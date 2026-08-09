@@ -102,6 +102,16 @@ user_assets/selfie.jpeg
 dist/OnePicDesktopPet/OnePicDesktopPet.exe
 ```
 
+## 公开下载与 macOS 版本
+
+公开安装包由 GitHub Actions 在对应操作系统上构建，发布在仓库的 Releases 页面：
+
+- `OnePicDesktopPet-Windows-x64.zip`：解压后双击 `OnePicDesktopPet.exe`；
+- `OnePicDesktopPet-macOS-arm64-unsigned.dmg`：适用于 Apple 芯片 Mac（M1/M2/M3/M4 等）；
+- `OnePicDesktopPet-macOS-x64-unsigned.dmg`：适用于 Intel Mac。打开 DMG 后运行 `OnePicDesktopPet.app`。
+
+公开安装包始终使用仓库中的演示角色，不包含 `user_assets/`、用户原图、自拍照片、候选图或私人动作。macOS DMG 目前没有 Apple Developer ID 签名与公证；首次启动时可能需要在 Finder 中按住 Control 点击应用并选择“打开”。
+
 ## 一图制作流程
 
 Agent 应先检查环境，再建立项目、处理原图、生成动作、检查多头多腿和裁切问题、接入行为状态机、运行测试，最后在用户验收后打包。详细流程见：
