@@ -2,7 +2,7 @@
 
 上传一张角色图片，让 Agent 帮助生成、配置并优化一个可以在 Windows 桌面上跑动、休息、互动和自拍的桌面宠物。
 
-当前 `v0.1.0` 是从已经可运行的 Python + PySide6 桌宠整理出的开源候选版本。仓库暂时保留一套演示角色动作，后续将继续完善“一张图到完整动作”的 Agent 自动执行流程。
+当前 `v0.2.0` 提供可直接下载的 Windows、Apple 芯片 Mac 和 Intel Mac 公开安装包。仓库保留一套公开演示角色动作，后续将继续完善“一张图到完整动作”的 Agent 自动执行流程。
 
 ## 当前功能
 
@@ -125,7 +125,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码已发布到 [Taylor154/OnePic-Desktop-Pet](https://github.com/Taylor154/OnePic-Desktop-Pet)，GitHub Actions 测试已经通过。[v0.1.0 Release](https://github.com/Taylor154/OnePic-Desktop-Pet/releases/tag/v0.1.0) 已提供 Windows ZIP，并已完成公开下载、SHA-256 核对、解压和独立启动验证。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)，GitHub Actions 测试与三平台打包均已通过。[v0.2.0 Release](https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.2.0) 提供 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件。
 
 ## 授权
 
