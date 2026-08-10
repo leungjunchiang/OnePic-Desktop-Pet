@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from .behavior import PetMood, PetState
 
 
-PET_NAME = "Lili"
+PET_NAME = "六毛"
 APP_DISPLAY_NAME = "Lili"
 
 
@@ -38,7 +38,7 @@ class FoodOption:
 FOOD_OPTIONS = (
     FoodOption("apple", "苹果", 18, 2, "苹果脆脆的，谢谢你！今天也一起加油。"),
     FoodOption("cookie", "小饼干", 14, 5, "小饼干收到！工作再忙也要记得喝水。"),
-    FoodOption("milk", "热牛奶", 20, 8, "暖暖的牛奶，Lili 充好电啦。"),
+    FoodOption("milk", "热牛奶", 20, 8, "暖暖的牛奶，六毛充好电啦。"),
     FoodOption("coffee", "咖啡", 5, 14, "咖啡香香的！精神回来一点啦，不过今天也别喝得太晚。"),
     FoodOption("tea", "热茶", 7, 7, "捧住这杯热茶，先缓一缓。我们慢慢把事情做好。"),
 )
@@ -63,8 +63,8 @@ COMPANION_ACTIONS = (
         "陪我专注",
         PetState.SIT,
         (
-            "Lili 坐好陪你。先专注眼前这一小步，别急着一次做完全部。",
-            "开始吧，先安静做十分钟。Lili 就在旁边守着你。",
+            "六毛坐好陪你。先专注眼前这一小步，别急着一次做完全部。",
+            "开始吧，先安静做十分钟。六毛就在旁边守着你。",
         ),
         3600,
     ),
@@ -74,7 +74,7 @@ COMPANION_ACTIONS = (
         PetState.WAVE,
         (
             "你不需要一下子变得很厉害，只要比刚才再前进一步。加油！",
-            "Lili 给你挥挥手：你已经开始了，这本身就很了不起。",
+            "六毛给你挥挥手：你已经开始了，这本身就很了不起。",
             "不用等状态完美，慢慢做也算前进。Lili 相信你。",
         ),
     ),
@@ -85,7 +85,7 @@ COMPANION_ACTIONS = (
         (
             "抱抱你。辛苦和脆弱都可以被看见，你不用一直逞强。",
             "给你一个软乎乎的抱抱。无论今天完成多少，你都值得被喜欢。",
-            "Lili 贴贴你一下。休息不是偷懒，是在照顾认真生活的自己。",
+            "六毛贴贴你一下。休息不是偷懒，是在照顾认真生活的自己。",
         ),
         3200,
     ),
@@ -95,7 +95,7 @@ COMPANION_ACTIONS = (
         PetState.HAPPY,
         (
             "完成啦！先认真夸夸自己，再去迎接下一件事。",
-            "叮——今日成就已点亮！Lili 为你的坚持鼓掌。",
+            "叮——今日成就已点亮！六毛为你的坚持鼓掌。",
             "做到了！不管成果大小，这一步都值得庆祝。",
         ),
         3000,
@@ -105,7 +105,7 @@ COMPANION_ACTIONS = (
         "安慰我一下",
         PetState.SHY,
         (
-            "没关系，今天走得慢一点也仍然是在向前。Lili 陪着你。",
+            "没关系，今天走得慢一点也仍然是在向前。六毛陪着你。",
             "先别急着责怪自己。你已经承担了很多，可以喘一口气。",
             "事情没做好，不等于你不好。我们休息一下，再从最小的一步开始。",
         ),
@@ -127,7 +127,7 @@ COMPANION_ACTIONS = (
         PetState.WAVE,
         (
             "手臂伸长，肩膀放松——好，别把自己折成办公椅的形状啦。",
-            "起来伸展十秒钟吧。Lili 也活动一下这六根毛。",
+            "起来伸展十秒钟吧。六毛也活动一下这六根毛。",
         ),
         3600,
         (PetState.SIT, PetState.WAVE, PetState.HAPPY),
@@ -138,7 +138,7 @@ COMPANION_ACTIONS = (
         PetState.CURIOUS,
         (
             "先把问题说成一句话，再列三个可能的下一步。复杂的事也能一点点拆开。",
-            "Lili 开始转小脑筋了：我们先找最卡住的那一处。",
+            "六毛开始转小脑筋了：我们先找最卡住的那一处。",
         ),
         4200,
         (PetState.CURIOUS, PetState.SIT, PetState.CURIOUS),
@@ -148,7 +148,7 @@ COMPANION_ACTIONS = (
         "安静陪我一会儿",
         PetState.SIT,
         (
-            "好，不催你，也不讲话。Lili 就坐在这里陪你。",
+            "好，不催你，也不讲话。六毛就坐在这里陪你。",
             "这一会儿不用证明什么，安静呼吸、慢慢做就好。",
         ),
         5200,
@@ -229,7 +229,7 @@ class CompanionModel:
         if resumed:
             text = "计时已经在进行啦。别急，保持现在的节奏就很好。"
         else:
-            text = "工作计时开始。先把眼前最重要的一小步做好，Lili 陪你。"
+            text = "工作计时开始。先把眼前最重要的一小步做好，六毛陪你。"
         return CompanionReply(text, PetState.SIT)
 
     def work_paused(self, duration_text: str) -> CompanionReply:
@@ -263,7 +263,7 @@ class CompanionModel:
             )
         if kind == "long_break":
             return CompanionReply(
-                f"你已经连续工作 {duration_text}。Lili 认真劝你停一停：吃点东西、走一走，别拿身体硬撑。",
+            f"你已经连续工作 {duration_text}。六毛认真劝你停一停：吃点东西、走一走，别拿身体硬撑。",
                 PetState.SLEEPY,
             )
         raise ValueError(f"未知工作提醒：{kind}")
@@ -273,16 +273,16 @@ class CompanionModel:
 
         text = " ".join(message.split())[:120]
         if not text:
-            return CompanionReply("你还没说话呢，Lili 在认真听。", PetState.CURIOUS)
+            return CompanionReply("你还没说话呢，六毛在认真听。", PetState.CURIOUS)
         if any(word in text for word in ("你好", "嗨", "早上好", "早安")):
             return CompanionReply(
-                "在呢！我是 Lili。今天想先完成哪一件事？",
+                "在呢！我是六毛。巴布达！今天想先完成哪一件事？",
                 PetState.WAVE,
             )
         if any(word in text for word in ("爱你", "喜欢你", "想你", "抱抱", "亲亲")):
             self.mood.receive_affection()
             return CompanionReply(
-                "Lili 也很爱你。无论今天顺不顺利，你都不是孤零零的一个人。",
+                "六毛也很爱你。无论今天顺不顺利，你都不是孤零零的一个人。",
                 PetState.SHY,
             )
         if any(word in text for word in ("做不到", "没用", "很笨", "差劲", "不配")):
@@ -312,12 +312,12 @@ class CompanionModel:
             )
         if any(word in text for word in ("孤独", "一个人", "没人懂", "没人陪")):
             return CompanionReply(
-                "Lili 在这里听你说。先照顾好此刻的自己，也可以找信任的人聊一小会儿。",
+                "六毛在这里听你说。先照顾好此刻的自己，也可以找信任的人聊一小会儿。",
                 PetState.SHY,
             )
         if any(word in text for word in ("工作", "任务", "加班", "学习", "论文", "代码")):
             return CompanionReply(
-                "把最重要的一件事先做十分钟，不求完美，只求开始。Lili 在旁边陪你。",
+                "把最重要的一件事先做十分钟，不求完美，只求开始。六毛在旁边陪你。",
                 PetState.HAPPY,
             )
         if any(word in text for word in ("难过", "伤心", "不开心", "失败", "委屈")):
@@ -326,22 +326,22 @@ class CompanionModel:
                 PetState.SHY,
             )
         if any(word in text for word in ("开心", "完成", "成功", "搞定")):
-            return CompanionReply("太好啦！Lili 给你庆祝一下。", PetState.HAPPY)
+            return CompanionReply("太好啦！六毛给你庆祝一下。", PetState.HAPPY)
         if any(word in text for word in ("饿", "吃", "食物")):
             return CompanionReply(
-                f"Lili 现在饱食度是 {self.mood.fullness}，右键就可以给我喂食。",
+                f"六毛现在饱食度是 {self.mood.fullness}，右键就可以给我喂食。",
                 PetState.CURIOUS,
             )
         if any(word in text for word in ("名字", "你是谁")):
             return CompanionReply(
-                "我是 Lili，你的桌面工作搭子。没网时我也会留在这里陪你。",
+                "我是六毛，住在 Lili 里的小小工作搭子。没网时我也会留在这里陪你。",
                 PetState.WAVE,
             )
         if any(word in text for word in ("谢谢", "感谢")):
             self.mood.receive_affection()
-            return CompanionReply("不用客气。能陪你认真生活和工作，Lili 也很开心。", PetState.SHY)
+            return CompanionReply("不用客气。能陪你认真生活和工作，六毛也很开心。", PetState.SHY)
         if any(word in text for word in ("再见", "拜拜", "晚安")):
-            return CompanionReply("好，Lili 在桌面等你回来。", PetState.SLEEPY)
+            return CompanionReply("好，六毛在桌面等你回来。", PetState.SLEEPY)
         return CompanionReply(
             f"我听见了：“{text}”。我们把它拆成下一小步吧。",
             PetState.CURIOUS,
@@ -353,12 +353,12 @@ class CompanionModel:
         common = (
             ("今天的待办怎么还会自己长出来……算啦，先抓住最重要的一件。", PetState.ANNOYED),
             ("这个屏幕看久了，连六根毛都快坐扁了。要不要伸个懒腰？", PetState.SLEEPY),
-            ("Lili 刚才认真想了一下：休息五分钟不会让世界停转。", PetState.CURIOUS),
+            ("六毛刚才认真想了一下：休息五分钟不会让世界停转。", PetState.CURIOUS),
             ("咖啡负责香，工作还是得一小口一小口做。", PetState.SIT),
             ("有些任务看起来像山，其实第一步只是打开文件。", PetState.CURIOUS),
         )
         working = (
-            ("你负责专注，Lili 负责在旁边替你瞪着进度条。", PetState.SIT),
+            ("你负责专注，六毛负责在旁边替你瞪着进度条。", PetState.SIT),
             ("已经很认真啦，肩膀可以不用跟着一起加班。", PetState.SLEEPY),
         )
         text, state = self.random.choice(common + (working if work_running else ()))
@@ -382,6 +382,19 @@ class CompanionModel:
             advice = "晚上啦，记得给工作留一个收尾。"
             state = PetState.SLEEPY
         else:
-            advice = "时间不早了，Lili 建议你尽快休息。"
+            advice = "时间不早了，六毛建议你尽快休息。"
             state = PetState.SLEEPY
         return CompanionReply(f"现在是 {normalized:02d}:00。{advice}", state)
+
+    def song_inspiration(self, late_wakeup: bool = False) -> CompanionReply:
+        """返回受歌名意象启发的原创短句，不复刻受版权保护的歌词。"""
+
+        if late_wakeup:
+            return CompanionReply("起晚啦？别再把今天的光年荒废掉。洗把脸，我们从这一刻出发。", PetState.CURIOUS)
+        choices = (
+            "风起的时候也别慌，先把手边这一页写完。",
+            "有人告诉你也好，无人提醒也好，今天记得照顾自己。",
+            "思念可以停一会儿，眼前的小事也值得认真完成。",
+            "六毛把今天当成一段前奏：慢一点，也仍然在往前。",
+        )
+        return CompanionReply(self.random.choice(choices), PetState.SIT)

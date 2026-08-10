@@ -1,11 +1,11 @@
 """
-本模块管理桌面宠物应用生命周期、系统托盘菜单和退出时的位置保存。
+本模块管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
 职责范围：
 - 创建或复用 QApplication；
 - 在创建应用前启用适合不同显示器缩放比例的高 DPI 舍入策略；
-- 创建 PetWindow 和 QSystemTrayIcon；
-- 连接显示、隐藏、暂停跑动、喂食、离线对话、陪伴动作、工作计时和退出动作；
+- 创建 PetWindow 和精简 QSystemTrayIcon；
+- 托盘只保留显示、快捷口袋、聊天、设置与退出，主要互动直接在六毛窗口完成；
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
 
@@ -28,7 +28,7 @@ from PySide6.QtGui import QAction, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .config import PetSettings, load_settings, save_settings
-from .companion import APP_DISPLAY_NAME, COMPANION_ACTIONS, FOOD_OPTIONS
+from .companion import APP_DISPLAY_NAME
 from .resources import resource_path
 from .window import PetWindow
 
@@ -55,66 +55,20 @@ class DesktopPetApplication:
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
-        tray.setToolTip(APP_DISPLAY_NAME)
+        tray.setToolTip("Lili · 六毛")
         menu = QMenu()
 
         show_action = QAction("显示宠物", menu)
         show_action.triggered.connect(self.show_window)
         menu.addAction(show_action)
 
-        interact_action = QAction("和 Lili 打招呼", menu)
-        interact_action.triggered.connect(self.window.trigger_interaction)
-        menu.addAction(interact_action)
+        panel_action = QAction("六毛快捷口袋", menu)
+        panel_action.triggered.connect(self.window.show_quick_panel)
+        menu.addAction(panel_action)
 
-        dialogue_action = QAction("和 Lili 聊聊…", menu)
+        dialogue_action = QAction("和六毛聊聊…", menu)
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
-
-        action_menu = menu.addMenu("Lili 陪伴动作")
-        for option in COMPANION_ACTIONS:
-            action = QAction(option.label, menu)
-            action.triggered.connect(
-                lambda _checked=False, key=option.key: self.window.perform_companion_action(
-                    key
-                )
-            )
-            action_menu.addAction(action)
-
-        work_menu = menu.addMenu("工作计时")
-        start_work_action = QAction("开始/继续工作", menu)
-        start_work_action.triggered.connect(self.window.start_work_timer)
-        work_menu.addAction(start_work_action)
-        pause_work_action = QAction("暂停计时并休息", menu)
-        pause_work_action.triggered.connect(self.window.pause_work_timer)
-        work_menu.addAction(pause_work_action)
-        finish_work_action = QAction("完成本次工作", menu)
-        finish_work_action.triggered.connect(self.window.finish_work_timer)
-        work_menu.addAction(finish_work_action)
-        show_work_action = QAction("查看今日累计", menu)
-        show_work_action.triggered.connect(self.window.show_work_time)
-        work_menu.addAction(show_work_action)
-
-        food_menu = menu.addMenu("给 Lili 喂食/饮品")
-        for food in FOOD_OPTIONS:
-            food_action = QAction(food.label, menu)
-            food_action.triggered.connect(
-                lambda _checked=False, key=food.key: self.window.feed_pet(key)
-            )
-            food_menu.addAction(food_action)
-
-        status_action = QAction("查看 Lili 状态", menu)
-        status_action.triggered.connect(self.window.show_companion_status)
-        menu.addAction(status_action)
-
-        selfie_action = QAction("自拍一下", menu)
-        selfie_action.triggered.connect(self.window.trigger_selfie)
-        menu.addAction(selfie_action)
-
-        pause_action = QAction("暂停/恢复跑动", menu)
-        pause_action.triggered.connect(
-            lambda: self.window.set_paused(not self.window.paused)
-        )
-        menu.addAction(pause_action)
 
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(self.window.open_ai_settings)

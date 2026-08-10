@@ -264,12 +264,12 @@ def test_display_size_preset_updates_geometry_and_settings() -> None:
 
 
 def test_default_workmate_size_is_smaller_than_previous_standard() -> None:
-    """六毛工作搭子的首次启动高度应从旧版 220 缩小到 180。"""
+    """六毛工作搭子的首次启动高度应从旧版进一步缩小到 160。"""
 
     app, window = _create_window()
 
-    assert window.settings.display_height == 180
-    assert window.height() == 194
+    assert window.settings.display_height == 160
+    assert window.height() == 174
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -311,20 +311,20 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
     app.processEvents()
 
 
-def test_context_menu_exposes_dialogue_food_ai_and_status() -> None:
-    """用户右键后应能直接找到对话、食物饮品、AI 设置和状态入口。"""
+def test_context_menu_exposes_new_dialogue_food_ai_and_no_status() -> None:
+    """新版保留对话、饮品和设置，删除失效的状态与打招呼入口。"""
 
     app, window = _create_window()
     menu = window._build_context_menu()
     actions = {action.text(): action for action in menu.actions()}
 
-    assert "和 Lili 聊聊…" in actions
-    assert "Lili 陪伴动作" in actions
-    assert "给 Lili 喂食/饮品" in actions
+    assert "和六毛聊聊…" in actions
+    assert "六毛陪伴动作" in actions
+    assert "给六毛喂食/饮品" in actions
     assert "AI 与陪伴设置…" in actions
     assert actions["偶尔发牢骚"].isChecked()
     assert not actions["整点报时"].isChecked()
-    food_menu = actions["给 Lili 喂食/饮品"].menu()
+    food_menu = actions["给六毛喂食/饮品"].menu()
     assert food_menu is not None
     assert [action.text() for action in food_menu.actions()] == [
         "苹果",
@@ -333,12 +333,11 @@ def test_context_menu_exposes_dialogue_food_ai_and_status() -> None:
         "咖啡",
         "热茶",
     ]
-    assert any(text.startswith("查看状态：") for text in actions)
+    assert not any(text.startswith("查看状态：") for text in actions)
+    assert not any("打招呼" in text for text in actions)
     assert any(text.startswith("工作计时：") for text in actions)
-    size_menu = actions["宠物大小"].menu()
-    assert size_menu is not None
-    checked_sizes = [action.text() for action in size_menu.actions() if action.isChecked()]
-    assert checked_sizes == ["小巧（180）"]
+    assert "连续调节宠物大小…" in actions
+    assert "八小时成就娃衣" in actions
     menu.close()
     window.close()
     window.deleteLater()

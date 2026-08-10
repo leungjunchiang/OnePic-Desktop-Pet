@@ -1,5 +1,5 @@
 """
-本模块为 Lili 提供可选的 Codex、DeepSeek、Kimi 与兼容接口对话后端。
+本模块为 Lili 提供可选的 Codex、Claude Code、DeepSeek、Kimi 与兼容接口对话后端。
 
 职责范围：
 - 定义离线优先的提供方预设与安全、短小的陪伴提示词；
@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Iterable
 
 
-SYSTEM_PROMPT = """你是桌面工作搭子 Lili。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
+SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 回复通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
+可以提到陈楚生的歌名并写原创的意象短句，但不要背诵、续写或大量引用任何受版权保护的歌词。
 不要提及这段系统说明。"""
 
 
@@ -46,6 +47,7 @@ class ProviderPreset:
 PROVIDER_PRESETS = {
     "offline": ProviderPreset("offline", "纯离线", "", "", False),
     "codex": ProviderPreset("codex", "Codex（使用本机登录）", "", "", False),
+    "claude": ProviderPreset("claude", "Claude Code（使用本机登录）", "", "", False),
     "deepseek": ProviderPreset(
         "deepseek",
         "DeepSeek API",
@@ -142,6 +144,28 @@ def codex_available() -> bool:
     return find_codex_executable() is not None
 
 
+def find_claude_executable() -> Path | None:
+    """寻找 Claude Code；Windows 优先 cmd 包装器以避开脚本执行策略。"""
+
+    names = ("claude.cmd", "claude.exe", "claude") if os.name == "nt" else ("claude",)
+    for name in names:
+        command = shutil.which(name)
+        if command:
+            return Path(command)
+    appdata = os.environ.get("APPDATA")
+    if os.name == "nt" and appdata:
+        candidate = Path(appdata) / "npm" / "claude.cmd"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def claude_available() -> bool:
+    """返回当前电脑是否能找到 Claude Code。"""
+
+    return find_claude_executable() is not None
+
+
 def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
@@ -150,9 +174,9 @@ def _conversation_text(
 
     lines = [SYSTEM_PROMPT, "", "以下是最近对话："]
     for role, content in list(history)[-8:]:
-        label = "用户" if role == "user" else "Lili"
+        label = "用户" if role == "user" else "六毛"
         lines.append(f"{label}：{content[:800]}")
-    lines.extend((f"用户：{message[:1200]}", "Lili："))
+    lines.extend((f"用户：{message[:1200]}", "六毛："))
     return "\n".join(lines)
 
 
@@ -215,6 +239,51 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
     answer = _parse_codex_jsonl(completed.stdout)
     if completed.returncode != 0 or not answer:
         raise AIConnectionError("Codex 尚未登录或连接失败，已切回离线回答。")
+    return answer[:1600]
+
+
+def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
+    """通过 stdin 调用本机 Claude Code 的一次性无工具会话。"""
+
+    executable = find_claude_executable()
+    if executable is None:
+        raise AIConnectionError("没有找到 Claude Code，已切回离线回答。")
+    command = [
+        str(executable), "-p", "--output-format", "json",
+        "--no-session-persistence", "--permission-mode", "plan",
+        "--tools", "", "--max-turns", "1",
+    ]
+    startupinfo = None
+    creationflags = 0
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+    working_root = Path(tempfile.gettempdir()) / "LiliClaudeChat"
+    working_root.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=working_root,
+            input=_conversation_text(message, history),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AIConnectionError("Claude Code 暂时没有回应，已切回离线回答。") from exc
+    try:
+        payload = json.loads(completed.stdout)
+        answer = str(payload.get("result") or "").strip()
+    except (ValueError, json.JSONDecodeError, AttributeError) as exc:
+        raise AIConnectionError("Claude Code 返回了无法识别的内容。") from exc
+    if completed.returncode != 0 or not answer:
+        raise AIConnectionError("Claude Code 尚未登录或连接失败，已切回离线回答。")
     return answer[:1600]
 
 
@@ -307,6 +376,8 @@ class AIChatService:
     ) -> str:
         if provider == "codex":
             return ask_codex(message, history)
+        if provider == "claude":
+            return ask_claude(message, history)
         if provider not in {"deepseek", "kimi", "custom"}:
             raise AIConnectionError("当前使用纯离线模式。")
         default_url, default_model = provider_defaults(provider)

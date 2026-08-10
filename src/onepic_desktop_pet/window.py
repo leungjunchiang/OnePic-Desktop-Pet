@@ -1,5 +1,5 @@
 """
-本模块实现桌面宠物的透明窗口、连续动画、鼠标交互和自主移动。
+本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
 - 创建无边框、透明、可选始终置顶的 QWidget；
@@ -7,10 +7,11 @@
 - 处理左右翻转、边缘转身停顿、亚像素时间驱动移动和同步身体起伏；
 - 用窗口遮罩让人物外透明区域穿透鼠标点击；
 - 缓存不同 DPI 下的缩放帧，并在窗口跨显示器后按新比例重新栅格化；
-- 支持左键拖动、双击互动、无互动分级休息和右键尺寸菜单；
-- 支持给 Lili 喂食或饮品，并用独立文字气泡反馈状态；
+- 支持左键拖动、单击调戏、双击快捷口袋、无互动分级休息和连续尺寸滑块；
+- 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
 - 支持离线优先的聊天面板、可选 AI 后端以及工作、爱意、鼓励和安慰动作；
-- 支持开始、暂停、完成工作计时，显示今日累计时长并在连续工作过久时温和提醒；
+- 支持电脑图层、摸头工作气泡、今日/终身计时、八小时娃衣解锁及健康提醒；
+- 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
 - 优先从用户私有素材目录显示自拍成片气泡，按当前屏幕 DPI 保持清晰度，并贴近人物真实轮廓定位；
@@ -42,7 +43,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -56,10 +57,18 @@ from PySide6.QtGui import (
     QScreen,
     QShowEvent,
     QTransform,
+    QDesktopServices,
 )
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QWidget
 
+try:
+    from PySide6.QtTextToSpeech import QTextToSpeech
+except ImportError:
+    QTextToSpeech = None
+
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
+from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
+from .activity import active_application_category
 from .behavior import BehaviorModel, PetMood, PetState, StateDecision
 from .chat import AIReplyThread, AISettingsDialog, ChatDialog
 from .companion import (
@@ -71,8 +80,11 @@ from .companion import (
     CompanionReply,
 )
 from .config import PetSettings, save_settings
+from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .resources import resource_path
+from .music import choose_song, music_search_url
+from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
 
@@ -98,6 +110,7 @@ class PetWindow(QWidget):
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
         self.work_timer = work_timer or WorkTimerModel()
+        self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
         self.direction = -1
         self._movement_x = float(self.x())
@@ -133,6 +146,10 @@ class PetWindow(QWidget):
         self._chat_history: list[tuple[str, str]] = []
         self._action_sequence_id = 0
         self._last_announced_hour = ""
+        self._ambient_activity = "none"
+        self._last_app_category = "other"
+        self._late_wakeup_shown = False
+        self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
 
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         if settings.always_on_top:
@@ -177,7 +194,7 @@ class PetWindow(QWidget):
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()
         bubble_font.setFamilies(
-            ["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Arial"]
+            ["PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", "Arial"]
         )
         bubble_font.setPointSize(10)
         self.speech_bubble.setFont(bubble_font)
@@ -187,10 +204,20 @@ class PetWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
         self.speech_bubble.setStyleSheet(
-            "QLabel { background: rgba(255, 249, 230, 248); "
-            "color: #3d2a24; border: 2px solid #e6312a; border-radius: 15px; "
+            "QLabel { background: rgba(239, 245, 248, 175); "
+            "color: #27313d; border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px; "
             "padding: 10px 13px; font-size: 14px; }"
         )
+
+        self.work_controls = WorkControlBubble()
+        self.work_controls.pause_requested.connect(self.pause_work_timer)
+        self.work_controls.finish_requested.connect(self.finish_work_timer)
+        self.quick_panel = QuickControlPanel()
+        self.quick_panel.chat_requested.connect(self.prompt_dialogue)
+        self.quick_panel.work_requested.connect(self._quick_work_action)
+        self.quick_panel.music_requested.connect(self.play_random_song)
+        self.quick_panel.size_requested.connect(self.open_size_control)
+        self.quick_panel.settings_requested.connect(self.open_ai_settings)
 
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
@@ -247,6 +274,16 @@ class PetWindow(QWidget):
         self.hourly_timer.setInterval(15000)
         self.hourly_timer.timeout.connect(self._hourly_tick)
         self.hourly_timer.start()
+
+        self.app_timer = QTimer(self)
+        self.app_timer.setInterval(5000)
+        self.app_timer.timeout.connect(self._app_awareness_tick)
+        self.app_timer.start()
+
+        self.topmost_timer = QTimer(self)
+        self.topmost_timer.setInterval(4000)
+        self.topmost_timer.timeout.connect(self._ensure_on_top)
+        self.topmost_timer.start()
 
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
@@ -443,9 +480,17 @@ class PetWindow(QWidget):
             display_state,
             self._effect_phase,
         )
+        activity = "computer" if self.work_timer.is_running else self._ambient_activity
+        composed = draw_activity_overlay(
+            composed,
+            activity,
+            self.settings.equipped_outfit,
+            self._effect_phase,
+        )
         self.label.setPixmap(composed)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
-        self._refresh_window_mask(display_state, composed, direction_key, effect_key)
+        overlay_key = hash((activity, self.settings.equipped_outfit, self._effect_phase % 2))
+        self._refresh_window_mask(display_state, composed, direction_key, effect_key ^ overlay_key)
 
     def _refresh_window_mask(
         self,
@@ -541,6 +586,25 @@ class PetWindow(QWidget):
             handle.screenChanged.connect(self._on_screen_changed)
             self._screen_change_connected = True
         self._on_screen_changed(handle.screen() if handle else None)
+        QTimer.singleShot(0, self._ensure_on_top)
+
+    def _ensure_on_top(self) -> None:
+        """周期恢复顶层层级；Windows 使用不抢焦点的原生置顶作为补强。"""
+
+        if not self.settings.always_on_top or not self.isVisible():
+            return
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                ctypes.windll.user32.SetWindowPos(
+                    int(self.winId()), -1, 0, 0, 0, 0,
+                    0x0001 | 0x0002 | 0x0010 | 0x0040,
+                )
+                return
+            except (AttributeError, OSError, ValueError):
+                pass
+        self.raise_()
 
     def moveEvent(self, event: QMoveEvent) -> None:
         """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
@@ -554,6 +618,8 @@ class PetWindow(QWidget):
 
         self.photo_bubble.hide()
         self.speech_bubble.hide()
+        self.work_controls.hide()
+        self.quick_panel.hide()
         super().hideEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -806,7 +872,7 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         old_center_x = self.x() + self.width() // 2
         old_bottom = self.y() + self.height()
-        self.settings.display_height = max(120, min(600, int(display_height)))
+        self.settings.display_height = max(100, min(360, int(display_height)))
         source = self._pixmaps[PetState.IDLE][0]
         width = round(
             self.settings.display_height * source.width() / source.height()
@@ -949,6 +1015,7 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(self.work_timer.is_running)
+        self._refresh_pixmap()
         return reply
 
     def pause_work_timer(self) -> CompanionReply:
@@ -967,6 +1034,8 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3200)
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(False)
+        self.work_controls.hide()
+        self._refresh_pixmap()
         return reply
 
     def finish_work_timer(self) -> CompanionReply:
@@ -979,6 +1048,9 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3400)
         self.show_speech(reply.text, 6200)
         self.work_timer_changed.emit(False)
+        self.work_controls.hide()
+        self._refresh_pixmap()
+        self._show_new_outfit_unlock()
         return reply
 
     def show_work_time(self) -> None:
@@ -993,6 +1065,17 @@ class PetWindow(QWidget):
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
         self.work_timer.checkpoint()
+        self._show_new_outfit_unlock()
+        wellness_kind = self.wellness.take_due(
+            self.settings.water_reminder_enabled,
+            self.settings.stand_reminder_enabled,
+            self.settings.water_interval_minutes,
+            self.settings.stand_interval_minutes,
+        )
+        if wellness_kind == "water":
+            self.show_speech("喝口水吧。六毛替你把这一小会儿守住。", 6200)
+        elif wellness_kind == "stand":
+            self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
         reminder_kind = self.work_timer.take_due_reminder()
         if reminder_kind is None:
             return
@@ -1000,6 +1083,18 @@ class PetWindow(QWidget):
         reply = self.companion.work_reminder(reminder_kind, duration)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 7200)
+
+    def _show_new_outfit_unlock(self) -> None:
+        """在跨过新的八小时门槛时提示并自动装备新娃衣。"""
+
+        index = self.work_timer.take_new_outfit_unlock()
+        if index is None or not 1 <= index <= len(OUTFITS):
+            return
+        outfit = OUTFITS[index - 1]
+        self.settings.equipped_outfit = outfit.key
+        save_settings(self.settings)
+        self._refresh_pixmap()
+        self.show_speech(f"八小时成就解锁：{outfit.name}。{outfit.message}", 7600)
 
     def shutdown_work_timer(self) -> None:
         """自然退出前暂停并保存计时，避免把关机时间计入工作。"""
@@ -1016,8 +1111,8 @@ class PetWindow(QWidget):
             self._chat_dialog.message_submitted.connect(self._submit_chat_message)
             self._chat_dialog.settings_requested.connect(self.open_ai_settings)
             self._chat_dialog.append_message(
-                "Lili",
-                "我在呢。没网也可以聊天；想用 Codex、DeepSeek 或 Kimi，可以点右上角 AI 设置。",
+                "六毛",
+                "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
             )
         self._chat_dialog.set_provider(self.settings.ai_provider)
         self._chat_dialog.show()
@@ -1037,10 +1132,10 @@ class PetWindow(QWidget):
         if self.settings.ai_provider == "offline":
             reply = self.talk_to_pet(message)
             self._chat_history.append(("assistant", reply.text))
-            self._chat_dialog.append_message("Lili", reply.text)
+            self._chat_dialog.append_message("六毛", reply.text)
             return
         if self._ai_thread is not None and self._ai_thread.isRunning():
-            self._chat_dialog.append_message("Lili", "上一句话还在路上，稍等我一下。")
+            self._chat_dialog.append_message("六毛", "上一句话还在路上，稍等我一下。")
             return
         self._chat_dialog.set_busy(True)
         self._ai_thread = AIReplyThread(
@@ -1065,7 +1160,7 @@ class PetWindow(QWidget):
         self._chat_history.append(("assistant", answer))
         self._chat_history = self._chat_history[-10:]
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("Lili", answer)
+            self._chat_dialog.append_message("六毛", answer)
             self._chat_dialog.set_busy(False)
         state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
         self._show_emotion(state, 3000)
@@ -1075,11 +1170,11 @@ class PetWindow(QWidget):
         """明确提示连接问题，并无缝使用本地规则回答。"""
 
         offline = self.companion.reply_to(original)
-        combined = f"{error}\n\n离线 Lili：{offline.text}"
+        combined = f"{error}\n\n离线六毛：{offline.text}"
         self._chat_history.append(("assistant", offline.text))
         self._chat_history = self._chat_history[-10:]
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("Lili", combined)
+            self._chat_dialog.append_message("六毛", combined)
             self._chat_dialog.set_busy(False)
         self._show_emotion(offline.state, 2800)
         self.show_speech(offline.text, 6200)
@@ -1124,6 +1219,93 @@ class PetWindow(QWidget):
         save_settings(self.settings)
         self.show_speech("整点报时已开启。" if enabled else "整点报时已关闭。", 3200)
 
+    def _app_awareness_tick(self) -> None:
+        """只根据前台应用类别切换配饰动作，不读取标题或文档内容。"""
+
+        if not self.settings.app_awareness or self.work_timer.is_running:
+            return
+        category = active_application_category()
+        if category == self._last_app_category:
+            return
+        self._last_app_category = category
+        mapping = {"music": "headphones", "office": "writing", "coding": "computer", "reading": "reading"}
+        self._ambient_activity = mapping.get(category, "none")
+        self._mask_cache.clear()
+        self._refresh_pixmap()
+
+    def play_random_song(self) -> str:
+        """由用户主动打开一首陈楚生歌曲的正版平台搜索页。"""
+
+        title = choose_song()
+        QDesktopServices.openUrl(QUrl(music_search_url(self.settings.music_service, title)))
+        self._ambient_activity = random.choice(("headphones", "guitar", "drums"))
+        self._refresh_pixmap()
+        self.show_speech(f"六毛挑了《{title}》。我打开正版搜索页啦，点一下就能播放。", 6500)
+        return title
+
+    def set_activity(self, activity: str) -> None:
+        """手动选择电脑、耳机、吉他、鼓或阅读叠加动作。"""
+
+        self._ambient_activity = activity if activity in {"computer", "headphones", "guitar", "drums", "reading", "writing"} else "none"
+        self._mask_cache.clear()
+        self._refresh_pixmap()
+
+    def equip_outfit(self, outfit_key: str) -> None:
+        """装备已解锁娃衣；空字符串恢复经典外观。"""
+
+        allowed = {item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())}
+        if outfit_key and outfit_key not in allowed:
+            self.show_speech("这套娃衣还在秘密王国里，再累计工作八小时就更近一点。", 5200)
+            return
+        self.settings.equipped_outfit = outfit_key
+        save_settings(self.settings)
+        self._mask_cache.clear(); self._refresh_pixmap()
+
+    def open_size_control(self) -> None:
+        """打开连续尺寸滑块并实时应用，不改变不同动作之间的比例。"""
+
+        dialog = SizeControlDialog(self.settings.display_height, self)
+        dialog.value_changed.connect(self.set_display_height)
+        dialog.exec()
+        save_settings(self.settings)
+
+    def _position_floating_panel(self, panel: QWidget) -> None:
+        """把快捷面板放在宠物旁边并限制在当前屏幕可见区域。"""
+
+        panel.adjustSize()
+        area = self._screen_geometry()
+        x = self.x() - panel.width() - 10
+        y = self.y() + max(0, self.height() // 3)
+        if area is not None:
+            if x < area.left():
+                x = self.x() + self.width() + 10
+            x = min(max(x, area.left()), area.right() - panel.width() + 1)
+            y = min(max(y, area.top()), area.bottom() - panel.height() + 1)
+        panel.move(x, y)
+
+    def show_quick_panel(self) -> None:
+        """显示无需系统托盘即可访问的快捷入口。"""
+
+        self._position_floating_panel(self.quick_panel)
+        self.quick_panel.show(); self.quick_panel.raise_()
+
+    def show_work_controls(self) -> None:
+        """在计时运行时显示暂停和结束两个操作气泡。"""
+
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+            return
+        self._position_floating_panel(self.work_controls)
+        self.work_controls.show(); self.work_controls.raise_()
+
+    def _quick_work_action(self) -> None:
+        """快捷面板的工作入口：未运行时开始，运行时展示控制。"""
+
+        if self.work_timer.is_running:
+            self.show_work_controls()
+        else:
+            self.start_work_timer()
+
     def _schedule_ambient(self) -> None:
         """用随机间隔安排下一句牢骚，避免固定频率造成打扰。"""
 
@@ -1139,7 +1321,10 @@ class PetWindow(QWidget):
         try:
             busy = self._ai_thread is not None and self._ai_thread.isRunning()
             if self.isVisible() and not self.dragging and not busy:
-                reply = self.companion.ambient_grumble(self.work_timer.is_running)
+                if self.settings.lyric_inspiration_enabled and random.random() < 0.28:
+                    reply = self.companion.song_inspiration()
+                else:
+                    reply = self.companion.ambient_grumble(self.work_timer.is_running)
                 self._show_emotion(reply.state, 2600)
                 self.show_speech(reply.text, 6200)
         finally:
@@ -1183,6 +1368,20 @@ class PetWindow(QWidget):
         else:
             state = random.choice((PetState.WAVE, PetState.HAPPY, PetState.SHY))
         self._show_emotion(state, 1800)
+        now = datetime.now()
+        if (
+            not self._late_wakeup_shown
+            and self.settings.lyric_inspiration_enabled
+            and 10 <= now.hour < 13
+            and self.work_timer.today_seconds() == 0
+        ):
+            self._late_wakeup_shown = True
+            reply = self.companion.song_inspiration(late_wakeup=True)
+            self.show_speech(reply.text, 6500)
+        else:
+            self.show_speech("巴布达！六毛听见你啦。", 3000)
+        if self.settings.voice_enabled and self._speech_engine is not None:
+            self._speech_engine.say("巴布达")
 
     def _show_emotion(self, state: PetState, duration_ms: int = 1600) -> None:
         """显示一次短暂互动表情，并在计时结束后恢复自主生活。"""
@@ -1204,6 +1403,8 @@ class PetWindow(QWidget):
 
         x = (point.x() - self.label.x()) / max(1, self.label.width())
         y = (point.y() - self.label.y()) / max(1, self.label.height())
+        if self.work_timer.is_running and 0.52 <= y <= 0.88 and 0.18 <= x <= 0.84:
+            return "work_device"
         if y < 0.24:
             return "head"
         if y < 0.46:
@@ -1217,6 +1418,9 @@ class PetWindow(QWidget):
 
         zone = self._interaction_zone(point)
         self._record_user_interaction()
+        if zone == "work_device" or (zone == "head" and self.work_timer.is_running):
+            self.show_work_controls()
+            return
         if zone == "camera":
             self.trigger_selfie()
             return
@@ -1224,6 +1428,9 @@ class PetWindow(QWidget):
             self.mood.receive_affection()
             state = PetState.SHY if self.mood.affinity >= 70 else PetState.HAPPY
             self._show_emotion(state, 1700)
+            self.show_speech("巴布达。六毛被你摸到脑袋啦。", 3000)
+            if self.settings.voice_enabled and self._speech_engine is not None:
+                self._speech_engine.say("巴布达")
             return
         if zone == "face":
             self.mood.receive_poke(False)
@@ -1344,13 +1551,10 @@ class PetWindow(QWidget):
         pause_action = QAction("恢复跑动" if self.paused else "暂停跑动", self)
         pause_action.triggered.connect(lambda: self.set_paused(not self.paused))
         menu.addAction(pause_action)
-        interact_action = QAction("和 Lili 打招呼", self)
-        interact_action.triggered.connect(self.trigger_interaction)
-        menu.addAction(interact_action)
-        dialogue_action = QAction("和 Lili 聊聊…", self)
+        dialogue_action = QAction("和六毛聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         menu.addAction(dialogue_action)
-        action_menu = menu.addMenu("Lili 陪伴动作")
+        action_menu = menu.addMenu("六毛陪伴动作")
         for option in COMPANION_ACTIONS:
             action = QAction(option.label, self)
             action.triggered.connect(
@@ -1366,17 +1570,14 @@ class PetWindow(QWidget):
         start_work_action.setEnabled(not self.work_timer.is_running)
         start_work_action.triggered.connect(self.start_work_timer)
         work_menu.addAction(start_work_action)
-        pause_work_action = QAction("暂停计时并休息", self)
-        pause_work_action.setEnabled(self.work_timer.is_running)
-        pause_work_action.triggered.connect(self.pause_work_timer)
-        work_menu.addAction(pause_work_action)
-        finish_work_action = QAction("完成本次工作", self)
-        finish_work_action.triggered.connect(self.finish_work_timer)
-        work_menu.addAction(finish_work_action)
+        if self.work_timer.is_running:
+            controls_action = QAction("摸头或点电脑进行暂停/结束", self)
+            controls_action.triggered.connect(self.show_work_controls)
+            work_menu.addAction(controls_action)
         show_work_action = QAction("查看今日累计", self)
         show_work_action.triggered.connect(self.show_work_time)
         work_menu.addAction(show_work_action)
-        food_menu = menu.addMenu("给 Lili 喂食/饮品")
+        food_menu = menu.addMenu("给六毛喂食/饮品")
         for food in FOOD_OPTIONS:
             food_action = QAction(food.label, self)
             food_action.triggered.connect(
@@ -1386,12 +1587,14 @@ class PetWindow(QWidget):
         selfie_action = QAction("自拍一下", self)
         selfie_action.triggered.connect(self.trigger_selfie)
         menu.addAction(selfie_action)
-        mood_action = QAction(
-            f"查看状态：{self.companion.status_text()}",
-            self,
-        )
-        mood_action.triggered.connect(self.show_companion_status)
-        menu.addAction(mood_action)
+        music_action = QAction("随机听一首陈楚生", self)
+        music_action.triggered.connect(self.play_random_song)
+        menu.addAction(music_action)
+        music_move = menu.addMenu("音乐动作")
+        for label, key in (("戴耳机", "headphones"), ("弹吉他", "guitar"), ("打鼓", "drums")):
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+            music_move.addAction(action)
         ai_action = QAction("AI 与陪伴设置…", self)
         ai_action.triggered.connect(self.open_ai_settings)
         menu.addAction(ai_action)
@@ -1405,20 +1608,17 @@ class PetWindow(QWidget):
         hourly_action.setChecked(self.settings.hourly_announcement)
         hourly_action.toggled.connect(self.set_hourly_announcement)
         menu.addAction(hourly_action)
-        size_menu = menu.addMenu("宠物大小")
-        for label, height in (
-            ("迷你（150）", 150),
-            ("小巧（180）", 180),
-            ("标准（220）", 220),
-            ("大（280）", 280),
-        ):
-            size_action = QAction(label, self)
-            size_action.setCheckable(True)
-            size_action.setChecked(self.settings.display_height == height)
-            size_action.triggered.connect(
-                lambda _checked=False, value=height: self.set_display_height(value)
-            )
-            size_menu.addAction(size_action)
+        size_action = QAction("连续调节宠物大小…", self)
+        size_action.triggered.connect(self.open_size_control)
+        menu.addAction(size_action)
+        outfit_menu = menu.addMenu("八小时成就娃衣")
+        classic = QAction("经典六毛", self); classic.triggered.connect(lambda: self.equip_outfit("")); outfit_menu.addAction(classic)
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        for outfit in OUTFITS:
+            label = outfit.name if outfit in unlocked else f"🔒 {outfit.name}"
+            action = QAction(label, self); action.setEnabled(outfit in unlocked)
+            action.triggered.connect(lambda _checked=False, key=outfit.key: self.equip_outfit(key))
+            outfit_menu.addAction(action)
         return_action = QAction("回到主屏幕", self)
         return_action.triggered.connect(self.return_to_primary_screen)
         menu.addAction(return_action)
@@ -1502,14 +1702,13 @@ class PetWindow(QWidget):
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """双击左键时触发互动反馈。"""
+        """双击左键打开快捷口袋，避免依赖系统托盘。"""
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
             self._press_pending = False
-            self.mood.receive_affection()
             self._record_user_interaction()
-            self._show_emotion(PetState.HAPPY, 1800)
+            self.show_quick_panel()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
