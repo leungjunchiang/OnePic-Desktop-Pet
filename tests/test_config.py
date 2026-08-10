@@ -78,7 +78,17 @@ def test_default_inactivity_uses_five_and_ten_minutes() -> None:
 
 def test_save_settings_writes_json(tmp_path) -> None:
     path = tmp_path / "nested" / "settings.json"
-    saved = save_settings(PetSettings(start_x=12, start_y=34), path)
+    saved = save_settings(
+        PetSettings(
+            start_x=12,
+            start_y=34,
+            qq_music_path=r"C:\Music\QQMusic.exe",
+            babuda_audio_path=r"C:\Private\babuda-1.wav",
+            local_lyrics_path=r"C:\Private\lyrics.txt",
+            lyric_interval_minutes=6,
+        ),
+        path,
+    )
 
     data = json.loads(saved.read_text(encoding="utf-8"))
     assert data["start_x"] == 12
@@ -87,8 +97,27 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["ai_provider"] == "offline"
     assert data["automatic_grumbling"] is True
     assert data["hourly_announcement"] is False
+    assert data["qq_music_path"].endswith("QQMusic.exe")
+    assert data["babuda_audio_path"].endswith("babuda-1.wav")
+    assert data["local_lyrics_path"].endswith("lyrics.txt")
+    assert data["lyric_interval_minutes"] == 6
     assert not any("token" in key or "key" in key for key in data)
     assert not path.with_suffix(".json.tmp").exists()
+
+
+def test_local_path_and_lyric_interval_validation(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path = tmp_path / "override.json"
+    override_path.write_text(
+        json.dumps({"qq_music_path": "  demo.exe\u0000 ", "lyric_interval_minutes": 1}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(default_path, override_path)
+
+    assert settings.qq_music_path == "demo.exe"
+    assert settings.lyric_interval_minutes == 2
 
 
 def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> None:

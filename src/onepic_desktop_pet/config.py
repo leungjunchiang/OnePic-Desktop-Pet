@@ -1,5 +1,5 @@
 """
-本模块负责桌面宠物默认配置、用户配置、尺寸和窗口位置状态的加载与保存。
+本模块负责桌面宠物默认配置、用户配置、本地程序/音频路径、尺寸和窗口位置状态的加载与保存。
 
 职责范围：
 - 从项目内只读 JSON 读取默认功能设置；
@@ -60,6 +60,11 @@ class PetSettings:
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
     music_service: str = "netease"
+    qq_music_path: str = ""
+    netease_music_path: str = ""
+    babuda_audio_path: str = ""
+    local_lyrics_path: str = ""
+    lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
 
 
@@ -136,6 +141,11 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
     settings.music_service = "qq" if settings.music_service == "qq" else "netease"
+    settings.qq_music_path = str(settings.qq_music_path).replace("\x00", "").strip()[:1200]
+    settings.netease_music_path = str(settings.netease_music_path).replace("\x00", "").strip()[:1200]
+    settings.babuda_audio_path = str(settings.babuda_audio_path).replace("\x00", "").strip()[:1200]
+    settings.local_lyrics_path = str(settings.local_lyrics_path).replace("\x00", "").strip()[:1200]
+    settings.lyric_interval_minutes = min(120, max(2, int(settings.lyric_interval_minutes)))
     settings.equipped_outfit = str(settings.equipped_outfit)[:60]
     return settings
 
@@ -177,6 +187,11 @@ def load_settings(
                 "water_interval_minutes",
                 "stand_interval_minutes",
                 "music_service",
+                "qq_music_path",
+                "netease_music_path",
+                "babuda_audio_path",
+                "local_lyrics_path",
+                "lyric_interval_minutes",
                 "equipped_outfit",
             }
         }
@@ -207,6 +222,11 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "water_interval_minutes": settings.water_interval_minutes,
         "stand_interval_minutes": settings.stand_interval_minutes,
         "music_service": settings.music_service,
+        "qq_music_path": settings.qq_music_path,
+        "netease_music_path": settings.netease_music_path,
+        "babuda_audio_path": settings.babuda_audio_path,
+        "local_lyrics_path": settings.local_lyrics_path,
+        "lyric_interval_minutes": settings.lyric_interval_minutes,
         "equipped_outfit": settings.equipped_outfit,
     }
     temporary.write_text(

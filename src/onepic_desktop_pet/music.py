@@ -1,4 +1,4 @@
-"""调用本机 QQ 音乐或网易云音乐，并为缺少客户端的情况提供正版网页回退。
+"""调用用户指定或自动检测的本机 QQ 音乐/网易云音乐，并提供正版网页回退。
 
 本模块不内置歌词、音频或非公开曲库接口。Windows 在用户主动点击后启动已安装客户端，
 模拟一次搜索快捷键并尝试播放首条结果；macOS 将正版搜索地址交给指定客户端。若客户端不存在，
@@ -82,17 +82,23 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
     return ()
 
 
-def find_music_client(service: str) -> Path | None:
-    """返回首个已安装的指定音乐客户端。"""
+def find_music_client(service: str, custom_path: str = "") -> Path | None:
+    """优先返回用户选择的程序，否则返回首个自动检测到的客户端。"""
 
+    selected = Path(custom_path).expanduser() if custom_path.strip() else None
+    if selected is not None and selected.exists():
+        if (os.name == "nt" and selected.is_file() and selected.suffix.casefold() == ".exe") or (
+            sys.platform == "darwin" and selected.is_dir() and selected.suffix.casefold() == ".app"
+        ):
+            return selected
     return next((path for path in music_client_candidates(service) if path.exists()), None)
 
 
-def launch_music_client(service: str, title: str) -> MusicLaunchResult:
+def launch_music_client(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
     """启动客户端并尝试自动搜索播放；找不到客户端时打开正版网页。"""
 
     normalized = "qq" if service == "qq" else "netease"
-    client = find_music_client(normalized)
+    client = find_music_client(normalized, custom_path)
     query = f"陈楚生 {title}"
     if client is None:
         webbrowser.open(music_search_url(normalized, title))

@@ -43,7 +43,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -65,6 +65,11 @@ try:
 except ImportError:
     QTextToSpeech = None
 
+try:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+except ImportError:
+    QAudioOutput = QMediaPlayer = None
+
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
 from .activity import active_application_category
@@ -81,6 +86,7 @@ from .companion import (
 from .config import PetSettings, save_settings
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
+from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
 from .music import choose_song, launch_music_client
 from .wellness import WellnessReminderModel
@@ -150,6 +156,14 @@ class PetWindow(QWidget):
         self._last_app_category = "other"
         self._late_wakeup_shown = False
         self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
+        self._babuda_variant_index = 0
+        self._pending_context_global = QPoint()
+        self._suppress_context_until = 0.0
+        self._audio_output = QAudioOutput(self) if QAudioOutput is not None else None
+        self._media_player = QMediaPlayer(self) if QMediaPlayer is not None else None
+        if self._audio_output is not None and self._media_player is not None:
+            self._audio_output.setVolume(0.9)
+            self._media_player.setAudioOutput(self._audio_output)
 
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         if settings.always_on_top:
@@ -269,6 +283,15 @@ class PetWindow(QWidget):
         self.ambient_timer.setSingleShot(True)
         self.ambient_timer.timeout.connect(self._ambient_tick)
         self._schedule_ambient()
+
+        self.song_timer = QTimer(self)
+        self.song_timer.setSingleShot(True)
+        self.song_timer.timeout.connect(self._song_inspiration_tick)
+        self._schedule_song_inspiration()
+
+        self.context_menu_timer = QTimer(self)
+        self.context_menu_timer.setSingleShot(True)
+        self.context_menu_timer.timeout.connect(self._show_deferred_context_menu)
 
         self.hourly_timer = QTimer(self)
         self.hourly_timer.setInterval(15000)
@@ -628,6 +651,8 @@ class PetWindow(QWidget):
         self.shutdown_work_timer()
         self.photo_bubble.close()
         self.speech_bubble.close()
+        if self._media_player is not None:
+            self._media_player.stop()
         super().closeEvent(event)
 
     def _on_screen_changed(self, screen: QScreen | None) -> None:
@@ -1199,6 +1224,7 @@ class PetWindow(QWidget):
             return
         save_settings(self.settings)
         self._schedule_ambient()
+        self._schedule_song_inspiration()
         if self._chat_dialog is not None:
             self._chat_dialog.set_provider(self.settings.ai_provider)
         preset = PROVIDER_PRESETS[self.settings.ai_provider]
@@ -1241,7 +1267,12 @@ class PetWindow(QWidget):
         """由用户主动调用音乐客户端，自动搜索并尝试播放随机歌曲。"""
 
         title = choose_song()
-        result = launch_music_client(self.settings.music_service, title)
+        custom_path = (
+            self.settings.qq_music_path
+            if self.settings.music_service == "qq"
+            else self.settings.netease_music_path
+        )
+        result = launch_music_client(self.settings.music_service, title, custom_path)
         self._ambient_activity = random.choice(("headphones", "guitar", "drums"))
         self._manual_activity_until = time.monotonic() + 180
         self._refresh_pixmap()
@@ -1330,14 +1361,38 @@ class PetWindow(QWidget):
         try:
             busy = self._ai_thread is not None and self._ai_thread.isRunning()
             if self.isVisible() and not self.dragging and not busy:
-                if self.settings.lyric_inspiration_enabled and random.random() < 0.28:
-                    reply = self.companion.song_inspiration()
-                else:
-                    reply = self.companion.ambient_grumble(self.work_timer.is_running)
+                reply = self.companion.ambient_grumble(self.work_timer.is_running)
                 self._show_emotion(reply.state, 2600)
                 self.show_speech(reply.text, 6200)
         finally:
             self._schedule_ambient()
+
+    def _schedule_song_inspiration(self) -> None:
+        """按用户设置单独安排歌词气泡，不再与低概率牢骚共用计时器。"""
+
+        if not hasattr(self, "song_timer"):
+            return
+        self.song_timer.stop()
+        if self.settings.lyric_inspiration_enabled:
+            base = self.settings.lyric_interval_minutes * 60_000
+            self.song_timer.start(max(60_000, round(base * random.uniform(0.85, 1.15))))
+
+    def _song_inspiration_tick(self) -> None:
+        """显示本机歌词短行；未选择文件时显示原创歌名意象短句。"""
+
+        try:
+            busy = self._ai_thread is not None and self._ai_thread.isRunning()
+            if self.isVisible() and not self.dragging and not busy:
+                local_lines = load_local_lines(self.settings.local_lyrics_path)
+                if local_lines:
+                    self._show_emotion(PetState.SIT, 2400)
+                    self.show_speech(f"♪ {random.choice(local_lines)}", 6800)
+                else:
+                    reply = self.companion.song_inspiration()
+                    self._show_emotion(reply.state, 2400)
+                    self.show_speech(f"♪ {reply.text}", 6800)
+        finally:
+            self._schedule_song_inspiration()
 
     def _hourly_tick(self) -> None:
         """周期检查整点报时，关闭时不产生任何气泡。"""
@@ -1389,8 +1444,6 @@ class PetWindow(QWidget):
             self.show_speech(reply.text, 6500)
         else:
             self.show_speech("巴布达！六毛听见你啦。", 3000)
-        if self.settings.voice_enabled and self._speech_engine is not None:
-            self._speech_engine.say("巴布达")
 
     def _show_emotion(self, state: PetState, duration_ms: int = 1600) -> None:
         """显示一次短暂互动表情，并在计时结束后恢复自主生活。"""
@@ -1438,8 +1491,6 @@ class PetWindow(QWidget):
             state = PetState.SHY if self.mood.affinity >= 70 else PetState.HAPPY
             self._show_emotion(state, 1700)
             self.show_speech("巴布达。六毛被你摸到脑袋啦。", 3000)
-            if self.settings.voice_enabled and self._speech_engine is not None:
-                self._speech_engine.say("巴布达")
             return
         if zone == "face":
             self.mood.receive_poke(False)
@@ -1456,6 +1507,28 @@ class PetWindow(QWidget):
             PetState.ANNOYED if repeated else PetState.SURPRISED,
             1800 if repeated else 1200,
         )
+
+    def play_babuda_voice(self) -> None:
+        """双击右键时轮换播放用户本地音频；缺少文件则用系统语音轻微变调。"""
+
+        if not self.settings.voice_enabled:
+            self.show_speech("巴布达！", 2600)
+            return
+        variants = find_audio_variants(self.settings.babuda_audio_path)
+        index = self._babuda_variant_index
+        self._babuda_variant_index += 1
+        if variants and self._media_player is not None:
+            path = variants[index % len(variants)]
+            self._media_player.stop()
+            self._media_player.setPlaybackRate((0.96, 1.0, 1.05)[index % 3])
+            self._media_player.setSource(QUrl.fromLocalFile(str(path.resolve())))
+            self._media_player.play()
+        elif self._speech_engine is not None:
+            self._speech_engine.setRate((-0.08, 0.0, 0.08)[index % 3])
+            self._speech_engine.setPitch((-0.05, 0.0, 0.08)[index % 3])
+            self._speech_engine.say("巴布达")
+        self._show_emotion(random.choice((PetState.HAPPY, PetState.SHY, PetState.SURPRISED)), 1500)
+        self.show_speech(random.choice(("巴布达！", "巴——布达。", "巴布达？六毛在呢。")), 2800)
 
     def _track_passive_motion(self, point: QPoint) -> None:
         """跟踪无按键悬停；停留触发好奇，头部往返移动判定为摸头。"""
@@ -1641,10 +1714,21 @@ class PetWindow(QWidget):
         return menu
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """在鼠标位置显示窗口菜单。"""
+        """稍候显示单次右键菜单，为双击右键的巴布达语音留出判定时间。"""
 
         self._record_user_interaction()
-        self._build_context_menu().exec(event.globalPos())
+        if time.monotonic() < self._suppress_context_until:
+            event.accept()
+            return
+        self._pending_context_global = event.globalPos()
+        self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
+        event.accept()
+
+    def _show_deferred_context_menu(self) -> None:
+        """确认不是双击后，在原鼠标位置打开普通右键菜单。"""
+
+        if time.monotonic() >= self._suppress_context_until:
+            self._build_context_menu().exec(self._pending_context_global)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """记录左键按下；只有移动超过系统阈值后才真正进入拖拽。"""
@@ -1711,13 +1795,20 @@ class PetWindow(QWidget):
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """双击左键打开快捷口袋，避免依赖系统托盘。"""
+        """双击左键打开快捷口袋；双击右键播放一声不同语气的巴布达。"""
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
             self._press_pending = False
             self._record_user_interaction()
             self.show_quick_panel()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self.context_menu_timer.stop()
+            self._suppress_context_until = time.monotonic() + 0.8
+            self._record_user_interaction()
+            self.play_babuda_voice()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)

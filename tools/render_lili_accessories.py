@@ -49,4 +49,4 @@ def render(output: Path) -> None:
 
 
 if __name__ == "__main__":
-    render(Path("build/visual/lili-0.8-accessories.png"))
+    render(Path("build/visual/lili-0.9-accessories.png"))

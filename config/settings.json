@@ -10,5 +10,10 @@
   "action_max_ms": 7000,
   "inactive_sit_ms": 300000,
   "inactive_sleep_ms": 600000,
-  "always_on_top": true
+  "always_on_top": true,
+  "qq_music_path": "",
+  "netease_music_path": "",
+  "babuda_audio_path": "",
+  "local_lyrics_path": "",
+  "lyric_interval_minutes": 8
 }

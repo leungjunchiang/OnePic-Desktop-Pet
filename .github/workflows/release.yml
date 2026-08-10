@@ -98,4 +98,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Lili $GITHUB_REF_NAME" \
             --generate-notes \
-            --notes "Lili 0.8：双击切换且自动收起的快捷口袋，AI Agent/API 连接检测，直接调用 QQ 音乐或网易云音乐客户端并尝试播放随机陈楚生歌曲，更醒目的耳机/吉他/鼓，以及每小时解锁一套、最终奖励为荒野国王的十件成就配饰。程序不内置歌曲音频或完整歌词；API 令牌存放在系统安全凭据库。公开包不含 user_assets、私人照片、令牌、聊天记录或本机工作数据。macOS DMG 因没有 Apple Developer ID 证书而未公证。"
+            --notes "Lili 0.9：可选择本机 QQ 音乐或网易云音乐程序路径并尝试随机播放陈楚生歌曲；歌词气泡使用独立可调计时，并可读取用户自选的本地 TXT；双击右键可播放用户本地的多段巴布达语音；耳机、吉他和鼓改为完整动作图，成就扩充为十四套并以荒野国王收尾。程序不内置歌曲音频、完整歌词或巴布达私人音频；API 令牌存放在系统安全凭据库。公开包不含 user_assets、私人照片、令牌、聊天记录、本机路径或工作数据。macOS DMG 因没有 Apple Developer ID 证书而未公证。"
