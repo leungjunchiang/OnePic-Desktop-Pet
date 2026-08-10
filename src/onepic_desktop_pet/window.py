@@ -10,7 +10,7 @@
 - 支持左键拖动、单击调戏、双击快捷口袋、无互动分级休息和连续尺寸滑块；
 - 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
 - 支持离线优先的聊天面板、可选 AI 后端以及工作、爱意、鼓励和安慰动作；
-- 支持电脑图层、摸头工作气泡、今日/终身计时、八小时娃衣解锁及健康提醒；
+- 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -43,7 +43,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal, QUrl
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -57,7 +57,6 @@ from PySide6.QtGui import (
     QScreen,
     QShowEvent,
     QTransform,
-    QDesktopServices,
 )
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QWidget
 
@@ -83,7 +82,7 @@ from .config import PetSettings, save_settings
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .resources import resource_path
-from .music import choose_song, music_search_url
+from .music import choose_song, launch_music_client
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
@@ -147,6 +146,7 @@ class PetWindow(QWidget):
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
+        self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
         self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
@@ -1085,7 +1085,7 @@ class PetWindow(QWidget):
         self.show_speech(reply.text, 7200)
 
     def _show_new_outfit_unlock(self) -> None:
-        """在跨过新的八小时门槛时提示并自动装备新娃衣。"""
+        """在跨过新的整小时门槛时提示并自动装备新娃衣。"""
 
         index = self.work_timer.take_new_outfit_unlock()
         if index is None or not 1 <= index <= len(OUTFITS):
@@ -1094,7 +1094,7 @@ class PetWindow(QWidget):
         self.settings.equipped_outfit = outfit.key
         save_settings(self.settings)
         self._refresh_pixmap()
-        self.show_speech(f"八小时成就解锁：{outfit.name}。{outfit.message}", 7600)
+        self.show_speech(f"一小时成就解锁：{outfit.name}。{outfit.message}", 7600)
 
     def shutdown_work_timer(self) -> None:
         """自然退出前暂停并保存计时，避免把关机时间计入工作。"""
@@ -1222,7 +1222,11 @@ class PetWindow(QWidget):
     def _app_awareness_tick(self) -> None:
         """只根据前台应用类别切换配饰动作，不读取标题或文档内容。"""
 
-        if not self.settings.app_awareness or self.work_timer.is_running:
+        if (
+            not self.settings.app_awareness
+            or self.work_timer.is_running
+            or time.monotonic() < self._manual_activity_until
+        ):
             return
         category = active_application_category()
         if category == self._last_app_category:
@@ -1234,19 +1238,21 @@ class PetWindow(QWidget):
         self._refresh_pixmap()
 
     def play_random_song(self) -> str:
-        """由用户主动打开一首陈楚生歌曲的正版平台搜索页。"""
+        """由用户主动调用音乐客户端，自动搜索并尝试播放随机歌曲。"""
 
         title = choose_song()
-        QDesktopServices.openUrl(QUrl(music_search_url(self.settings.music_service, title)))
+        result = launch_music_client(self.settings.music_service, title)
         self._ambient_activity = random.choice(("headphones", "guitar", "drums"))
+        self._manual_activity_until = time.monotonic() + 180
         self._refresh_pixmap()
-        self.show_speech(f"六毛挑了《{title}》。我打开正版搜索页啦，点一下就能播放。", 6500)
+        self.show_speech(f"六毛挑了《{title}》。{result.message}", 7200)
         return title
 
     def set_activity(self, activity: str) -> None:
         """手动选择电脑、耳机、吉他、鼓或阅读叠加动作。"""
 
         self._ambient_activity = activity if activity in {"computer", "headphones", "guitar", "drums", "reading", "writing"} else "none"
+        self._manual_activity_until = time.monotonic() + 120
         self._mask_cache.clear()
         self._refresh_pixmap()
 
@@ -1255,7 +1261,7 @@ class PetWindow(QWidget):
 
         allowed = {item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())}
         if outfit_key and outfit_key not in allowed:
-            self.show_speech("这套娃衣还在秘密王国里，再累计工作八小时就更近一点。", 5200)
+            self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
             return
         self.settings.equipped_outfit = outfit_key
         save_settings(self.settings)
@@ -1284,8 +1290,11 @@ class PetWindow(QWidget):
         panel.move(x, y)
 
     def show_quick_panel(self) -> None:
-        """显示无需系统托盘即可访问的快捷入口。"""
+        """双击切换快捷口袋；再次双击立即收起。"""
 
+        if self.quick_panel.isVisible():
+            self.quick_panel.hide()
+            return
         self._position_floating_panel(self.quick_panel)
         self.quick_panel.show(); self.quick_panel.raise_()
 
@@ -1611,7 +1620,7 @@ class PetWindow(QWidget):
         size_action = QAction("连续调节宠物大小…", self)
         size_action.triggered.connect(self.open_size_control)
         menu.addAction(size_action)
-        outfit_menu = menu.addMenu("八小时成就娃衣")
+        outfit_menu = menu.addMenu("每小时成就娃衣")
         classic = QAction("经典六毛", self); classic.triggered.connect(lambda: self.equip_outfit("")); outfit_menu.addAction(classic)
         unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
         for outfit in OUTFITS:

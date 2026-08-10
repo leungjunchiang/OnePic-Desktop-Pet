@@ -4,6 +4,7 @@
 职责范围：
 - 定义离线优先的提供方预设与安全、短小的陪伴提示词；
 - 在本机寻找 Codex CLI，并以只读、临时会话模式获取回复；
+- 检测 Codex、Claude Code 的本机登录状态及兼容 API 的只读模型端点；
 - 通过标准 HTTPS Chat Completions 接口调用用户主动配置的服务；
 - 使用系统凭据库保存 API 令牌，绝不把令牌写入设置文件；
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
@@ -109,6 +110,109 @@ class CredentialStore:
             return bool(self.get(provider))
         except AIConnectionError:
             return False
+
+
+def check_provider_connection(
+    provider: str,
+    credentials: CredentialStore,
+    base_url: str = "",
+    token_override: str = "",
+) -> str:
+    """由用户主动检测本机 Agent 登录或在线 API 认证状态。"""
+
+    if provider == "offline":
+        return "纯离线模式正常，不需要账号或网络。"
+    if provider == "codex":
+        executable = find_codex_executable()
+        if executable is None:
+            raise AIConnectionError("没有找到 Codex。")
+        if not _command_succeeds([str(executable), "login", "status"]):
+            raise AIConnectionError("已找到 Codex，但当前没有登录。")
+        return "Codex 已安装并登录，可以连接。"
+    if provider == "claude":
+        executable = find_claude_executable()
+        if executable is None:
+            raise AIConnectionError("没有找到 Claude Code。")
+        output = _run_status_command([str(executable), "auth", "status", "--json"])
+        try:
+            logged_in = bool(json.loads(output).get("loggedIn"))
+        except (ValueError, AttributeError, json.JSONDecodeError):
+            logged_in = False
+        if not logged_in:
+            raise AIConnectionError("已找到 Claude Code，但当前没有登录。")
+        return "Claude Code 已安装并登录，可以连接。"
+    if provider not in {"deepseek", "kimi", "custom"}:
+        raise AIConnectionError("未知的 AI 连接方式。")
+    default_url, _model = provider_defaults(provider)
+    token = token_override.strip() or credentials.get(provider)
+    if not token:
+        raise AIConnectionError("还没有填写或保存 API 令牌。")
+    request = urllib.request.Request(
+        _models_endpoint(base_url or default_url),
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "LiliDesktopPet/0.8"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            if int(getattr(response, "status", 200)) >= 400:
+                raise AIConnectionError("API 返回了连接错误。")
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise AIConnectionError("API 令牌无效或没有权限。") from exc
+        raise AIConnectionError(f"API 检测失败（{exc.code}）。") from exc
+    except OSError as exc:
+        raise AIConnectionError("无法连接到 AI 服务，请检查网络和 API 地址。") from exc
+    return "API 地址和令牌检测通过，可以连接。"
+
+
+def _command_succeeds(command: list[str]) -> bool:
+    """隐藏运行状态命令并按退出码判断成功。"""
+
+    try:
+        _run_status_command(command)
+    except AIConnectionError:
+        return False
+    return True
+
+
+def _run_status_command(command: list[str]) -> str:
+    """运行不产生会话内容的本机登录状态命令。"""
+
+    startupinfo = None
+    creationflags = 0
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AIConnectionError("连接状态检测没有响应。") from exc
+    if completed.returncode != 0:
+        raise AIConnectionError("当前没有检测到有效登录。")
+    return completed.stdout.strip()
+
+
+def _models_endpoint(base_url: str) -> str:
+    """从兼容 API 地址生成只读模型列表检测端点。"""
+
+    clean = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(clean)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AIConnectionError("API 地址必须是有效的 HTTPS 地址。")
+    if clean.endswith("/chat/completions"):
+        clean = clean[: -len("/chat/completions")]
+    return f"{clean}/models"
 
 
 def provider_defaults(provider: str) -> tuple[str, str]:

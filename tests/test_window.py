@@ -275,6 +275,19 @@ def test_default_workmate_size_is_smaller_than_previous_standard() -> None:
     app.processEvents()
 
 
+def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
+    """快捷口袋只在主动打开时显示，再次调用会立即收起。"""
+
+    app, window = _create_window()
+    window.show_quick_panel()
+    app.processEvents()
+    assert window.quick_panel.isVisible()
+    assert window.quick_panel.hide_timer.isActive()
+    window.show_quick_panel()
+    assert not window.quick_panel.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_feeding_updates_fullness_and_shows_speech_bubble() -> None:
     """从菜单喂苹果应更新状态，并在人物附近显示文字反馈。"""
 
@@ -337,7 +350,7 @@ def test_context_menu_exposes_new_dialogue_food_ai_and_no_status() -> None:
     assert not any("打招呼" in text for text in actions)
     assert any(text.startswith("工作计时：") for text in actions)
     assert "连续调节宠物大小…" in actions
-    assert "八小时成就娃衣" in actions
+    assert "每小时成就娃衣" in actions
     menu.close()
     window.close()
     window.deleteLater()

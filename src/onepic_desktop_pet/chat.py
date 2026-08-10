@@ -4,7 +4,7 @@
 职责范围：
 - 提供不遮挡桌宠的圆角聊天窗口与清晰的本地/在线状态提示；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
-- 允许选择纯离线、Codex、DeepSeek、Kimi 或兼容接口；
+- 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 在线请求放入 QThread，避免冻结桌面动画。
 
@@ -36,6 +36,7 @@ from .ai import (
     AIConnectionError,
     CredentialStore,
     PROVIDER_PRESETS,
+    check_provider_connection,
     codex_available,
     claude_available,
     provider_defaults,
@@ -259,6 +260,10 @@ class AISettingsDialog(QDialog):
         self.token_status.setObjectName("status")
         self.token_status.setWordWrap(True)
         layout.addWidget(self.token_status)
+        self.connection_button = QPushButton("检测是否连接")
+        self.connection_button.setObjectName("softButton")
+        self.connection_button.clicked.connect(self._test_connection)
+        layout.addWidget(self.connection_button)
 
         self.grumbling = QCheckBox("允许六毛偶尔发一句轻松的牢骚")
         self.grumbling.setChecked(settings.automatic_grumbling)
@@ -328,6 +333,29 @@ class AISettingsDialog(QDialog):
         else:
             status = "所有回答都在本机生成。"
         self.token_status.setText(status)
+
+    def _test_connection(self) -> None:
+        """检测本机 Agent 登录或 API 地址与令牌，不发送聊天内容。"""
+
+        provider = str(self.provider.currentData())
+        self.connection_button.setEnabled(False)
+        self.connection_button.setText("正在检测…")
+        try:
+            result = check_provider_connection(
+                provider,
+                self.credentials,
+                self.base_url.text().strip(),
+                self.token.text().strip(),
+            )
+        except AIConnectionError as exc:
+            self.token_status.setText(f"❌ {exc}")
+        except Exception:
+            self.token_status.setText("❌ 检测遇到意外问题，请稍后重试。")
+        else:
+            self.token_status.setText(f"✅ {result}")
+        finally:
+            self.connection_button.setEnabled(True)
+            self.connection_button.setText("检测是否连接")
 
     def apply(self) -> None:
         provider = str(self.provider.currentData())

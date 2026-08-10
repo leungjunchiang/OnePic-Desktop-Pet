@@ -1,13 +1,24 @@
-"""提供陈楚生歌曲标题随机选择和正版音乐平台搜索入口。
+"""调用本机 QQ 音乐或网易云音乐，并为缺少客户端的情况提供正版网页回退。
 
-本模块不内置歌词、音频或非公开接口，也不尝试绕过平台播放规则。用户主动点击后，程序只会
-打开网易云音乐或 QQ 音乐的官方搜索页，由用户在已安装客户端或浏览器中确认播放。
+本模块不内置歌词、音频或非公开曲库接口。Windows 在用户主动点击后启动已安装客户端，
+模拟一次搜索快捷键并尝试播放首条结果；macOS 将正版搜索地址交给指定客户端。若客户端不存在，
+才打开官方搜索网页。键盘自动化只在这次明确点击后运行，不在后台持续控制其他应用。
 """
 
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
+import os
 import random
+import subprocess
+import sys
+import threading
+import time
 import urllib.parse
+import webbrowser
+from dataclasses import dataclass
+from pathlib import Path
 
 
 CHEN_CHUSHENG_SONGS = (
@@ -37,3 +48,262 @@ def music_search_url(service: str, title: str) -> str:
     if service == "qq":
         return f"https://y.qq.com/n/ryqq/search?w={query}&t=song"
     return f"https://music.163.com/#/search/m/?s={query}&type=1"
+
+
+@dataclass(frozen=True)
+class MusicLaunchResult:
+    """说明客户端是否找到以及用户可见的启动结果。"""
+
+    client_found: bool
+    message: str
+
+
+def music_client_candidates(service: str) -> tuple[Path, ...]:
+    """返回当前平台常见的正版音乐客户端位置。"""
+
+    if sys.platform == "darwin":
+        names = ("QQMusic.app",) if service == "qq" else ("NeteaseMusic.app", "网易云音乐.app")
+        return tuple(Path("/Applications") / name for name in names)
+    if os.name == "nt":
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        program_x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        if service == "qq":
+            return (
+                program_x86 / "Tencent" / "QQMusic" / "QQMusic.exe",
+                program_files / "Tencent" / "QQMusic" / "QQMusic.exe",
+                local / "Tencent" / "QQMusic" / "QQMusic.exe",
+            )
+        return (
+            program_files / "NetEase" / "CloudMusic" / "cloudmusic.exe",
+            program_x86 / "NetEase" / "CloudMusic" / "cloudmusic.exe",
+            local / "NetEase" / "CloudMusic" / "cloudmusic.exe",
+        )
+    return ()
+
+
+def find_music_client(service: str) -> Path | None:
+    """返回首个已安装的指定音乐客户端。"""
+
+    return next((path for path in music_client_candidates(service) if path.exists()), None)
+
+
+def launch_music_client(service: str, title: str) -> MusicLaunchResult:
+    """启动客户端并尝试自动搜索播放；找不到客户端时打开正版网页。"""
+
+    normalized = "qq" if service == "qq" else "netease"
+    client = find_music_client(normalized)
+    query = f"陈楚生 {title}"
+    if client is None:
+        webbrowser.open(music_search_url(normalized, title))
+        label = "QQ 音乐" if normalized == "qq" else "网易云音乐"
+        return MusicLaunchResult(False, f"没有找到已安装的{label}，已改为打开正版搜索页。")
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", "-a", str(client), music_search_url(normalized, title)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.Popen(
+                [str(client)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if os.name == "nt":
+                threading.Thread(
+                    target=_windows_search_and_play,
+                    args=(client.name, query),
+                    daemon=True,
+                ).start()
+    except OSError:
+        webbrowser.open(music_search_url(normalized, title))
+        return MusicLaunchResult(False, "客户端启动失败，已改为打开正版搜索页。")
+    return MusicLaunchResult(True, "已打开音乐客户端，正在自动搜索并尝试播放第一条结果。")
+
+
+def _windows_search_and_play(executable_name: str, query: str) -> bool:
+    """短暂聚焦刚启动的音乐客户端，通过搜索快捷键尝试播放首条结果。"""
+
+    if os.name != "nt":
+        return False
+    time.sleep(2.4)
+    hwnd = _find_windows_app_window(executable_name)
+    if not hwnd:
+        return False
+    user32 = ctypes.windll.user32
+    if not user32.IsWindow(hwnd):
+        return False
+    user32.ShowWindow(hwnd, 9)
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(0.4)
+    if not _is_foreground_window(hwnd):
+        return False
+    original_cursor = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(original_cursor))
+    try:
+        _click_window_relative(hwnd, 0.40, 0.052)
+        time.sleep(0.2)
+        if not _is_foreground_window(hwnd):
+            return False
+        _press_virtual_key(0x11, down=True)
+        _press_virtual_key(ord("A"), down=True)
+        _press_virtual_key(ord("A"), down=False)
+        _press_virtual_key(0x11, down=False)
+        time.sleep(0.2)
+        if not _is_foreground_window(hwnd):
+            return False
+        _send_unicode_text(query)
+        _tap_virtual_key(0x0D)
+        time.sleep(2.2)
+        if not _is_foreground_window(hwnd):
+            return False
+        _double_click_window_relative(hwnd, 0.43, 0.30)
+        return True
+    finally:
+        user32.SetCursorPos(original_cursor.x, original_cursor.y)
+
+
+def _is_foreground_window(hwnd: int) -> bool:
+    """只在目标音乐窗口确实位于前台时允许发送鼠标和键盘事件。"""
+
+    user32 = ctypes.windll.user32
+    return bool(user32.IsWindow(hwnd) and user32.GetForegroundWindow() == hwnd)
+
+
+def _find_windows_app_window(executable_name: str) -> int:
+    """寻找属于指定可执行文件的可见顶层窗口。"""
+
+    process_ids = _windows_process_ids(executable_name)
+    if not process_ids:
+        return 0
+    matches: list[tuple[int, int]] = []
+    user32 = ctypes.windll.user32
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def visit(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        process_id = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        if process_id.value not in process_ids:
+            return True
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+        matches.append((area, int(hwnd)))
+        return True
+
+    user32.EnumWindows(callback_type(visit), 0)
+    return max(matches)[1] if matches else 0
+
+
+def _windows_process_ids(executable_name: str) -> set[int]:
+    """通过 Toolhelp 快照返回指定可执行文件的全部进程号。"""
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snapshot in (0, ctypes.c_void_p(-1).value):
+        return set()
+    entry = ProcessEntry(); entry.dwSize = ctypes.sizeof(ProcessEntry)
+    target = executable_name.casefold()
+    result: set[int] = set()
+    try:
+        success = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while success:
+            if str(entry.szExeFile).casefold() == target:
+                result.add(int(entry.th32ProcessID))
+            success = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return result
+
+
+def _window_point(hwnd: int, x_ratio: float, y_ratio: float) -> tuple[int, int]:
+    """把窗口比例位置转换为屏幕坐标。"""
+
+    rect = wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return (
+        rect.left + round((rect.right - rect.left) * x_ratio),
+        rect.top + round((rect.bottom - rect.top) * y_ratio),
+    )
+
+
+def _click_window_relative(hwnd: int, x_ratio: float, y_ratio: float) -> None:
+    """单击窗口内的相对位置。"""
+
+    x, y = _window_point(hwnd, x_ratio, y_ratio)
+    user32 = ctypes.windll.user32
+    user32.SetCursorPos(x, y)
+    user32.mouse_event(0x0002, 0, 0, 0, 0)
+    user32.mouse_event(0x0004, 0, 0, 0, 0)
+
+
+def _double_click_window_relative(hwnd: int, x_ratio: float, y_ratio: float) -> None:
+    """双击窗口内的相对位置，用于播放第一条搜索结果。"""
+
+    _click_window_relative(hwnd, x_ratio, y_ratio)
+    time.sleep(0.1)
+    _click_window_relative(hwnd, x_ratio, y_ratio)
+
+
+def _press_virtual_key(key: int, down: bool) -> None:
+    """发送一个普通虚拟按键事件。"""
+
+    ctypes.windll.user32.keybd_event(key, 0, 0 if down else 0x0002, 0)
+
+
+def _tap_virtual_key(key: int) -> None:
+    """按下并释放一个普通虚拟按键。"""
+
+    _press_virtual_key(key, True)
+    _press_virtual_key(key, False)
+
+
+def _send_unicode_text(text: str) -> None:
+    """用 Unicode 键盘事件输入中文，不读取或覆盖用户剪贴板。"""
+
+    class KeyboardInput(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+            ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class MouseInput(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_long), ("dy", ctypes.c_long),
+            ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class HardwareInput(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", ctypes.c_ulong),
+            ("wParamL", ctypes.c_ushort),
+            ("wParamH", ctypes.c_ushort),
+        ]
+
+    class InputUnion(ctypes.Union):
+        _fields_ = [("mi", MouseInput), ("ki", KeyboardInput), ("hi", HardwareInput)]
+
+    class Input(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ulong), ("union", InputUnion)]
+
+    for character in text:
+        code = ord(character)
+        down = Input(1, InputUnion(ki=KeyboardInput(0, code, 0x0004, 0, 0)))
+        up = Input(1, InputUnion(ki=KeyboardInput(0, code, 0x0004 | 0x0002, 0, 0)))
+        events = (Input * 2)(down, up)
+        ctypes.windll.user32.SendInput(2, ctypes.byref(events), ctypes.sizeof(Input))
