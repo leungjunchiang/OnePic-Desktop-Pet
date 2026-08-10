@@ -5,7 +5,7 @@
 - 创建或复用 QApplication；
 - 在创建应用前启用适合不同显示器缩放比例的高 DPI 舍入策略；
 - 创建 PetWindow 和 QSystemTrayIcon；
-- 连接显示、隐藏、暂停跑动、互动和退出动作；
+- 连接显示、隐藏、暂停跑动、喂食、离线对话和退出动作；
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
 
@@ -28,6 +28,7 @@ from PySide6.QtGui import QAction, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .config import PetSettings, load_settings, save_settings
+from .companion import APP_DISPLAY_NAME, FOOD_OPTIONS
 from .resources import resource_path
 from .window import PetWindow
 
@@ -41,7 +42,8 @@ class DesktopPetApplication:
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
         self.qt_app = QApplication.instance() or QApplication(sys.argv)
-        self.qt_app.setApplicationName("OnePic Desktop Pet")
+        self.qt_app.setApplicationName(APP_DISPLAY_NAME)
+        self.qt_app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
@@ -53,16 +55,32 @@ class DesktopPetApplication:
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
-        tray.setToolTip("OnePic Desktop Pet")
+        tray.setToolTip(APP_DISPLAY_NAME)
         menu = QMenu()
 
         show_action = QAction("显示宠物", menu)
         show_action.triggered.connect(self.show_window)
         menu.addAction(show_action)
 
-        interact_action = QAction("和她打招呼", menu)
+        interact_action = QAction("和六毛打招呼", menu)
         interact_action.triggered.connect(self.window.trigger_interaction)
         menu.addAction(interact_action)
+
+        dialogue_action = QAction("和六毛聊聊…", menu)
+        dialogue_action.triggered.connect(self.window.prompt_dialogue)
+        menu.addAction(dialogue_action)
+
+        food_menu = menu.addMenu("给六毛喂食")
+        for food in FOOD_OPTIONS:
+            food_action = QAction(food.label, menu)
+            food_action.triggered.connect(
+                lambda _checked=False, key=food.key: self.window.feed_pet(key)
+            )
+            food_menu.addAction(food_action)
+
+        status_action = QAction("查看六毛状态", menu)
+        status_action.triggered.connect(self.window.show_companion_status)
+        menu.addAction(status_action)
 
         selfie_action = QAction("自拍一下", menu)
         selfie_action.triggered.connect(self.window.trigger_selfie)

@@ -1,8 +1,8 @@
-# 一图桌宠（OnePic Desktop Pet）
+# 六毛工作搭子（Six Hair Workmate）
 
-上传一张角色图片，让 Agent 帮助生成、配置并优化一个可以在 Windows 桌面上跑动、休息、互动和自拍的桌面宠物。
+一只可以在桌面跑动、休息、互动、吃东西并陪你聊天的六毛公仔。项目仍保留 OnePic Desktop Pet 的一图制作流程。
 
-当前 `v0.3.0` 是六毛公仔公开版，提供可直接下载的 Windows、Apple 芯片 Mac 和 Intel Mac 安装包。默认角色保留六束紧密红色头发、蓝色发梢与锯齿脸、黄色连体衣和粉色爱心等辨识特征。
+当前 `v0.4.0` 命名为“六毛工作搭子”。默认站立高度从 220 缩小为 180，保留六束紧密红色头发、蓝色发梢与锯齿脸、黄色连体衣和粉色爱心等辨识特征。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -11,18 +11,26 @@
 - 透明无边框窗口、桌面置顶和多显示器 DPI 适配；
 - 站立、跑动、坐下、入睡、醒来、拖拽和自拍连续动画；
 - 摸头、分区点击、连续戳击、悬停注视和情绪反馈；
+- 可喂苹果、小饼干和热牛奶，并反馈饱食度、精力与亲密度；
+- 可输入文字与六毛离线对话，聊天内容不保存、不上传；
 - 跑动结束后随机站立、坐下或自拍；
 - 默认 5 分钟无互动后坐下、10 分钟后入睡；
-- 右键尺寸调整、暂停跑动、隐藏和退出；
+- 右键尺寸调整、查看状态、暂停跑动、隐藏和退出；
 - 用户可在本地放入自己的自拍成片，不提交到 Git；
 - 原图登记后自动作为自拍成片，保持原始像素尺寸；
 - 标准角色形象和走路 GIF 必须分别得到用户确认；
 - 表情符号由程序独立绘制，换角色后仍可显示闪光、爱心、惊叹号、疑问号、怒气、Zzz 和汗滴；
 - PyInstaller Windows 打包脚本。
 
+## 喂食与对话
+
+右键点击六毛，选择“给六毛喂食”，可以喂苹果、小饼干或热牛奶；选择“和六毛聊聊”即可输入一句话。六毛会回应问候、工作、学习、疲惫、开心、难过、吃饭等常见话题，也会给出适合工作搭子的简短陪伴建议。
+
+对话使用程序内置的本地规则，不调用在线大模型，不需要账号或网络，不保存聊天历史。
+
 ## 最快体验
 
-未来正式 Release 会提供可直接运行的 Windows 版本，不需要安装 Python。当前本地候选版请先执行：
+Releases 页面提供可直接运行的 Windows 和 macOS 版本，不需要安装 Python。本地开发版可执行：
 
 ```powershell
 .\scripts\check_environment.ps1
@@ -101,18 +109,18 @@ user_assets/selfie.jpeg
 打包结果位于：
 
 ```text
-dist/OnePicDesktopPet/OnePicDesktopPet.exe
+dist/SixHairWorkmate/SixHairWorkmate.exe
 ```
 
 ## 公开下载与 macOS 版本
 
 公开安装包由 GitHub Actions 在对应操作系统上构建，发布在仓库的 Releases 页面：
 
-- `OnePicDesktopPet-Windows-x64.zip`：解压后双击 `OnePicDesktopPet.exe`；
-- `OnePicDesktopPet-macOS-arm64-unsigned.dmg`：适用于 Apple 芯片 Mac（M1/M2/M3/M4 等）；
-- `OnePicDesktopPet-macOS-x64-unsigned.dmg`：适用于 Intel Mac。打开 DMG 后运行 `OnePicDesktopPet.app`。
+- `SixHairWorkmate-Windows-x64.zip`：解压后双击 `SixHairWorkmate.exe`；
+- `SixHairWorkmate-macOS-arm64-unsigned.dmg`：适用于 Apple 芯片 Mac（M1/M2/M3/M4 等）；
+- `SixHairWorkmate-macOS-x64-unsigned.dmg`：适用于 Intel Mac。打开 DMG 后运行 `SixHairWorkmate.app`。
 
-公开安装包始终使用仓库中的演示角色，不包含 `user_assets/`、用户原图、自拍照片、候选图或私人动作。macOS DMG 目前没有 Apple Developer ID 签名与公证；首次启动时可能需要在 Finder 中按住 Control 点击应用并选择“打开”。
+公开安装包使用仓库中的六毛公仔动作，不包含 `user_assets/`、用户原图、自拍照片、候选图、私人动作或聊天记录。macOS DMG 目前没有 Apple Developer ID 签名与公证；首次启动时可能需要在 Finder 中按住 Control 点击应用并选择“打开”。
 
 ## 一图制作流程
 
@@ -127,7 +135,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。[v0.3.0 六毛公仔版](https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.3.0) 提供 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧的 `v0.2.0` 演示角色版仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。[v0.4.0 六毛工作搭子](https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.4.0) 提供 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
 
 ## 授权
 

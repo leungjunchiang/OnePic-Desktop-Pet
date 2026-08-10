@@ -1,5 +1,6 @@
 """
-本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动和自拍成片。
+本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
+喂食、离线对话和自拍成片。
 
 测试在 Qt 的离屏平台中创建真实 PetWindow，但不显示到用户桌面、不写配置文件，
 也不启动系统托盘。重点检查透明区域不会形成完整矩形点击区、重复绘制能够复用缓存，
@@ -255,6 +256,100 @@ def test_display_size_preset_updates_geometry_and_settings() -> None:
     assert window.height() == 294
     assert window.label.height() == 288
     assert not window.mask().isEmpty()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_default_workmate_size_is_smaller_than_previous_standard() -> None:
+    """六毛工作搭子的首次启动高度应从旧版 220 缩小到 180。"""
+
+    app, window = _create_window()
+
+    assert window.settings.display_height == 180
+    assert window.height() == 194
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_feeding_updates_fullness_and_shows_speech_bubble() -> None:
+    """从菜单喂苹果应更新状态，并在人物附近显示文字反馈。"""
+
+    app, window = _create_window()
+    initial_fullness = window.mood.fullness
+
+    reply = window.feed_pet("apple")
+    app.processEvents()
+
+    assert window.mood.fullness == initial_fullness + 18
+    assert reply.state is PetState.HAPPY
+    assert window.state is PetState.HAPPY
+    assert window.speech_bubble.isVisible()
+    assert "苹果" in window.speech_bubble.text()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_dialogue_is_handled_locally_and_shows_reply() -> None:
+    """输入工作话题后应直接生成本地回复，不依赖外部服务。"""
+
+    app, window = _create_window()
+
+    reply = window.talk_to_pet("今天工作很多")
+    app.processEvents()
+
+    assert reply.state is PetState.HAPPY
+    assert "十分钟" in reply.text
+    assert window.speech_bubble.text() == reply.text
+    assert window.speech_bubble.isVisible()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_context_menu_exposes_dialogue_food_and_status() -> None:
+    """用户右键后应能直接找到对话、三种食物和状态入口。"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    actions = {action.text(): action for action in menu.actions()}
+
+    assert "和六毛聊聊…" in actions
+    assert "给六毛喂食" in actions
+    food_menu = actions["给六毛喂食"].menu()
+    assert food_menu is not None
+    assert [action.text() for action in food_menu.actions()] == [
+        "苹果",
+        "小饼干",
+        "热牛奶",
+    ]
+    assert any(text.startswith("查看状态：") for text in actions)
+    size_menu = actions["宠物大小"].menu()
+    assert size_menu is not None
+    checked_sizes = [action.text() for action in size_menu.actions() if action.isChecked()]
+    assert checked_sizes == ["小巧（180）"]
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_dialogue_prompt_passes_accepted_text_to_local_reply(monkeypatch) -> None:
+    """输入框确认后应把文字交给本地规则；取消时不产生聊天记录。"""
+
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.QInputDialog.getText",
+        lambda *_args, **_kwargs: ("今天有点累", True),
+    )
+
+    window.prompt_dialogue()
+    app.processEvents()
+
+    assert window.state is PetState.SLEEPY
+    assert "喝口水" in window.speech_bubble.text()
     window.close()
     window.deleteLater()
     app.processEvents()
