@@ -1,5 +1,5 @@
 """
-本模块实现 Lili 的聊天面板、AI 设置面板和后台请求线程。
+本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板和后台请求线程。
 
 职责范围：
 - 提供不遮挡桌宠的圆角聊天窗口与清晰的本地/在线状态提示；
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -36,6 +37,7 @@ from .ai import (
     CredentialStore,
     PROVIDER_PRESETS,
     codex_available,
+    claude_available,
     provider_defaults,
 )
 from .config import PetSettings
@@ -43,38 +45,38 @@ from .config import PetSettings
 
 PANEL_STYLE = """
 QDialog, QWidget#liliPanel {
-    background: #fff8e8;
-    color: #3d2a24;
-    font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    background: rgba(245, 247, 250, 205);
+    color: #27313d;
+    font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif;
 }
 QTextBrowser {
-    background: #fffdf7;
-    border: 2px solid #f1b5a9;
+    background: rgba(255, 255, 255, 168);
+    border: 1px solid rgba(101, 116, 139, 120);
     border-radius: 16px;
     padding: 10px;
     font-size: 14px;
 }
 QLineEdit, QComboBox {
     background: white;
-    border: 2px solid #eeb0a4;
+    border: 1px solid rgba(101, 116, 139, 130);
     border-radius: 11px;
     padding: 8px 10px;
     min-height: 20px;
 }
-QLineEdit:focus, QComboBox:focus { border-color: #e6312a; }
+QLineEdit:focus, QComboBox:focus { border-color: #58a6c7; }
 QPushButton {
     color: white;
-    background: #e6312a;
+    background: #4f8099;
     border: none;
     border-radius: 11px;
     padding: 9px 16px;
     font-weight: 600;
 }
-QPushButton:hover { background: #c92520; }
+QPushButton:hover { background: #3d6d86; }
 QPushButton:disabled { background: #c8aaa5; }
-QPushButton#softButton { color: #8b302a; background: #f9d8cf; }
-QLabel#title { color: #c82420; font-size: 20px; font-weight: 700; }
-QLabel#status { color: #805e55; font-size: 12px; }
+QPushButton#softButton { color: #405363; background: rgba(213, 229, 238, 180); }
+QLabel#title { color: #334e61; font-size: 20px; font-weight: 700; }
+QLabel#status { color: #667784; font-size: 12px; }
 """
 
 
@@ -127,7 +129,7 @@ class ChatDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("和 Lili 聊聊")
+        self.setWindowTitle("和六毛聊聊")
         self.setObjectName("liliPanel")
         self.setMinimumSize(430, 520)
         self.resize(470, 580)
@@ -138,7 +140,7 @@ class ChatDialog(QDialog):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        title = QLabel("Lili 的小纸条")
+        title = QLabel("六毛的小纸条")
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
@@ -159,7 +161,7 @@ class ChatDialog(QDialog):
 
         entry = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("跟 Lili 说点什么……")
+        self.input.setPlaceholderText("跟六毛说点什么……")
         self.input.setMaxLength(1200)
         self.input.returnPressed.connect(self._submit)
         entry.addWidget(self.input, 1)
@@ -186,13 +188,15 @@ class ChatDialog(QDialog):
             detail = "纯离线 · 不联网"
         elif provider == "codex":
             detail = "Codex 已找到 · 临时只读会话" if codex_available() else "未找到 Codex · 会自动离线回答"
+        elif provider == "claude":
+            detail = "Claude Code 已找到 · 一次性无工具会话" if claude_available() else "未找到 Claude Code · 会自动离线回答"
         else:
             detail = f"{preset.label} · 在线模式"
         self.status_label.setText(detail)
 
     def append_message(self, role: str, text: str) -> None:
-        color = "#d92d27" if role == "Lili" else "#3177a8"
-        background = "#fff0df" if role == "Lili" else "#eaf6ff"
+        color = "#426b7c" if role == "六毛" else "#496f9b"
+        background = "#edf5f7" if role == "六毛" else "#eaf1fa"
         safe = escape(text).replace("\n", "<br>")
         self.transcript.append(
             f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
@@ -204,7 +208,7 @@ class ChatDialog(QDialog):
     def set_busy(self, busy: bool) -> None:
         self.input.setEnabled(not busy)
         self.send_button.setEnabled(not busy)
-        self.send_button.setText("Lili 在想…" if busy else "发送")
+        self.send_button.setText("六毛在想…" if busy else "发送")
         if not busy:
             self.input.setFocus()
 
@@ -221,7 +225,7 @@ class AISettingsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.credentials = credentials
-        self.setWindowTitle("Lili AI 与陪伴设置")
+        self.setWindowTitle("Lili · 六毛设置")
         self.setObjectName("liliPanel")
         self.setMinimumWidth(500)
         self.setStyleSheet(PANEL_STYLE)
@@ -256,15 +260,35 @@ class AISettingsDialog(QDialog):
         self.token_status.setWordWrap(True)
         layout.addWidget(self.token_status)
 
-        self.grumbling = QCheckBox("允许 Lili 偶尔发一句轻松的牢骚")
+        self.grumbling = QCheckBox("允许六毛偶尔发一句轻松的牢骚")
         self.grumbling.setChecked(settings.automatic_grumbling)
         layout.addWidget(self.grumbling)
         self.hourly = QCheckBox("整点报时（默认关闭，可随时取消）")
         self.hourly.setChecked(settings.hourly_announcement)
         layout.addWidget(self.hourly)
+        self.app_awareness = QCheckBox("根据当前应用切换陪伴动作（只识别应用类别）")
+        self.app_awareness.setChecked(settings.app_awareness)
+        layout.addWidget(self.app_awareness)
+        self.voice = QCheckBox("点击六毛时让他说“巴布达”")
+        self.voice.setChecked(settings.voice_enabled)
+        layout.addWidget(self.voice)
+        self.lyric_inspiration = QCheckBox("偶尔显示陈楚生歌名意象的原创短句")
+        self.lyric_inspiration.setChecked(settings.lyric_inspiration_enabled)
+        layout.addWidget(self.lyric_inspiration)
+        self.water = QCheckBox("喝水提醒")
+        self.water.setChecked(settings.water_reminder_enabled)
+        self.water_minutes = QSpinBox(); self.water_minutes.setRange(10, 240); self.water_minutes.setSuffix(" 分钟"); self.water_minutes.setValue(settings.water_interval_minutes)
+        form.addRow(self.water, self.water_minutes)
+        self.stand = QCheckBox("站立休息提醒")
+        self.stand.setChecked(settings.stand_reminder_enabled)
+        self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
+        form.addRow(self.stand, self.stand_minutes)
+        self.music_service = QComboBox(); self.music_service.addItem("网易云音乐", "netease"); self.music_service.addItem("QQ 音乐", "qq")
+        self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
+        form.addRow("正版音乐入口", self.music_service)
 
         note = QLabel(
-            "Codex 模式复用本机登录，不需要 API Key；DeepSeek/Kimi 令牌保存在系统安全凭据库。"
+            "Codex/Claude Code 模式复用本机登录，不需要 API Key；DeepSeek/Kimi 令牌保存在系统安全凭据库。"
             "官方尚未提供让外部程序接管 Codex 内置宠物的接口，但 Lili 可作为独立宠物使用 Codex 对话。"
         )
         note.setObjectName("status")
@@ -286,17 +310,19 @@ class AISettingsDialog(QDialog):
     def _provider_changed(self) -> None:
         provider = str(self.provider.currentData())
         base_url, model = provider_defaults(provider)
-        if provider not in {"offline", "codex"}:
+        if provider not in {"offline", "codex", "claude"}:
             if not self.base_url.text().strip() or self.settings.ai_provider != provider:
                 self.base_url.setText(base_url)
             if not self.model.text().strip() or self.settings.ai_provider != provider:
                 self.model.setText(model)
-        enabled = provider not in {"offline", "codex"}
+        enabled = provider not in {"offline", "codex", "claude"}
         self.base_url.setEnabled(enabled)
         self.model.setEnabled(enabled)
         self.token.setEnabled(enabled)
         if provider == "codex":
             status = "已检测到本机 Codex。" if codex_available() else "暂未检测到 Codex，聊天时会使用离线回答。"
+        elif provider == "claude":
+            status = "已检测到本机 Claude Code。" if claude_available() else "暂未检测到 Claude Code，聊天时会使用离线回答。"
         elif enabled:
             status = "系统凭据库中已有令牌。" if self.credentials.has(provider) else "尚未保存令牌。"
         else:
@@ -310,5 +336,13 @@ class AISettingsDialog(QDialog):
         self.settings.ai_model = self.model.text().strip()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
-        if provider not in {"offline", "codex"} and self.token.text().strip():
+        self.settings.app_awareness = self.app_awareness.isChecked()
+        self.settings.voice_enabled = self.voice.isChecked()
+        self.settings.lyric_inspiration_enabled = self.lyric_inspiration.isChecked()
+        self.settings.water_reminder_enabled = self.water.isChecked()
+        self.settings.stand_reminder_enabled = self.stand.isChecked()
+        self.settings.water_interval_minutes = self.water_minutes.value()
+        self.settings.stand_interval_minutes = self.stand_minutes.value()
+        self.settings.music_service = str(self.music_service.currentData())
+        if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())

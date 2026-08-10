@@ -33,7 +33,7 @@ from .resources import resource_path
 class PetSettings:
     """保存桌面宠物可配置参数和上次窗口位置。"""
 
-    display_height: int = 180
+    display_height: int = 160
     movement_interval_ms: int = 16
     movement_step: int = 1
     walk_frame_interval_ms: int = 90
@@ -52,6 +52,15 @@ class PetSettings:
     ai_model: str = ""
     automatic_grumbling: bool = True
     hourly_announcement: bool = False
+    app_awareness: bool = True
+    voice_enabled: bool = True
+    lyric_inspiration_enabled: bool = True
+    water_reminder_enabled: bool = False
+    stand_reminder_enabled: bool = False
+    water_interval_minutes: int = 45
+    stand_interval_minutes: int = 60
+    music_service: str = "netease"
+    equipped_outfit: str = ""
 
 
 def user_settings_path() -> Path:
@@ -90,7 +99,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     allowed = {field.name for field in fields(PetSettings)}
     clean = {key: value for key, value in data.items() if key in allowed}
     settings = PetSettings(**clean)
-    settings.display_height = min(600, max(120, int(settings.display_height)))
+    settings.display_height = min(360, max(100, int(settings.display_height)))
     settings.movement_interval_ms = min(
         100,
         max(16, int(settings.movement_interval_ms)),
@@ -113,12 +122,21 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.inactive_sit_ms + 5000,
         int(settings.inactive_sleep_ms),
     )
-    if settings.ai_provider not in {"offline", "codex", "deepseek", "kimi", "custom"}:
+    if settings.ai_provider not in {"offline", "codex", "claude", "deepseek", "kimi", "custom"}:
         settings.ai_provider = "offline"
     settings.ai_base_url = str(settings.ai_base_url).strip()[:500]
     settings.ai_model = str(settings.ai_model).strip()[:120]
     settings.automatic_grumbling = bool(settings.automatic_grumbling)
     settings.hourly_announcement = bool(settings.hourly_announcement)
+    settings.app_awareness = bool(settings.app_awareness)
+    settings.voice_enabled = bool(settings.voice_enabled)
+    settings.lyric_inspiration_enabled = bool(settings.lyric_inspiration_enabled)
+    settings.water_reminder_enabled = bool(settings.water_reminder_enabled)
+    settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
+    settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
+    settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
+    settings.music_service = "qq" if settings.music_service == "qq" else "netease"
+    settings.equipped_outfit = str(settings.equipped_outfit)[:60]
     return settings
 
 
@@ -151,6 +169,15 @@ def load_settings(
                 "ai_model",
                 "automatic_grumbling",
                 "hourly_announcement",
+                "app_awareness",
+                "voice_enabled",
+                "lyric_inspiration_enabled",
+                "water_reminder_enabled",
+                "stand_reminder_enabled",
+                "water_interval_minutes",
+                "stand_interval_minutes",
+                "music_service",
+                "equipped_outfit",
             }
         }
     )
@@ -172,6 +199,15 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "ai_model": settings.ai_model,
         "automatic_grumbling": settings.automatic_grumbling,
         "hourly_announcement": settings.hourly_announcement,
+        "app_awareness": settings.app_awareness,
+        "voice_enabled": settings.voice_enabled,
+        "lyric_inspiration_enabled": settings.lyric_inspiration_enabled,
+        "water_reminder_enabled": settings.water_reminder_enabled,
+        "stand_reminder_enabled": settings.stand_reminder_enabled,
+        "water_interval_minutes": settings.water_interval_minutes,
+        "stand_interval_minutes": settings.stand_interval_minutes,
+        "music_service": settings.music_service,
+        "equipped_outfit": settings.equipped_outfit,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

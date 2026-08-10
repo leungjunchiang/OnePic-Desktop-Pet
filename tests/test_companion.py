@@ -94,7 +94,7 @@ def test_dialogue_gives_specific_loving_and_supportive_responses() -> None:
     assert "也很爱你" in companion.reply_to("我喜欢你").text
     assert "不代表你不行" in companion.reply_to("我什么都做不到").text
     assert "不是对你的判决" in companion.reply_to("今天工作出错了").text
-    assert "Lili 在这里" in companion.reply_to("我觉得很孤独").text
+    assert "六毛在这里" in companion.reply_to("我觉得很孤独").text
     assert "只做五分钟" in companion.reply_to("完全没动力").text
 
 

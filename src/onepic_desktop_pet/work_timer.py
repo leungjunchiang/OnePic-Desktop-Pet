@@ -2,7 +2,7 @@
 本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
 
 职责范围：
-- 记录当天累计工作秒数，并在日期变化时自动开始新一天；
+- 记录当天和终身累计工作秒数，并在日期变化时自动开始新一天；
 - 支持开始、暂停、完成、状态格式化和运行中定期落盘；
 - 只在本机应用数据目录保存日期与累计秒数，不保存任务名称或聊天内容；
 - 按单次连续工作时长产生 25 分钟鼓励、50 分钟休息和更长时段劝慰提醒。
@@ -66,6 +66,8 @@ class WorkTimerModel:
         self._monotonic = monotonic_provider or time.monotonic
         self._date_key = self._today_key()
         self._accumulated_seconds = 0
+        self._lifetime_seconds = 0
+        self._notified_outfit_count = 0
         self._session_accumulated_seconds = 0
         self._running_since: float | None = None
         self._last_checkpoint = self._monotonic()
@@ -90,9 +92,9 @@ class WorkTimerModel:
             return
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            if data.get("date") != self._date_key:
-                return
-            seconds = int(data.get("accumulated_seconds", 0))
+            self._lifetime_seconds = max(0, int(data.get("lifetime_seconds", 0)))
+            self._notified_outfit_count = max(0, int(data.get("notified_outfit_count", 0)))
+            seconds = int(data.get("accumulated_seconds", 0)) if data.get("date") == self._date_key else 0
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return
         self._accumulated_seconds = max(0, seconds)
@@ -131,6 +133,26 @@ class WorkTimerModel:
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
 
+    def lifetime_seconds(self) -> int:
+        """返回累计工作秒数，包括当前尚未落盘的一段。"""
+
+        return self._lifetime_seconds + self._current_elapsed()
+
+    def unlocked_outfit_count(self) -> int:
+        """每累计八小时解锁一套娃衣，最多十套。"""
+
+        return min(10, self.lifetime_seconds() // (8 * 3600))
+
+    def take_new_outfit_unlock(self) -> int | None:
+        """首次跨过八小时门槛时返回从一开始的解锁序号。"""
+
+        count = self.unlocked_outfit_count()
+        if count <= self._notified_outfit_count:
+            return None
+        self._notified_outfit_count = count
+        self._save()
+        return count
+
     def start(self) -> bool:
         """开始或继续新的工作段；已运行时返回 False。"""
 
@@ -152,6 +174,7 @@ class WorkTimerModel:
             return False
         elapsed = self._current_elapsed()
         self._accumulated_seconds += elapsed
+        self._lifetime_seconds += elapsed
         self._session_accumulated_seconds = 0
         self._running_since = None
         self._last_reminder_key = None
@@ -175,6 +198,7 @@ class WorkTimerModel:
             return False
         elapsed = self._current_elapsed()
         self._accumulated_seconds += elapsed
+        self._lifetime_seconds += elapsed
         self._session_accumulated_seconds += elapsed
         self._running_since = now
         self._last_checkpoint = now
@@ -217,6 +241,8 @@ class WorkTimerModel:
         data = {
             "date": self._date_key,
             "accumulated_seconds": max(0, int(self._accumulated_seconds)),
+            "lifetime_seconds": max(0, int(self._lifetime_seconds)),
+            "notified_outfit_count": max(0, int(self._notified_outfit_count)),
         }
         temporary.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n",

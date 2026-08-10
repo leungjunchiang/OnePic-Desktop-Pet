@@ -15,6 +15,7 @@ from onepic_desktop_pet.ai import (
     PROVIDER_PRESETS,
     _chat_endpoint,
     _parse_codex_jsonl,
+    ask_claude,
     ask_codex,
     ask_compatible_api,
     provider_defaults,
@@ -50,6 +51,7 @@ def test_official_provider_presets_have_current_https_endpoints() -> None:
     )
     assert provider_defaults("kimi") == ("https://api.moonshot.cn/v1", "kimi-k3")
     assert PROVIDER_PRESETS["codex"].needs_token is False
+    assert PROVIDER_PRESETS["claude"].needs_token is False
 
 
 def test_chat_endpoint_rejects_plain_http() -> None:
@@ -137,6 +139,24 @@ def test_codex_uses_ephemeral_read_only_session_and_stdin(monkeypatch) -> None:
     assert command[-1] == "-"
     assert "这句话不能出现在命令参数里" not in " ".join(command)
     assert "这句话不能出现在命令参数里" in captured["kwargs"]["input"]
+
+
+def test_claude_uses_one_shot_no_tools_session_and_stdin(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": "巴布达"}), stderr="")
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_claude_executable", lambda: Path("claude.cmd"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+
+    assert ask_claude("私密消息", []) == "巴布达"
+    assert "--no-session-persistence" in captured["command"]
+    assert captured["command"][captured["command"].index("--tools") + 1] == ""
+    assert "私密消息" not in " ".join(captured["command"])
+    assert "私密消息" in captured["kwargs"]["input"]
 
 
 def test_service_requires_explicit_online_provider() -> None:

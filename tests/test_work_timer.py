@@ -44,6 +44,7 @@ def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> No
 
     reloaded = _timer(tmp_path, clock)
     assert reloaded.today_seconds() == 100
+    assert reloaded.lifetime_seconds() == 100
     assert not reloaded.is_running
 
 

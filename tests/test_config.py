@@ -37,7 +37,7 @@ def test_load_settings_merges_position_and_user_selected_size(tmp_path) -> None:
 
     settings = load_settings(default_path, override_path)
 
-    assert settings.display_height == 600
+    assert settings.display_height == 360
     assert settings.movement_step == 3
     assert settings.start_x == 25
     assert settings.start_y == 40
@@ -83,7 +83,7 @@ def test_save_settings_writes_json(tmp_path) -> None:
     data = json.loads(saved.read_text(encoding="utf-8"))
     assert data["start_x"] == 12
     assert data["start_y"] == 34
-    assert data["display_height"] == 180
+    assert data["display_height"] == 160
     assert data["ai_provider"] == "offline"
     assert data["automatic_grumbling"] is True
     assert data["hourly_announcement"] is False
@@ -92,9 +92,9 @@ def test_save_settings_writes_json(tmp_path) -> None:
 
 
 def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> None:
-    """新版应避开旧桌宠保存的 220 像素尺寸，首次启动采用 180。"""
+    """新版应避开旧桌宠保存的 220 像素尺寸，首次启动采用 160。"""
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     assert user_settings_path() == tmp_path / "Lili" / "settings.json"
-    assert PetSettings().display_height == 180
+    assert PetSettings().display_height == 160
