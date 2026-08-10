@@ -350,7 +350,12 @@ def test_context_menu_exposes_new_dialogue_food_ai_and_no_status() -> None:
     assert not any("打招呼" in text for text in actions)
     assert any(text.startswith("工作计时：") for text in actions)
     assert "连续调节宠物大小…" in actions
-    assert "每小时成就娃衣" in actions
+    assert "长期收藏娃衣" in actions
+    assert "36 个修正版图片动作" in actions
+    work_action = next(action for text, action in actions.items() if text.startswith("工作计时："))
+    work_labels = [action.text() for action in work_action.menu().actions()]
+    assert "查看今日 0–8 小时成长线" in work_labels
+    assert "今天六毛陪你做了什么" in work_labels
     menu.close()
     window.close()
     window.deleteLater()
@@ -493,8 +498,8 @@ def test_interaction_zones_map_head_face_body_and_camera() -> None:
     app.processEvents()
 
 
-def test_head_click_increases_affinity_and_repeated_body_poke_annoys() -> None:
-    """摸头应提升亲密度，短时间连续戳身体应切换到轻微生气表情。"""
+def test_head_click_tilts_curiously_and_five_body_pokes_annoy() -> None:
+    """点头应歪头好奇，短时间连续戳五次身体才切换到轻微生气。"""
 
     app, window = _create_window()
     initial_affinity = window.mood.affinity
@@ -503,11 +508,14 @@ def test_head_click_increases_affinity_and_repeated_body_poke_annoys() -> None:
 
     window._handle_click(head)
     assert window.mood.affinity == initial_affinity + 5
-    assert window.state is PetState.HAPPY
+    assert window.state is PetState.CURIOUS
 
-    for _ in range(3):
+    for _ in range(4):
         window._handle_click(body)
+        assert window.state is PetState.SHY
+    window._handle_click(body)
     assert window.state is PetState.ANNOYED
+    assert window.daily_stats.touches >= 6
     assert window.mood.affinity < initial_affinity + 5
     window.close()
     window.deleteLater()
@@ -609,6 +617,24 @@ def test_babuda_fallback_changes_system_voice_tone() -> None:
     assert recorder.words == ["巴布达", "巴布达"]
     assert recorder.rates[0] != recorder.rates[1]
     assert recorder.pitches[0] != recorder.pitches[1]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_long_press_puts_lili_to_sleep_without_plain_click() -> None:
+    """长按应切换睡觉图片并记录一次睡觉，不再触发普通点击。"""
+
+    app, window = _create_window()
+    window._press_pending = True
+    window.dragging = False
+
+    window._trigger_long_press()
+
+    assert window._long_press_triggered
+    assert not window._press_pending
+    assert window._ambient_activity == "sleep"
+    assert window.daily_stats.sleeps == 1
     window.close()
     window.deleteLater()
     app.processEvents()

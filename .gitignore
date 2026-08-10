@@ -7,6 +7,7 @@ htmlcov/
 
 # 虚拟环境和构建产物
 .venv/
+.venv*/
 build/
 dist/
 *.egg-info/

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 
+from .growth import ACTION_SPRITES
 from .resources import resource_path
 
 
@@ -40,9 +41,8 @@ OUTFITS = (
 
 
 SPECIAL_ACTIVITY_SPRITES = {
-    "headphones": "assets/pet/special/music-headphones.png",
-    "guitar": "assets/pet/special/music-guitar.png",
-    "drums": "assets/pet/special/music-drums.png",
+    key: f"assets/pet/daily-actions/{filename}"
+    for key, filename in ACTION_SPRITES.items()
 }
 
 SPECIAL_OUTFIT_SPRITES = {
