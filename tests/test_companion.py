@@ -1,5 +1,5 @@
 """
-本模块测试“六毛工作搭子”的离线喂食、陪伴动作、工作提醒和关键词对话逻辑。
+本模块测试 Lili 的离线喂食、陪伴动作、工作提醒、牢骚、报时和关键词对话逻辑。
 
 测试不创建窗口、不写聊天记录，也不访问网络。
 """
@@ -14,9 +14,11 @@ from onepic_desktop_pet.companion import (
 )
 
 
-def test_food_menu_has_three_distinct_options() -> None:
-    assert [food.key for food in FOOD_OPTIONS] == ["apple", "cookie", "milk"]
-    assert [food.label for food in FOOD_OPTIONS] == ["苹果", "小饼干", "热牛奶"]
+def test_food_menu_includes_coffee_and_tea() -> None:
+    assert [food.key for food in FOOD_OPTIONS] == [
+        "apple", "cookie", "milk", "coffee", "tea"
+    ]
+    assert [food.label for food in FOOD_OPTIONS][-2:] == ["咖啡", "热茶"]
 
 
 def test_feeding_increases_fullness_energy_and_affinity() -> None:
@@ -72,6 +74,10 @@ def test_companion_actions_cover_work_love_encouragement_and_comfort() -> None:
         "celebrate",
         "comfort",
         "rest",
+        "stretch",
+        "think",
+        "quiet",
+        "victory",
     ]
     assert companion.perform_action("focus").state is PetState.SIT
     assert companion.perform_action("encourage").state is PetState.WAVE
@@ -88,7 +94,7 @@ def test_dialogue_gives_specific_loving_and_supportive_responses() -> None:
     assert "也很爱你" in companion.reply_to("我喜欢你").text
     assert "不代表你不行" in companion.reply_to("我什么都做不到").text
     assert "不是对你的判决" in companion.reply_to("今天工作出错了").text
-    assert "六毛在这里" in companion.reply_to("我觉得很孤独").text
+    assert "Lili 在这里" in companion.reply_to("我觉得很孤独").text
     assert "只做五分钟" in companion.reply_to("完全没动力").text
 
 
@@ -102,3 +108,13 @@ def test_work_timer_messages_encourage_and_advise_rest() -> None:
     assert long_reply.state is PetState.SLEEPY
     assert "别拿身体硬撑" in long_reply.text
     assert "值得" in companion.work_finished("1小时").text
+
+
+def test_ambient_grumble_and_hourly_announcement_are_local() -> None:
+    companion = CompanionModel(PetMood())
+
+    assert companion.ambient_grumble().text
+    morning = companion.hourly_announcement(9)
+    late = companion.hourly_announcement(23)
+    assert morning.text.startswith("现在是 09:00")
+    assert "休息" in late.text

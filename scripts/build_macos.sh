@@ -18,7 +18,7 @@ case "$machine_arch" in
         exit 1
         ;;
 esac
-dmg_file="dist/SixHairWorkmate-macOS-${release_arch}-unsigned.dmg"
+dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"
 
 mkdir -p "$icon_root"
 mkdir -p "$iconset"
@@ -37,14 +37,14 @@ sips -z 1024 1024 "$icon_source" --out "$iconset/icon_512x512@2x.png" >/dev/null
 iconutil -c icns "$iconset" -o "$icon_file"
 
 ONEPIC_INCLUDE_USER_ASSETS=0 python -m PyInstaller --noconfirm --clean OnePicDesktopPet.spec
-test -d "dist/SixHairWorkmate.app"
+test -d "dist/Lili.app"
 
 # The public build is intentionally unsigned because no Apple Developer ID is available.
-codesign --force --deep --sign - "dist/SixHairWorkmate.app"
+codesign --force --deep --sign - "dist/Lili.app"
 rm -f "$dmg_file"
 hdiutil create \
-    -volname "六毛工作搭子" \
-    -srcfolder "dist/SixHairWorkmate.app" \
+    -volname "Lili" \
+    -srcfolder "dist/Lili.app" \
     -ov \
     -format UDZO \
     "$dmg_file"

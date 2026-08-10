@@ -62,15 +62,15 @@ class DesktopPetApplication:
         show_action.triggered.connect(self.show_window)
         menu.addAction(show_action)
 
-        interact_action = QAction("和六毛打招呼", menu)
+        interact_action = QAction("和 Lili 打招呼", menu)
         interact_action.triggered.connect(self.window.trigger_interaction)
         menu.addAction(interact_action)
 
-        dialogue_action = QAction("和六毛聊聊…", menu)
+        dialogue_action = QAction("和 Lili 聊聊…", menu)
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
 
-        action_menu = menu.addMenu("六毛陪伴动作")
+        action_menu = menu.addMenu("Lili 陪伴动作")
         for option in COMPANION_ACTIONS:
             action = QAction(option.label, menu)
             action.triggered.connect(
@@ -94,7 +94,7 @@ class DesktopPetApplication:
         show_work_action.triggered.connect(self.window.show_work_time)
         work_menu.addAction(show_work_action)
 
-        food_menu = menu.addMenu("给六毛喂食")
+        food_menu = menu.addMenu("给 Lili 喂食/饮品")
         for food in FOOD_OPTIONS:
             food_action = QAction(food.label, menu)
             food_action.triggered.connect(
@@ -102,7 +102,7 @@ class DesktopPetApplication:
             )
             food_menu.addAction(food_action)
 
-        status_action = QAction("查看六毛状态", menu)
+        status_action = QAction("查看 Lili 状态", menu)
         status_action.triggered.connect(self.window.show_companion_status)
         menu.addAction(status_action)
 
@@ -115,6 +115,10 @@ class DesktopPetApplication:
             lambda: self.window.set_paused(not self.window.paused)
         )
         menu.addAction(pause_action)
+
+        ai_settings_action = QAction("AI 与陪伴设置…", menu)
+        ai_settings_action.triggered.connect(self.window.open_ai_settings)
+        menu.addAction(ai_settings_action)
 
         hide_action = QAction("隐藏宠物", menu)
         hide_action.triggered.connect(self.window.hide)

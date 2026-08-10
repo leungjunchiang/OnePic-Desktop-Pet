@@ -8,8 +8,8 @@
 - 用窗口遮罩让人物外透明区域穿透鼠标点击；
 - 缓存不同 DPI 下的缩放帧，并在窗口跨显示器后按新比例重新栅格化；
 - 支持左键拖动、双击互动、无互动分级休息和右键尺寸菜单；
-- 支持给六毛喂苹果、饼干或牛奶，并用独立文字气泡反馈饱食状态；
-- 支持完全离线的桌面对话输入以及工作、爱意、鼓励、庆祝和安慰动作；
+- 支持给 Lili 喂食或饮品，并用独立文字气泡反馈状态；
+- 支持离线优先的聊天面板、可选 AI 后端以及工作、爱意、鼓励和安慰动作；
 - 支持开始、暂停、完成工作计时，显示今日累计时长并在连续工作过久时温和提醒；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -26,7 +26,8 @@ Agent 快速定位：
 - 退出由 quit_requested 信号交给应用生命周期模块处理。
 
 输入为 PetSettings、素材清单和可选的用户自拍照片资源，输出为可交互的 Qt 窗口。
-本模块不写配置文件、不启动独立线程、不访问网络；位置持久化由 app.py 在退出时完成。
+本模块只在用户主动发送在线消息时启动后台请求线程；普通动画、牢骚和报时均不访问网络。
+API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 app.py 在退出时完成。
 `user_assets/` 默认不进入 Git；只有用户主动放入的自拍图片才会在本机显示。
 """
 
@@ -37,6 +38,7 @@ import os
 import random
 import time
 from collections import OrderedDict, deque
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -55,9 +57,11 @@ from PySide6.QtGui import (
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QWidget
 
+from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .behavior import BehaviorModel, PetMood, PetState, StateDecision
+from .chat import AIReplyThread, AISettingsDialog, ChatDialog
 from .companion import (
     ACTION_BY_KEY,
     APP_DISPLAY_NAME,
@@ -66,7 +70,7 @@ from .companion import (
     CompanionModel,
     CompanionReply,
 )
-from .config import PetSettings
+from .config import PetSettings, save_settings
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .resources import resource_path
 from .work_timer import WorkTimerModel, format_work_duration
@@ -122,6 +126,13 @@ class PetWindow(QWidget):
         self._selfie_photo = self._load_selfie_photo()
         self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
         self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
+        self.credentials = CredentialStore()
+        self.ai_service = AIChatService(self.credentials)
+        self._chat_dialog: ChatDialog | None = None
+        self._ai_thread: AIReplyThread | None = None
+        self._chat_history: list[tuple[str, str]] = []
+        self._action_sequence_id = 0
+        self._last_announced_hour = ""
 
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         if settings.always_on_top:
@@ -176,9 +187,9 @@ class PetWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
         self.speech_bubble.setStyleSheet(
-            "QLabel { background: rgba(255, 255, 255, 245); "
-            "color: #2b2b2b; border: 2px solid #e62b25; border-radius: 12px; "
-            "padding: 9px 12px; font-size: 14px; }"
+            "QLabel { background: rgba(255, 249, 230, 248); "
+            "color: #3d2a24; border: 2px solid #e6312a; border-radius: 15px; "
+            "padding: 10px 13px; font-size: 14px; }"
         )
 
         self.movement_timer = QTimer(self)
@@ -226,6 +237,16 @@ class PetWindow(QWidget):
         self.work_clock_timer.setInterval(1000)
         self.work_clock_timer.timeout.connect(self._work_timer_tick)
         self.work_clock_timer.start()
+
+        self.ambient_timer = QTimer(self)
+        self.ambient_timer.setSingleShot(True)
+        self.ambient_timer.timeout.connect(self._ambient_tick)
+        self._schedule_ambient()
+
+        self.hourly_timer = QTimer(self)
+        self.hourly_timer.setInterval(15000)
+        self.hourly_timer.timeout.connect(self._hourly_tick)
+        self.hourly_timer.start()
 
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
@@ -852,16 +873,22 @@ class PetWindow(QWidget):
         self.speech_timer.start(max(1200, duration_ms))
 
     def feed_pet(self, food_key: str) -> CompanionReply:
-        """喂给六毛一种菜单食物，并播放对应表情与文字反馈。"""
+        """喂给 Lili 一种菜单食物，并播放对应表情与文字反馈。"""
 
         self._record_user_interaction()
         reply = self.companion.feed(food_key)
-        self._show_emotion(reply.state, 2200)
+        if food_key in {"coffee", "tea"}:
+            self._play_action_sequence(
+                (PetState.SIT, PetState.HAPPY, PetState.SIT),
+                3000,
+            )
+        else:
+            self._show_emotion(reply.state, 2200)
         self.show_speech(reply.text)
         return reply
 
     def talk_to_pet(self, message: str) -> CompanionReply:
-        """在本地处理一条对话，并显示六毛的回复。"""
+        """在本地处理一条对话，并显示 Lili 的回复。"""
 
         self._record_user_interaction()
         reply = self.companion.reply_to(message)
@@ -874,10 +901,42 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         reply = self.companion.perform_action(action_key)
-        duration_ms = ACTION_BY_KEY[action_key].duration_ms
-        self._show_emotion(reply.state, duration_ms)
+        option = ACTION_BY_KEY[action_key]
+        duration_ms = option.duration_ms
+        self._play_action_sequence(option.sequence or (reply.state,), duration_ms)
         self.show_speech(reply.text, max(5200, duration_ms + 1800))
         return reply
+
+    def _play_action_sequence(
+        self,
+        states: tuple[PetState, ...],
+        duration_ms: int,
+    ) -> None:
+        """用现有且已验收的动作帧组成多段陪伴动作。"""
+
+        if not states:
+            return
+        self._action_sequence_id += 1
+        sequence_id = self._action_sequence_id
+        step_ms = max(450, duration_ms // len(states))
+        self.state_timer.stop()
+        self.interaction_timer.stop()
+        self.set_state(states[0])
+        for index, state in enumerate(states[1:], start=1):
+            QTimer.singleShot(
+                index * step_ms,
+                lambda value=state, marker=sequence_id: self._continue_action_sequence(
+                    marker,
+                    value,
+                ),
+            )
+        self.interaction_timer.start(max(800, duration_ms))
+
+    def _continue_action_sequence(self, sequence_id: int, state: PetState) -> None:
+        """仅在动作序列仍有效时播放下一段，避免旧计时器抢状态。"""
+
+        if sequence_id == self._action_sequence_id and not self.dragging:
+            self.set_state(state)
 
     def start_work_timer(self) -> CompanionReply:
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
@@ -949,16 +1008,161 @@ class PetWindow(QWidget):
             self.work_timer.pause()
 
     def prompt_dialogue(self) -> None:
-        """打开单行输入框，让用户输入一条仅在本机处理的话。"""
+        """打开新版聊天面板；离线和在线模式共用同一个入口。"""
 
         self._record_user_interaction()
-        message, accepted = QInputDialog.getText(
+        if self._chat_dialog is None:
+            self._chat_dialog = ChatDialog(self)
+            self._chat_dialog.message_submitted.connect(self._submit_chat_message)
+            self._chat_dialog.settings_requested.connect(self.open_ai_settings)
+            self._chat_dialog.append_message(
+                "Lili",
+                "我在呢。没网也可以聊天；想用 Codex、DeepSeek 或 Kimi，可以点右上角 AI 设置。",
+            )
+        self._chat_dialog.set_provider(self.settings.ai_provider)
+        self._chat_dialog.show()
+        self._chat_dialog.raise_()
+        self._chat_dialog.activateWindow()
+
+    def _submit_chat_message(self, message: str) -> None:
+        """显示用户消息，并按设置选择本地回答或后台 AI 请求。"""
+
+        if self._chat_dialog is None:
+            return
+        self._record_user_interaction()
+        self._chat_dialog.append_message("你", message)
+        history_before = list(self._chat_history)
+        self._chat_history.append(("user", message))
+        self._chat_history = self._chat_history[-10:]
+        if self.settings.ai_provider == "offline":
+            reply = self.talk_to_pet(message)
+            self._chat_history.append(("assistant", reply.text))
+            self._chat_dialog.append_message("Lili", reply.text)
+            return
+        if self._ai_thread is not None and self._ai_thread.isRunning():
+            self._chat_dialog.append_message("Lili", "上一句话还在路上，稍等我一下。")
+            return
+        self._chat_dialog.set_busy(True)
+        self._ai_thread = AIReplyThread(
+            self.ai_service,
+            self.settings.ai_provider,
+            message,
+            history_before,
+            self.settings.ai_base_url,
+            self.settings.ai_model,
             self,
-            "和六毛聊聊",
-            "你想对六毛说：",
         )
-        if accepted:
-            self.talk_to_pet(message)
+        self._ai_thread.succeeded.connect(self._ai_reply_succeeded)
+        self._ai_thread.failed.connect(
+            lambda error, original=message: self._ai_reply_failed(error, original)
+        )
+        self._ai_thread.finished.connect(self._ai_thread_finished)
+        self._ai_thread.start()
+
+    def _ai_reply_succeeded(self, answer: str) -> None:
+        """显示联网后端的成功回复。"""
+
+        self._chat_history.append(("assistant", answer))
+        self._chat_history = self._chat_history[-10:]
+        if self._chat_dialog is not None:
+            self._chat_dialog.append_message("Lili", answer)
+            self._chat_dialog.set_busy(False)
+        state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
+        self._show_emotion(state, 3000)
+        self.show_speech(answer, 6500)
+
+    def _ai_reply_failed(self, error: str, original: str) -> None:
+        """明确提示连接问题，并无缝使用本地规则回答。"""
+
+        offline = self.companion.reply_to(original)
+        combined = f"{error}\n\n离线 Lili：{offline.text}"
+        self._chat_history.append(("assistant", offline.text))
+        self._chat_history = self._chat_history[-10:]
+        if self._chat_dialog is not None:
+            self._chat_dialog.append_message("Lili", combined)
+            self._chat_dialog.set_busy(False)
+        self._show_emotion(offline.state, 2800)
+        self.show_speech(offline.text, 6200)
+
+    def _ai_thread_finished(self) -> None:
+        """释放已完成的后台请求对象。"""
+
+        if self._ai_thread is not None:
+            self._ai_thread.deleteLater()
+            self._ai_thread = None
+
+    def open_ai_settings(self) -> None:
+        """打开 AI、自动牢骚与报时设置，保存时不持久化任何明文令牌。"""
+
+        dialog = AISettingsDialog(self.settings, self.credentials, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            dialog.apply()
+        except Exception as exc:
+            self.show_speech(f"设置没有保存：{exc}", 6000)
+            return
+        save_settings(self.settings)
+        self._schedule_ambient()
+        if self._chat_dialog is not None:
+            self._chat_dialog.set_provider(self.settings.ai_provider)
+        preset = PROVIDER_PRESETS[self.settings.ai_provider]
+        self.show_speech(f"已切换为：{preset.label}", 4200)
+
+    def set_automatic_grumbling(self, enabled: bool) -> None:
+        """启用或停用只在本机生成的间歇牢骚。"""
+
+        self.settings.automatic_grumbling = bool(enabled)
+        save_settings(self.settings)
+        self._schedule_ambient()
+
+    def set_hourly_announcement(self, enabled: bool) -> None:
+        """启用或停用整点报时。"""
+
+        self.settings.hourly_announcement = bool(enabled)
+        self._last_announced_hour = ""
+        save_settings(self.settings)
+        self.show_speech("整点报时已开启。" if enabled else "整点报时已关闭。", 3200)
+
+    def _schedule_ambient(self) -> None:
+        """用随机间隔安排下一句牢骚，避免固定频率造成打扰。"""
+
+        if not hasattr(self, "ambient_timer"):
+            return
+        self.ambient_timer.stop()
+        if self.settings.automatic_grumbling:
+            self.ambient_timer.start(random.randint(12 * 60_000, 28 * 60_000))
+
+    def _ambient_tick(self) -> None:
+        """在宠物可见且当前没有聊天请求时显示一条本地牢骚。"""
+
+        try:
+            busy = self._ai_thread is not None and self._ai_thread.isRunning()
+            if self.isVisible() and not self.dragging and not busy:
+                reply = self.companion.ambient_grumble(self.work_timer.is_running)
+                self._show_emotion(reply.state, 2600)
+                self.show_speech(reply.text, 6200)
+        finally:
+            self._schedule_ambient()
+
+    def _hourly_tick(self) -> None:
+        """周期检查整点报时，关闭时不产生任何气泡。"""
+
+        self._maybe_announce_hour(datetime.now())
+
+    def _maybe_announce_hour(self, now: datetime) -> bool:
+        """在每个整点窗口内只播报一次，返回是否实际播报。"""
+
+        if not self.settings.hourly_announcement or now.minute != 0:
+            return False
+        key = now.strftime("%Y-%m-%d-%H")
+        if key == self._last_announced_hour:
+            return False
+        self._last_announced_hour = key
+        reply = self.companion.hourly_announcement(now.hour)
+        self._show_emotion(reply.state, 2800)
+        self.show_speech(reply.text, 6200)
+        return True
 
     def show_companion_status(self) -> None:
         """用气泡显示当前会话内亲密、精力和饱食状态。"""
@@ -1140,13 +1344,13 @@ class PetWindow(QWidget):
         pause_action = QAction("恢复跑动" if self.paused else "暂停跑动", self)
         pause_action.triggered.connect(lambda: self.set_paused(not self.paused))
         menu.addAction(pause_action)
-        interact_action = QAction("和六毛打招呼", self)
+        interact_action = QAction("和 Lili 打招呼", self)
         interact_action.triggered.connect(self.trigger_interaction)
         menu.addAction(interact_action)
-        dialogue_action = QAction("和六毛聊聊…", self)
+        dialogue_action = QAction("和 Lili 聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         menu.addAction(dialogue_action)
-        action_menu = menu.addMenu("六毛陪伴动作")
+        action_menu = menu.addMenu("Lili 陪伴动作")
         for option in COMPANION_ACTIONS:
             action = QAction(option.label, self)
             action.triggered.connect(
@@ -1172,7 +1376,7 @@ class PetWindow(QWidget):
         show_work_action = QAction("查看今日累计", self)
         show_work_action.triggered.connect(self.show_work_time)
         work_menu.addAction(show_work_action)
-        food_menu = menu.addMenu("给六毛喂食")
+        food_menu = menu.addMenu("给 Lili 喂食/饮品")
         for food in FOOD_OPTIONS:
             food_action = QAction(food.label, self)
             food_action.triggered.connect(
@@ -1188,6 +1392,19 @@ class PetWindow(QWidget):
         )
         mood_action.triggered.connect(self.show_companion_status)
         menu.addAction(mood_action)
+        ai_action = QAction("AI 与陪伴设置…", self)
+        ai_action.triggered.connect(self.open_ai_settings)
+        menu.addAction(ai_action)
+        grumble_action = QAction("偶尔发牢骚", self)
+        grumble_action.setCheckable(True)
+        grumble_action.setChecked(self.settings.automatic_grumbling)
+        grumble_action.toggled.connect(self.set_automatic_grumbling)
+        menu.addAction(grumble_action)
+        hourly_action = QAction("整点报时", self)
+        hourly_action.setCheckable(True)
+        hourly_action.setChecked(self.settings.hourly_announcement)
+        hourly_action.toggled.connect(self.set_hourly_announcement)
+        menu.addAction(hourly_action)
         size_menu = menu.addMenu("宠物大小")
         for label, height in (
             ("迷你（150）", 150),
