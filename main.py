@@ -1,5 +1,5 @@
 """
-本模块是“六毛工作搭子”桌面应用的命令行启动入口。
+本模块是 Lili 桌面工作搭子的命令行启动入口。
 
 职责范围：
 - 解析可选的 `--smoke-test-ms` 自动退出参数；
@@ -29,7 +29,7 @@ from onepic_desktop_pet.app import run
 def parse_args() -> argparse.Namespace:
     """解析启动参数。"""
 
-    parser = argparse.ArgumentParser(description="启动六毛工作搭子")
+    parser = argparse.ArgumentParser(description="启动 Lili 桌面工作搭子")
     parser.add_argument(
         "--smoke-test-ms",
         type=int,

@@ -84,7 +84,10 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["start_x"] == 12
     assert data["start_y"] == 34
     assert data["display_height"] == 180
-    assert set(data) == {"display_height", "start_x", "start_y"}
+    assert data["ai_provider"] == "offline"
+    assert data["automatic_grumbling"] is True
+    assert data["hourly_announcement"] is False
+    assert not any("token" in key or "key" in key for key in data)
     assert not path.with_suffix(".json.tmp").exists()
 
 
@@ -93,5 +96,5 @@ def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> 
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
-    assert user_settings_path() == tmp_path / "SixHairWorkmate" / "settings.json"
+    assert user_settings_path() == tmp_path / "Lili" / "settings.json"
     assert PetSettings().display_height == 180

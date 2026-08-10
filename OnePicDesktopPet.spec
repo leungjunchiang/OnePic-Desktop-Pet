@@ -39,7 +39,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="SixHairWorkmate",
+    name="Lili",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,18 +59,18 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="SixHairWorkmate",
+    name="Lili",
 )
 
 if sys.platform == "darwin":
     app = BUNDLE(
         coll,
-        name="SixHairWorkmate.app",
+        name="Lili.app",
         icon="build/macos/pet.icns",
-        bundle_identifier="io.github.leungjunchiang.sixhairworkmate",
+        bundle_identifier="io.github.leungjunchiang.lili",
         info_plist={
-            "CFBundleDisplayName": "六毛工作搭子",
-            "CFBundleShortVersionString": "0.5.0",
+            "CFBundleDisplayName": "Lili",
+            "CFBundleShortVersionString": "0.6.0",
             "LSUIElement": True,
             "NSHighResolutionCapable": True,
         },

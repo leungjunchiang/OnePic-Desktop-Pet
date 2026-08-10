@@ -311,22 +311,27 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
     app.processEvents()
 
 
-def test_context_menu_exposes_dialogue_food_and_status() -> None:
-    """用户右键后应能直接找到对话、三种食物和状态入口。"""
+def test_context_menu_exposes_dialogue_food_ai_and_status() -> None:
+    """用户右键后应能直接找到对话、食物饮品、AI 设置和状态入口。"""
 
     app, window = _create_window()
     menu = window._build_context_menu()
     actions = {action.text(): action for action in menu.actions()}
 
-    assert "和六毛聊聊…" in actions
-    assert "六毛陪伴动作" in actions
-    assert "给六毛喂食" in actions
-    food_menu = actions["给六毛喂食"].menu()
+    assert "和 Lili 聊聊…" in actions
+    assert "Lili 陪伴动作" in actions
+    assert "给 Lili 喂食/饮品" in actions
+    assert "AI 与陪伴设置…" in actions
+    assert actions["偶尔发牢骚"].isChecked()
+    assert not actions["整点报时"].isChecked()
+    food_menu = actions["给 Lili 喂食/饮品"].menu()
     assert food_menu is not None
     assert [action.text() for action in food_menu.actions()] == [
         "苹果",
         "小饼干",
         "热牛奶",
+        "咖啡",
+        "热茶",
     ]
     assert any(text.startswith("查看状态：") for text in actions)
     assert any(text.startswith("工作计时：") for text in actions)
@@ -358,6 +363,35 @@ def test_companion_action_shows_loving_animation_and_words() -> None:
     window.deleteLater()
     app.processEvents()
 
+
+def test_diverse_action_sequence_and_drinks_use_existing_frames() -> None:
+    """伸展与喝茶应组合已验收状态，而不是静止地只换一句文字。"""
+
+    app, window = _create_window()
+    reply = window.perform_companion_action("stretch")
+    assert reply.state is PetState.WAVE
+    assert window.state is PetState.SIT
+    tea = window.feed_pet("tea")
+    assert "热茶" in tea.text
+    assert window.state is PetState.SIT
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_hourly_announcement_can_be_disabled_and_deduplicates() -> None:
+    """整点报时默认不触发，开启后同一小时只触发一次。"""
+
+    app, window = _create_window()
+    now = datetime(2026, 8, 10, 14, 0, 5)
+    assert window._maybe_announce_hour(now) is False
+    window.settings.hourly_announcement = True
+    assert window._maybe_announce_hour(now) is True
+    assert "14:00" in window.speech_bubble.text()
+    assert window._maybe_announce_hour(now) is False
+    window.close()
+    window.deleteLater()
+    app.processEvents()
 
 def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     """工作计时应显示今日累计，并在连续工作过久时劝用户休息。"""
@@ -397,20 +431,19 @@ def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     app.processEvents()
 
 
-def test_dialogue_prompt_passes_accepted_text_to_local_reply(monkeypatch) -> None:
-    """输入框确认后应把文字交给本地规则；取消时不产生聊天记录。"""
+def test_dialogue_panel_passes_text_to_local_reply() -> None:
+    """新版聊天面板发送文字后应交给离线规则并显示回复。"""
 
     app, window = _create_window()
-    monkeypatch.setattr(
-        "onepic_desktop_pet.window.QInputDialog.getText",
-        lambda *_args, **_kwargs: ("今天有点累", True),
-    )
-
     window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    window._chat_dialog.input.setText("今天有点累")
+    window._chat_dialog._submit()
     app.processEvents()
 
     assert window.state is PetState.SLEEPY
     assert "喝口水" in window.speech_bubble.text()
+    assert "离线" in window._chat_dialog.status_label.text()
     window.close()
     window.deleteLater()
     app.processEvents()

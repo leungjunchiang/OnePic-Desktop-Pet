@@ -3,9 +3,9 @@
 
 职责范围：
 - 从项目内只读 JSON 读取默认功能设置；
-- 从当前用户本地应用数据目录读取上次窗口位置和用户选择的显示尺寸；
+- 从当前用户本地应用数据目录读取上次窗口位置、显示尺寸和非敏感体验设置；
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
-- 仅在用户配置目录保存窗口位置和显示尺寸，其他体验参数始终采用项目默认值。
+- 仅在用户配置目录保存窗口、AI 提供方和陪伴开关，不保存任何 API 令牌。
 
 Agent 快速定位：
 - 配置数据结构位于 PetSettings；
@@ -14,8 +14,8 @@ Agent 快速定位：
 - 不应把机器相关的绝对路径写入项目默认配置。
 
 输入为 JSON 文件，输出为 PetSettings 实例。保存操作会创建用户配置目录并原子写入
-`start_x`、`start_y` 与 `display_height`，不会覆盖项目默认配置，也不访问网络。
-“六毛工作搭子”使用独立的本地设置目录，避免旧桌宠尺寸覆盖新的小巧默认值。
+窗口、AI 提供方与陪伴开关，不会覆盖项目默认配置，也不访问网络。
+Lili 使用独立的本地设置目录，同时兼容读取旧“六毛工作搭子”的尺寸与位置。
 """
 
 from __future__ import annotations
@@ -47,10 +47,23 @@ class PetSettings:
     always_on_top: bool = True
     start_x: int | None = None
     start_y: int | None = None
+    ai_provider: str = "offline"
+    ai_base_url: str = ""
+    ai_model: str = ""
+    automatic_grumbling: bool = True
+    hourly_announcement: bool = False
 
 
 def user_settings_path() -> Path:
     """返回当前用户可写的设置文件路径。"""
+
+    base = os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / ".desktop_pet"
+    return root / "Lili" / "settings.json"
+
+
+def legacy_settings_path() -> Path:
+    """返回六毛工作搭子旧版本的设置路径，供一次性兼容读取。"""
 
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
@@ -100,6 +113,12 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.inactive_sit_ms + 5000,
         int(settings.inactive_sleep_ms),
     )
+    if settings.ai_provider not in {"offline", "codex", "deepseek", "kimi", "custom"}:
+        settings.ai_provider = "offline"
+    settings.ai_base_url = str(settings.ai_base_url).strip()[:500]
+    settings.ai_model = str(settings.ai_model).strip()[:120]
+    settings.automatic_grumbling = bool(settings.automatic_grumbling)
+    settings.hourly_announcement = bool(settings.hourly_announcement)
     return settings
 
 
@@ -111,6 +130,8 @@ def load_settings(
 
     default_file = default_path or resource_path("config/settings.json")
     user_file = override_path or user_settings_path()
+    if override_path is None and not user_file.exists() and legacy_settings_path().exists():
+        user_file = legacy_settings_path()
     base = _read_json(default_file)
     try:
         override = _read_json(user_file)
@@ -120,7 +141,17 @@ def load_settings(
         {
             key: value
             for key, value in override.items()
-            if key in {"display_height", "start_x", "start_y"}
+            if key
+            in {
+                "display_height",
+                "start_x",
+                "start_y",
+                "ai_provider",
+                "ai_base_url",
+                "ai_model",
+                "automatic_grumbling",
+                "hourly_announcement",
+            }
         }
     )
     return _validated(base)
@@ -136,6 +167,11 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "display_height": settings.display_height,
         "start_x": settings.start_x,
         "start_y": settings.start_y,
+        "ai_provider": settings.ai_provider,
+        "ai_base_url": settings.ai_base_url,
+        "ai_model": settings.ai_model,
+        "automatic_grumbling": settings.automatic_grumbling,
+        "hourly_announcement": settings.hourly_announcement,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

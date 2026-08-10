@@ -1,8 +1,8 @@
-# 六毛工作搭子（Six Hair Workmate）
+# Lili 桌面工作搭子
 
-一只可以在桌面跑动、休息、互动、吃东西、陪你聊天并记录工作时间的六毛公仔。项目仍保留 OnePic Desktop Pet 的一图制作流程。
+一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-当前 `v0.5.0` 命名为“六毛工作搭子”。默认站立高度为 180，保留六束紧密红色头发、蓝色发梢与锯齿脸、黄色连体衣和粉色爱心等辨识特征。
+从 `v0.6.0` 起应用名改为“Lili”。默认站立高度为 180，保留六束紧密红色头发、蓝色发梢与锯齿脸、黄色连体衣和粉色爱心等辨识特征。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -11,11 +11,14 @@
 - 透明无边框窗口、桌面置顶和多显示器 DPI 适配；
 - 站立、跑动、坐下、入睡、醒来、拖拽和自拍连续动画；
 - 摸头、分区点击、连续戳击、悬停注视和情绪反馈；
-- 可喂苹果、小饼干和热牛奶，并反馈饱食度、精力与亲密度；
-- 可输入文字与六毛离线对话，聊天内容不保存、不上传；
+- 可喂苹果、小饼干、热牛奶，也可选择咖啡或热茶；
+- 新版圆角聊天面板支持纯离线、Codex、DeepSeek、Kimi 和其他 OpenAI 兼容接口；
+- 本机有 Codex 且已经登录时可直接复用，不需要另填 API Key；Codex 不可用或在线连接失败时自动离线回答；
+- DeepSeek/Kimi 的 API 令牌只保存在系统安全凭据库，不写入设置、源码或 GitHub；
 - 可开始、暂停或完成工作计时，并查看今天累计工作多久；
 - 连续专注约 25 分钟会收到鼓励，约 50 分钟及更长时段会收到休息劝慰；
-- 新增陪我专注、为我加油、给我抱抱、庆祝完成、安慰和休息提醒动作；
+- 陪伴动作新增伸懒腰、一起想办法、安静陪伴和击掌庆祝，并用多段现有动画组合表现；
+- 可让 Lili 间断性发一句轻松牢骚，也可单独开启或关闭整点报时；
 - 扩充对工作压力、自我怀疑、拖延、犯错、孤独与爱意的暖心回应；
 - 跑动结束后随机站立、坐下或自拍；
 - 默认 5 分钟无互动后坐下、10 分钟后入睡；
@@ -26,17 +29,26 @@
 - 表情符号由程序独立绘制，换角色后仍可显示闪光、爱心、惊叹号、疑问号、怒气、Zzz 和汗滴；
 - PyInstaller Windows 打包脚本。
 
-## 喂食与对话
+## 喂食、对话与 AI
 
-右键点击六毛，选择“给六毛喂食”，可以喂苹果、小饼干或热牛奶；选择“和六毛聊聊”即可输入一句话。六毛会回应问候、工作、学习、疲惫、开心、难过、自我怀疑、拖延、犯错、孤独和爱意等常见话题，也会给出适合工作搭子的简短陪伴建议。
+右键点击 Lili，选择“给 Lili 喂食/饮品”，可以喂苹果、小饼干、热牛奶、咖啡或热茶；选择“和 Lili 聊聊”会打开新的聊天面板。本地规则可以回应问候、工作、学习、疲惫、自我怀疑、拖延、犯错、孤独与爱意等常见话题。
 
-对话使用程序内置的本地规则，不调用在线大模型，不需要账号或网络，不保存聊天历史。
+默认是“纯离线”，不需要账号或网络。右键选择“AI 与陪伴设置”后，可切换：
+
+- `Codex`：自动检测本机 Codex CLI，复用当前登录，以临时、只读会话回答；
+- `DeepSeek`：默认使用 `https://api.deepseek.com` 与 `deepseek-v4-flash`；
+- `Kimi`：默认使用中国区 `https://api.moonshot.cn/v1` 与 `kimi-k3`；
+- `其他兼容 API`：填写自有 HTTPS 地址和模型名称。
+
+在线模式会把当前消息与最近少量上下文发送给所选服务。聊天记录只放在当前进程内存里，关闭 Lili 后不会落盘。令牌由 Windows 凭据管理器或 macOS 钥匙串保存。不要把 API Key 发到 Issue、聊天记录或截图里。
+
+OpenAI 当前公开资料没有提供让第三方独立程序直接接管 Codex 内置宠物的接口。因此本版本采用受支持的 `codex exec` 联动方式；Lili 仍是独立桌宠。若要在 Codex/ChatGPT 桌面应用里使用 Lili 外观，需要在该应用的“设置 → Pets”中另行创建并选择自定义宠物。
 
 ## 工作计时与陪伴动作
 
 右键点击六毛，进入“工作计时”，可以开始/继续、暂停、完成本次工作或查看今日累计。开始计时后六毛会坐下陪伴；完成工作后会庆祝。计时跨应用重启保留当天累计，到第二天自动从零开始。自然退出程序时会自动暂停，关机或未运行的时间不会被算作工作。
 
-“六毛陪伴动作”中可以主动选择专注、加油、抱抱、庆祝、安慰和休息提醒。每类动作都有多句不同的鼓励话语。
+“Lili 陪伴动作”中可以主动选择专注、加油、抱抱、庆祝、安慰、休息、伸展、想办法、安静陪伴和击掌。每类动作都有多句不同的话语。
 
 工作记录只在本机应用数据目录保存日期和累计秒数，不保存任务名称、输入内容或聊天历史，也不会上传到 GitHub 或任何网络服务。
 
@@ -121,16 +133,16 @@ user_assets/selfie.jpeg
 打包结果位于：
 
 ```text
-dist/SixHairWorkmate/SixHairWorkmate.exe
+dist/Lili/Lili.exe
 ```
 
 ## 公开下载与 macOS 版本
 
 公开安装包由 GitHub Actions 在对应操作系统上构建，发布在仓库的 Releases 页面：
 
-- `SixHairWorkmate-Windows-x64.zip`：解压后双击 `SixHairWorkmate.exe`；
-- `SixHairWorkmate-macOS-arm64-unsigned.dmg`：适用于 Apple 芯片 Mac（M1/M2/M3/M4 等）；
-- `SixHairWorkmate-macOS-x64-unsigned.dmg`：适用于 Intel Mac。打开 DMG 后运行 `SixHairWorkmate.app`。
+- `Lili-Windows-x64.zip`：解压后双击 `Lili.exe`；
+- `Lili-macOS-arm64-unsigned.dmg`：适用于 Apple 芯片 Mac（M1/M2/M3/M4 等）；
+- `Lili-macOS-x64-unsigned.dmg`：适用于 Intel Mac。打开 DMG 后运行 `Lili.app`。
 
 公开安装包使用仓库中的六毛公仔动作，不包含 `user_assets/`、用户原图、自拍照片、候选图、私人动作或聊天记录。macOS DMG 目前没有 Apple Developer ID 签名与公证；首次启动时可能需要在 Finder 中按住 Control 点击应用并选择“打开”。
 
@@ -147,7 +159,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。[v0.5.0 六毛工作搭子](https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.5.0) 提供 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.6.0` 将提供 Lili 的 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
 
 ## 授权
 

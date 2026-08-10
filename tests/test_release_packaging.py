@@ -29,15 +29,15 @@ def test_release_builds_windows_zip_and_macos_dmg() -> None:
     spec = (PROJECT_ROOT / "OnePicDesktopPet.spec").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert "SixHairWorkmate-Windows-x64.zip" in workflow
-    assert "SixHairWorkmate-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
-    assert 'dmg_file="dist/SixHairWorkmate-macOS-${release_arch}-unsigned.dmg"' in macos_build
+    assert "Lili-Windows-x64.zip" in workflow
+    assert "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
+    assert 'dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"' in macos_build
     assert 'arm64) release_arch="arm64"' in macos_build
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
     assert "BUNDLE(" in spec
-    assert 'name="SixHairWorkmate"' in spec
-    assert '"CFBundleDisplayName": "六毛工作搭子"' in spec
-    assert '"CFBundleShortVersionString": "0.5.0"' in spec
-    assert 'version = "0.5.0"' in pyproject
+    assert 'name="Lili"' in spec
+    assert '"CFBundleDisplayName": "Lili"' in spec
+    assert '"CFBundleShortVersionString": "0.6.0"' in spec
+    assert 'version = "0.6.0"' in pyproject

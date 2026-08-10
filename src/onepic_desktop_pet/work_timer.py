@@ -1,5 +1,5 @@
 """
-本模块提供“六毛工作搭子”的本地工作计时与温和休息提醒，不创建窗口或访问网络。
+本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
 
 职责范围：
 - 记录当天累计工作秒数，并在日期变化时自动开始新一天；
@@ -26,7 +26,15 @@ def work_timer_path() -> Path:
 
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "SixHairWorkmate" / "work_timer.json"
+    current = root / "Lili" / "work_timer.json"
+    legacy = root / "SixHairWorkmate" / "work_timer.json"
+    if not current.exists() and legacy.exists():
+        try:
+            current.parent.mkdir(parents=True, exist_ok=True)
+            current.write_bytes(legacy.read_bytes())
+        except OSError:
+            return legacy
+    return current
 
 
 def format_work_duration(seconds: int) -> str:
