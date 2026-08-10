@@ -48,6 +48,7 @@ from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QContextMenuEvent,
+    QDesktopServices,
     QFont,
     QHideEvent,
     QMouseEvent,
@@ -58,7 +59,7 @@ from PySide6.QtGui import (
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 
 try:
     from PySide6.QtTextToSpeech import QTextToSpeech
@@ -86,6 +87,20 @@ from .companion import (
 from .config import PetSettings, save_settings
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
+from .daily_report import render_daily_report
+from .diary import DailyCompanionStats, album_directory
+from .growth import (
+    ACTION_GROUPS,
+    ACTION_SPRITES,
+    COMPLETE_ACTIONS,
+    FOCUS_ACTIONS,
+    RANDOM_ACTIONS,
+    REST_ACTIONS,
+    growth_progress_text,
+    positive_mood,
+    stage_for_seconds,
+    time_of_day_activity,
+)
 from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
 from .music import choose_song, launch_music_client
@@ -115,6 +130,9 @@ class PetWindow(QWidget):
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
         self.work_timer = work_timer or WorkTimerModel()
+        self.daily_stats = DailyCompanionStats(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
         self.direction = -1
@@ -155,6 +173,8 @@ class PetWindow(QWidget):
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
+        self._last_growth_hour = stage_for_seconds(self.work_timer.today_seconds()).hour
+        self._long_press_triggered = False
         self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
         self._babuda_variant_index = 0
         self._pending_context_global = QPoint()
@@ -253,6 +273,10 @@ class PetWindow(QWidget):
         self.interaction_timer.setSingleShot(True)
         self.interaction_timer.timeout.connect(self._finish_interaction)
 
+        self.long_press_timer = QTimer(self)
+        self.long_press_timer.setSingleShot(True)
+        self.long_press_timer.timeout.connect(self._trigger_long_press)
+
         self.hover_timer = QTimer(self)
         self.hover_timer.setSingleShot(True)
         self.hover_timer.timeout.connect(self._trigger_hover_curiosity)
@@ -292,6 +316,14 @@ class PetWindow(QWidget):
         self.context_menu_timer = QTimer(self)
         self.context_menu_timer.setSingleShot(True)
         self.context_menu_timer.timeout.connect(self._show_deferred_context_menu)
+
+        self.activity_timer = QTimer(self)
+        self.activity_timer.setSingleShot(True)
+        self.activity_timer.timeout.connect(self._activity_timeout)
+
+        self.work_activity_timer = QTimer(self)
+        self.work_activity_timer.setSingleShot(True)
+        self.work_activity_timer.timeout.connect(self._work_activity_tick)
 
         self.hourly_timer = QTimer(self)
         self.hourly_timer.setInterval(15000)
@@ -503,7 +535,9 @@ class PetWindow(QWidget):
             display_state,
             self._effect_phase,
         )
-        activity = "computer" if self.work_timer.is_running else self._ambient_activity
+        activity = self._ambient_activity
+        if self.work_timer.is_running and activity in {"", "none"}:
+            activity = "computer"
         composed = draw_activity_overlay(
             composed,
             activity,
@@ -969,11 +1003,15 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         reply = self.companion.feed(food_key)
         if food_key in {"coffee", "tea"}:
+            self._set_temporary_activity("tea", 28_000)
             self._play_action_sequence(
                 (PetState.SIT, PetState.HAPPY, PetState.SIT),
                 3000,
             )
         else:
+            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "milk-tea"}.get(food_key)
+            if food_activity:
+                self._set_temporary_activity(food_activity, 28_000)
             self._show_emotion(reply.state, 2200)
         self.show_speech(reply.text)
         return reply
@@ -1036,6 +1074,8 @@ class PetWindow(QWidget):
         started = self.work_timer.start()
         if started:
             self.set_paused(True)
+        self._ambient_activity = "computer"
+        self._schedule_work_activity(25_000)
         reply = self.companion.work_started(resumed=not started)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 5600)
@@ -1047,7 +1087,12 @@ class PetWindow(QWidget):
         """暂停工作计时并显示当天累计与休息建议。"""
 
         self._record_user_interaction()
+        session_seconds = self.work_timer.session_seconds()
         was_running = self.work_timer.pause()
+        if was_running:
+            self.daily_stats.record_focus(session_seconds)
+        self.work_activity_timer.stop()
+        self._set_temporary_activity("tea", 25_000)
         duration = format_work_duration(self.work_timer.today_seconds())
         if was_running:
             reply = self.companion.work_paused(duration)
@@ -1067,15 +1112,19 @@ class PetWindow(QWidget):
         """完成本次工作、保留今日累计并播放庆祝动作。"""
 
         self._record_user_interaction()
+        session_seconds = self.work_timer.session_seconds()
         total = self.work_timer.finish()
+        self.daily_stats.record_focus(session_seconds, completed=True)
         self.set_paused(False)
         reply = self.companion.work_finished(format_work_duration(total))
         self._show_emotion(reply.state, 3400)
         self.show_speech(reply.text, 6200)
         self.work_timer_changed.emit(False)
         self.work_controls.hide()
-        self._refresh_pixmap()
+        self.work_activity_timer.stop()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
         self._show_new_outfit_unlock()
+        self._generate_daily_report(show_dialog=False)
         return reply
 
     def show_work_time(self) -> None:
@@ -1084,7 +1133,59 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
         self._show_emotion(state, 2600)
-        self.show_speech(self.work_timer.status_text(), 4800)
+        text = (
+            f"{self.work_timer.status_text()}\n"
+            f"{growth_progress_text(self.work_timer.today_seconds())}\n"
+            f"六毛心情：{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
+        )
+        self.show_speech(text, 6800)
+
+    def show_daily_growth(self) -> None:
+        """显示今天 0–8 小时成长节点和下一个可见奖励。"""
+
+        seconds = self.work_timer.today_seconds()
+        stage = stage_for_seconds(seconds)
+        self._set_temporary_activity(stage.activity, 35_000)
+        self.show_speech(
+            f"今日成长 {stage.hour}/8：{stage.title}\n"
+            f"当前奖励：{stage.reward}\n{growth_progress_text(seconds)}",
+            7600,
+        )
+
+    def _schedule_work_activity(self, delay_ms: int | None = None) -> None:
+        """计时期间安排下一次陪伴工作动作。"""
+
+        self.work_activity_timer.stop()
+        if self.work_timer.is_running:
+            self.work_activity_timer.start(delay_ms or random.randint(150_000, 300_000))
+
+    def _work_activity_tick(self) -> None:
+        """在专注动作间轮换，让用户工作时六毛也持续工作。"""
+
+        if not self.work_timer.is_running:
+            return
+        session = self.work_timer.session_seconds()
+        choices = FOCUS_ACTIONS
+        if session >= 45 * 60 and random.random() < 0.35:
+            choices = ("thermos", "tea", "sleep")
+        self._ambient_activity = random.choice(choices)
+        self._manual_activity_until = time.monotonic() + 120
+        self._mask_cache.clear(); self._refresh_pixmap()
+        self._schedule_work_activity()
+
+    def _set_temporary_activity(self, activity: str, duration_ms: int = 30_000) -> None:
+        """显示一张完整动作图，结束后回到工作或普通待机。"""
+
+        self._ambient_activity = activity if activity in ACTION_SPRITES else "none"
+        self._manual_activity_until = time.monotonic() + duration_ms / 1000
+        self.activity_timer.start(max(1500, duration_ms))
+        self._mask_cache.clear(); self._refresh_pixmap()
+
+    def _activity_timeout(self) -> None:
+        """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
+
+        self._ambient_activity = random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+        self._mask_cache.clear(); self._refresh_pixmap()
 
     def _work_timer_tick(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
@@ -1098,8 +1199,10 @@ class PetWindow(QWidget):
             self.settings.stand_interval_minutes,
         )
         if wellness_kind == "water":
+            self._set_temporary_activity("thermos", 35_000)
             self.show_speech("喝口水吧。六毛替你把这一小会儿守住。", 6200)
         elif wellness_kind == "stand":
+            self._set_temporary_activity("football", 35_000)
             self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
         reminder_kind = self.work_timer.take_due_reminder()
         if reminder_kind is None:
@@ -1110,22 +1213,72 @@ class PetWindow(QWidget):
         self.show_speech(reply.text, 7200)
 
     def _show_new_outfit_unlock(self) -> None:
-        """在跨过新的整小时门槛时提示并自动装备新娃衣。"""
+        """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
 
-        index = self.work_timer.take_new_outfit_unlock()
-        if index is None or not 1 <= index <= len(OUTFITS):
+        stage = stage_for_seconds(self.work_timer.today_seconds())
+        if stage.hour <= self._last_growth_hour:
             return
-        outfit = OUTFITS[index - 1]
-        self.settings.equipped_outfit = outfit.key
-        save_settings(self.settings)
-        self._refresh_pixmap()
-        self.show_speech(f"一小时成就解锁：{outfit.name}。{outfit.message}", 7600)
+        self._last_growth_hour = stage.hour
+        self._set_temporary_activity(stage.activity, 60_000)
+        self.show_speech(f"今日成长：{stage.title}\n解锁：{stage.reward}\n{stage.message}", 8200)
+        if stage.hour >= 8:
+            self._generate_daily_report(show_dialog=True)
 
     def shutdown_work_timer(self) -> None:
-        """自然退出前暂停并保存计时，避免把关机时间计入工作。"""
+        """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
 
         if hasattr(self, "work_timer"):
+            if self.work_timer.is_running:
+                self.daily_stats.record_focus(self.work_timer.session_seconds())
             self.work_timer.pause()
+            if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
+                self._generate_daily_report(show_dialog=False)
+
+    def _generate_daily_report(self, *, show_dialog: bool) -> Path | None:
+        """生成只保存在本机的工作日报；可选展示预览窗口。"""
+
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1" and not show_dialog:
+            return None
+        photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
+        try:
+            path = render_daily_report(
+                self.work_timer.today_seconds(),
+                self.daily_stats.snapshot(),
+                photo,
+            )
+        except OSError as exc:
+            if show_dialog:
+                self.show_speech(f"工作日报暂时没保存成功：{exc}", 6200)
+            return None
+        if show_dialog:
+            self._show_daily_report_dialog(path)
+        return path
+
+    def show_daily_report(self) -> None:
+        """由菜单生成并打开今天的六毛工作日报。"""
+
+        self._record_user_interaction()
+        self._generate_daily_report(show_dialog=True)
+
+    def _show_daily_report_dialog(self, path: Path) -> None:
+        """在应用内预览工作卡，并提供打开本机相册的按钮。"""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("今天六毛陪你做了什么")
+        layout = QVBoxLayout(dialog)
+        preview = QLabel(dialog); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card = QPixmap(str(path)).scaled(430, 570, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        preview.setPixmap(card); layout.addWidget(preview)
+        open_button = QPushButton("打开六毛相册", dialog)
+        open_button.clicked.connect(self.open_daily_album)
+        layout.addWidget(open_button)
+        dialog.exec()
+
+    def open_daily_album(self) -> None:
+        """打开本机六毛相册文件夹，不访问网络。"""
+
+        directory = album_directory(); directory.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
 
     def prompt_dialogue(self) -> None:
         """打开新版聊天面板；离线和在线模式共用同一个入口。"""
@@ -1280,12 +1433,9 @@ class PetWindow(QWidget):
         return title
 
     def set_activity(self, activity: str) -> None:
-        """手动选择电脑、耳机、吉他、鼓或阅读叠加动作。"""
+        """手动选择修正版动作表中的任意完整动作。"""
 
-        self._ambient_activity = activity if activity in {"computer", "headphones", "guitar", "drums", "reading", "writing"} else "none"
-        self._manual_activity_until = time.monotonic() + 120
-        self._mask_cache.clear()
-        self._refresh_pixmap()
+        self._set_temporary_activity(activity, 120_000)
 
     def equip_outfit(self, outfit_key: str) -> None:
         """装备已解锁娃衣；空字符串恢复经典外观。"""
@@ -1347,23 +1497,37 @@ class PetWindow(QWidget):
             self.start_work_timer()
 
     def _schedule_ambient(self) -> None:
-        """用随机间隔安排下一句牢骚，避免固定频率造成打扰。"""
+        """用随机间隔安排六毛主动出现，保持存在感但避免频繁打扰。"""
 
         if not hasattr(self, "ambient_timer"):
             return
         self.ambient_timer.stop()
         if self.settings.automatic_grumbling:
-            self.ambient_timer.start(random.randint(12 * 60_000, 28 * 60_000))
+            self.ambient_timer.start(random.randint(8 * 60_000, 18 * 60_000))
 
     def _ambient_tick(self) -> None:
-        """在宠物可见且当前没有聊天请求时显示一条本地牢骚。"""
+        """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
         try:
             busy = self._ai_thread is not None and self._ai_thread.isRunning()
             if self.isVisible() and not self.dragging and not busy:
-                reply = self.companion.ambient_grumble(self.work_timer.is_running)
-                self._show_emotion(reply.state, 2600)
-                self.show_speech(reply.text, 6200)
+                idle_seconds = time.monotonic() - self._last_user_interaction
+                if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
+                    activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"
+                elif idle_seconds >= 30 * 60:
+                    activity, text = "pointing", "你很久没动啦，六毛偷偷探头看看你还在不在。"
+                elif self.work_timer.today_seconds() >= 3 * 3600 and random.random() < 0.06:
+                    activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
+                elif random.random() < 0.55:
+                    activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                else:
+                    activity = random.choice(RANDOM_ACTIONS)
+                    text = self.companion.ambient_grumble(self.work_timer.is_running).text
+                self.daily_stats.record_event(activity)
+                if activity == "sleep":
+                    self.daily_stats.record_sleep()
+                self._set_temporary_activity(activity, 42_000)
+                self.show_speech(text, 6800)
         finally:
             self._schedule_ambient()
 
@@ -1480,6 +1644,7 @@ class PetWindow(QWidget):
 
         zone = self._interaction_zone(point)
         self._record_user_interaction()
+        self.daily_stats.record_touch()
         if zone == "work_device" or (zone == "head" and self.work_timer.is_running):
             self.show_work_controls()
             return
@@ -1488,9 +1653,8 @@ class PetWindow(QWidget):
             return
         if zone == "head":
             self.mood.receive_affection()
-            state = PetState.SHY if self.mood.affinity >= 70 else PetState.HAPPY
-            self._show_emotion(state, 1700)
-            self.show_speech("巴布达。六毛被你摸到脑袋啦。", 3000)
+            self._show_emotion(PetState.CURIOUS, 1700)
+            self.show_speech("六毛歪着头看你：是在叫我吗？", 3200)
             return
         if zone == "face":
             self.mood.receive_poke(False)
@@ -1501,11 +1665,15 @@ class PetWindow(QWidget):
         self._poke_times.append(now)
         while self._poke_times and now - self._poke_times[0] > 2.5:
             self._poke_times.popleft()
-        repeated = len(self._poke_times) >= 3
+        repeated = len(self._poke_times) >= 5
         self.mood.receive_poke(repeated)
         self._show_emotion(
-            PetState.ANNOYED if repeated else PetState.SURPRISED,
+            PetState.ANNOYED if repeated else PetState.SHY,
             1800 if repeated else 1200,
+        )
+        self.show_speech(
+            "戳够五下啦，六毛真的要生气一点点。" if repeated else "六毛赶紧护住肚子：这里不许乱戳。",
+            3600,
         )
 
     def play_babuda_voice(self) -> None:
@@ -1529,6 +1697,17 @@ class PetWindow(QWidget):
             self._speech_engine.say("巴布达")
         self._show_emotion(random.choice((PetState.HAPPY, PetState.SHY, PetState.SURPRISED)), 1500)
         self.show_speech(random.choice(("巴布达！", "巴——布达。", "巴布达？六毛在呢。")), 2800)
+
+    def _trigger_long_press(self) -> None:
+        """长按六毛让他原地睡觉，释放鼠标时不再触发普通点击。"""
+
+        if not self._press_pending or self.dragging:
+            return
+        self._press_pending = False
+        self._long_press_triggered = True
+        self.daily_stats.record_sleep()
+        self._set_temporary_activity("sleep", 60_000)
+        self.show_speech("长按成功。六毛决定就地睡一小会儿。", 4200)
 
     def _track_passive_motion(self, point: QPoint) -> None:
         """跟踪无按键悬停；停留触发好奇，头部往返移动判定为摸头。"""
@@ -1557,8 +1736,10 @@ class PetWindow(QWidget):
             self._stroke_points.clear()
             self.mood.receive_affection()
             self._record_user_interaction()
+            self.daily_stats.record_touch()
             state = PetState.SHY if self.mood.affinity >= 70 else PetState.HAPPY
             self._show_emotion(state, 1600)
+            self.show_speech("摸摸收到。六毛的红毛都开心得翘起来啦。", 3400)
 
     def _trigger_hover_curiosity(self) -> None:
         """鼠标在宠物附近稳定停留时显示好奇注视。"""
@@ -1572,6 +1753,8 @@ class PetWindow(QWidget):
         ):
             self._record_user_interaction()
             self._show_emotion(PetState.CURIOUS, 1300)
+            if time.monotonic() >= self._manual_activity_until:
+                self._set_temporary_activity("pointing", 5000)
 
     def _show_photo_bubble(self) -> None:
         """在宠物旁显示独立自拍成片，并在数秒后自动隐藏。"""
@@ -1645,6 +1828,13 @@ class PetWindow(QWidget):
                 )
             )
             action_menu.addAction(action)
+        picture_actions = menu.addMenu("36 个修正版图片动作")
+        for group_name, entries in ACTION_GROUPS:
+            group_menu = picture_actions.addMenu(group_name)
+            for label, key in entries:
+                action = QAction(label, self)
+                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+                group_menu.addAction(action)
         work_menu = menu.addMenu(
             f"工作计时：{format_work_duration(self.work_timer.today_seconds())}"
         )
@@ -1659,6 +1849,15 @@ class PetWindow(QWidget):
         show_work_action = QAction("查看今日累计", self)
         show_work_action.triggered.connect(self.show_work_time)
         work_menu.addAction(show_work_action)
+        growth_action = QAction("查看今日 0–8 小时成长线", self)
+        growth_action.triggered.connect(self.show_daily_growth)
+        work_menu.addAction(growth_action)
+        report_action = QAction("今天六毛陪你做了什么", self)
+        report_action.triggered.connect(self.show_daily_report)
+        work_menu.addAction(report_action)
+        album_action = QAction("打开六毛相册", self)
+        album_action.triggered.connect(self.open_daily_album)
+        work_menu.addAction(album_action)
         food_menu = menu.addMenu("给六毛喂食/饮品")
         for food in FOOD_OPTIONS:
             food_action = QAction(food.label, self)
@@ -1693,7 +1892,7 @@ class PetWindow(QWidget):
         size_action = QAction("连续调节宠物大小…", self)
         size_action.triggered.connect(self.open_size_control)
         menu.addAction(size_action)
-        outfit_menu = menu.addMenu("每小时成就娃衣")
+        outfit_menu = menu.addMenu("长期收藏娃衣")
         classic = QAction("经典六毛", self); classic.triggered.connect(lambda: self.equip_outfit("")); outfit_menu.addAction(classic)
         unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
         for outfit in OUTFITS:
@@ -1736,6 +1935,8 @@ class PetWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._record_user_interaction()
             self._press_pending = True
+            self._long_press_triggered = False
+            self.long_press_timer.start(850)
             self.dragging = False
             self.state_timer.stop()
             self.interaction_timer.stop()
@@ -1757,6 +1958,7 @@ class PetWindow(QWidget):
                 and (current_global - self._press_global).manhattanLength()
                 >= QApplication.startDragDistance()
             ):
+                self.long_press_timer.stop()
                 self._press_pending = False
                 self.dragging = True
                 self.mood.receive_drag()
@@ -1775,10 +1977,13 @@ class PetWindow(QWidget):
         """左键释放时结束拖动并恢复待机。"""
 
         if event.button() == Qt.MouseButton.LeftButton:
+            self.long_press_timer.stop()
             if self.dragging:
                 self.dragging = False
                 self._press_pending = False
                 self._show_emotion(PetState.SURPRISED, 1100)
+            elif self._long_press_triggered:
+                self._long_press_triggered = False
             elif self._press_pending:
                 self._press_pending = False
                 self._handle_click(self._press_local)
@@ -1792,6 +1997,7 @@ class PetWindow(QWidget):
         self._hover_zone = ""
         self._stroke_points.clear()
         self.hover_timer.stop()
+        self.long_press_timer.stop()
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
