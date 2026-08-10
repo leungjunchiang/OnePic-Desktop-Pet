@@ -5,6 +5,7 @@
 - 提供不遮挡桌宠的圆角聊天窗口与清晰的本地/在线状态提示；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
+- 允许用户选择本机音乐客户端、巴布达音频和自有歌词文本，绝不把这些路径上传；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 在线请求放入 QThread，避免冻结桌面动画。
 
@@ -13,6 +14,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from html import escape
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -20,6 +23,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -274,10 +278,10 @@ class AISettingsDialog(QDialog):
         self.app_awareness = QCheckBox("根据当前应用切换陪伴动作（只识别应用类别）")
         self.app_awareness.setChecked(settings.app_awareness)
         layout.addWidget(self.app_awareness)
-        self.voice = QCheckBox("点击六毛时让他说“巴布达”")
+        self.voice = QCheckBox("双击右键时让六毛说“巴布达”")
         self.voice.setChecked(settings.voice_enabled)
         layout.addWidget(self.voice)
-        self.lyric_inspiration = QCheckBox("偶尔显示陈楚生歌名意象的原创短句")
+        self.lyric_inspiration = QCheckBox("定时显示歌名意象或本地歌词")
         self.lyric_inspiration.setChecked(settings.lyric_inspiration_enabled)
         layout.addWidget(self.lyric_inspiration)
         self.water = QCheckBox("喝水提醒")
@@ -291,6 +295,36 @@ class AISettingsDialog(QDialog):
         self.music_service = QComboBox(); self.music_service.addItem("网易云音乐", "netease"); self.music_service.addItem("QQ 音乐", "qq")
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
         form.addRow("正版音乐入口", self.music_service)
+
+        self.qq_music_path = QLineEdit(settings.qq_music_path)
+        self.qq_music_path.setPlaceholderText("自动寻找，或选择 QQMusic.exe / QQMusic.app")
+        qq_row = QWidget(); qq_layout = QHBoxLayout(qq_row); qq_layout.setContentsMargins(0, 0, 0, 0)
+        qq_pick = QPushButton("选择…"); qq_pick.setObjectName("softButton"); qq_pick.clicked.connect(self._choose_qq_music)
+        qq_layout.addWidget(self.qq_music_path, 1); qq_layout.addWidget(qq_pick)
+        form.addRow("QQ 音乐程序", qq_row)
+
+        self.netease_music_path = QLineEdit(settings.netease_music_path)
+        self.netease_music_path.setPlaceholderText("自动寻找，或选择 cloudmusic.exe / 网易云音乐.app")
+        netease_row = QWidget(); netease_layout = QHBoxLayout(netease_row); netease_layout.setContentsMargins(0, 0, 0, 0)
+        netease_pick = QPushButton("选择…"); netease_pick.setObjectName("softButton"); netease_pick.clicked.connect(self._choose_netease_music)
+        netease_layout.addWidget(self.netease_music_path, 1); netease_layout.addWidget(netease_pick)
+        form.addRow("网易云程序", netease_row)
+
+        self.babuda_audio_path = QLineEdit(settings.babuda_audio_path)
+        self.babuda_audio_path.setPlaceholderText("选择第一段 babuda 音频；同目录多段会自动轮换")
+        audio_row = QWidget(); audio_layout = QHBoxLayout(audio_row); audio_layout.setContentsMargins(0, 0, 0, 0)
+        audio_pick = QPushButton("选择…"); audio_pick.setObjectName("softButton"); audio_pick.clicked.connect(self._choose_babuda_audio)
+        audio_layout.addWidget(self.babuda_audio_path, 1); audio_layout.addWidget(audio_pick)
+        form.addRow("巴布达音频", audio_row)
+
+        self.local_lyrics_path = QLineEdit(settings.local_lyrics_path)
+        self.local_lyrics_path.setPlaceholderText("可选：你有权使用的 TXT，每行一句")
+        lyrics_row = QWidget(); lyrics_layout = QHBoxLayout(lyrics_row); lyrics_layout.setContentsMargins(0, 0, 0, 0)
+        lyrics_pick = QPushButton("选择…"); lyrics_pick.setObjectName("softButton"); lyrics_pick.clicked.connect(self._choose_local_lyrics)
+        lyrics_layout.addWidget(self.local_lyrics_path, 1); lyrics_layout.addWidget(lyrics_pick)
+        form.addRow("本地歌词文本", lyrics_row)
+        self.lyric_minutes = QSpinBox(); self.lyric_minutes.setRange(2, 120); self.lyric_minutes.setSuffix(" 分钟"); self.lyric_minutes.setValue(settings.lyric_interval_minutes)
+        form.addRow("歌词气泡间隔", self.lyric_minutes)
 
         note = QLabel(
             "Codex/Claude Code 模式复用本机登录，不需要 API Key；DeepSeek/Kimi 令牌保存在系统安全凭据库。"
@@ -334,6 +368,47 @@ class AISettingsDialog(QDialog):
             status = "所有回答都在本机生成。"
         self.token_status.setText(status)
 
+    def _choose_qq_music(self) -> None:
+        """选择本机 QQ 音乐程序，不读取程序内容。"""
+
+        path = self._choose_music_program("选择 QQ 音乐程序", self.qq_music_path.text())
+        if path:
+            self.qq_music_path.setText(path)
+
+    def _choose_netease_music(self) -> None:
+        """选择本机网易云音乐程序，不读取程序内容。"""
+
+        path = self._choose_music_program("选择网易云音乐程序", self.netease_music_path.text())
+        if path:
+            self.netease_music_path.setText(path)
+
+    def _choose_music_program(self, title: str, current: str) -> str:
+        """Windows 选择 EXE，macOS 选择应用包目录；输入框仍允许手工粘贴路径。"""
+
+        if sys.platform == "darwin":
+            return QFileDialog.getExistingDirectory(self, title, current or "/Applications")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            title,
+            current,
+            "程序 (*.exe);;所有文件 (*)",
+        )
+        return path
+
+    def _choose_babuda_audio(self) -> None:
+        """选择本地巴布达音频；同目录相同前缀文件会作为语气变体。"""
+
+        path, _ = QFileDialog.getOpenFileName(self, "选择巴布达音频", self.babuda_audio_path.text(), "音频 (*.wav *.mp3 *.m4a *.aac *.ogg);;所有文件 (*)")
+        if path:
+            self.babuda_audio_path.setText(path)
+
+    def _choose_local_lyrics(self) -> None:
+        """选择用户有权在本机使用的逐行文本。"""
+
+        path, _ = QFileDialog.getOpenFileName(self, "选择本地歌词文本", self.local_lyrics_path.text(), "文本 (*.txt);;所有文件 (*)")
+        if path:
+            self.local_lyrics_path.setText(path)
+
     def _test_connection(self) -> None:
         """检测本机 Agent 登录或 API 地址与令牌，不发送聊天内容。"""
 
@@ -372,5 +447,10 @@ class AISettingsDialog(QDialog):
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
         self.settings.music_service = str(self.music_service.currentData())
+        self.settings.qq_music_path = self.qq_music_path.text().strip()
+        self.settings.netease_music_path = self.netease_music_path.text().strip()
+        self.settings.babuda_audio_path = self.babuda_audio_path.text().strip()
+        self.settings.local_lyrics_path = self.local_lyrics_path.text().strip()
+        self.settings.lyric_interval_minutes = self.lyric_minutes.value()
         if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())

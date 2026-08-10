@@ -149,7 +149,7 @@ def check_provider_connection(
         raise AIConnectionError("还没有填写或保存 API 令牌。")
     request = urllib.request.Request(
         _models_endpoint(base_url or default_url),
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "LiliDesktopPet/0.8"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "LiliDesktopPet/0.9"},
         method="GET",
     )
     try:

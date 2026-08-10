@@ -139,9 +139,9 @@ class WorkTimerModel:
         return self._lifetime_seconds + self._current_elapsed()
 
     def unlocked_outfit_count(self) -> int:
-        """每累计一小时解锁一套娃衣，最多十套。"""
+        """每累计一小时解锁一套娃衣，最多十四套。"""
 
-        return min(10, self.lifetime_seconds() // 3600)
+        return min(14, self.lifetime_seconds() // 3600)
 
     def take_new_outfit_unlock(self) -> int | None:
         """首次跨过整小时门槛时返回从一开始的解锁序号。"""

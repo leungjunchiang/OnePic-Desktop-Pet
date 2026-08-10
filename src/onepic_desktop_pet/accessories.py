@@ -1,4 +1,4 @@
-"""在已确认的六毛角色帧上绘制工作、音乐和成就配饰。
+"""在已确认的六毛角色帧上绘制配饰，并加载用户确认的完整动作/娃衣素材。
 
 所有图层均以当前透明画布的比例绘制，不改变宠物窗口尺寸或原始人物轮廓。配饰采用简单原创
 矢量造型，避免重新生成角色导致六根毛、身形或五官不一致。
@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+
+from .resources import resource_path
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,26 @@ OUTFITS = (
     Outfit("painter", "小画家", "把还没说清的心情先画下来。"),
     Outfit("astronaut", "月亮来客", "长大以后，也保留一点奔向星星的认真。"),
     Outfit("reader", "故事学者", "小小的大人，也在慢慢读懂世界。"),
-    Outfit("wild_king", "荒野国王", "十小时的坚持，为小小大人加冕：你是自己荒野里的国王。"),
+    Outfit("dream_cleaner", "梦想清扫员", "把今天的小混乱扫干净，秘密王国就有地方开门。"),
+    Outfit("dream_plane", "飞行梦想家", "不是赶路，是坐上亲手画出的飞机看看更远的可能。"),
+    Outfit("sleep_heart", "甜梦抱抱", "抱着喜欢的东西好好睡一觉，也是小小大人的本领。"),
+    Outfit("dream_cape", "红毯小大人", "披上想象力做的外套，认真扮演一次未来的自己。"),
+    Outfit("wild_king", "荒野国王", "十四小时的坚持，为小小大人加冕：你是自己荒野里的国王。"),
 )
+
+
+SPECIAL_ACTIVITY_SPRITES = {
+    "headphones": "assets/pet/special/music-headphones.png",
+    "guitar": "assets/pet/special/music-guitar.png",
+    "drums": "assets/pet/special/music-drums.png",
+}
+
+SPECIAL_OUTFIT_SPRITES = {
+    "dream_cleaner": "assets/pet/special/outfit-dream-cleaner.png",
+    "dream_plane": "assets/pet/special/outfit-dream-plane.png",
+    "sleep_heart": "assets/pet/special/outfit-sleep-heart.png",
+    "dream_cape": "assets/pet/special/outfit-dream-cape.png",
+}
 
 
 def unlocked_outfits(count: int) -> tuple[Outfit, ...]:
@@ -46,6 +66,12 @@ def draw_activity_overlay(
     phase: int = 0,
 ) -> QPixmap:
     """返回叠加活动物件和娃衣配饰后的新像素图。"""
+
+    if activity in SPECIAL_ACTIVITY_SPRITES:
+        return _full_sprite(source, SPECIAL_ACTIVITY_SPRITES[activity])
+    if outfit in SPECIAL_OUTFIT_SPRITES:
+        source = _full_sprite(source, SPECIAL_OUTFIT_SPRITES[outfit])
+        outfit = ""
 
     result = QPixmap(source)
     painter = QPainter(result)
@@ -104,6 +130,30 @@ def draw_activity_overlay(
         if activity == "writing":
             painter.setPen(QPen(QColor("#5b6fa8"), line * 1.5))
             painter.drawLine(QPointF(w * .58, h * .56), QPointF(w * .69, h * .78))
+    painter.end()
+    return result
+
+
+def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
+    """把完整透明动作素材按源画布等比居中，保持桌宠窗口大小恒定。"""
+
+    sprite = QPixmap(str(resource_path(relative_path)))
+    if sprite.isNull():
+        return QPixmap(source)
+    result = QPixmap(source.size())
+    result.fill(Qt.GlobalColor.transparent)
+    result.setDevicePixelRatio(source.devicePixelRatio())
+    scaled = sprite.scaled(
+        source.size(),
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    painter = QPainter(result)
+    painter.drawPixmap(
+        (result.width() - scaled.width()) // 2,
+        (result.height() - scaled.height()) // 2,
+        scaled,
+    )
     painter.end()
     return result
 

@@ -566,3 +566,49 @@ def test_selfie_photo_is_positioned_near_visible_character() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_song_inspiration_uses_independent_timer() -> None:
+    """开启歌词气泡后应有独立计时器，不再依赖随机牢骚触发。"""
+
+    app, window = _create_window()
+
+    assert window.song_timer.isActive()
+    assert window.song_timer.remainingTime() > 0
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_babuda_fallback_changes_system_voice_tone() -> None:
+    """未选择本地音频时，连续双击右键仍会获得不同语气的系统语音。"""
+
+    class SpeechRecorder:
+        def __init__(self) -> None:
+            self.rates = []
+            self.pitches = []
+            self.words = []
+
+        def setRate(self, value) -> None:
+            self.rates.append(value)
+
+        def setPitch(self, value) -> None:
+            self.pitches.append(value)
+
+        def say(self, value) -> None:
+            self.words.append(value)
+
+    app, window = _create_window()
+    recorder = SpeechRecorder()
+    window._speech_engine = recorder
+    window.settings.babuda_audio_path = ""
+
+    window.play_babuda_voice()
+    window.play_babuda_voice()
+
+    assert recorder.words == ["巴布达", "巴布达"]
+    assert recorder.rates[0] != recorder.rates[1]
+    assert recorder.pitches[0] != recorder.pitches[1]
+    window.close()
+    window.deleteLater()
+    app.processEvents()

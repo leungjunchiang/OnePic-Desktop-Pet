@@ -19,7 +19,7 @@
 
 CC BY-NC 4.0 仅适用于上述公开演示素材，不改变程序代码的 MIT License。
 
-`assets/pet/` 与 `assets/icons/pet.png` 中自 `v0.3.0` 起使用的六毛公仔素材由仓库所有者 `leungjunchiang` 明确授权公开，并沿用上述 CC BY-NC 4.0 条款；最初上传的参考原图和私人自拍不在授权及仓库范围内。
+`assets/pet/` 与 `assets/icons/pet.png` 中自 `v0.3.0` 起使用的六毛公仔素材由仓库所有者 `leungjunchiang` 明确授权公开，并沿用上述 CC BY-NC 4.0 条款；`v0.9.0` 新增的耳机、吉他、鼓及四套梦想娃衣亦按同一范围发布。最初上传的参考原图、私人自拍、原视频、提取语音和本地歌词不在授权及仓库范围内。
 
 ## 用户素材
 
