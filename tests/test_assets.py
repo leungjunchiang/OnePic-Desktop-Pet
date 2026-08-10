@@ -4,6 +4,7 @@
 测试读取项目内生成的 PNG，不修改素材、不启动 GUI，也不访问网络。
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,13 +16,31 @@ from tools.prepare_assets import split_equal_horizontal_sheet, split_horizontal_
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_six_hair_identity_anchor_and_icon_match_approved_assets() -> None:
+    """固定已验收六毛角色的站立主帧，并确保程序图标来自同一角色。"""
+
+    idle_frame = PROJECT_ROOT / "assets" / "pet" / "idle" / "idle_01.png"
+    pet_icon = PROJECT_ROOT / "assets" / "pet" / "icon.png"
+    app_icon = PROJECT_ROOT / "assets" / "icons" / "pet.png"
+
+    assert hashlib.sha256(idle_frame.read_bytes()).hexdigest() == (
+        "af3aee460a98d4cf9655c4f854f0d8ef22e9c460a9fce1bb2adad5767d70d8d1"
+    )
+    assert hashlib.sha256(pet_icon.read_bytes()).hexdigest() == (
+        "b2dc71bbcd5d74c3b2f02c7c7f0500480ff56a7a184a1f498ea1a4f88390005a"
+    )
+    assert app_icon.read_bytes() == pet_icon.read_bytes()
+
+
 def test_manifest_assets_exist_and_are_transparent() -> None:
     manifest_path = PROJECT_ROOT / "assets" / "pet" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_size = tuple(manifest["canvas_size"])
 
     animations = manifest["animations"]
-    assert "assets/generated/interaction-expressions-v2-alpha.png" in manifest["sources"]
+    assert manifest["character_id"] == "six-hair-doll"
+    assert manifest["display_name"] == "六毛公仔"
+    assert all("user_assets" not in source for source in manifest["sources"])
     assert set(animations) == {
         "idle",
         "wave",
@@ -79,19 +98,26 @@ def test_standing_animation_frames_use_consistent_character_height() -> None:
     assert max(heights) - min(heights) <= 8
 
 
-def test_run_cycle_preserves_airborne_height() -> None:
-    """跑步腾空帧的鞋底必须离开公共基线，不能被素材规范化重新贴地。"""
+def test_walk_cycle_has_eight_distinct_phases_and_motion_curve() -> None:
+    """走路必须有八张不同帧，并配合程序位移曲线产生自然起伏。"""
 
     manifest_path = PROJECT_ROOT / "assets" / "pet" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    bottoms = []
+    frame_hashes = []
+    tops = []
     for relative in manifest["animations"]["walk"]:
         with Image.open(manifest_path.parent / relative) as image:
+            rgba = image.convert("RGBA")
             bbox = image.getchannel("A").getbbox()
             assert bbox is not None
-            bottoms.append(bbox[3])
+            tops.append(bbox[1])
+            frame_hashes.append(hashlib.sha256(rgba.tobytes()).hexdigest())
 
-    assert max(bottoms) - min(bottoms) >= 12
+    assert len(set(frame_hashes)) == 8
+    assert max(tops) - min(tops) >= 5
+    motion_factors = manifest["walk_motion_factors"]
+    assert len(motion_factors) == 8
+    assert max(motion_factors) - min(motion_factors) >= 1.0
 
 
 def test_sleep_sheet_is_split_by_transparent_gutters_not_equal_width() -> None:
@@ -143,13 +169,11 @@ def test_seated_sleep_starts_at_same_height_as_final_sit_frame() -> None:
     assert heights == [316, 316]
 
 
-def test_corrected_sit_sheet_keeps_transition_height_and_source() -> None:
-    """正确版坐下主图集必须登记，且第四帧处于深蹲与盘腿坐姿之间。"""
+def test_six_hair_sit_transition_lowers_gradually() -> None:
+    """六毛公仔的坐下过渡必须逐步降低，不能突然跳到坐姿。"""
 
     manifest_path = PROJECT_ROOT / "assets" / "pet" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert "assets/generated/sit-transition-v4-alpha.png" in manifest["sources"]
-
     heights = []
     for index in (3, 4, 5):
         path = PROJECT_ROOT / "assets" / "pet" / "sit" / f"sit_{index:02d}.png"
@@ -161,13 +185,11 @@ def test_corrected_sit_sheet_keeps_transition_height_and_source() -> None:
     assert heights[0] > heights[1] > heights[2]
 
 
-def test_corrected_sleep_sheet_keeps_source_and_lowers_gradually() -> None:
-    """正确版入睡主图集必须登记，且前三帧人物高度应随侧卧逐步降低。"""
+def test_six_hair_sleep_transition_lowers_gradually() -> None:
+    """六毛公仔入睡前三帧的高度必须随侧卧逐步降低。"""
 
     manifest_path = PROJECT_ROOT / "assets" / "pet" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert "assets/generated/sit-to-sleep-v2-alpha.png" in manifest["sources"]
-
     heights = []
     for index in (1, 2, 3):
         path = PROJECT_ROOT / "assets" / "pet" / "sleep" / f"sleep_{index:02d}.png"
