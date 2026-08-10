@@ -2,7 +2,9 @@
 
 上传一张角色图片，让 Agent 帮助生成、配置并优化一个可以在 Windows 桌面上跑动、休息、互动和自拍的桌面宠物。
 
-当前 `v0.2.0` 提供可直接下载的 Windows、Apple 芯片 Mac 和 Intel Mac 公开安装包。仓库保留一套公开演示角色动作，后续将继续完善“一张图到完整动作”的 Agent 自动执行流程。
+当前 `v0.3.0` 是六毛公仔公开版，提供可直接下载的 Windows、Apple 芯片 Mac 和 Intel Mac 安装包。默认角色保留六束紧密红色头发、蓝色发梢与锯齿脸、黄色连体衣和粉色爱心等辨识特征。
+
+![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
 ## 当前功能
 
@@ -125,7 +127,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)，GitHub Actions 测试与三平台打包均已通过。[v0.2.0 Release](https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.2.0) 提供 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。[v0.3.0 六毛公仔版](https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.3.0) 提供 Windows ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧的 `v0.2.0` 演示角色版仍保留在 Releases 页面。
 
 ## 授权
 

@@ -70,7 +70,7 @@ if sys.platform == "darwin":
         bundle_identifier="io.github.leungjunchiang.onepicdesktoppet",
         info_plist={
             "CFBundleDisplayName": "OnePic Desktop Pet",
-            "CFBundleShortVersionString": "0.2.0",
+            "CFBundleShortVersionString": "0.3.0",
             "LSUIElement": True,
             "NSHighResolutionCapable": True,
         },
