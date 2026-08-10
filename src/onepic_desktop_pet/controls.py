@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 
@@ -39,7 +39,7 @@ class WorkControlBubble(QWidget):
 
 
 class QuickControlPanel(QWidget):
-    """双击宠物即可出现的常用控制入口，Mac 刘海屏也无需寻找托盘。"""
+    """双击宠物才出现的常用入口；选择后或闲置八秒会自动收起。"""
 
     chat_requested = Signal()
     work_requested = Signal()
@@ -53,6 +53,9 @@ class QuickControlPanel(QWidget):
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide)
         layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9)
         title = QLabel("六毛快捷口袋"); title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(title)
         for label, signal in (
@@ -60,7 +63,33 @@ class QuickControlPanel(QWidget):
             ("随机听陈楚生", self.music_requested), ("连续调节大小", self.size_requested),
             ("设置", self.settings_requested),
         ):
-            button = QPushButton(label); button.clicked.connect(signal.emit); layout.addWidget(button)
+            button = QPushButton(label)
+            button.clicked.connect(lambda _checked=False, value=signal: self._choose(value))
+            layout.addWidget(button)
+
+    def _choose(self, signal: object) -> None:
+        """先收起口袋再发出操作信号，避免新窗口被它遮挡。"""
+
+        self.hide()
+        signal.emit()
+
+    def showEvent(self, event) -> None:
+        """每次显示重新开始八秒自动收起计时。"""
+
+        super().showEvent(event)
+        self.hide_timer.start(8000)
+
+    def enterEvent(self, event) -> None:
+        """鼠标操作期间暂停自动收起。"""
+
+        self.hide_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """鼠标离开后给用户三秒余量再收起。"""
+
+        self.hide_timer.start(3000)
+        super().leaveEvent(event)
 
 
 class SizeControlDialog(QDialog):

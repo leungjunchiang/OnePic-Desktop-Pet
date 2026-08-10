@@ -18,7 +18,9 @@ from onepic_desktop_pet.ai import (
     ask_claude,
     ask_codex,
     ask_compatible_api,
+    check_provider_connection,
     provider_defaults,
+    _models_endpoint,
 )
 
 
@@ -33,6 +35,7 @@ class FakeCredentials:
 class FakeResponse:
     def __init__(self, data: dict) -> None:
         self.body = io.BytesIO(json.dumps(data).encode("utf-8"))
+        self.status = 200
 
     def __enter__(self):
         return self
@@ -163,3 +166,36 @@ def test_service_requires_explicit_online_provider() -> None:
     service = AIChatService(FakeCredentials())
     with pytest.raises(AIConnectionError, match="离线"):
         service.reply("offline", "你好", [])
+
+
+def test_codex_and_claude_connection_checks_verify_login(monkeypatch) -> None:
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("codex.exe"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_claude_executable", lambda: Path("claude.cmd"))
+
+    def fake_run(command, **_kwargs):
+        if "claude.cmd" in str(command[0]):
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
+        return SimpleNamespace(returncode=0, stdout="Logged in using ChatGPT", stderr="")
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    assert "Codex 已安装并登录" in check_provider_connection("codex", FakeCredentials())
+    assert "Claude Code 已安装并登录" in check_provider_connection("claude", FakeCredentials())
+
+
+def test_api_connection_check_uses_read_only_models_endpoint(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse({"data": []})
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.urllib.request.urlopen", fake_urlopen)
+    message = check_provider_connection(
+        "deepseek", FakeCredentials(), "https://api.deepseek.com", "new-token"
+    )
+    assert "检测通过" in message
+    assert captured["request"].full_url == "https://api.deepseek.com/models"
+    assert captured["request"].method == "GET"
+    assert captured["timeout"] == 15
+    assert _models_endpoint("https://example.com/v1/chat/completions") == "https://example.com/v1/models"

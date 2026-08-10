@@ -98,4 +98,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Lili $GITHUB_REF_NAME" \
             --generate-notes \
-            --notes "Lili 0.7：宠物仍叫六毛。新增 Codex/Claude Code/DeepSeek/Kimi 对话、敲电脑工作气泡、快捷口袋、连续尺寸、应用类别感知、耳机/吉他/鼓、正版音乐搜索、喝水与站立提醒，以及每八小时一套的十件成就配饰。程序不内置歌曲音频或完整歌词；API 令牌存放在系统安全凭据库。公开包不含 user_assets、私人照片、令牌、聊天记录或本机工作数据。macOS DMG 因没有 Apple Developer ID 证书而未公证。"
+            --notes "Lili 0.8：双击切换且自动收起的快捷口袋，AI Agent/API 连接检测，直接调用 QQ 音乐或网易云音乐客户端并尝试播放随机陈楚生歌曲，更醒目的耳机/吉他/鼓，以及每小时解锁一套、最终奖励为荒野国王的十件成就配饰。程序不内置歌曲音频或完整歌词；API 令牌存放在系统安全凭据库。公开包不含 user_assets、私人照片、令牌、聊天记录或本机工作数据。macOS DMG 因没有 Apple Developer ID 证书而未公证。"

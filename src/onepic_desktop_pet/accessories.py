@@ -20,7 +20,7 @@ class Outfit:
 
 
 OUTFITS = (
-    Outfit("paper_crown", "纸王冠", "小时候的秘密王国，今天重新开门。"),
+    Outfit("paper_hat", "折纸帽", "小时候的秘密王国，今天重新开门。"),
     Outfit("big_coat", "大人外套", "偷偷试穿过的大人外套，现在也能认真穿好。"),
     Outfit("pilot", "小飞行员", "不是梦想职业，是允许自己飞远一点。"),
     Outfit("stage_star", "卧室歌手", "镜子前的小舞台，也曾装下整个未来。"),
@@ -29,7 +29,7 @@ OUTFITS = (
     Outfit("painter", "小画家", "把还没说清的心情先画下来。"),
     Outfit("astronaut", "月亮来客", "长大以后，也保留一点奔向星星的认真。"),
     Outfit("reader", "故事学者", "小小的大人，也在慢慢读懂世界。"),
-    Outfit("dreamer", "可能性勋章", "不规定将来，只纪念你仍相信可能。"),
+    Outfit("wild_king", "荒野国王", "十小时的坚持，为小小大人加冕：你是自己荒野里的国王。"),
 )
 
 
@@ -70,24 +70,33 @@ def draw_activity_overlay(
         painter.drawRoundedRect(QRectF(w * .20, h * .80, w * .62, h * .055), w * .02, w * .02)
     elif activity == "headphones":
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor("#4a5166"), line * 2.2))
-        painter.drawArc(QRectF(w * .24, h * .07, w * .52, h * .37), 15 * 16, 150 * 16)
-        painter.setBrush(QColor("#6fc8ef"))
-        painter.drawRoundedRect(QRectF(w * .19, h * .27, w * .12, h * .21), w * .025, w * .025)
-        painter.drawRoundedRect(QRectF(w * .69, h * .27, w * .12, h * .21), w * .025, w * .025)
+        painter.setPen(QPen(QColor("#26344f"), line * 3.2))
+        painter.drawArc(QRectF(w * .16, h * .02, w * .68, h * .45), 12 * 16, 156 * 16)
+        painter.setBrush(QColor("#42c9f5"))
+        painter.drawRoundedRect(QRectF(w * .12, h * .25, w * .17, h * .25), w * .035, w * .035)
+        painter.drawRoundedRect(QRectF(w * .71, h * .25, w * .17, h * .25), w * .035, w * .035)
+        painter.setBrush(QColor("#ffe36e"))
+        painter.drawEllipse(QRectF(w * .075, h * .33, w * .055, w * .055))
+        painter.drawEllipse(QRectF(w * .87, h * .33, w * .055, w * .055))
     elif activity == "guitar":
-        painter.setBrush(QColor("#d59a51"))
-        painter.drawEllipse(QRectF(w * .32, h * .64, w * .28, h * .22))
-        painter.drawEllipse(QRectF(w * .46, h * .59, w * .24, h * .20))
-        painter.setBrush(QColor("#604129"))
-        painter.drawEllipse(QRectF(w * .47, h * .68, w * .07, w * .07))
-        painter.drawRoundedRect(QRectF(w * .58, h * .46, w * .075, h * .28), w * .02, w * .02)
+        painter.setBrush(QColor("#e2a84f"))
+        painter.drawEllipse(QRectF(w * .20, h * .58, w * .38, h * .31))
+        painter.drawEllipse(QRectF(w * .41, h * .53, w * .33, h * .28))
+        painter.setBrush(QColor("#493725"))
+        painter.drawEllipse(QRectF(w * .42, h * .67, w * .09, w * .09))
+        painter.setBrush(QColor("#6e4b2d"))
+        painter.drawRoundedRect(QRectF(w * .61, h * .31, w * .105, h * .40), w * .02, w * .02)
+        painter.setPen(QPen(QColor("#fff3c7"), line * .8))
+        painter.drawLine(QPointF(w * .66, h * .32), QPointF(w * .47, h * .79))
     elif activity == "drums":
-        painter.setBrush(QColor("#74c7e9"))
-        painter.drawEllipse(QRectF(w * .18, h * .73, w * .29, h * .14))
-        painter.drawEllipse(QRectF(w * .53, h * .73, w * .29, h * .14))
-        painter.drawLine(QPointF(w * .37, h * .56), QPointF(w * .55, h * .75))
-        painter.drawLine(QPointF(w * .63, h * .56), QPointF(w * .45, h * .75))
+        painter.setBrush(QColor("#36bde8"))
+        painter.drawEllipse(QRectF(w * .08, h * .68, w * .38, h * .20))
+        painter.drawEllipse(QRectF(w * .54, h * .68, w * .38, h * .20))
+        painter.setBrush(QColor("#f5cf54"))
+        painter.drawEllipse(QRectF(w * .35, h * .75, w * .30, h * .17))
+        painter.setPen(QPen(QColor("#5d3f29"), line * 1.7))
+        painter.drawLine(QPointF(w * .28, h * .47), QPointF(w * .56, h * .73))
+        painter.drawLine(QPointF(w * .72, h * .47), QPointF(w * .44, h * .73))
     elif activity in {"reading", "writing"}:
         painter.setBrush(QColor("#fffaf0"))
         painter.drawRoundedRect(QRectF(w * .24, h * .61, w * .52, h * .24), w * .025, w * .025)
@@ -103,10 +112,11 @@ def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:
     """绘制一枚轻量配饰；每套都不遮住蓝色面部与六根毛。"""
 
     w, h = rect.width(), rect.height()
-    if outfit == "paper_crown":
-        painter.setBrush(QColor("#ffd95a"))
-        points = [QPointF(w*.36,h*.14), QPointF(w*.42,h*.04), QPointF(w*.49,h*.13), QPointF(w*.57,h*.03), QPointF(w*.65,h*.14)]
+    if outfit == "paper_hat":
+        painter.setBrush(QColor("#f4e2b8"))
+        points = [QPointF(w*.33,h*.14), QPointF(w*.50,h*.025), QPointF(w*.68,h*.14)]
         painter.drawPolygon(points)
+        painter.drawLine(QPointF(w*.50,h*.025), QPointF(w*.50,h*.14))
     elif outfit == "big_coat":
         painter.setBrush(QColor(90, 110, 150, 185)); painter.drawRoundedRect(QRectF(w*.22,h*.63,w*.56,h*.28), w*.04,w*.04)
     elif outfit == "pilot":
@@ -123,5 +133,9 @@ def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:
         painter.setBrush(Qt.BrushStyle.NoBrush); painter.setPen(QPen(QColor("#d8e7ee"),w*.035)); painter.drawEllipse(QRectF(w*.16,h*.03,w*.68,h*.42))
     elif outfit == "reader":
         painter.setBrush(QColor("#59483f")); painter.drawEllipse(QRectF(w*.28,h*.31,w*.18,h*.12)); painter.drawEllipse(QRectF(w*.54,h*.31,w*.18,h*.12)); painter.drawLine(QPointF(w*.46,h*.36),QPointF(w*.54,h*.36))
-    elif outfit == "dreamer":
-        painter.setBrush(QColor("#ffde62")); painter.drawEllipse(QRectF(w*.70,h*.57,w*.16,w*.16)); painter.setBrush(QColor("#6fc8ef")); painter.drawEllipse(QRectF(w*.745,h*.615,w*.07,w*.07))
+    elif outfit == "wild_king":
+        painter.setBrush(QColor(109, 52, 122, 190)); painter.drawRoundedRect(QRectF(w*.18,h*.58,w*.64,h*.34),w*.06,w*.06)
+        painter.setBrush(QColor("#ffd43b"))
+        points = [QPointF(w*.30,h*.15), QPointF(w*.36,h*.025), QPointF(w*.45,h*.12), QPointF(w*.52,h*.015), QPointF(w*.61,h*.12), QPointF(w*.69,h*.025), QPointF(w*.74,h*.15)]
+        painter.drawPolygon(points)
+        painter.setBrush(QColor("#ef5b5b")); painter.drawEllipse(QRectF(w*.49,h*.08,w*.055,w*.055))
