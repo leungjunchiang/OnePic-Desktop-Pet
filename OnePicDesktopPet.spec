@@ -70,7 +70,7 @@ if sys.platform == "darwin":
         bundle_identifier="io.github.leungjunchiang.sixhairworkmate",
         info_plist={
             "CFBundleDisplayName": "六毛工作搭子",
-            "CFBundleShortVersionString": "0.4.0",
+            "CFBundleShortVersionString": "0.5.0",
             "LSUIElement": True,
             "NSHighResolutionCapable": True,
         },

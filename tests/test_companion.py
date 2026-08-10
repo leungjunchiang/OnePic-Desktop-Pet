@@ -1,5 +1,5 @@
 """
-本模块测试“六毛工作搭子”的离线喂食、状态反馈和关键词对话逻辑。
+本模块测试“六毛工作搭子”的离线喂食、陪伴动作、工作提醒和关键词对话逻辑。
 
 测试不创建窗口、不写聊天记录，也不访问网络。
 """
@@ -7,7 +7,11 @@
 import pytest
 
 from onepic_desktop_pet.behavior import PetMood, PetState
-from onepic_desktop_pet.companion import CompanionModel, FOOD_OPTIONS
+from onepic_desktop_pet.companion import (
+    COMPANION_ACTIONS,
+    CompanionModel,
+    FOOD_OPTIONS,
+)
 
 
 def test_food_menu_has_three_distinct_options() -> None:
@@ -56,3 +60,45 @@ def test_offline_dialogue_covers_work_fatigue_and_fallback() -> None:
     assert fallback.state is PetState.CURIOUS
     assert "整理桌面" in fallback.text
     assert not hasattr(companion, "history")
+
+
+def test_companion_actions_cover_work_love_encouragement_and_comfort() -> None:
+    companion = CompanionModel(PetMood())
+
+    assert [action.key for action in COMPANION_ACTIONS] == [
+        "focus",
+        "encourage",
+        "love",
+        "celebrate",
+        "comfort",
+        "rest",
+    ]
+    assert companion.perform_action("focus").state is PetState.SIT
+    assert companion.perform_action("encourage").state is PetState.WAVE
+    assert companion.perform_action("love").state is PetState.SHY
+    assert companion.perform_action("celebrate").state is PetState.HAPPY
+    assert companion.perform_action("comfort").state is PetState.SHY
+    assert companion.perform_action("rest").state is PetState.SLEEPY
+
+
+def test_dialogue_gives_specific_loving_and_supportive_responses() -> None:
+    companion = CompanionModel(PetMood())
+
+    assert companion.reply_to("六毛我爱你").state is PetState.SHY
+    assert "也很爱你" in companion.reply_to("我喜欢你").text
+    assert "不代表你不行" in companion.reply_to("我什么都做不到").text
+    assert "不是对你的判决" in companion.reply_to("今天工作出错了").text
+    assert "六毛在这里" in companion.reply_to("我觉得很孤独").text
+    assert "只做五分钟" in companion.reply_to("完全没动力").text
+
+
+def test_work_timer_messages_encourage_and_advise_rest() -> None:
+    companion = CompanionModel(PetMood())
+
+    assert companion.work_started().state is PetState.SIT
+    assert "25分钟" in companion.work_reminder("focus", "25分钟").text
+    assert "活动" in companion.work_reminder("break", "50分钟").text
+    long_reply = companion.work_reminder("long_break", "1小时30分钟")
+    assert long_reply.state is PetState.SLEEPY
+    assert "别拿身体硬撑" in long_reply.text
+    assert "值得" in companion.work_finished("1小时").text

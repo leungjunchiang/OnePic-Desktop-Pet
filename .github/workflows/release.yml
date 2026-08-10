@@ -98,4 +98,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "六毛工作搭子 $GITHUB_REF_NAME" \
             --generate-notes \
-            --notes "六毛工作搭子公开版，包含喂食和离线对话功能。公开包不含 user_assets、私人照片或聊天记录。macOS DMG 因没有 Apple Developer ID 证书而未公证。"
+            --notes "六毛工作搭子公开版，包含本地工作计时、暖心鼓励、陪伴动作、喂食和离线对话。公开包不含 user_assets、私人照片、聊天记录或本机工作数据。macOS DMG 因没有 Apple Developer ID 证书而未公证。"
