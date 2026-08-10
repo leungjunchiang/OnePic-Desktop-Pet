@@ -7,7 +7,12 @@
 
 import json
 
-from onepic_desktop_pet.config import PetSettings, load_settings, save_settings
+from onepic_desktop_pet.config import (
+    PetSettings,
+    load_settings,
+    save_settings,
+    user_settings_path,
+)
 
 
 def test_load_settings_merges_position_and_user_selected_size(tmp_path) -> None:
@@ -78,6 +83,15 @@ def test_save_settings_writes_json(tmp_path) -> None:
     data = json.loads(saved.read_text(encoding="utf-8"))
     assert data["start_x"] == 12
     assert data["start_y"] == 34
-    assert data["display_height"] == 220
+    assert data["display_height"] == 180
     assert set(data) == {"display_height", "start_x", "start_y"}
     assert not path.with_suffix(".json.tmp").exists()
+
+
+def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> None:
+    """新版应避开旧桌宠保存的 220 像素尺寸，首次启动采用 180。"""
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    assert user_settings_path() == tmp_path / "SixHairWorkmate" / "settings.json"
+    assert PetSettings().display_height == 180

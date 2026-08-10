@@ -3,7 +3,7 @@
 
 职责范围：
 - 定义待机、跑步、坐下、睡觉、互动表情和拖动状态；
-- 维护亲密度、精力与无聊度三个轻量情绪数值；
+- 维护亲密度、精力、无聊度与饱食度四个轻量数值；
 - 根据是否允许跑动选择下一生活状态及持续时间；
 - 计算到达屏幕边界后的新位置和行走方向。
 
@@ -53,18 +53,34 @@ class StateDecision:
 
 @dataclass
 class PetMood:
-    """保存并约束宠物的亲密度、精力和无聊度。"""
+    """保存并约束宠物的亲密度、精力、无聊度和饱食度。"""
 
     affinity: int = 50
     energy: int = 75
     boredom: int = 10
+    fullness: int = 55
 
     def _clamp(self) -> None:
-        """把三个情绪数值限制在 0 到 100。"""
+        """把四个会话状态数值限制在 0 到 100。"""
 
         self.affinity = min(100, max(0, self.affinity))
         self.energy = min(100, max(0, self.energy))
         self.boredom = min(100, max(0, self.boredom))
+        self.fullness = min(100, max(0, self.fullness))
+
+    def receive_food(
+        self,
+        fullness_gain: int,
+        energy_gain: int,
+        affinity_gain: int = 3,
+    ) -> None:
+        """记录一次喂食带来的饱食、精力和亲密度变化。"""
+
+        self.fullness += fullness_gain
+        self.energy += energy_gain
+        self.affinity += affinity_gain
+        self.boredom -= 6
+        self._clamp()
 
     def receive_affection(self) -> None:
         """记录摸头或友好点击带来的亲密反馈。"""
@@ -90,7 +106,7 @@ class PetMood:
         self._clamp()
 
     def pass_time(self, state: PetState) -> None:
-        """在自主状态到期时更新精力和无聊度。"""
+        """在自主状态到期时更新精力、无聊度和轻微饥饿。"""
 
         if state is PetState.SLEEP:
             self.energy += 12
@@ -101,6 +117,7 @@ class PetMood:
         else:
             self.energy -= 1
             self.boredom += 4
+        self.fullness -= 1
         self._clamp()
 
 

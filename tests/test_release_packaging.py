@@ -28,11 +28,13 @@ def test_release_builds_windows_zip_and_macos_dmg() -> None:
     )
     spec = (PROJECT_ROOT / "OnePicDesktopPet.spec").read_text(encoding="utf-8")
 
-    assert "OnePicDesktopPet-Windows-x64.zip" in workflow
-    assert "OnePicDesktopPet-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
-    assert 'dmg_file="dist/OnePicDesktopPet-macOS-${release_arch}-unsigned.dmg"' in macos_build
+    assert "SixHairWorkmate-Windows-x64.zip" in workflow
+    assert "SixHairWorkmate-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
+    assert 'dmg_file="dist/SixHairWorkmate-macOS-${release_arch}-unsigned.dmg"' in macos_build
     assert 'arm64) release_arch="arm64"' in macos_build
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
     assert "BUNDLE(" in spec
+    assert 'name="SixHairWorkmate"' in spec
+    assert '"CFBundleDisplayName": "六毛工作搭子"' in spec

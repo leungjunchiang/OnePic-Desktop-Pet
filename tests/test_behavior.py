@@ -66,3 +66,4 @@ def test_mood_reacts_to_affection_repeated_pokes_and_sleep() -> None:
 
     mood.pass_time(PetState.SLEEP)
     assert (mood.affinity, mood.energy, mood.boredom) == (53, 59, 19)
+    assert mood.fullness == 54

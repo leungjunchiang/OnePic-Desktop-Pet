@@ -39,7 +39,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="OnePicDesktopPet",
+    name="SixHairWorkmate",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,18 +59,18 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="OnePicDesktopPet",
+    name="SixHairWorkmate",
 )
 
 if sys.platform == "darwin":
     app = BUNDLE(
         coll,
-        name="OnePicDesktopPet.app",
+        name="SixHairWorkmate.app",
         icon="build/macos/pet.icns",
-        bundle_identifier="io.github.leungjunchiang.onepicdesktoppet",
+        bundle_identifier="io.github.leungjunchiang.sixhairworkmate",
         info_plist={
-            "CFBundleDisplayName": "OnePic Desktop Pet",
-            "CFBundleShortVersionString": "0.3.0",
+            "CFBundleDisplayName": "六毛工作搭子",
+            "CFBundleShortVersionString": "0.4.0",
             "LSUIElement": True,
             "NSHighResolutionCapable": True,
         },

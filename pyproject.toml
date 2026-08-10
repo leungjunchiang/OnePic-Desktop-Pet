@@ -3,9 +3,9 @@ requires = ["setuptools>=70"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "onepic-desktop-pet"
-version = "0.1.0"
-description = "上传一张角色图片，让 Agent 帮助制作可互动的 Windows 桌面宠物。"
+name = "six-hair-workmate"
+version = "0.4.0"
+description = "可喂食、可离线对话的六毛桌面工作搭子。"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
@@ -22,4 +22,3 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

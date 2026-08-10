@@ -8,11 +8,13 @@
 - 用窗口遮罩让人物外透明区域穿透鼠标点击；
 - 缓存不同 DPI 下的缩放帧，并在窗口跨显示器后按新比例重新栅格化；
 - 支持左键拖动、双击互动、无互动分级休息和右键尺寸菜单；
+- 支持给六毛喂苹果、饼干或牛奶，并用独立文字气泡反馈饱食状态；
+- 支持完全离线的桌面对话输入，聊天内容不保存、不上传；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
 - 优先从用户私有素材目录显示自拍成片气泡，按当前屏幕 DPI 保持清晰度，并贴近人物真实轮廓定位；
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
-- 维护亲密度、精力与无聊度的会话内状态；
+- 维护亲密度、精力、无聊度与饱食度的会话内状态；
 - 使用 QTimer 驱动状态切换及水平移动，并限制窗口不脱离当前屏幕。
 
 Agent 快速定位：
@@ -40,17 +42,22 @@ from typing import Callable
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
+    QCloseEvent,
     QContextMenuEvent,
+    QFont,
+    QHideEvent,
     QMouseEvent,
+    QMoveEvent,
     QPixmap,
     QRegion,
     QScreen,
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QMenu, QWidget
 
 from .behavior import BehaviorModel, PetMood, PetState, StateDecision
+from .companion import APP_DISPLAY_NAME, FOOD_OPTIONS, CompanionModel, CompanionReply
 from .config import PetSettings
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .resources import resource_path
@@ -71,6 +78,7 @@ class PetWindow(QWidget):
         self.settings = settings
         self.behavior = BehaviorModel(settings)
         self.mood = PetMood()
+        self.companion = CompanionModel(self.mood)
         self.state = PetState.IDLE
         self.direction = -1
         self._movement_x = float(self.x())
@@ -106,7 +114,7 @@ class PetWindow(QWidget):
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setWindowTitle("OnePic Desktop Pet")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setMouseTracking(True)
 
         source = self._pixmaps[PetState.IDLE][0]
@@ -129,6 +137,34 @@ class PetWindow(QWidget):
         )
         self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.photo_bubble.setStyleSheet("background: transparent;")
+
+        self.speech_bubble = QLabel()
+        self.speech_bubble.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.speech_bubble.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            True,
+        )
+        self.speech_bubble.setWordWrap(True)
+        bubble_font = QFont()
+        bubble_font.setFamilies(
+            ["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Arial"]
+        )
+        bubble_font.setPointSize(10)
+        self.speech_bubble.setFont(bubble_font)
+        self.speech_bubble.setMinimumWidth(180)
+        self.speech_bubble.setMaximumWidth(280)
+        self.speech_bubble.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.speech_bubble.setStyleSheet(
+            "QLabel { background: rgba(255, 255, 255, 245); "
+            "color: #2b2b2b; border: 2px solid #e62b25; border-radius: 12px; "
+            "padding: 9px 12px; font-size: 14px; }"
+        )
 
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
@@ -157,6 +193,10 @@ class PetWindow(QWidget):
         self.photo_timer = QTimer(self)
         self.photo_timer.setSingleShot(True)
         self.photo_timer.timeout.connect(self.photo_bubble.hide)
+
+        self.speech_timer = QTimer(self)
+        self.speech_timer.setSingleShot(True)
+        self.speech_timer.timeout.connect(self.speech_bubble.hide)
 
         self.effect_timer = QTimer(self)
         self.effect_timer.setInterval(90)
@@ -461,6 +501,27 @@ class PetWindow(QWidget):
             self._screen_change_connected = True
         self._on_screen_changed(handle.screen() if handle else None)
 
+    def moveEvent(self, event: QMoveEvent) -> None:
+        """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
+
+        super().moveEvent(event)
+        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
+            self._position_speech_bubble()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """隐藏宠物时同步隐藏照片和文字气泡。"""
+
+        self.photo_bubble.hide()
+        self.speech_bubble.hide()
+        super().hideEvent(event)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """关闭宠物时释放两个独立气泡窗口。"""
+
+        self.photo_bubble.close()
+        self.speech_bubble.close()
+        super().closeEvent(event)
+
     def _on_screen_changed(self, screen: QScreen | None) -> None:
         """切换目标屏幕后重连 DPI 信号并延迟刷新素材。"""
 
@@ -718,6 +779,7 @@ class PetWindow(QWidget):
         )
         self.move(self._constrained_position(target))
         self._refresh_pixmap()
+        self._position_speech_bubble()
 
     def return_to_primary_screen(self) -> None:
         """将宠物重新放到主屏幕右下角。"""
@@ -727,6 +789,82 @@ class PetWindow(QWidget):
             return
         area = screen.availableGeometry()
         self.move(area.right() - self.width() - 24, area.bottom() - self.height() - 12)
+
+    def _position_speech_bubble(self) -> None:
+        """把对话气泡放在人物上方，空间不足时自动移到侧面。"""
+
+        if not self.speech_bubble.isVisible():
+            return
+        area = self._screen_geometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            character_left = self.x()
+            character_right = self.x() + self.width()
+            character_top = self.y()
+        else:
+            character_left = self.x() + visible_bounds.left()
+            character_right = self.x() + visible_bounds.right() + 1
+            character_top = self.y() + visible_bounds.top()
+        gap = 9
+        x = (character_left + character_right - self.speech_bubble.width()) // 2
+        y = character_top - self.speech_bubble.height() - gap
+        if area is not None:
+            x = min(max(x, area.left()), area.right() - self.speech_bubble.width() + 1)
+            if y < area.top():
+                x = character_right + gap
+                if x + self.speech_bubble.width() > area.right() + 1:
+                    x = character_left - self.speech_bubble.width() - gap
+                x = min(
+                    max(x, area.left()),
+                    area.right() - self.speech_bubble.width() + 1,
+                )
+                y = max(area.top(), self.y())
+        self.speech_bubble.move(x, y)
+
+    def show_speech(self, text: str, duration_ms: int = 4800) -> None:
+        """显示不会抢走键盘焦点的桌面对话气泡。"""
+
+        self.speech_bubble.setText(text)
+        self.speech_bubble.adjustSize()
+        self.speech_bubble.show()
+        self._position_speech_bubble()
+        self.speech_timer.start(max(1200, duration_ms))
+
+    def feed_pet(self, food_key: str) -> CompanionReply:
+        """喂给六毛一种菜单食物，并播放对应表情与文字反馈。"""
+
+        self._record_user_interaction()
+        reply = self.companion.feed(food_key)
+        self._show_emotion(reply.state, 2200)
+        self.show_speech(reply.text)
+        return reply
+
+    def talk_to_pet(self, message: str) -> CompanionReply:
+        """在本地处理一条对话，并显示六毛的回复。"""
+
+        self._record_user_interaction()
+        reply = self.companion.reply_to(message)
+        self._show_emotion(reply.state, 2600)
+        self.show_speech(reply.text, 5600)
+        return reply
+
+    def prompt_dialogue(self) -> None:
+        """打开单行输入框，让用户输入一条仅在本机处理的话。"""
+
+        self._record_user_interaction()
+        message, accepted = QInputDialog.getText(
+            self,
+            "和六毛聊聊",
+            "你想对六毛说：",
+        )
+        if accepted:
+            self.talk_to_pet(message)
+
+    def show_companion_status(self) -> None:
+        """用气泡显示当前会话内亲密、精力和饱食状态。"""
+
+        self._record_user_interaction()
+        self.show_speech(self.companion.status_text(), 4200)
 
     def trigger_interaction(self) -> None:
         """结合当前情绪数值触发友好表情或挥手反馈。"""
@@ -902,23 +1040,35 @@ class PetWindow(QWidget):
         pause_action = QAction("恢复跑动" if self.paused else "暂停跑动", self)
         pause_action.triggered.connect(lambda: self.set_paused(not self.paused))
         menu.addAction(pause_action)
-        interact_action = QAction("和她打招呼", self)
+        interact_action = QAction("和六毛打招呼", self)
         interact_action.triggered.connect(self.trigger_interaction)
         menu.addAction(interact_action)
+        dialogue_action = QAction("和六毛聊聊…", self)
+        dialogue_action.triggered.connect(self.prompt_dialogue)
+        menu.addAction(dialogue_action)
+        food_menu = menu.addMenu("给六毛喂食")
+        for food in FOOD_OPTIONS:
+            food_action = QAction(food.label, self)
+            food_action.triggered.connect(
+                lambda _checked=False, key=food.key: self.feed_pet(key)
+            )
+            food_menu.addAction(food_action)
         selfie_action = QAction("自拍一下", self)
         selfie_action.triggered.connect(self.trigger_selfie)
         menu.addAction(selfie_action)
         mood_action = QAction(
-            "心情："
-            f"亲密 {self.mood.affinity} · "
-            f"精力 {self.mood.energy} · "
-            f"无聊 {self.mood.boredom}",
+            f"查看状态：{self.companion.status_text()}",
             self,
         )
-        mood_action.setEnabled(False)
+        mood_action.triggered.connect(self.show_companion_status)
         menu.addAction(mood_action)
         size_menu = menu.addMenu("宠物大小")
-        for label, height in (("小（180）", 180), ("标准（220）", 220), ("大（280）", 280)):
+        for label, height in (
+            ("迷你（150）", 150),
+            ("小巧（180）", 180),
+            ("标准（220）", 220),
+            ("大（280）", 280),
+        ):
             size_action = QAction(label, self)
             size_action.setCheckable(True)
             size_action.setChecked(self.settings.display_height == height)

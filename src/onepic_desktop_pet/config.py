@@ -15,6 +15,7 @@ Agent 快速定位：
 
 输入为 JSON 文件，输出为 PetSettings 实例。保存操作会创建用户配置目录并原子写入
 `start_x`、`start_y` 与 `display_height`，不会覆盖项目默认配置，也不访问网络。
+“六毛工作搭子”使用独立的本地设置目录，避免旧桌宠尺寸覆盖新的小巧默认值。
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from .resources import resource_path
 class PetSettings:
     """保存桌面宠物可配置参数和上次窗口位置。"""
 
-    display_height: int = 220
+    display_height: int = 180
     movement_interval_ms: int = 16
     movement_step: int = 1
     walk_frame_interval_ms: int = 90
@@ -53,7 +54,7 @@ def user_settings_path() -> Path:
 
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "OnePicDesktopPet" / "settings.json"
+    return root / "SixHairWorkmate" / "settings.json"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
