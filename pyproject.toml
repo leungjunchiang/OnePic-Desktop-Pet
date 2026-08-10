@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "six-hair-workmate"
-version = "0.4.0"
-description = "可喂食、可离线对话的六毛桌面工作搭子。"
+version = "0.5.0"
+description = "可工作计时、暖心鼓励、喂食和离线对话的六毛桌面工作搭子。"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }

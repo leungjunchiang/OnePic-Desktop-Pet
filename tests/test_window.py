@@ -1,6 +1,6 @@
 """
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
-喂食、离线对话和自拍成片。
+喂食、离线对话、陪伴动作、工作计时和自拍成片。
 
 测试在 Qt 的离屏平台中创建真实 PetWindow，但不显示到用户桌面、不写配置文件，
 也不启动系统托盘。重点检查透明区域不会形成完整矩形点击区、重复绘制能够复用缓存，
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
@@ -22,6 +23,7 @@ from onepic_desktop_pet.behavior import PetState, StateDecision
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
+from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
 def _create_window() -> tuple[QApplication, PetWindow]:
@@ -317,6 +319,7 @@ def test_context_menu_exposes_dialogue_food_and_status() -> None:
     actions = {action.text(): action for action in menu.actions()}
 
     assert "和六毛聊聊…" in actions
+    assert "六毛陪伴动作" in actions
     assert "给六毛喂食" in actions
     food_menu = actions["给六毛喂食"].menu()
     assert food_menu is not None
@@ -326,11 +329,69 @@ def test_context_menu_exposes_dialogue_food_and_status() -> None:
         "热牛奶",
     ]
     assert any(text.startswith("查看状态：") for text in actions)
+    assert any(text.startswith("工作计时：") for text in actions)
     size_menu = actions["宠物大小"].menu()
     assert size_menu is not None
     checked_sizes = [action.text() for action in size_menu.actions() if action.isChecked()]
     assert checked_sizes == ["小巧（180）"]
     menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_companion_action_shows_loving_animation_and_words() -> None:
+    """主动选择抱抱应增加亲密度，并显示爱意动作与安慰话语。"""
+
+    app, window = _create_window()
+    initial_affinity = window.mood.affinity
+
+    reply = window.perform_companion_action("love")
+    app.processEvents()
+
+    assert reply.state is PetState.SHY
+    assert window.state is PetState.SHY
+    assert window.mood.affinity == initial_affinity + 5
+    assert window.speech_bubble.text() == reply.text
+    assert any(word in reply.text for word in ("抱抱", "贴贴"))
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
+    """工作计时应显示今日累计，并在连续工作过久时劝用户休息。"""
+
+    now = [datetime(2026, 8, 10, 9, 0, 0)]
+    monotonic = [100.0]
+    timer = WorkTimerModel(
+        path=tmp_path / "work_timer.json",
+        now_provider=lambda: now[0],
+        monotonic_provider=lambda: monotonic[0],
+    )
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(PetSettings(), work_timer=timer)
+    window.show()
+    app.processEvents()
+
+    start_reply = window.start_work_timer()
+    assert start_reply.state is PetState.SIT
+    assert timer.is_running
+    assert window.paused
+
+    now[0] += timedelta(minutes=50)
+    monotonic[0] += 50 * 60
+    window._work_timer_tick()
+    app.processEvents()
+    assert window.state is PetState.SLEEPY
+    assert "活动" in window.speech_bubble.text()
+    assert "50分钟" in timer.status_text()
+
+    finish_reply = window.finish_work_timer()
+    assert finish_reply.state is PetState.HAPPY
+    assert not timer.is_running
+    assert not window.paused
+    assert "50分钟" in finish_reply.text
     window.close()
     window.deleteLater()
     app.processEvents()

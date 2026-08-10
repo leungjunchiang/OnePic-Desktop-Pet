@@ -9,7 +9,8 @@
 - 缓存不同 DPI 下的缩放帧，并在窗口跨显示器后按新比例重新栅格化；
 - 支持左键拖动、双击互动、无互动分级休息和右键尺寸菜单；
 - 支持给六毛喂苹果、饼干或牛奶，并用独立文字气泡反馈饱食状态；
-- 支持完全离线的桌面对话输入，聊天内容不保存、不上传；
+- 支持完全离线的桌面对话输入以及工作、爱意、鼓励、庆祝和安慰动作；
+- 支持开始、暂停、完成工作计时，显示今日累计时长并在连续工作过久时温和提醒；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
 - 优先从用户私有素材目录显示自拍成片气泡，按当前屏幕 DPI 保持清晰度，并贴近人物真实轮廓定位；
@@ -57,10 +58,18 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QMenu, QWidget
 
 from .behavior import BehaviorModel, PetMood, PetState, StateDecision
-from .companion import APP_DISPLAY_NAME, FOOD_OPTIONS, CompanionModel, CompanionReply
+from .companion import (
+    ACTION_BY_KEY,
+    APP_DISPLAY_NAME,
+    COMPANION_ACTIONS,
+    FOOD_OPTIONS,
+    CompanionModel,
+    CompanionReply,
+)
 from .config import PetSettings
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .resources import resource_path
+from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
 
 
@@ -72,13 +81,19 @@ class PetWindow(QWidget):
 
     quit_requested = Signal()
     pause_changed = Signal(bool)
+    work_timer_changed = Signal(bool)
 
-    def __init__(self, settings: PetSettings) -> None:
+    def __init__(
+        self,
+        settings: PetSettings,
+        work_timer: WorkTimerModel | None = None,
+    ) -> None:
         super().__init__()
         self.settings = settings
         self.behavior = BehaviorModel(settings)
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
+        self.work_timer = work_timer or WorkTimerModel()
         self.state = PetState.IDLE
         self.direction = -1
         self._movement_x = float(self.x())
@@ -206,6 +221,11 @@ class PetWindow(QWidget):
         self.bob_timer.setInterval(280)
         self.bob_timer.timeout.connect(self._bob_tick)
         self.bob_timer.start()
+
+        self.work_clock_timer = QTimer(self)
+        self.work_clock_timer.setInterval(1000)
+        self.work_clock_timer.timeout.connect(self._work_timer_tick)
+        self.work_clock_timer.start()
 
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
@@ -516,8 +536,9 @@ class PetWindow(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """关闭宠物时释放两个独立气泡窗口。"""
+        """关闭宠物时保存运行中的工作计时并释放两个独立气泡窗口。"""
 
+        self.shutdown_work_timer()
         self.photo_bubble.close()
         self.speech_bubble.close()
         super().closeEvent(event)
@@ -848,6 +869,85 @@ class PetWindow(QWidget):
         self.show_speech(reply.text, 5600)
         return reply
 
+    def perform_companion_action(self, action_key: str) -> CompanionReply:
+        """播放用户选择的工作、爱意、鼓励、庆祝或安慰动作。"""
+
+        self._record_user_interaction()
+        reply = self.companion.perform_action(action_key)
+        duration_ms = ACTION_BY_KEY[action_key].duration_ms
+        self._show_emotion(reply.state, duration_ms)
+        self.show_speech(reply.text, max(5200, duration_ms + 1800))
+        return reply
+
+    def start_work_timer(self) -> CompanionReply:
+        """开始今日工作计时，并让六毛进入安静陪伴动作。"""
+
+        self._record_user_interaction()
+        started = self.work_timer.start()
+        if started:
+            self.set_paused(True)
+        reply = self.companion.work_started(resumed=not started)
+        self._show_emotion(reply.state, 3600)
+        self.show_speech(reply.text, 5600)
+        self.work_timer_changed.emit(self.work_timer.is_running)
+        return reply
+
+    def pause_work_timer(self) -> CompanionReply:
+        """暂停工作计时并显示当天累计与休息建议。"""
+
+        self._record_user_interaction()
+        was_running = self.work_timer.pause()
+        duration = format_work_duration(self.work_timer.today_seconds())
+        if was_running:
+            reply = self.companion.work_paused(duration)
+        else:
+            reply = CompanionReply(
+                f"计时现在是暂停状态，今天累计工作 {duration}。",
+                PetState.CURIOUS,
+            )
+        self._show_emotion(reply.state, 3200)
+        self.show_speech(reply.text, 5600)
+        self.work_timer_changed.emit(False)
+        return reply
+
+    def finish_work_timer(self) -> CompanionReply:
+        """完成本次工作、保留今日累计并播放庆祝动作。"""
+
+        self._record_user_interaction()
+        total = self.work_timer.finish()
+        self.set_paused(False)
+        reply = self.companion.work_finished(format_work_duration(total))
+        self._show_emotion(reply.state, 3400)
+        self.show_speech(reply.text, 6200)
+        self.work_timer_changed.emit(False)
+        return reply
+
+    def show_work_time(self) -> None:
+        """显示今日累计工作时长和当前计时状态。"""
+
+        self._record_user_interaction()
+        state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
+        self._show_emotion(state, 2600)
+        self.show_speech(self.work_timer.status_text(), 4800)
+
+    def _work_timer_tick(self) -> None:
+        """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
+
+        self.work_timer.checkpoint()
+        reminder_kind = self.work_timer.take_due_reminder()
+        if reminder_kind is None:
+            return
+        duration = format_work_duration(self.work_timer.session_seconds())
+        reply = self.companion.work_reminder(reminder_kind, duration)
+        self._show_emotion(reply.state, 3600)
+        self.show_speech(reply.text, 7200)
+
+    def shutdown_work_timer(self) -> None:
+        """自然退出前暂停并保存计时，避免把关机时间计入工作。"""
+
+        if hasattr(self, "work_timer"):
+            self.work_timer.pause()
+
     def prompt_dialogue(self) -> None:
         """打开单行输入框，让用户输入一条仅在本机处理的话。"""
 
@@ -1046,6 +1146,32 @@ class PetWindow(QWidget):
         dialogue_action = QAction("和六毛聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         menu.addAction(dialogue_action)
+        action_menu = menu.addMenu("六毛陪伴动作")
+        for option in COMPANION_ACTIONS:
+            action = QAction(option.label, self)
+            action.triggered.connect(
+                lambda _checked=False, key=option.key: self.perform_companion_action(
+                    key
+                )
+            )
+            action_menu.addAction(action)
+        work_menu = menu.addMenu(
+            f"工作计时：{format_work_duration(self.work_timer.today_seconds())}"
+        )
+        start_work_action = QAction("开始/继续工作", self)
+        start_work_action.setEnabled(not self.work_timer.is_running)
+        start_work_action.triggered.connect(self.start_work_timer)
+        work_menu.addAction(start_work_action)
+        pause_work_action = QAction("暂停计时并休息", self)
+        pause_work_action.setEnabled(self.work_timer.is_running)
+        pause_work_action.triggered.connect(self.pause_work_timer)
+        work_menu.addAction(pause_work_action)
+        finish_work_action = QAction("完成本次工作", self)
+        finish_work_action.triggered.connect(self.finish_work_timer)
+        work_menu.addAction(finish_work_action)
+        show_work_action = QAction("查看今日累计", self)
+        show_work_action.triggered.connect(self.show_work_time)
+        work_menu.addAction(show_work_action)
         food_menu = menu.addMenu("给六毛喂食")
         for food in FOOD_OPTIONS:
             food_action = QAction(food.label, self)
