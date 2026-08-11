@@ -1,4 +1,4 @@
-"""把 36 张每日动作素材渲染为联系表，供透明边缘与角色一致性验收。"""
+"""把每日动作素材渲染为联系表，供透明边缘、尺寸与角色一致性验收。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from PIL import Image, ImageDraw
 
 def render(source_dir: Path, output: Path) -> None:
     files = sorted(source_dir.glob("*.png"))
+    columns = 6
+    rows = (len(files) + columns - 1) // columns
     cell = 230
-    canvas = Image.new("RGB", (cell * 6, cell * 6), "#e8edf2")
+    canvas = Image.new("RGB", (cell * columns, cell * rows), "#e8edf2")
     draw = ImageDraw.Draw(canvas)
     for index, path in enumerate(files):
-        row, column = divmod(index, 6)
+        row, column = divmod(index, columns)
         sprite = Image.open(path).convert("RGBA")
         sprite.thumbnail((198, 198), Image.Resampling.LANCZOS)
         x = column * cell + (cell - sprite.width) // 2

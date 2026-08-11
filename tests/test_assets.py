@@ -199,3 +199,23 @@ def test_six_hair_sleep_transition_lowers_gradually() -> None:
             heights.append(bbox[3] - bbox[1])
 
     assert heights[0] > heights[1] > heights[2]
+
+
+def test_daily_action_library_is_transparent_consistent_and_uncropped() -> None:
+    """46 张完整动作必须使用统一透明画布，并在四周保留安全边距。"""
+
+    action_dir = PROJECT_ROOT / "assets" / "pet" / "daily-actions"
+    paths = sorted(action_dir.glob("*.png"))
+
+    assert len(paths) == 46
+    for path in paths:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+            alpha = rgba.getchannel("A")
+            bbox = alpha.getbbox()
+            assert rgba.size == (1024, 1024), path.name
+            assert rgba.mode == "RGBA", path.name
+            assert alpha.getextrema()[0] == 0, path.name
+            assert bbox is not None, path.name
+            assert bbox[0] >= 34 and bbox[1] >= 34, path.name
+            assert bbox[2] <= 990 and bbox[3] <= 990, path.name

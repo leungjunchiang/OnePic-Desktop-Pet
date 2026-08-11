@@ -72,6 +72,16 @@ ACTION_SPRITES = {
     "group-photo": "34-group-photo.png",
     "whale": "35-whale.png",
     "demon": "36-demon.png",
+    "flower-dance": "37-flower-dance.png",
+    "work-cheer": "38-work-cheer.png",
+    "work-study": "39-work-study.png",
+    "work-flow": "40-work-flow.png",
+    "desk-nap": "41-desk-nap.png",
+    "daydream": "42-daydream.png",
+    "deep-focus": "43-deep-focus.png",
+    "work-complete": "44-work-complete.png",
+    "overtime": "45-overtime.png",
+    "overwhelmed": "46-overwhelmed.png",
 }
 
 
@@ -81,12 +91,13 @@ ACTION_GROUPS = (
     ("音乐演出", (("戴耳机", "headphones"), ("弹吉他", "guitar"), ("打鼓", "drums"), ("唱歌", "singing"), ("弹钢琴", "piano"))),
     ("爱与庆祝", (("爱心比心", "love"), ("头顶比心", "overhead-heart"), ("送花", "flowers"), ("合影", "group-photo"), ("荒野国王", "wild-king"))),
     ("出门冒险", (("登山", "climbing"), ("骑摩托", "motorcycle"), ("UFO 悬挂", "ufo"), ("打网球", "tennis"), ("与海豚游泳", "dolphin"), ("钓螃蟹", "fishing"), ("与海鸥", "seagull"), ("捡贝壳", "shells"), ("踢足球", "football"), ("乘鲸云游", "whale"), ("恶魔毛毛", "demon"))),
+    ("工作搭子", (("花环舞步", "flower-dance"), ("开心开工", "work-cheer"), ("埋头读写", "work-study"), ("工作流转", "work-flow"), ("趴桌小睡", "desk-nap"), ("摸鱼走神", "daydream"), ("深度专注", "deep-focus"), ("完成挥手", "work-complete"), ("夜间加班", "overtime"), ("忙到转圈", "overwhelmed"))),
 )
 
 
-FOCUS_ACTIONS = ("office", "night-reading", "pointing", "thermos")
-REST_ACTIONS = ("tea", "coconut", "sunbath", "sleep", "movie", "headphones")
-COMPLETE_ACTIONS = ("love", "overhead-heart", "guitar", "drums", "flowers", "group-photo")
+FOCUS_ACTIONS = ("office", "work-cheer", "work-study", "deep-focus", "night-reading", "thermos")
+REST_ACTIONS = ("tea", "coconut", "sunbath", "sleep", "desk-nap", "daydream", "movie", "headphones")
+COMPLETE_ACTIONS = ("love", "overhead-heart", "work-complete", "guitar", "drums", "flower-dance", "flowers", "group-photo")
 RANDOM_ACTIONS = ("fishing", "seagull", "football", "aquarium", "singing", "ufo", "whale")
 
 
