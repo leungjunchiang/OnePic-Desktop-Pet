@@ -53,6 +53,7 @@ from PySide6.QtGui import (
     QHideEvent,
     QMouseEvent,
     QMoveEvent,
+    QPainter,
     QPixmap,
     QRegion,
     QScreen,
@@ -180,6 +181,9 @@ class PetWindow(QWidget):
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_step = 0
+        self._activity_transition_steps = 8
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
@@ -330,6 +334,10 @@ class PetWindow(QWidget):
         self.activity_timer = QTimer(self)
         self.activity_timer.setSingleShot(True)
         self.activity_timer.timeout.connect(self._activity_timeout)
+
+        self.activity_transition_timer = QTimer(self)
+        self.activity_transition_timer.setInterval(35)
+        self.activity_transition_timer.timeout.connect(self._activity_transition_tick)
 
         self.work_activity_timer = QTimer(self)
         self.work_activity_timer.setSingleShot(True)
@@ -561,10 +569,62 @@ class PetWindow(QWidget):
             self.settings.equipped_outfit,
             self._effect_phase,
         )
-        self.label.setPixmap(composed)
+        visible = self._blend_activity_transition(composed)
+        self.label.setPixmap(visible)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
         overlay_key = hash((activity, self.settings.equipped_outfit, self._effect_phase % 2))
-        self._refresh_window_mask(display_state, composed, direction_key, effect_key ^ overlay_key)
+        self._refresh_window_mask(display_state, visible, direction_key, effect_key ^ overlay_key)
+
+    def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
+        """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
+
+        previous = self._activity_transition_from
+        if previous.isNull() or self._activity_transition_step >= self._activity_transition_steps:
+            return target
+        if previous.size() != target.size():
+            previous = previous.scaled(
+                target.size(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            previous.setDevicePixelRatio(target.devicePixelRatio())
+        progress = self._activity_transition_step / self._activity_transition_steps
+        result = QPixmap(target.size())
+        result.fill(Qt.GlobalColor.transparent)
+        result.setDevicePixelRatio(target.devicePixelRatio())
+        painter = QPainter(result)
+        painter.setOpacity(1.0 - progress)
+        painter.drawPixmap(0, 0, previous)
+        painter.setOpacity(progress)
+        painter.drawPixmap(0, 0, target)
+        painter.end()
+        return result
+
+    def _activity_transition_tick(self) -> None:
+        """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
+
+        self._activity_transition_step += 1
+        if self._activity_transition_step >= self._activity_transition_steps:
+            self.activity_transition_timer.stop()
+            self._activity_transition_from = QPixmap()
+            self._mask_cache.clear()
+        self._refresh_pixmap()
+
+    def _change_ambient_activity(self, activity: str) -> None:
+        """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
+
+        next_activity = activity if activity in ACTION_SPRITES else "none"
+        if next_activity == self._ambient_activity:
+            self._refresh_pixmap()
+            return
+        current = self.label.pixmap() if hasattr(self, "label") else QPixmap()
+        self._activity_transition_from = QPixmap(current) if not current.isNull() else QPixmap()
+        self._activity_transition_step = 0
+        self._ambient_activity = next_activity
+        self._mask_cache.clear()
+        if not self._activity_transition_from.isNull():
+            self.activity_transition_timer.start()
+        self._refresh_pixmap()
 
     def _refresh_window_mask(
         self,
@@ -1094,7 +1154,7 @@ class PetWindow(QWidget):
         started = self.work_timer.start()
         if started:
             self.set_paused(True)
-        self._ambient_activity = "computer"
+        self._change_ambient_activity("computer")
         self._schedule_work_activity(25_000)
         reply = self.companion.work_started(resumed=not started)
         self._show_emotion(reply.state, 3600)
@@ -1188,24 +1248,23 @@ class PetWindow(QWidget):
         choices = FOCUS_ACTIONS
         if session >= 45 * 60 and random.random() < 0.35:
             choices = ("thermos", "tea", "sleep")
-        self._ambient_activity = random.choice(choices)
+        self._change_ambient_activity(random.choice(choices))
         self._manual_activity_until = time.monotonic() + 120
-        self._mask_cache.clear(); self._refresh_pixmap()
         self._schedule_work_activity()
 
     def _set_temporary_activity(self, activity: str, duration_ms: int = 30_000) -> None:
         """显示一张完整动作图，结束后回到工作或普通待机。"""
 
-        self._ambient_activity = activity if activity in ACTION_SPRITES else "none"
+        self._change_ambient_activity(activity)
         self._manual_activity_until = time.monotonic() + duration_ms / 1000
         self.activity_timer.start(max(1500, duration_ms))
-        self._mask_cache.clear(); self._refresh_pixmap()
 
     def _activity_timeout(self) -> None:
         """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
 
-        self._ambient_activity = random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
-        self._mask_cache.clear(); self._refresh_pixmap()
+        self._change_ambient_activity(
+            random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+        )
 
     def _work_timer_tick(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
@@ -1491,10 +1550,8 @@ class PetWindow(QWidget):
         if category == self._last_app_category:
             return
         self._last_app_category = category
-        mapping = {"music": "headphones", "office": "writing", "coding": "computer", "reading": "reading"}
-        self._ambient_activity = mapping.get(category, "none")
-        self._mask_cache.clear()
-        self._refresh_pixmap()
+        mapping = {"music": "headphones", "office": "work-study", "coding": "deep-focus", "reading": "night-reading"}
+        self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
         """由用户主动调用音乐客户端，自动搜索并尝试播放随机歌曲。"""
@@ -1506,9 +1563,8 @@ class PetWindow(QWidget):
             else self.settings.netease_music_path
         )
         result = launch_music_client(self.settings.music_service, title, custom_path)
-        self._ambient_activity = random.choice(("headphones", "guitar", "drums"))
+        self._change_ambient_activity(random.choice(("headphones", "guitar", "drums")))
         self._manual_activity_until = time.monotonic() + 180
-        self._refresh_pixmap()
         self.show_speech(f"六毛挑了《{title}》。{result.message}", 7200)
         return title
 
@@ -1908,7 +1964,7 @@ class PetWindow(QWidget):
                 )
             )
             action_menu.addAction(action)
-        picture_actions = menu.addMenu("36 个修正版图片动作")
+        picture_actions = menu.addMenu("46 个透明图片动作")
         for group_name, entries in ACTION_GROUPS:
             group_menu = picture_actions.addMenu(group_name)
             for label, key in entries:

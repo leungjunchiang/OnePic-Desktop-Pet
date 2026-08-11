@@ -39,6 +39,8 @@ def test_time_of_day_and_corrected_action_assets() -> None:
     assert time_of_day_activity(datetime(2026, 8, 10, 12, 0), True)[0] == "feast"
     assert ACTION_SPRITES["headphones"] == "03-headphones.png"
     assert ACTION_SPRITES["wild-king"] == "27-wild-king.png"
-    assert len(set(ACTION_SPRITES.values())) == 36
+    assert len(set(ACTION_SPRITES.values())) == 46
     root = Path(__file__).resolve().parents[1] / "assets" / "pet" / "daily-actions"
     assert all((root / filename).is_file() for filename in set(ACTION_SPRITES.values()))
+    assert ACTION_SPRITES["deep-focus"] == "43-deep-focus.png"
+    assert ACTION_SPRITES["work-complete"] == "44-work-complete.png"

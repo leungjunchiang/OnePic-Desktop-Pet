@@ -39,5 +39,5 @@ def test_release_builds_windows_zip_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.11.0"' in spec
-    assert 'version = "0.11.0"' in pyproject
+    assert '"CFBundleShortVersionString": "0.12.0"' in spec
+    assert 'version = "0.12.0"' in pyproject

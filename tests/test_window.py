@@ -351,7 +351,7 @@ def test_context_menu_exposes_new_dialogue_food_ai_and_no_status() -> None:
     assert any(text.startswith("工作计时：") for text in actions)
     assert "连续调节宠物大小…" in actions
     assert "长期收藏娃衣" in actions
-    assert "36 个修正版图片动作" in actions
+    assert "46 个透明图片动作" in actions
     work_action = next(action for text, action in actions.items() if text.startswith("工作计时："))
     work_labels = [action.text() for action in work_action.menu().actions()]
     assert "查看今日 0–8 小时成长线" in work_labels
@@ -635,6 +635,30 @@ def test_long_press_puts_lili_to_sleep_without_plain_click() -> None:
     assert not window._press_pending
     assert window._ambient_activity == "sleep"
     assert window.daily_stats.sleeps == 1
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
+    """完整动作切换应短暂交叉淡化，结束后保持同一窗口尺寸。"""
+
+    app, window = _create_window()
+    original_size = window.size()
+
+    window._set_temporary_activity("guitar", 5000)
+
+    assert window.activity_transition_timer.isActive()
+    assert not window._activity_transition_from.isNull()
+    assert window.size() == original_size
+
+    for _ in range(window._activity_transition_steps):
+        window._activity_transition_tick()
+
+    assert not window.activity_transition_timer.isActive()
+    assert window._activity_transition_from.isNull()
+    assert window._ambient_activity == "guitar"
+    assert window.size() == original_size
     window.close()
     window.deleteLater()
     app.processEvents()
