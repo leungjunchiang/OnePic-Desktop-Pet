@@ -219,3 +219,21 @@ def test_daily_action_library_is_transparent_consistent_and_uncropped() -> None:
             assert bbox is not None, path.name
             assert bbox[0] >= 34 and bbox[1] >= 34, path.name
             assert bbox[2] <= 990 and bbox[3] <= 990, path.name
+
+
+def test_hourly_outfit_library_is_transparent_consistent_and_uncropped() -> None:
+    """1–12 小时娃衣必须完整、高清、透明且不贴边。"""
+
+    outfit_dir = PROJECT_ROOT / "assets" / "pet" / "hourly-outfits"
+    paths = sorted(outfit_dir.glob("*.png"))
+    assert [path.name for path in paths] == [f"{hour:02d}-hour.png" for hour in range(1, 13)]
+    for path in paths:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+            alpha = rgba.getchannel("A")
+            bbox = alpha.getbbox()
+            assert rgba.size == (1024, 1024), path.name
+            assert alpha.getextrema()[0] == 0, path.name
+            assert bbox is not None, path.name
+            assert bbox[0] >= 34 and bbox[1] >= 34, path.name
+            assert bbox[2] <= 990 and bbox[3] <= 990, path.name

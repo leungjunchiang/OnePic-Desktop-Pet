@@ -32,3 +32,15 @@ def test_social_schema_uses_rls_and_authenticated_functions() -> None:
         assert f"alter table public.{table} enable row level security" in sql
     assert "grant execute" in sql and "to authenticated" in sql
     assert "service_role" not in (root / "config" / "social_backend.json").read_text(encoding="utf-8")
+
+
+def test_visit_dashboard_syncs_only_start_time_and_minimum_presence() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = root / "supabase" / "migrations" / "20260811104519_lili_visit_started_at.sql"
+    sql = migration.read_text(encoding="utf-8")
+    assert "'visit_started_at'" in sql
+    assert "coalesce(v.responded_at,v.created_at)" in sql
+    assert "set search_path = ''" in sql
+    assert "revoke execute on function public.lili_dashboard() from public, anon" in sql
+    for forbidden in ("chat", "task", "window_title", "animation_frame"):
+        assert forbidden not in sql

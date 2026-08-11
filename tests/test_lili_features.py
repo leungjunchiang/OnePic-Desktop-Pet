@@ -1,4 +1,4 @@
-"""验证 Lili 0.9 的应用感知、本地音乐、提醒和十四套成就功能。"""
+"""验证 Lili 的应用感知、本地音乐、提醒和每小时娃衣功能。"""
 
 from datetime import datetime
 import os
@@ -32,6 +32,7 @@ def test_music_links_use_official_platforms_and_only_titles() -> None:
     assert len(CHEN_CHUSHENG_SONGS) >= 10
     assert music_search_url("netease", "荒废光年").startswith("https://music.163.com/")
     assert music_search_url("qq", "山楂花").startswith("https://y.qq.com/")
+    assert music_search_url("kugou", "有没有人告诉你").startswith("https://www.kugou.com/")
 
 
 def test_missing_music_client_falls_back_to_official_search(monkeypatch) -> None:
@@ -64,7 +65,7 @@ def test_wellness_channels_are_optional_and_independent() -> None:
     assert model.take_due(True, False, 45, 60) is None
 
 
-def test_each_hour_unlocks_one_of_fourteen_outfits_and_final_is_wild_king(tmp_path) -> None:
+def test_each_hour_unlocks_one_of_twelve_outfits_and_final_is_wild_king(tmp_path) -> None:
     clock = Clock()
     model = WorkTimerModel(
         tmp_path / "timer.json",
@@ -78,7 +79,7 @@ def test_each_hour_unlocks_one_of_fourteen_outfits_and_final_is_wild_king(tmp_pa
     assert model.take_new_outfit_unlock() is None
     assert unlocked_outfits(1) == OUTFITS[:1]
     clock.value = 14 * 3600
-    assert model.unlocked_outfit_count() == 14
-    assert len(OUTFITS) == 14
-    assert OUTFITS[-1].key == "wild_king"
+    assert model.unlocked_outfit_count() == 12
+    assert len(OUTFITS) == 12
+    assert OUTFITS[-1].key == "hour-12"
     assert OUTFITS[-1].name == "荒野国王"

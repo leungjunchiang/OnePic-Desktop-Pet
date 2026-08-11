@@ -105,6 +105,15 @@ class PetMood:
         self.boredom -= 12
         self._clamp()
 
+    def receive_focus_reward(self, blocks: int = 1) -> None:
+        """每完成一个十分钟专注块增加默契，同时产生轻微精力消耗。"""
+
+        safe_blocks = max(0, int(blocks))
+        self.affinity += safe_blocks
+        self.energy -= safe_blocks
+        self.boredom -= safe_blocks * 2
+        self._clamp()
+
     def pass_time(self, state: PetState) -> None:
         """在自主状态到期时更新精力、无聊度和轻微饥饿。"""
 

@@ -37,6 +37,14 @@ def test_feeding_increases_fullness_energy_and_affinity() -> None:
     )
 
 
+def test_status_shows_mood_energy_and_focus_stars() -> None:
+    companion = CompanionModel(PetMood(affinity=62, energy=80, fullness=70))
+    text = companion.status_text(4)
+    assert "精神满满" in text
+    assert "精力 80" in text
+    assert "专注星 4" in text
+
+
 def test_full_pet_declines_more_food_without_overflow() -> None:
     mood = PetMood(fullness=98)
     companion = CompanionModel(mood)
