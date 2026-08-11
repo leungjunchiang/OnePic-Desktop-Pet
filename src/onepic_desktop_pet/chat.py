@@ -24,11 +24,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTextBrowser,
     QVBoxLayout,
@@ -124,6 +126,42 @@ class AIReplyThread(QThread):
             self.failed.emit("AI 连接遇到意外问题，已切回离线回答。")
         else:
             self.succeeded.emit(answer)
+
+
+class ConnectionCheckThread(QThread):
+    """后台检测本机 Agent 或 API，避免设置窗口在检测时假死。"""
+
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        provider: str,
+        credentials: CredentialStore,
+        base_url: str,
+        token: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.provider = provider
+        self.credentials = credentials
+        self.base_url = base_url
+        self.token = token
+
+    def run(self) -> None:
+        try:
+            result = check_provider_connection(
+                self.provider,
+                self.credentials,
+                self.base_url,
+                self.token,
+            )
+        except AIConnectionError as exc:
+            self.failed.emit(str(exc))
+        except Exception:
+            self.failed.emit("检测遇到意外问题，请稍后重试。")
+        else:
+            self.succeeded.emit(result)
 
 
 class ChatDialog(QDialog):
@@ -230,16 +268,29 @@ class AISettingsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.credentials = credentials
+        self._connection_thread: ConnectionCheckThread | None = None
         self.setWindowTitle("Lili · 六毛设置")
         self.setObjectName("liliPanel")
         self.setMinimumWidth(500)
+        self.resize(620, 760)
         self.setStyleSheet(PANEL_STYLE)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(20, 18, 20, 18)
         title = QLabel("连接与陪伴")
         title.setObjectName("title")
-        layout.addWidget(title)
+        outer_layout.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(2, 4, 8, 4)
+        layout.setSpacing(9)
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll, 1)
 
         form = QFormLayout()
         self.provider = QComboBox()
@@ -292,7 +343,15 @@ class AISettingsDialog(QDialog):
         self.stand.setChecked(settings.stand_reminder_enabled)
         self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
         form.addRow(self.stand, self.stand_minutes)
-        self.music_service = QComboBox(); self.music_service.addItem("网易云音乐", "netease"); self.music_service.addItem("QQ 音乐", "qq"); self.music_service.addItem("酷狗音乐", "kugou")
+        self.music_service = QComboBox()
+        for label, key in (
+            ("网易云音乐", "netease"),
+            ("QQ 音乐", "qq"),
+            ("酷狗音乐", "kugou"),
+            ("Apple Music", "apple"),
+            ("Spotify", "spotify"),
+        ):
+            self.music_service.addItem(label, key)
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
         form.addRow("正版音乐入口", self.music_service)
 
@@ -316,6 +375,20 @@ class AISettingsDialog(QDialog):
         kugou_pick = QPushButton("选择…"); kugou_pick.setObjectName("softButton"); kugou_pick.clicked.connect(self._choose_kugou_music)
         kugou_layout.addWidget(self.kugou_music_path, 1); kugou_layout.addWidget(kugou_pick)
         form.addRow("酷狗音乐程序", kugou_row)
+
+        self.apple_music_path = QLineEdit(settings.apple_music_path)
+        self.apple_music_path.setPlaceholderText("自动寻找，或选择 AppleMusic.exe / Music.app")
+        apple_row = QWidget(); apple_layout = QHBoxLayout(apple_row); apple_layout.setContentsMargins(0, 0, 0, 0)
+        apple_pick = QPushButton("选择…"); apple_pick.setObjectName("softButton"); apple_pick.clicked.connect(self._choose_apple_music)
+        apple_layout.addWidget(self.apple_music_path, 1); apple_layout.addWidget(apple_pick)
+        form.addRow("Apple Music 程序", apple_row)
+
+        self.spotify_music_path = QLineEdit(settings.spotify_music_path)
+        self.spotify_music_path.setPlaceholderText("自动寻找，或选择 Spotify.exe / Spotify.app")
+        spotify_row = QWidget(); spotify_layout = QHBoxLayout(spotify_row); spotify_layout.setContentsMargins(0, 0, 0, 0)
+        spotify_pick = QPushButton("选择…"); spotify_pick.setObjectName("softButton"); spotify_pick.clicked.connect(self._choose_spotify_music)
+        spotify_layout.addWidget(self.spotify_music_path, 1); spotify_layout.addWidget(spotify_pick)
+        form.addRow("Spotify 程序", spotify_row)
 
         self.babuda_audio_path = QLineEdit(settings.babuda_audio_path)
         self.babuda_audio_path.setPlaceholderText("选择第一段 babuda 音频；同目录多段会自动轮换")
@@ -343,14 +416,14 @@ class AISettingsDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        cancel = QPushButton("取消")
-        cancel.setObjectName("softButton")
-        cancel.clicked.connect(self.reject)
-        buttons.addWidget(cancel)
-        save = QPushButton("保存")
-        save.clicked.connect(self.accept)
-        buttons.addWidget(save)
-        layout.addLayout(buttons)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setObjectName("softButton")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button)
+        self.save_button = QPushButton("保存")
+        self.save_button.clicked.connect(self.accept)
+        buttons.addWidget(self.save_button)
+        outer_layout.addLayout(buttons)
         self._provider_changed()
 
     def _provider_changed(self) -> None:
@@ -396,6 +469,20 @@ class AISettingsDialog(QDialog):
         if path:
             self.kugou_music_path.setText(path)
 
+    def _choose_apple_music(self) -> None:
+        """选择本机 Apple Music 程序。"""
+
+        path = self._choose_music_program("选择 Apple Music 程序", self.apple_music_path.text())
+        if path:
+            self.apple_music_path.setText(path)
+
+    def _choose_spotify_music(self) -> None:
+        """选择本机 Spotify 程序。"""
+
+        path = self._choose_music_program("选择 Spotify 程序", self.spotify_music_path.text())
+        if path:
+            self.spotify_music_path.setText(path)
+
     def _choose_music_program(self, title: str, current: str) -> str:
         """Windows 选择 EXE，macOS 选择应用包目录；输入框仍允许手工粘贴路径。"""
 
@@ -424,27 +511,42 @@ class AISettingsDialog(QDialog):
             self.local_lyrics_path.setText(path)
 
     def _test_connection(self) -> None:
-        """检测本机 Agent 登录或 API 地址与令牌，不发送聊天内容。"""
+        """在后台检测本机 Agent 登录或 API，不阻塞其余设置选项。"""
 
+        if self._connection_thread is not None and self._connection_thread.isRunning():
+            return
         provider = str(self.provider.currentData())
         self.connection_button.setEnabled(False)
         self.connection_button.setText("正在检测…")
-        try:
-            result = check_provider_connection(
-                provider,
-                self.credentials,
-                self.base_url.text().strip(),
-                self.token.text().strip(),
-            )
-        except AIConnectionError as exc:
-            self.token_status.setText(f"❌ {exc}")
-        except Exception:
-            self.token_status.setText("❌ 检测遇到意外问题，请稍后重试。")
-        else:
-            self.token_status.setText(f"✅ {result}")
-        finally:
-            self.connection_button.setEnabled(True)
-            self.connection_button.setText("检测是否连接")
+        self.cancel_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self._connection_thread = ConnectionCheckThread(
+            provider,
+            self.credentials,
+            self.base_url.text().strip(),
+            self.token.text().strip(),
+            self,
+        )
+        self._connection_thread.succeeded.connect(
+            lambda result: self.token_status.setText(f"✅ {result}")
+        )
+        self._connection_thread.failed.connect(
+            lambda error: self.token_status.setText(f"❌ {error}")
+        )
+        self._connection_thread.finished.connect(self._connection_finished)
+        self._connection_thread.start()
+
+    def _connection_finished(self) -> None:
+        """恢复检测与保存按钮并释放已完成的线程。"""
+
+        thread = self._connection_thread
+        self._connection_thread = None
+        self.connection_button.setEnabled(True)
+        self.connection_button.setText("检测是否连接")
+        self.cancel_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        if thread is not None:
+            thread.deleteLater()
 
     def apply(self) -> None:
         provider = str(self.provider.currentData())
@@ -464,6 +566,8 @@ class AISettingsDialog(QDialog):
         self.settings.qq_music_path = self.qq_music_path.text().strip()
         self.settings.netease_music_path = self.netease_music_path.text().strip()
         self.settings.kugou_music_path = self.kugou_music_path.text().strip()
+        self.settings.apple_music_path = self.apple_music_path.text().strip()
+        self.settings.spotify_music_path = self.spotify_music_path.text().strip()
         self.settings.babuda_audio_path = self.babuda_audio_path.text().strip()
         self.settings.local_lyrics_path = self.local_lyrics_path.text().strip()
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()

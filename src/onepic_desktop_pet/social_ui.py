@@ -87,6 +87,7 @@ class BuddyVisitWindow(QWidget):
         super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setFont(_social_font())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setStyleSheet("QWidget#card{background:rgba(238,246,249,235);border:1px solid rgba(90,110,120,80);border-radius:20px;} QLabel{color:#263746;font-family:'Microsoft YaHei UI','PingFang SC';} QPushButton{padding:8px;border-radius:10px;background:#d7ece8;}")
         card = QWidget(self); card.setObjectName("card")
         root = QVBoxLayout(self); root.addWidget(card); layout = QVBoxLayout(card)
@@ -130,7 +131,8 @@ class BuddyVisitWindow(QWidget):
             except ValueError:
                 self.elapsed = 0
         self._refresh_pets()
-        self._tick(); self.show(); self.raise_(); self.activateWindow()
+        self._tick()
+        self.show()
 
     def _load_pet(self, label: QLabel, outfit_key: str, fallback_name: str) -> None:
         relative = SPECIAL_OUTFIT_SPRITES.get(outfit_key, f"assets/pet/daily-actions/{fallback_name}")

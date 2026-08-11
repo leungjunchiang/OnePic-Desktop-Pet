@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.13.0` 在 46 张完整动作基础上加入 12 套按累计专注小时自动更换的高清娃衣，修复 200% 高分屏只显示半张动作的问题，并升级心情能量、本地音乐与双六毛自习室；不登录时仍是完整的纯离线桌宠。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.14.0` 让桌宠和自动气泡不再抢走微信、Word 等软件的输入焦点，加入 Apple Music、Spotify、可滚动的连接设置、macOS Codex/Claude Code 发现路径，以及 Windows 正式安装程序；不登录时仍是完整的纯离线桌宠。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -20,7 +20,7 @@
 - 开始计时后六毛会敲电脑；摸头或点击电脑会直接弹出“暂停工作 / 结束工作”气泡；
 - 双击六毛切换快捷口袋；选择操作后自动收起，闲置八秒也会消失，不依赖 Windows 托盘或 Mac 菜单栏；
 - 能按前台应用类别切换电脑、写字、看书、耳机等动作；只识别应用类别，不读取窗口标题或文档内容；
-- 可主动选择全幅耳机、吉他和鼓动作；设置页能分别选择本机网易云音乐、QQ 音乐或酷狗音乐程序路径，点击随机歌曲后打开完整客户端、自动搜索并尝试播放，未安装时才回退到正版网页；
+- 可主动选择全幅耳机、吉他和鼓动作；设置页能选择本机网易云音乐、QQ 音乐、酷狗音乐、Apple Music 或 Spotify，点击随机歌曲后打开完整客户端、定位搜索结果并尝试播放，未安装时才回退到正版网页；
 - 连续专注约 25 分钟会收到鼓励，约 50 分钟及更长时段会收到休息劝慰；
 - 陪伴动作新增伸懒腰、一起想办法、安静陪伴和击掌庆祝，并用多段现有动画组合表现；
 - 可让六毛间断性发牢骚、报时或按 2–120 分钟间隔显示歌名意象短句；也可选择自己有权使用的本地逐行 TXT，报时、喝水、站立休息均可单独开关；
@@ -163,9 +163,12 @@ dist/Lili/Lili.exe
 
 公开安装包由 GitHub Actions 在对应操作系统上构建，发布在仓库的 Releases 页面：
 
-- `Lili-Windows-x64.zip`：解压后双击 `Lili.exe`；
+- `Lili-Windows-x64-Setup.exe`：推荐，安装到当前用户的开始菜单，可选创建桌面快捷方式；退出后可像普通应用一样再次启动；
+- `Lili-Windows-x64.zip`：免安装便携版，解压后双击 `Lili.exe`；
 - `Lili-macOS-arm64-unsigned.dmg`：适用于 Apple 芯片 Mac（M1/M2/M3/M4 等）；
-- `Lili-macOS-x64-unsigned.dmg`：适用于 Intel Mac。打开 DMG 后运行 `Lili.app`。
+- `Lili-macOS-x64-unsigned.dmg`：适用于 Intel Mac。
+
+两种 Mac 版本都应在打开 DMG 后把 `Lili.app` 拖入 `Applications`，之后可从“应用程序”或 Dock 再次启动。
 
 公开安装包使用仓库中的六毛公仔动作，不包含 `user_assets/`、用户原图、自拍照片、候选图、私人动作或聊天记录。macOS DMG 目前没有 Apple Developer ID 签名与公证；首次启动时可能需要在 Finder 中按住 Control 点击应用并选择“打开”。
 
@@ -182,7 +185,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.13.0` 提供 Lili 的 Windows ZIP，并由发布流程生成 Apple 芯片 Mac DMG、Intel Mac DMG及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.14.0` 提供 Lili 的 Windows 安装程序与便携 ZIP，并由发布流程生成 Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
 
 ## 授权
 

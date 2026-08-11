@@ -200,12 +200,17 @@ class PetWindow(QWidget):
             self._audio_output.setVolume(0.9)
             self._media_player.setAudioOutput(self._audio_output)
 
-        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
         if settings.always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setWindowTitle(APP_DISPLAY_NAME)
         self.setMouseTracking(True)
 
@@ -222,6 +227,7 @@ class PetWindow(QWidget):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.photo_bubble.setAttribute(
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
@@ -235,6 +241,7 @@ class PetWindow(QWidget):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.speech_bubble.setAttribute(
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
@@ -740,7 +747,8 @@ class PetWindow(QWidget):
                 return
             except (AttributeError, OSError, ValueError):
                 pass
-        self.raise_()
+        # WindowStaysOnTopHint 已负责非 Windows 平台的层级。这里不能调用
+        # raise_()，否则 macOS 会在用户打字时把当前应用切到 Lili。
 
     def moveEvent(self, event: QMoveEvent) -> None:
         """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
@@ -1605,6 +1613,8 @@ class PetWindow(QWidget):
             "qq": self.settings.qq_music_path,
             "netease": self.settings.netease_music_path,
             "kugou": self.settings.kugou_music_path,
+            "apple": self.settings.apple_music_path,
+            "spotify": self.settings.spotify_music_path,
         }.get(self.settings.music_service, self.settings.netease_music_path)
         result = launch_music_client(self.settings.music_service, title, custom_path)
         self._change_ambient_activity(random.choice(("headphones", "guitar", "drums")))

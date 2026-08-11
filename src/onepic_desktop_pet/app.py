@@ -102,11 +102,10 @@ class DesktopPetApplication:
             self.show_window()
 
     def show_window(self) -> None:
-        """显示宠物并将其提升到前台。"""
+        """显示宠物但不夺走用户正在输入文字的窗口焦点。"""
 
         self.window.show()
-        self.window.raise_()
-        self.window.activateWindow()
+        self.window._ensure_on_top()
 
     def start(self, smoke_test_ms: int | None = None) -> int:
         """显示应用并进入事件循环；可选定时退出用于自动验证。"""

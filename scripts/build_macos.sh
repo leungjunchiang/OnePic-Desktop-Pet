@@ -19,6 +19,7 @@ case "$machine_arch" in
         ;;
 esac
 dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"
+dmg_root="$icon_root/dmg-root"
 
 mkdir -p "$icon_root"
 mkdir -p "$iconset"
@@ -42,9 +43,13 @@ test -d "dist/Lili.app"
 # The public build is intentionally unsigned because no Apple Developer ID is available.
 codesign --force --deep --sign - "dist/Lili.app"
 rm -f "$dmg_file"
+rm -rf "$dmg_root"
+mkdir -p "$dmg_root"
+cp -R "dist/Lili.app" "$dmg_root/Lili.app"
+ln -s /Applications "$dmg_root/Applications"
 hdiutil create \
     -volname "Lili" \
-    -srcfolder "dist/Lili.app" \
+    -srcfolder "$dmg_root" \
     -ov \
     -format UDZO \
     "$dmg_file"

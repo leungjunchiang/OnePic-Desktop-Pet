@@ -16,13 +16,16 @@ from datetime import datetime, timedelta
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
-from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtTest import QSignalSpy
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from onepic_desktop_pet.behavior import PetState, StateDecision
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
+from onepic_desktop_pet.chat import AISettingsDialog
+from onepic_desktop_pet.ai import CredentialStore
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -34,6 +37,37 @@ def _create_window() -> tuple[QApplication, PetWindow]:
     window.show()
     app.processEvents()
     return app, window
+
+
+def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
+    """桌宠周期置顶时不得抢走微信、Word 等当前输入窗口。"""
+
+    app, window = _create_window()
+    assert window.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert window.speech_bubble.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert window.photo_bubble.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_connection_and_companion_settings_scroll_and_include_music_clients() -> None:
+    """小屏幕可滚动到全部陪伴选项，并能选择 Apple Music/Spotify。"""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = AISettingsDialog(PetSettings(), CredentialStore())
+    assert dialog.findChild(QScrollArea) is not None
+    services = {
+        dialog.music_service.itemData(index)
+        for index in range(dialog.music_service.count())
+    }
+    assert {"qq", "netease", "kugou", "apple", "spotify"} <= services
+    assert dialog.apple_music_path.isEnabled()
+    assert dialog.spotify_music_path.isEnabled()
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
 
 
 def test_window_uses_character_mask_and_reuses_render_cache() -> None:
@@ -456,6 +490,7 @@ def test_dialogue_panel_passes_text_to_local_reply() -> None:
     app, window = _create_window()
     window.prompt_dialogue()
     assert window._chat_dialog is not None
+    settings_spy = QSignalSpy(window._chat_dialog.settings_requested)
     window._chat_dialog.input.setText("今天有点累")
     window._chat_dialog._submit()
     app.processEvents()
@@ -463,6 +498,7 @@ def test_dialogue_panel_passes_text_to_local_reply() -> None:
     assert window.state is PetState.SLEEPY
     assert "喝口水" in window.speech_bubble.text()
     assert "离线" in window._chat_dialog.status_label.text()
+    assert settings_spy.count() == 0
     window.close()
     window.deleteLater()
     app.processEvents()

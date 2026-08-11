@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -125,15 +128,15 @@ def check_provider_connection(
     if provider == "codex":
         executable = find_codex_executable()
         if executable is None:
-            raise AIConnectionError("没有找到 Codex。")
-        if not _command_succeeds([str(executable), "login", "status"]):
+            raise AIConnectionError("没有找到 Codex CLI；请先安装，或在终端运行 codex 确认可用。")
+        if not _command_succeeds(_cli_command(executable, "login", "status")):
             raise AIConnectionError("已找到 Codex，但当前没有登录。")
         return "Codex 已安装并登录，可以连接。"
     if provider == "claude":
         executable = find_claude_executable()
         if executable is None:
-            raise AIConnectionError("没有找到 Claude Code。")
-        output = _run_status_command([str(executable), "auth", "status", "--json"])
+            raise AIConnectionError("没有找到 Claude Code CLI；请先安装，或在终端运行 claude 确认可用。")
+        output = _run_status_command(_cli_command(executable, "auth", "status"))
         try:
             logged_in = bool(json.loads(output).get("loggedIn"))
         except (ValueError, AttributeError, json.JSONDecodeError):
@@ -192,6 +195,7 @@ def _run_status_command(command: list[str]) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=15,
+            env=_cli_environment(),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
@@ -200,7 +204,7 @@ def _run_status_command(command: list[str]) -> str:
         raise AIConnectionError("连接状态检测没有响应。") from exc
     if completed.returncode != 0:
         raise AIConnectionError("当前没有检测到有效登录。")
-    return completed.stdout.strip()
+    return (completed.stdout or completed.stderr).strip()
 
 
 def _models_endpoint(base_url: str) -> str:
@@ -222,24 +226,118 @@ def provider_defaults(provider: str) -> tuple[str, str]:
     return preset.base_url, preset.model
 
 
-def find_codex_executable() -> Path | None:
-    """寻找 PATH 或 Codex 桌面应用自带的最新 codex 可执行文件。"""
+def _cli_search_directories() -> tuple[Path, ...]:
+    """返回终端常见 CLI 目录，补足 macOS 图形应用缺失的 PATH。"""
 
-    command = shutil.which("codex")
+    home = Path.home()
+    if os.name == "nt":
+        values = [
+            home / ".local" / "bin",
+            home / ".bun" / "bin",
+            home / ".volta" / "bin",
+        ]
+        appdata = os.environ.get("APPDATA")
+        local = os.environ.get("LOCALAPPDATA")
+        if appdata:
+            values.insert(0, Path(appdata) / "npm")
+        if local:
+            values.insert(1, Path(local) / "Microsoft" / "WindowsApps")
+    else:
+        values = (
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+            home / ".local" / "bin",
+            home / ".npm-global" / "bin",
+            home / ".bun" / "bin",
+            home / ".volta" / "bin",
+            home / "Library" / "pnpm",
+        )
+    return tuple(path for path in values if str(path) not in {"", "."})
+
+
+def _cli_environment() -> dict[str, str]:
+    """为 CLI 子进程构造包含终端常见安装目录的环境。"""
+
+    environment = dict(os.environ)
+    current = environment.get("PATH", "")
+    additions = [str(path) for path in _cli_search_directories()]
+    environment["PATH"] = os.pathsep.join((*additions, current))
+    return environment
+
+
+@lru_cache(maxsize=4)
+def _login_shell_path(command_name: str) -> Path | None:
+    """在 macOS 登录 shell 中做最后一次只读查找。"""
+
+    if sys.platform != "darwin":
+        return None
+    shell = os.environ.get("SHELL") or "/bin/zsh"
+    try:
+        completed = subprocess.run(
+            [shell, "-lc", f"command -v -- {shlex.quote(command_name)}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2,
+            env=_cli_environment(),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in reversed(completed.stdout.splitlines()):
+        candidate = Path(line.strip()).expanduser()
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _which_cli(command_name: str) -> Path | None:
+    """使用扩展 PATH 查找命令，并在 macOS 回退到登录 shell。"""
+
+    command = shutil.which(command_name, path=_cli_environment().get("PATH"))
     if command:
         return Path(command)
-    local = os.environ.get("LOCALAPPDATA")
-    if not local:
-        return None
-    root = Path(local) / "OpenAI" / "Codex" / "bin"
-    if not root.is_dir():
-        return None
-    matches = sorted(
-        root.glob("*/codex.exe"),
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    )
-    return matches[0] if matches else None
+    return _login_shell_path(command_name)
+
+
+def _newest_file(paths: Iterable[Path]) -> Path | None:
+    """返回存在的最新文件，忽略不可访问候选。"""
+
+    existing: list[Path] = []
+    for path in paths:
+        try:
+            if path.is_file() and (os.name == "nt" or os.access(path, os.X_OK)):
+                existing.append(path)
+        except OSError:
+            continue
+    try:
+        return max(existing, key=lambda item: item.stat().st_mtime) if existing else None
+    except OSError:
+        return existing[0] if existing else None
+
+
+def find_codex_executable() -> Path | None:
+    """寻找 PATH、包管理器或 Codex 桌面应用自带的 CLI。"""
+
+    command = _which_cli("codex")
+    if command:
+        return command
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        root = local / "OpenAI" / "Codex" / "bin"
+        return _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
+    if sys.platform == "darwin":
+        candidates: list[Path] = []
+        for root in (Path("/Applications/Codex.app"), Path.home() / "Applications" / "Codex.app"):
+            resources = root / "Contents" / "Resources"
+            if resources.is_dir():
+                candidates.extend(resources.glob("**/codex"))
+        return _newest_file(candidates)
+    return None
 
 
 def codex_available() -> bool:
@@ -249,25 +347,38 @@ def codex_available() -> bool:
 
 
 def find_claude_executable() -> Path | None:
-    """寻找 Claude Code；Windows 优先 cmd 包装器以避开脚本执行策略。"""
+    """寻找 npm、原生安装器或终端 PATH 中的 Claude Code。"""
 
     names = ("claude.cmd", "claude.exe", "claude") if os.name == "nt" else ("claude",)
     for name in names:
-        command = shutil.which(name)
+        command = _which_cli(name)
         if command:
-            return Path(command)
-    appdata = os.environ.get("APPDATA")
-    if os.name == "nt" and appdata:
-        candidate = Path(appdata) / "npm" / "claude.cmd"
-        if candidate.is_file():
-            return candidate
-    return None
+            return command
+    home = Path.home()
+    candidates = [home / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude")]
+    if os.name == "nt":
+        candidates.extend(
+            (
+                Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
+                home / ".claude" / "local" / "claude.exe",
+            )
+        )
+    return _newest_file(candidates)
 
 
 def claude_available() -> bool:
     """返回当前电脑是否能找到 Claude Code。"""
 
     return find_claude_executable() is not None
+
+
+def _cli_command(executable: Path, *arguments: str) -> list[str]:
+    """安全运行 Windows 批处理包装器，其余平台直接执行二进制。"""
+
+    if os.name == "nt" and executable.suffix.casefold() in {".cmd", ".bat"}:
+        command_processor = os.environ.get("COMSPEC") or "cmd.exe"
+        return [command_processor, "/d", "/s", "/c", str(executable), *arguments]
+    return [str(executable), *arguments]
 
 
 def _conversation_text(
@@ -277,10 +388,10 @@ def _conversation_text(
     """把有限轮次的内存对话整理为 Codex 的单次输入。"""
 
     lines = [SYSTEM_PROMPT, "", "以下是最近对话："]
-    for role, content in list(history)[-8:]:
+    for role, content in list(history)[-4:]:
         label = "用户" if role == "user" else "六毛"
-        lines.append(f"{label}：{content[:800]}")
-    lines.extend((f"用户：{message[:1200]}", "六毛："))
+        lines.append(f"{label}：{content[:400]}")
+    lines.extend((f"用户：{message[:800]}", "六毛："))
     return "\n".join(lines)
 
 
@@ -307,17 +418,19 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
         raise AIConnectionError("没有找到 Codex，已切回离线回答。")
     working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
     working_root.mkdir(parents=True, exist_ok=True)
-    command = [
-        str(executable),
+    command = _cli_command(
+        executable,
         "exec",
         "--ephemeral",
         "--skip-git-repo-check",
         "--ignore-rules",
+        "--config",
+        'model_reasoning_effort="low"',
         "--sandbox",
         "read-only",
         "--json",
         "-",
-    ]
+    )
     startupinfo = None
     creationflags = 0
     if os.name == "nt":
@@ -333,7 +446,8 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=90,
+            timeout=75,
+            env=_cli_environment(),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
@@ -352,11 +466,11 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
     executable = find_claude_executable()
     if executable is None:
         raise AIConnectionError("没有找到 Claude Code，已切回离线回答。")
-    command = [
-        str(executable), "-p", "--output-format", "json",
+    command = _cli_command(
+        executable, "-p", "--output-format", "json",
         "--no-session-persistence", "--permission-mode", "plan",
         "--tools", "", "--max-turns", "1",
-    ]
+    )
     startupinfo = None
     creationflags = 0
     if os.name == "nt":
@@ -374,7 +488,8 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=90,
+            timeout=75,
+            env=_cli_environment(),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
@@ -418,14 +533,14 @@ def ask_compatible_api(
     if not model.strip():
         raise AIConnectionError("还没有填写模型名称。")
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for role, content in list(history)[-8:]:
+    for role, content in list(history)[-4:]:
         if role in {"user", "assistant"}:
-            messages.append({"role": role, "content": content[:1200]})
-    messages.append({"role": "user", "content": message[:1200]})
+            messages.append({"role": role, "content": content[:600]})
+    messages.append({"role": "user", "content": message[:800]})
     payload: dict[str, object] = {
         "model": model.strip(),
         "messages": messages,
-        "max_tokens": 400,
+        "max_tokens": 260,
         "stream": False,
     }
     if provider == "deepseek":
@@ -443,7 +558,7 @@ def ask_compatible_api(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=45) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:

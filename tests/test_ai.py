@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +21,8 @@ from onepic_desktop_pet.ai import (
     ask_codex,
     ask_compatible_api,
     check_provider_connection,
+    _cli_command,
+    _cli_environment,
     provider_defaults,
     _models_endpoint,
 )
@@ -91,7 +95,7 @@ def test_compatible_api_sends_bearer_token_without_returning_it(monkeypatch) -> 
     assert request.get_header("Authorization") == "Bearer secret-token"
     assert payload["thinking"] == {"type": "disabled"}
     assert "secret-token" not in json.dumps(payload)
-    assert captured["timeout"] == 60
+    assert captured["timeout"] == 45
 
 
 def test_codex_jsonl_parser_takes_last_agent_message() -> None:
@@ -173,7 +177,7 @@ def test_codex_and_claude_connection_checks_verify_login(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.find_claude_executable", lambda: Path("claude.cmd"))
 
     def fake_run(command, **_kwargs):
-        if "claude.cmd" in str(command[0]):
+        if "claude.cmd" in " ".join(str(part) for part in command):
             return SimpleNamespace(returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
         return SimpleNamespace(returncode=0, stdout="Logged in using ChatGPT", stderr="")
 
@@ -199,3 +203,23 @@ def test_api_connection_check_uses_read_only_models_endpoint(monkeypatch) -> Non
     assert captured["request"].method == "GET"
     assert captured["timeout"] == 15
     assert _models_endpoint("https://example.com/v1/chat/completions") == "https://example.com/v1/models"
+
+
+def test_cli_environment_adds_graphical_app_missing_paths() -> None:
+    """桌面应用启动时也应能发现 npm、Homebrew 或用户目录中的 CLI。"""
+
+    path = _cli_environment()["PATH"]
+    if sys.platform == "darwin":
+        assert "/opt/homebrew/bin" in path
+        assert str(Path.home() / ".local" / "bin") in path
+    elif sys.platform == "win32":
+        assert str(Path(os.environ.get("APPDATA", "")) / "npm") in path
+
+
+def test_windows_cmd_cli_uses_command_processor() -> None:
+    command = _cli_command(Path("claude.cmd"), "auth", "status")
+    if sys.platform == "win32":
+        assert command[1:4] == ["/d", "/s", "/c"]
+        assert command[4:] == ["claude.cmd", "auth", "status"]
+    else:
+        assert command == ["claude.cmd", "auth", "status"]

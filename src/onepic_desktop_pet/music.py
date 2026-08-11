@@ -1,8 +1,8 @@
-"""调用用户指定或自动检测的本机 QQ/网易云/酷狗音乐，并提供正版网页回退。
+"""调用用户指定或自动检测的本机音乐客户端，并提供正版网页回退。
 
-本模块不内置歌词、音频或非公开曲库接口。Windows 在用户主动点击后启动已安装客户端，
-模拟一次搜索快捷键并尝试播放首条结果；macOS 将正版搜索地址交给指定客户端。若客户端不存在，
-才打开官方搜索网页。键盘自动化只在这次明确点击后运行，不在后台持续控制其他应用。
+支持 QQ、网易云、酷狗、Apple Music 与 Spotify。本模块不内置歌词、音频或非公开曲库接口。
+用户主动点击后，Lili 会把正版搜索地址交给已安装客户端，并在系统允许时尝试播放首条结果；
+客户端不存在时才打开官方搜索网页。键盘自动化只针对这次明确点击，不在后台控制其他应用。
 """
 
 from __future__ import annotations
@@ -34,6 +34,14 @@ CHEN_CHUSHENG_SONGS = (
     "一夜",
 )
 
+MUSIC_SERVICE_LABELS = {
+    "qq": "QQ 音乐",
+    "netease": "网易云音乐",
+    "kugou": "酷狗音乐",
+    "apple": "Apple Music",
+    "spotify": "Spotify",
+}
+
 
 def choose_song(random_source: random.Random | None = None) -> str:
     """随机返回一个歌曲标题，不包含歌词内容。"""
@@ -42,14 +50,29 @@ def choose_song(random_source: random.Random | None = None) -> str:
 
 
 def music_search_url(service: str, title: str) -> str:
-    """构造三个正版音乐平台的官方搜索网址。"""
+    """构造受支持正版音乐平台的官方搜索网址。"""
 
     query = urllib.parse.quote(f"陈楚生 {title}")
     if service == "qq":
         return f"https://y.qq.com/n/ryqq/search?w={query}&t=song"
     if service == "kugou":
         return f"https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord={query}"
+    if service == "apple":
+        return f"https://music.apple.com/cn/search?term={query}"
+    if service == "spotify":
+        return f"https://open.spotify.com/search/{query}"
     return f"https://music.163.com/#/search/m/?s={query}&type=1"
+
+
+def music_client_uri(service: str, title: str) -> str:
+    """为支持深链的客户端生成应用内搜索地址。"""
+
+    query = urllib.parse.quote(f"陈楚生 {title}")
+    if service == "spotify":
+        return f"spotify:search:{query}"
+    if service == "apple":
+        return f"music://music.apple.com/cn/search?term={query}"
+    return music_search_url(service, title)
 
 
 @dataclass(frozen=True)
@@ -68,8 +91,14 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
             "qq": ("QQMusic.app", "QQ音乐.app"),
             "netease": ("NeteaseMusic.app", "网易云音乐.app"),
             "kugou": ("KugouMusic.app", "酷狗音乐.app"),
+            "apple": ("Music.app",),
+            "spotify": ("Spotify.app",),
         }.get(service, ())
-        return tuple(Path("/Applications") / name for name in names)
+        roots = (Path("/Applications"), Path.home() / "Applications")
+        candidates = [root / name for root in roots for name in names]
+        if service == "apple":
+            candidates.insert(0, Path("/System/Applications/Music.app"))
+        return tuple(candidates)
     if os.name == "nt":
         program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
         program_x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
@@ -93,6 +122,17 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
                 local / "KuGou" / "KGMusic" / "KuGou.exe",
                 Path(os.environ.get("APPDATA", "")) / "KuGou8" / "KuGou.exe",
             )
+        if service == "apple":
+            return (
+                local / "Microsoft" / "WindowsApps" / "AppleMusic.exe",
+                program_files / "Apple" / "Apple Music" / "AppleMusic.exe",
+            )
+        if service == "spotify":
+            return (
+                Path(os.environ.get("APPDATA", "")) / "Spotify" / "Spotify.exe",
+                local / "Microsoft" / "WindowsApps" / "Spotify.exe",
+                program_files / "Spotify" / "Spotify.exe",
+            )
     return ()
 
 
@@ -111,23 +151,31 @@ def find_music_client(service: str, custom_path: str = "") -> Path | None:
 def launch_music_client(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
     """启动客户端并尝试自动搜索播放；找不到客户端时打开正版网页。"""
 
-    normalized = service if service in {"qq", "netease", "kugou"} else "netease"
+    normalized = service if service in MUSIC_SERVICE_LABELS else "netease"
     client = find_music_client(normalized, custom_path)
     query = f"陈楚生 {title}"
     if client is None:
         webbrowser.open(music_search_url(normalized, title))
-        label = {"qq": "QQ 音乐", "netease": "网易云音乐", "kugou": "酷狗音乐"}[normalized]
+        label = MUSIC_SERVICE_LABELS[normalized]
         return MusicLaunchResult(False, f"没有找到已安装的{label}，已改为打开正版搜索页。")
     try:
         if sys.platform == "darwin":
             subprocess.Popen(
-                ["open", "-a", str(client), music_search_url(normalized, title)],
+                ["open", "-a", str(client), music_client_uri(normalized, title)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            threading.Thread(
+                target=_macos_try_play_first_result,
+                args=(client.stem, normalized),
+                daemon=True,
+            ).start()
         else:
+            command = [str(client)]
+            if normalized in {"apple", "spotify"}:
+                command.append(music_client_uri(normalized, title))
             subprocess.Popen(
-                [str(client)],
+                command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -140,7 +188,39 @@ def launch_music_client(service: str, title: str, custom_path: str = "") -> Musi
     except OSError:
         webbrowser.open(music_search_url(normalized, title))
         return MusicLaunchResult(False, "客户端启动失败，已改为打开正版搜索页。")
-    return MusicLaunchResult(True, "已打开音乐客户端，正在自动搜索并尝试播放第一条结果。")
+    return MusicLaunchResult(True, "已打开音乐客户端并定位到搜索结果，正在尝试播放第一条歌曲。")
+
+
+def _macos_try_play_first_result(application_name: str, service: str) -> bool:
+    """在用户主动点歌后，借助已授权的辅助功能尝试播放首条结果。"""
+
+    if sys.platform != "darwin":
+        return False
+    time.sleep(2.5)
+    safe_name = application_name.replace("\\", "\\\\").replace('"', '\\"')
+    # 不请求或绕过系统权限；未授权“辅助功能”时 osascript 会直接失败，
+    # 客户端仍停留在正版搜索结果页供用户手动选择。
+    down_count = 2 if service in {"apple", "spotify"} else 1
+    script = (
+        'tell application "System Events"\n'
+        'if UI elements enabled then\n'
+        f'tell process "{safe_name}"\n'
+        'set frontmost to true\n'
+        f'repeat {down_count} times\nkey code 125\nend repeat\n'
+        'key code 36\ndelay 0.7\nkey code 36\n'
+        'end tell\nend if\nend tell'
+    )
+    try:
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
 
 
 def _windows_search_and_play(executable_name: str, query: str, service: str = "netease") -> bool:
@@ -171,11 +251,15 @@ def _windows_search_and_play(executable_name: str, query: str, service: str = "n
             "qq": (0.50, 0.055),
             "netease": (0.43, 0.055),
             "kugou": (0.46, 0.060),
+            "apple": (0.48, 0.060),
+            "spotify": (0.45, 0.065),
         }
         result_points = {
             "qq": (0.45, 0.31),
             "netease": (0.43, 0.30),
             "kugou": (0.44, 0.30),
+            "apple": (0.45, 0.31),
+            "spotify": (0.45, 0.32),
         }
         _click_window_relative(hwnd, *search_points.get(service, search_points["netease"]))
         time.sleep(0.2)

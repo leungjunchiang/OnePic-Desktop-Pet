@@ -33,6 +33,8 @@ def test_music_links_use_official_platforms_and_only_titles() -> None:
     assert music_search_url("netease", "荒废光年").startswith("https://music.163.com/")
     assert music_search_url("qq", "山楂花").startswith("https://y.qq.com/")
     assert music_search_url("kugou", "有没有人告诉你").startswith("https://www.kugou.com/")
+    assert music_search_url("apple", "经过").startswith("https://music.apple.com/")
+    assert music_search_url("spotify", "晓得").startswith("https://open.spotify.com/")
 
 
 def test_missing_music_client_falls_back_to_official_search(monkeypatch) -> None:
