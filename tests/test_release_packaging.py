@@ -40,6 +40,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
+    assert 'gh release view "$GITHUB_REF_NAME"' in workflow
+    assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
+    assert "--clobber" in workflow
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec

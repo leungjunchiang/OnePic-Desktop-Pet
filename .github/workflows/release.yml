@@ -104,8 +104,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Lili $GITHUB_REF_NAME" \
-            --generate-notes \
-            --notes "Lili 0.14：桌宠与自动气泡不再抢走微信、Word 等应用的输入焦点；音乐入口新增 Apple Music 与 Spotify，并加强已安装客户端的搜索播放；连接设置可滚动且检测不再卡住界面；补齐 macOS 图形应用中的 Codex/Claude Code CLI 发现路径。Windows 新增可安装到开始菜单的 Setup，macOS DMG 提供 Applications 拖放入口且 Lili 会显示在 Dock，退出后仍能重新找到。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Lili $GITHUB_REF_NAME" \
+              --generate-notes \
+              --notes "Lili 0.14：桌宠与自动气泡不再抢走微信、Word 等应用的输入焦点；音乐入口新增 Apple Music 与 Spotify，并加强已安装客户端的搜索播放；连接设置可滚动且检测不再卡住界面；补齐 macOS 图形应用中的 Codex/Claude Code CLI 发现路径。Windows 新增可安装到开始菜单的 Setup，macOS DMG 提供 Applications 拖放入口且 Lili 会显示在 Dock，退出后仍能重新找到。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+          fi
