@@ -23,6 +23,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
+    publisher = (
+        PROJECT_ROOT / ".github" / "workflows" / "publish-release-assets.yml"
+    ).read_text(encoding="utf-8")
     macos_build = (PROJECT_ROOT / "scripts" / "build_macos.sh").read_text(
         encoding="utf-8"
     )
@@ -46,6 +49,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'gh release view "$GITHUB_REF_NAME"' in workflow
     assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
     assert "--clobber" in workflow
+    assert "artifact_run_id" in publisher
+    assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
+    assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
