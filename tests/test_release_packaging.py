@@ -54,5 +54,6 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'version = "0.14.0"' in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
+    assert "ChineseSimplified.isl" not in installer
     assert installer_script.isascii()
     assert 'ln -s /Applications "$dmg_root/Applications"' in macos_build
