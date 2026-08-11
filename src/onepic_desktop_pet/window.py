@@ -39,7 +39,7 @@ import os
 import random
 import time
 from collections import OrderedDict, deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -103,6 +103,8 @@ from .growth import (
 )
 from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
+from .social import SocialClient
+from .social_ui import BuddyVisitWindow, SocialHubDialog, SocialSyncThread
 from .music import choose_song, launch_music_client
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
@@ -164,6 +166,14 @@ class PetWindow(QWidget):
         self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
         self.credentials = CredentialStore()
         self.ai_service = AIChatService(self.credentials)
+        self.social_client = SocialClient(
+            persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self._social_dialog: SocialHubDialog | None = None
+        self._social_thread: SocialSyncThread | None = None
+        self._buddy_visit_window = BuddyVisitWindow()
+        self._seen_visit_ids: set[str] = set()
+        self._shown_active_visit_ids: set[str] = set()
         self._chat_dialog: ChatDialog | None = None
         self._ai_thread: AIReplyThread | None = None
         self._chat_history: list[tuple[str, str]] = []
@@ -339,6 +349,13 @@ class PetWindow(QWidget):
         self.topmost_timer.setInterval(4000)
         self.topmost_timer.timeout.connect(self._ensure_on_top)
         self.topmost_timer.start()
+
+        self.social_timer = QTimer(self)
+        self.social_timer.setInterval(30_000)
+        self.social_timer.timeout.connect(self._social_tick)
+        self.social_timer.start()
+        if self.social_client.signed_in:
+            QTimer.singleShot(2500, self._social_tick)
 
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
@@ -685,6 +702,9 @@ class PetWindow(QWidget):
         self.shutdown_work_timer()
         self.photo_bubble.close()
         self.speech_bubble.close()
+        self._buddy_visit_window.close()
+        if self._social_thread is not None and self._social_thread.isRunning():
+            self._social_thread.wait(2500)
         if self._media_player is not None:
             self._media_player.stop()
         super().closeEvent(event)
@@ -1383,6 +1403,66 @@ class PetWindow(QWidget):
         preset = PROVIDER_PRESETS[self.settings.ai_provider]
         self.show_speech(f"已切换为：{preset.label}", 4200)
 
+    def open_social_hub(self) -> None:
+        """打开联网搭子与私人自习室；离线功能不依赖此窗口。"""
+
+        self._record_user_interaction()
+        if self._social_dialog is None:
+            self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, self)
+            self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.finished.connect(self._social_dialog_finished)
+        self._social_dialog.show(); self._social_dialog.raise_(); self._social_dialog.activateWindow()
+
+    def _social_dialog_finished(self) -> None:
+        if self._social_dialog is not None:
+            self._social_dialog.deleteLater(); self._social_dialog = None
+
+    def _social_tick(self) -> None:
+        """每 30 秒同步最小状态；失败时静默保留纯离线桌宠。"""
+
+        if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
+            return
+        started = None
+        if self.work_timer.is_running:
+            started = (datetime.now().astimezone() - timedelta(seconds=self.work_timer.session_seconds())).isoformat()
+        presence = {
+            "working": self.work_timer.is_running,
+            "today_seconds": self.work_timer.today_seconds(),
+            "session_started_at": started,
+            "outfit_key": self.settings.equipped_outfit,
+            "room_id": None,
+        }
+        thread = SocialSyncThread(self.social_client, presence, self)
+        self._social_thread = thread
+        thread.completed.connect(self._social_dashboard_received)
+        thread.finished.connect(self._social_thread_finished)
+        thread.start()
+
+    def _social_dashboard_received(self, data: dict) -> None:
+        """显示新串门提醒，并在双方本地打开双六毛画面。"""
+
+        for visit in data.get("visits") or []:
+            visit_id = str(visit.get("id", ""))
+            if visit_id and visit_id not in self._seen_visit_ids:
+                self._seen_visit_ids.add(visit_id)
+                self._set_temporary_activity("pointing", 20_000)
+                self.show_speech(f"{visit.get('nickname','搭子')} 的六毛来串门啦！\n打开“搭子自习室”可以接受。", 7600)
+        active = data.get("active_visits") or []
+        if active:
+            self._show_buddy_visit(active[0])
+
+    def _show_buddy_visit(self, peer: dict) -> None:
+        visit_id = str(peer.get("id", ""))
+        if visit_id and visit_id in self._shown_active_visit_ids:
+            return
+        if visit_id:
+            self._shown_active_visit_ids.add(visit_id)
+        self._buddy_visit_window.show_peer(peer)
+
+    def _social_thread_finished(self) -> None:
+        if self._social_thread is not None:
+            self._social_thread.deleteLater(); self._social_thread = None
+
     def set_automatic_grumbling(self, enabled: bool) -> None:
         """启用或停用只在本机生成的间歇牢骚。"""
 
@@ -1876,6 +1956,9 @@ class PetWindow(QWidget):
             action = QAction(label, self)
             action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
             music_move.addAction(action)
+        social_action = QAction("搭子与自习室…", self)
+        social_action.triggered.connect(self.open_social_hub)
+        menu.addAction(social_action)
         ai_action = QAction("AI 与陪伴设置…", self)
         ai_action.triggered.connect(self.open_ai_settings)
         menu.addAction(ai_action)

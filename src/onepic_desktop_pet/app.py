@@ -70,6 +70,10 @@ class DesktopPetApplication:
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
 
+        social_action = QAction("搭子与自习室…", menu)
+        social_action.triggered.connect(self.window.open_social_hub)
+        menu.addAction(social_action)
+
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(self.window.open_ai_settings)
         menu.addAction(ai_settings_action)
