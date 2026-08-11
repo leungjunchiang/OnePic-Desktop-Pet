@@ -324,8 +324,8 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
     app.processEvents()
 
 
-def test_context_menu_exposes_new_dialogue_food_ai_and_no_status() -> None:
-    """新版保留对话、饮品和设置，删除失效的状态与打招呼入口。"""
+def test_context_menu_exposes_dialogue_food_mood_ai_and_no_greeting() -> None:
+    """菜单保留对话、饮品、有效心情信息和设置，删除打招呼入口。"""
 
     app, window = _create_window()
     menu = window._build_context_menu()
@@ -339,18 +339,20 @@ def test_context_menu_exposes_new_dialogue_food_ai_and_no_status() -> None:
     assert not actions["整点报时"].isChecked()
     food_menu = actions["给六毛喂食/饮品"].menu()
     assert food_menu is not None
-    assert [action.text() for action in food_menu.actions()] == [
+    food_actions = [action.text() for action in food_menu.actions() if not action.isSeparator()]
+    assert food_actions == [
         "苹果",
         "小饼干",
         "热牛奶",
         "咖啡",
         "热茶",
+        "查看六毛心情与能量",
     ]
     assert not any(text.startswith("查看状态：") for text in actions)
     assert not any("打招呼" in text for text in actions)
     assert any(text.startswith("工作计时：") for text in actions)
     assert "连续调节宠物大小…" in actions
-    assert "长期收藏娃衣" in actions
+    assert "工作时长娃衣（自动换装）" in actions
     assert "46 个透明图片动作" in actions
     work_action = next(action for text, action in actions.items() if text.startswith("工作计时："))
     work_labels = [action.text() for action in work_action.menu().actions()]

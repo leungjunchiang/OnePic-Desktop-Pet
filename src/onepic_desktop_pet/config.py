@@ -62,6 +62,7 @@ class PetSettings:
     music_service: str = "netease"
     qq_music_path: str = ""
     netease_music_path: str = ""
+    kugou_music_path: str = ""
     babuda_audio_path: str = ""
     local_lyrics_path: str = ""
     lyric_interval_minutes: int = 8
@@ -140,9 +141,11 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
-    settings.music_service = "qq" if settings.music_service == "qq" else "netease"
+    if settings.music_service not in {"qq", "netease", "kugou"}:
+        settings.music_service = "netease"
     settings.qq_music_path = str(settings.qq_music_path).replace("\x00", "").strip()[:1200]
     settings.netease_music_path = str(settings.netease_music_path).replace("\x00", "").strip()[:1200]
+    settings.kugou_music_path = str(settings.kugou_music_path).replace("\x00", "").strip()[:1200]
     settings.babuda_audio_path = str(settings.babuda_audio_path).replace("\x00", "").strip()[:1200]
     settings.local_lyrics_path = str(settings.local_lyrics_path).replace("\x00", "").strip()[:1200]
     settings.lyric_interval_minutes = min(120, max(2, int(settings.lyric_interval_minutes)))
@@ -189,6 +192,7 @@ def load_settings(
                 "music_service",
                 "qq_music_path",
                 "netease_music_path",
+                "kugou_music_path",
                 "babuda_audio_path",
                 "local_lyrics_path",
                 "lyric_interval_minutes",
@@ -224,6 +228,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "music_service": settings.music_service,
         "qq_music_path": settings.qq_music_path,
         "netease_music_path": settings.netease_music_path,
+        "kugou_music_path": settings.kugou_music_path,
         "babuda_audio_path": settings.babuda_audio_path,
         "local_lyrics_path": settings.local_lyrics_path,
         "lyric_interval_minutes": settings.lyric_interval_minutes,

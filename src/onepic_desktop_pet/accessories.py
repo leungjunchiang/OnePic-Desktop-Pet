@@ -23,20 +23,18 @@ class Outfit:
 
 
 OUTFITS = (
-    Outfit("paper_hat", "折纸帽", "小时候的秘密王国，今天重新开门。"),
-    Outfit("big_coat", "大人外套", "偷偷试穿过的大人外套，现在也能认真穿好。"),
-    Outfit("pilot", "小飞行员", "不是梦想职业，是允许自己飞远一点。"),
-    Outfit("stage_star", "卧室歌手", "镜子前的小舞台，也曾装下整个未来。"),
-    Outfit("blanket_cape", "毯子披风", "柔软也可以是一种勇敢。"),
-    Outfit("explorer", "纸箱探险家", "卧室角落的远方，今天继续出发。"),
-    Outfit("painter", "小画家", "把还没说清的心情先画下来。"),
-    Outfit("astronaut", "月亮来客", "长大以后，也保留一点奔向星星的认真。"),
-    Outfit("reader", "故事学者", "小小的大人，也在慢慢读懂世界。"),
-    Outfit("dream_cleaner", "梦想清扫员", "把今天的小混乱扫干净，秘密王国就有地方开门。"),
-    Outfit("dream_plane", "飞行梦想家", "不是赶路，是坐上亲手画出的飞机看看更远的可能。"),
-    Outfit("sleep_heart", "甜梦抱抱", "抱着喜欢的东西好好睡一觉，也是小小大人的本领。"),
-    Outfit("dream_cape", "红毯小大人", "披上想象力做的外套，认真扮演一次未来的自己。"),
-    Outfit("wild_king", "荒野国王", "十四小时的坚持，为小小大人加冕：你是自己荒野里的国王。"),
+    Outfit("hour-01", "兔兔搭子", "一小时达成。六毛换上兔兔装，陪你轻轻向前。"),
+    Outfit("hour-02", "小熊搭子", "两小时达成。认真工作的小熊也要记得抱抱自己。"),
+    Outfit("hour-03", "鲨鱼搭子", "三小时达成。摸鱼一会儿，也不影响继续游向目标。"),
+    Outfit("hour-04", "蜜蜂搭子", "四小时达成。半日的小蜜蜂辛苦啦。"),
+    Outfit("hour-05", "草莓搭子", "五小时达成。给犯困的下午添一点甜。"),
+    Outfit("hour-06", "熊猫搭子", "六小时达成。六毛满血复活，继续陪你。"),
+    Outfit("hour-07", "恐龙搭子", "七小时达成。快下班了，再稳稳走一小段。"),
+    Outfit("hour-08", "太空搭子", "八小时今日毕业。六毛陪你飞到今天的终点。"),
+    Outfit("hour-09", "舞台歌手", "九小时达成。把今天的坚持唱给自己听。"),
+    Outfit("hour-10", "驯鹿搭子", "十小时达成。很晚了，六毛来接你回家。"),
+    Outfit("hour-11", "荒野勇士", "十一小时达成。勇敢不是硬撑，也包括好好休息。"),
+    Outfit("hour-12", "荒野国王", "十二小时达成。为小小大人加冠：你是自己荒野里的国王。"),
 )
 
 
@@ -46,10 +44,8 @@ SPECIAL_ACTIVITY_SPRITES = {
 }
 
 SPECIAL_OUTFIT_SPRITES = {
-    "dream_cleaner": "assets/pet/special/outfit-dream-cleaner.png",
-    "dream_plane": "assets/pet/special/outfit-dream-plane.png",
-    "sleep_heart": "assets/pet/special/outfit-sleep-heart.png",
-    "dream_cape": "assets/pet/special/outfit-dream-cape.png",
+    f"hour-{hour:02d}": f"assets/pet/hourly-outfits/{hour:02d}-hour.png"
+    for hour in range(1, 13)
 }
 
 
@@ -148,6 +144,9 @@ def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
         Qt.AspectRatioMode.KeepAspectRatio,
         Qt.TransformationMode.SmoothTransformation,
     )
+    # scaled() drops DPR. Restoring it prevents half-sprite clipping on 200%
+    # displays and keeps the imported high-resolution artwork sharp.
+    scaled.setDevicePixelRatio(source.devicePixelRatio())
     painter = QPainter(result)
     painter.drawPixmap(
         (result.width() - scaled.width()) // 2,

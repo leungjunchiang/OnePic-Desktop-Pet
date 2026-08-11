@@ -292,7 +292,7 @@ class AISettingsDialog(QDialog):
         self.stand.setChecked(settings.stand_reminder_enabled)
         self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
         form.addRow(self.stand, self.stand_minutes)
-        self.music_service = QComboBox(); self.music_service.addItem("网易云音乐", "netease"); self.music_service.addItem("QQ 音乐", "qq")
+        self.music_service = QComboBox(); self.music_service.addItem("网易云音乐", "netease"); self.music_service.addItem("QQ 音乐", "qq"); self.music_service.addItem("酷狗音乐", "kugou")
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
         form.addRow("正版音乐入口", self.music_service)
 
@@ -309,6 +309,13 @@ class AISettingsDialog(QDialog):
         netease_pick = QPushButton("选择…"); netease_pick.setObjectName("softButton"); netease_pick.clicked.connect(self._choose_netease_music)
         netease_layout.addWidget(self.netease_music_path, 1); netease_layout.addWidget(netease_pick)
         form.addRow("网易云程序", netease_row)
+
+        self.kugou_music_path = QLineEdit(settings.kugou_music_path)
+        self.kugou_music_path.setPlaceholderText("自动寻找，或选择 KuGou.exe / 酷狗音乐.app")
+        kugou_row = QWidget(); kugou_layout = QHBoxLayout(kugou_row); kugou_layout.setContentsMargins(0, 0, 0, 0)
+        kugou_pick = QPushButton("选择…"); kugou_pick.setObjectName("softButton"); kugou_pick.clicked.connect(self._choose_kugou_music)
+        kugou_layout.addWidget(self.kugou_music_path, 1); kugou_layout.addWidget(kugou_pick)
+        form.addRow("酷狗音乐程序", kugou_row)
 
         self.babuda_audio_path = QLineEdit(settings.babuda_audio_path)
         self.babuda_audio_path.setPlaceholderText("选择第一段 babuda 音频；同目录多段会自动轮换")
@@ -382,6 +389,13 @@ class AISettingsDialog(QDialog):
         if path:
             self.netease_music_path.setText(path)
 
+    def _choose_kugou_music(self) -> None:
+        """选择本机酷狗音乐程序，不读取程序内容。"""
+
+        path = self._choose_music_program("选择酷狗音乐程序", self.kugou_music_path.text())
+        if path:
+            self.kugou_music_path.setText(path)
+
     def _choose_music_program(self, title: str, current: str) -> str:
         """Windows 选择 EXE，macOS 选择应用包目录；输入框仍允许手工粘贴路径。"""
 
@@ -449,6 +463,7 @@ class AISettingsDialog(QDialog):
         self.settings.music_service = str(self.music_service.currentData())
         self.settings.qq_music_path = self.qq_music_path.text().strip()
         self.settings.netease_music_path = self.netease_music_path.text().strip()
+        self.settings.kugou_music_path = self.kugou_music_path.text().strip()
         self.settings.babuda_audio_path = self.babuda_audio_path.text().strip()
         self.settings.local_lyrics_path = self.local_lyrics_path.text().strip()
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()

@@ -188,12 +188,23 @@ class CompanionModel:
         self.mood = mood
         self.random = random_source or random.Random()
 
-    def status_text(self) -> str:
+    def status_text(self, focus_stars: int = 0) -> str:
         """返回适合气泡和菜单展示的当前状态。"""
 
+        if self.mood.energy < 30:
+            mood_label = "需要充电"
+        elif self.mood.fullness < 25:
+            mood_label = "有点馋"
+        elif self.mood.boredom > 70:
+            mood_label = "想找你玩"
+        elif self.mood.energy >= 75 and self.mood.affinity >= 60:
+            mood_label = "精神满满"
+        else:
+            mood_label = "安静陪伴"
         return (
-            f"亲密 {self.mood.affinity} · 精力 {self.mood.energy} · "
-            f"饱食 {self.mood.fullness}"
+            f"心情：{mood_label}\n"
+            f"默契 {self.mood.affinity} · 精力 {self.mood.energy} · "
+            f"饱食 {self.mood.fullness} · 专注星 {max(0, int(focus_stars))}"
         )
 
     def feed(self, food_key: str) -> CompanionReply:

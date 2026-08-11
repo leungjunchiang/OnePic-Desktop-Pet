@@ -83,6 +83,7 @@ def test_save_settings_writes_json(tmp_path) -> None:
             start_x=12,
             start_y=34,
             qq_music_path=r"C:\Music\QQMusic.exe",
+            kugou_music_path=r"C:\Music\KuGou.exe",
             babuda_audio_path=r"C:\Private\babuda-1.wav",
             local_lyrics_path=r"C:\Private\lyrics.txt",
             lyric_interval_minutes=6,
@@ -98,6 +99,7 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["automatic_grumbling"] is True
     assert data["hourly_announcement"] is False
     assert data["qq_music_path"].endswith("QQMusic.exe")
+    assert data["kugou_music_path"].endswith("KuGou.exe")
     assert data["babuda_audio_path"].endswith("babuda-1.wav")
     assert data["local_lyrics_path"].endswith("lyrics.txt")
     assert data["lyric_interval_minutes"] == 6

@@ -133,6 +133,7 @@ class PetWindow(QWidget):
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
         self.work_timer = work_timer or WorkTimerModel()
+        self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -365,6 +366,7 @@ class PetWindow(QWidget):
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
 
+        self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
 
@@ -1093,7 +1095,10 @@ class PetWindow(QWidget):
             if food_activity:
                 self._set_temporary_activity(food_activity, 28_000)
             self._show_emotion(reply.state, 2200)
-        self.show_speech(reply.text)
+        self.show_speech(
+            f"{reply.text}\n精力 {self.mood.energy} · 饱食 {self.mood.fullness}",
+            5200,
+        )
         return reply
 
     def talk_to_pet(self, message: str) -> CompanionReply:
@@ -1171,6 +1176,7 @@ class PetWindow(QWidget):
         was_running = self.work_timer.pause()
         if was_running:
             self.daily_stats.record_focus(session_seconds)
+        self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("tea", 25_000)
         duration = format_work_duration(self.work_timer.today_seconds())
@@ -1194,6 +1200,7 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         session_seconds = self.work_timer.session_seconds()
         total = self.work_timer.finish()
+        self._award_focus_rewards()
         self.daily_stats.record_focus(session_seconds, completed=True)
         self.set_paused(False)
         reply = self.companion.work_finished(format_work_duration(total))
@@ -1270,6 +1277,8 @@ class PetWindow(QWidget):
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
         self.work_timer.checkpoint()
+        self._award_focus_rewards()
+        self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
         wellness_kind = self.wellness.take_due(
             self.settings.water_reminder_enabled,
@@ -1302,6 +1311,37 @@ class PetWindow(QWidget):
         self.show_speech(f"今日成长：{stage.title}\n解锁：{stage.reward}\n{stage.message}", 8200)
         if stage.hour >= 8:
             self._generate_daily_report(show_dialog=True)
+
+    def _sync_hourly_outfit(self, *, announce: bool) -> None:
+        """按终身累计专注时长自动换上最新解锁娃衣。"""
+
+        count = self.work_timer.unlocked_outfit_count()
+        latest = OUTFITS[count - 1] if count else None
+        desired = latest.key if latest is not None else ""
+        newly_unlocked = self.work_timer.take_new_outfit_unlock()
+        if self.settings.equipped_outfit != desired:
+            self.settings.equipped_outfit = desired
+            save_settings(self.settings)
+            self._render_cache.clear()
+            self._mask_cache.clear()
+            if hasattr(self, "label"):
+                self._refresh_pixmap()
+        if not announce or newly_unlocked is None or latest is None:
+            return
+        self._change_ambient_activity("none")
+        self.show_speech(
+            f"累计专注 {newly_unlocked} 小时，自动换上「{latest.name}」！\n{latest.message}",
+            8200,
+        )
+
+    def _award_focus_rewards(self) -> None:
+        """把今日专注时间换成正向的默契奖励，不制造饥饿惩罚。"""
+
+        completed_blocks = self.work_timer.today_seconds() // 600
+        new_blocks = max(0, completed_blocks - self._rewarded_focus_blocks)
+        if new_blocks:
+            self.mood.receive_focus_reward(new_blocks)
+            self._rewarded_focus_blocks = completed_blocks
 
     def shutdown_work_timer(self) -> None:
         """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
@@ -1516,7 +1556,11 @@ class PetWindow(QWidget):
             return
         if visit_id:
             self._shown_active_visit_ids.add(visit_id)
-        self._buddy_visit_window.show_peer(peer)
+        self._buddy_visit_window.show_peer(
+            peer,
+            self.settings.equipped_outfit,
+            self.work_timer.today_seconds(),
+        )
 
     def _social_thread_finished(self) -> None:
         if self._social_thread is not None:
@@ -1557,11 +1601,11 @@ class PetWindow(QWidget):
         """由用户主动调用音乐客户端，自动搜索并尝试播放随机歌曲。"""
 
         title = choose_song()
-        custom_path = (
-            self.settings.qq_music_path
-            if self.settings.music_service == "qq"
-            else self.settings.netease_music_path
-        )
+        custom_path = {
+            "qq": self.settings.qq_music_path,
+            "netease": self.settings.netease_music_path,
+            "kugou": self.settings.kugou_music_path,
+        }.get(self.settings.music_service, self.settings.netease_music_path)
         result = launch_music_client(self.settings.music_service, title, custom_path)
         self._change_ambient_activity(random.choice(("headphones", "guitar", "drums")))
         self._manual_activity_until = time.monotonic() + 180
@@ -1717,7 +1761,15 @@ class PetWindow(QWidget):
         """用气泡显示当前会话内亲密、精力和饱食状态。"""
 
         self._record_user_interaction()
-        self.show_speech(self.companion.status_text(), 4200)
+        count = self.work_timer.unlocked_outfit_count()
+        next_text = "12 套小时娃衣已全部解锁"
+        if count < len(OUTFITS):
+            remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
+            next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
+        self.show_speech(
+            f"{self.companion.status_text(self.work_timer.today_seconds() // 600)}\n{next_text}",
+            6200,
+        )
 
     def trigger_interaction(self) -> None:
         """结合当前情绪数值触发友好表情或挥手反馈。"""
@@ -2001,6 +2053,10 @@ class PetWindow(QWidget):
                 lambda _checked=False, key=food.key: self.feed_pet(key)
             )
             food_menu.addAction(food_action)
+        mood_action = QAction("查看六毛心情与能量", self)
+        mood_action.triggered.connect(self.show_companion_status)
+        food_menu.addSeparator()
+        food_menu.addAction(mood_action)
         selfie_action = QAction("自拍一下", self)
         selfie_action.triggered.connect(self.trigger_selfie)
         menu.addAction(selfie_action)
@@ -2031,13 +2087,20 @@ class PetWindow(QWidget):
         size_action = QAction("连续调节宠物大小…", self)
         size_action.triggered.connect(self.open_size_control)
         menu.addAction(size_action)
-        outfit_menu = menu.addMenu("长期收藏娃衣")
-        classic = QAction("经典六毛", self); classic.triggered.connect(lambda: self.equip_outfit("")); outfit_menu.addAction(classic)
+        outfit_menu = menu.addMenu("工作时长娃衣（自动换装）")
+        classic = QAction("经典六毛（累计不足 1 小时）", self)
+        classic.setEnabled(False)
+        outfit_menu.addAction(classic)
         unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
-        for outfit in OUTFITS:
-            label = outfit.name if outfit in unlocked else f"🔒 {outfit.name}"
-            action = QAction(label, self); action.setEnabled(outfit in unlocked)
-            action.triggered.connect(lambda _checked=False, key=outfit.key: self.equip_outfit(key))
+        for hour, outfit in enumerate(OUTFITS, start=1):
+            if outfit.key == self.settings.equipped_outfit:
+                label = f"✓ {hour} 小时 · {outfit.name}（当前）"
+            elif outfit in unlocked:
+                label = f"已解锁 · {hour} 小时 · {outfit.name}"
+            else:
+                label = f"🔒 {hour} 小时 · {outfit.name}"
+            action = QAction(label, self)
+            action.setEnabled(False)
             outfit_menu.addAction(action)
         return_action = QAction("回到主屏幕", self)
         return_action.triggered.connect(self.return_to_primary_screen)

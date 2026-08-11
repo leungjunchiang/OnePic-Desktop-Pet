@@ -1,4 +1,4 @@
-"""调用用户指定或自动检测的本机 QQ 音乐/网易云音乐，并提供正版网页回退。
+"""调用用户指定或自动检测的本机 QQ/网易云/酷狗音乐，并提供正版网页回退。
 
 本模块不内置歌词、音频或非公开曲库接口。Windows 在用户主动点击后启动已安装客户端，
 模拟一次搜索快捷键并尝试播放首条结果；macOS 将正版搜索地址交给指定客户端。若客户端不存在，
@@ -42,11 +42,13 @@ def choose_song(random_source: random.Random | None = None) -> str:
 
 
 def music_search_url(service: str, title: str) -> str:
-    """构造网易云音乐或 QQ 音乐的官方搜索网址。"""
+    """构造三个正版音乐平台的官方搜索网址。"""
 
     query = urllib.parse.quote(f"陈楚生 {title}")
     if service == "qq":
         return f"https://y.qq.com/n/ryqq/search?w={query}&t=song"
+    if service == "kugou":
+        return f"https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord={query}"
     return f"https://music.163.com/#/search/m/?s={query}&type=1"
 
 
@@ -62,7 +64,11 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
     """返回当前平台常见的正版音乐客户端位置。"""
 
     if sys.platform == "darwin":
-        names = ("QQMusic.app",) if service == "qq" else ("NeteaseMusic.app", "网易云音乐.app")
+        names = {
+            "qq": ("QQMusic.app", "QQ音乐.app"),
+            "netease": ("NeteaseMusic.app", "网易云音乐.app"),
+            "kugou": ("KugouMusic.app", "酷狗音乐.app"),
+        }.get(service, ())
         return tuple(Path("/Applications") / name for name in names)
     if os.name == "nt":
         program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
@@ -74,11 +80,19 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
                 program_files / "Tencent" / "QQMusic" / "QQMusic.exe",
                 local / "Tencent" / "QQMusic" / "QQMusic.exe",
             )
-        return (
-            program_files / "NetEase" / "CloudMusic" / "cloudmusic.exe",
-            program_x86 / "NetEase" / "CloudMusic" / "cloudmusic.exe",
-            local / "NetEase" / "CloudMusic" / "cloudmusic.exe",
-        )
+        if service == "netease":
+            return (
+                program_files / "NetEase" / "CloudMusic" / "cloudmusic.exe",
+                program_x86 / "NetEase" / "CloudMusic" / "cloudmusic.exe",
+                local / "NetEase" / "CloudMusic" / "cloudmusic.exe",
+            )
+        if service == "kugou":
+            return (
+                program_files / "KuGou" / "KGMusic" / "KuGou.exe",
+                program_x86 / "KuGou" / "KGMusic" / "KuGou.exe",
+                local / "KuGou" / "KGMusic" / "KuGou.exe",
+                Path(os.environ.get("APPDATA", "")) / "KuGou8" / "KuGou.exe",
+            )
     return ()
 
 
@@ -97,12 +111,12 @@ def find_music_client(service: str, custom_path: str = "") -> Path | None:
 def launch_music_client(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
     """启动客户端并尝试自动搜索播放；找不到客户端时打开正版网页。"""
 
-    normalized = "qq" if service == "qq" else "netease"
+    normalized = service if service in {"qq", "netease", "kugou"} else "netease"
     client = find_music_client(normalized, custom_path)
     query = f"陈楚生 {title}"
     if client is None:
         webbrowser.open(music_search_url(normalized, title))
-        label = "QQ 音乐" if normalized == "qq" else "网易云音乐"
+        label = {"qq": "QQ 音乐", "netease": "网易云音乐", "kugou": "酷狗音乐"}[normalized]
         return MusicLaunchResult(False, f"没有找到已安装的{label}，已改为打开正版搜索页。")
     try:
         if sys.platform == "darwin":
@@ -120,7 +134,7 @@ def launch_music_client(service: str, title: str, custom_path: str = "") -> Musi
             if os.name == "nt":
                 threading.Thread(
                     target=_windows_search_and_play,
-                    args=(client.name, query),
+                    args=(client.name, query, normalized),
                     daemon=True,
                 ).start()
     except OSError:
@@ -129,13 +143,17 @@ def launch_music_client(service: str, title: str, custom_path: str = "") -> Musi
     return MusicLaunchResult(True, "已打开音乐客户端，正在自动搜索并尝试播放第一条结果。")
 
 
-def _windows_search_and_play(executable_name: str, query: str) -> bool:
+def _windows_search_and_play(executable_name: str, query: str, service: str = "netease") -> bool:
     """短暂聚焦刚启动的音乐客户端，通过搜索快捷键尝试播放首条结果。"""
 
     if os.name != "nt":
         return False
-    time.sleep(2.4)
-    hwnd = _find_windows_app_window(executable_name)
+    hwnd = 0
+    for _attempt in range(12):
+        time.sleep(0.5)
+        hwnd = _find_windows_app_window(executable_name)
+        if hwnd:
+            break
     if not hwnd:
         return False
     user32 = ctypes.windll.user32
@@ -149,7 +167,17 @@ def _windows_search_and_play(executable_name: str, query: str) -> bool:
     original_cursor = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(original_cursor))
     try:
-        _click_window_relative(hwnd, 0.40, 0.052)
+        search_points = {
+            "qq": (0.50, 0.055),
+            "netease": (0.43, 0.055),
+            "kugou": (0.46, 0.060),
+        }
+        result_points = {
+            "qq": (0.45, 0.31),
+            "netease": (0.43, 0.30),
+            "kugou": (0.44, 0.30),
+        }
+        _click_window_relative(hwnd, *search_points.get(service, search_points["netease"]))
         time.sleep(0.2)
         if not _is_foreground_window(hwnd):
             return False
@@ -162,10 +190,16 @@ def _windows_search_and_play(executable_name: str, query: str) -> bool:
             return False
         _send_unicode_text(query)
         _tap_virtual_key(0x0D)
-        time.sleep(2.2)
+        time.sleep(2.8)
         if not _is_foreground_window(hwnd):
             return False
-        _double_click_window_relative(hwnd, 0.43, 0.30)
+        # Keyboard selection works across more layouts; the relative double
+        # click remains a fallback for clients that keep focus in the search box.
+        _tap_virtual_key(0x28)
+        _tap_virtual_key(0x0D)
+        time.sleep(0.7)
+        if _is_foreground_window(hwnd):
+            _double_click_window_relative(hwnd, *result_points.get(service, result_points["netease"]))
         return True
     finally:
         user32.SetCursorPos(original_cursor.x, original_cursor.y)
