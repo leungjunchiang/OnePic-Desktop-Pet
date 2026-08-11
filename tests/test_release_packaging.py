@@ -31,6 +31,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     installer = (PROJECT_ROOT / "packaging" / "windows" / "Lili.iss").read_text(
         encoding="utf-8"
     )
+    installer_script = (PROJECT_ROOT / "scripts" / "build_installer.ps1").read_text(
+        encoding="utf-8"
+    )
 
     assert "Lili-Windows-x64.zip" in workflow
     assert "Lili-Windows-x64-Setup.exe" in workflow
@@ -51,4 +54,5 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'version = "0.14.0"' in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
+    assert installer_script.isascii()
     assert 'ln -s /Applications "$dmg_root/Applications"' in macos_build
