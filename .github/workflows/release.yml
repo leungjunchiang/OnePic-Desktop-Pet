@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.19.1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.20.0
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -111,7 +111,8 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $GITHUB_REF_NAME · 网易云联调与桌宠交互修复" \
+              --title "Lili $GITHUB_REF_NAME · 自动选择音乐播放器" \
               --generate-notes \
-              --notes "网易云音乐控制现在区分 UI 自动化不可用与搜索无结果，并记录进程、窗口、UI 树、搜索框、候选和点击控件等诊断信息；恢复随机播放陈楚生的基础流程，聊天窗口、一级菜单、喂食反馈与自动工作陪伴行为同步改进。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "随机听陈楚生现在会自动检测并评分 QQ音乐、网易云、酷狗、Apple Music 与 Spotify，首选失败后自动尝试下一个；成功历史会提升后续优先级，失败与 UI Automation 不可用会降低评分。播放/暂停、下一首和上一首继续控制实际成功播放的平台。设置默认显示自动选择状态；右键子菜单只保留系统原生展开箭头。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
           fi
+

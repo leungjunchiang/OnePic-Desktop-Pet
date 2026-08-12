@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Existing GitHub Release tag"
         required: true
-        default: "v0.19.1"
+        default: "v0.20.0"
         type: string
 
 permissions:
@@ -36,3 +36,4 @@ jobs:
           gh release upload "${{ inputs.release_tag }}" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+
