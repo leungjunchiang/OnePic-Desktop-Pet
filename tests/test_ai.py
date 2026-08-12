@@ -21,6 +21,9 @@ from onepic_desktop_pet.ai import (
     ask_codex,
     ask_compatible_api,
     check_provider_connection,
+    codex_detection_message,
+    find_codex_executable,
+    launch_codex_gui,
     _cli_command,
     _cli_environment,
     provider_defaults,
@@ -174,6 +177,7 @@ def test_service_requires_explicit_online_provider() -> None:
 
 def test_codex_and_claude_connection_checks_verify_login(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("codex.exe"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_gui_app", lambda: Path("ChatGPT.exe"))
     monkeypatch.setattr("onepic_desktop_pet.ai.find_claude_executable", lambda: Path("claude.cmd"))
 
     def fake_run(command, **_kwargs):
@@ -182,7 +186,7 @@ def test_codex_and_claude_connection_checks_verify_login(monkeypatch) -> None:
         return SimpleNamespace(returncode=0, stdout="Logged in using ChatGPT", stderr="")
 
     monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
-    assert "Codex 已安装并登录" in check_provider_connection("codex", FakeCredentials())
+    assert check_provider_connection("codex", FakeCredentials()) == "Codex 已连接。"
     assert "Claude Code 已安装并登录" in check_provider_connection("claude", FakeCredentials())
 
 
@@ -223,3 +227,58 @@ def test_windows_cmd_cli_uses_command_processor() -> None:
         assert command[4:] == ["claude.cmd", "auth", "status"]
     else:
         assert command == ["claude.cmd", "auth", "status"]
+
+
+def test_macos_codex_cli_uses_login_zsh_and_validates_absolute_path(
+    monkeypatch, tmp_path
+) -> None:
+    """macOS 必须通过 /bin/zsh 找 CLI，再以绝对路径执行 --version。"""
+
+    executable = tmp_path / "codex"
+    executable.write_text("codex", encoding="utf-8")
+    executable.chmod(0o755)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command == ["/bin/zsh", "-lc", "command -v codex"]:
+            return SimpleNamespace(returncode=0, stdout=f"{executable}\n", stderr="")
+        if command == [str(executable), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli 1.0", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    find_codex_executable.cache_clear()
+
+    assert find_codex_executable() == executable
+    assert calls == [
+        ["/bin/zsh", "-lc", "command -v codex"],
+        [str(executable), "--version"],
+    ]
+    find_codex_executable.cache_clear()
+
+
+def test_chatgpt_without_cli_uses_required_neutral_status(monkeypatch) -> None:
+    """安装 ChatGPT GUI 但缺少 CLI 时，不得误报“未安装 Codex”。"""
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_gui_app", lambda: Path("ChatGPT.app"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: None)
+    expected = "已检测到 ChatGPT（包含 Codex），但未检测到 Codex CLI。"
+
+    assert codex_detection_message() == expected
+    assert check_provider_connection("codex", FakeCredentials()) == expected
+
+
+def test_macos_gui_launch_uses_open_a_chatgpt(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_gui_app", lambda: Path("/Applications/ChatGPT.app"))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.ai.subprocess.Popen",
+        lambda command, **kwargs: calls.append((command, kwargs)),
+    )
+
+    assert launch_codex_gui() is True
+    assert calls[0][0] == ["open", "-a", "ChatGPT"]

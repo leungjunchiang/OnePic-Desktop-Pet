@@ -5,6 +5,7 @@
 - 提供不遮挡桌宠的圆角聊天窗口与清晰的本地/在线状态提示；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
+- 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 允许用户选择本机音乐客户端、巴布达音频和自有歌词文本，绝不把这些路径上传；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 在线请求放入 QThread，避免冻结桌面动画。
@@ -43,8 +44,10 @@ from .ai import (
     CredentialStore,
     PROVIDER_PRESETS,
     check_provider_connection,
-    codex_available,
+    codex_detection_message,
     claude_available,
+    find_codex_gui_app,
+    launch_codex_gui,
     provider_defaults,
 )
 from .config import PetSettings
@@ -230,7 +233,7 @@ class ChatDialog(QDialog):
         if provider == "offline":
             detail = "纯离线 · 不联网"
         elif provider == "codex":
-            detail = "Codex 已找到 · 临时只读会话" if codex_available() else "未找到 Codex · 会自动离线回答"
+            detail = codex_detection_message()
         elif provider == "claude":
             detail = "Claude Code 已找到 · 一次性无工具会话" if claude_available() else "未找到 Claude Code · 会自动离线回答"
         else:
@@ -319,6 +322,14 @@ class AISettingsDialog(QDialog):
         self.connection_button.setObjectName("softButton")
         self.connection_button.clicked.connect(self._test_connection)
         layout.addWidget(self.connection_button)
+        self.open_chatgpt_button = QPushButton("打开 ChatGPT")
+        self.open_chatgpt_button.setObjectName("softButton")
+        self.open_chatgpt_button.clicked.connect(self._open_codex_gui)
+        layout.addWidget(self.open_chatgpt_button)
+
+        self.always_on_top = QCheckBox("始终置顶（关闭后为桌面模式，不抢输入焦点）")
+        self.always_on_top.setChecked(settings.always_on_top)
+        layout.addWidget(self.always_on_top)
 
         self.grumbling = QCheckBox("允许六毛偶尔发一句轻松的牢骚")
         self.grumbling.setChecked(settings.automatic_grumbling)
@@ -439,7 +450,7 @@ class AISettingsDialog(QDialog):
         self.model.setEnabled(enabled)
         self.token.setEnabled(enabled)
         if provider == "codex":
-            status = "已检测到本机 Codex。" if codex_available() else "暂未检测到 Codex，聊天时会使用离线回答。"
+            status = codex_detection_message()
         elif provider == "claude":
             status = "已检测到本机 Claude Code。" if claude_available() else "暂未检测到 Claude Code，聊天时会使用离线回答。"
         elif enabled:
@@ -447,6 +458,16 @@ class AISettingsDialog(QDialog):
         else:
             status = "所有回答都在本机生成。"
         self.token_status.setText(status)
+        self.open_chatgpt_button.setVisible(provider == "codex")
+        self.open_chatgpt_button.setEnabled(find_codex_gui_app() is not None)
+
+    def _open_codex_gui(self) -> None:
+        """由用户主动打开 ChatGPT Desktop App，不把 GUI 当作 Codex CLI。"""
+
+        if launch_codex_gui():
+            self.token_status.setText("已打开 ChatGPT；代码任务仍由独立的 Codex CLI 执行。")
+        else:
+            self.token_status.setText("未检测到可打开的 ChatGPT Desktop App。")
 
     def _choose_qq_music(self) -> None:
         """选择本机 QQ 音乐程序，不读取程序内容。"""
@@ -553,6 +574,7 @@ class AISettingsDialog(QDialog):
         self.settings.ai_provider = provider
         self.settings.ai_base_url = self.base_url.text().strip()
         self.settings.ai_model = self.model.text().strip()
+        self.settings.always_on_top = self.always_on_top.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
         self.settings.app_awareness = self.app_awareness.isChecked()

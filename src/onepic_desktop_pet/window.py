@@ -3,6 +3,8 @@
 
 职责范围：
 - 创建无边框、透明、可选始终置顶的 QWidget；
+- 使用 Windows/macOS 原生窗口层级补强置顶，同时保持不激活、不占任务栏和轮廓外点击穿透；
+- 提供“始终置顶/桌面模式”即时切换并持久化，切换时不破坏动画、拖动和互动状态；
 - 播放循环或单次 PNG 序列，并支持拖拽、坐下、坐姿入睡和反向起身；
 - 处理左右翻转、边缘转身停顿、亚像素时间驱动移动和同步身体起伏；
 - 用窗口遮罩让人物外透明区域穿透鼠标点击；
@@ -37,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import sys
 import time
 from collections import OrderedDict, deque
 from datetime import datetime, timedelta
@@ -121,6 +124,7 @@ class PetWindow(QWidget):
     quit_requested = Signal()
     pause_changed = Signal(bool)
     work_timer_changed = Signal(bool)
+    always_on_top_changed = Signal(bool)
 
     def __init__(
         self,
@@ -200,14 +204,7 @@ class PetWindow(QWidget):
             self._audio_output.setVolume(0.9)
             self._media_player.setAudioOutput(self._audio_output)
 
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        if settings.always_on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
+        self.setWindowFlags(self._pet_window_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -223,12 +220,7 @@ class PetWindow(QWidget):
         self.label.setGeometry(6, 0, width, settings.display_height + 8)
 
         self.photo_bubble = QLabel()
-        self.photo_bubble.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
+        self.photo_bubble.setWindowFlags(self._ambient_window_flags())
         self.photo_bubble.setAttribute(
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
@@ -237,12 +229,7 @@ class PetWindow(QWidget):
         self.photo_bubble.setStyleSheet("background: transparent;")
 
         self.speech_bubble = QLabel()
-        self.speech_bubble.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
+        self.speech_bubble.setWindowFlags(self._ambient_window_flags())
         self.speech_bubble.setAttribute(
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
@@ -376,6 +363,30 @@ class PetWindow(QWidget):
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
+
+    def _pet_window_flags(self) -> Qt.WindowType:
+        """返回不占任务栏、不接收键盘焦点的宠物窗口标志。"""
+
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        if self.settings.always_on_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        return flags
+
+    def _ambient_window_flags(self) -> Qt.WindowType:
+        """让自动气泡跟随宠物模式，并保证显示时不激活当前应用。"""
+
+        flags = (
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        if self.settings.always_on_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        return flags
 
     def _load_pixmaps(self) -> dict[PetState, list[QPixmap]]:
         """根据素材清单加载各状态帧序列并验证完整性。"""
@@ -732,23 +743,99 @@ class PetWindow(QWidget):
         QTimer.singleShot(0, self._ensure_on_top)
 
     def _ensure_on_top(self) -> None:
-        """周期恢复顶层层级；Windows 使用不抢焦点的原生置顶作为补强。"""
+        """恢复原生窗口层级，但绝不激活窗口或夺走当前输入焦点。"""
 
-        if not self.settings.always_on_top or not self.isVisible():
+        if not self.isVisible():
             return
         if os.name == "nt":
             try:
                 import ctypes
 
-                ctypes.windll.user32.SetWindowPos(
-                    int(self.winId()), -1, 0, 0, 0, 0,
+                user32 = ctypes.windll.user32
+                hwnd = int(self.winId())
+                get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+                set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+                extended = int(get_style(hwnd, -20))
+                extended |= 0x00000080 | 0x08000000  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+                set_style(hwnd, -20, extended)
+                insert_after = -1 if self.settings.always_on_top else -2
+                user32.SetWindowPos(
+                    hwnd,
+                    insert_after,
+                    0,
+                    0,
+                    0,
+                    0,
                     0x0001 | 0x0002 | 0x0010 | 0x0040,
                 )
                 return
             except (AttributeError, OSError, ValueError):
                 pass
-        # WindowStaysOnTopHint 已负责非 Windows 平台的层级。这里不能调用
-        # raise_()，否则 macOS 会在用户打字时把当前应用切到 Lili。
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior()
+        # 其他平台由 WindowStaysOnTopHint 负责。这里不能调用 raise_()，
+        # 否则 macOS/部分 Linux 桌面会在用户打字时切换当前应用。
+
+    def _apply_macos_window_behavior(self) -> None:
+        """以 NSWindow 浮动层级跨空间显示；保留人物窗口鼠标互动且不激活。"""
+
+        if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
+            return
+        try:
+            import ctypes
+
+            objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.A.dylib")
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            objc.objc_msgSend.restype = ctypes.c_void_p
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            view = ctypes.c_void_p(int(self.winId()))
+            window = objc.objc_msgSend(view, objc.sel_registerName(b"window"))
+            if not window:
+                return
+            send_integer = objc.objc_msgSend
+            send_integer.restype = None
+            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_longlong]
+            level = 3 if self.settings.always_on_top else 0  # NSFloatingWindowLevel / normal
+            send_integer(window, objc.sel_registerName(b"setLevel:"), level)
+            behavior = (1 << 0) | (1 << 8) if self.settings.always_on_top else 0
+            send_integer(
+                window,
+                objc.sel_registerName(b"setCollectionBehavior:"),
+                behavior,
+            )
+            send_bool = objc.objc_msgSend
+            send_bool.restype = None
+            send_bool.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            send_bool(window, objc.sel_registerName(b"setHidesOnDeactivate:"), False)
+            send_bool(window, objc.sel_registerName(b"setIgnoresMouseEvents:"), False)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return
+
+    def set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
+        """在 QQ 宠物式置顶与普通桌面模式间切换，显示时不抢焦点。"""
+
+        enabled = bool(enabled)
+        position = self.pos()
+        was_visible = self.isVisible()
+        bubble_states = (
+            (self.photo_bubble, self.photo_bubble.isVisible(), self.photo_bubble.pos()),
+            (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
+        )
+        self.settings.always_on_top = enabled
+        self.setWindowFlags(self._pet_window_flags())
+        self.move(position)
+        for bubble, visible, bubble_position in bubble_states:
+            bubble.setWindowFlags(self._ambient_window_flags())
+            bubble.move(bubble_position)
+            if visible:
+                bubble.show()
+        if was_visible:
+            self.show()
+            QTimer.singleShot(0, self._ensure_on_top)
+        if persist:
+            save_settings(self.settings)
+        self.always_on_top_changed.emit(enabled)
 
     def moveEvent(self, event: QMoveEvent) -> None:
         """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
@@ -1497,11 +1584,14 @@ class PetWindow(QWidget):
         dialog = AISettingsDialog(self.settings, self.credentials, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        previous_always_on_top = self.settings.always_on_top
         try:
             dialog.apply()
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
             return
+        if self.settings.always_on_top != previous_always_on_top:
+            self.set_always_on_top(self.settings.always_on_top, persist=False)
         save_settings(self.settings)
         self._schedule_ambient()
         self._schedule_song_inspiration()
@@ -2094,6 +2184,11 @@ class PetWindow(QWidget):
         hourly_action.setChecked(self.settings.hourly_announcement)
         hourly_action.toggled.connect(self.set_hourly_announcement)
         menu.addAction(hourly_action)
+        topmost_action = QAction("始终置顶（关闭即桌面模式）", self)
+        topmost_action.setCheckable(True)
+        topmost_action.setChecked(self.settings.always_on_top)
+        topmost_action.toggled.connect(self.set_always_on_top)
+        menu.addAction(topmost_action)
         size_action = QAction("连续调节宠物大小…", self)
         size_action.triggered.connect(self.open_size_control)
         menu.addAction(size_action)

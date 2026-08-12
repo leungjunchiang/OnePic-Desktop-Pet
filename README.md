@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.14.0` 让桌宠和自动气泡不再抢走微信、Word 等软件的输入焦点，加入 Apple Music、Spotify、可滚动的连接设置、macOS Codex/Claude Code 发现路径，以及 Windows 正式安装程序；不登录时仍是完整的纯离线桌宠。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.15.0` 将窗口改为 QQ 宠物式无焦点置顶，并提供“始终置顶/桌面模式”开关；macOS 会分别检测 ChatGPT Desktop App 与 Codex CLI，不登录时仍是完整的纯离线桌宠。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -185,7 +185,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.14.0` 提供 Lili 的 Windows 安装程序与便携 ZIP，并由发布流程生成 Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.15.0` 提供 Lili 的 Windows 安装程序与便携 ZIP，并由发布流程生成 Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
 
 ## 授权
 

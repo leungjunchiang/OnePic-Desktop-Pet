@@ -11,6 +11,7 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+work/
 
 # 编辑器和系统文件
 .vscode/

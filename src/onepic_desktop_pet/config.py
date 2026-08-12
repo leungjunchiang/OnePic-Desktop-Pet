@@ -4,6 +4,7 @@
 职责范围：
 - 从项目内只读 JSON 读取默认功能设置；
 - 从当前用户本地应用数据目录读取上次窗口位置、显示尺寸和非敏感体验设置；
+- 持久化“始终置顶/桌面模式”，默认采用不抢焦点的 QQ 宠物式置顶行为；
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
 - 仅在用户配置目录保存窗口、AI 提供方和陪伴开关，不保存任何 API 令牌。
 
@@ -130,6 +131,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.inactive_sit_ms + 5000,
         int(settings.inactive_sleep_ms),
     )
+    settings.always_on_top = bool(settings.always_on_top)
     if settings.ai_provider not in {"offline", "codex", "claude", "deepseek", "kimi", "custom"}:
         settings.ai_provider = "offline"
     settings.ai_base_url = str(settings.ai_base_url).strip()[:500]
@@ -181,6 +183,7 @@ def load_settings(
                 "display_height",
                 "start_x",
                 "start_y",
+                "always_on_top",
                 "ai_provider",
                 "ai_base_url",
                 "ai_model",
@@ -219,6 +222,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "display_height": settings.display_height,
         "start_x": settings.start_x,
         "start_y": settings.start_y,
+        "always_on_top": settings.always_on_top,
         "ai_provider": settings.ai_provider,
         "ai_base_url": settings.ai_base_url,
         "ai_model": settings.ai_model,

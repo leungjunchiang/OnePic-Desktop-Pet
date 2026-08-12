@@ -82,6 +82,7 @@ def test_save_settings_writes_json(tmp_path) -> None:
         PetSettings(
             start_x=12,
             start_y=34,
+            always_on_top=False,
             qq_music_path=r"C:\Music\QQMusic.exe",
             kugou_music_path=r"C:\Music\KuGou.exe",
             apple_music_path=r"C:\Music\AppleMusic.exe",
@@ -96,6 +97,7 @@ def test_save_settings_writes_json(tmp_path) -> None:
     data = json.loads(saved.read_text(encoding="utf-8"))
     assert data["start_x"] == 12
     assert data["start_y"] == 34
+    assert data["always_on_top"] is False
     assert data["display_height"] == 160
     assert data["ai_provider"] == "offline"
     assert data["automatic_grumbling"] is True
@@ -133,3 +135,14 @@ def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> 
 
     assert user_settings_path() == tmp_path / "Lili" / "settings.json"
     assert PetSettings().display_height == 160
+
+
+def test_window_mode_is_loaded_from_user_settings(tmp_path) -> None:
+    """“始终置顶/桌面模式”必须跨重启保留。"""
+
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text('{"always_on_top": true}', encoding="utf-8")
+    override_path.write_text('{"always_on_top": false}', encoding="utf-8")
+
+    assert load_settings(default_path, override_path).always_on_top is False
