@@ -1,14 +1,15 @@
 """
-本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板和后台请求线程。
+本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板。
 
 职责范围：
-- 提供不遮挡桌宠的圆角聊天窗口与清晰的本地/在线状态提示；
+- 提供不遮挡桌宠的圆角聊天窗口与 checking/connected/disconnected/error 状态提示；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 允许用户选择本机音乐客户端、巴布达音频和自有歌词文本，绝不把这些路径上传；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
-- 在线请求放入 QThread，避免冻结桌面动画。
+- 为复杂离线请求提供“重新连接 AI”和“去设置”按钮，但绝不自动打开设置窗口；
+- 手动连接检测放入 QThread；聊天请求和自动重连由 chat_manager.py 管理。
 
 聊天文本仅在窗口当前进程的内存中保留，关闭应用后不会写入磁盘。
 """
@@ -39,7 +40,6 @@ from PySide6.QtWidgets import (
 )
 
 from .ai import (
-    AIChatService,
     AIConnectionError,
     CredentialStore,
     PROVIDER_PRESETS,
@@ -51,6 +51,7 @@ from .ai import (
     provider_defaults,
 )
 from .config import PetSettings
+from .chat_manager import AgentConnectionState, AgentManager
 
 
 PANEL_STYLE = """
@@ -88,47 +89,6 @@ QPushButton#softButton { color: #405363; background: rgba(213, 229, 238, 180); }
 QLabel#title { color: #334e61; font-size: 20px; font-weight: 700; }
 QLabel#status { color: #667784; font-size: 12px; }
 """
-
-
-class AIReplyThread(QThread):
-    """在后台执行一次可能较慢的 AI 请求。"""
-
-    succeeded = Signal(str)
-    failed = Signal(str)
-
-    def __init__(
-        self,
-        service: AIChatService,
-        provider: str,
-        message: str,
-        history: list[tuple[str, str]],
-        base_url: str,
-        model: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.service = service
-        self.provider = provider
-        self.message = message
-        self.history = history
-        self.base_url = base_url
-        self.model = model
-
-    def run(self) -> None:
-        try:
-            answer = self.service.reply(
-                self.provider,
-                self.message,
-                self.history,
-                self.base_url,
-                self.model,
-            )
-        except AIConnectionError as exc:
-            self.failed.emit(str(exc))
-        except Exception:
-            self.failed.emit("AI 连接遇到意外问题，已切回离线回答。")
-        else:
-            self.succeeded.emit(answer)
 
 
 class ConnectionCheckThread(QThread):
@@ -172,6 +132,7 @@ class ChatDialog(QDialog):
 
     message_submitted = Signal(str)
     settings_requested = Signal()
+    reconnect_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -201,6 +162,21 @@ class ChatDialog(QDialog):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
+        self.recovery_actions = QWidget()
+        recovery_layout = QHBoxLayout(self.recovery_actions)
+        recovery_layout.setContentsMargins(0, 0, 0, 0)
+        recovery_layout.addStretch(1)
+        self.reconnect_button = QPushButton("重新连接 AI")
+        self.reconnect_button.setObjectName("softButton")
+        self.reconnect_button.clicked.connect(self.reconnect_requested.emit)
+        recovery_layout.addWidget(self.reconnect_button)
+        self.go_to_settings_button = QPushButton("去设置")
+        self.go_to_settings_button.setObjectName("softButton")
+        self.go_to_settings_button.clicked.connect(self.settings_requested.emit)
+        recovery_layout.addWidget(self.go_to_settings_button)
+        self.recovery_actions.hide()
+        layout.addWidget(self.recovery_actions)
+
         self.transcript = QTextBrowser()
         self.transcript.setOpenExternalLinks(False)
         layout.addWidget(self.transcript, 1)
@@ -228,17 +204,32 @@ class ChatDialog(QDialog):
         self.input.clear()
         self.message_submitted.emit(message)
 
-    def set_provider(self, provider: str) -> None:
+    def set_provider(
+        self,
+        provider: str,
+        state: str = AgentConnectionState.CHECKING.value,
+        detail: str = "",
+    ) -> None:
+        """只展示 AgentManager 缓存状态，不在 UI 线程执行检测。"""
+
         preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["offline"])
         if provider == "offline":
             detail = "纯离线 · 不联网"
-        elif provider == "codex":
-            detail = codex_detection_message()
-        elif provider == "claude":
-            detail = "Claude Code 已找到 · 一次性无工具会话" if claude_available() else "未找到 Claude Code · 会自动离线回答"
         else:
-            detail = f"{preset.label} · 在线模式"
+            state_labels = {
+                AgentConnectionState.CHECKING.value: "正在后台检测",
+                AgentConnectionState.CONNECTED.value: "已连接，优先使用 AI",
+                AgentConnectionState.DISCONNECTED.value: "未连接，已自动使用离线陪伴",
+                AgentConnectionState.ERROR.value: "暂时出错，已自动使用离线陪伴",
+            }
+            label = state_labels.get(state, "已自动使用离线陪伴")
+            detail = f"{preset.label} · {label}" + (f"\n{detail}" if detail else "")
         self.status_label.setText(detail)
+
+    def show_recovery_actions(self, visible: bool) -> None:
+        """复杂问题离线时才显示手动操作，不自动触发其中任何按钮。"""
+
+        self.recovery_actions.setVisible(bool(visible))
 
     def append_message(self, role: str, text: str) -> None:
         color = "#426b7c" if role == "六毛" else "#496f9b"
@@ -267,10 +258,12 @@ class AISettingsDialog(QDialog):
         settings: PetSettings,
         credentials: CredentialStore,
         parent: QWidget | None = None,
+        agent_manager: AgentManager | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.credentials = credentials
+        self.agent_manager = agent_manager
         self._connection_thread: ConnectionCheckThread | None = None
         self.setWindowTitle("Lili · 六毛设置")
         self.setObjectName("liliPanel")
@@ -449,7 +442,16 @@ class AISettingsDialog(QDialog):
         self.base_url.setEnabled(enabled)
         self.model.setEnabled(enabled)
         self.token.setEnabled(enabled)
-        if provider == "codex":
+        if provider != "offline" and self.agent_manager is not None:
+            cached = self.agent_manager.status(provider)
+            labels = {
+                AgentConnectionState.CHECKING: "正在后台检测；当前聊天仍可使用离线陪伴。",
+                AgentConnectionState.CONNECTED: cached.detail,
+                AgentConnectionState.DISCONNECTED: f"{cached.detail}\n聊天会自动使用离线陪伴。",
+                AgentConnectionState.ERROR: f"{cached.detail}\n稍后会低频自动重连。",
+            }
+            status = labels[cached.state]
+        elif provider == "codex":
             status = codex_detection_message()
         elif provider == "claude":
             status = "已检测到本机 Claude Code。" if claude_available() else "暂未检测到 Claude Code，聊天时会使用离线回答。"
@@ -548,14 +550,28 @@ class AISettingsDialog(QDialog):
             self.token.text().strip(),
             self,
         )
-        self._connection_thread.succeeded.connect(
-            lambda result: self.token_status.setText(f"✅ {result}")
-        )
-        self._connection_thread.failed.connect(
-            lambda error: self.token_status.setText(f"❌ {error}")
-        )
+        self._connection_thread.succeeded.connect(self._manual_check_succeeded)
+        self._connection_thread.failed.connect(self._manual_check_failed)
         self._connection_thread.finished.connect(self._connection_finished)
         self._connection_thread.start()
+
+    def _manual_check_succeeded(self, result: str) -> None:
+        """手动检测成功时更新可见文案与共享缓存。"""
+
+        self.token_status.setText(f"✅ {result}")
+        if self.agent_manager is not None:
+            provider = str(self.provider.currentData())
+            if "未检测到 Codex CLI" in result:
+                self.agent_manager.mark_disconnected(provider, result)
+            else:
+                self.agent_manager.mark_runtime_success(provider)
+
+    def _manual_check_failed(self, error: str) -> None:
+        """手动检测失败只更新当前设置页，不打开其他窗口。"""
+
+        self.token_status.setText(f"❌ {error}")
+        if self.agent_manager is not None:
+            self.agent_manager.mark_runtime_error(str(self.provider.currentData()), error)
 
     def _connection_finished(self) -> None:
         """恢复检测与保存按钮并释放已完成的线程。"""

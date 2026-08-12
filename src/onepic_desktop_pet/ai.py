@@ -5,13 +5,13 @@
 - 定义离线优先的提供方预设与安全、短小的陪伴提示词；
 - 分开检测 ChatGPT/Codex 图形应用与 Codex CLI，不把安装 GUI 误判为可执行 CLI；
 - 在本机验证 Codex CLI 绝对路径，并以只读、临时会话模式获取回复；
-- 检测 Codex、Claude Code 的本机登录状态及兼容 API 的只读模型端点；
+- 供 AgentManager 在启动、手动刷新和低频重连时检测本机登录状态与 API 模型端点；
 - 通过标准 HTTPS Chat Completions 接口调用用户主动配置的服务；
 - 使用系统凭据库保存 API 令牌，绝不把令牌写入设置文件；
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
 
-本模块不会自动联网。只有用户在设置中选择在线提供方并主动发送消息时，
-窗口层才会调用这里的同步接口；聊天记录只由当前进程在内存中保留。
+本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
+ChatManager 只在缓存已连接且用户发送消息时调用回复接口；聊天记录只在内存中保留。
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def check_provider_connection(
     base_url: str = "",
     token_override: str = "",
 ) -> str:
-    """由用户主动检测本机 Agent 登录或在线 API 认证状态。"""
+    """检测本机 Agent 登录或在线 API 认证状态；调用方必须放在后台线程。"""
 
     if provider == "offline":
         return "纯离线模式正常，不需要账号或网络。"

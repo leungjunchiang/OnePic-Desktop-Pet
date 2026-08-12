@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.15.0` 将窗口改为 QQ 宠物式无焦点置顶，并提供“始终置顶/桌面模式”开关；macOS 会分别检测 ChatGPT Desktop App 与 Codex CLI，不登录时仍是完整的纯离线桌宠。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.16.0` 把 AI Agent 改为纯增强能力：后台检测并缓存连接状态，聊天不再逐条检测；AI 未连接、检测中、掉线或超时时会无缝回到完整离线陪伴，绝不会自动弹出设置页。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -14,8 +14,9 @@
 - 完整图片动作切换采用约 280 毫秒交叉淡化，窗口和人物显示尺寸保持不变，原有八帧走路动画仍按逐帧节奏播放；
 - 摸头会歪头、来回抚摸会开心、点肚子会护住肚子、连续戳五次会小生气、长按会睡觉，悬停会好奇注视；
 - 可喂苹果、小饼干、热牛奶，也可选择咖啡或热茶；
-- 半透明、无红框聊天面板支持纯离线、Codex、Claude Code、DeepSeek、Kimi 和其他 OpenAI 兼容接口；macOS 字体优先苹方简体；
-- 本机有 Codex/Claude Code 且已经登录时可直接复用，不需要另填 API Key；不可用或在线连接失败时自动离线回答；
+- 半透明、无红框聊天面板支持纯离线、Codex、Claude Code、DeepSeek、Kimi 和其他 OpenAI 兼容接口；Agent 状态区分正在检测、已连接、未连接和错误；
+- 本机有 Codex/Claude Code 且已经登录时可直接复用，不需要另填 API Key；启动后后台检测并缓存，发送消息不重复执行完整检测；
+- AI 未连接、正在检测、响应超时或调用异常时自动无缝使用本地关键词、随机回复、时间、工作时长与宠物状态；复杂离线问题只显示“重新连接 AI / 去设置”按钮，不主动弹设置窗口；
 - DeepSeek/Kimi 的 API 令牌只保存在系统安全凭据库，不写入设置、源码或 GitHub；
 - 开始计时后六毛会敲电脑；摸头或点击电脑会直接弹出“暂停工作 / 结束工作”气泡；
 - 双击六毛切换快捷口袋；选择操作后自动收起，闲置八秒也会消失，不依赖 Windows 托盘或 Mac 菜单栏；
@@ -49,7 +50,7 @@
 
 右键点击六毛，选择“给六毛喂食/饮品”，可以喂苹果、小饼干、热牛奶、咖啡或热茶；选择“和六毛聊聊”会打开聊天面板。本地规则可以回应工作、学习、疲惫、自我怀疑、拖延、犯错、孤独与爱意等常见话题。普通点击就是和六毛打招呼或调戏，因此不再提供单独“打招呼”菜单。
 
-默认是“纯离线”，不需要账号或网络。右键选择“AI 与陪伴设置”后，可切换：
+默认是“纯离线”，不需要账号或网络。没有 AI 时，六毛仍能回应情绪和工作话题、告诉当前时间与今日工作时长、查看自己的心情/精力/饱食，并保持全部动画、拖动、计时和音乐功能。右键选择“AI 与陪伴设置”后，可切换：
 
 - `Codex`：自动检测本机 Codex CLI，复用当前登录，以临时、只读会话回答；
 - `Claude Code`：自动检测本机 CLI，以一次性、无工具、无会话持久化模式回答；
@@ -57,7 +58,7 @@
 - `Kimi`：默认使用中国区 `https://api.moonshot.cn/v1` 与 `kimi-k3`；
 - `其他兼容 API`：填写自有 HTTPS 地址和模型名称。
 
-设置页的“检测是否连接”不会发送聊天内容：Codex 使用官方 `codex login status` 检查登录；Claude Code 检查本机认证状态；API 通道使用只读的模型列表请求验证地址和令牌。
+程序启动后会在后台检测并缓存各 Agent；`checking` 不会被误报为断开，聊天也不会等待检测。设置页的“检测是否连接”用于用户主动刷新，不会发送聊天内容：Codex 使用官方 `codex login status` 检查登录；Claude Code 检查本机认证状态；API 通道使用只读的模型列表请求验证地址和令牌。断开的 Agent 会低频后台重连，恢复后下一条消息自然切回 AI。
 
 在线模式会把当前消息与最近少量上下文发送给所选服务。聊天记录只放在当前进程内存里，关闭 Lili 后不会落盘。令牌由 Windows 凭据管理器或 macOS 钥匙串保存。不要把 API Key 发到 Issue、聊天记录或截图里。
 
@@ -170,6 +171,14 @@ dist/Lili/Lili.exe
 
 两种 Mac 版本都应在打开 DMG 后把 `Lili.app` 拖入 `Applications`，之后可从“应用程序”或 Dock 再次启动。
 
+维护者安装并登录 GitHub CLI 后，可不打开网页直接发布：
+
+```powershell
+.\scripts\publish_release.ps1 -Version 0.16.0 -NotesFile .\release-notes.md
+```
+
+脚本会检查 `gh` 登录、主分支、干净工作区和测试结果，然后自动推送 `main`、标签和 Release；跨平台安装包继续由 GitHub Actions 自动附加。
+
 公开安装包使用仓库中的六毛公仔动作，不包含 `user_assets/`、用户原图、自拍照片、候选图、私人动作或聊天记录。macOS DMG 目前没有 Apple Developer ID 签名与公证；首次启动时可能需要在 Finder 中按住 Control 点击应用并选择“打开”。
 
 ## 一图制作流程
@@ -185,7 +194,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.15.0` 提供 Lili 的 Windows 安装程序与便携 ZIP，并由发布流程生成 Apple 芯片 Mac DMG、Intel Mac DMG 及各自的 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.16.0` 提供离线优先的 AgentManager / OfflineDialogueManager / ChatManager 架构，以及 Lili 的 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
 
 ## 授权
 

@@ -536,6 +536,28 @@ def test_dialogue_panel_passes_text_to_local_reply() -> None:
     app.processEvents()
 
 
+def test_agent_checking_never_opens_settings_and_complex_chat_shows_buttons() -> None:
+    """Agent 尚在检测时聊天应立即离线回复，只显示手动按钮而不弹设置。"""
+
+    app, window = _create_window()
+    window.settings.ai_provider = "codex"
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    settings_spy = QSignalSpy(window._chat_dialog.settings_requested)
+
+    window._chat_dialog.input.setText("帮我写代码并分析这个项目")
+    window._chat_dialog._submit()
+    app.processEvents()
+
+    assert settings_spy.count() == 0
+    assert "离线模式" in window._chat_dialog.transcript.toPlainText()
+    assert window._chat_dialog.recovery_actions.isVisible()
+    assert "正在后台检测" in window._chat_dialog.status_label.text()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_interaction_zones_map_head_face_body_and_camera() -> None:
     """窗口相对位置应稳定映射为四种点击区域。"""
 

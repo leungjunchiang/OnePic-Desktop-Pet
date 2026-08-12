@@ -11,7 +11,7 @@
 - 缓存不同 DPI 下的缩放帧，并在窗口跨显示器后按新比例重新栅格化；
 - 支持左键拖动、单击调戏、双击快捷口袋、无互动分级休息和连续尺寸滑块；
 - 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
-- 支持离线优先的聊天面板、可选 AI 后端以及工作、爱意、鼓励和安慰动作；
+- 支持 Agent 状态缓存、异步 AI、无缝离线降级以及工作、爱意、鼓励和安慰动作；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
@@ -29,7 +29,7 @@ Agent 快速定位：
 - 退出由 quit_requested 信号交给应用生命周期模块处理。
 
 输入为 PetSettings、素材清单和可选的用户自拍照片资源，输出为可交互的 Qt 窗口。
-本模块只在用户主动发送在线消息时启动后台请求线程；普通动画、牢骚和报时均不访问网络。
+本模块启动后只在后台低频检测 Agent；每条聊天不重复完整检测，普通动画、牢骚和报时均不访问网络。
 API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 app.py 在退出时完成。
 `user_assets/` 默认不进入 Git；只有用户主动放入的自拍图片才会在本机显示。
 """
@@ -79,7 +79,14 @@ from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
 from .activity import active_application_category
 from .behavior import BehaviorModel, PetMood, PetState, StateDecision
-from .chat import AIReplyThread, AISettingsDialog, ChatDialog
+from .chat import AISettingsDialog, ChatDialog
+from .chat_manager import (
+    AgentManager,
+    ChatManager,
+    ManagedChatReply,
+    OfflineDialogueManager,
+    should_start_startup_detection,
+)
 from .companion import (
     ACTION_BY_KEY,
     APP_DISPLAY_NAME,
@@ -181,8 +188,24 @@ class PetWindow(QWidget):
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
         self._chat_dialog: ChatDialog | None = None
-        self._ai_thread: AIReplyThread | None = None
         self._chat_history: list[tuple[str, str]] = []
+        self.agent_manager = AgentManager(self.settings, self.credentials, self)
+        self.offline_dialogue_manager = OfflineDialogueManager(
+            self.companion,
+            self.work_timer.status_text,
+            lambda: self.work_timer.today_seconds() // 3600,
+        )
+        self.chat_manager = ChatManager(
+            self.settings,
+            self.ai_service,
+            self.agent_manager,
+            self.offline_dialogue_manager,
+            self,
+        )
+        self.agent_manager.status_changed.connect(self._agent_status_changed)
+        self.chat_manager.reply_ready.connect(self._managed_chat_reply)
+        self.chat_manager.busy_changed.connect(self._chat_busy_changed)
+        self.chat_manager.notice.connect(self._chat_notice)
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
@@ -363,6 +386,8 @@ class PetWindow(QWidget):
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
         self._schedule(self.behavior.initial_idle())
+        if should_start_startup_detection():
+            QTimer.singleShot(0, self.agent_manager.start_background_check)
 
     def _pet_window_flags(self) -> Qt.WindowType:
         """返回不占任务栏、不接收键盘焦点的宠物窗口标志。"""
@@ -854,9 +879,10 @@ class PetWindow(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """关闭宠物时保存运行中的工作计时并释放两个独立气泡窗口。"""
+        """关闭宠物时保存计时并停止 Agent 重连及独立气泡窗口。"""
 
         self.shutdown_work_timer()
+        self.chat_manager.shutdown()
         self.photo_bubble.close()
         self.speech_bubble.close()
         self._buddy_visit_window.close()
@@ -1502,86 +1528,86 @@ class PetWindow(QWidget):
             self._chat_dialog = ChatDialog(self)
             self._chat_dialog.message_submitted.connect(self._submit_chat_message)
             self._chat_dialog.settings_requested.connect(self.open_ai_settings)
+            self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
             self._chat_dialog.append_message(
                 "六毛",
                 "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
             )
-        self._chat_dialog.set_provider(self.settings.ai_provider)
+        status = self.agent_manager.status(self.settings.ai_provider)
+        self._chat_dialog.set_provider(
+            self.settings.ai_provider,
+            status.state.value,
+            status.detail,
+        )
         self._chat_dialog.show()
         self._chat_dialog.raise_()
         self._chat_dialog.activateWindow()
 
     def _submit_chat_message(self, message: str) -> None:
-        """显示用户消息，并按设置选择本地回答或后台 AI 请求。"""
+        """把消息交给 ChatManager；路由只读取缓存，不做同步检测。"""
 
         if self._chat_dialog is None:
             return
         self._record_user_interaction()
+        if self.chat_manager.busy:
+            self._chat_dialog.append_message("六毛", "上一句话还在路上，稍等我一下。")
+            return
         self._chat_dialog.append_message("你", message)
         history_before = list(self._chat_history)
         self._chat_history.append(("user", message))
         self._chat_history = self._chat_history[-10:]
-        if self.settings.ai_provider == "offline":
-            reply = self.talk_to_pet(message)
-            self._chat_history.append(("assistant", reply.text))
+        self._chat_dialog.show_recovery_actions(False)
+        self.chat_manager.submit(message, history_before)
+
+    def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
+        """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
+
+        self._chat_history.append(("assistant", reply.text))
+        self._chat_history = self._chat_history[-10:]
+        if self._chat_dialog is not None:
             self._chat_dialog.append_message("六毛", reply.text)
-            return
-        if self._ai_thread is not None and self._ai_thread.isRunning():
-            self._chat_dialog.append_message("六毛", "上一句话还在路上，稍等我一下。")
-            return
-        self._chat_dialog.set_busy(True)
-        self._ai_thread = AIReplyThread(
-            self.ai_service,
-            self.settings.ai_provider,
-            message,
-            history_before,
-            self.settings.ai_base_url,
-            self.settings.ai_model,
-            self,
-        )
-        self._ai_thread.succeeded.connect(self._ai_reply_succeeded)
-        self._ai_thread.failed.connect(
-            lambda error, original=message: self._ai_reply_failed(error, original)
-        )
-        self._ai_thread.finished.connect(self._ai_thread_finished)
-        self._ai_thread.start()
+            self._chat_dialog.show_recovery_actions(reply.show_recovery_actions)
+        self._show_emotion(reply.state, 3000)
+        self.show_speech(reply.text, 6500)
 
-    def _ai_reply_succeeded(self, answer: str) -> None:
-        """显示联网后端的成功回复。"""
+    def _chat_busy_changed(self, busy: bool) -> None:
+        """只禁用聊天输入，宠物动画、计时和音乐继续运行。"""
 
-        self._chat_history.append(("assistant", answer))
-        self._chat_history = self._chat_history[-10:]
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("六毛", answer)
-            self._chat_dialog.set_busy(False)
-        state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
-        self._show_emotion(state, 3000)
-        self.show_speech(answer, 6500)
+            self._chat_dialog.set_busy(busy)
 
-    def _ai_reply_failed(self, error: str, original: str) -> None:
-        """明确提示连接问题，并无缝使用本地规则回答。"""
+    def _chat_notice(self, message: str) -> None:
+        """显示非阻塞提示，不跳转设置页。"""
 
-        offline = self.companion.reply_to(original)
-        combined = f"{error}\n\n离线六毛：{offline.text}"
-        self._chat_history.append(("assistant", offline.text))
-        self._chat_history = self._chat_history[-10:]
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("六毛", combined)
-            self._chat_dialog.set_busy(False)
-        self._show_emotion(offline.state, 2800)
-        self.show_speech(offline.text, 6200)
+            self._chat_dialog.append_message("六毛", message)
 
-    def _ai_thread_finished(self) -> None:
-        """释放已完成的后台请求对象。"""
+    def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
+        """后台检测完成后刷新缓存状态文案，恢复后下一条自然走 AI。"""
 
-        if self._ai_thread is not None:
-            self._ai_thread.deleteLater()
-            self._ai_thread = None
+        if self._chat_dialog is not None and provider == self.settings.ai_provider:
+            self._chat_dialog.set_provider(provider, state, detail)
+            if state == "connected":
+                self._chat_dialog.show_recovery_actions(False)
+
+    def _reconnect_ai(self) -> None:
+        """用户主动要求重连；不会自动打开设置窗口。"""
+
+        if self.settings.ai_provider == "offline":
+            self._chat_notice("当前选择的是纯离线模式；需要 AI 时可以点“去设置”。")
+            return
+        if not self.chat_manager.reconnect_now():
+            self._chat_notice("AI 已在后台检测中，请稍等一下。")
 
     def open_ai_settings(self) -> None:
         """打开 AI、自动牢骚与报时设置，保存时不持久化任何明文令牌。"""
 
-        dialog = AISettingsDialog(self.settings, self.credentials, self)
+        dialog = AISettingsDialog(
+            self.settings,
+            self.credentials,
+            self,
+            agent_manager=self.agent_manager,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         previous_always_on_top = self.settings.always_on_top
@@ -1596,7 +1622,17 @@ class PetWindow(QWidget):
         self._schedule_ambient()
         self._schedule_song_inspiration()
         if self._chat_dialog is not None:
-            self._chat_dialog.set_provider(self.settings.ai_provider)
+            status = self.agent_manager.status(self.settings.ai_provider)
+            self._chat_dialog.set_provider(
+                self.settings.ai_provider,
+                status.state.value,
+                status.detail,
+            )
+        if self.settings.ai_provider != "offline":
+            self.agent_manager.start_background_check(
+                (self.settings.ai_provider,),
+                force=True,
+            )
         preset = PROVIDER_PRESETS[self.settings.ai_provider]
         self.show_speech(f"已切换为：{preset.label}", 4200)
 
@@ -1789,7 +1825,7 @@ class PetWindow(QWidget):
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
         try:
-            busy = self._ai_thread is not None and self._ai_thread.isRunning()
+            busy = self.chat_manager.busy
             if self.isVisible() and not self.dragging and not busy:
                 idle_seconds = time.monotonic() - self._last_user_interaction
                 if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
@@ -1825,7 +1861,7 @@ class PetWindow(QWidget):
         """显示本机歌词短行；未选择文件时显示原创歌名意象短句。"""
 
         try:
-            busy = self._ai_thread is not None and self._ai_thread.isRunning()
+            busy = self.chat_manager.busy
             if self.isVisible() and not self.dragging and not busy:
                 local_lines = load_local_lines(self.settings.local_lyrics_path)
                 if local_lines:
