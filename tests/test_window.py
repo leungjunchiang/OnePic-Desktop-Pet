@@ -71,9 +71,9 @@ def test_topmost_desktop_mode_switch_preserves_interaction_window(monkeypatch) -
     assert not window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     assert window.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
     assert window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    # Cocoa's offscreen backend aligns odd logical coordinates to a 2x pixel
-    # grid, so a one-pixel delta is the tightest portable invariant.
-    assert (window.pos() - QPoint(123, 77)).manhattanLength() <= 1
+    # Cocoa's offscreen backend aligns logical coordinates to a display pixel
+    # grid (2 px on arm64 runners, 4 px on Intel runners).
+    assert (window.pos() - QPoint(123, 77)).manhattanLength() <= 4
     assert window.state is PetState.WALK
     assert window._frame_index == frame
     assert not window.mask().isEmpty()
@@ -82,7 +82,7 @@ def test_topmost_desktop_mode_switch_preserves_interaction_window(monkeypatch) -
     app.processEvents()
 
     assert window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
-    assert (window.pos() - QPoint(123, 77)).manhattanLength() <= 1
+    assert (window.pos() - QPoint(123, 77)).manhattanLength() <= 4
     window.close()
     window.deleteLater()
     app.processEvents()
