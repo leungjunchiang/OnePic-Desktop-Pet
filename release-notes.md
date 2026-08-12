@@ -1,4 +1,4 @@
-# Lili v0.18.0
+# Lili v0.18.1
 
 这一版重点修复 macOS 中“Terminal 能找到 Codex、Lili 却找不到”的问题，并增强聊天连续性与桌宠界面可用性。
 

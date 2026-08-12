@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.18.0` 修复 macOS 图形应用中的 Codex CLI 路径识别，聊天默认保留最近 30 轮完整上下文，并把右键入口与“六毛搭子自习室”重构为清晰、有反馈的分组界面。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.18.1` 修复 macOS 图形应用中的 Codex CLI 路径识别，聊天默认保留最近 30 轮完整上下文，并把右键入口与“六毛搭子自习室”重构为清晰、有反馈的分组界面。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -177,7 +177,7 @@ dist/Lili/Lili.exe
 维护者安装并登录 GitHub CLI 后，可不打开网页直接发布：
 
 ```powershell
-.\scripts\publish_release.ps1 -Version 0.18.0 -NotesFile .\release-notes.md
+.\scripts\publish_release.ps1 -Version 0.18.1 -NotesFile .\release-notes.md
 ```
 
 脚本会检查 `gh` 登录、主分支、干净工作区和测试结果，然后自动推送 `main`、标签和 Release；跨平台安装包继续由 GitHub Actions 自动附加。
@@ -197,7 +197,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.18.0` 修复 macOS Codex CLI 检测与缓存、增加 30 轮连续聊天记忆、重组五类桌宠菜单，并将搭子自习室升级为首页/聊天/专注/我的四标签完整页面；继续提供 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件，旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.18.1` 修复 macOS Codex CLI 检测与缓存、增加 30 轮连续聊天记忆、重组五类桌宠菜单，并将搭子自习室升级为首页/聊天/专注/我的四标签完整页面；继续提供 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件，旧版本仍保留在 Releases 页面。
 
 ## 授权
 
