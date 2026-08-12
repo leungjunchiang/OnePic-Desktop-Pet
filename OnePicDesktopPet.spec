@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 datas = [("assets", "assets"), ("config", "config")]
+hiddenimports = ["winrt.windows.media.control"] if sys.platform == "win32" else []
 private_assets = Path("user_assets")
 if os.environ.get("ONEPIC_INCLUDE_USER_ASSETS") == "1" and private_assets.exists():
     workflow = private_assets / "workflow.json"
@@ -24,7 +25,7 @@ a = Analysis(
     pathex=["src"],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -70,10 +71,11 @@ if sys.platform == "darwin":
         bundle_identifier="io.github.leungjunchiang.lili",
         info_plist={
             "CFBundleDisplayName": "Lili",
-            "CFBundleShortVersionString": "0.16.1",
-            "CFBundleVersion": "0.16.1",
+            "CFBundleShortVersionString": "0.17.0",
+            "CFBundleVersion": "0.17.0",
             "CFBundlePackageType": "APPL",
             "LSUIElement": False,
             "NSHighResolutionCapable": True,
+            "NSAppleEventsUsageDescription": "Lili 需要在您点击音乐控制后操作 Apple Music 或 Spotify 的播放、暂停与切歌。",
         },
     )

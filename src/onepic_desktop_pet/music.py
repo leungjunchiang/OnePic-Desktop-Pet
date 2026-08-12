@@ -1,8 +1,9 @@
-"""调用用户指定或自动检测的本机音乐客户端，并提供正版网页回退。
+"""处理指定歌曲搜索、客户端发现和正版网页回退，不承担基础播放控制。
 
 支持 QQ、网易云、酷狗、Apple Music 与 Spotify。本模块不内置歌词、音频或非公开曲库接口。
-用户主动点击后，Lili 会把正版搜索地址交给已安装客户端，并在系统允许时尝试播放首条结果；
-客户端不存在时才打开官方搜索网页。键盘自动化只针对这次明确点击，不在后台控制其他应用。
+用户主动点歌后，Lili 会把搜索交给已安装客户端，并在系统允许时尝试选中首条结果；客户端
+不存在时打开官方搜索网页。搜索结果不等于已经建立播放控制，基础播放命令由 music_control.py
+读取系统媒体 Session 或发送媒体键。键盘自动化只针对这次明确点击，不在后台控制其他应用。
 """
 
 from __future__ import annotations
@@ -148,8 +149,8 @@ def find_music_client(service: str, custom_path: str = "") -> Path | None:
     return next((path for path in music_client_candidates(service) if path.exists()), None)
 
 
-def launch_music_client(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
-    """启动客户端并尝试自动搜索播放；找不到客户端时打开正版网页。"""
+def search_song(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
+    """在客户端发起指定歌曲搜索；绝不把“已打开”报告为“已连接”。"""
 
     normalized = service if service in MUSIC_SERVICE_LABELS else "netease"
     client = find_music_client(normalized, custom_path)
@@ -188,7 +189,17 @@ def launch_music_client(service: str, title: str, custom_path: str = "") -> Musi
     except OSError:
         webbrowser.open(music_search_url(normalized, title))
         return MusicLaunchResult(False, "客户端启动失败，已改为打开正版搜索页。")
-    return MusicLaunchResult(True, "已打开音乐客户端并定位到搜索结果，正在尝试播放第一条歌曲。")
+    return MusicLaunchResult(
+        True,
+        "已检测并打开音乐客户端，正在定位搜索结果；是否开始播放取决于客户端，"
+        "这不代表已建立播放控制。",
+    )
+
+
+def launch_music_client(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
+    """兼容旧调用名称；新代码应使用 :func:`search_song`。"""
+
+    return search_song(service, title, custom_path)
 
 
 def _macos_try_play_first_result(application_name: str, service: str) -> bool:

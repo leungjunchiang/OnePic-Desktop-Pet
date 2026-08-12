@@ -13,6 +13,7 @@
 - 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
 - 支持 Agent 状态缓存、异步 AI、无缝离线降级以及工作、爱意、鼓励和安慰动作；
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
+- 异步读取 Windows 系统媒体 Session 或调用 macOS Apple Events，提供真实的本机播放控制；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
@@ -118,7 +119,8 @@ from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
 from .social import SocialClient
 from .social_ui import BuddyVisitWindow, SocialHubDialog, SocialSyncThread
-from .music import choose_song, launch_music_client
+from .music import choose_song, search_song
+from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
@@ -208,10 +210,17 @@ class PetWindow(QWidget):
             self.offline_dialogue_manager,
             self,
         )
+        self.music_provider_manager = MusicProviderManager(self.settings)
+        self.music_controller = MusicController(
+            self.settings,
+            self.music_provider_manager,
+            self,
+        )
         self.agent_manager.status_changed.connect(self._agent_status_changed)
         self.chat_manager.reply_ready.connect(self._managed_chat_reply)
         self.chat_manager.busy_changed.connect(self._chat_busy_changed)
         self.chat_manager.notice.connect(self._chat_notice)
+        self.music_controller.result_ready.connect(self._music_control_result)
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
@@ -287,6 +296,7 @@ class PetWindow(QWidget):
         self.quick_panel = QuickControlPanel()
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
+        self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
         self.quick_panel.size_requested.connect(self.open_size_control)
         self.quick_panel.settings_requested.connect(self.open_settings)
@@ -885,10 +895,11 @@ class PetWindow(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """关闭宠物时保存计时并停止 Agent 重连及独立气泡窗口。"""
+        """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
         self.shutdown_work_timer()
         self.chat_manager.shutdown()
+        self.music_controller.shutdown()
         self.photo_bubble.close()
         self.speech_bubble.close()
         self._buddy_visit_window.close()
@@ -1617,6 +1628,7 @@ class PetWindow(QWidget):
             self.credentials,
             self,
             agent_manager=self.agent_manager,
+            music_manager=self.music_provider_manager,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return True
@@ -1743,7 +1755,7 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """由用户主动调用音乐客户端，自动搜索并尝试播放随机歌曲。"""
+        """由用户主动发起指定歌曲搜索，与基础播放控制严格分开。"""
 
         title = choose_song()
         custom_path = {
@@ -1753,11 +1765,27 @@ class PetWindow(QWidget):
             "apple": self.settings.apple_music_path,
             "spotify": self.settings.spotify_music_path,
         }.get(self.settings.music_service, self.settings.netease_music_path)
-        result = launch_music_client(self.settings.music_service, title, custom_path)
+        result = search_song(self.settings.music_service, title, custom_path)
         self._change_ambient_activity(random.choice(("headphones", "guitar", "drums")))
         self._manual_activity_until = time.monotonic() + 180
         self.show_speech(f"六毛挑了《{title}》。{result.message}", 7200)
         return title
+
+    def control_music(self, action: str) -> bool:
+        """异步控制当前选择的播放器，不启动应用也不抢夺输入焦点。"""
+
+        if self.music_controller.perform(action):
+            return True
+        self.show_speech("音乐控制还在处理中，请稍等一下。", 3200)
+        return False
+
+    def _music_control_result(self, result: MusicControlResult) -> None:
+        """只展示系统控制层返回的真实结果和能力等级。"""
+
+        if result.success and result.action != "status":
+            self._change_ambient_activity("headphones")
+            self._manual_activity_until = time.monotonic() + 45
+        self.show_speech(result.message, 6200)
 
     def set_activity(self, activity: str) -> None:
         """手动选择修正版动作表中的任意完整动作。"""
@@ -2207,9 +2235,22 @@ class PetWindow(QWidget):
         selfie_action = QAction("自拍一下", self)
         selfie_action.triggered.connect(self.trigger_selfie)
         menu.addAction(selfie_action)
-        music_action = QAction("随机听一首陈楚生", self)
-        music_action.triggered.connect(self.play_random_song)
-        menu.addAction(music_action)
+        music_control_menu = menu.addMenu("控制正在运行的音乐")
+        for label, command in (
+            ("播放 / 暂停", "toggle"),
+            ("上一首", "previous"),
+            ("下一首", "next"),
+            ("查看正在播放", "status"),
+        ):
+            control_action = QAction(label, self)
+            control_action.triggered.connect(
+                lambda _checked=False, value=command: self.control_music(value)
+            )
+            music_control_menu.addAction(control_action)
+        music_search_action = QAction("搜索一首陈楚生", self)
+        music_search_action.triggered.connect(self.play_random_song)
+        music_control_menu.addSeparator()
+        music_control_menu.addAction(music_search_action)
         music_move = menu.addMenu("音乐动作")
         for label, key in (("戴耳机", "headphones"), ("弹吉他", "guitar"), ("打鼓", "drums")):
             action = QAction(label, self)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lili-desktop-pet"
-version = "0.16.1"
+version = "0.17.0"
 description = "离线优先、可连接 Codex、Claude Code、DeepSeek 与 Kimi 的 Lili 六毛桌面工作搭子。"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -14,6 +14,8 @@ dependencies = [
     "Pillow>=10,<13",
     "keyring>=25,<27",
     "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10,<13; sys_platform == 'darwin'",
+    "winrt-Windows.Media.Control>=3.2,<4; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

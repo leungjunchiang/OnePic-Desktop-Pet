@@ -46,6 +46,20 @@ def test_missing_music_client_falls_back_to_official_search(monkeypatch) -> None
     assert opened and opened[0].startswith("https://y.qq.com/")
 
 
+def test_music_search_never_claims_connection_or_guaranteed_playback(monkeypatch, tmp_path) -> None:
+    executable = tmp_path / "Spotify.exe"
+    executable.write_bytes(b"MZ")
+    monkeypatch.setattr("onepic_desktop_pet.music.subprocess.Popen", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("onepic_desktop_pet.music.threading.Thread.start", lambda _thread: None)
+
+    result = launch_music_client("spotify", "经过", str(executable))
+
+    assert result.client_found is True
+    assert "已连接" not in result.message
+    assert "正在播放" not in result.message
+    assert "不代表已建立播放控制" in result.message
+
+
 def test_user_selected_music_program_has_priority(tmp_path) -> None:
     if os.name == "nt":
         executable = tmp_path / "QQMusic.exe"
