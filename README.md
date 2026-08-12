@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.17.0` 新增真正的本机播放器控制：Windows 优先使用系统媒体 Session，macOS 用 Apple Events 控制 Apple Music/Spotify，其余播放器在运行时使用基础媒体键回退；“发现应用”和“已建立控制”会如实分开显示。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.18.0` 修复 macOS 图形应用中的 Codex CLI 路径识别，聊天默认保留最近 30 轮完整上下文，并把右键入口与“六毛搭子自习室”重构为清晰、有反馈的分组界面。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -16,6 +16,8 @@
 - 可喂苹果、小饼干、热牛奶，也可选择咖啡或热茶；
 - 半透明、无红框聊天面板支持纯离线、Codex、Claude Code、DeepSeek、Kimi 和其他 OpenAI 兼容接口；Agent 状态区分正在检测、已连接、未连接和错误；
 - 本机有 Codex/Claude Code 且已经登录时可直接复用，不需要另填 API Key；启动后后台检测并缓存，发送消息不重复执行完整检测；
+- macOS 会通过登录 zsh 获取 Codex CLI 绝对路径，再用该路径验证版本与登录状态；ChatGPT.app 与 Codex CLI 分开显示和判断；
+- 陪伴聊天保留最近 30 轮完整原始对话，超过后只把更早内容滚动压缩为人物、话题、状态、约定与偏好摘要，不读取项目代码或开发上下文；
 - AI 未连接、正在检测、响应超时或调用异常时自动无缝使用本地关键词、随机回复、时间、工作时长与宠物状态；复杂离线问题只显示“重新连接 AI / 去设置”按钮，不主动弹设置窗口；
 - DeepSeek/Kimi 的 API 令牌只保存在系统安全凭据库，不写入设置、源码或 GitHub；
 - 开始计时后六毛会敲电脑；摸头或点击电脑会直接弹出“暂停工作 / 结束工作”气泡；
@@ -175,7 +177,7 @@ dist/Lili/Lili.exe
 维护者安装并登录 GitHub CLI 后，可不打开网页直接发布：
 
 ```powershell
-.\scripts\publish_release.ps1 -Version 0.17.0 -NotesFile .\release-notes.md
+.\scripts\publish_release.ps1 -Version 0.18.0 -NotesFile .\release-notes.md
 ```
 
 脚本会检查 `gh` 登录、主分支、干净工作区和测试结果，然后自动推送 `main`、标签和 Release；跨平台安装包继续由 GitHub Actions 自动附加。
@@ -195,7 +197,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.17.0` 加入跨平台本机播放器控制、真实能力状态、当前歌曲读取和系统媒体键回退，并继续提供 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.18.0` 修复 macOS Codex CLI 检测与缓存、增加 30 轮连续聊天记忆、重组五类桌宠菜单，并将搭子自习室升级为首页/聊天/专注/我的四标签完整页面；继续提供 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件，旧版本仍保留在 Releases 页面。
 
 ## 授权
 

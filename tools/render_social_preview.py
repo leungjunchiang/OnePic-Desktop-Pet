@@ -30,6 +30,10 @@ class PreviewClient:
         }
 
 
+class SignedOutPreviewClient(PreviewClient):
+    signed_in = False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
@@ -39,7 +43,14 @@ def main() -> None:
 
     hub = SocialHubDialog(PreviewClient())
     hub.refresh(); hub.show(); app.processEvents()
-    hub.grab().save(str(args.output / "study-room.png"))
+    for index, name in enumerate(("home", "chat", "focus", "mine")):
+        hub.tabs.setCurrentIndex(index)
+        app.processEvents()
+        hub.grab().save(str(args.output / f"study-room-{name}.png"))
+
+    signed_out = SocialHubDialog(SignedOutPreviewClient())
+    signed_out.tabs.setCurrentIndex(3); signed_out.show(); app.processEvents()
+    signed_out.grab().save(str(args.output / "study-room-auth.png"))
 
     visit = BuddyVisitWindow()
     visit.show_peer(

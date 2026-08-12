@@ -239,8 +239,8 @@ def test_macos_codex_cli_uses_login_zsh_and_validates_absolute_path(
     executable.chmod(0o755)
     calls = []
 
-    def fake_run(command, **_kwargs):
-        calls.append(command)
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs.get("env", {})))
         if command == ["/bin/zsh", "-lc", "command -v codex"]:
             return SimpleNamespace(returncode=0, stdout=f"{executable}\n", stderr="")
         if command == [str(executable), "--version"]:
@@ -252,10 +252,45 @@ def test_macos_codex_cli_uses_login_zsh_and_validates_absolute_path(
     find_codex_executable.cache_clear()
 
     assert find_codex_executable() == executable
-    assert calls == [
+    assert [command for command, _env in calls] == [
         ["/bin/zsh", "-lc", "command -v codex"],
         [str(executable), "--version"],
     ]
+    version_path = calls[1][1]["PATH"].split(os.pathsep)
+    assert version_path[0] == str(executable.parent)
+    assert find_codex_executable() == executable
+    assert len(calls) == 2
+    find_codex_executable.cache_clear()
+
+
+def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_path) -> None:
+    """连接验证和后续调用不得回退到 GUI PATH 中的裸 codex 命令。"""
+
+    executable = tmp_path / "nvm" / "bin" / "codex"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("codex", encoding="utf-8")
+    executable.chmod(0o755)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs.get("env", {})))
+        if command == ["/bin/zsh", "-lc", "command -v codex"]:
+            return SimpleNamespace(returncode=0, stdout=f"{executable}\n", stderr="")
+        if command == [str(executable), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli 1.0", stderr="")
+        if command == [str(executable), "login", "status"]:
+            return SimpleNamespace(returncode=0, stdout="Logged in", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_gui_app", lambda: Path("/Applications/ChatGPT.app"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    find_codex_executable.cache_clear()
+
+    assert check_provider_connection("codex", FakeCredentials()) == "Codex 已连接。"
+    assert calls[-1][0] == [str(executable), "login", "status"]
+    assert calls[-1][1]["PATH"].split(os.pathsep)[0] == str(executable.parent)
+    assert find_codex_executable() == executable
     find_codex_executable.cache_clear()
 
 
