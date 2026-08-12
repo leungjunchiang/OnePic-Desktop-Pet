@@ -875,7 +875,15 @@ class PetWindow(QWidget):
                 bubble.show()
         if was_visible:
             self.show()
-            QTimer.singleShot(0, self._ensure_on_top)
+            target_position = QPoint(position)
+
+            def restore_position_after_show() -> None:
+                # macOS may round a frameless window by one pixel while recreating
+                # its native handle. Restore the user-visible position afterwards.
+                self.move(target_position)
+                self._ensure_on_top()
+
+            QTimer.singleShot(0, restore_position_after_show)
         if persist:
             save_settings(self.settings)
             self.show_speech(
