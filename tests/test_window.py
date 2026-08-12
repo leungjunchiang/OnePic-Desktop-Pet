@@ -52,6 +52,37 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     app.processEvents()
 
 
+def test_topmost_desktop_mode_switch_preserves_interaction_window(monkeypatch) -> None:
+    """切换层级不得丢失位置、动画状态、轮廓穿透或无焦点标志。"""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.move(123, 77)
+    window.set_state(PetState.WALK)
+    frame = window._frame_index
+
+    window.set_always_on_top(False)
+    app.processEvents()
+
+    assert window.settings.always_on_top is False
+    assert not window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert window.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert window.pos() == QPoint(123, 77)
+    assert window.state is PetState.WALK
+    assert window._frame_index == frame
+    assert not window.mask().isEmpty()
+
+    window.set_always_on_top(True)
+    app.processEvents()
+
+    assert window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert window.pos() == QPoint(123, 77)
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_connection_and_companion_settings_scroll_and_include_music_clients() -> None:
     """小屏幕可滚动到全部陪伴选项，并能选择 Apple Music/Spotify。"""
 
@@ -65,6 +96,7 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     assert {"qq", "netease", "kugou", "apple", "spotify"} <= services
     assert dialog.apple_music_path.isEnabled()
     assert dialog.spotify_music_path.isEnabled()
+    assert dialog.always_on_top.isChecked()
     dialog.close()
     dialog.deleteLater()
     app.processEvents()

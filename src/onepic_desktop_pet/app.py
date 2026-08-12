@@ -6,6 +6,7 @@
 - 在创建应用前启用适合不同显示器缩放比例的高 DPI 舍入策略；
 - 创建 PetWindow 和精简 QSystemTrayIcon；
 - 托盘只保留显示、快捷口袋、聊天、设置与退出，主要互动直接在六毛窗口完成；
+- 托盘提供“始终置顶/桌面模式”开关，并与宠物右键菜单和设置页保持同步；
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
 
@@ -77,6 +78,14 @@ class DesktopPetApplication:
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(self.window.open_ai_settings)
         menu.addAction(ai_settings_action)
+
+        topmost_action = QAction("始终置顶（关闭即桌面模式）", menu)
+        topmost_action.setCheckable(True)
+        topmost_action.setChecked(self.settings.always_on_top)
+        topmost_action.toggled.connect(self.window.set_always_on_top)
+        self.window.always_on_top_changed.connect(topmost_action.setChecked)
+        menu.addAction(topmost_action)
+        self.topmost_action = topmost_action
 
         hide_action = QAction("隐藏宠物", menu)
         hide_action.triggered.connect(self.window.hide)

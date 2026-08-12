@@ -3,7 +3,8 @@
 
 职责范围：
 - 定义离线优先的提供方预设与安全、短小的陪伴提示词；
-- 在本机寻找 Codex CLI，并以只读、临时会话模式获取回复；
+- 分开检测 ChatGPT/Codex 图形应用与 Codex CLI，不把安装 GUI 误判为可执行 CLI；
+- 在本机验证 Codex CLI 绝对路径，并以只读、临时会话模式获取回复；
 - 检测 Codex、Claude Code 的本机登录状态及兼容 API 的只读模型端点；
 - 通过标准 HTTPS Chat Completions 接口调用用户主动配置的服务；
 - 使用系统凭据库保存 API 令牌，绝不把令牌写入设置文件；
@@ -126,12 +127,20 @@ def check_provider_connection(
     if provider == "offline":
         return "纯离线模式正常，不需要账号或网络。"
     if provider == "codex":
+        clear_cache = getattr(find_codex_executable, "cache_clear", None)
+        if callable(clear_cache):
+            clear_cache()
+        gui_app = find_codex_gui_app()
         executable = find_codex_executable()
         if executable is None:
-            raise AIConnectionError("没有找到 Codex CLI；请先安装，或在终端运行 codex 确认可用。")
+            if gui_app is not None:
+                if _is_chatgpt_desktop_app(gui_app):
+                    return "已检测到 ChatGPT（包含 Codex），但未检测到 Codex CLI。"
+                return "已检测到 Codex Desktop，但未检测到 Codex CLI。"
+            raise AIConnectionError("未检测到 Codex CLI；当前仍可使用离线陪伴模式。")
         if not _command_succeeds(_cli_command(executable, "login", "status")):
-            raise AIConnectionError("已找到 Codex，但当前没有登录。")
-        return "Codex 已安装并登录，可以连接。"
+            raise AIConnectionError("已检测到 Codex CLI，但当前尚未登录。")
+        return "Codex 已连接。" if gui_app is not None else "Codex CLI 已连接。"
     if provider == "claude":
         executable = find_claude_executable()
         if executable is None:
@@ -320,9 +329,128 @@ def _newest_file(paths: Iterable[Path]) -> Path | None:
         return existing[0] if existing else None
 
 
-def find_codex_executable() -> Path | None:
-    """寻找 PATH、包管理器或 Codex 桌面应用自带的 CLI。"""
+def find_chatgpt_desktop_app() -> Path | None:
+    """寻找 ChatGPT Desktop App；macOS 只认正式 ChatGPT.app 路径。"""
 
+    if sys.platform == "darwin":
+        for candidate in (
+            Path("/Applications/ChatGPT.app"),
+            Path.home() / "Applications" / "ChatGPT.app",
+        ):
+            if candidate.is_dir():
+                return candidate
+        return None
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        candidates = (
+            local / "Programs" / "ChatGPT" / "ChatGPT.exe",
+            local / "OpenAI" / "ChatGPT" / "ChatGPT.exe",
+            local / "Microsoft" / "WindowsApps" / "ChatGPT.exe",
+        )
+        command = shutil.which("ChatGPT.exe")
+        all_candidates = list(candidates)
+        if command:
+            all_candidates.append(Path(command))
+        return _newest_file(all_candidates)
+    return None
+
+
+def find_codex_gui_app() -> Path | None:
+    """返回可供用户主动打开的 OpenAI GUI；不参与 CLI 可用性判断。"""
+
+    chatgpt = find_chatgpt_desktop_app()
+    if chatgpt is not None:
+        return chatgpt
+    if os.name != "nt":
+        return None
+    local = Path(os.environ.get("LOCALAPPDATA", ""))
+    candidates = [
+        local / "Programs" / "Codex" / "Codex.exe",
+        local / "OpenAI" / "Codex" / "Codex.exe",
+    ]
+    root = local / "OpenAI" / "Codex"
+    if root.is_dir():
+        candidates.extend(root.glob("app-*/Codex.exe"))
+    return _newest_file(candidates)
+
+
+def _is_chatgpt_desktop_app(application: Path) -> bool:
+    """区分新版 ChatGPT GUI 与 Windows 旧版 Codex Desktop。"""
+
+    return application.name.casefold() in {"chatgpt.app", "chatgpt.exe"}
+
+
+def launch_codex_gui() -> bool:
+    """只在用户主动点击时打开 ChatGPT/Codex GUI，不影响 CLI 调用状态。"""
+
+    application = find_codex_gui_app()
+    if application is None:
+        return False
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", "-a", "ChatGPT"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        elif os.name == "nt":
+            os.startfile(str(application))  # type: ignore[attr-defined]
+        else:
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _macos_codex_cli_path() -> Path | None:
+    """按登录 zsh 查找 Codex CLI，并用绝对路径执行 --version 验证。"""
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        completed = subprocess.run(
+            ["/bin/zsh", "-lc", "command -v codex"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            env=_cli_environment(),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+    candidate = Path(lines[-1]).expanduser()
+    if not candidate.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
+        return None
+    try:
+        version = subprocess.run(
+            [str(candidate), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            env=_cli_environment(),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return candidate if version.returncode == 0 else None
+
+
+@lru_cache(maxsize=1)
+def find_codex_executable() -> Path | None:
+    """寻找并验证 Codex CLI；图形应用检测由 find_codex_gui_app() 负责。"""
+
+    if sys.platform == "darwin":
+        return _macos_codex_cli_path()
     command = _which_cli("codex")
     if command:
         return command
@@ -330,13 +458,6 @@ def find_codex_executable() -> Path | None:
         local = Path(os.environ.get("LOCALAPPDATA", ""))
         root = local / "OpenAI" / "Codex" / "bin"
         return _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
-    if sys.platform == "darwin":
-        candidates: list[Path] = []
-        for root in (Path("/Applications/Codex.app"), Path.home() / "Applications" / "Codex.app"):
-            resources = root / "Contents" / "Resources"
-            if resources.is_dir():
-                candidates.extend(resources.glob("**/codex"))
-        return _newest_file(candidates)
     return None
 
 
@@ -344,6 +465,22 @@ def codex_available() -> bool:
     """返回当前电脑是否能找到 Codex CLI。"""
 
     return find_codex_executable() is not None
+
+
+def codex_detection_message() -> str:
+    """返回供聊天和设置页复用的 GUI/CLI 分离状态文案。"""
+
+    gui_app = find_codex_gui_app()
+    cli = find_codex_executable()
+    if gui_app is not None and cli is not None:
+        return "Codex 已连接。"
+    if gui_app is not None:
+        if _is_chatgpt_desktop_app(gui_app):
+            return "已检测到 ChatGPT（包含 Codex），但未检测到 Codex CLI。"
+        return "已检测到 Codex Desktop，但未检测到 Codex CLI。"
+    if cli is not None:
+        return "已检测到 Codex CLI；未检测到 ChatGPT Desktop App。"
+    return "未检测到 Codex CLI；聊天时会使用离线陪伴模式。"
 
 
 def find_claude_executable() -> Path | None:
