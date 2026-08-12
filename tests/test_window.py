@@ -62,6 +62,7 @@ def test_topmost_desktop_mode_switch_preserves_interaction_window(monkeypatch) -
     monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
     window.move(123, 77)
     window.set_state(PetState.WALK)
+    window.animation_timer.stop()
     frame = window._frame_index
 
     window.set_always_on_top(False)
@@ -76,6 +77,7 @@ def test_topmost_desktop_mode_switch_preserves_interaction_window(monkeypatch) -
     assert (window.pos() - QPoint(123, 77)).manhattanLength() <= 4
     assert window.state is PetState.WALK
     assert window._frame_index == frame
+    assert not window.animation_timer.isActive()
     assert not window.mask().isEmpty()
 
     window.set_always_on_top(True)
