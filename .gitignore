@@ -30,3 +30,5 @@ user_assets/*
 .pytest*/
 .local-*/
 .localappdata*/
+.test-run/
+.codex-test/

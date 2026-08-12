@@ -393,20 +393,32 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
     app.processEvents()
 
 
-def test_context_menu_exposes_dialogue_food_mood_ai_and_no_greeting() -> None:
-    """菜单保留对话、饮品、有效心情信息和设置，删除打招呼入口。"""
+def test_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
+    """右键菜单只保留五个一级分组，功能放入语义明确的子菜单。"""
 
     app, window = _create_window()
     menu = window._build_context_menu()
     actions = {action.text(): action for action in menu.actions()}
+    assert list(actions) == ["聊天与陪伴", "动作与外观", "音乐与娱乐", "专注与自习", "系统与显示"]
 
-    assert "和六毛聊聊…" in actions
-    assert "六毛陪伴动作" in actions
-    assert "给六毛喂食/饮品" in actions
-    assert "AI 与陪伴设置…" in actions
-    assert actions["偶尔发牢骚"].isChecked()
-    assert not actions["整点报时"].isChecked()
-    food_menu = actions["给六毛喂食/饮品"].menu()
+    chat_actions = {action.text(): action for action in actions["聊天与陪伴"].menu().actions()}
+    appearance_actions = {action.text(): action for action in actions["动作与外观"].menu().actions()}
+    music_actions = {action.text(): action for action in actions["音乐与娱乐"].menu().actions()}
+    focus_actions = {action.text(): action for action in actions["专注与自习"].menu().actions()}
+    system_actions = {action.text(): action for action in actions["系统与显示"].menu().actions() if not action.isSeparator()}
+
+    assert "和六毛聊聊…" in chat_actions
+    assert "陪伴动作" in chat_actions
+    assert "喂食、饮品与状态" in chat_actions
+    assert "六毛搭子自习室…" in chat_actions
+    assert "完整图片动作" in appearance_actions
+    assert "工作时长娃衣" in appearance_actions
+    assert "控制正在运行的播放器" in music_actions
+    assert any(text.startswith("工作计时：") for text in focus_actions)
+    assert "AI 与陪伴设置…" in system_actions
+    assert system_actions["偶尔发牢骚"].isChecked()
+    assert not system_actions["整点报时"].isChecked()
+    food_menu = chat_actions["喂食、饮品与状态"].menu()
     assert food_menu is not None
     food_actions = [action.text() for action in food_menu.actions() if not action.isSeparator()]
     assert food_actions == [
@@ -417,13 +429,9 @@ def test_context_menu_exposes_dialogue_food_mood_ai_and_no_greeting() -> None:
         "热茶",
         "查看六毛心情与能量",
     ]
-    assert not any(text.startswith("查看状态：") for text in actions)
-    assert not any("打招呼" in text for text in actions)
-    assert any(text.startswith("工作计时：") for text in actions)
-    assert "连续调节宠物大小…" in actions
-    assert "工作时长娃衣（自动换装）" in actions
-    assert "46 个透明图片动作" in actions
-    work_action = next(action for text, action in actions.items() if text.startswith("工作计时："))
+    assert not any("打招呼" in text for text in chat_actions)
+    assert "连续调节宠物大小…" in system_actions
+    work_action = next(action for text, action in focus_actions.items() if text.startswith("工作计时："))
     work_labels = [action.text() for action in work_action.menu().actions()]
     assert "查看今日 0–8 小时成长线" in work_labels
     assert "今天六毛陪你做了什么" in work_labels

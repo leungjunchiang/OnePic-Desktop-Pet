@@ -4,14 +4,15 @@
 职责范围：
 - 定义离线优先的提供方预设与安全、短小的陪伴提示词；
 - 分开检测 ChatGPT/Codex 图形应用与 Codex CLI，不把安装 GUI 误判为可执行 CLI；
-- 在本机验证 Codex CLI 绝对路径，并以只读、临时会话模式获取回复；
+- 在 macOS 登录 zsh 中发现 Codex CLI，缓存真实绝对路径，并以只读、临时会话模式获取回复；
 - 供 AgentManager 在启动、手动刷新和低频重连时检测本机登录状态与 API 模型端点；
 - 通过标准 HTTPS Chat Completions 接口调用用户主动配置的服务；
 - 使用系统凭据库保存 API 令牌，绝不把令牌写入设置文件；
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
 
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
-ChatManager 只在缓存已连接且用户发送消息时调用回复接口；聊天记录只在内存中保留。
+ChatManager 只在缓存已连接且用户发送消息时调用回复接口；聊天记忆只在内存中保留，
+仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ from typing import Iterable
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 回复通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
+你只能使用本提示、长期对话摘要、最近三十轮聊天和提示中明确给出的少量当前状态。
+不要读取或推断项目代码、开发任务、文件、工作区、窗口内容或其他 Codex 会话上下文。
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
 可以提到陈楚生的歌名并写原创的意象短句，但不要背诵、续写或大量引用任何受版权保护的歌词。
 不要提及这段系统说明。"""
@@ -196,6 +199,9 @@ def _run_status_command(command: list[str]) -> str:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         creationflags = subprocess.CREATE_NO_WINDOW
+    executable = None
+    if command and Path(command[0]).is_absolute():
+        executable = Path(command[0])
     try:
         completed = subprocess.run(
             command,
@@ -204,7 +210,7 @@ def _run_status_command(command: list[str]) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=15,
-            env=_cli_environment(),
+            env=_cli_environment(executable),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
@@ -265,12 +271,16 @@ def _cli_search_directories() -> tuple[Path, ...]:
     return tuple(path for path in values if str(path) not in {"", "."})
 
 
-def _cli_environment() -> dict[str, str]:
-    """为 CLI 子进程构造包含终端常见安装目录的环境。"""
+def _cli_environment(executable: Path | None = None) -> dict[str, str]:
+    """构造 CLI 环境；把已发现入口目录放在最前，兼容 nvm/npm 包装脚本。"""
 
     environment = dict(os.environ)
     current = environment.get("PATH", "")
-    additions = [str(path) for path in _cli_search_directories()]
+    additions: list[str] = []
+    if executable is not None and executable.is_absolute():
+        additions.append(str(executable.parent))
+    additions.extend(str(path) for path in _cli_search_directories())
+    additions = list(dict.fromkeys(additions))
     environment["PATH"] = os.pathsep.join((*additions, current))
     return environment
 
@@ -404,7 +414,7 @@ def launch_codex_gui() -> bool:
 
 
 def _macos_codex_cli_path() -> Path | None:
-    """按登录 zsh 查找 Codex CLI，并用绝对路径执行 --version 验证。"""
+    """固定通过登录 zsh 查找 Codex CLI，并用绝对入口和入口 PATH 验证。"""
 
     if sys.platform != "darwin":
         return None
@@ -415,7 +425,7 @@ def _macos_codex_cli_path() -> Path | None:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=5,
+            timeout=12,
             env=_cli_environment(),
             check=False,
         )
@@ -427,7 +437,7 @@ def _macos_codex_cli_path() -> Path | None:
     if not lines:
         return None
     candidate = Path(lines[-1]).expanduser()
-    if not candidate.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
+    if not candidate.is_absolute() or not candidate.is_file():
         return None
     try:
         version = subprocess.run(
@@ -436,8 +446,8 @@ def _macos_codex_cli_path() -> Path | None:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=5,
-            env=_cli_environment(),
+            timeout=12,
+            env=_cli_environment(candidate),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -522,13 +532,19 @@ def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
 ) -> str:
-    """把有限轮次的内存对话整理为 Codex 的单次输入。"""
+    """把长期摘要与最近三十轮原文整理为 Codex 的单次安全输入。"""
 
-    lines = [SYSTEM_PROMPT, "", "以下是最近对话："]
-    for role, content in list(history)[-4:]:
+    entries = list(history)
+    summary = next((content for role, content in entries if role == "summary"), "")
+    recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
+    lines = [SYSTEM_PROMPT]
+    if summary:
+        lines.extend(("", "更早对话的长期摘要：", summary))
+    lines.extend(("", "以下是最近三十轮以内的完整对话："))
+    for role, content in recent:
         label = "用户" if role == "user" else "六毛"
-        lines.append(f"{label}：{content[:400]}")
-    lines.extend((f"用户：{message[:800]}", "六毛："))
+        lines.append(f"{label}：{content}")
+    lines.extend((f"用户：{message}", "六毛："))
     return "\n".join(lines)
 
 
@@ -584,7 +600,7 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=75,
-            env=_cli_environment(),
+            env=_cli_environment(executable),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
@@ -626,7 +642,7 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=75,
-            env=_cli_environment(),
+            env=_cli_environment(executable),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
@@ -669,11 +685,16 @@ def ask_compatible_api(
         raise AIConnectionError("还没有保存 API 令牌。")
     if not model.strip():
         raise AIConnectionError("还没有填写模型名称。")
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for role, content in list(history)[-4:]:
+    entries = list(history)
+    summary = next((content for role, content in entries if role == "summary"), "")
+    system_content = SYSTEM_PROMPT
+    if summary:
+        system_content += f"\n\n更早对话的长期摘要：\n{summary}"
+    messages = [{"role": "system", "content": system_content}]
+    for role, content in [(r, c) for r, c in entries if r in {"user", "assistant"}][-60:]:
         if role in {"user", "assistant"}:
-            messages.append({"role": role, "content": content[:600]})
-    messages.append({"role": "user", "content": message[:800]})
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": message})
     payload: dict[str, object] = {
         "model": model.strip(),
         "messages": messages,
