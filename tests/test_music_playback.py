@@ -55,6 +55,21 @@ class UnavailableAdapter(FakeAdapter):
         raise UIAutomationUnavailableError("UI tree unavailable")
 
 
+class NativeRandomAdapter(UnavailableAdapter):
+    """模拟 UIA 不可读但 Provider 自有回退可以真实发起播放。"""
+
+    native_calls: list[str]
+
+    def __init__(self, native_success: bool = True) -> None:
+        super().__init__()
+        self.native_success = native_success
+        self.native_calls = []
+
+    def play_random_artist(self, artist: str) -> bool:
+        self.native_calls.append(artist)
+        return self.native_success
+
+
 def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_results() -> None:
     manager = BasicRandomArtistPlaybackManager({"qq": UnavailableAdapter()})
 
@@ -62,6 +77,34 @@ def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_result
 
     assert result.success is False
     assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
+
+
+def test_random_artist_uses_provider_native_fallback_when_ui_tree_is_unavailable() -> None:
+    adapter = NativeRandomAdapter()
+    manager = BasicRandomArtistPlaybackManager({"qq": adapter})
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert adapter.native_calls == ["陈楚生"]
+
+
+def test_netease_default_desktop_script_is_dpi_aware_and_verifies_artist_title() -> None:
+    script = NeteaseMusicAdapter._netease_default_desktop_script(
+        r"C:\Program Files\NetEase\CloudMusic\cloudmusic.exe",
+        "陈楚生",
+        3,
+    )
+
+    assert 'OpenDesktop("Default"' in script
+    assert "SetThreadDpiAwarenessContext" in script
+    assert 'c.ToString()=="OrpheusBrowserHost"' in script
+    assert "width*0.385" in script
+    assert "double[] songRows" in script
+    assert "width*0.32" in script
+    assert "IndexOf(artist" in script
+    assert "$pick=3" in script
 
 
 def test_random_artist_keeps_playing_when_media_information_is_unavailable() -> None:
