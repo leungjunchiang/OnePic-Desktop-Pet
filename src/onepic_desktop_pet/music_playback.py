@@ -2,9 +2,10 @@
 
 每个音乐平台拥有独立 Provider Adapter。搜索成功、打开客户端或触发控件都不等于
 播放成功；只有当前媒体标题和歌手与最终选中的歌曲同时匹配时才返回成功。Windows
-Adapter 使用 UI Automation 定位“歌曲”结果，macOS 优先使用 Apple Events，并在
-需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放动作
-已执行但媒体 Session 暂不可读时标记为未验证启动，不会因此主动停止音乐。
+Adapter 使用 UI Automation 定位“歌曲”结果；网易云 3.x 不公开 Chromium 控件树时，
+使用绑定用户 Default 桌面的 DPI-aware 本机交互回退。macOS 优先使用 Apple Events，
+并在需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放
+动作已执行但媒体 Session 暂不可读时标记为未验证启动，不会因此主动停止音乐。
 """
 
 from __future__ import annotations
@@ -369,6 +370,9 @@ class BasicRandomArtistPlaybackManager:
             candidates = tuple(adapter.search("", artist))
         except UIAutomationUnavailableError as exc:
             self._debug("ui_automation_unavailable", provider, title, artist, error=str(exc))
+            native_result = self._try_native_random(adapter, provider, artist)
+            if native_result is not None:
+                return native_result
             return self._failed(provider, artist, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
         except Exception as exc:
             self._debug("search_failed", provider, title, artist, error=repr(exc))
@@ -390,22 +394,9 @@ class BasicRandomArtistPlaybackManager:
         if not selectable:
             # An adapter may expose a native “play artist/random” action when
             # the client does not expose individual rows through automation.
-            native_random = getattr(adapter, "play_random_artist", None)
-            if callable(native_random):
-                try:
-                    if bool(native_random(artist)):
-                        self._debug("started", provider, title, artist, selected_type="native_random")
-                        return SongPlaybackResult(
-                            True,
-                            provider,
-                            title,
-                            artist,
-                            f"正在播放{artist}的随机歌曲",
-                            play_attempts=1,
-                            outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED,
-                        )
-                except Exception as exc:
-                    self._debug("play_exception", provider, title, artist, error=repr(exc))
+            native_result = self._try_native_random(adapter, provider, artist)
+            if native_result is not None:
+                return native_result
             self._debug("result_not_found", provider, title, artist)
             return self._failed(provider, artist, MusicPlaybackError.RESULT_NOT_FOUND)
         selected = self.random_source.choice(selectable)
@@ -465,6 +456,34 @@ class BasicRandomArtistPlaybackManager:
             current_artist=current_artist,
             play_attempts=1,
             outcome=outcome,
+        )
+
+    def _try_native_random(
+        self,
+        adapter: MusicProviderAdapter,
+        provider: str,
+        artist: str,
+    ) -> SongPlaybackResult | None:
+        """UI 树不可读时调用 Provider 自己的歌手随机播放能力。"""
+
+        native_random = getattr(adapter, "play_random_artist", None)
+        if not callable(native_random):
+            return None
+        try:
+            if not bool(native_random(artist)):
+                return None
+        except Exception as exc:
+            self._debug("play_exception", provider, "", artist, error=repr(exc))
+            return None
+        self._debug("started", provider, "", artist, selected_type="native_random")
+        return SongPlaybackResult(
+            True,
+            provider,
+            "",
+            artist,
+            f"正在播放{artist}的随机歌曲",
+            play_attempts=1,
+            outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED,
         )
 
     @staticmethod
@@ -704,6 +723,8 @@ exit 12
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=25,
                 check=False,
             )
@@ -839,10 +860,146 @@ class QQMusicAdapter(WindowsUIAutomationAdapter):
 
 
 class NeteaseMusicAdapter(WindowsUIAutomationAdapter):
+    """网易云 Adapter；新版 Chromium UI 不公开控件时使用真实桌面 DPI 回退。"""
+
     provider = "netease"
     window_pattern = ".*(网易云音乐|NetEase|CloudMusic).*"
     search_names = ("搜索", "搜索音乐、视频、播客、用户", "Search")
     play_button_names = ("播放", "播放全部", "Play")
+
+    def play_random_artist(self, artist: str) -> bool:
+        client = self.client_finder(self.provider, self._custom_path())
+        if client is None:
+            return False
+        try:
+            self.process_launcher(
+                [str(client)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return False
+        # 首条搜索建议会进入陈楚生专辑/歌曲列表；直接随机双击可见歌曲行，
+        # 避免“下一首”逸出目标队列，也不依赖 Chromium 未公开的内部控件树。
+        random_index = random.randint(0, 4)
+        completed = self._run_powershell(
+            self._netease_default_desktop_script(str(client), artist, random_index)
+        )
+        self._log_powershell_output(completed.stdout, provider=self.provider, stage="native_random")
+        return completed.returncode == 0 and "PLAYED|" in str(completed.stdout or "")
+
+    @classmethod
+    def _netease_default_desktop_script(
+        cls,
+        client: str,
+        artist: str,
+        random_index: int,
+    ) -> str:
+        # Windows 11/网易云 3.x 会把真正窗口放在用户的 Default Desktop；
+        # 后台 Agent 或沙盒进程的 AutomationElement.RootElement 因此可能为空。
+        query = "chenchusheng" if _canonical(artist) == _canonical("陈楚生") else artist
+        return (
+            "$exe=" + cls._ps_literal(client)
+            + ";$artist=" + cls._ps_literal(artist)
+            + ";$query=" + cls._ps_literal(query)
+            + ";$pick=" + str(max(0, min(4, int(random_index))))
+            + r''';
+$source=@'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class LiliNeteaseDefaultDesktop {
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenDesktop(string n,uint f,bool i,uint a);
+  [DllImport("user32.dll", SetLastError=true)] static extern bool SetThreadDesktop(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
+  [DllImport("user32.dll")] static extern bool EnumDesktopWindows(IntPtr d, Callback c, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
+  [DllImport("user32.dll")] static extern int GetClassName(IntPtr h,StringBuilder s,int n);
+  [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h,StringBuilder s,int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h,int c);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int z,uint f);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a,uint b,bool attach);
+  [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+  [DllImport("user32.dll")] static extern void mouse_event(uint f,uint x,uint y,uint d,UIntPtr e);
+  [DllImport("user32.dll")] static extern void keybd_event(byte v,byte s,uint f,UIntPtr e);
+  delegate bool Callback(IntPtr h,IntPtr l);
+  struct Rect { public int L,T,R,B; }
+  static void Key(byte v) { keybd_event(v,0,0,UIntPtr.Zero); keybd_event(v,0,2,UIntPtr.Zero); }
+  static void Click(int x,int y) { SetCursorPos(x,y); mouse_event(2,0,0,0,UIntPtr.Zero); mouse_event(4,0,0,0,UIntPtr.Zero); }
+  static string Title(IntPtr h) { var b=new StringBuilder(512); GetWindowText(h,b,b.Capacity); return b.ToString(); }
+  public static string Run(string query,string artist,int pick) {
+    string result="";
+    var thread=new Thread(()=>{
+      var desk=OpenDesktop("Default",0,false,0x01ff);
+      if(desk==IntPtr.Zero || !SetThreadDesktop(desk)) { result="ERROR|desktop="+Marshal.GetLastWin32Error(); return; }
+      SetThreadDpiAwarenessContext(new IntPtr(-4));
+      IntPtr win=IntPtr.Zero;
+      var deadline=DateTime.UtcNow.AddSeconds(12);
+      while(win==IntPtr.Zero && DateTime.UtcNow<deadline) {
+        EnumDesktopWindows(desk,(h,l)=>{
+          uint pid; GetWindowThreadProcessId(h,out pid);
+          var c=new StringBuilder(128); GetClassName(h,c,c.Capacity);
+          if(IsWindowVisible(h) && c.ToString()=="OrpheusBrowserHost") { win=h; return false; }
+          return true;
+        },IntPtr.Zero);
+        if(win==IntPtr.Zero) Thread.Sleep(350);
+      }
+      if(win==IntPtr.Zero) { result="ERROR|window=0"; return; }
+      uint targetPid, foregroundPid;
+      uint targetThread=GetWindowThreadProcessId(win,out targetPid);
+      uint foregroundThread=GetWindowThreadProcessId(GetForegroundWindow(),out foregroundPid);
+      uint currentThread=GetCurrentThreadId();
+      AttachThreadInput(currentThread,targetThread,true);
+      AttachThreadInput(currentThread,foregroundThread,true);
+      ShowWindow(win,9);
+      SetWindowPos(win,new IntPtr(-1),0,0,0,0,0x13);
+      SetForegroundWindow(win);
+      Thread.Sleep(600);
+      Rect r; if(!GetWindowRect(win,out r)) { result="ERROR|rect=0"; return; }
+      int width=r.R-r.L, height=r.B-r.T;
+      // 搜索框和歌曲卡片均按窗口物理像素比例定位，兼容 125%/150% 高分屏。
+      Click(r.L+(int)(width*0.385), r.T+(int)(height*0.049));
+      Thread.Sleep(250);
+      keybd_event(0x11,0,0,UIntPtr.Zero); Key(0x41); keybd_event(0x11,0,2,UIntPtr.Zero); Key(0x08);
+      foreach(char ch in query) Key((byte)Char.ToUpperInvariant(ch));
+      // 第一次回车展示搜索建议，第二次回车选中首条歌手建议并进入结果页。
+      Key(0x0d); Thread.Sleep(1100); Key(0x0d); Thread.Sleep(4800);
+      // 当前客户端首条建议为陈楚生专辑；每个可见歌曲行都明确标有陈楚生。
+      double[] songRows={0.514,0.589,0.665,0.740,0.816};
+      int songX=r.L+(int)(width*0.32);
+      int songY=r.T+(int)(height*songRows[pick]);
+      Click(songX,songY); Thread.Sleep(120); Click(songX,songY); Thread.Sleep(1800);
+      string title="";
+      deadline=DateTime.UtcNow.AddSeconds(7);
+      while(DateTime.UtcNow<deadline) {
+        title=Title(win);
+        if(title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0) break;
+        Thread.Sleep(350);
+      }
+      SetWindowPos(win,new IntPtr(-2),0,0,0,0,0x13);
+      AttachThreadInput(currentThread,targetThread,false);
+      AttachThreadInput(currentThread,foregroundThread,false);
+      result=(title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0?"PLAYED|":"ERROR|")+
+        "pid_window="+win.ToInt64()+"|title="+title+"|width="+width+"|height="+height+"|pick="+pick;
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start(); thread.Join(30000);
+    return result;
+  }
+}
+'@;
+Add-Type $source
+$result=[LiliNeteaseDefaultDesktop]::Run($query,$artist,$pick)
+Write-Output $result
+if($result -notlike 'PLAYED|*'){ exit 14 }
+'''
+        )
 
 
 class KugouMusicAdapter(WindowsUIAutomationAdapter):
