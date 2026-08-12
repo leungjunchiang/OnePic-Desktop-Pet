@@ -7,7 +7,7 @@
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
-- 允许用户选择本机音乐客户端、巴布达音频和自有歌词文本，绝不把这些路径上传；
+- 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 为复杂离线请求提供“重新连接 AI”和“去设置”按钮，但绝不自动打开设置窗口；
@@ -384,6 +384,7 @@ class AISettingsDialog(QDialog):
         form.addRow(self.stand, self.stand_minutes)
         self.music_service = QComboBox()
         for label, key in (
+            ("自动选择（推荐）", "auto"),
             ("网易云音乐", "netease"),
             ("QQ 音乐", "qq"),
             ("酷狗音乐", "kugou"),
@@ -393,11 +394,11 @@ class AISettingsDialog(QDialog):
             self.music_service.addItem(label, key)
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
         self.music_service.currentIndexChanged.connect(self._music_provider_changed)
-        form.addRow("音乐播放器", self.music_service)
+        form.addRow("优先播放器（高级）", self.music_service)
         self.music_status = QLabel()
         self.music_status.setObjectName("status")
         self.music_status.setWordWrap(True)
-        form.addRow("播放控制状态", self.music_status)
+        form.addRow("自动选择状态", self.music_status)
 
         self.qq_music_path = QLineEdit(settings.qq_music_path)
         self.qq_music_path.setPlaceholderText("自动寻找，或选择 QQMusic.exe / QQMusic.app")
@@ -476,10 +477,13 @@ class AISettingsDialog(QDialog):
 
         provider = str(self.music_service.currentData())
         if self.music_manager is None:
-            self.music_status.setText("尚未验证播放控制；请从六毛快捷口袋发送播放命令。")
+            self.music_status.setText("音乐播放器：自动选择\n当前使用：尚未开始播放\n首次播放时将检测本机播放器。")
+            return
+        if provider == "auto":
+            self.music_status.setText(self.music_manager.auto_status_text())
             return
         status = self.music_manager.cached_status(provider)
-        self.music_status.setText(status.message)
+        self.music_status.setText(f"自动选择已开启；优先尝试{self.music_service.currentText()}。\n{status.message}")
 
     def _provider_changed(self) -> None:
         provider = str(self.provider.currentData())

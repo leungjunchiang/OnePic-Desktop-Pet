@@ -100,7 +100,8 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
         dialog.music_service.itemData(index)
         for index in range(dialog.music_service.count())
     }
-    assert {"qq", "netease", "kugou", "apple", "spotify"} <= services
+    assert {"auto", "qq", "netease", "kugou", "apple", "spotify"} <= services
+    assert dialog.music_service.currentData() == "auto"
     assert dialog.apple_music_path.isEnabled()
     assert dialog.spotify_music_path.isEnabled()
     assert dialog.always_on_top.isChecked()
@@ -405,21 +406,22 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     assert labels[:7] == [
         "和六毛聊聊…",
-        "工作打卡/工作计时 ›",
-        "音乐 ›",
+        "工作打卡/工作计时",
+        "音乐",
         "搭子自习室…",
-        "动作 ›",
-        "给六毛喂食 ›",
-        "换装与外观 ›",
+        "动作",
+        "给六毛喂食",
+        "换装与外观",
     ]
     assert "隐藏" in labels
     assert "退出" in labels
     assert "陪伴动作" not in labels
     assert "完整图片动作" not in labels
-    music = next(action for action in menu.actions() if action.text() == "音乐 ›")
+    assert not any("›" in label for label in labels)
+    music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
     assert music_labels == ["随机听一首陈楚生", "播放/暂停", "下一首", "上一首", "音乐播放器设置"]
-    food = next(action for action in menu.actions() if action.text() == "给六毛喂食 ›")
+    food = next(action for action in menu.actions() if action.text() == "给六毛喂食")
     assert food.menu() is not None
     menu.close()
     window.close()

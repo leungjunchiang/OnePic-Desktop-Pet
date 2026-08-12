@@ -90,6 +90,9 @@ def test_save_settings_writes_json(tmp_path) -> None:
             babuda_audio_path=r"C:\Private\babuda-1.wav",
             local_lyrics_path=r"C:\Private\lyrics.txt",
             lyric_interval_minutes=6,
+            music_provider_history={
+                "qq": {"success_count": 3, "consecutive_failures": 0}
+            },
         ),
         path,
     )
@@ -109,6 +112,8 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["babuda_audio_path"].endswith("babuda-1.wav")
     assert data["local_lyrics_path"].endswith("lyrics.txt")
     assert data["lyric_interval_minutes"] == 6
+    assert data["music_service"] == "auto"
+    assert data["music_provider_history"]["qq"]["success_count"] == 3
     assert not any("token" in key or "key" in key for key in data)
     assert not path.with_suffix(".json.tmp").exists()
 
@@ -126,6 +131,38 @@ def test_local_path_and_lyric_interval_validation(tmp_path) -> None:
 
     assert settings.qq_music_path == "demo.exe"
     assert settings.lyric_interval_minutes == 2
+
+
+def test_music_provider_history_is_safely_validated(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps(
+            {
+                "music_service": "auto",
+                "music_provider_history": {
+                    "qq": {
+                        "success_count": "4",
+                        "failure_count": "broken",
+                        "consecutive_failures": 999,
+                        "last_error": "X" * 200,
+                    },
+                    "unknown": {"success_count": 20},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(default_path, override_path)
+
+    assert settings.music_service == "auto"
+    assert settings.music_provider_history["qq"]["success_count"] == 4
+    assert settings.music_provider_history["qq"]["failure_count"] == 0
+    assert settings.music_provider_history["qq"]["consecutive_failures"] == 100
+    assert len(settings.music_provider_history["qq"]["last_error"]) == 80
+    assert "unknown" not in settings.music_provider_history
 
 
 def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> None:

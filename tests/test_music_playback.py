@@ -19,6 +19,7 @@ from onepic_desktop_pet.music_playback import (
     ExactMusicPlaybackManager,
     KugouMusicAdapter,
     MusicPlaybackError,
+    MusicPlaybackOutcome,
     NeteaseMusicAdapter,
     QQMusicAdapter,
     SongCandidate,
@@ -61,6 +62,21 @@ def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_result
 
     assert result.success is False
     assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
+
+
+def test_random_artist_keeps_playing_when_media_information_is_unavailable() -> None:
+    adapter = FakeAdapter((SongCandidate("qq", "山楂花", "陈楚生"),))
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        lambda _provider: None,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert adapter.played
 
 
 def _manager(adapter: FakeAdapter, tracks, *, random_source=None) -> ExactMusicPlaybackManager:

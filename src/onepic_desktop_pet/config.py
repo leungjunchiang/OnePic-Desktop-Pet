@@ -6,7 +6,7 @@
 - 从当前用户本地应用数据目录读取上次窗口位置、显示尺寸和非敏感体验设置；
 - 持久化“始终置顶/桌面模式”，默认采用不抢焦点的 QQ 宠物式置顶行为；
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
-- 仅在用户配置目录保存窗口、AI 提供方和陪伴开关，不保存任何 API 令牌。
+- 仅在用户配置目录保存窗口、AI 提供方、陪伴开关和音乐 Provider 成败统计，不保存任何 API 令牌。
 
 Agent 快速定位：
 - 配置数据结构位于 PetSettings；
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +60,8 @@ class PetSettings:
     stand_reminder_enabled: bool = False
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
-    music_service: str = "netease"
+    music_service: str = "auto"
+    music_provider_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     qq_music_path: str = ""
     netease_music_path: str = ""
     kugou_music_path: str = ""
@@ -145,8 +146,34 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
-    if settings.music_service not in {"qq", "netease", "kugou", "apple", "spotify"}:
-        settings.music_service = "netease"
+    if settings.music_service not in {"auto", "qq", "netease", "kugou", "apple", "spotify"}:
+        settings.music_service = "auto"
+    def safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    history: dict[str, dict[str, Any]] = {}
+    if isinstance(settings.music_provider_history, dict):
+        for provider, raw in settings.music_provider_history.items():
+            if provider not in {"qq", "netease", "kugou", "apple", "spotify"} or not isinstance(raw, dict):
+                continue
+            history[provider] = {
+                "success_count": max(0, min(10_000, safe_int(raw.get("success_count", 0)))),
+                "failure_count": max(0, min(10_000, safe_int(raw.get("failure_count", 0)))),
+                "consecutive_failures": max(0, min(100, safe_int(raw.get("consecutive_failures", 0)))),
+                "last_success_at": max(0.0, safe_float(raw.get("last_success_at", 0.0))),
+                "last_failure_at": max(0.0, safe_float(raw.get("last_failure_at", 0.0))),
+                "last_error": str(raw.get("last_error", ""))[:80],
+            }
+    settings.music_provider_history = history
     settings.qq_music_path = str(settings.qq_music_path).replace("\x00", "").strip()[:1200]
     settings.netease_music_path = str(settings.netease_music_path).replace("\x00", "").strip()[:1200]
     settings.kugou_music_path = str(settings.kugou_music_path).replace("\x00", "").strip()[:1200]
@@ -197,6 +224,7 @@ def load_settings(
                 "water_interval_minutes",
                 "stand_interval_minutes",
                 "music_service",
+                "music_provider_history",
                 "qq_music_path",
                 "netease_music_path",
                 "kugou_music_path",
@@ -236,6 +264,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "water_interval_minutes": settings.water_interval_minutes,
         "stand_interval_minutes": settings.stand_interval_minutes,
         "music_service": settings.music_service,
+        "music_provider_history": settings.music_provider_history,
         "qq_music_path": settings.qq_music_path,
         "netease_music_path": settings.netease_music_path,
         "kugou_music_path": settings.kugou_music_path,
