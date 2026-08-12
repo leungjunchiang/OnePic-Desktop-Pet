@@ -3,7 +3,8 @@
 每个音乐平台拥有独立 Provider Adapter。搜索成功、打开客户端或触发控件都不等于
 播放成功；只有当前媒体标题和歌手与最终选中的歌曲同时匹配时才返回成功。Windows
 Adapter 使用 UI Automation 定位“歌曲”结果，macOS 优先使用 Apple Events，并在
-需要时使用已授权的 Accessibility。任何无法确认的情况都会返回明确失败码。
+需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放动作
+已执行但媒体 Session 暂不可读时标记为未验证启动，不会因此主动停止音乐。
 """
 
 from __future__ import annotations
@@ -39,6 +40,13 @@ class MusicPlaybackError(str, Enum):
     TRACK_VERIFY_FAILED = "TRACK_VERIFY_FAILED"
 
 
+class MusicPlaybackOutcome(str, Enum):
+    """基础随机播放成功后的可验证程度。"""
+
+    PLAYBACK_CONFIRMED = "PLAYBACK_CONFIRMED"
+    PLAYBACK_STARTED_UNVERIFIED = "PLAYBACK_STARTED_UNVERIFIED"
+
+
 class TrackSnapshot(Protocol):
     """校验器所需的最小当前歌曲信息。"""
 
@@ -60,7 +68,7 @@ class SongCandidate:
 
 @dataclass(frozen=True)
 class SongPlaybackResult:
-    """一次完整点歌闭环的结果；成功必然意味着媒体信息已通过校验。"""
+    """一次播放结果；严格点歌需确认，随机歌手播放允许标记为未验证启动。"""
 
     success: bool
     provider: str
@@ -72,6 +80,8 @@ class SongPlaybackResult:
     current_title: str = ""
     current_artist: str = ""
     play_attempts: int = 0
+    outcome: MusicPlaybackOutcome | None = None
+    attempted_providers: tuple[str, ...] = ()
 
 
 class ProviderSearchError(RuntimeError):
@@ -227,6 +237,7 @@ class ExactMusicPlaybackManager:
                     current_title=current_title,
                     current_artist=current_artist,
                     play_attempts=attempt,
+                    outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED,
                 )
             self._debug(
                 "verify_retry" if attempt == 1 else "verify_failed",
@@ -391,6 +402,7 @@ class BasicRandomArtistPlaybackManager:
                             artist,
                             f"正在播放{artist}的随机歌曲",
                             play_attempts=1,
+                            outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED,
                         )
                 except Exception as exc:
                     self._debug("play_exception", provider, title, artist, error=repr(exc))
@@ -425,6 +437,12 @@ class BasicRandomArtistPlaybackManager:
                     current_artist = str(getattr(current, "artist", "") or "")
             except Exception as exc:
                 self._debug("media_read_error", provider, title, artist, error=repr(exc))
+        confirmed = bool(_canonical(artist)) and _canonical(artist) in _canonical(current_artist)
+        outcome = (
+            MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+            if confirmed
+            else MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+        )
         self._debug(
             "started",
             provider,
@@ -434,6 +452,7 @@ class BasicRandomArtistPlaybackManager:
             selected_artist=selected.artist,
             current_title=current_title,
             current_artist=current_artist,
+            outcome=outcome.value,
         )
         return SongPlaybackResult(
             True,
@@ -445,6 +464,7 @@ class BasicRandomArtistPlaybackManager:
             current_title=current_title,
             current_artist=current_artist,
             play_attempts=1,
+            outcome=outcome,
         )
 
     @staticmethod

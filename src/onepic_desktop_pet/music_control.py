@@ -4,17 +4,20 @@ Windows 优先读取 Windows.Media.Control 的全局媒体 Sessions；只有目�
 暴露可控制 Session 时才发送系统媒体键。macOS 的 Apple Music 与 Spotify 使用各自的
 AppleScript adapter，QQ 音乐、网易云和酷狗在运行时使用系统媒体键作为基础控制回退。
 本模块不把“找到安装文件”或“启动客户端”视为已连接，也不实现或伪造任何私人音乐 API。
+随机播放会综合运行状态、窗口、媒体 Session、控制能力和本机成功/失败历史自动排序，
+首个 Provider 失败后继续尝试下一个；基础控制始终留在最近真正启动播放的 Provider。
 """
 
 from __future__ import annotations
 
 import asyncio
 import ctypes
+import logging
 import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Mapping
@@ -27,17 +30,22 @@ from .music_playback import (
     BasicRandomArtistPlaybackManager,
     ExactMusicPlaybackManager,
     MusicPlaybackError,
+    MusicPlaybackOutcome,
     MusicProviderAdapter,
     SongPlaybackResult,
     build_provider_adapters,
 )
 
 
+LOGGER = logging.getLogger(__name__)
+SUPPORTED_PROVIDERS = ("qq", "netease", "kugou", "apple", "spotify")
+
+
 PROVIDER_SESSION_MARKERS = {
     "qq": ("qqmusic", "tencent.qqmusic"),
     "netease": ("cloudmusic", "netease", "music.163"),
     "kugou": ("kugou", "kgmusic"),
-    "apple": ("applemusic", "apple.music", "music.exe"),
+    "apple": ("applemusic", "apple.music", "appleinc.applemusic"),
     "spotify": ("spotify",),
 }
 
@@ -88,6 +96,9 @@ class MusicProviderStatus:
     application_running: bool = False
     session_id: str = ""
     track: TrackInfo | None = None
+    window_accessible: bool = False
+    random_artist_capable: bool = False
+    last_call_success: bool | None = None
 
     @property
     def can_control(self) -> bool:
@@ -107,6 +118,42 @@ class MusicControlResult:
     message: str
     status: MusicProviderStatus
     used_fallback: bool = False
+
+
+@dataclass(frozen=True)
+class MusicProviderScore:
+    """自动选择时一个 Provider 的可解释评分。"""
+
+    provider: str
+    score: int
+    reasons: tuple[str, ...]
+    status: MusicProviderStatus
+
+
+@dataclass(frozen=True)
+class ManagedMusicProvider:
+    """把独立 Adapter 纳入统一的检测、启动、随机播放与曲目信息接口。"""
+
+    manager: "MusicProviderManager"
+    provider: str
+
+    def detect(self) -> MusicProviderStatus:
+        return self.manager.detect(self.provider)
+
+    def is_running(self) -> bool:
+        return self.manager.is_running(self.provider)
+
+    def can_control(self) -> bool:
+        return self.manager.can_control(self.provider)
+
+    def launch_or_activate(self) -> bool:
+        return self.manager.launch_or_activate(self.provider)
+
+    def play_random_artist(self, artist: str) -> SongPlaybackResult:
+        return self.manager.play_song(self.provider, "", artist, random_artist=True)
+
+    def read_current_track(self) -> TrackInfo | None:
+        return self.manager.current_track(self.provider)
 
 
 @dataclass(frozen=True)
@@ -222,6 +269,7 @@ class MusicProviderManager:
         process_checker: Callable[[str], bool] | None = None,
         command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         media_key_sender: Callable[[str], bool] | None = None,
+        window_checker: Callable[[str], bool] | None = None,
         playback_adapters: Mapping[str, MusicProviderAdapter] | None = None,
         playback_verify_timeout: float = 5.0,
         playback_poll_interval: float = 0.55,
@@ -234,6 +282,7 @@ class MusicProviderManager:
         self.process_checker = process_checker or self._default_process_checker
         self.command_runner = command_runner
         self.media_key_sender = media_key_sender or self._default_media_key_sender
+        self.window_checker = window_checker or self._default_window_checker
         self._cache: dict[str, MusicProviderStatus] = {}
         adapters = playback_adapters or build_provider_adapters(
             settings,
@@ -241,6 +290,8 @@ class MusicProviderManager:
             client_finder=client_finder,
             command_runner=command_runner,
         )
+        self._playback_adapters = dict(adapters)
+        self.active_provider: str | None = None
         self.playback_manager = ExactMusicPlaybackManager(
             adapters,
             self.current_track,
@@ -258,6 +309,15 @@ class MusicProviderManager:
         """返回缓存；没有缓存时只做安装检测，不声称已经建立控制。"""
 
         normalized = self._normalize(provider)
+        if normalized == "auto":
+            current = self.active_provider
+            if current:
+                return self.cached_status(current)
+            return MusicProviderStatus(
+                "auto",
+                MusicControlState.NOT_DETECTED,
+                "音乐播放器将自动选择；尚未开始播放。",
+            )
         cached = self._cache.get(normalized)
         if cached is not None:
             return cached
@@ -271,6 +331,7 @@ class MusicProviderManager:
             else f"未检测到{label}应用。",
             application_detected=detected,
         )
+        status = self._decorate_status(status)
         self._cache[normalized] = status
         return status
 
@@ -278,19 +339,139 @@ class MusicProviderManager:
         """刷新真实状态；macOS 只在用户主动刷新时探测 Apple Events 权限。"""
 
         normalized = self._normalize(provider)
+        if normalized == "auto":
+            return self.cached_status("auto")
         if self.platform_name == "win32":
             status = self._inspect_windows(normalized)
         elif self.platform_name == "darwin":
             status = self._inspect_macos(normalized, probe_control=probe_control)
         else:
             status = self.cached_status(normalized)
+        status = self._decorate_status(status)
         self._cache[normalized] = status
         return status
+
+    def detect(self, provider: str) -> MusicProviderStatus:
+        """供统一 Provider API 使用的安装、运行、窗口与控制能力检测。"""
+
+        return self.inspect(provider, probe_control=False)
+
+    def provider(self, provider: str) -> ManagedMusicProvider:
+        """返回带统一能力方法的 Provider facade，各平台播放细节仍由独立 Adapter 实现。"""
+
+        normalized = self._normalize(provider)
+        if normalized == "auto":
+            raise ValueError("auto 不是单一 Provider")
+        return ManagedMusicProvider(self, normalized)
+
+    def detect_all(self, *, probe_control: bool = False) -> dict[str, MusicProviderStatus]:
+        """一次刷新全部 Provider；Windows 复用同一份 GSMTC Session 快照。"""
+
+        statuses: dict[str, MusicProviderStatus] = {}
+        if self.platform_name == "win32":
+            try:
+                sessions = self.windows_bridge.sessions()
+                session_error: Exception | None = None
+            except Exception as exc:
+                sessions = ()
+                session_error = exc
+            for provider in SUPPORTED_PROVIDERS:
+                status = self._inspect_windows(
+                    provider,
+                    sessions=sessions,
+                    session_error=session_error,
+                )
+                status = self._decorate_status(status)
+                self._cache[provider] = status
+                statuses[provider] = status
+            return statuses
+        for provider in SUPPORTED_PROVIDERS:
+            statuses[provider] = self.inspect(provider, probe_control=probe_control)
+        return statuses
+
+    def ranked_providers(self, *, probe_control: bool = True) -> tuple[MusicProviderScore, ...]:
+        """按真实可用性和本机成败历史排序，只返回当前有可能调用的播放器。"""
+
+        statuses = self.detect_all(probe_control=probe_control)
+        ranked = [
+            self._score_provider(status)
+            for status in statuses.values()
+            if status.application_detected or status.application_running or bool(status.session_id)
+        ]
+        ranked.sort(key=lambda item: (-item.score, SUPPORTED_PROVIDERS.index(item.provider)))
+        for item in ranked:
+            LOGGER.debug(
+                "music_auto_select provider=%s score=%s reason=%s",
+                item.provider,
+                item.score,
+                "+".join(item.reasons) or "fallback",
+            )
+        return tuple(ranked)
+
+    def auto_status_text(self) -> str:
+        """返回设置页可直接显示的自动选择、当前播放器和检测摘要。"""
+
+        statuses = {provider: self.cached_status(provider) for provider in SUPPORTED_PROVIDERS}
+        detected = [
+            MUSIC_SERVICE_LABELS[provider]
+            for provider, status in statuses.items()
+            if status.application_detected or status.application_running or status.session_id
+        ]
+        current = MUSIC_SERVICE_LABELS.get(self.active_provider or "", "尚未开始播放")
+        detected_text = "、".join(detected) if detected else "暂未检测到播放器"
+        return f"音乐播放器：自动选择\n当前使用：{current}\n已检测：{detected_text}"
+
+    def is_running(self, provider: str) -> bool:
+        return self.inspect(provider).application_running
+
+    def can_control(self, provider: str) -> bool:
+        return self.inspect(provider, probe_control=True).can_control
+
+    def read_current_track(self, provider: str = "auto") -> TrackInfo | None:
+        return self.current_track(provider)
+
+    def launch_or_activate(self, provider: str) -> bool:
+        """显式播放流程可调用的客户端启动入口；单独启动不代表播放成功。"""
+
+        normalized = self._normalize(provider)
+        if normalized == "auto":
+            ranked = self.ranked_providers(probe_control=False)
+            normalized = ranked[0].provider if ranked else ""
+        if not normalized:
+            return False
+        client = self._client(normalized)
+        if client is None:
+            return False
+        try:
+            if self.platform_name == "darwin":
+                subprocess.Popen(
+                    ["open", "-a", str(client)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                subprocess.Popen(
+                    [str(client)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except OSError:
+            return False
+        return True
 
     def control(self, provider: str, action: str) -> MusicControlResult:
         """执行基础播放命令；搜索歌曲不经过此入口。"""
 
         normalized = self._normalize(provider)
+        if normalized == "auto":
+            normalized = self._control_provider()
+            if not normalized:
+                status = MusicProviderStatus(
+                    "auto",
+                    MusicControlState.NOT_DETECTED,
+                    "还没有正在播放的音乐软件，请先点击“随机听一首陈楚生”。",
+                )
+                return MusicControlResult(False, "auto", action, status.message, status)
         if action == "status":
             status = self.inspect(normalized, probe_control=True)
             message = status.track.display_text() if status.track else status.message
@@ -317,13 +498,101 @@ class MusicProviderManager:
 
         normalized = self._normalize(provider)
         if random_artist:
+            if normalized == "auto":
+                return self.play_random_artist_auto(artist)
             return self.random_playback_manager.play_random_artist(normalized, artist)
+        if normalized == "auto":
+            ranked = self.ranked_providers()
+            if not ranked:
+                return SongPlaybackResult(
+                    False,
+                    "auto",
+                    title,
+                    artist,
+                    "暂时没能找到可以播放的音乐软件，点击重试。",
+                    MusicPlaybackError.SEARCH_FAILED,
+                )
+            normalized = ranked[0].provider
         return self.playback_manager.play_song(normalized, title, artist)
+
+    def play_random_artist_auto(self, artist: str) -> SongPlaybackResult:
+        """按评分逐个尝试已安装 Provider，只有全部失败才向用户报告总失败。"""
+
+        ranked = self.ranked_providers(probe_control=True)
+        attempted: list[str] = []
+        last_result: SongPlaybackResult | None = None
+        for candidate in ranked:
+            provider = candidate.provider
+            attempted.append(provider)
+            reason = "+".join(candidate.reasons) or "fallback"
+            try:
+                result = self.random_playback_manager.play_random_artist(provider, artist)
+            except Exception as exc:
+                LOGGER.exception(
+                    "music_auto_select provider=%s score=%s reason=%s result=failed error=%r",
+                    provider,
+                    candidate.score,
+                    reason,
+                    exc,
+                )
+                result = SongPlaybackResult(
+                    False,
+                    provider,
+                    "",
+                    artist,
+                    "播放器调用失败。",
+                    MusicPlaybackError.PLAY_ACTION_FAILED,
+                )
+            if result.success:
+                self._record_provider_result(provider, True)
+                self.active_provider = provider
+                label = MUSIC_SERVICE_LABELS[provider]
+                outcome = result.outcome or MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+                if outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED:
+                    message = f"已自动选择{label}，正在播放{artist}的歌曲。"
+                else:
+                    message = f"已自动选择{label}并发起播放；当前歌曲信息暂时无法读取。"
+                LOGGER.debug(
+                    "music_auto_select provider=%s score=%s reason=%s result=success outcome=%s",
+                    provider,
+                    candidate.score,
+                    reason,
+                    outcome.value,
+                )
+                return replace(
+                    result,
+                    message=message,
+                    outcome=outcome,
+                    attempted_providers=tuple(attempted),
+                )
+            error = result.error_code.value if result.error_code else "UNKNOWN"
+            self._record_provider_result(provider, False, error)
+            LOGGER.debug(
+                "music_auto_select provider=%s score=%s reason=%s result=failed error=%s",
+                provider,
+                candidate.score,
+                reason,
+                error,
+            )
+            last_result = result
+        return SongPlaybackResult(
+            False,
+            last_result.provider if last_result else "auto",
+            "",
+            artist,
+            "暂时没能找到可以播放的音乐软件，点击重试。",
+            last_result.error_code if last_result else MusicPlaybackError.SEARCH_FAILED,
+            attempted_providers=tuple(attempted),
+        )
 
     def current_track(self, provider: str) -> TrackInfo | None:
         """直接读取当前媒体信息供点歌校验使用，不复用可能过期的状态缓存。"""
 
         normalized = self._normalize(provider)
+        if normalized == "auto":
+            normalized = self.active_provider or ""
+            if not normalized:
+                return None
         if self.platform_name == "win32":
             sessions = self.windows_bridge.sessions()
             session = self._matching_session(normalized, sessions)
@@ -333,13 +602,24 @@ class MusicProviderManager:
             return self._parse_macos_track(output) if result_type == "ok" else None
         return None
 
-    def _inspect_windows(self, provider: str) -> MusicProviderStatus:
+    def _inspect_windows(
+        self,
+        provider: str,
+        *,
+        sessions: tuple[WindowsSessionSnapshot, ...] | None = None,
+        session_error: Exception | None = None,
+    ) -> MusicProviderStatus:
         detected = self._client(provider) is not None
         running = self._running(provider)
         label = MUSIC_SERVICE_LABELS[provider]
-        try:
-            sessions = self.windows_bridge.sessions()
-        except Exception as exc:
+        if sessions is None and session_error is None:
+            try:
+                sessions = self.windows_bridge.sessions()
+            except Exception as exc:
+                sessions = ()
+                session_error = exc
+        if session_error is not None:
+            exc = session_error
             if running:
                 return MusicProviderStatus(
                     provider,
@@ -353,6 +633,7 @@ class MusicProviderManager:
             if not isinstance(exc, (ImportError, OSError)) and detected:
                 message += " Windows 媒体控制暂时不可用。"
             return MusicProviderStatus(provider, state, message, detected, running)
+        sessions = sessions or ()
         session = self._matching_session(provider, sessions)
         if session is not None:
             suffix = "已建立播放控制。" if session.controls else "已发现媒体 Session，但客户端未开放控制按钮。"
@@ -383,14 +664,14 @@ class MusicProviderManager:
         )
 
     def _control_windows(self, provider: str, action: str) -> MusicControlResult:
-        status = self._inspect_windows(provider)
+        status = self._decorate_status(self._inspect_windows(provider))
         if status.state is MusicControlState.CONTROL_READY and status.session_id:
             try:
                 success = self.windows_bridge.control(status.session_id, action)
             except Exception:
                 success = False
             if success:
-                refreshed = self._inspect_windows(provider)
+                refreshed = self._decorate_status(self._inspect_windows(provider))
                 self._cache[provider] = refreshed
                 return MusicControlResult(True, provider, action, self._action_message(action, refreshed), refreshed)
         if status.application_running and self.media_key_sender(action):
@@ -402,6 +683,7 @@ class MusicProviderManager:
                 True,
                 track=status.track,
             )
+            fallback = self._decorate_status(fallback)
             self._cache[provider] = fallback
             return MusicControlResult(True, provider, action, self._action_message(action, fallback), fallback, True)
         self._cache[provider] = status
@@ -450,14 +732,14 @@ class MusicProviderManager:
         )
 
     def _control_macos(self, provider: str, action: str) -> MusicControlResult:
-        status = self._inspect_macos(provider, probe_control=False)
+        status = self._decorate_status(self._inspect_macos(provider, probe_control=False))
         if not status.application_running:
             self._cache[provider] = status
             return MusicControlResult(False, provider, action, status.message, status)
         if provider in {"apple", "spotify"}:
             result_type, output = self._run_macos_script(provider, action)
             if result_type == "ok":
-                refreshed = self._inspect_macos(provider, probe_control=True)
+                refreshed = self._decorate_status(self._inspect_macos(provider, probe_control=True))
                 self._cache[provider] = refreshed
                 return MusicControlResult(True, provider, action, self._action_message(action, refreshed), refreshed)
             if result_type == "permission":
@@ -472,6 +754,7 @@ class MusicProviderManager:
                 status.application_detected,
                 True,
             )
+            fallback = self._decorate_status(fallback)
             self._cache[provider] = fallback
             return MusicControlResult(True, provider, action, self._action_message(action, fallback), fallback, True)
         error = MusicProviderStatus(
@@ -557,8 +840,160 @@ class MusicProviderManager:
         }.get(provider, "")
         return self.client_finder(provider, custom)
 
+    def _decorate_status(self, status: MusicProviderStatus) -> MusicProviderStatus:
+        """补齐窗口、随机歌手能力与最近调用结果，避免各平台构造逻辑重复。"""
+
+        if status.provider not in SUPPORTED_PROVIDERS:
+            return status
+        window_accessible = False
+        if status.application_running:
+            try:
+                window_accessible = bool(self.window_checker(status.provider))
+            except Exception:
+                window_accessible = False
+        history = self._history(status.provider)
+        last_success = float(history.get("last_success_at", 0.0) or 0.0)
+        last_failure = float(history.get("last_failure_at", 0.0) or 0.0)
+        last_call_success: bool | None = None
+        if last_success or last_failure:
+            last_call_success = last_success >= last_failure
+        capable = status.provider in self._playback_adapters and (
+            status.application_detected or status.application_running
+        )
+        return replace(
+            status,
+            window_accessible=window_accessible,
+            random_artist_capable=capable,
+            last_call_success=last_call_success,
+        )
+
+    def _score_provider(self, status: MusicProviderStatus) -> MusicProviderScore:
+        score = 0
+        reasons: list[str] = []
+        history = self._history(status.provider)
+        if status.application_running:
+            score += 40
+            reasons.append("running")
+        if status.can_control:
+            score += 30
+            reasons.append("controllable")
+        if status.session_id:
+            score += 15
+            reasons.append("media_session")
+        if status.window_accessible:
+            score += 15
+            reasons.append("window")
+        if status.application_detected:
+            score += 10
+            reasons.append("installed")
+        if status.random_artist_capable:
+            score += 10
+            reasons.append("artist_playback")
+        if int(history.get("success_count", 0) or 0) > 0:
+            score += 40
+            reasons.append("last_success")
+        if self.active_provider == status.provider:
+            score += 60
+            reasons.append("current_provider")
+        if self.settings.music_service == status.provider:
+            score += 20
+            reasons.append("preferred")
+        last_success = float(history.get("last_success_at", 0.0) or 0.0)
+        last_failure = float(history.get("last_failure_at", 0.0) or 0.0)
+        if last_failure > last_success:
+            score -= 30
+            reasons.append("recent_failure")
+        last_error = str(history.get("last_error", ""))
+        if last_error == MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE.value:
+            score -= 30
+            reasons.append("ui_automation_unavailable")
+        consecutive = int(history.get("consecutive_failures", 0) or 0)
+        if consecutive > 1:
+            score -= min(50, (consecutive - 1) * 10)
+            reasons.append(f"failures_{consecutive}")
+        return MusicProviderScore(status.provider, score, tuple(reasons), status)
+
+    def _history(self, provider: str, *, create: bool = False) -> dict[str, object]:
+        history = self.settings.music_provider_history
+        entry = history.get(provider)
+        if not isinstance(entry, dict):
+            entry = {
+                "success_count": 0,
+                "failure_count": 0,
+                "consecutive_failures": 0,
+                "last_success_at": 0.0,
+                "last_failure_at": 0.0,
+                "last_error": "",
+            }
+            if create:
+                history[provider] = entry
+        return entry
+
+    def _record_provider_result(self, provider: str, success: bool, error: str = "") -> None:
+        entry = self._history(provider, create=True)
+        now = time.time()
+        if success:
+            entry["success_count"] = int(entry.get("success_count", 0) or 0) + 1
+            entry["consecutive_failures"] = 0
+            entry["last_success_at"] = now
+            entry["last_error"] = ""
+        else:
+            entry["failure_count"] = int(entry.get("failure_count", 0) or 0) + 1
+            entry["consecutive_failures"] = int(entry.get("consecutive_failures", 0) or 0) + 1
+            entry["last_failure_at"] = now
+            entry["last_error"] = str(error)[:80]
+        cached = self._cache.get(provider)
+        if cached is not None:
+            self._cache[provider] = self._decorate_status(cached)
+
+    def _control_provider(self) -> str:
+        """基础控制锁定最近实际播放成功的平台；没有时才寻找运行中的 Session。"""
+
+        if self.active_provider:
+            return self.active_provider
+        return next(
+            (
+                item.provider
+                for item in self.ranked_providers(probe_control=True)
+                if item.status.application_running and item.status.can_control
+            ),
+            "",
+        )
+
     def _running(self, provider: str) -> bool:
         return any(self.process_checker(name) for name in PROVIDER_PROCESS_NAMES[provider])
+
+    def _default_window_checker(self, provider: str) -> bool:
+        """检测 Provider 是否拥有可见顶层窗口；不激活窗口也不读取窗口文本内容。"""
+
+        if self.platform_name != "win32":
+            return False
+        from .music import _windows_process_ids
+
+        process_ids: set[int] = set()
+        for name in PROVIDER_PROCESS_NAMES[provider]:
+            if name.casefold().endswith(".exe"):
+                process_ids.update(_windows_process_ids(name))
+        if not process_ids:
+            return False
+        found = ctypes.c_bool(False)
+        user32 = ctypes.windll.user32
+        callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        @callback_type
+        def callback(hwnd, _lparam):
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if int(pid.value) in process_ids and user32.IsWindowVisible(hwnd):
+                found.value = True
+                return False
+            return True
+
+        try:
+            user32.EnumWindows(callback, 0)
+        except (AttributeError, OSError):
+            return False
+        return bool(found.value)
 
     def _default_process_checker(self, process_name: str) -> bool:
         if self.platform_name == "win32":
@@ -607,7 +1042,7 @@ class MusicProviderManager:
 
     @staticmethod
     def _normalize(provider: str) -> str:
-        return provider if provider in MUSIC_SERVICE_LABELS else "netease"
+        return provider if provider == "auto" or provider in MUSIC_SERVICE_LABELS else "auto"
 
 
 def _send_macos_media_key(action: str) -> bool:
@@ -713,7 +1148,7 @@ class MusicController(QObject):
             return False
         self._thread = MusicCommandThread(
             self.manager,
-            self.settings.music_service,
+            "auto",
             action,
             self,
         )
@@ -736,7 +1171,7 @@ class MusicController(QObject):
             return False
         self._thread = MusicCommandThread(
             self.manager,
-            self.settings.music_service,
+            "auto" if random_artist else self.settings.music_service,
             "play_song",
             self,
             title=title,

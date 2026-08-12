@@ -14,7 +14,7 @@
 - 支持 Agent 状态缓存、异步 AI、无缝离线降级以及工作、爱意、鼓励和安慰动作；
 - 在内存中保留最近三十轮完整聊天，并把更早内容滚动压缩为长期摘要；
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
-- 异步读取 Windows 系统媒体 Session 或调用 macOS Apple Events，提供真实的本机播放控制；
+- 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
@@ -1783,10 +1783,10 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """在当前播放器中搜索陈楚生并随机开始播放。"""
+        """自动寻找最可用的本机播放器并随机开始播放陈楚生。"""
 
         if self.music_controller.play_song("", "陈楚生", random_artist=True):
-            self.show_speech("正在播放器中随机播放一首陈楚生的歌曲…", 4200)
+            self.show_speech("正在自动寻找可用播放器，并随机播放一首陈楚生…", 4200)
         else:
             self.show_speech("音乐操作正在处理中，请稍等一下。", 3200)
         return "陈楚生随机歌曲"
@@ -1801,7 +1801,7 @@ class PetWindow(QWidget):
         return "陈楚生随机歌曲"
 
     def control_music(self, action: str) -> bool:
-        """异步控制当前选择的播放器，不启动应用也不抢夺输入焦点。"""
+        """异步控制刚才真正开始播放的 Provider，不重新选择其他播放器。"""
 
         if self.music_controller.perform(action):
             self.show_speech("正在连接系统播放器…", 2200)
@@ -1816,6 +1816,8 @@ class PetWindow(QWidget):
         if result.success and not is_status:
             self._change_ambient_activity("headphones")
             self._manual_activity_until = time.monotonic() + 45
+        if isinstance(result, SongPlaybackResult):
+            save_settings(self.settings)
         self.show_speech(result.message, 6200)
 
     def set_activity(self, activity: str) -> None:
@@ -2233,7 +2235,7 @@ class PetWindow(QWidget):
         dialogue_action = QAction("和六毛聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         menu.addAction(dialogue_action)
-        work_menu = menu.addMenu("工作打卡/工作计时 ›")
+        work_menu = menu.addMenu("工作打卡/工作计时")
         start_work = QAction("开始工作计时" if not self.work_timer.is_running else "工作计时进行中", self)
         start_work.setEnabled(not self.work_timer.is_running)
         start_work.triggered.connect(self.start_work_timer)
@@ -2246,7 +2248,7 @@ class PetWindow(QWidget):
             action = QAction(label, self)
             action.triggered.connect(callback)
             work_menu.addAction(action)
-        music_menu = menu.addMenu("音乐 ›")
+        music_menu = menu.addMenu("音乐")
         random_song = QAction("随机听一首陈楚生", self)
         random_song.triggered.connect(self.play_random_song)
         music_menu.addAction(random_song)
@@ -2260,7 +2262,7 @@ class PetWindow(QWidget):
         study_action = QAction("搭子自习室…", self)
         study_action.triggered.connect(self.open_social_hub)
         menu.addAction(study_action)
-        action_menu = menu.addMenu("动作 ›")
+        action_menu = menu.addMenu("动作")
         for group_name, entries in ACTION_GROUPS:
             group_menu = action_menu.addMenu(group_name)
             for label, key in entries:
@@ -2275,7 +2277,7 @@ class PetWindow(QWidget):
         pause.setChecked(self.paused)
         pause.triggered.connect(lambda: self.set_paused(not self.paused))
         action_menu.addAction(pause)
-        food_menu = menu.addMenu("给六毛喂食 ›")
+        food_menu = menu.addMenu("给六毛喂食")
         for food in FOOD_OPTIONS:
             action = QAction(food.label, self)
             action.triggered.connect(lambda _checked=False, key=food.key: self.feed_pet(key))
@@ -2284,7 +2286,7 @@ class PetWindow(QWidget):
         mood = QAction("查看心情与能量", self)
         mood.triggered.connect(self.show_companion_status)
         food_menu.addAction(mood)
-        outfit_menu = menu.addMenu("换装与外观 ›")
+        outfit_menu = menu.addMenu("换装与外观")
         classic = QAction("经典六毛", self)
         classic.setCheckable(True)
         classic.setChecked(not self.settings.equipped_outfit)
@@ -2307,7 +2309,7 @@ class PetWindow(QWidget):
             action.setChecked(checked)
             action.toggled.connect(callback)
             menu.addAction(action)
-        system_menu = menu.addMenu("系统与设置 ›")
+        system_menu = menu.addMenu("系统与设置")
         ai_action = QAction("AI 与陪伴设置", self)
         ai_action.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
         system_menu.addAction(ai_action)
