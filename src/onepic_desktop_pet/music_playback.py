@@ -413,6 +413,461 @@ class WindowsUIAutomationAdapter:
         while time.monotonic() < deadline:
             try:
                 if window.Exists(0, 0):
-                    ret×M¶¶‰ËkºwµçA‘•˜}Ñ¥Ñ±•}™É½µ}É½Ü¡Í•±˜°É½Ü°…ÉÑ¥ÍĞèÍÑÈ¤€´øÍÑÈè(€€€€€€€¥¹½É•€ôì(€€€€€€€€€€€}…¹½¹¥…°¡…ÉÑ¥ÍĞ¤°(€€€€€€€€€€€€¨¡}…¹½¹¥…°¡¹…µ”¤™½È¹…µ”¥¸Í•±˜¹Í½¹}Ñ…‰}¹…µ•Ì¤°(€€€€€€€€€€€€¨¡}…¹½¹¥…°¡¹…µ”¤™½È¹…µ”¥¸Í•±˜¹Á±…å}‰ÕÑÑ½¹}¹…µ•Ì¤°(€€€€€€€€€€€€‹š¶3šnÈˆ°(€€€€€€€€€€€€‰Í½¹œˆ°(€€€€€€€ô(€€€€€€€™½È½¹ÑÉ½°¥¸Í•±˜¹}İ…±¬¡É½Ü°µ…á}‘•ÁÑ ôĞ¤è(€€€€€€€€€€€¹…µ”€ôÍÑÈ¡•Ñ…ÑÑÈ¡½¹ÑÉ½°°€‰9…µ”ˆ°€ˆˆ¤½È€ˆˆ¤¹ÍÑÉ¥À ¤(€€€€€€€€€€€…¹½¹¥…°€ô}…¹½¹¥…°¡¹…µ”¤(€€€€€€€€€€€¥˜…¹½¹¥…°…¹…¹½¹¥…°¹½Ğ¥¸¥¹½É•…¹±•¸¡¹…µ”¤€ğô€àÀè(€€€€€€€€€€€€€€€É•ÑÕÉ¸¹…µ”(€€€€€€€É•ÑÕÉ¸€ˆˆ((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}İ…±¬¡É½½Ğ°€¨°µ…á}‘•ÁÑ è¥¹Ğ¤è(€€€€€€€ÍÑ…¬€ôl¡É½½Ğ°€À¥t(€€€€€€€Í••¸èÍ•Ñm¥¹Ñt€ôÍ•Ğ ¤(€€€€€€€İ¡¥±”ÍÑ…¬è(€€€€€€€€€€€½¹ÑÉ½°°‘•ÁÑ €ôÍÑ…¬¹Á½À ¤(€€€€€€€€€€€µ…É­•È€ô¥¡½¹ÑÉ½°¤(€€€€€€€€€€€¥˜µ…É­•È¥¸Í••¸è(€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€Í••¸¹…‘¡µ…É­•È¤(€€€€€€€€€€€å¥•±½¹ÑÉ½°(€€€€€€€€€€€¥˜‘•ÁÑ €øôµ…á}‘•ÁÑ è(€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€¡¥±‘É•¸€ôÑÕÁ±”¡½¹ÑÉ½°¹•Ñ¡¥±‘É•¸ ¤¤(€€€€€€€€€€€•á•ÁĞá•ÁÑ¥½¸è(€€€€€€€€€€€€€€€¡¥±‘É•¸€ô€ ¤(€€€€€€€€€€€ÍÑ…¬¹•áÑ•¹ ¡¡¥±°‘•ÁÑ €¬€Ä¤™½È¡¥±¥¸É•Ù•ÉÍ•¡¡¥±‘É•¸¤¤((€€€‘•˜}ÕÍÑ½µ}Á…Ñ ¡Í•±˜¤€´øÍÑÈè(€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€€€€‰ÅÄˆèÍ•±˜¹Í•ÑÑ¥¹Ì¹ÅÅ}µÕÍ¥}Á…Ñ °(€€€€€€€€€€€€‰¹•Ñ•…Í”ˆèÍ•±˜¹Í•ÑÑ¥¹Ì¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ °(€€€€€€€€€€€€‰­Õ½ÔˆèÍ•±˜¹Í•ÑÑ¥¹Ì¹­Õ½Õ}µÕÍ¥}Á…Ñ °(€€€€€€€€€€€€‰…ÁÁ±”ˆèÍ•±˜¹Í•ÑÑ¥¹Ì¹…ÁÁ±•}µÕÍ¥}Á…Ñ °(€€€€€€€€€€€€‰ÍÁ½Ñ¥™äˆèÍ•±˜¹Í•ÑÑ¥¹Ì¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ °(€€€€€€€ô¹•Ğ¡Í•±˜¹ÁÉ½Ù¥‘•È°€ˆˆ¤(()±…ÍÌEE5ÕÍ¥‘…ÁÑ•È¡]¥¹‘½İÍU%ÕÑ½µ…Ñ¥½¹‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰ÅÄˆ(€€€İ¥¹‘½İ}Á…ÑÑ•É¸€ô€ˆ¸¨¡EG¦~Ï’æAñEE5ÕÍ¥Œ¤¸¨ˆ(€€€Í•…É¡}¹…µ•Ì€ô€ ‹šBsÒ‹¦~Ï’æ@ˆ°€‹šBsÒˆˆ°€‰M•…É ˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹šJ·šRûš¶3šnÈˆ°€‰A±…äˆ¤(()±…ÍÌ9•Ñ•…Í•5ÕÍ¥‘…ÁÑ•È¡]¥¹‘½İÍU%ÕÑ½µ…Ñ¥½¹‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰¹•Ñ•…Í”ˆ(€€€İ¥¹‘½İ}Á…ÑÑ•É¸€ô€ˆ¸¨£öGšbO’êG¦~Ï’æAñ9•Ñ…Í•ñ±½Õ‘5ÕÍ¥Œ¤¸¨ˆ(€€€Í•…É¡}¹…µ•Ì€ô€ ‹šBsÒˆˆ°€‹šBsÒ‹¦~Ï’æC¢¦ŠGšJ·–º‹R£š"Üˆ°€‰M•…É ˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹šJ·šRû–£¦ ˆ°€‰A±…äˆ¤(()±…ÍÌ-Õ½Õ5ÕÍ¥‘…ÁÑ•È¡]¥¹‘½İÍU%ÕÑ½µ…Ñ¥½¹‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰­Õ½Ôˆ(€€€İ¥¹‘½İ}Á…ÑÑ•É¸€ô€ˆ¸¨£¦ß._¦~Ï’æAñ-Õ½Õñ-5ÕÍ¥Œ¤¸¨ˆ(€€€Í•…É¡}¹…µ•Ì€ô€ ‹šBsÒˆˆ°€‹šBsÒ‹¦~Ï’æ@ˆ°€‰M•…É ˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹®/–6ÏšJ·šRøˆ°€‰A±…äˆ¤(()±…ÍÌÁÁ±•5ÕÍ¥]¥¹‘½İÍ‘…ÁÑ•È¡]¥¹‘½İÍU%ÕÑ½µ…Ñ¥½¹‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰…ÁÁ±”ˆ(€€€İ¥¹‘½İ}Á…ÑÑ•É¸€ô€ˆ¸¨¡ÁÁ±”5ÕÍ¥ó¦~Ï’æ@¤¸¨ˆ(€€€Í•…É¡}¹…µ•Ì€ô€ ‹šBsÒˆˆ°€‰M•…É ˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹šJ·šRûš¶3šnÈˆ°€‰A±…äˆ°€‰A±…äÍ½¹œˆ¤(()±…ÍÌMÁ½Ñ¥™å]¥¹‘½İÍ‘…ÁÑ•È¡]¥¹‘½İÍU%ÕÑ½µ…Ñ¥½¹‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰ÍÁ½Ñ¥™äˆ(€€€İ¥¹‘½İ}Á…ÑÑ•É¸€ô€ˆ¸©MÁ½Ñ¥™ä¸¨ˆ(€€€Í•…É¡}¹…µ•Ì€ô€ ‹šBsÒˆˆ°€‰M•…É ˆ¤(€€€Í½¹}Ñ…‰}¹…µ•Ì€ô€ ‹š¶3šnÈˆ°€‰M½¹Ìˆ°€‰QÉ…­Ìˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹šJ·šRûš¶3šnÈˆ°€‰A±…äˆ°€‰A±…äÍ½¹œˆ¤(()‘•˜}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡Ù…±Õ”èÍÑÈ¤€´øÍÑÈè(€€€É•ÑÕÉ¸Ù…±Õ”¹É•Á±…” ‰qpˆ°€‰qqqpˆ¤¹É•Á±…” œˆœ°€qpˆœ¤(()±…ÍÌÁÁ±•5ÕÍ¥5…‘…ÁÑ•Èè(€€€€ˆˆ‹¦k¢şÁÁ±”Ù•¹ÑÌƒ–r£R£š"ß¦~Ï’æC¢ÖšZg–êO’â·šBsÒ‹–æÛšJ·šRûÊû†»š¶3šnËˆˆˆ((€€€ÁÉ½Ù¥‘•È€ô€‰…ÁÁ±”ˆ((€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°½µµ…¹‘}ÉÕ¹¹•Èè…±±…‰±•l¸¸¸°ÍÕ‰ÁÉ½•ÍÌ¹½µÁ±•Ñ•‘AÉ½•ÍÍt€ôÍÕ‰ÁÉ½•ÍÌ¹ÉÕ¸¤€´ø9½¹”è(€€€€€€€Í•±˜¹½µµ…¹‘}ÉÕ¹¹•È€ô½µµ…¹‘}ÉÕ¹¹•È((€€€‘•˜Í•…É ¡Í•±˜°Ñ¥Ñ±”èÍÑÈ°…ÉÑ¥ÍĞèÍÑÈ¤€´øM•ÅÕ•¹•mM½¹…¹‘¥‘…Ñ•tè(€€€€€€€ÅÕ•Éä€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡˜‰í…ÉÑ¥ÍÑôíÑ¥Ñ±•ôˆ¹ÍÑÉ¥À ¤¤(€€€€€€€ÍÉ¥ÁĞ€ô€ (€€€€€€€€€€€€Ñ•±°…ÁÁ±¥…Ñ¥½¸€‰5ÕÍ¥Œ‰q¸œ(€€€€€€€€€€€˜Í•Ğ™½Õ¹‘QÉ…­ÌÑ¼Í•…É ±¥‰É…ÉäÁ±…å±¥ÍĞ€Ä™½È€‰íÅÕ•Éåôˆ½¹±äÍ½¹Íq¸œ(€€€€€€€€€€€€Í•Ğ½ÕÑÁÕÑQ•áĞÑ¼€ˆ‰q¸œ(€€€€€€€€€€€€É•Á•…Ğİ¥Ñ …¹‘¥‘…Ñ•QÉ…¬¥¸™½Õ¹‘QÉ…­Íq¸œ(€€€€€€€€€€€€Í•Ğ½ÕÑÁÕÑQ•áĞÑ¼½ÕÑÁÕÑQ•áĞ€˜€¡¹…µ”½˜…¹‘¥‘…Ñ•QÉ…¬…ÌÑ•áĞ¤€˜Ñ…ˆ€˜€œ(€€€€€€€€€€€€œ¡…ÉÑ¥ÍĞ½˜…¹‘¥‘…Ñ•QÉ…¬…ÌÑ•áĞ¤€˜Ñ…ˆ€˜€¡Á•ÉÍ¥ÍÑ•¹Ğ%½˜…¹‘¥‘…Ñ•QÉ…¬…ÌÑ•áĞ¤€˜±¥¹•™••‘q¸œ(€€€€€€€€€€€€•¹É•Á•…Ñq¹É•ÑÕÉ¸½ÕÑÁÕÑQ•áÑq¹•¹Ñ•±°œ(€€€€€€€€¤(€€€€€€€½µÁ±•Ñ•€ôÍ•±˜¹}ÉÕ¸¡ÍÉ¥ÁĞ¤(€€€€€€€…¹‘¥‘…Ñ•Ìè±¥ÍÑmM½¹…¹‘¥‘…Ñ•t€ômt(€€€€€€€™½È±¥¹”¥¸ÍÑÈ¡½µÁ±•Ñ•¹ÍÑ‘½ÕĞ½È€ˆˆ¤¹ÍÁ±¥Ñ±¥¹•Ì ¤è(€€€€€€€€€€€Á…ÉÑÌ€ô±¥¹”¹ÍÁ±¥Ğ ‰qĞˆ¤(€€€€€€€€€€€¥˜±•¸¡Á…ÉÑÌ¤€øô€Ìè(€€€€€€€€€€€€€€€…¹‘¥‘…Ñ•Ì¹…ÁÁ•¹¡M½¹…¹‘¥‘…Ñ”¡Í•±˜¹ÁÉ½Ù¥‘•È°Á…ÉÑÍlÁt°Á…ÉÑÍlÅt°€‰Í½¹œˆ°Á…ÉÑÍlÉt¤¤(€€€€€€€É•ÑÕÉ¸…¹‘¥‘…Ñ•Ì((€€€‘•˜Á±…ä¡Í•±˜°…¹‘¥‘…Ñ”èM½¹…¹‘¥‘…Ñ”¤€´ø‰½½°è(€€€€€€€¥‘•¹Ñ¥™¥•È€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡…¹‘¥‘…Ñ”¹¥‘•¹Ñ¥™¥•È¤(€€€€€€€¥˜¹½Ğ¥‘•¹Ñ¥™¥•Èè(€€€€€€€€€€€É•ÑÕÉ¸…±Í”(€€€€€€€ÍÉ¥ÁĞ€ô€ (€€€€€€€€€€€€Ñ•±°…ÁÁ±¥…Ñ¥½¸€‰5ÕÍ¥Œ‰q¸œ(€€€€€€€€€€€˜Í•ĞÑ…É•ÑQÉ…¬Ñ¼™¥ÉÍĞÑÉ…¬½˜±¥‰É…ÉäÁ±…å±¥ÍĞ€Äİ¡½Í”Á•ÉÍ¥ÍÑ•¹Ğ%¥Ì€‰í¥‘•¹Ñ¥™¥•Éô‰q¸œ(€€€€€€€€€€€€Á±…äÑ…É•ÑQÉ…­q¹•¹Ñ•±°œ(€€€€€€€€¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Í•±˜¹}ÉÕ¸¡ÍÉ¥ÁĞ¤(€€€€€€€•á•ÁĞAÉ½Ù¥‘•ÉM•…É¡ÉÉ½Èè(€€€€€€€€€€€É•ÑÕÉ¸…±Í”(€€€€€€€É•ÑÕÉ¸QÉÕ”((€€€‘•˜}ÉÕ¸¡Í•±˜°ÍÉ¥ÁĞèÍÑÈ¤€´øÍÕ‰ÁÉ½•ÍÌ¹½µÁ±•Ñ•‘AÉ½•ÍÌè(€€€€€€€ÑÉäè(€€€€€€€€€€€½µÁ±•Ñ•€ôÍ•±˜¹½µµ…¹‘}ÉÕ¹¹•È (€€€€€€€€€€€€€€€l‰½Í…ÍÉ¥ÁĞˆ°€ˆµ”ˆ°ÍÉ¥ÁÑt°(€€€€€€€€€€€€€€€…ÁÑÕÉ•}½ÕÑÁÕĞõQÉÕ”°(€€€€€€€€€€€€€€€Ñ•áĞõQÉÕ”°(€€€€€€€€€€€€€€€Ñ¥µ•½ÕĞôÄÀ°(€€€€€€€€€€€€€€€¡•¬õ…±Í”°(€€€€€€€€€€€€¤(€€€€€€€•á•ÁĞ€¡=MÉÉ½È°ÍÕ‰ÁÉ½•ÍÌ¹Q¥µ•½ÕÑáÁ¥É•¤…Ì•áŒè(€€€€€€€€€€€É…¥Í”AÉ½Ù¥‘•ÉM•…É¡ÉÉ½È ‰ÁÁ±”Ù•¹ÑÌÉ•ÅÕ•ÍĞ™…¥±•ˆ¤™É½´•áŒ(€€€€€€€¥˜½µÁ±•Ñ•¹É•ÑÕÉ¹½‘”€„ô€Àè(€€€€€€€€€€€É…¥Í”AÉ½Ù¥‘•ÉM•…É¡ÉÉ½È¡ÍÑÈ¡½µÁ±•Ñ•¹ÍÑ‘•ÉÈ½È€‰ÁÁ±”Ù•¹ÑÌÉ•ÅÕ•ÍĞ™…¥±•ˆ¤¤(€€€€€€€É•ÑÕÉ¸½µÁ±•Ñ•(()±…ÍÌ5…•ÍÍ¥‰¥±¥Ñå‘…ÁÑ•Èè(€€€€ˆˆ‹–r£–ŞËš:#šv•ÍÍ¥‰¥±¥Ñäƒš^Û–>«
-ç–ï–B3š^Û–2–B¯Êû†»š¶3–B7–J3š¶3š&/jš¶3šnËîOšzsˆˆˆ((€€€ÁÉ½Ù¥‘•È€ô€ˆˆ(€€€…ÁÁ±¥…Ñ¥½¹}¹…µ”€ô€ˆˆ(€€€Í½¹}Ñ…‰}¹…µ•ÌèÑÕÁ±•mÍÑÈ°€¸¸¹t€ô€ ‹š¶3šnÈˆ°€‰M½¹Ìˆ°€‰QÉ…­Ìˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•ÌèÑÕÁ±•mÍÑÈ°€¸¸¹t€ô€ ‹šJ·šRøˆ°€‹šJ·šRûš¶3šnÈˆ°€‰A±…äˆ°€‰A±…äÍ½¹œˆ¤((€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°½µµ…¹‘}ÉÕ¹¹•Èè…±±…‰±•l¸¸¸°ÍÕ‰ÁÉ½•ÍÌ¹½µÁ±•Ñ•‘AÉ½•ÍÍt€ôÍÕ‰ÁÉ½•ÍÌ¹ÉÕ¸¤€´ø9½¹”è(€€€€€€€Í•±˜¹½µµ…¹‘}ÉÕ¹¹•È€ô½µµ…¹‘}ÉÕ¹¹•È((€€€‘•˜Í•…É ¡Í•±˜°Ñ¥Ñ±”èÍÑÈ°…ÉÑ¥ÍĞèÍÑÈ¤€´øM•ÅÕ•¹•mM½¹…¹‘¥‘…Ñ•tè(€€€€€€€ÅÕ•Éä€ôÕÉ±±¥ˆ¹Á…ÉÍ”¹ÅÕ½Ñ”¡˜‰í…ÉÑ¥ÍÑôíÑ¥Ñ±•ôˆ¤(€€€€€€€ÕÉ¤€ôÍ•±˜¹}Í•…É¡}ÕÉ¤¡ÅÕ•Éä¤(€€€€€€€ÑÉäè(€€€€€€€€€€€½Á•¹•€ôÍ•±˜¹½µµ…¹‘}ÉÕ¹¹•È (€€€€€€€€€€€€€€€l‰½Á•¸ˆ°€ˆµ„ˆ°Í•±˜¹…ÁÁ±¥…Ñ¥½¹}¹…µ”°ÕÉ¥t°(€€€€€€€€€€€€€€€…ÁÑÕÉ•}½ÕÑÁÕĞõQÉÕ”°(€€€€€€€€€€€€€€€Ñ•áĞõQÉÕ”°(€€€€€€€€€€€€€€€Ñ¥µ•½ÕĞôà°(€€€€€€€€€€€€€€€¡•¬õ…±Í”°(€€€€€€€€€€€€¤(€€€€€€€•á•ÁĞ€¡=MÉÉ½È°ÍÕ‰ÁÉ½•ÍÌ¹Q¥µ•½ÕÑáÁ¥É•¤…Ì•áŒè(€€€€€€€€€€€É…¥Í”AÉ½Ù¥‘•ÉM•…É¡ÉÉ½È ‰±¥•¹ĞÍ•…É ½Õ±¹½Ğ‰”½Á•¹•ˆ¤™É½´•áŒ(€€€€€€€¥˜½Á•¹•¹É•ÑÕÉ¹½‘”€„ô€Àè(€€€€€€€€€€€É…¥Í”AÉ½Ù¥‘•ÉM•…É¡ÉÉ½È¡ÍÑÈ¡½Á•¹•¹ÍÑ‘•ÉÈ½È€‰±¥•¹ĞÍ•…É ½Õ±¹½Ğ‰”½Á•¹•ˆ¤¤(€€€€€€€¥˜¹½ĞÑ¥Ñ±”è(€€€€€€€€€€€½µÁ±•Ñ•€ôÍ•±˜¹}ÉÕ¹}…•ÍÍ¥‰¥±¥Ñä¡Í•±˜¹}…ÉÑ¥ÍÑ}…¹‘¥‘…Ñ•Í}ÍÉ¥ÁĞ¡…ÉÑ¥ÍĞ¤¤(€€€€€€€€€€€…¹‘¥‘…Ñ•Ìè±¥ÍÑmM½¹…¹‘¥‘…Ñ•t€ômt(€€€€€€€€€€€™½È±¥¹”¥¸ÍÑÈ¡½µÁ±•Ñ•¹ÍÑ‘½ÕĞ½È€ˆˆ¤¹ÍÁ±¥Ñ±¥¹•Ì ¤è(€€€€€€€€€€€€€€€Á…ÉÑÌ€ô±¥¹”¹ÍÁ±¥Ğ ‰qĞˆ¤(€€€€€€€€€€€€€€€¥˜±•¸¡Á…ÉÑÌ¤€øô€È…¹Á…ÉÑÍlÁt¹ÍÑÉ¥À ¤…¹}Í…µ•}Í½¹œ¡Á…ÉÑÍlÅt°…ÉÑ¥ÍĞ¤è(€€€€€€€€€€€€€€€€€€€…¹‘¥‘…Ñ•Ì¹…ÁÁ•¹¡M½¹…¹‘¥‘…Ñ”¡Í•±˜¹ÁÉ½Ù¥‘•È°Á…ÉÑÍlÁt°Á…ÉÑÍlÅt°€‰Í½¹œˆ¤¤(€€€€€€€€€€€É•ÑÕÉ¸…¹‘¥‘…Ñ•Ì(€€€€€€€ÍÉ¥ÁĞ€ôÍ•±˜¹}…•ÍÍ¥‰¥±¥Ñå}ÍÉ¥ÁĞ¡Ñ¥Ñ±”°…ÉÑ¥ÍĞ°Á±…äõ…±Í”¤(€€€€€€€½µÁ±•Ñ•€ôÍ•±˜¹}ÉÕ¹}…•ÍÍ¥‰¥±¥Ñä¡ÍÉ¥ÁĞ¤(€€€€€€€¥˜ÍÑÈ¡½µÁ±•Ñ•¹ÍÑ‘½ÕĞ½È€ˆˆ¤¹ÍÑÉ¥À ¤€ôô€‰5Q ˆè(€€€€€€€€€€€É•ÑÕÉ¸€¡M½¹…¹‘¥‘…Ñ”¡Í•±˜¹ÁÉ½Ù¥‘•È°Ñ¥Ñ±”°…ÉÑ¥ÍĞ°€‰Í½¹œˆ°˜‰íÑ¥Ñ±•õqÑí…ÉÑ¥ÍÑôˆ¤°¤(€€€€€€€É•ÑÕÉ¸€ ¤((€€€‘•˜Á±…ä¡Í•±˜°…¹‘¥‘…Ñ”èM½¹…¹‘¥‘…Ñ”¤€´ø‰½½°è(€€€€€€€½µÁ±•Ñ•€ôÍ•±˜¹}ÉÕ¹}…•ÍÍ¥‰¥±¥Ñä (€€€€€€€€€€€Í•±˜¹}…•ÍÍ¥‰¥±¥Ñå}ÍÉ¥ÁĞ¡…¹‘¥‘…Ñ”¹Ñ¥Ñ±”°…¹‘¥‘…Ñ”¹…ÉÑ¥ÍĞ°Á±…äõQÉÕ”¤(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸ÍÑÈ¡½µÁ±•Ñ•¹ÍÑ‘½ÕĞ½È€ˆˆ¤¹ÍÑÉ¥À ¤€ôô€‰A1eˆ((€€€‘•˜}ÉÕ¹}…•ÍÍ¥‰¥±¥Ñä¡Í•±˜°ÍÉ¥ÁĞèÍÑÈ¤€´øÍÕ‰ÁÉ½•ÍÌ¹½µÁ±•Ñ•‘AÉ½•ÍÌè(€€€€€€€ÑÉäè(€€€€€€€€€€€½µÁ±•Ñ•€ôÍ•±˜¹½µµ…¹‘}ÉÕ¹¹•È (€€€€€€€€€€€€€€€l‰½Í…ÍÉ¥ÁĞˆ°€ˆµ”ˆ°ÍÉ¥ÁÑt°(€€€€€€€€€€€€€€€…ÁÑÕÉ•}½ÕÑÁÕĞõQÉÕ”°(€€€€€€€€€€€€€€€Ñ•áĞõQÉÕ”°(€€€€€€€€€€€€€€€Ñ¥µ•½ÕĞôÄÈ°(€€€€€€€€€€€€€€€¡•¬õ…±Í”°(€€€€€€€€€€€€¤(€€€€€€€•á•ÁĞ€¡=MÉÉ½È°ÍÕ‰ÁÉ½•ÍÌ¹Q¥µ•½ÕÑáÁ¥É•¤…Ì•áŒè(€€€€€€€€€€€É…¥Í”AÉ½Ù¥‘•ÉM•…É¡ÉÉ½È ‰•ÍÍ¥‰¥±¥ÑäÉ•ÅÕ•ÍĞ™…¥±•ˆ¤™É½´•áŒ(€€€€€€€¥˜½µÁ±•Ñ•¹É•ÑÕÉ¹½‘”€„ô€Àè(€€€€€€€€€€€É…¥Í”AÉ½Ù¥‘•ÉM•…É¡ÉÉ½È¡ÍÑÈ¡½µÁ±•Ñ•¹ÍÑ‘•ÉÈ½È€‰•ÍÍ¥‰¥±¥ÑäÉ•ÅÕ•ÍĞ™…¥±•ˆ¤¤(€€€€€€€É•ÑÕÉ¸½µÁ±•Ñ•((€€€‘•˜}…•ÍÍ¥‰¥±¥Ñå}ÍÉ¥ÁĞ¡Í•±˜°Ñ¥Ñ±”èÍÑÈ°…ÉÑ¥ÍĞèÍÑÈ°€¨°Á±…äè‰½½°¤€´øÍÑÈè(€€€€€€€Í…™•}…ÁÀ€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡Í•±˜¹…ÁÁ±¥…Ñ¥½¹}¹…µ”¤(€€€€€€€Í…™•}Ñ¥Ñ±”€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡Ñ¥Ñ±”¤(€€€€€€€Í…™•}…ÉÑ¥ÍĞ€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡…ÉÑ¥ÍĞ¤(€€€€€€€Ñ…‰Ì€ô€ˆ°€ˆ¹©½¥¸¡˜œ‰í}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡¹…µ”¥ôˆœ™½È¹…µ”¥¸Í•±˜¹Í½¹}Ñ…‰}¹…µ•Ì¤(€€€€€€€‰ÕÑÑ½¹Ì€ô€ˆ°€ˆ¹©½¥¸¡˜œ‰í}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡¹…µ”¥ôˆœ™½È¹…µ”¥¸Í•±˜¹Á±…å}‰ÕÑÑ½¹}¹…µ•Ì¤(€€€€€€€…Ñ¥½¸€ô€‰ÑÉÕ”ˆ¥˜Á±…ä•±Í”€‰™…±Í”ˆ(€€€€€€€É•ÑÕÉ¸˜œœœ)Ñ•±°…ÁÁ±¥…Ñ¥½¸€‰íÍ…™•}…ÁÁôˆÑ¼…Ñ¥Ù…Ñ”)‘•±…ä€Ä¸Ô)Ñ•±°…ÁÁ±¥…Ñ¥½¸€‰MåÍÑ•´Ù•¹ÑÌˆ(€¥˜U$•±•µ•¹ÑÌ•¹…‰±•¥Ì™…±Í”Ñ¡•¸•ÉÉ½È€‰•ÍÍ¥‰¥±¥ÑäÁ•Éµ¥ÍÍ¥½¸É•ÅÕ¥É•ˆ(€Ñ•±°ÁÉ½•ÍÌ€‰íÍ…™•}…ÁÁôˆ(€€€Í•Ğ™É½¹Ñµ½ÍĞÑ¼ÑÉÕ”(€€€Í•ĞÑ…‰9…µ•ÌÑ¼íííÑ…‰Íõõô(€€€Í•ĞÁ±…å9…µ•ÌÑ¼ííí‰ÕÑÑ½¹Íõõô(€€€ÑÉä(€€€€€É•Á•…Ğİ¥Ñ ¥Ñ•µI•˜¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜™É½¹Ğİ¥¹‘½Ü¤(€€€€€€€ÑÉä(€€€€€€€€€¥˜€¡¹…µ”½˜¥Ñ•µI•˜…ÌÑ•áĞ¤¥Ì¥¸Ñ…‰9…µ•ÌÑ¡•¸±¥¬¥Ñ•µI•˜(€€€€€€€•¹ÑÉä(€€€€€•¹É•Á•…Ğ(€€€•¹ÑÉä(€€€‘•±…ä€Ä¸À(€€€É•Á•…Ğİ¥Ñ Ñ¥Ñ±•±•µ•¹Ğ¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜™É½¹Ğİ¥¹‘½Ü¤(€€€€€ÑÉä(€€€€€€€¥˜€¡¹…µ”½˜Ñ¥Ñ±•±•µ•¹Ğ…ÌÑ•áĞ¤¥Ì€‰íÍ…™•}Ñ¥Ñ±•ôˆÑ¡•¸(€€€€€€€€€Í•ĞÉ½İ±•µ•¹ĞÑ¼Á…É•¹Ğ½˜Ñ¥Ñ±•±•µ•¹Ğ(€€€€€€€€€É•Á•…Ğ€ØÑ¥µ•Ì(€€€€€€€€€€€Í•Ğ…ÉÑ¥ÍÑ½Õ¹Ñ¼™…±Í”(€€€€€€€€€€€É•Á•…Ğİ¥Ñ ¡¥±‘±•µ•¹Ğ¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜É½İ±•µ•¹Ğ¤(€€€€€€€€€€€€€ÑÉä(€€€€€€€€€€€€€€€¥˜€¡¹…µ”½˜¡¥±‘±•µ•¹Ğ…ÌÑ•áĞ¤¥Ì€‰íÍ…™•}…ÉÑ¥ÍÑôˆÑ¡•¸Í•Ğ…ÉÑ¥ÍÑ½Õ¹Ñ¼ÑÉÕ”(€€€€€€€€€€€€€•¹ÑÉä(€€€€€€€€€€€•¹É•Á•…Ğ(€€€€€€€€€€€¥˜…ÉÑ¥ÍÑ½Õ¹Ñ¡•¸(€€€€€€€€€€€€€¥˜í…Ñ¥½¹ôÑ¡•¸(€€€€€€€€€€€€€€€É•Á•…Ğİ¥Ñ ¡¥±‘±•µ•¹Ğ¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜É½İ±•µ•¹Ğ¤(€€€€€€€€€€€€€€€€€ÑÉä(€€€€€€€€€€€€€€€€€€€¥˜€¡¹…µ”½˜¡¥±‘±•µ•¹Ğ…ÌÑ•áĞ¤¥Ì¥¸Á±…å9…µ•ÌÑ¡•¸(€€€€€€€€€€€€€€€€€€€€€±¥¬¡¥±‘±•µ•¹Ğ(€€€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸€‰A1eˆ(€€€€€€€€€€€€€€€€€€€•¹¥˜(€€€€€€€€€€€€€€€€€•¹ÑÉä(€€€€€€€€€€€€€€€•¹É•Á•…Ğ(€€€€€€€€€€€€€€€É•ÑÕÉ¸€‰5Q!}9=}A1e}	UQQ=8ˆ(€€€€€€€€€€€€€•¹¥˜(€€€€€€€€€€€€€É•ÑÕÉ¸€‰5Q ˆ(€€€€€€€€€€€•¹¥˜(€€€€€€€€€€€Í•ĞÉ½İ±•µ•¹ĞÑ¼Á…É•¹Ğ½˜É½İ±•µ•¹Ğ(€€€€€€€€€•¹É•Á•…Ğ(€€€€€€€•¹¥˜(€€€€€•¹ÑÉä(€€€•¹É•Á•…Ğ(€•¹Ñ•±°)•¹Ñ•±°)É•ÑÕÉ¸€‰9=}5Q ˆ(œœœ((€€€‘•˜}…ÉÑ¥ÍÑ}…¹‘¥‘…Ñ•Í}ÍÉ¥ÁĞ¡Í•±˜°…ÉÑ¥ÍĞèÍÑÈ¤€´øÍÑÈè(€€€€€€€€ˆˆ‹–r£š¶3šnËš‚¶û¦†×’â·¢¾ï–>[š¶3š&/Êû†»–2ç¦7¢†3jš¶3–B7¾ò3’â7
-ç–ï¦j?šrë¦†×¦v‹–Òƒˆˆˆ((€€€€€€€Í…™•}…ÁÀ€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡Í•±˜¹…ÁÁ±¥…Ñ¥½¹}¹…µ”¤(€€€€€€€Í…™•}…ÉÑ¥ÍĞ€ô}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡…ÉÑ¥ÍĞ¤(€€€€€€€Ñ…‰Ì€ô€ˆ°€ˆ¹©½¥¸¡˜œ‰í}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡¹…µ”¥ôˆœ™½È¹…µ”¥¸Í•±˜¹Í½¹}Ñ…‰}¹…µ•Ì¤(€€€€€€€‰ÕÑÑ½¹Ì€ô€ˆ°€ˆ¹©½¥¸¡˜œ‰í}•Í…Á•}…ÁÁ±•ÍÉ¥ÁĞ¡¹…µ”¥ôˆœ™½È¹…µ”¥¸Í•±˜¹Á±…å}‰ÕÑÑ½¹}¹…µ•Ì¤(€€€€€€€É•ÑÕÉ¸˜œœœ)Ñ•±°…ÁÁ±¥…Ñ¥½¸€‰íÍ…™•}…ÁÁôˆÑ¼…Ñ¥Ù…Ñ”)‘•±…ä€Ä¸Ô)Ñ•±°…ÁÁ±¥…Ñ¥½¸€‰MåÍÑ•´Ù•¹ÑÌˆ(€¥˜U$•±•µ•¹ÑÌ•¹…‰±•¥Ì™…±Í”Ñ¡•¸•ÉÉ½È€‰•ÍÍ¥‰¥±¥ÑäÁ•Éµ¥ÍÍ¥½¸É•ÅÕ¥É•ˆ(€Ñ•±°ÁÉ½•ÍÌ€‰íÍ…™•}…ÁÁôˆ(€€€Í•ĞÑ…‰9…µ•ÌÑ¼íííÑ…‰Íõõô(€€€Í•ĞÁ±…å9…µ•ÌÑ¼ííí‰ÕÑÑ½¹Íõõô(€€€É•Á•…Ğİ¥Ñ ¥Ñ•µI•˜¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜™É½¹Ğİ¥¹‘½Ü¤(€€€€€ÑÉä(€€€€€€€¥˜€¡¹…µ”½˜¥Ñ•µI•˜…ÌÑ•áĞ¤¥Ì¥¸Ñ…‰9…µ•ÌÑ¡•¸±¥¬¥Ñ•µI•˜(€€€€€•¹ÑÉä(€€€•¹É•Á•…Ğ(€€€‘•±…ä€Ä¸À(€€€Í•Ğ½ÕÑÁÕÑQ•áĞÑ¼€ˆˆ(€€€É•Á•…Ğİ¥Ñ …ÉÑ¥ÍÑ±•µ•¹Ğ¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜™É½¹Ğİ¥¹‘½Ü¤(€€€€€ÑÉä(€€€€€€€¥˜€¡¹…µ”½˜…ÉÑ¥ÍÑ±•µ•¹Ğ…ÌÑ•áĞ¤¥Ì€‰íÍ…™•}…ÉÑ¥ÍÑôˆÑ¡•¸(€€€€€€€€€Í•ĞÉ½İ±•µ•¹ĞÑ¼Á…É•¹Ğ½˜…ÉÑ¥ÍÑ±•µ•¹Ğ(€€€€€€€€€É•Á•…Ğ€ØÑ¥µ•Ì(€€€€€€€€€€€Í•ĞÑ¥Ñ±•Q•áĞÑ¼€ˆˆ(€€€€€€€€€€€É•Á•…Ğİ¥Ñ ¡¥±‘±•µ•¹Ğ¥¸€¡•¹Ñ¥É”½¹Ñ•¹ÑÌ½˜É½İ±•µ•¹Ğ¤(€€€€€€€€€€€€€ÑÉä(€€€€€€€€€€€€€€€Í•Ğ¡¥±‘9…µ”Ñ¼¹…µ”½˜¡¥±‘±•µ•¹Ğ…ÌÑ•áĞ(€€€€€€€€€€€€€€€¥˜¡¥±‘9…µ”¥Ì¹½Ğ€ˆˆ…¹¡¥±‘9…µ”¥Ì¹½Ğ€‰íÍ…™•}…ÉÑ¥ÍÑôˆ…¹¡¥±‘9…µ”¥Ì¹½Ğ¥¸Ñ…‰9…µ•Ì…¹¡¥±‘9…µ”¥Ì¹½Ğ¥¸Á±…å9…µ•ÌÑ¡•¸(€€€€€€€€€€€€€€€€€Í•ĞÑ¥Ñ±•Q•áĞÑ¼¡¥±‘9…µ”(€€€€€€€€€€€€€€€€€•á¥ĞÉ•Á•…Ğ(€€€€€€€€€€€€€€€•¹¥˜(€€€€€€€€€€€€€•¹ÑÉä(€€€€€€€€€€€•¹É•Á•…Ğ(€€€€€€€€€€€¥˜Ñ¥Ñ±•Q•áĞ¥Ì¹½Ğ€ˆˆÑ¡•¸(€€€€€€€€€€€€€Í•Ğ½ÕÑÁÕÑQ•áĞÑ¼½ÕÑÁÕÑQ•áĞ€˜Ñ¥Ñ±•Q•áĞ€˜Ñ…ˆ€˜€‰íÍ…™•}…ÉÑ¥ÍÑôˆ€˜±¥¹•™••(€€€€€€€€€€€€€•á¥ĞÉ•Á•…Ğ(€€€€€€€€€€€•¹¥˜(€€€€€€€€€€€Í•ĞÉ½İ±•µ•¹ĞÑ¼Á…É•¹Ğ½˜É½İ±•µ•¹Ğ(€€€€€€€€€•¹É•Á•…Ğ(€€€€€€€•¹¥˜(€€€€€•¹ÑÉä(€€€•¹É•Á•…Ğ(€€€É•ÑÕÉ¸½ÕÑÁÕÑQ•áĞ(€•¹Ñ•±°)•¹Ñ•±°(œœœ((€€€‘•˜}Í•…É¡}ÕÉ¤¡Í•±˜°ÅÕ•ÉäèÍÑÈ¤€´øÍÑÈè(€€€€€€€É…¥Í”9½Ñ%µÁ±•µ•¹Ñ•‘ÉÉ½È(()±…ÍÌEE5ÕÍ¥5…‘…ÁÑ•È¡5…•ÍÍ¥‰¥±¥Ñå‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰ÅÄˆ(€€€…ÁÁ±¥…Ñ¥½¹}¹…µ”€ô€‰EE5ÕÍ¥Œˆ(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹šJ·šRûš¶3šnÈˆ°€‰A±…äˆ¤((€€€‘•˜}Í•…É¡}ÕÉ¤¡Í•±˜°ÅÕ•ÉäèÍÑÈ¤€´øÍÑÈè(€€€€€€€É•ÑÕÉ¸˜‰¡ÑÑÁÌè¼½ä¹ÅÄ¹½´½¸½ÉåÅÄ½Í•…É ıÜõíÅÕ•Éåô™ĞõÍ½¹œˆ(()±…ÍÌ9•Ñ•…Í•5ÕÍ¥5…‘…ÁÑ•È¡5…•ÍÍ¥‰¥±¥Ñå‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰¹•Ñ•…Í”ˆ(€€€…ÁÁ±¥…Ñ¥½¹}¹…µ”€ô€‰9•Ñ•…Í•5ÕÍ¥Œˆ(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹®/–6ÏšJ·šRøˆ°€‰A±…äˆ¤((€€€‘•˜}Í•…É¡}ÕÉ¤¡Í•±˜°ÅÕ•ÉäèÍÑÈ¤€´øÍÑÈè(€€€€€€€É•ÑÕÉ¸˜‰¡ÑÑÁÌè¼½µÕÍ¥Œ¸ÄØÌ¹½´¼Œ½Í•…É ½´¼ıÌõíÅÕ•Éåô™ÑåÁ”ôÄˆ(()±…ÍÌ-Õ½Õ5ÕÍ¥5…‘…ÁÑ•È¡5…•ÍÍ¥‰¥±¥Ñå‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰­Õ½Ôˆ(€€€…ÁÁ±¥…Ñ¥½¹}¹…µ”€ô€‰-Õ½Õ5ÕÍ¥Œˆ(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹®/–6ÏšJ·šRøˆ°€‰A±…äˆ¤((€€€‘•˜}Í•…É¡}ÕÉ¤¡Í•±˜°ÅÕ•ÉäèÍÑÈ¤€´øÍÑÈè(€€€€€€€É•ÑÕÉ¸˜‰¡ÑÑÁÌè¼½İİÜ¹­Õ½Ô¹½´½åä½¡Ñµ°½Í•…É ¹¡Ñµ°Í•…É¡QåÁ”õÍ½¹œ™Í•…É¡-•å]½ÉõíÅÕ•Éåôˆ(()±…ÍÌMÁ½Ñ¥™å5…‘…ÁÑ•È¡5…•ÍÍ¥‰¥±¥Ñå‘…ÁÑ•È¤è(€€€ÁÉ½Ù¥‘•È€ô€‰ÍÁ½Ñ¥™äˆ(€€€…ÁÁ±¥…Ñ¥½¹}¹…µ”€ô€‰MÁ½Ñ¥™äˆ(€€€Í½¹}Ñ…‰}¹…µ•Ì€ô€ ‹š¶3šnÈˆ°€‰M½¹Ìˆ°€‰QÉ…­Ìˆ¤(€€€Á±…å}‰ÕÑÑ½¹}¹…µ•Ì€ô€ ‹šJ·šRøˆ°€‹šJ·šRûš¶3šnÈˆ°€‰A±…äˆ°€‰A±…äÍ½¹œˆ¤((€€€‘•˜}Í•…É¡}ÕÉ¤¡Í•±˜°ÅÕ•ÉäèÍÑÈ¤€´øÍÑÈè(€€€€€€€É•ÑÕÉ¸˜‰ÍÁ½Ñ¥™äéÍ•…É éíÅÕ•Éåôˆ(()‘•˜‰Õ¥±‘}ÁÉ½Ù¥‘•É}…‘…ÁÑ•ÉÌ (€€€Í•ÑÑ¥¹ÌèA•ÑM•ÑÑ¥¹Ì°(€€€€¨°(€€€Á±…Ñ™½Éµ}¹…µ”èÍÑÈğ9½¹”€ô9½¹”°(€€€±¥•¹Ñ}™¥¹‘•Èè…±±…‰±•mmÍÑÈ°ÍÑÉt°A…Ñ ğ9½¹•t€ô™¥¹‘}µÕÍ¥}±¥•¹Ğ°(€€€½µµ…¹‘}ÉÕ¹¹•Èè…±±…‰±•l¸¸¸°ÍÕ‰ÁÉ½•ÍÌ¹½µÁ±•Ñ•‘AÉ½•ÍÍt€ôÍÕ‰ÁÉ½•ÍÌ¹ÉÕ¸°(¤€´ø‘¥ÑmÍÑÈ°5ÕÍ¥AÉ½Ù¥‘•É‘…ÁÑ•Étè(€€€€ˆˆ‹š2'–öO–&7Îïîšz¦ƒ’êS’â«–öóš¶“.³®/jAÉ½Ù¥‘•È‘…ÁÑ•Ëˆˆˆ((€€€Á±…Ñ™½É´€ôÁ±…Ñ™½Éµ}¹…µ”½ÈÍåÌ¹Á±…Ñ™½É´(€€€¥˜Á±…Ñ™½É´€ôô€‰İ¥¸ÌÈˆè(€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€€€€‰ÅÄˆèEE5ÕÍ¥‘…ÁÑ•È¡Í•ÑÑ¥¹Ì°±¥•¹Ñ}™¥¹‘•Èõ±¥•¹Ñ}™¥¹‘•È¤°(€€€€€€€€€€€€‰¹•Ñ•…Í”ˆè9•Ñ•…Í•5ÕÍ¥‘…ÁÑ•È¡Í•ÑÑ¥¹Ì°±¥•¹Ñ}™¥¹‘•Èõ±¥•¹Ñ}™¥¹‘•È¤°(€€€€€€€€€€€€‰­Õ½Ôˆè-Õ½Õ5ÕÍ¥‘…ÁÑ•È¡Í•ÑÑ¥¹Ì°±¥•¹Ñ}™¥¹‘•Èõ±¥•¹Ñ}™¥¹‘•È¤°(€€€€€€€€€€€€‰…ÁÁ±”ˆèÁÁ±•5ÕÍ¥]¥¹‘½İÍ‘…ÁÑ•È¡Í•ÑÑ¥¹Ì°±¥•¹Ñ}™¥¹‘•Èõ±¥•¹Ñ}™¥¹‘•È¤°(€€€€€€€€€€€€‰ÍÁ½Ñ¥™äˆèMÁ½Ñ¥™å]¥¹‘½İÍ‘…ÁÑ•È¡Í•ÑÑ¥¹Ì°±¥•¹Ñ}™¥¹‘•Èõ±¥•¹Ñ}™¥¹‘•È¤°(€€€€€€€ô(€€€¥˜Á±…Ñ™½É´€ôô€‰‘…Éİ¥¸ˆè(€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€€€€‰ÅÄˆèEE5ÕÍ¥5…‘…ÁÑ•È¡½µµ…¹‘}ÉÕ¹¹•È¤°(€€€€€€€€€€€€‰¹•Ñ•…Í”ˆè9•Ñ•…Í•5ÕÍ¥5…‘…ÁÑ•È¡½µµ…¹‘}ÉÕ¹¹•È¤°(€€€€€€€€€€€€‰­Õ½Ôˆè-Õ½Õ5ÕÍ¥5…‘…ÁÑ•È¡½µµ…¹‘}ÉÕ¹¹•È¤°(€€€€€€€€€€€€‰…ÁÁ±”ˆèÁÁ±•5ÕÍ¥5…‘…ÁÑ•È¡½µµ…¹‘}ÉÕ¹¹•È¤°(€€€€€€€€€€€€‰ÍÁ½Ñ¥™äˆèMÁ½Ñ¥™å5…‘…ÁÑ•È¡½µµ…¹‘}ÉÕ¹¹•È¤°(€€€€€€€ô(€€€É•ÑÕÉ¸íô(()‘•˜ÁÉ½Ù¥‘•É}±…‰•°¡ÁÉ½Ù¥‘•ÈèÍÑÈ¤€´øÍÑÈè(€€€€ˆˆ‹’âëš^—–ş_–Ş—–ß–J3¢Â¢¾W¦v‹švÿ¢şS–n{¢Ï–ºkj–æÏ–>Ã–B7Ãˆˆˆ((€€€É•ÑÕÉ¸5UM%}MIY%}1	1L¹•Ğ¡ÁÉ½Ù¥‘•È°ÁÉ½Ù¥‘•È¤(
+                    return window
+            except TypeError:
+                if window.Exists():
+                    return window
+            time.sleep(0.3)
+        raise ProviderSearchError("player window not found")
+
+    def _find_search_box(self, window):
+        wanted = {_canonical(name) for name in self.search_names}
+        fallback = None
+        for control in self._walk(window, max_depth=7):
+            if "Edit" not in str(getattr(control, "ControlTypeName", "")):
+                continue
+            fallback = fallback or control
+            name = _canonical(str(getattr(control, "Name", "") or ""))
+            if not wanted or any(item in name for item in wanted):
+                return control
+        return fallback
+
+    def _select_song_tab(self, window) -> bool:
+        wanted = {_canonical(name) for name in self.song_tab_names}
+        deadline = time.monotonic() + min(4.0, self.wait_seconds)
+        while time.monotonic() < deadline:
+            for control in self._walk(window, max_depth=8):
+                if _canonical(str(getattr(control, "Name", "") or "")) not in wanted:
+                    continue
+                try:
+                    control.Click()
+                    time.sleep(0.45)
+                    return True
+                except Exception:
+                    continue
+            time.sleep(0.25)
+        return False
+
+    def _song_candidates(self, window, title: str, artist: str) -> tuple[SongCandidate, ...]:
+        candidates: list[SongCandidate] = []
+        for control in self._walk(window, max_depth=10):
+            name = str(getattr(control, "Name", "") or "")
+            if title and not _same_song(name, title):
+                continue
+            if not title or self._matching_row(control, artist) is not None:
+                row = self._matching_row(control, artist)
+                if row is None:
+                    continue
+                resolved_title = name if title else self._title_from_row(row, artist)
+                if resolved_title:
+                    candidates.append(
+                        SongCandidate(self.provider, resolved_title, artist, "song", native=control)
+                    )
+        unique: dict[tuple[str, str], SongCandidate] = {}
+        for candidate in candidates:
+            unique.setdefault((_canonical(candidate.title), _canonical(candidate.artist)), candidate)
+        return tuple(unique.values())
+
+    def _matching_row(self, control, artist: str):
+        current = control
+        for _ in range(6):
+            try:
+                current = current.GetParentControl()
+            except Exception:
+                return None
+            if current is None:
+                return None
+            descendants = tuple(self._walk(current, max_depth=4))
+            names = [str(getattr(item, "Name", "") or "") for item in descendants]
+            nonempty = [name for name in names if name.strip()]
+            if len(nonempty) <= 60 and any(_same_song(name, artist) for name in nonempty):
+                return current
+        return None
+
+    def _title_from_row(self, row, artist: str) -> str:
+        ignored = {
+            _canonical(artist),
+            *(_canonical(name) for name in self.song_tab_names),
+            *(_canonical(name) for name in self.play_button_names),
+            "æ­Œæ›²",
+            "song",
+        }
+        for control in self._walk(row, max_depth=4):
+            name = str(getattr(control, "Name", "") or "").strip()
+            canonical = _canonical(name)
+            if canonical and canonical not in ignored and len(name) <= 80:
+                return name
+        return ""
+
+    @staticmethod
+    def _walk(root, *, max_depth: int):
+        stack = [(root, 0)]
+        seen: set[int] = set()
+        while stack:
+            control, depth = stack.pop()
+            marker = id(control)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            yield control
+            if depth >= max_depth:
+                continue
+            try:
+                children = tuple(control.GetChildren())
+            except Exception:
+                children = ()
+            stack.extend((child, depth + 1) for child in reversed(children))
+
+    def _custom_path(self) -> str:
+        return {
+            "qq": self.settings.qq_music_path,
+            "netease": self.settings.netease_music_path,
+            "kugou": self.settings.kugou_music_path,
+            "apple": self.settings.apple_music_path,
+            "spotify": self.settings.spotify_music_path,
+        }.get(self.provider, "")
+
+
+class QQMusicAdapter(WindowsUIAutomationAdapter):
+    provider = "qq"
+    window_pattern = ".*(QQéŸ³ä¹|QQMusic).*"
+    search_names = ("æœç´¢éŸ³ä¹", "æœç´¢", "Search")
+    play_button_names = ("æ’­æ”¾", "æ’­æ”¾æ­Œæ›²", "Play")
+
+
+class NeteaseMusicAdapter(WindowsUIAutomationAdapter):
+    provider = "netease"
+    window_pattern = ".*(ç½‘æ˜“äº‘éŸ³ä¹|NetEase|CloudMusic).*"
+    search_names = ("æœç´¢", "æœç´¢éŸ³ä¹ã€è§†é¢‘ã€æ’­å®¢ã€ç”¨æˆ·", "Search")
+    play_button_names = ("æ’­æ”¾", "æ’­æ”¾å…¨éƒ¨", "Play")
+
+
+class KugouMusicAdapter(WindowsUIAutomationAdapter):
+    provider = "kugou"
+    window_pattern = ".*(é…·ç‹—éŸ³ä¹|KuGou|KGMusic).*"
+    search_names = ("æœç´¢", "æœç´¢éŸ³ä¹", "Search")
+    play_button_names = ("æ’­æ”¾", "ç«‹å³æ’­æ”¾", "Play")
+
+
+class AppleMusicWindowsAdapter(WindowsUIAutomationAdapter):
+    provider = "apple"
+    window_pattern = ".*(Apple Music|éŸ³ä¹).*"
+    search_names = ("æœç´¢", "Search")
+    play_button_names = ("æ’­æ”¾", "æ’­æ”¾æ­Œæ›²", "Play", "Play song")
+
+
+class SpotifyWindowsAdapter(WindowsUIAutomationAdapter):
+    provider = "spotify"
+    window_pattern = ".*Spotify.*"
+    search_names = ("æœç´¢", "Search")
+    song_tab_names = ("æ­Œæ›²", "Songs", "Tracks")
+    play_button_names = ("æ’­æ”¾", "æ’­æ”¾æ­Œæ›²", "Play", "Play song")
+
+
+def _escape_applescript(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+class AppleMusicMacAdapter:
+    """é€šè¿‡ Apple Events åœ¨ç”¨æˆ·éŸ³ä¹èµ„æ–™åº“ä¸­æœç´¢å¹¶æ’­æ”¾ç²¾ç¡®æ­Œæ›²ã€‚"""
+
+    provider = "apple"
+
+    def __init__(self, command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> None:
+        self.command_runner = command_runner
+
+    def search(self, title: str, artist: str) -> Sequence[SongCandidate]:
+        query = _escape_applescript(f"{artist} {title}".strip())
+        script = (
+            'tell application "Music"\n'
+            f'set foundTracks to search library playlist 1 for "{query}" only songs\n'
+            'set outputText to ""\n'
+            'repeat with candidateTrack in foundTracks\n'
+            'set outputText to outputText & (name of candidateTrack as text) & tab & '
+            '(artist of candidateTrack as text) & tab & (persistent ID of candidateTrack as text) & linefeed\n'
+            'end repeat\nreturn outputText\nend tell'
+        )
+        completed = self._run(script)
+        candidates: list[SongCandidate] = []
+        for line in str(completed.stdout or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 3:
+                candidates.append(SongCandidate(self.provider, parts[0], parts[1], "song", parts[2]))
+        return candidates
+
+    def play(self, candidate: SongCandidate) -> bool:
+        identifier = _escape_applescript(candidate.identifier)
+        if not identifier:
+            return False
+        script = (
+            'tell application "Music"\n'
+            f'set targetTrack to first track of library playlist 1 whose persistent ID is "{identifier}"\n'
+            'play targetTrack\nend tell'
+        )
+        try:
+            self._run(script)
+        except ProviderSearchError:
+            return False
+        return True
+
+    def _run(self, script: str) -> subprocess.CompletedProcess:
+        try:
+            completed = self.command_runner(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ProviderSearchError("Apple Events request failed") from exc
+        if completed.returncode != 0:
+            raise ProviderSearchError(str(completed.stderr or "Apple Events request failed"))
+        return completed
+
+
+class MacAccessibilityAdapter:
+    """åœ¨å·²æˆæƒ Accessibility æ—¶åªç‚¹å‡»åŒæ—¶åŒ…å«ç²¾ç¡®æ­Œåå’Œæ­Œæ‰‹çš„æ­Œæ›²ç»“æœã€‚"""
+
+    provider = ""
+    application_name = ""
+    song_tab_names: tuple[str, ...] = ("æ­Œæ›²", "Songs", "Tracks")
+    play_button_names: tuple[str, ...] = ("æ’­æ”¾", "æ’­æ”¾æ­Œæ›²", "Play", "Play song")
+
+    def __init__(self, command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> None:
+        self.command_runner = command_runner
+
+    def search(self, title: str, artist: str) -> Sequence[SongCandidate]:
+        query = urllib.parse.quote(f"{artist} {title}")
+        uri = self._search_uri(query)
+        try:
+            opened = self.command_runner(
+                ["open", "-a", self.application_name, uri],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ProviderSearchError("client search could not be opened") from exc
+        if opened.returncode != 0:
+            raise ProviderSearchError(str(opened.stderr or "client search could not be opened"))
+        if not title:
+            completed = self._run_accessibility(self._artist_candidates_script(artist))
+            candidates: list[SongCandidate] = []
+            for line in str(completed.stdout or "").splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[0].strip() and _same_song(parts[1], artist):
+                    candidates.append(SongCandidate(self.provider, parts[0], parts[1], "song"))
+            return candidates
+        script = self._accessibility_script(title, artist, play=False)
+        completed = self._run_accessibility(script)
+        if str(completed.stdout or "").strip() == "MATCH":
+            return (SongCandidate(self.provider, title, artist, "song", f"{title}\t{artist}"),)
+        return ()
+
+    def play(self, candidate: SongCandidate) -> bool:
+        completed = self._run_accessibility(
+            self._accessibility_script(candidate.title, candidate.artist, play=True)
+        )
+        return str(completed.stdout or "").strip() == "PLAYED"
+
+    def _run_accessibility(self, script: str) -> subprocess.CompletedProcess:
+        try:
+            completed = self.command_runner(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=12,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ProviderSearchError("Accessibility request failed") from exc
+        if completed.returncode != 0:
+            raise ProviderSearchError(str(completed.stderr or "Accessibility request failed"))
+        return completed
+
+    def _accessibility_script(self, title: str, artist: str, *, play: bool) -> str:
+        safe_app = _escape_applescript(self.application_name)
+        safe_title = _escape_applescript(title)
+        safe_artist = _escape_applescript(artist)
+        tabs = ", ".join(f'"{_escape_applescript(name)}"' for name in self.song_tab_names)
+        buttons = ", ".join(f'"{_escape_applescript(name)}"' for name in self.play_button_names)
+        action = "true" if play else "false"
+        return f'''
+tell application "{safe_app}" to activate
+delay 1.5
+tell application "System Events"
+  if UI elements enabled is false then error "Accessibility permission required"
+  tell process "{safe_app}"
+    set frontmost to true
+    set tabNames to {{{tabs}}}
+    set playNames to {{{buttons}}}
+    try
+      repeat with itemRef in (entire contents of front window)
+        try
+          if (name of itemRef as text) is in tabNames then click itemRef
+        end try
+      end repeat
+    end try
+    delay 1.0
+    repeat with titleElement in (entire contents of front window)
+      try
+        if (name of titleElement as text) is "{safe_title}" then
+          set rowElement to parent of titleElement
+          repeat 6 times
+            set artistFound to false
+            repeat with childElement in (entire contents of rowElement)
+              try
+                if (name of childElement as text) is "{safe_artist}" then set artistFound to true
+              end try
+            end repeat
+            if artistFound then
+              if {action} then
+                repeat with childElement in (entire contents of rowElement)
+                  try
+                    if (name of childElement as text) is in playNames then
+                      click childElement
+                      return "PLAYED"
+                    end if
+                  end try
+                end repeat
+                return "MATCH_NO_PLAY_BUTTON"
+              end if
+              return "MATCH"
+            end if
+            set rowElement to parent of rowElement
+          end repeat
+        end if
+      end try
+    end repeat
+  end tell
+end tell
+return "NO_MATCH"
+'''
+
+    def _artist_candidates_script(self, artist: str) -> str:
+        """åœ¨æ­Œæ›²æ ‡ç­¾é¡µä¸­è¯»å–æ­Œæ‰‹ç²¾ç¡®åŒ¹é…è¡Œçš„æ­Œåï¼Œä¸ç‚¹å‡»éšæœºé¡µé¢å…ƒç´ ã€‚"""
+
+        safe_app = _escape_applescript(self.application_name)
+        safe_artist = _escape_applescript(artist)
+        tabs = ", ".join(f'"{_escape_applescript(name)}"' for name in self.song_tab_names)
+        buttons = ", ".join(f'"{_escape_applescript(name)}"' for name in self.play_button_names)
+        return f'''
+tell application "{safe_app}" to activate
+delay 1.5
+tell application "System Events"
+  if UI elements enabled is false then error "Accessibility permission required"
+  tell process "{safe_app}"
+    set tabNames to {{{tabs}}}
+    set playNames to {{{buttons}}}
+    repeat with itemRef in (entire contents of front window)
+      try
+        if (name of itemRef as text) is in tabNames then click itemRef
+      end try
+    end repeat
+    delay 1.0
+    set outputText to ""
+    repeat with artistElement in (entire contents of front window)
+      try
+        if (name of artistElement as text) is "{safe_artist}" then
+          set rowElement to parent of artistElement
+          repeat 6 times
+            set titleText to ""
+            repeat with childElement in (entire contents of rowElement)
+              try
+                set childName to name of childElement as text
+                if childName is not "" and childName is not "{safe_artist}" and childName is not in tabNames and childName is not in playNames then
+                  set titleText to childName
+                  exit repeat
+                end if
+              end try
+            end repeat
+            if titleText is not "" then
+              set outputText to outputText & titleText & tab & "{safe_artist}" & linefeed
+              exit repeat
+            end if
+            set rowElement to parent of rowElement
+          end repeat
+        end if
+      end try
+    end repeat
+    return outputText
+  end tell
+end tell
+'''
+
+    def _search_uri(self, query: str) -> str:
+        raise NotImplementedError
+
+
+class QQMusicMacAdapter(MacAccessibilityAdapter):
+    provider = "qq"
+    application_name = "QQMusic"
+    play_button_names = ("æ’­æ”¾", "æ’­æ”¾æ­Œæ›²", "Play")
+
+    def _search_uri(self, query: str) -> str:
+        return f"https://y.qq.com/n/ryqq/search?w={query}&t=song"
+
+
+class NeteaseMusicMacAdapter(MacAccessibilityAdapter):
+    provider = "netease"
+    application_name = "NeteaseMusic"
+    play_button_names = ("æ’­æ”¾", "ç«‹å³æ’­æ”¾", "Play")
+
+    def _search_uri(self, query: str) -> str:
+        return f"https://music.163.com/#/search/m/?s={query}&type=1"
+
+
+class KugouMusicMacAdapter(MacAccessibilityAdapter):
+    provider = "kugou"
+    application_name = "KugouMusic"
+    play_button_names = ("æ’­æ”¾", "ç«‹å³æ’­æ”¾", "Play")
+
+    def _search_uri(self, query: str) -> str:
+        return f"https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord={query}"
+
+
+class SpotifyMacAdapter(MacAccessibilityAdapter):
+    provider = "spotify"
+    application_name = "Spotify"
+    song_tab_names = ("æ­Œæ›²", "Songs", "Tracks")
+    play_button_names = ("æ’­æ”¾", "æ’­æ”¾æ­Œæ›²", "Play", "Play song")
+
+    def _search_uri(self, query: str) -> str:
+        return f"spotify:search:{query}"
+
+
+def build_provider_adapters(
+    settings: PetSettings,
+    *,
+    platform_name: str | None = None,
+    client_finder: Callable[[str, str], Path | None] = find_music_client,
+    command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, MusicProviderAdapter]:
+    """æŒ‰å½“å‰ç³»ç»Ÿæ„é€ äº”ä¸ªå½¼æ­¤ç‹¬ç«‹çš„ Provider Adapterã€‚"""
+
+    platform = platform_name or sys.platform
+    if platform == "win32":
+        return {
+            "qq": QQMusicAdapter(settings, client_finder=client_finder),
+            "netease": NeteaseMusicAdapter(settings, client_finder=client_finder),
+            "kugou": KugouMusicAdapter(settings, client_finder=client_finder),
+            "apple": AppleMusicWindowsAdapter(settings, client_finder=client_finder),
+            "spotify": SpotifyWindowsAdapter(settings, client_finder=client_finder),
+        }
+    if platform == "darwin":
+        return {
+            "qq": QQMusicMacAdapter(command_runner),
+            "netease": NeteaseMusicMacAdapter(command_runner),
+            "kugou": KugouMusicMacAdapter(command_runner),
+            "apple": AppleMusicMacAdapter(command_runner),
+            "spotify": SpotifyMacAdapter(command_runner),
+        }
+    return {}
+
+
+def provider_label(provider: str) -> str:
+    """ä¸ºæ—¥å¿—å·¥å…·å’Œè°ƒè¯•é¢æ¿è¿”å›ç¨³å®šçš„å¹³å°åç§°ã€‚"""
+
+    return MUSIC_SERVICE_LABELS.get(provider, provider)

@@ -97,8 +97,19 @@ def test_ai_settings_has_one_source_guarded_open_path() -> None:
         path.relative_to(PROJECT_ROOT).as_posix(): path.read_text(encoding="utf-8")
         for path in source_files
     }
-    combinYYH—ˆ‹š›Ú[ŠÛÝ\˜Ù\Ë˜[Y\Ê
-JBˆÚ[™ÝÈHÛÝ\˜Ù\ÖÈœÜ˜ËÛÛ™\X×Ù\ÚÝÜÜ]ÝÚ[™ÝËœH—BˆÚ]ÛX[˜YÙ\ˆHÛÝ\˜Ù\ÖÈœÜ˜ËÛÛ™\X×Ù\ÚÝÜÜ]ØÚ]ÛX[˜YÙ\‹œH—B‚ˆ›Üˆ›Ü˜šY[ˆ[ˆ
-ˆ›Ü[—ØZWÜÙ][™ÜÈ‹ˆ›Ü[RTÙ][™ÜÈ‹ˆœÚÝÐRTÙ][™ÜÈ‹ˆœÙ]Ù][™ÜÓÜ[ˆ‹ˆœÙ]ÚÝÔÙ][™ÜÈ‹ˆ
-N‚ˆ\ÜÙ\›Ü˜šY[ˆ›Ý[ˆÛÛXš[™Yˆ\ÜÙ\ÛÛXš[™Y˜ÛÝ[
-™X[ÙÈHRTÙ][™ÜÑX[ÙÊŠHOHBˆ\ÜÙ\™YˆÜ[—ÜÙ][™ÜÊÙ[‹ÛÝ\˜ÙNˆÝŠHOˆ›ÛÛˆˆ[ˆÚ[™ÝÂˆ\ÜÙ\šYˆÛÝ\˜ÙHOHÑUS‘Ô×ÔÓÕTÑWÕTÑT—ÐPÕSÓŽˆˆ[ˆÚ[™ÝÂˆ\ÜÙ\RTÙ][™ÜÑX[ÙÈˆ›Ý[ˆÚ]ÛX[˜YÙ\‚
+    combined = "\n".join(sources.values())
+    window = sources["src/onepic_desktop_pet/window.py"]
+    chat_manager = sources["src/onepic_desktop_pet/chat_manager.py"]
+
+    for forbidden in (
+        "open_ai_settings",
+        "openAISettings",
+        "showAISettings",
+        "setSettingsOpen",
+        "setShowSettings",
+    ):
+        assert forbidden not in combined
+    assert combined.count("dialog = AISettingsDialog(") == 1
+    assert "def open_settings(self, source: str) -> bool:" in window
+    assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
+    assert "AISettingsDialog" not in chat_manager
