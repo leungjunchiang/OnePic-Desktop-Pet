@@ -320,6 +320,153 @@ class ExactMusicPlaybackManager:
         )
 
 
+class BasicRandomArtistPlaybackManager:
+    """用于陪伴场景的宽松随机播放闭环。
+
+    与精确点播不同，这条路径只需要把播放器带到目标歌手的歌曲区域并
+    发起一次真实播放动作。媒体 Session 仅作为日志和可选反馈，读取不到
+    当前歌曲时也不能阻止基础播放。
+    """
+
+    def __init__(
+        self,
+        adapters: Mapping[str, MusicProviderAdapter],
+        track_reader: Callable[[str], TrackSnapshot | None] | None = None,
+        *,
+        random_source: random.Random | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.adapters = dict(adapters)
+        self.track_reader = track_reader
+        self.random_source = random_source or random.Random()
+        self.sleep = sleep
+
+    def play_random_artist(self, provider: str, artist: str) -> SongPlaybackResult:
+        adapter = self.adapters.get(provider)
+        title = ""
+        self._debug("search", provider, title, artist)
+        if adapter is None:
+            return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
+        try:
+            candidates = tuple(adapter.search("", artist))
+        except Exception as exc:
+            self._debug("search_failed", provider, title, artist, error=repr(exc))
+            return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
+
+        # Song rows are preferred, but an artist page/playlist returned by an
+        # adapter is also a valid target for random playback.
+        song_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() == "song"
+            and _same_song(candidate.artist, artist)
+        ]
+        selectable = song_candidates or [
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() in {"artist", "album", "playlist"}
+        ]
+        if not selectable:
+            # An adapter may expose a native “play artist/random” action when
+            # the client does not expose individual rows through automation.
+            native_random = getattr(adapter, "play_random_artist", None)
+            if callable(native_random):
+                try:
+                    if bool(native_random(artist)):
+                        self._debug("started", provider, title, artist, selected_type="native_random")
+                        return SongPlaybackResult(
+                            True,
+                            provider,
+                            title,
+                            artist,
+                            f"正在播放{artist}的随机歌曲",
+                            play_attempts=1,
+                        )
+                except Exception as exc:
+                    self._debug("play_exception", provider, title, artist, error=repr(exc))
+            self._debug("result_not_found", provider, title, artist)
+            return self._failed(provider, artist, MusicPlaybackError.RESULT_NOT_FOUND)
+        selected = self.random_source.choice(selectable)
+        self._debug(
+            "random_match",
+            provider,
+            title,
+            artist,
+            selected_title=selected.title,
+            selected_artist=selected.artist,
+            selected_type=selected.result_type,
+        )
+        try:
+            played = bool(adapter.play(selected))
+        except Exception as exc:
+            self._debug("play_exception", provider, title, artist, error=repr(exc))
+            played = False
+        if not played:
+            self._debug("play_action_failed", provider, title, artist)
+            return self._failed(provider, artist, MusicPlaybackError.PLAY_ACTION_FAILED, selected=selected)
+
+        current_title = current_artist = ""
+        if self.track_reader is not None:
+            try:
+                self.sleep(0.25)
+                current = self.track_reader(provider)
+                if current is not None:
+                    current_title = str(getattr(current, "title", "") or "")
+                    current_artist = str(getattr(current, "artist", "") or "")
+            except Exception as exc:
+                self._debug("media_read_error", provider, title, artist, error=repr(exc))
+        self._debug(
+            "started",
+            provider,
+            title,
+            artist,
+            selected_title=selected.title,
+            selected_artist=selected.artist,
+            current_title=current_title,
+            current_artist=current_artist,
+        )
+        return SongPlaybackResult(
+            True,
+            provider,
+            title,
+            artist,
+            f"正在播放{artist}的随机歌曲" + (f"：{selected.title}" if selected.title else ""),
+            selected=selected,
+            current_title=current_title,
+            current_artist=current_artist,
+            play_attempts=1,
+        )
+
+    @staticmethod
+    def _debug(stage: str, provider: str, title: str, artist: str, **values: object) -> None:
+        details = " ".join(f"{key}={value!r}" for key, value in values.items())
+        LOGGER.debug(
+            "music_playback stage=%s provider=%s requestedTitle=%r requestedArtist=%r %s",
+            stage,
+            provider,
+            title,
+            artist,
+            details,
+        )
+
+    @staticmethod
+    def _failed(
+        provider: str,
+        artist: str,
+        code: MusicPlaybackError,
+        *,
+        selected: SongCandidate | None = None,
+    ) -> SongPlaybackResult:
+        return SongPlaybackResult(
+            False,
+            provider,
+            "",
+            artist,
+            _failure_message(code, random_artist=True),
+            code,
+            selected,
+        )
+
 class WindowsUIAutomationAdapter:
     """Windows 客户端 Adapter 基类；子类必须提供自身窗口、搜索框和播放按钮语义。"""
 
@@ -366,7 +513,7 @@ class WindowsUIAutomationAdapter:
             search_box.SendKeys("{Enter}")
         except Exception as exc:
             raise ProviderSearchError("search input failed") from exc
-        if not self._select_song_tab(window):
+        if not self._select_song_tab(window) and title:
             raise ProviderSearchError("song results tab not found")
         deadline = time.monotonic() + self.wait_seconds
         while time.monotonic() < deadline:

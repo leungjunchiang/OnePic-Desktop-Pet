@@ -24,6 +24,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 from .config import PetSettings
 from .music import MUSIC_SERVICE_LABELS, find_music_client
 from .music_playback import (
+    BasicRandomArtistPlaybackManager,
     ExactMusicPlaybackManager,
     MusicPlaybackError,
     MusicProviderAdapter,
@@ -247,6 +248,11 @@ class MusicProviderManager:
             poll_interval_seconds=playback_poll_interval,
             sleep=playback_sleep or time.sleep,
         )
+        self.random_playback_manager = BasicRandomArtistPlaybackManager(
+            adapters,
+            self.current_track,
+            sleep=playback_sleep or time.sleep,
+        )
 
     def cached_status(self, provider: str) -> MusicProviderStatus:
         """返回缓存；没有缓存时只做安装检测，不声称已经建立控制。"""
@@ -310,12 +316,9 @@ class MusicProviderManager:
         """执行严格点歌闭环；不会使用全局播放键代替精确歌曲点击。"""
 
         normalized = self._normalize(provider)
-        return self.playback_manager.play_song(
-            normalized,
-            title,
-            artist,
-            random_artist=random_artist,
-        )
+        if random_artist:
+            return self.random_playback_manager.play_random_artist(normalized, artist)
+        return self.playback_manager.play_song(normalized, title, artist)
 
     def current_track(self, provider: str) -> TrackInfo | None:
         """直接读取当前媒体信息供点歌校验使用，不复用可能过期的状态缓存。"""

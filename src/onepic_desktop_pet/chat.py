@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -142,6 +143,14 @@ class ChatDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("和六毛聊聊")
         self.setObjectName("liliPanel")
         self.setMinimumSize(430, 520)
@@ -214,6 +223,12 @@ class ChatDialog(QDialog):
         privacy.setObjectName("status")
         privacy.setWordWrap(True)
         layout.addWidget(privacy)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """关闭按钮只隐藏聊天窗，不关闭桌宠或丢失会话。"""
+
+        event.ignore()
+        self.hide()
 
     def _submit(self) -> None:
         message = " ".join(self.input.text().split())
