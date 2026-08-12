@@ -51,14 +51,13 @@ def test_music_search_never_claims_connection_or_guaranteed_playback(monkeypatch
     executable.write_bytes(b"MZ")
     monkeypatch.setattr("onepic_desktop_pet.music.find_music_client", lambda _service, _path="": executable)
     monkeypatch.setattr("onepic_desktop_pet.music.subprocess.Popen", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("onepic_desktop_pet.music.threading.Thread.start", lambda _thread: None)
 
     result = launch_music_client("spotify", "经过", str(executable))
 
     assert result.client_found is True
     assert "已连接" not in result.message
     assert "正在播放" not in result.message
-    assert "不代表已建立播放控制" in result.message
+    assert "尚未执行歌曲精确匹配" in result.message
 
 
 def test_user_selected_music_program_has_priority(tmp_path) -> None:

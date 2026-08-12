@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.18.1` 修复 macOS 图形应用中的 Codex CLI 路径识别，聊天默认保留最近 30 轮完整上下文，并把右键入口与“六毛搭子自习室”重构为清晰、有反馈的分组界面。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.19.0` 将点歌重构为精确搜索、歌曲结果匹配、播放和当前媒体校验闭环；搜索页、歌手主页或旧队列继续播放都不再被误报为成功。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -75,7 +75,7 @@ OpenAI 当前公开资料没有提供让第三方独立程序直接接管 Codex 
 
 工作菜单可以随时查看今日 0–8 小时成长线、生成“今天六毛陪你做了什么”日报，或打开本机六毛相册。日报会在完成工作、达到 8 小时或正常退出时更新，同一天重复生成会覆盖当天卡片，不会制造重复文件。
 
-公开程序没有打包陈楚生歌词或“巴布达”私人音频。它只保存歌曲标题与原创化的意象短句。你可以在“AI 与陪伴设置”选择本机音乐程序、本地巴布达音频和自己有权使用的歌词 TXT；路径与内容只在本机使用。基础播放控制不需要音乐平台 API。指定歌曲搜索是独立功能，可能在用户主动点击后短暂聚焦客户端并定位结果，但不会把“打开/发现客户端”报告成“已连接”或保证已经播放。Spotify OAuth/Web API 只适合作为未来可选的高级点歌增强，不是基本控制的前提。
+公开程序没有打包陈楚生歌词或“巴布达”私人音频。它只保存歌曲标题与原创化的意象短句。你可以在“AI 与陪伴设置”选择本机音乐程序、本地巴布达音频和自己有权使用的歌词 TXT；路径与内容只在本机使用。基础播放控制不需要音乐平台 API。指定歌曲搜索是独立功能：Windows 需要 UI Automation 读取歌曲结果，再由 GSMTC 校验当前媒体；macOS Apple Music 使用 Apple Events，其他客户端需要用户授予 Accessibility。只有实际歌名与歌手都匹配才报告成功。Spotify OAuth/Web API 仍只是未来可选的高级增强，不是基本控制的前提。
 
 工作记录只在本机应用数据目录保存日期和累计秒数，不保存任务名称、输入内容或聊天历史，也不会上传到 GitHub 或任何网络服务。
 
@@ -177,7 +177,7 @@ dist/Lili/Lili.exe
 维护者安装并登录 GitHub CLI 后，可不打开网页直接发布：
 
 ```powershell
-.\scripts\publish_release.ps1 -Version 0.18.1 -NotesFile .\release-notes.md
+.\scripts\publish_release.ps1 -Version 0.19.0 -NotesFile .\release-notes.md
 ```
 
 脚本会检查 `gh` 登录、主分支、干净工作区和测试结果，然后自动推送 `main`、标签和 Release；跨平台安装包继续由 GitHub Actions 自动附加。
@@ -197,7 +197,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.18.1` 修复 macOS Codex CLI 检测与缓存、增加 30 轮连续聊天记忆、重组五类桌宠菜单，并将搭子自习室升级为首页/聊天/专注/我的四标签完整页面；继续提供 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件，旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.19.0` 为 QQ 音乐、网易云、酷狗、Apple Music 和 Spotify 拆分独立点歌 Adapter，并以 Windows GSMTC 或 macOS Apple Events 当前歌曲作为成功依据；继续包含 v0.18.1 的 Codex CLI、30 轮记忆、五类桌宠菜单和四标签自习室改进。
 
 ## 授权
 

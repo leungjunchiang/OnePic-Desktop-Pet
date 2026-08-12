@@ -4,3 +4,4 @@ keyring>=25,<27
 pyobjc-framework-Cocoa>=10,<13; sys_platform == "darwin"
 pyobjc-framework-Quartz>=10,<13; sys_platform == "darwin"
 winrt-Windows.Media.Control>=3.2,<4; sys_platform == "win32"
+uiautomation>=2.0,<3; sys_platform == "win32"

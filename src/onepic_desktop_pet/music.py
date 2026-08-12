@@ -14,8 +14,6 @@ import os
 import random
 import subprocess
 import sys
-import threading
-import time
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
@@ -154,7 +152,6 @@ def search_song(service: str, title: str, custom_path: str = "") -> MusicLaunchR
 
     normalized = service if service in MUSIC_SERVICE_LABELS else "netease"
     client = find_music_client(normalized, custom_path)
-    query = f"陈楚生 {title}"
     if client is None:
         webbrowser.open(music_search_url(normalized, title))
         label = MUSIC_SERVICE_LABELS[normalized]
@@ -166,11 +163,6 @@ def search_song(service: str, title: str, custom_path: str = "") -> MusicLaunchR
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            threading.Thread(
-                target=_macos_try_play_first_result,
-                args=(client.stem, normalized),
-                daemon=True,
-            ).start()
         else:
             command = [str(client)]
             if normalized in {"apple", "spotify"}:
@@ -180,19 +172,12 @@ def search_song(service: str, title: str, custom_path: str = "") -> MusicLaunchR
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            if os.name == "nt":
-                threading.Thread(
-                    target=_windows_search_and_play,
-                    args=(client.name, query, normalized),
-                    daemon=True,
-                ).start()
     except OSError:
         webbrowser.open(music_search_url(normalized, title))
         return MusicLaunchResult(False, "客户端启动失败，已改为打开正版搜索页。")
     return MusicLaunchResult(
         True,
-        "已检测并打开音乐客户端，正在定位搜索结果；是否开始播放取决于客户端，"
-        "这不代表已建立播放控制。",
+        "已检测并打开音乐客户端搜索页；尚未执行歌曲精确匹配、播放动作或当前歌曲校验。",
     )
 
 
@@ -200,138 +185,6 @@ def launch_music_client(service: str, title: str, custom_path: str = "") -> Musi
     """兼容旧调用名称；新代码应使用 :func:`search_song`。"""
 
     return search_song(service, title, custom_path)
-
-
-def _macos_try_play_first_result(application_name: str, service: str) -> bool:
-    """在用户主动点歌后，借助已授权的辅助功能尝试播放首条结果。"""
-
-    if sys.platform != "darwin":
-        return False
-    time.sleep(2.5)
-    safe_name = application_name.replace("\\", "\\\\").replace('"', '\\"')
-    # 不请求或绕过系统权限；未授权“辅助功能”时 osascript 会直接失败，
-    # 客户端仍停留在正版搜索结果页供用户手动选择。
-    down_count = 2 if service in {"apple", "spotify"} else 1
-    script = (
-        'tell application "System Events"\n'
-        'if UI elements enabled then\n'
-        f'tell process "{safe_name}"\n'
-        'set frontmost to true\n'
-        f'repeat {down_count} times\nkey code 125\nend repeat\n'
-        'key code 36\ndelay 0.7\nkey code 36\n'
-        'end tell\nend if\nend tell'
-    )
-    try:
-        completed = subprocess.run(
-            ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return completed.returncode == 0
-
-
-def _windows_search_and_play(executable_name: str, query: str, service: str = "netease") -> bool:
-    """短暂聚焦刚启动的音乐客户端，通过搜索快捷键尝试播放首条结果。"""
-
-    if os.name != "nt":
-        return False
-    hwnd = 0
-    for _attempt in range(12):
-        time.sleep(0.5)
-        hwnd = _find_windows_app_window(executable_name)
-        if hwnd:
-            break
-    if not hwnd:
-        return False
-    user32 = ctypes.windll.user32
-    if not user32.IsWindow(hwnd):
-        return False
-    user32.ShowWindow(hwnd, 9)
-    user32.SetForegroundWindow(hwnd)
-    time.sleep(0.4)
-    if not _is_foreground_window(hwnd):
-        return False
-    original_cursor = wintypes.POINT()
-    user32.GetCursorPos(ctypes.byref(original_cursor))
-    try:
-        search_points = {
-            "qq": (0.50, 0.055),
-            "netease": (0.43, 0.055),
-            "kugou": (0.46, 0.060),
-            "apple": (0.48, 0.060),
-            "spotify": (0.45, 0.065),
-        }
-        result_points = {
-            "qq": (0.45, 0.31),
-            "netease": (0.43, 0.30),
-            "kugou": (0.44, 0.30),
-            "apple": (0.45, 0.31),
-            "spotify": (0.45, 0.32),
-        }
-        _click_window_relative(hwnd, *search_points.get(service, search_points["netease"]))
-        time.sleep(0.2)
-        if not _is_foreground_window(hwnd):
-            return False
-        _press_virtual_key(0x11, down=True)
-        _press_virtual_key(ord("A"), down=True)
-        _press_virtual_key(ord("A"), down=False)
-        _press_virtual_key(0x11, down=False)
-        time.sleep(0.2)
-        if not _is_foreground_window(hwnd):
-            return False
-        _send_unicode_text(query)
-        _tap_virtual_key(0x0D)
-        time.sleep(2.8)
-        if not _is_foreground_window(hwnd):
-            return False
-        # Keyboard selection works across more layouts; the relative double
-        # click remains a fallback for clients that keep focus in the search box.
-        _tap_virtual_key(0x28)
-        _tap_virtual_key(0x0D)
-        time.sleep(0.7)
-        if _is_foreground_window(hwnd):
-            _double_click_window_relative(hwnd, *result_points.get(service, result_points["netease"]))
-        return True
-    finally:
-        user32.SetCursorPos(original_cursor.x, original_cursor.y)
-
-
-def _is_foreground_window(hwnd: int) -> bool:
-    """只在目标音乐窗口确实位于前台时允许发送鼠标和键盘事件。"""
-
-    user32 = ctypes.windll.user32
-    return bool(user32.IsWindow(hwnd) and user32.GetForegroundWindow() == hwnd)
-
-
-def _find_windows_app_window(executable_name: str) -> int:
-    """寻找属于指定可执行文件的可见顶层窗口。"""
-
-    process_ids = _windows_process_ids(executable_name)
-    if not process_ids:
-        return 0
-    matches: list[tuple[int, int]] = []
-    user32 = ctypes.windll.user32
-    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-
-    def visit(hwnd, _lparam):
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        process_id = ctypes.c_ulong()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-        if process_id.value not in process_ids:
-            return True
-        rect = wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
-        matches.append((area, int(hwnd)))
-        return True
-
-    user32.EnumWindows(callback_type(visit), 0)
-    return max(matches)[1] if matches else 0
 
 
 def _windows_process_ids(executable_name: str) -> set[int]:
@@ -362,83 +215,3 @@ def _windows_process_ids(executable_name: str) -> set[int]:
     finally:
         kernel32.CloseHandle(snapshot)
     return result
-
-
-def _window_point(hwnd: int, x_ratio: float, y_ratio: float) -> tuple[int, int]:
-    """把窗口比例位置转换为屏幕坐标。"""
-
-    rect = wintypes.RECT()
-    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-    return (
-        rect.left + round((rect.right - rect.left) * x_ratio),
-        rect.top + round((rect.bottom - rect.top) * y_ratio),
-    )
-
-
-def _click_window_relative(hwnd: int, x_ratio: float, y_ratio: float) -> None:
-    """单击窗口内的相对位置。"""
-
-    x, y = _window_point(hwnd, x_ratio, y_ratio)
-    user32 = ctypes.windll.user32
-    user32.SetCursorPos(x, y)
-    user32.mouse_event(0x0002, 0, 0, 0, 0)
-    user32.mouse_event(0x0004, 0, 0, 0, 0)
-
-
-def _double_click_window_relative(hwnd: int, x_ratio: float, y_ratio: float) -> None:
-    """双击窗口内的相对位置，用于播放第一条搜索结果。"""
-
-    _click_window_relative(hwnd, x_ratio, y_ratio)
-    time.sleep(0.1)
-    _click_window_relative(hwnd, x_ratio, y_ratio)
-
-
-def _press_virtual_key(key: int, down: bool) -> None:
-    """发送一个普通虚拟按键事件。"""
-
-    ctypes.windll.user32.keybd_event(key, 0, 0 if down else 0x0002, 0)
-
-
-def _tap_virtual_key(key: int) -> None:
-    """按下并释放一个普通虚拟按键。"""
-
-    _press_virtual_key(key, True)
-    _press_virtual_key(key, False)
-
-
-def _send_unicode_text(text: str) -> None:
-    """用 Unicode 键盘事件输入中文，不读取或覆盖用户剪贴板。"""
-
-    class KeyboardInput(ctypes.Structure):
-        _fields_ = [
-            ("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
-            ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
-            ("dwExtraInfo", ctypes.c_size_t),
-        ]
-
-    class MouseInput(ctypes.Structure):
-        _fields_ = [
-            ("dx", ctypes.c_long), ("dy", ctypes.c_long),
-            ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
-            ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t),
-        ]
-
-    class HardwareInput(ctypes.Structure):
-        _fields_ = [
-            ("uMsg", ctypes.c_ulong),
-            ("wParamL", ctypes.c_ushort),
-            ("wParamH", ctypes.c_ushort),
-        ]
-
-    class InputUnion(ctypes.Union):
-        _fields_ = [("mi", MouseInput), ("ki", KeyboardInput), ("hi", HardwareInput)]
-
-    class Input(ctypes.Structure):
-        _fields_ = [("type", ctypes.c_ulong), ("union", InputUnion)]
-
-    for character in text:
-        code = ord(character)
-        down = Input(1, InputUnion(ki=KeyboardInput(0, code, 0x0004, 0, 0)))
-        up = Input(1, InputUnion(ki=KeyboardInput(0, code, 0x0004 | 0x0002, 0, 0)))
-        events = (Input * 2)(down, up)
-        ctypes.windll.user32.SendInput(2, ctypes.byref(events), ctypes.sizeof(Input))
