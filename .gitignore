@@ -33,3 +33,5 @@ user_assets/*
 .test-run/
 .codex-test/
 .tools/
+.test-tmp/
+.test-localappdata/
