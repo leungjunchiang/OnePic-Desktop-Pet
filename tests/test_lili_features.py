@@ -49,6 +49,7 @@ def test_missing_music_client_falls_back_to_official_search(monkeypatch) -> None
 def test_music_search_never_claims_connection_or_guaranteed_playback(monkeypatch, tmp_path) -> None:
     executable = tmp_path / "Spotify.exe"
     executable.write_bytes(b"MZ")
+    monkeypatch.setattr("onepic_desktop_pet.music.find_music_client", lambda _service, _path="": executable)
     monkeypatch.setattr("onepic_desktop_pet.music.subprocess.Popen", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("onepic_desktop_pet.music.threading.Thread.start", lambda _thread: None)
 
