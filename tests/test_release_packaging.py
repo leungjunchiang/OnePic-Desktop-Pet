@@ -40,7 +40,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
 
     assert "Lili-Windows-x64.zip" in workflow
     assert "Lili-Windows-x64-Setup.exe" in workflow
-    assert "tomllib.load(open('pyproject.toml', 'rb'))['project']['version']" in workflow
+    assert "-Version 0.19.0" in workflow
     assert "-Version 0.18.1" not in workflow
     assert "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
     assert 'dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"' in macos_build
