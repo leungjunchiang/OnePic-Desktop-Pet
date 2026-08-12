@@ -82,7 +82,13 @@ except ImportError:
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
 from .activity import active_application_category
-from .behavior import BehaviorModel, PetMood, PetState, StateDecision
+from .behavior import (
+    BehaviorModel,
+    CompanionBehaviorController,
+    PetMood,
+    PetState,
+    StateDecision,
+)
 from .chat import AISettingsDialog, ChatDialog
 from .chat_manager import (
     AgentManager,
@@ -151,6 +157,7 @@ class PetWindow(QWidget):
         super().__init__()
         self.settings = settings
         self.behavior = BehaviorModel(settings)
+        self.companion_behavior = CompanionBehaviorController()
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
         self.work_timer = work_timer or WorkTimerModel()
@@ -1559,7 +1566,9 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         if self._chat_dialog is None:
-            self._chat_dialog = ChatDialog(self)
+            # Keep chat as an independent utility window so it has a normal
+            # taskbar/Dock entry and can be minimized without affecting pet.
+            self._chat_dialog = ChatDialog(None)
             self._chat_dialog.message_submitted.connect(self._submit_chat_message)
             self._chat_dialog.settings_requested.connect(self.open_settings)
             self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
@@ -1573,7 +1582,10 @@ class PetWindow(QWidget):
             status.state.value,
             status.detail,
         )
-        self._chat_dialog.show()
+        if self._chat_dialog.isMinimized():
+            self._chat_dialog.showNormal()
+        else:
+            self._chat_dialog.show()
         self._chat_dialog.raise_()
         self._chat_dialog.activateWindow()
 
@@ -1771,6 +1783,15 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
+        """在当前播放器中搜索陈楚生并随机开始播放。"""
+
+        if self.music_controller.play_song("", "陈楚生", random_artist=True):
+            self.show_speech("正在播放器中随机播放一首陈楚生的歌曲…", 4200)
+        else:
+            self.show_speech("音乐操作正在处理中，请稍等一下。", 3200)
+        return "陈楚生随机歌曲"
+
+    def _play_random_song_legacy(self) -> str:
         """从搜索结果中的陈楚生歌曲行随机选择，再执行播放与媒体校验。"""
 
         if self.music_controller.play_song("", "陈楚生", random_artist=True):
@@ -1887,7 +1908,27 @@ class PetWindow(QWidget):
                 elif self.work_timer.today_seconds() >= 3 * 3600 and random.random() < 0.06:
                     activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
                 elif random.random() < 0.55:
-                    activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                    decision = self.companion_behavior.decide(
+                        now_hour=datetime.now().hour,
+                        working=self.work_timer.is_running,
+                        session_seconds=self.work_timer.session_seconds(),
+                        today_seconds=self.work_timer.today_seconds(),
+                        idle_seconds=int(idle_seconds),
+                        music_playing=self._manual_activity_until > time.monotonic(),
+                    )
+                    activity = decision.activity
+                    if activity == "idle":
+                        activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                    elif activity == "night-reading":
+                        text = "我陪你读一会儿，慢慢来。"
+                    elif activity == "sleepy":
+                        text = "六毛有点累啦，记得给自己留一点休息时间。"
+                    elif activity == "sit":
+                        text = "我坐在这里陪你，把这一小段完成就好。"
+                    elif activity == "headphones":
+                        text = "音乐响起来啦，和你一起专注。"
+                    else:
+                        text = self.companion.ambient_grumble(self.work_timer.is_running).text
                 else:
                     activity = random.choice(RANDOM_ACTIONS)
                     text = self.companion.ambient_grumble(self.work_timer.is_running).text
@@ -2186,6 +2227,105 @@ class PetWindow(QWidget):
             self._schedule(self.behavior.initial_idle())
 
     def _build_context_menu(self) -> QMenu:
+        """构建高频入口直达、低频选项收纳到二级菜单的右键菜单。"""
+
+        menu = QMenu(self)
+        dialogue_action = QAction("和六毛聊聊…", self)
+        dialogue_action.triggered.connect(self.prompt_dialogue)
+        menu.addAction(dialogue_action)
+        work_menu = menu.addMenu("工作打卡/工作计时 ›")
+        start_work = QAction("开始工作计时" if not self.work_timer.is_running else "工作计时进行中", self)
+        start_work.setEnabled(not self.work_timer.is_running)
+        start_work.triggered.connect(self.start_work_timer)
+        work_menu.addAction(start_work)
+        if self.work_timer.is_running:
+            pause_work = QAction("暂停/结束工作", self)
+            pause_work.triggered.connect(self.show_work_controls)
+            work_menu.addAction(pause_work)
+        for label, callback in (("查看今日累计", self.show_work_time), ("查看今日成长", self.show_daily_growth), ("查看陪伴报告", self.show_daily_report), ("打开六毛相册", self.open_daily_album)):
+            action = QAction(label, self)
+            action.triggered.connect(callback)
+            work_menu.addAction(action)
+        music_menu = menu.addMenu("音乐 ›")
+        random_song = QAction("随机听一首陈楚生", self)
+        random_song.triggered.connect(self.play_random_song)
+        music_menu.addAction(random_song)
+        for label, command in (("播放/暂停", "toggle"), ("下一首", "next"), ("上一首", "previous")):
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, value=command: self.control_music(value))
+            music_menu.addAction(action)
+        music_settings = QAction("音乐播放器设置", self)
+        music_settings.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        music_menu.addAction(music_settings)
+        study_action = QAction("搭子自习室…", self)
+        study_action.triggered.connect(self.open_social_hub)
+        menu.addAction(study_action)
+        action_menu = menu.addMenu("动作 ›")
+        for group_name, entries in ACTION_GROUPS:
+            group_menu = action_menu.addMenu(group_name)
+            for label, key in entries:
+                action = QAction(label, self)
+                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+                group_menu.addAction(action)
+        selfie = QAction("自拍", self)
+        selfie.triggered.connect(self.trigger_selfie)
+        action_menu.addAction(selfie)
+        pause = QAction("恢复动画" if self.paused else "暂停动画", self)
+        pause.setCheckable(True)
+        pause.setChecked(self.paused)
+        pause.triggered.connect(lambda: self.set_paused(not self.paused))
+        action_menu.addAction(pause)
+        food_menu = menu.addMenu("给六毛喂食 ›")
+        for food in FOOD_OPTIONS:
+            action = QAction(food.label, self)
+            action.triggered.connect(lambda _checked=False, key=food.key: self.feed_pet(key))
+            food_menu.addAction(action)
+        food_menu.addSeparator()
+        mood = QAction("查看心情与能量", self)
+        mood.triggered.connect(self.show_companion_status)
+        food_menu.addAction(mood)
+        outfit_menu = menu.addMenu("换装与外观 ›")
+        classic = QAction("经典六毛", self)
+        classic.setCheckable(True)
+        classic.setChecked(not self.settings.equipped_outfit)
+        classic.triggered.connect(lambda: self.equip_outfit(""))
+        outfit_menu.addAction(classic)
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        for outfit in OUTFITS:
+            action = QAction(outfit.name, self)
+            available = outfit in unlocked
+            action.setEnabled(available)
+            action.setCheckable(True)
+            action.setChecked(outfit.key == self.settings.equipped_outfit)
+            if available:
+                action.triggered.connect(lambda _checked=False, key=outfit.key: self.equip_outfit(key))
+            outfit_menu.addAction(action)
+        menu.addSeparator()
+        for label, callback, checked in (("偶尔发牢骚", self.set_automatic_grumbling, self.settings.automatic_grumbling), ("整点报时", self.set_hourly_announcement, self.settings.hourly_announcement), ("始终置顶", self.set_always_on_top, self.settings.always_on_top)):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(checked)
+            action.toggled.connect(callback)
+            menu.addAction(action)
+        system_menu = menu.addMenu("系统与设置 ›")
+        ai_action = QAction("AI 与陪伴设置", self)
+        ai_action.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        system_menu.addAction(ai_action)
+        size_action = QAction("调整桌宠大小", self)
+        size_action.triggered.connect(self.open_size_control)
+        system_menu.addAction(size_action)
+        return_action = QAction("回到主屏幕", self)
+        return_action.triggered.connect(self.return_to_primary_screen)
+        system_menu.addAction(return_action)
+        hide_action = QAction("隐藏", self)
+        hide_action.triggered.connect(self.hide)
+        menu.addAction(hide_action)
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        menu.addAction(quit_action)
+        return menu
+
+    def _build_context_menu_legacy(self) -> QMenu:
         """按五个稳定分组构建右键菜单，避免功能平铺和入口层级混乱。"""
 
         menu = QMenu(self)

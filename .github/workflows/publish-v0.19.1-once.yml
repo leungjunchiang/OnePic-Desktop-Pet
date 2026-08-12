@@ -1,0 +1,29 @@
+name: publish-v0.19.1-once
+
+on:
+  push:
+    branches:
+      - agent/netease-ui-automation
+    paths:
+      - .github/workflows/publish-v0.19.1-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  create-release-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create v0.19.1 tag
+        run: |
+          if git ls-remote --exit-code --tags origin refs/tags/v0.19.1 >/dev/null 2>&1; then
+            echo "v0.19.1 already exists"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v0.19.1 -m "Lili 0.19.1"
+          git push origin v0.19.1

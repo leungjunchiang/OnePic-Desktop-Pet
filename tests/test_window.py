@@ -397,7 +397,37 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
     app.processEvents()
 
 
-def test_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
+def test_context_menu_uses_direct_high_frequency_entries() -> None:
+    """一级菜单直接呈现聊天、工作、音乐、自习室、动作和喂食入口。"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels[:7] == [
+        "和六毛聊聊…",
+        "工作打卡/工作计时 ›",
+        "音乐 ›",
+        "搭子自习室…",
+        "动作 ›",
+        "给六毛喂食 ›",
+        "换装与外观 ›",
+    ]
+    assert "隐藏" in labels
+    assert "退出" in labels
+    assert "陪伴动作" not in labels
+    assert "完整图片动作" not in labels
+    music = next(action for action in menu.actions() if action.text() == "音乐 ›")
+    music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
+    assert music_labels == ["随机听一首陈楚生", "播放/暂停", "下一首", "上一首", "音乐播放器设置"]
+    food = next(action for action in menu.actions() if action.text() == "给六毛喂食 ›")
+    assert food.menu() is not None
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def _legacy_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
     """右键菜单只保留五个一级分组，功能放入语义明确的子菜单。"""
 
     app, window = _create_window()

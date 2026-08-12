@@ -14,6 +14,7 @@ from onepic_desktop_pet.music_control import (
     WindowsSessionSnapshot,
 )
 from onepic_desktop_pet.music_playback import (
+    BasicRandomArtistPlaybackManager,
     AppleMusicWindowsAdapter,
     ExactMusicPlaybackManager,
     KugouMusicAdapter,
@@ -23,6 +24,7 @@ from onepic_desktop_pet.music_playback import (
     SongCandidate,
     SpotifyWindowsAdapter,
     build_provider_adapters,
+    UIAutomationUnavailableError,
 )
 
 
@@ -45,6 +47,20 @@ class FakeAdapter:
     def play(self, candidate: SongCandidate) -> bool:
         self.played.append(candidate)
         return self.play_success
+
+
+class UnavailableAdapter(FakeAdapter):
+    def search(self, _title: str, _artist: str):
+        raise UIAutomationUnavailableError("UI tree unavailable")
+
+
+def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_results() -> None:
+    manager = BasicRandomArtistPlaybackManager({"qq": UnavailableAdapter()})
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is False
+    assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
 
 
 def _manager(adapter: FakeAdapter, tracks, *, random_source=None) -> ExactMusicPlaybackManager:
