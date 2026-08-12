@@ -2,7 +2,7 @@
 
 一只可以在桌面跑动、休息、互动、吃喝、陪你聊天并记录工作时间的六毛形象公仔。项目仍使用 OnePic Desktop Pet 的现有代码与一图制作流程。
 
-应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.16.0` 把 AI Agent 改为纯增强能力：后台检测并缓存连接状态，聊天不再逐条检测；AI 未连接、检测中、掉线或超时时会无缝回到完整离线陪伴，绝不会自动弹出设置页。
+应用和安装文件名为“Lili”，宠物本人仍叫“六毛”。`v0.16.1` 修复聊天框回车误触 QDialog 默认“AI 设置”按钮的问题，并将连接与陪伴设置收口为唯一的 `user_action` 入口；AI 未连接、检测中、掉线、错误或超时时只会无缝使用离线陪伴。
 
 ![六毛公仔走路预览](assets/pet/walk-preview.gif)
 
@@ -174,7 +174,7 @@ dist/Lili/Lili.exe
 维护者安装并登录 GitHub CLI 后，可不打开网页直接发布：
 
 ```powershell
-.\scripts\publish_release.ps1 -Version 0.16.0 -NotesFile .\release-notes.md
+.\scripts\publish_release.ps1 -Version 0.16.1 -NotesFile .\release-notes.md
 ```
 
 脚本会检查 `gh` 登录、主分支、干净工作区和测试结果，然后自动推送 `main`、标签和 Release；跨平台安装包继续由 GitHub Actions 自动附加。
@@ -194,7 +194,7 @@ Agent 应先检查环境，再建立项目、处理原图、生成动作、检�
 
 ## 当前公开状态
 
-源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.16.0` 提供离线优先的 AgentManager / OfflineDialogueManager / ChatManager 架构，以及 Lili 的 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
+源码维护在 [leungjunchiang/OnePic-Desktop-Pet](https://github.com/leungjunchiang/OnePic-Desktop-Pet)。`v0.16.1` 在离线优先架构上加入设置入口来源门禁与回车误触回归保护，并提供 Lili 的 Windows 安装程序、便携 ZIP、Apple 芯片 Mac DMG、Intel Mac DMG 和 SHA-256 校验文件；旧版本仍保留在 Releases 页面。
 
 ## 授权
 

@@ -55,9 +55,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.16.0"' in spec
+    assert '"CFBundleShortVersionString": "0.16.1"' in spec
     assert '"LSUIElement": False' in spec
-    assert 'version = "0.16.0"' in pyproject
+    assert 'version = "0.16.1"' in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
     assert "ChineseSimplified.isl" not in installer
@@ -80,3 +80,29 @@ def test_one_command_release_script_has_safety_checks() -> None:
     assert "gh release create" in script
     assert "--verify-tag" in script
     assert "--web" not in script
+
+
+def test_ai_settings_has_one_source_guarded_open_path() -> None:
+    """源码中不得保留 Agent 状态或旧别名直接打开连接与陪伴设置。"""
+
+    source_files = list((PROJECT_ROOT / "src").rglob("*.py"))
+    sources = {
+        path.relative_to(PROJECT_ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in source_files
+    }
+    combined = "\n".join(sources.values())
+    window = sources["src/onepic_desktop_pet/window.py"]
+    chat_manager = sources["src/onepic_desktop_pet/chat_manager.py"]
+
+    for forbidden in (
+        "open_ai_settings",
+        "openAISettings",
+        "showAISettings",
+        "setSettingsOpen",
+        "setShowSettings",
+    ):
+        assert forbidden not in combined
+    assert combined.count("dialog = AISettingsDialog(") == 1
+    assert "def open_settings(self, source: str) -> bool:" in window
+    assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
+    assert "AISettingsDialog" not in chat_manager

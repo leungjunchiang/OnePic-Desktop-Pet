@@ -1,4 +1,7 @@
-"""提供不依赖系统托盘的六毛快捷面板、工作气泡和连续尺寸调节器。"""
+"""提供不依赖系统托盘的六毛快捷面板、工作气泡和连续尺寸调节器。
+
+设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
+"""
 
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ class QuickControlPanel(QWidget):
     work_requested = Signal()
     music_requested = Signal()
     size_requested = Signal()
-    settings_requested = Signal()
+    settings_requested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__(None)
@@ -58,20 +61,29 @@ class QuickControlPanel(QWidget):
         self.hide_timer.timeout.connect(self.hide)
         layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9)
         title = QLabel("六毛快捷口袋"); title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(title)
-        for label, signal in (
-            ("聊聊", self.chat_requested), ("工作计时", self.work_requested),
-            ("随机听陈楚生", self.music_requested), ("连续调节大小", self.size_requested),
-            ("设置", self.settings_requested),
+        for label, signal, source in (
+            ("聊聊", self.chat_requested, None),
+            ("工作计时", self.work_requested, None),
+            ("随机听陈楚生", self.music_requested, None),
+            ("连续调节大小", self.size_requested, None),
+            ("设置", self.settings_requested, "user_action"),
         ):
             button = QPushButton(label)
-            button.clicked.connect(lambda _checked=False, value=signal: self._choose(value))
+            button.clicked.connect(
+                lambda _checked=False, value=signal, value_source=source: self._choose(
+                    value, value_source
+                )
+            )
             layout.addWidget(button)
 
-    def _choose(self, signal: object) -> None:
+    def _choose(self, signal: object, source: str | None = None) -> None:
         """先收起口袋再发出操作信号，避免新窗口被它遮挡。"""
 
         self.hide()
-        signal.emit()
+        if source is None:
+            signal.emit()
+        else:
+            signal.emit(source)
 
     def showEvent(self, event) -> None:
         """每次显示重新开始八秒自动收起计时。"""

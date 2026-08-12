@@ -3,6 +3,7 @@
 
 职责范围：
 - 提供不遮挡桌宠的圆角聊天窗口与 checking/connected/disconnected/error 状态提示；
+- 禁止设置类按钮成为 QDialog 默认按钮，确保回车只发送消息，不会误触设置入口；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
@@ -131,7 +132,7 @@ class ChatDialog(QDialog):
     """QQ 宠物式的轻量聊天窗口，但不复制其素材或商标。"""
 
     message_submitted = Signal(str)
-    settings_requested = Signal()
+    settings_requested = Signal(str)
     reconnect_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -153,7 +154,11 @@ class ChatDialog(QDialog):
         header.addStretch(1)
         self.settings_button = QPushButton("AI 设置")
         self.settings_button.setObjectName("softButton")
-        self.settings_button.clicked.connect(self.settings_requested.emit)
+        self.settings_button.setAutoDefault(False)
+        self.settings_button.setDefault(False)
+        self.settings_button.clicked.connect(
+            lambda _checked=False: self.settings_requested.emit("user_action")
+        )
         header.addWidget(self.settings_button)
         layout.addLayout(header)
 
@@ -168,11 +173,17 @@ class ChatDialog(QDialog):
         recovery_layout.addStretch(1)
         self.reconnect_button = QPushButton("重新连接 AI")
         self.reconnect_button.setObjectName("softButton")
+        self.reconnect_button.setAutoDefault(False)
+        self.reconnect_button.setDefault(False)
         self.reconnect_button.clicked.connect(self.reconnect_requested.emit)
         recovery_layout.addWidget(self.reconnect_button)
         self.go_to_settings_button = QPushButton("去设置")
         self.go_to_settings_button.setObjectName("softButton")
-        self.go_to_settings_button.clicked.connect(self.settings_requested.emit)
+        self.go_to_settings_button.setAutoDefault(False)
+        self.go_to_settings_button.setDefault(False)
+        self.go_to_settings_button.clicked.connect(
+            lambda _checked=False: self.settings_requested.emit("user_action")
+        )
         recovery_layout.addWidget(self.go_to_settings_button)
         self.recovery_actions.hide()
         layout.addWidget(self.recovery_actions)
@@ -188,6 +199,8 @@ class ChatDialog(QDialog):
         self.input.returnPressed.connect(self._submit)
         entry.addWidget(self.input, 1)
         self.send_button = QPushButton("发送")
+        self.send_button.setAutoDefault(False)
+        self.send_button.setDefault(False)
         self.send_button.clicked.connect(self._submit)
         entry.addWidget(self.send_button)
         layout.addLayout(entry)
