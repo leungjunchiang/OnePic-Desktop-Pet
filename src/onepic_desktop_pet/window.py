@@ -12,6 +12,7 @@
 - 支持左键拖动、单击调戏、双击快捷口袋、无互动分级休息和连续尺寸滑块；
 - 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
 - 支持 Agent 状态缓存、异步 AI、无缝离线降级以及工作、爱意、鼓励和安慰动作；
+- 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
@@ -37,6 +38,7 @@ API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import sys
@@ -120,6 +122,10 @@ from .music import choose_song, launch_music_client
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
+
+
+LOGGER = logging.getLogger(__name__)
+SETTINGS_SOURCE_USER_ACTION = "user_action"
 
 
 DEFAULT_WALK_MOTION_FACTORS = (0.45, 0.7, 1.2, 1.65, 0.45, 0.7, 1.2, 1.65)
@@ -283,7 +289,7 @@ class PetWindow(QWidget):
         self.quick_panel.work_requested.connect(self._quick_work_action)
         self.quick_panel.music_requested.connect(self.play_random_song)
         self.quick_panel.size_requested.connect(self.open_size_control)
-        self.quick_panel.settings_requested.connect(self.open_ai_settings)
+        self.quick_panel.settings_requested.connect(self.open_settings)
 
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
@@ -1527,7 +1533,7 @@ class PetWindow(QWidget):
         if self._chat_dialog is None:
             self._chat_dialog = ChatDialog(self)
             self._chat_dialog.message_submitted.connect(self._submit_chat_message)
-            self._chat_dialog.settings_requested.connect(self.open_ai_settings)
+            self._chat_dialog.settings_requested.connect(self.open_settings)
             self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
             self._chat_dialog.append_message(
                 "六毛",
@@ -1599,8 +1605,12 @@ class PetWindow(QWidget):
         if not self.chat_manager.reconnect_now():
             self._chat_notice("AI 已在后台检测中，请稍等一下。")
 
-    def open_ai_settings(self) -> None:
-        """打开 AI、自动牢骚与报时设置，保存时不持久化任何明文令牌。"""
+    def open_settings(self, source: str) -> bool:
+        """只允许明确用户动作打开设置；所有自动或未知来源均拒绝并记录。"""
+
+        if source != SETTINGS_SOURCE_USER_ACTION:
+            LOGGER.debug("拒绝非用户来源打开连接与陪伴设置：source=%r", source)
+            return False
 
         dialog = AISettingsDialog(
             self.settings,
@@ -1609,13 +1619,13 @@ class PetWindow(QWidget):
             agent_manager=self.agent_manager,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+            return True
         previous_always_on_top = self.settings.always_on_top
         try:
             dialog.apply()
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
-            return
+            return True
         if self.settings.always_on_top != previous_always_on_top:
             self.set_always_on_top(self.settings.always_on_top, persist=False)
         save_settings(self.settings)
@@ -1635,6 +1645,7 @@ class PetWindow(QWidget):
             )
         preset = PROVIDER_PRESETS[self.settings.ai_provider]
         self.show_speech(f"已切换为：{preset.label}", 4200)
+        return True
 
     def open_social_hub(self) -> None:
         """打开联网搭子与私人自习室；离线功能不依赖此窗口。"""
@@ -2208,7 +2219,9 @@ class PetWindow(QWidget):
         social_action.triggered.connect(self.open_social_hub)
         menu.addAction(social_action)
         ai_action = QAction("AI 与陪伴设置…", self)
-        ai_action.triggered.connect(self.open_ai_settings)
+        ai_action.triggered.connect(
+            lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION)
+        )
         menu.addAction(ai_action)
         grumble_action = QAction("偶尔发牢骚", self)
         grumble_action.setCheckable(True)

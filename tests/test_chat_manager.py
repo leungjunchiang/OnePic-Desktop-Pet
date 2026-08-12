@@ -8,7 +8,8 @@ from datetime import datetime
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
-from PySide6.QtTest import QSignalSpy
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.ai import AIConnectionError
@@ -226,6 +227,33 @@ def test_recovery_buttons_only_emit_user_actions() -> None:
     dialog.go_to_settings_button.click()
     assert reconnect.count() == 1
     assert settings.count() == 1
+    assert settings.at(0)[0] == "user_action"
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_pressing_enter_ten_times_only_submits_messages() -> None:
+    """QDialog 的回车不得把 AI 设置按钮当成默认按钮并误触。"""
+
+    app = _app()
+    dialog = ChatDialog()
+    messages = QSignalSpy(dialog.message_submitted)
+    settings = QSignalSpy(dialog.settings_requested)
+    dialog.show()
+    dialog.input.setFocus()
+
+    for index in range(10):
+        dialog.input.setText(f"第 {index + 1} 条消息")
+        QTest.keyClick(dialog.input, Qt.Key.Key_Return)
+        app.processEvents()
+
+    assert messages.count() == 10
+    assert settings.count() == 0
+    assert not dialog.settings_button.autoDefault()
+    assert not dialog.go_to_settings_button.autoDefault()
+    assert not dialog.reconnect_button.autoDefault()
+    assert not dialog.send_button.autoDefault()
     dialog.close()
     dialog.deleteLater()
     app.processEvents()

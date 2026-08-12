@@ -13,19 +13,22 @@ import os
 import time
 from datetime import datetime, timedelta
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtWidgets import QApplication, QDialog, QScrollArea
 
+from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
 from onepic_desktop_pet.behavior import PetState, StateDecision
+from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.chat import AISettingsDialog
-from onepic_desktop_pet.ai import CredentialStore
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -553,6 +556,114 @@ def test_agent_checking_never_opens_settings_and_complex_chat_shows_buttons() ->
     assert "离线模式" in window._chat_dialog.transcript.toPlainText()
     assert window._chat_dialog.recovery_actions.isVisible()
     assert "正在后台检测" in window._chat_dialog.status_label.text()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_settings_open_path_rejects_every_non_user_source(monkeypatch) -> None:
+    """Agent 检测、错误、超时或内部调用均不能创建设置窗口。"""
+
+    created = []
+
+    class FakeSettingsDialog:
+        def __init__(self, *_args, **_kwargs) -> None:
+            created.append(True)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.AISettingsDialog",
+        FakeSettingsDialog,
+    )
+    app, window = _create_window()
+
+    for source in (
+        "startup_detection",
+        "checking",
+        "agent_disconnected",
+        "agent_error",
+        "agent_timeout",
+        "cli_not_found",
+        "ai_call_failed",
+        "internal",
+        "",
+    ):
+        assert window.open_settings(source) is False
+    assert created == []
+
+    assert window.open_settings("user_action") is True
+    assert created == [True]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ("connected", "checking", "disconnected", "error", "timeout"),
+)
+def test_ten_messages_in_every_agent_state_never_open_settings(
+    monkeypatch,
+    scenario: str,
+) -> None:
+    """五种 Agent 情况各连续发送十条消息都不得产生设置窗口副作用。"""
+
+    settings_opened = []
+
+    class ForbiddenSettingsDialog:
+        def __init__(self, *_args, **_kwargs) -> None:
+            settings_opened.append(True)
+            raise AssertionError("聊天或 Agent 状态不得创建设置窗口")
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.AISettingsDialog",
+        ForbiddenSettingsDialog,
+    )
+    app, window = _create_window()
+    window.settings.ai_provider = "codex"
+    service_calls = []
+
+    def successful_reply(*_args, **_kwargs) -> str:
+        service_calls.append("success")
+        return "AI 六毛在这里。"
+
+    def timed_out_reply(*_args, **_kwargs) -> str:
+        service_calls.append("timeout")
+        raise AIConnectionError("Codex 请求超时。")
+
+    if scenario == "connected":
+        window.agent_manager.mark_runtime_success("codex")
+        monkeypatch.setattr(window.chat_manager.service, "reply", successful_reply)
+    elif scenario == "timeout":
+        window.agent_manager.mark_runtime_success("codex")
+        monkeypatch.setattr(window.chat_manager.service, "reply", timed_out_reply)
+    else:
+        state = AgentConnectionState(scenario)
+        window.agent_manager._set_status("codex", state, f"测试状态：{scenario}")
+
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    settings_signal = QSignalSpy(window._chat_dialog.settings_requested)
+
+    for index in range(10):
+        window._chat_dialog.input.setText(f"第 {index + 1} 条测试消息")
+        window._chat_dialog._submit()
+        thread = window.chat_manager._thread
+        if thread is not None:
+            assert thread.wait(2000)
+        app.processEvents()
+
+    assert settings_opened == []
+    assert settings_signal.count() == 0
+    if scenario == "connected":
+        assert len(service_calls) == 10
+    elif scenario == "timeout":
+        assert service_calls == ["timeout"]
+        assert window.agent_manager.status("codex").state is AgentConnectionState.ERROR
+    else:
+        assert service_calls == []
     window.close()
     window.deleteLater()
     app.processEvents()
