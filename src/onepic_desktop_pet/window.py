@@ -121,8 +121,8 @@ from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
 from .social import SocialClient
 from .social_ui import BuddyVisitWindow, SocialHubDialog, SocialSyncThread
-from .music import choose_song, search_song
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
+from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
@@ -1763,21 +1763,13 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """由用户主动发起指定歌曲搜索，与基础播放控制严格分开。"""
+        """从搜索结果中的陈楚生歌曲行随机选择，再执行播放与媒体校验。"""
 
-        title = choose_song()
-        custom_path = {
-            "qq": self.settings.qq_music_path,
-            "netease": self.settings.netease_music_path,
-            "kugou": self.settings.kugou_music_path,
-            "apple": self.settings.apple_music_path,
-            "spotify": self.settings.spotify_music_path,
-        }.get(self.settings.music_service, self.settings.netease_music_path)
-        result = search_song(self.settings.music_service, title, custom_path)
-        self._change_ambient_activity(random.choice(("headphones", "guitar", "drums")))
-        self._manual_activity_until = time.monotonic() + 180
-        self.show_speech(f"六毛挑了《{title}》。{result.message}", 7200)
-        return title
+        if self.music_controller.play_song("", "陈楚生", random_artist=True):
+            self.show_speech("正在从陈楚生的歌曲结果中随机选择，并核对实际播放歌曲……", 4200)
+        else:
+            self.show_speech("上一项音乐操作还在处理中，请稍等一下。", 3200)
+        return "陈楚生随机歌曲"
 
     def control_music(self, action: str) -> bool:
         """异步控制当前选择的播放器，不启动应用也不抢夺输入焦点。"""
@@ -1788,10 +1780,11 @@ class PetWindow(QWidget):
         self.show_speech("音乐控制还在处理中，请稍等一下。", 3200)
         return False
 
-    def _music_control_result(self, result: MusicControlResult) -> None:
+    def _music_control_result(self, result: MusicControlResult | SongPlaybackResult) -> None:
         """只展示系统控制层返回的真实结果和能力等级。"""
 
-        if result.success and result.action != "status":
+        is_status = isinstance(result, MusicControlResult) and result.action == "status"
+        if result.success and not is_status:
             self._change_ambient_activity("headphones")
             self._manual_activity_until = time.monotonic() + 45
         self.show_speech(result.message, 6200)

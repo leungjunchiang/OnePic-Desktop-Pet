@@ -55,11 +55,11 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.18.1"' in spec
+    assert '"CFBundleShortVersionString": "0.19.0"' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
-    assert 'version = "0.18.1"' in pyproject
+    assert 'version = "0.19.0"' in pyproject
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer

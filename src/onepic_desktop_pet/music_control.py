@@ -13,15 +13,23 @@ import ctypes
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from PySide6.QtCore import QObject, QThread, Signal
 
 from .config import PetSettings
 from .music import MUSIC_SERVICE_LABELS, find_music_client
+from .music_playback import (
+    ExactMusicPlaybackManager,
+    MusicPlaybackError,
+    MusicProviderAdapter,
+    SongPlaybackResult,
+    build_provider_adapters,
+)
 
 
 PROVIDER_SESSION_MARKERS = {
@@ -213,6 +221,10 @@ class MusicProviderManager:
         process_checker: Callable[[str], bool] | None = None,
         command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         media_key_sender: Callable[[str], bool] | None = None,
+        playback_adapters: Mapping[str, MusicProviderAdapter] | None = None,
+        playback_verify_timeout: float = 5.0,
+        playback_poll_interval: float = 0.55,
+        playback_sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.settings = settings
         self.platform_name = platform_name or sys.platform
@@ -222,6 +234,19 @@ class MusicProviderManager:
         self.command_runner = command_runner
         self.media_key_sender = media_key_sender or self._default_media_key_sender
         self._cache: dict[str, MusicProviderStatus] = {}
+        adapters = playback_adapters or build_provider_adapters(
+            settings,
+            platform_name=self.platform_name,
+            client_finder=client_finder,
+            command_runner=command_runner,
+        )
+        self.playback_manager = ExactMusicPlaybackManager(
+            adapters,
+            self.current_track,
+            verify_timeout_seconds=playback_verify_timeout,
+            poll_interval_seconds=playback_poll_interval,
+            sleep=playback_sleep or time.sleep,
+        )
 
     def cached_status(self, provider: str) -> MusicProviderStatus:
         """返回缓存；没有缓存时只做安装检测，不声称已经建立控制。"""
@@ -273,6 +298,37 @@ class MusicProviderManager:
             return self._control_macos(normalized, action)
         status = self.inspect(normalized)
         return MusicControlResult(False, normalized, action, "当前系统暂不支持本机音乐控制。", status)
+
+    def play_song(
+        self,
+        provider: str,
+        title: str,
+        artist: str,
+        *,
+        random_artist: bool = False,
+    ) -> SongPlaybackResult:
+        """执行严格点歌闭环；不会使用全局播放键代替精确歌曲点击。"""
+
+        normalized = self._normalize(provider)
+        return self.playback_manager.play_song(
+            normalized,
+            title,
+            artist,
+            random_artist=random_artist,
+        )
+
+    def current_track(self, provider: str) -> TrackInfo | None:
+        """直接读取当前媒体信息供点歌校验使用，不复用可能过期的状态缓存。"""
+
+        normalized = self._normalize(provider)
+        if self.platform_name == "win32":
+            sessions = self.windows_bridge.sessions()
+            session = self._matching_session(normalized, sessions)
+            return session.track if session is not None else None
+        if self.platform_name == "darwin" and normalized in {"apple", "spotify"}:
+            result_type, output = self._run_macos_script(normalized, "status")
+            return self._parse_macos_track(output) if result_type == "ok" else None
+        return None
 
     def _inspect_windows(self, provider: str) -> MusicProviderStatus:
         detected = self._client(provider) is not None
@@ -582,22 +638,53 @@ class MusicCommandThread(QThread):
 
     completed = Signal(object)
 
-    def __init__(self, manager: MusicProviderManager, provider: str, action: str, parent=None) -> None:
+    def __init__(
+        self,
+        manager: MusicProviderManager,
+        provider: str,
+        action: str,
+        parent=None,
+        *,
+        title: str = "",
+        artist: str = "",
+        random_artist: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.manager = manager
         self.provider = provider
         self.action = action
+        self.title = title
+        self.artist = artist
+        self.random_artist = random_artist
 
     def run(self) -> None:
         try:
-            result = self.manager.control(self.provider, self.action)
+            if self.action == "play_song":
+                result = self.manager.play_song(
+                    self.provider,
+                    self.title,
+                    self.artist,
+                    random_artist=self.random_artist,
+                )
+            else:
+                result = self.manager.control(self.provider, self.action)
         except Exception as exc:
-            status = MusicProviderStatus(
-                self.provider,
-                MusicControlState.ERROR,
-                f"音乐控制遇到问题：{exc}",
-            )
-            result = MusicControlResult(False, self.provider, self.action, status.message, status)
+            if self.action == "play_song":
+                result = SongPlaybackResult(
+                    False,
+                    self.provider,
+                    self.title,
+                    self.artist,
+                    "歌曲搜索失败，请确认播放器正在运行并允许辅助功能。",
+                    MusicPlaybackError.SEARCH_FAILED,
+                )
+            else:
+                status = MusicProviderStatus(
+                    self.provider,
+                    MusicControlState.ERROR,
+                    f"音乐控制遇到问题：{exc}",
+                )
+                result = MusicControlResult(False, self.provider, self.action, status.message, status)
         self.completed.emit(result)
 
 
@@ -633,8 +720,35 @@ class MusicController(QObject):
         self._thread.start()
         return True
 
-    def _completed(self, result: MusicControlResult) -> None:
-        self.status_changed.emit(result.status)
+    def play_song(
+        self,
+        title: str,
+        artist: str,
+        *,
+        random_artist: bool = False,
+    ) -> bool:
+        """在线程中执行精确点歌与媒体校验，避免阻塞宠物动画和拖动。"""
+
+        if self.busy:
+            return False
+        self._thread = MusicCommandThread(
+            self.manager,
+            self.settings.music_service,
+            "play_song",
+            self,
+            title=title,
+            artist=artist,
+            random_artist=random_artist,
+        )
+        self._thread.completed.connect(self._completed)
+        self._thread.finished.connect(self._finished)
+        self.busy_changed.emit(True)
+        self._thread.start()
+        return True
+
+    def _completed(self, result: MusicControlResult | SongPlaybackResult) -> None:
+        if isinstance(result, MusicControlResult):
+            self.status_changed.emit(result.status)
         self.result_ready.emit(result)
 
     def _finished(self) -> None:

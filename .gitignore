@@ -32,3 +32,4 @@ user_assets/*
 .localappdata*/
 .test-run/
 .codex-test/
+.tools/
