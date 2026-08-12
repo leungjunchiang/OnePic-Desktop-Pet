@@ -1,0 +1,26 @@
+name: apply-v0.20.1-once
+on:
+  push:
+    branches: [agent/netease-ui-automation]
+    paths:
+      - .github/workflows/apply-v0.20.1-once.yml
+      - .github/repair/v0.20.1.patch.gz.b64
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply v0.20.1 source patch
+        env:
+          TARGET_BRANCH: agent/netease-ui-automation
+        run: |
+          base64 -d .github/repair/v0.20.1.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/v0.20.1.patch"
+          git apply --index "$RUNNER_TEMP/v0.20.1.patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: control NetEase on the real Windows desktop"
+          git push origin HEAD:"$TARGET_BRANCH"

@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.20.0
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.20.1
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -111,8 +111,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $GITHUB_REF_NAME · 自动选择音乐播放器" \
+              --title "Lili $GITHUB_REF_NAME · 网易云真实桌面随机播放" \
               --generate-notes \
-              --notes "随机听陈楚生现在会自动检测并评分 QQ音乐、网易云、酷狗、Apple Music 与 Spotify，首选失败后自动尝试下一个；成功历史会提升后续优先级，失败与 UI Automation 不可用会降低评分。播放/暂停、下一首和上一首继续控制实际成功播放的平台。设置默认显示自动选择状态；右键子菜单只保留系统原生展开箭头。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "修复网易云 3.x Chromium 控件树为空和高分屏坐标失真的真实调度问题。UI Automation 不可用时，Lili 会进入用户 Default Desktop，以 Per-Monitor DPI 物理像素搜索陈楚生，进入明确标有陈楚生的专辑歌曲列表，并随机双击一首歌曲；不会使用全局 Play 或下一首续播旧队列。Windows 本机已连续 5 次真实播放成功。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
           fi
-
