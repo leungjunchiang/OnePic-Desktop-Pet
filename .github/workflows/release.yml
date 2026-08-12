@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.16.1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.17.0
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -113,5 +113,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "Lili $GITHUB_REF_NAME" \
               --generate-notes \
-              --notes "Lili 0.15：桌宠采用 QQ 宠物式无焦点置顶窗口，点击微信、Word 等应用后仍保持可见且不抢输入；透明留白继续支持点击穿透，并新增可持久化的‘始终置顶/桌面模式’开关。macOS 分开检测 ChatGPT Desktop App 与 Codex CLI：GUI 通过 open -a ChatGPT 打开，CLI 通过登录 zsh 获取绝对路径并验证版本，不再扫描 Codex.app。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "Lili 0.17：Windows 优先通过系统媒体 Session 控制正在运行的 QQ 音乐、网易云、酷狗、Apple Music 与 Spotify，并在客户端没有暴露 Session 时使用系统媒体键；macOS 通过 Apple Events 控制 Apple Music/Spotify，其他运行中的播放器提供基础媒体键。快捷口袋新增播放/暂停、上一首、下一首和当前歌曲，安装发现、控制建立与基础控制状态不再混淆。指定歌曲搜索保持独立，不伪造音乐平台 API。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
           fi

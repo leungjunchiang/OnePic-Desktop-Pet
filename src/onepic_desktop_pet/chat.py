@@ -8,6 +8,7 @@
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 允许用户选择本机音乐客户端、巴布达音频和自有歌词文本，绝不把这些路径上传；
+- 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 为复杂离线请求提供“重新连接 AI”和“去设置”按钮，但绝不自动打开设置窗口；
 - 手动连接检测放入 QThread；聊天请求和自动重连由 chat_manager.py 管理。
@@ -18,8 +19,12 @@
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
 
 from html import escape
+
+if TYPE_CHECKING:
+    from .music_control import MusicProviderManager
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -272,11 +277,13 @@ class AISettingsDialog(QDialog):
         credentials: CredentialStore,
         parent: QWidget | None = None,
         agent_manager: AgentManager | None = None,
+        music_manager: MusicProviderManager | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.credentials = credentials
         self.agent_manager = agent_manager
+        self.music_manager = music_manager
         self._connection_thread: ConnectionCheckThread | None = None
         self.setWindowTitle("Lili · 六毛设置")
         self.setObjectName("liliPanel")
@@ -370,7 +377,12 @@ class AISettingsDialog(QDialog):
         ):
             self.music_service.addItem(label, key)
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
-        form.addRow("正版音乐入口", self.music_service)
+        self.music_service.currentIndexChanged.connect(self._music_provider_changed)
+        form.addRow("音乐播放器", self.music_service)
+        self.music_status = QLabel()
+        self.music_status.setObjectName("status")
+        self.music_status.setWordWrap(True)
+        form.addRow("播放控制状态", self.music_status)
 
         self.qq_music_path = QLineEdit(settings.qq_music_path)
         self.qq_music_path.setPlaceholderText("自动寻找，或选择 QQMusic.exe / QQMusic.app")
@@ -442,6 +454,17 @@ class AISettingsDialog(QDialog):
         buttons.addWidget(self.save_button)
         outer_layout.addLayout(buttons)
         self._provider_changed()
+        self._music_provider_changed()
+
+    def _music_provider_changed(self) -> None:
+        """显示缓存的真实能力等级；实际命令会在后台再次刷新系统状态。"""
+
+        provider = str(self.music_service.currentData())
+        if self.music_manager is None:
+            self.music_status.setText("尚未验证播放控制；请从六毛快捷口袋发送播放命令。")
+            return
+        status = self.music_manager.cached_status(provider)
+        self.music_status.setText(status.message)
 
     def _provider_changed(self) -> None:
         provider = str(self.provider.currentData())

@@ -1,6 +1,7 @@
-"""提供不依赖系统托盘的六毛快捷面板、工作气泡和连续尺寸调节器。
+"""提供不依赖系统托盘的六毛快捷面板、原生音乐控制、工作气泡和尺寸调节器。
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
+播放、暂停、切歌和歌曲状态分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ class QuickControlPanel(QWidget):
     chat_requested = Signal()
     work_requested = Signal()
     music_requested = Signal()
+    music_control_requested = Signal(str)
     size_requested = Signal()
     settings_requested = Signal(str)
 
@@ -64,6 +66,10 @@ class QuickControlPanel(QWidget):
         for label, signal, source in (
             ("聊聊", self.chat_requested, None),
             ("工作计时", self.work_requested, None),
+            ("播放 / 暂停", self.music_control_requested, "toggle"),
+            ("上一首", self.music_control_requested, "previous"),
+            ("下一首", self.music_control_requested, "next"),
+            ("正在播放", self.music_control_requested, "status"),
             ("随机听陈楚生", self.music_requested, None),
             ("连续调节大小", self.size_requested, None),
             ("设置", self.settings_requested, "user_action"),
