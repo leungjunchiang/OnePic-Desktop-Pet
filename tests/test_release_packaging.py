@@ -55,11 +55,28 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.15.0"' in spec
+    assert '"CFBundleShortVersionString": "0.16.0"' in spec
     assert '"LSUIElement": False' in spec
-    assert 'version = "0.15.0"' in pyproject
+    assert 'version = "0.16.0"' in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
     assert "ChineseSimplified.isl" not in installer
     assert installer_script.isascii()
     assert 'ln -s /Applications "$dmg_root/Applications"' in macos_build
+
+
+def test_one_command_release_script_has_safety_checks() -> None:
+    """一键发布必须先验登录、干净工作区、测试、主分支和标签归属。"""
+
+    script = (PROJECT_ROOT / "scripts" / "publish_release.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "gh auth status" in script
+    assert "git status --porcelain" in script
+    assert 'branch -ne "main"' in script
+    assert "test.ps1" in script
+    assert "git push origin main" in script
+    assert "gh release create" in script
+    assert "--verify-tag" in script
+    assert "--web" not in script
