@@ -464,7 +464,1507 @@ class PetWindow(QWidget):
         self._walk_motion_factors = tuple(float(value) for value in motion_factors)
         mapping = {
             PetState.IDLE: animations["idle"],
-            PetState.WAL…15802 tokens truncated…= 0
+            PetState.WALK: animations["walk"],
+            PetState.SIT: animations["sit"],
+            PetState.SLEEP: animations["sleep"],
+            PetState.WAVE: animations["wave"],
+            PetState.HAPPY: animations["happy"],
+            PetState.SHY: animations["shy"],
+            PetState.SURPRISED: animations["surprised"],
+            PetState.ANNOYED: animations["annoyed"],
+            PetState.SLEEPY: animations["sleepy"],
+            PetState.CURIOUS: animations["curious"],
+            PetState.SELFIE: animations["selfie"],
+            PetState.DRAG: animations["drag"],
+        }
+        pixmaps: dict[PetState, list[QPixmap]] = {}
+        for state, relative_paths in mapping.items():
+            state_frames = []
+            for relative in relative_paths:
+                path = manifest_path.parent / relative
+                if not path.is_file():
+                    raise FileNotFoundError(f"缺少宠物素材：{path}")
+                pixmap = QPixmap(str(path))
+                if pixmap.isNull():
+                    raise ValueError(f"无法加载宠物素材：{path}")
+                state_frames.append(pixmap)
+            if not state_frames:
+                raise ValueError(f"状态 {state.value} 没有可用素材帧")
+            pixmaps[state] = state_frames
+        return pixmaps
+
+    def _load_selfie_photo(self) -> QPixmap:
+        """只加载用户提供的原始自拍照片，不用生成帧冒充原图。"""
+
+        for relative in (
+            "user_assets/selfie.png",
+            "user_assets/selfie.jpg",
+            "user_assets/selfie.jpeg",
+            "user_assets/image.png",
+        ):
+            try:
+                path = resource_path(relative)
+            except FileNotFoundError:
+                continue
+            photo = QPixmap(str(path))
+            if not photo.isNull():
+                return photo
+        return QPixmap()
+
+    def place_at_start(self) -> None:
+        """按已保存位置或主屏幕右下角放置窗口。"""
+
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        if self.settings.start_x is None or self.settings.start_y is None:
+            x = area.right() - self.width() - 24
+            y = area.bottom() - self.height() - 12
+        else:
+            x = self.settings.start_x
+            y = self.settings.start_y
+        self.move(self._constrained_position(QPoint(x, y)))
+
+    def set_state(self, state: PetState) -> None:
+        """切换行为状态、重置帧序号并刷新当前图片。"""
+
+        self.state = state
+        self._frame_index = 0
+        self._animation_direction = 1
+        self._animation_finished = None
+        self._turn_paused = False
+        self._movement_x = float(self.x())
+        self._last_movement_at = time.monotonic()
+        self.turn_timer.stop()
+        display_state = state
+        frame_count = len(self._pixmaps[display_state])
+        if frame_count > 1:
+            self.animation_timer.start(self._frame_interval(display_state, 0))
+        else:
+            self.animation_timer.stop()
+        if display_state is PetState.WALK:
+            self._apply_frame_offset(display_state)
+        else:
+            self.label.move(6, 0)
+        self._effect_phase = 0
+        if emotion_effect_name(display_state) is None:
+            self.effect_timer.stop()
+        else:
+            self.effect_timer.start()
+        self._refresh_pixmap()
+
+    def _frame_interval(self, state: PetState, frame_index: int) -> int:
+        """返回指定动画帧的停留时间，使眨眼、过渡与行走节奏彼此独立。"""
+
+        if state is PetState.IDLE:
+            durations = (820, 360, 100, 120, 140, 720)
+            return durations[frame_index % len(durations)]
+        if state is PetState.WALK:
+            return self.settings.walk_frame_interval_ms
+        if state is PetState.SIT:
+            return 160
+        if state is PetState.SLEEP:
+            return 180
+        if state is PetState.DRAG:
+            return 180
+        return 380
+
+    @staticmethod
+    def _remember_cache_item(cache, key, value) -> None:
+        """写入小型最近使用缓存，并限制长期运行时的内存占用。"""
+
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > 96:
+            cache.popitem(last=False)
+
+    def _current_source(self) -> tuple[PetState, QPixmap]:
+        """返回当前显示状态及方向处理后的原始帧。"""
+
+        display_state = self.state
+        frames = self._pixmaps[display_state]
+        pixmap = frames[min(self._frame_index, len(frames) - 1)]
+        if self.direction < 0 and display_state is PetState.WALK:
+            pixmap = pixmap.transformed(QTransform().scale(-1, 1))
+        return display_state, pixmap
+
+    def _refresh_pixmap(self) -> None:
+        """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
+
+        display_state, pixmap = self._current_source()
+        ratio = max(1.0, self.devicePixelRatioF())
+        direction_key = self.direction if display_state is PetState.WALK else 0
+        cache_key = (
+            display_state,
+            self._frame_index,
+            direction_key,
+            round(ratio, 3),
+            self.label.width(),
+            self.label.height(),
+        )
+        scaled = self._render_cache.get(cache_key)
+        if scaled is None:
+            target = QSize(
+                max(1, round(self.label.width() * ratio)),
+                max(1, round(self.label.height() * ratio)),
+            )
+            scaled = pixmap.scaled(
+                target,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            scaled.setDevicePixelRatio(ratio)
+            self._remember_cache_item(self._render_cache, cache_key, scaled)
+        composed = draw_emotion_effect(
+            scaled,
+            display_state,
+            self._effect_phase,
+        )
+        activity = self._ambient_activity
+        if self.work_timer.is_running and activity in {"", "none"}:
+            activity = "computer"
+        composed = draw_activity_overlay(
+            composed,
+            activity,
+            self.settings.equipped_outfit,
+            self._effect_phase,
+        )
+        visible = self._blend_activity_transition(composed)
+        self.label.setPixmap(visible)
+        effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
+        overlay_key = hash((activity, self.settings.equipped_outfit, self._effect_phase % 2))
+        self._refresh_window_mask(display_state, visible, direction_key, effect_key ^ overlay_key)
+
+    def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
+        """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
+
+        previous = self._activity_transition_from
+        if previous.isNull() or self._activity_transition_step >= self._activity_transition_steps:
+            return target
+        if previous.size() != target.size():
+            previous = previous.scaled(
+                target.size(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            previous.setDevicePixelRatio(target.devicePixelRatio())
+        progress = self._activity_transition_step / self._activity_transition_steps
+        result = QPixmap(target.size())
+        result.fill(Qt.GlobalColor.transparent)
+        result.setDevicePixelRatio(target.devicePixelRatio())
+        painter = QPainter(result)
+        painter.setOpacity(1.0 - progress)
+        painter.drawPixmap(0, 0, previous)
+        painter.setOpacity(progress)
+        painter.drawPixmap(0, 0, target)
+        painter.end()
+        return result
+
+    def _activity_transition_tick(self) -> None:
+        """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
+
+        self._activity_transition_step += 1
+        if self._activity_transition_step >= self._activity_transition_steps:
+            self.activity_transition_timer.stop()
+            self._activity_transition_from = QPixmap()
+            self._mask_cache.clear()
+        self._refresh_pixmap()
+
+    def _change_ambient_activity(self, activity: str) -> None:
+        """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
+
+        next_activity = activity if activity in ACTION_SPRITES else "none"
+        if next_activity == self._ambient_activity:
+            self._refresh_pixmap()
+            return
+        current = self.label.pixmap() if hasattr(self, "label") else QPixmap()
+        self._activity_transition_from = QPixmap(current) if not current.isNull() else QPixmap()
+        self._activity_transition_step = 0
+        self._ambient_activity = next_activity
+        self._mask_cache.clear()
+        if not self._activity_transition_from.isNull():
+            self.activity_transition_timer.start()
+        self._refresh_pixmap()
+
+    def _refresh_window_mask(
+        self,
+        display_state: PetState,
+        pixmap: QPixmap,
+        direction_key: int,
+        effect_key: int,
+    ) -> None:
+        """按当前人物轮廓设置窗口遮罩，使透明留白不拦截桌面点击。"""
+
+        cache_key = (
+            display_state,
+            self._frame_index,
+            direction_key,
+            effect_key,
+            self.label.width(),
+            self.label.height(),
+        )
+        region = self._mask_cache.get(cache_key)
+        if region is None:
+            logical = pixmap.scaled(
+                self.label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            offset_x = (self.label.width() - logical.width()) // 2
+            offset_y = (self.label.height() - logical.height()) // 2
+            region = QRegion(logical.mask()).translated(offset_x, offset_y)
+            self._remember_cache_item(self._mask_cache, cache_key, region)
+        self.setMask(region.translated(self.label.x(), self.label.y()))
+
+    def _effect_tick(self) -> None:
+        """推进表情符号的轻微漂浮动画并刷新合成帧。"""
+
+        if emotion_effect_name(self.state) is None:
+            self.effect_timer.stop()
+            return
+        self._effect_phase = (self._effect_phase + 1) % 12
+        self._refresh_pixmap()
+
+    def _animation_tick(self) -> None:
+        """推进循环或单次连续帧，并在反向过渡结束后执行回调。"""
+
+        display_state = self.state
+        frames = self._pixmaps[display_state]
+        if len(frames) <= 1:
+            return
+        if self._animation_direction < 0:
+            self._frame_index = max(0, self._frame_index - 1)
+            if self._frame_index == 0:
+                self.animation_timer.stop()
+                callback = self._animation_finished
+                self._animation_finished = None
+                if callback is not None:
+                    QTimer.singleShot(0, callback)
+        elif display_state in (PetState.SIT, PetState.SLEEP, PetState.SELFIE):
+            self._frame_index = min(self._frame_index + 1, len(frames) - 1)
+            if self._frame_index == len(frames) - 1:
+                self.animation_timer.stop()
+        else:
+            self._frame_index = (self._frame_index + 1) % len(frames)
+        self._apply_frame_offset(display_state)
+        self._refresh_pixmap()
+        if self.animation_timer.isActive():
+            self.animation_timer.setInterval(
+                self._frame_interval(display_state, self._frame_index)
+            )
+
+    def _apply_frame_offset(self, display_state: PetState) -> None:
+        """按跑步落脚、压缩和腾空阶段同步水平回弹与身体起伏。"""
+
+        if display_state is PetState.WALK:
+            x_offsets = (6, 6, 6, 6, 6, 6, 6, 6)
+            y_offsets = (3, 5, 2, 0, 3, 5, 2, 0)
+            phase = self._frame_index % len(y_offsets)
+            self.label.move(x_offsets[phase], y_offsets[phase])
+
+    def _movement_speed_pixels_per_second(self) -> float:
+        """按旧配置的平均速度计算恒定水平速度。"""
+
+        return (
+            self.settings.movement_step
+            * 1000.0
+            / self.settings.movement_interval_ms
+        )
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """窗口首次显示时连接跨屏信号并按当前 DPI 绘制。"""
+
+        super().showEvent(event)
+        handle = self.windowHandle()
+        if handle is not None and not self._screen_change_connected:
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._screen_change_connected = True
+        self._on_screen_changed(handle.screen() if handle else None)
+        QTimer.singleShot(0, self._ensure_on_top)
+
+    def _ensure_on_top(self) -> None:
+        """恢复原生窗口层级，但绝不激活窗口或夺走当前输入焦点。"""
+
+        if not self.isVisible():
+            return
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                user32 = ctypes.windll.user32
+                hwnd = int(self.winId())
+                get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+                set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+                extended = int(get_style(hwnd, -20))
+                extended |= 0x00000080 | 0x08000000  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+                set_style(hwnd, -20, extended)
+                insert_after = -1 if self.settings.always_on_top else -2
+                user32.SetWindowPos(
+                    hwnd,
+                    insert_after,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0x0001 | 0x0002 | 0x0010 | 0x0040,
+                )
+                return
+            except (AttributeError, OSError, ValueError):
+                pass
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior()
+        # 其他平台由 WindowStaysOnTopHint 负责。这里不能调用 raise_()，
+        # 否则 macOS/部分 Linux 桌面会在用户打字时切换当前应用。
+
+    def _apply_macos_window_behavior(self) -> None:
+        """以 NSWindow 浮动层级跨空间显示；保留人物窗口鼠标互动且不激活。"""
+
+        if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
+            return
+        try:
+            import ctypes
+
+            objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.A.dylib")
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            objc.objc_msgSend.restype = ctypes.c_void_p
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            view = ctypes.c_void_p(int(self.winId()))
+            window = objc.objc_msgSend(view, objc.sel_registerName(b"window"))
+            if not window:
+                return
+            send_integer = objc.objc_msgSend
+            send_integer.restype = None
+            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_longlong]
+            level = 3 if self.settings.always_on_top else 0  # NSFloatingWindowLevel / normal
+            send_integer(window, objc.sel_registerName(b"setLevel:"), level)
+            behavior = (1 << 0) | (1 << 8) if self.settings.always_on_top else 0
+            send_integer(
+                window,
+                objc.sel_registerName(b"setCollectionBehavior:"),
+                behavior,
+            )
+            send_bool = objc.objc_msgSend
+            send_bool.restype = None
+            send_bool.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            send_bool(window, objc.sel_registerName(b"setHidesOnDeactivate:"), False)
+            send_bool(window, objc.sel_registerName(b"setIgnoresMouseEvents:"), False)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return
+
+    def set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
+        """在 QQ 宠物式置顶与普通桌面模式间切换，显示时不抢焦点。"""
+
+        enabled = bool(enabled)
+        position = self.pos()
+        was_visible = self.isVisible()
+        bubble_states = (
+            (self.photo_bubble, self.photo_bubble.isVisible(), self.photo_bubble.pos()),
+            (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
+        )
+        self.settings.always_on_top = enabled
+        self.setWindowFlags(self._pet_window_flags())
+        self.move(position)
+        for bubble, visible, bubble_position in bubble_states:
+            bubble.setWindowFlags(self._ambient_window_flags())
+            bubble.move(bubble_position)
+            if visible:
+                bubble.show()
+        if was_visible:
+            self.show()
+            QTimer.singleShot(0, self._ensure_on_top)
+        if persist:
+            save_settings(self.settings)
+        self.always_on_top_changed.emit(enabled)
+
+    def moveEvent(self, event: QMoveEvent) -> None:
+        """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
+
+        super().moveEvent(event)
+        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
+            self._position_speech_bubble()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """隐藏宠物时同步隐藏照片和文字气泡。"""
+
+        self.photo_bubble.hide()
+        self.speech_bubble.hide()
+        self.work_controls.hide()
+        self.quick_panel.hide()
+        super().hideEvent(event)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
+
+        self.shutdown_work_timer()
+        self.chat_manager.shutdown()
+        self.music_controller.shutdown()
+        self.photo_bubble.close()
+        self.speech_bubble.close()
+        self._buddy_visit_window.close()
+        if self._social_thread is not None and self._social_thread.isRunning():
+            self._social_thread.wait(2500)
+        if self._media_player is not None:
+            self._media_player.stop()
+        super().closeEvent(event)
+
+    def _on_screen_changed(self, screen: QScreen | None) -> None:
+        """切换目标屏幕后重连 DPI 信号并延迟刷新素材。"""
+
+        if self._connected_screen is not None:
+            try:
+                self._connected_screen.logicalDotsPerInchChanged.disconnect(
+                    self._on_dpi_changed
+                )
+            except (RuntimeError, TypeError):
+                pass
+        self._connected_screen = screen
+        if screen is not None:
+            screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
+        self._render_cache.clear()
+        QTimer.singleShot(0, self._refresh_pixmap)
+
+    def _on_dpi_changed(self, _dpi: float) -> None:
+        """显示器缩放发生变化时刷新当前帧。"""
+
+        self._render_cache.clear()
+        QTimer.singleShot(0, self._refresh_pixmap)
+
+    def _schedule(self, decision: StateDecision) -> None:
+        """应用状态决策并安排下一次状态切换。"""
+
+        self.set_state(decision.state)
+        if not self.dragging:
+            self.state_timer.start(decision.duration_ms)
+
+    def _state_timeout(self) -> None:
+        """处理自主状态到期，并按无互动时长逐级进入坐下与睡眠。"""
+
+        if self.dragging:
+            return
+        self.mood.pass_time(self.state)
+        inactive_ms = self._inactive_ms()
+        if self._sleep_after_sit and self.state is PetState.SIT:
+            self._sleep_after_sit = False
+            self._schedule(self._decision(PetState.SLEEP, 8000))
+            return
+        if inactive_ms >= self.settings.inactive_sleep_ms:
+            if self.state is PetState.SLEEP:
+                self.state_timer.start(10000)
+                return
+            if self.state is PetState.SIT:
+                self._schedule(self._decision(PetState.SLEEP, 10000))
+                return
+            self._schedule_sleep_via_sit()
+            return
+        if inactive_ms >= self.settings.inactive_sit_ms:
+            if self.state is PetState.SIT:
+                remaining = self.settings.inactive_sleep_ms - inactive_ms
+                self.state_timer.start(max(500, min(5000, remaining)))
+                return
+            self._schedule(
+                self._decision(
+                    PetState.SIT,
+                    min(5000, self.settings.inactive_sleep_ms - inactive_ms),
+                )
+            )
+            return
+        if self.state in (PetState.SIT, PetState.SLEEP):
+            self._reverse_transition_to_idle()
+            return
+        decision = self.behavior.next_autonomous_state(
+            self.state,
+            allow_walk=not self.paused,
+        )
+        if decision.state is PetState.SLEEP:
+            self._schedule_sleep_via_sit()
+        else:
+            self._schedule(decision)
+
+    @staticmethod
+    def _decision(state: PetState, duration_ms: int) -> StateDecision:
+        """创建窗口内部过渡使用的确定时长状态决策。"""
+
+        return StateDecision(state, max(500, duration_ms))
+
+    def _inactive_ms(self) -> int:
+        """返回距离最近一次鼠标或菜单互动的毫秒数。"""
+
+        return max(0, round((time.monotonic() - self._last_user_interaction) * 1000))
+
+    def _record_user_interaction(self) -> None:
+        """重置无互动计时，并取消尚未开始的自动入睡意图。"""
+
+        self._last_user_interaction = time.monotonic()
+        self._sleep_after_sit = False
+
+    def _schedule_sleep_via_sit(self) -> None:
+        """先完整坐下，再从坐姿播放入睡序列。"""
+
+        self._sleep_after_sit = True
+        self._schedule(self._decision(PetState.SIT, 1400))
+
+    def _reverse_transition_to_idle(self) -> None:
+        """倒放坐下或睡眠序列，完成自然起身后再进入待机。"""
+
+        frames = self._pixmaps[self.state]
+        self._frame_index = len(frames) - 1
+        self._animation_direction = -1
+        self._animation_finished = self._finish_reverse_transition
+        self._refresh_pixmap()
+        self.animation_timer.start(self._frame_interval(self.state, self._frame_index))
+
+    def _finish_reverse_transition(self) -> None:
+        """睡醒后先回到坐姿，再倒放坐下序列恢复站立待机。"""
+
+        if self.dragging:
+            return
+        if self.state is PetState.SLEEP:
+            self.state = PetState.SIT
+            self._frame_index = len(self._pixmaps[PetState.SIT]) - 1
+            self._animation_direction = -1
+            self._animation_finished = self._finish_reverse_transition
+            self._refresh_pixmap()
+            self.animation_timer.start(
+                self._frame_interval(PetState.SIT, self._frame_index)
+            )
+            return
+        self._schedule(self.behavior.initial_idle())
+
+    def _screen_geometry(self):
+        """返回窗口中心所在屏幕的可用区域。"""
+
+        center = self.frameGeometry().center()
+        screen = QApplication.screenAt(center) or QApplication.primaryScreen()
+        return screen.availableGeometry() if screen else None
+
+    def _constrained_position(self, position: QPoint) -> QPoint:
+        """将目标位置限制在当前或主屏幕可用区域内。"""
+
+        screen = QApplication.screenAt(position) or QApplication.primaryScreen()
+        if screen is None:
+            return position
+        area = screen.availableGeometry()
+        x = min(max(position.x(), area.left()), area.right() - self.width() + 1)
+        y = min(max(position.y(), area.top()), area.bottom() - self.height() + 1)
+        return QPoint(x, y)
+
+    def _movement_tick(self) -> None:
+        """按实际经过时间亚像素累计移动，并在屏幕边缘转向。"""
+
+        now = time.monotonic()
+        elapsed = min(0.1, max(0.0, now - self._last_movement_at))
+        self._last_movement_at = now
+        if (
+            self.paused
+            or self.dragging
+            or self._turn_paused
+            or self.state is not PetState.WALK
+        ):
+            self._movement_x = float(self.x())
+            return
+        area = self._screen_geometry()
+        if area is None:
+            return
+        if abs(self._movement_x - self.x()) > 1.5:
+            self._movement_x = float(self.x())
+        maximum = area.right() - self.width() + 1
+        direction = 1 if self.direction >= 0 else -1
+        phase_factor = self._walk_motion_factors[
+            self._frame_index % len(self._walk_motion_factors)
+        ]
+        self._movement_x += direction * (
+            self._movement_speed_pixels_per_second()
+            * phase_factor
+            * elapsed
+        )
+        if self._movement_x <= area.left():
+            self._movement_x = float(area.left())
+            direction = 1
+        elif self._movement_x >= maximum:
+            self._movement_x = float(maximum)
+            direction = -1
+        if direction != self.direction:
+            self.direction = direction
+            self._frame_index = 0
+            self._turn_paused = True
+            self.animation_timer.stop()
+            self._refresh_pixmap()
+            self.turn_timer.start(self.settings.turn_pause_ms)
+        self.move(round(self._movement_x), self.y())
+
+    def _finish_turn(self) -> None:
+        """结束屏幕边缘的短暂停顿，并从第一帧恢复行走。"""
+
+        self._turn_paused = False
+        self._movement_x = float(self.x())
+        self._last_movement_at = time.monotonic()
+        if self.state is PetState.WALK and not self.paused and not self.dragging:
+            self.animation_timer.start(
+                self._frame_interval(PetState.WALK, self._frame_index)
+            )
+
+    def _bob_tick(self) -> None:
+        """通过标签轻微上下移动营造呼吸和行走起伏。"""
+
+        if self.state is PetState.WALK:
+            return
+        if self.state not in (
+            PetState.IDLE,
+            PetState.HAPPY,
+            PetState.SHY,
+            PetState.SURPRISED,
+            PetState.ANNOYED,
+            PetState.SLEEPY,
+            PetState.CURIOUS,
+        ):
+            self.label.move(6, 0)
+            self._refresh_pixmap()
+            return
+        self._bob_phase = not self._bob_phase
+        self.label.move(6, 2 if self._bob_phase else 0)
+        self._refresh_pixmap()
+
+    def set_paused(self, paused: bool) -> None:
+        """暂停或恢复跑动；暂停期间仍继续坐下、睡眠和自拍等生活状态。"""
+
+        self._record_user_interaction()
+        self.paused = paused
+        self.pause_changed.emit(paused)
+        if paused and self.state is PetState.WALK:
+            self.state_timer.stop()
+            decision = self.behavior.next_autonomous_state(
+                PetState.IDLE,
+                allow_walk=False,
+            )
+            if decision.state is PetState.SLEEP:
+                self._schedule_sleep_via_sit()
+            else:
+                self._schedule(decision)
+        elif not paused and not self.dragging and not self.state_timer.isActive():
+            self._schedule(self.behavior.initial_idle())
+
+    def set_display_height(self, display_height: int) -> None:
+        """应用右键菜单尺寸预设，保持窗口底部中心位置并立即重绘。"""
+
+        self._record_user_interaction()
+        old_center_x = self.x() + self.width() // 2
+        old_bottom = self.y() + self.height()
+        self.settings.display_height = max(100, min(360, int(display_height)))
+        source = self._pixmaps[PetState.IDLE][0]
+        width = round(
+            self.settings.display_height * source.width() / source.height()
+        )
+        self.setFixedSize(width + 12, self.settings.display_height + 14)
+        self.label.setGeometry(6, 0, width, self.settings.display_height + 8)
+        self._render_cache.clear()
+        self._mask_cache.clear()
+        target = QPoint(
+            old_center_x - self.width() // 2,
+            old_bottom - self.height(),
+        )
+        self.move(self._constrained_position(target))
+        self._refresh_pixmap()
+        self._position_speech_bubble()
+
+    def return_to_primary_screen(self) -> None:
+        """将宠物重新放到主屏幕右下角。"""
+
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.move(area.right() - self.width() - 24, area.bottom() - self.height() - 12)
+
+    def _position_speech_bubble(self) -> None:
+        """把对话气泡放在人物上方，空间不足时自动移到侧面。"""
+
+        if not self.speech_bubble.isVisible():
+            return
+        area = self._screen_geometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            character_left = self.x()
+            character_right = self.x() + self.width()
+            character_top = self.y()
+        else:
+            character_left = self.x() + visible_bounds.left()
+            character_right = self.x() + visible_bounds.right() + 1
+            character_top = self.y() + visible_bounds.top()
+        gap = 9
+        x = (character_left + character_right - self.speech_bubble.width()) // 2
+        y = character_top - self.speech_bubble.height() - gap
+        if area is not None:
+            x = min(max(x, area.left()), area.right() - self.speech_bubble.width() + 1)
+            if y < area.top():
+                x = character_right + gap
+                if x + self.speech_bubble.width() > area.right() + 1:
+                    x = character_left - self.speech_bubble.width() - gap
+                x = min(
+                    max(x, area.left()),
+                    area.right() - self.speech_bubble.width() + 1,
+                )
+                y = max(area.top(), self.y())
+        self.speech_bubble.move(x, y)
+
+    def show_speech(self, text: str, duration_ms: int = 4800) -> None:
+        """显示不会抢走键盘焦点的桌面对话气泡。"""
+
+        self.speech_bubble.setText(text)
+        self.speech_bubble.adjustSize()
+        self.speech_bubble.show()
+        self._position_speech_bubble()
+        self.speech_timer.start(max(1200, duration_ms))
+
+    def feed_pet(self, food_key: str) -> CompanionReply:
+        """喂给 Lili 一种菜单食物，并播放对应表情与文字反馈。"""
+
+        self._record_user_interaction()
+        reply = self.companion.feed(food_key)
+        if food_key in {"coffee", "tea"}:
+            self._set_temporary_activity("tea", 28_000)
+            self._play_action_sequence(
+                (PetState.SIT, PetState.HAPPY, PetState.SIT),
+                3000,
+            )
+        else:
+            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "milk-tea"}.get(food_key)
+            if food_activity:
+                self._set_temporary_activity(food_activity, 28_000)
+            self._show_emotion(reply.state, 2200)
+        self.show_speech(
+            f"{reply.text}\n精力 {self.mood.energy} · 饱食 {self.mood.fullness}",
+            5200,
+        )
+        return reply
+
+    def talk_to_pet(self, message: str) -> CompanionReply:
+        """在本地处理一条对话，并显示 Lili 的回复。"""
+
+        self._record_user_interaction()
+        reply = self.companion.reply_to(message)
+        self._show_emotion(reply.state, 2600)
+        self.show_speech(reply.text, 5600)
+        return reply
+
+    def perform_companion_action(self, action_key: str) -> CompanionReply:
+        """播放用户选择的工作、爱意、鼓励、庆祝或安慰动作。"""
+
+        self._record_user_interaction()
+        reply = self.companion.perform_action(action_key)
+        option = ACTION_BY_KEY[action_key]
+        duration_ms = option.duration_ms
+        self._play_action_sequence(option.sequence or (reply.state,), duration_ms)
+        self.show_speech(reply.text, max(5200, duration_ms + 1800))
+        return reply
+
+    def _play_action_sequence(
+        self,
+        states: tuple[PetState, ...],
+        duration_ms: int,
+    ) -> None:
+        """用现有且已验收的动作帧组成多段陪伴动作。"""
+
+        if not states:
+            return
+        self._action_sequence_id += 1
+        sequence_id = self._action_sequence_id
+        step_ms = max(450, duration_ms // len(states))
+        self.state_timer.stop()
+        self.interaction_timer.stop()
+        self.set_state(states[0])
+        for index, state in enumerate(states[1:], start=1):
+            QTimer.singleShot(
+                index * step_ms,
+                lambda value=state, marker=sequence_id: self._continue_action_sequence(
+                    marker,
+                    value,
+                ),
+            )
+        self.interaction_timer.start(max(800, duration_ms))
+
+    def _continue_action_sequence(self, sequence_id: int, state: PetState) -> None:
+        """仅在动作序列仍有效时播放下一段，避免旧计时器抢状态。"""
+
+        if sequence_id == self._action_sequence_id and not self.dragging:
+            self.set_state(state)
+
+    def start_work_timer(self) -> CompanionReply:
+        """开始今日工作计时，并让六毛进入安静陪伴动作。"""
+
+        self._record_user_interaction()
+        started = self.work_timer.start()
+        if started:
+            self.set_paused(True)
+        self._change_ambient_activity("computer")
+        self._schedule_work_activity(25_000)
+        reply = self.companion.work_started(resumed=not started)
+        self._show_emotion(reply.state, 3600)
+        self.show_speech(reply.text, 5600)
+        self.work_timer_changed.emit(self.work_timer.is_running)
+        self._refresh_pixmap()
+        return reply
+
+    def pause_work_timer(self) -> CompanionReply:
+        """暂停工作计时并显示当天累计与休息建议。"""
+
+        self._record_user_interaction()
+        session_seconds = self.work_timer.session_seconds()
+        was_running = self.work_timer.pause()
+        if was_running:
+            self.daily_stats.record_focus(session_seconds)
+        self._award_focus_rewards()
+        self.work_activity_timer.stop()
+        self._set_temporary_activity("tea", 25_000)
+        duration = format_work_duration(self.work_timer.today_seconds())
+        if was_running:
+            reply = self.companion.work_paused(duration)
+        else:
+            reply = CompanionReply(
+                f"计时现在是暂停状态，今天累计工作 {duration}。",
+                PetState.CURIOUS,
+            )
+        self._show_emotion(reply.state, 3200)
+        self.show_speech(reply.text, 5600)
+        self.work_timer_changed.emit(False)
+        self.work_controls.hide()
+        self._refresh_pixmap()
+        return reply
+
+    def finish_work_timer(self) -> CompanionReply:
+        """完成本次工作、保留今日累计并播放庆祝动作。"""
+
+        self._record_user_interaction()
+        session_seconds = self.work_timer.session_seconds()
+        total = self.work_timer.finish()
+        self._award_focus_rewards()
+        self.daily_stats.record_focus(session_seconds, completed=True)
+        self.set_paused(False)
+        reply = self.companion.work_finished(format_work_duration(total))
+        self._show_emotion(reply.state, 3400)
+        self.show_speech(reply.text, 6200)
+        self.work_timer_changed.emit(False)
+        self.work_controls.hide()
+        self.work_activity_timer.stop()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
+        self._show_new_outfit_unlock()
+        self._generate_daily_report(show_dialog=False)
+        return reply
+
+    def show_work_time(self) -> None:
+        """显示今日累计工作时长和当前计时状态。"""
+
+        self._record_user_interaction()
+        state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
+        self._show_emotion(state, 2600)
+        text = (
+            f"{self.work_timer.status_text()}\n"
+            f"{growth_progress_text(self.work_timer.today_seconds())}\n"
+            f"六毛心情：{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
+        )
+        self.show_speech(text, 6800)
+
+    def show_daily_growth(self) -> None:
+        """显示今天 0–8 小时成长节点和下一个可见奖励。"""
+
+        seconds = self.work_timer.today_seconds()
+        stage = stage_for_seconds(seconds)
+        self._set_temporary_activity(stage.activity, 35_000)
+        self.show_speech(
+            f"今日成长 {stage.hour}/8：{stage.title}\n"
+            f"当前奖励：{stage.reward}\n{growth_progress_text(seconds)}",
+            7600,
+        )
+
+    def _schedule_work_activity(self, delay_ms: int | None = None) -> None:
+        """计时期间安排下一次陪伴工作动作。"""
+
+        self.work_activity_timer.stop()
+        if self.work_timer.is_running:
+            self.work_activity_timer.start(delay_ms or random.randint(150_000, 300_000))
+
+    def _work_activity_tick(self) -> None:
+        """在专注动作间轮换，让用户工作时六毛也持续工作。"""
+
+        if not self.work_timer.is_running:
+            return
+        session = self.work_timer.session_seconds()
+        choices = FOCUS_ACTIONS
+        if session >= 45 * 60 and random.random() < 0.35:
+            choices = ("thermos", "tea", "sleep")
+        self._change_ambient_activity(random.choice(choices))
+        self._manual_activity_until = time.monotonic() + 120
+        self._schedule_work_activity()
+
+    def _set_temporary_activity(self, activity: str, duration_ms: int = 30_000) -> None:
+        """显示一张完整动作图，结束后回到工作或普通待机。"""
+
+        self._change_ambient_activity(activity)
+        self._manual_activity_until = time.monotonic() + duration_ms / 1000
+        self.activity_timer.start(max(1500, duration_ms))
+
+    def _activity_timeout(self) -> None:
+        """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
+
+        self._change_ambient_activity(
+            random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+        )
+
+    def _work_timer_tick(self) -> None:
+        """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
+
+        self.work_timer.checkpoint()
+        self._award_focus_rewards()
+        self._sync_hourly_outfit(announce=True)
+        self._show_new_outfit_unlock()
+        wellness_kind = self.wellness.take_due(
+            self.settings.water_reminder_enabled,
+            self.settings.stand_reminder_enabled,
+            self.settings.water_interval_minutes,
+            self.settings.stand_interval_minutes,
+        )
+        if wellness_kind == "water":
+            self._set_temporary_activity("thermos", 35_000)
+            self.show_speech("喝口水吧。六毛替你把这一小会儿守住。", 6200)
+        elif wellness_kind == "stand":
+            self._set_temporary_activity("football", 35_000)
+            self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
+        reminder_kind = self.work_timer.take_due_reminder()
+        if reminder_kind is None:
+            return
+        duration = format_work_duration(self.work_timer.session_seconds())
+        reply = self.companion.work_reminder(reminder_kind, duration)
+        self._show_emotion(reply.state, 3600)
+        self.show_speech(reply.text, 7200)
+
+    def _show_new_outfit_unlock(self) -> None:
+        """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
+
+        stage = stage_for_seconds(self.work_timer.today_seconds())
+        if stage.hour <= self._last_growth_hour:
+            return
+        self._last_growth_hour = stage.hour
+        self._set_temporary_activity(stage.activity, 60_000)
+        self.show_speech(f"今日成长：{stage.title}\n解锁：{stage.reward}\n{stage.message}", 8200)
+        if stage.hour >= 8:
+            self._generate_daily_report(show_dialog=True)
+
+    def _sync_hourly_outfit(self, *, announce: bool) -> None:
+        """按终身累计专注时长自动换上最新解锁娃衣。"""
+
+        count = self.work_timer.unlocked_outfit_count()
+        latest = OUTFITS[count - 1] if count else None
+        desired = latest.key if latest is not None else ""
+        newly_unlocked = self.work_timer.take_new_outfit_unlock()
+        if self.settings.equipped_outfit != desired:
+            self.settings.equipped_outfit = desired
+            save_settings(self.settings)
+            self._render_cache.clear()
+            self._mask_cache.clear()
+            if hasattr(self, "label"):
+                self._refresh_pixmap()
+        if not announce or newly_unlocked is None or latest is None:
+            return
+        self._change_ambient_activity("none")
+        self.show_speech(
+            f"累计专注 {newly_unlocked} 小时，自动换上「{latest.name}」！\n{latest.message}",
+            8200,
+        )
+
+    def _award_focus_rewards(self) -> None:
+        """把今日专注时间换成正向的默契奖励，不制造饥饿惩罚。"""
+
+        completed_blocks = self.work_timer.today_seconds() // 600
+        new_blocks = max(0, completed_blocks - self._rewarded_focus_blocks)
+        if new_blocks:
+            self.mood.receive_focus_reward(new_blocks)
+            self._rewarded_focus_blocks = completed_blocks
+
+    def shutdown_work_timer(self) -> None:
+        """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
+
+        if hasattr(self, "work_timer"):
+            if self.work_timer.is_running:
+                self.daily_stats.record_focus(self.work_timer.session_seconds())
+            self.work_timer.pause()
+            if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
+                self._generate_daily_report(show_dialog=False)
+
+    def _generate_daily_report(self, *, show_dialog: bool) -> Path | None:
+        """生成只保存在本机的工作日报；可选展示预览窗口。"""
+
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1" and not show_dialog:
+            return None
+        photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
+        try:
+            path = render_daily_report(
+                self.work_timer.today_seconds(),
+                self.daily_stats.snapshot(),
+                photo,
+            )
+        except OSError as exc:
+            if show_dialog:
+                self.show_speech(f"工作日报暂时没保存成功：{exc}", 6200)
+            return None
+        if show_dialog:
+            self._show_daily_report_dialog(path)
+        return path
+
+    def show_daily_report(self) -> None:
+        """由菜单生成并打开今天的六毛工作日报。"""
+
+        self._record_user_interaction()
+        self._generate_daily_report(show_dialog=True)
+
+    def _show_daily_report_dialog(self, path: Path) -> None:
+        """在应用内预览工作卡，并提供打开本机相册的按钮。"""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("今天六毛陪你做了什么")
+        layout = QVBoxLayout(dialog)
+        preview = QLabel(dialog); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card = QPixmap(str(path)).scaled(430, 570, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        preview.setPixmap(card); layout.addWidget(preview)
+        open_button = QPushButton("打开六毛相册", dialog)
+        open_button.clicked.connect(self.open_daily_album)
+        layout.addWidget(open_button)
+        dialog.exec()
+
+    def open_daily_album(self) -> None:
+        """打开本机六毛相册文件夹，不访问网络。"""
+
+        directory = album_directory(); directory.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
+
+    def prompt_dialogue(self) -> None:
+        """打开新版聊天面板；离线和在线模式共用同一个入口。"""
+
+        self._record_user_interaction()
+        if self._chat_dialog is None:
+            self._chat_dialog = ChatDialog(self)
+            self._chat_dialog.message_submitted.connect(self._submit_chat_message)
+            self._chat_dialog.settings_requested.connect(self.open_settings)
+            self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
+            self._chat_dialog.append_message(
+                "六毛",
+                "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
+            )
+        status = self.agent_manager.status(self.settings.ai_provider)
+        self._chat_dialog.set_provider(
+            self.settings.ai_provider,
+            status.state.value,
+            status.detail,
+        )
+        self._chat_dialog.show()
+        self._chat_dialog.raise_()
+        self._chat_dialog.activateWindow()
+
+    def _submit_chat_message(self, message: str) -> None:
+        """把消息交给 ChatManager；路由只读取缓存，不做同步检测。"""
+
+        if self._chat_dialog is None:
+            return
+        self._record_user_interaction()
+        if self.chat_manager.busy:
+            self._chat_dialog.append_message("六毛", "上一句话还在路上，稍等我一下。")
+            return
+        self._chat_dialog.append_message("你", message)
+        history_before = list(self._chat_history)
+        self._chat_history.append(("user", message))
+        self._chat_history = self._chat_history[-10:]
+        self._chat_dialog.show_recovery_actions(False)
+        self.chat_manager.submit(message, history_before)
+
+    def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
+        """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
+
+        self._chat_history.append(("assistant", reply.text))
+        self._chat_history = self._chat_history[-10:]
+        if self._chat_dialog is not None:
+            self._chat_dialog.append_message("六毛", reply.text)
+            self._chat_dialog.show_recovery_actions(reply.show_recovery_actions)
+        self._show_emotion(reply.state, 3000)
+        self.show_speech(reply.text, 6500)
+
+    def _chat_busy_changed(self, busy: bool) -> None:
+        """只禁用聊天输入，宠物动画、计时和音乐继续运行。"""
+
+        if self._chat_dialog is not None:
+            self._chat_dialog.set_busy(busy)
+
+    def _chat_notice(self, message: str) -> None:
+        """显示非阻塞提示，不跳转设置页。"""
+
+        if self._chat_dialog is not None:
+            self._chat_dialog.append_message("六毛", message)
+
+    def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
+        """后台检测完成后刷新缓存状态文案，恢复后下一条自然走 AI。"""
+
+        if self._chat_dialog is not None and provider == self.settings.ai_provider:
+            self._chat_dialog.set_provider(provider, state, detail)
+            if state == "connected":
+                self._chat_dialog.show_recovery_actions(False)
+
+    def _reconnect_ai(self) -> None:
+        """用户主动要求重连；不会自动打开设置窗口。"""
+
+        if self.settings.ai_provider == "offline":
+            self._chat_notice("当前选择的是纯离线模式；需要 AI 时可以点“去设置”。")
+            return
+        if not self.chat_manager.reconnect_now():
+            self._chat_notice("AI 已在后台检测中，请稍等一下。")
+
+    def open_settings(self, source: str) -> bool:
+        """只允许明确用户动作打开设置；所有自动或未知来源均拒绝并记录。"""
+
+        if source != SETTINGS_SOURCE_USER_ACTION:
+            LOGGER.debug("拒绝非用户来源打开连接与陪伴设置：source=%r", source)
+            return False
+
+        dialog = AISettingsDialog(
+            self.settings,
+            self.credentials,
+            self,
+            agent_manager=self.agent_manager,
+            music_manager=self.music_provider_manager,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return True
+        previous_always_on_top = self.settings.always_on_top
+        try:
+            dialog.apply()
+        except Exception as exc:
+            self.show_speech(f"设置没有保存：{exc}", 6000)
+            return True
+        if self.settings.always_on_top != previous_always_on_top:
+            self.set_always_on_top(self.settings.always_on_top, persist=False)
+        save_settings(self.settings)
+        self._schedule_ambient()
+        self._schedule_song_inspiration()
+        if self._chat_dialog is not None:
+            status = self.agent_manager.status(self.settings.ai_provider)
+            self._chat_dialog.set_provider(
+                self.settings.ai_provider,
+                status.state.value,
+                status.detail,
+            )
+        if self.settings.ai_provider != "offline":
+            self.agent_manager.start_background_check(
+                (self.settings.ai_provider,),
+                force=True,
+            )
+        preset = PROVIDER_PRESETS[self.settings.ai_provider]
+        self.show_speech(f"已切换为：{preset.label}", 4200)
+        return True
+
+    def open_social_hub(self) -> None:
+        """打开联网搭子与私人自习室；离线功能不依赖此窗口。"""
+
+        self._record_user_interaction()
+        if self._social_dialog is None:
+            self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, self)
+            self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.finished.connect(self._social_dialog_finished)
+        self._social_dialog.show(); self._social_dialog.raise_(); self._social_dialog.activateWindow()
+
+    def _social_dialog_finished(self) -> None:
+        if self._social_dialog is not None:
+            self._social_dialog.deleteLater(); self._social_dialog = None
+
+    def _social_tick(self) -> None:
+        """每 30 秒同步最小状态；失败时静默保留纯离线桌宠。"""
+
+        if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
+            return
+        started = None
+        if self.work_timer.is_running:
+            started = (datetime.now().astimezone() - timedelta(seconds=self.work_timer.session_seconds())).isoformat()
+        presence = {
+            "working": self.work_timer.is_running,
+            "today_seconds": self.work_timer.today_seconds(),
+            "session_started_at": started,
+            "outfit_key": self.settings.equipped_outfit,
+            "room_id": None,
+        }
+        thread = SocialSyncThread(self.social_client, presence, self)
+        self._social_thread = thread
+        thread.completed.connect(self._social_dashboard_received)
+        thread.finished.connect(self._social_thread_finished)
+        thread.start()
+
+    def _social_dashboard_received(self, data: dict) -> None:
+        """显示新串门提醒，并在双方本地打开双六毛画面。"""
+
+        for visit in data.get("visits") or []:
+            visit_id = str(visit.get("id", ""))
+            if visit_id and visit_id not in self._seen_visit_ids:
+                self._seen_visit_ids.add(visit_id)
+                self._set_temporary_activity("pointing", 20_000)
+                self.show_speech(f"{visit.get('nickname','搭子')} 的六毛来串门啦！\n打开“搭子自习室”可以接受。", 7600)
+        active = data.get("active_visits") or []
+        if active:
+            self._show_buddy_visit(active[0])
+
+    def _show_buddy_visit(self, peer: dict) -> None:
+        visit_id = str(peer.get("id", ""))
+        if visit_id and visit_id in self._shown_active_visit_ids:
+            return
+        if visit_id:
+            self._shown_active_visit_ids.add(visit_id)
+        self._buddy_visit_window.show_peer(
+            peer,
+            self.settings.equipped_outfit,
+            self.work_timer.today_seconds(),
+        )
+
+    def _social_thread_finished(self) -> None:
+        if self._social_thread is not None:
+            self._social_thread.deleteLater(); self._social_thread = None
+
+    def set_automatic_grumbling(self, enabled: bool) -> None:
+        """启用或停用只在本机生成的间歇牢骚。"""
+
+        self.settings.automatic_grumbling = bool(enabled)
+        save_settings(self.settings)
+        self._schedule_ambient()
+
+    def set_hourly_announcement(self, enabled: bool) -> None:
+        """启用或停用整点报时。"""
+
+        self.settings.hourly_announcement = bool(enabled)
+        self._last_announced_hour = ""
+        save_settings(self.settings)
+        self.show_speech("整点报时已开启。" if enabled else "整点报时已关闭。", 3200)
+
+    def _app_awareness_tick(self) -> None:
+        """只根据前台应用类别切换配饰动作，不读取标题或文档内容。"""
+
+        if (
+            not self.settings.app_awareness
+            or self.work_timer.is_running
+            or time.monotonic() < self._manual_activity_until
+        ):
+            return
+        category = active_application_category()
+        if category == self._last_app_category:
+            return
+        self._last_app_category = category
+        mapping = {"music": "headphones", "office": "work-study", "coding": "deep-focus", "reading": "night-reading"}
+        self._change_ambient_activity(mapping.get(category, "none"))
+
+    def play_random_song(self) -> str:
+        """由用户主动发起指定歌曲搜索，与基础播放控制严格分开。"""
+
+        title = choose_song()
+        custom_path = {
+            "qq": self.settings.qq_music_path,
+            "netease": self.settings.netease_music_path,
+            "kugou": self.settings.kugou_music_path,
+            "apple": self.settings.apple_music_path,
+            "spotify": self.settings.spotify_music_path,
+        }.get(self.settings.music_service, self.settings.netease_music_path)
+        result = search_song(self.settings.music_service, title, custom_path)
+        self._change_ambient_activity(random.choice(("headphones", "guitar", "drums")))
+        self._manual_activity_until = time.monotonic() + 180
+        self.show_speech(f"六毛挑了《{title}》。{result.message}", 7200)
+        return title
+
+    def control_music(self, action: str) -> bool:
+        """异步控制当前选择的播放器，不启动应用也不抢夺输入焦点。"""
+
+        if self.music_controller.perform(action):
+            return True
+        self.show_speech("音乐控制还在处理中，请稍等一下。", 3200)
+        return False
+
+    def _music_control_result(self, result: MusicControlResult) -> None:
+        """只展示系统控制层返回的真实结果和能力等级。"""
+
+        if result.success and result.action != "status":
+            self._change_ambient_activity("headphones")
+            self._manual_activity_until = time.monotonic() + 45
+        self.show_speech(result.message, 6200)
+
+    def set_activity(self, activity: str) -> None:
+        """手动选择修正版动作表中的任意完整动作。"""
+
+        self._set_temporary_activity(activity, 120_000)
+
+    def equip_outfit(self, outfit_key: str) -> None:
+        """装备已解锁娃衣；空字符串恢复经典外观。"""
+
+        allowed = {item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())}
+        if outfit_key and outfit_key not in allowed:
+            self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
+            return
+        self.settings.equipped_outfit = outfit_key
+        save_settings(self.settings)
+        self._mask_cache.clear(); self._refresh_pixmap()
+
+    def open_size_control(self) -> None:
+        """打开连续尺寸滑块并实时应用，不改变不同动作之间的比例。"""
+
+        dialog = SizeControlDialog(self.settings.display_height, self)
+        dialog.value_changed.connect(self.set_display_height)
+        dialog.exec()
+        save_settings(self.settings)
+
+    def _position_floating_panel(self, panel: QWidget) -> None:
+        """把快捷面板放在宠物旁边并限制在当前屏幕可见区域。"""
+
+        panel.adjustSize()
+        area = self._screen_geometry()
+        x = self.x() - panel.width() - 10
+        y = self.y() + max(0, self.height() // 3)
+        if area is not None:
+            if x < area.left():
+                x = self.x() + self.width() + 10
+            x = min(max(x, area.left()), area.right() - panel.width() + 1)
+            y = min(max(y, area.top()), area.bottom() - panel.height() + 1)
+        panel.move(x, y)
+
+    def show_quick_panel(self) -> None:
+        """双击切换快捷口袋；再次双击立即收起。"""
+
+        if self.quick_panel.isVisible():
+            self.quick_panel.hide()
+            return
+        self._position_floating_panel(self.quick_panel)
+        self.quick_panel.show(); self.quick_panel.raise_()
+
+    def show_work_controls(self) -> None:
+        """在计时运行时显示暂停和结束两个操作气泡。"""
+
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+            return
+        self._position_floating_panel(self.work_controls)
+        self.work_controls.show(); self.work_controls.raise_()
+
+    def _quick_work_action(self) -> None:
+        """快捷面板的工作入口：未运行时开始，运行时展示控制。"""
+
+        if self.work_timer.is_running:
+            self.show_work_controls()
+        else:
+            self.start_work_timer()
+
+    def _schedule_ambient(self) -> None:
+        """用随机间隔安排六毛主动出现，保持存在感但避免频繁打扰。"""
+
+        if not hasattr(self, "ambient_timer"):
+            return
+        self.ambient_timer.stop()
+        if self.settings.automatic_grumbling:
+            self.ambient_timer.start(random.randint(8 * 60_000, 18 * 60_000))
+
+    def _ambient_tick(self) -> None:
+        """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
+
+        try:
+            busy = self.chat_manager.busy
+            if self.isVisible() and not self.dragging and not busy:
+                idle_seconds = time.monotonic() - self._last_user_interaction
+                if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
+                    activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"
+                elif idle_seconds >= 30 * 60:
+                    activity, text = "pointing", "你很久没动啦，六毛偷偷探头看看你还在不在。"
+                elif self.work_timer.today_seconds() >= 3 * 3600 and random.random() < 0.06:
+                    activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
+                elif random.random() < 0.55:
+                    activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                else:
+                    activity = random.choice(RANDOM_ACTIONS)
+                    text = self.companion.ambient_grumble(self.work_timer.is_running).text
+                self.daily_stats.record_event(activity)
+                if activity == "sleep":
+                    self.daily_stats.record_sleep()
+                self._set_temporary_activity(activity, 42_000)
+                self.show_speech(text, 6800)
+        finally:
+            self._schedule_ambient()
+
+    def _schedule_song_inspiration(self) -> None:
+        """按用户设置单独安排歌词气泡，不再与低概率牢骚共用计时器。"""
+
+        if not hasattr(self, "song_timer"):
+            return
+        self.song_timer.stop()
+        if self.settings.lyric_inspiration_enabled:
+            base = self.settings.lyric_interval_minutes * 60_000
+            self.song_timer.start(max(60_000, round(base * random.uniform(0.85, 1.15))))
+
+    def _song_inspiration_tick(self) -> None:
+        """显示本机歌词短行；未选择文件时显示原创歌名意象短句。"""
+
+        try:
+            busy = self.chat_manager.busy
+            if self.isVisible() and not self.dragging and not busy:
+                local_lines = load_local_lines(self.settings.local_lyrics_path)
+                if local_lines:
+                    self._show_emotion(PetState.SIT, 2400)
+                    self.show_speech(f"♪ {random.choice(local_lines)}", 6800)
+                else:
+                    reply = self.companion.song_inspiration()
+                    self._show_emotion(reply.state, 2400)
+                    self.show_speech(f"♪ {reply.text}", 6800)
+        finally:
+            self._schedule_song_inspiration()
+
+    def _hourly_tick(self) -> None:
+        """周期检查整点报时，关闭时不产生任何气泡。"""
+
+        self._maybe_announce_hour(datetime.now())
+
+    def _maybe_announce_hour(self, now: datetime) -> bool:
+        """在每个整点窗口内只播报一次，返回是否实际播报。"""
+
+        if not self.settings.hourly_announcement or now.minute != 0:
+            return False
+        key = now.strftime("%Y-%m-%d-%H")
+        if key == self._last_announced_hour:
+            return False
+        self._last_announced_hour = key
+        reply = self.companion.hourly_announcement(now.hour)
+        self._show_emotion(reply.state, 2800)
+        self.show_speech(reply.text, 6200)
+        return True
+
+    def show_companion_status(self) -> None:
+        """用气泡显示当前会话内亲密、精力和饱食状态。"""
+
+        self._record_user_interaction()
+        count = self.work_timer.unlocked_outfit_count()
+        next_text = "12 套小时娃衣已全部解锁"
+        if count < len(OUTFITS):
+            remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
+            next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
+        self.show_speech(
+            f"{self.companion.status_text(self.work_timer.today_seconds() // 600)}\n{next_text}",
+            6200,
+        )
+
+    def trigger_interaction(self) -> None:
+        """结合当前情绪数值触发友好表情或挥手反馈。"""
+
+        if self.dragging:
+            return
+        self._record_user_interaction()
+        if self.mood.energy < 30:
+            state = PetState.SLEEPY
+        elif self.mood.boredom > 70:
+            state = PetState.CURIOUS
+        else:
+            state = random.choice((PetState.WAVE, PetState.HAPPY, PetState.SHY))
+        self._show_emotion(state, 1800)
+        now = datetime.now()
+        if (
+            not self._late_wakeup_shown
+            and self.settings.lyric_inspiration_enabled
+            and 10 <= now.hour < 13
+            and self.work_timer.today_seconds() == 0
         ):
             self._late_wakeup_shown = True
             reply = self.companion.song_inspiration(late_wakeup=True)
