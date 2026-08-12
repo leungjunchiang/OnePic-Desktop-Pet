@@ -19,7 +19,20 @@ jobs:
           TARGET_BRANCH: agent/netease-ui-automation
         run: |
           base64 -d .github/repair/v0.20.0.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/v0.20.0.patch"
-          git apply --index "$RUNNER_TEMP/v0.20.0.patch"
+          git apply --index --exclude=OnePicDesktopPet.spec --exclude=scripts/build_installer.ps1 "$RUNNER_TEMP/v0.20.0.patch"
+          python - <<'PY'
+          from pathlib import Path
+          replacements = {
+              Path("OnePicDesktopPet.spec"): ('"CFBundleShortVersionString": "0.19.1"', '"CFBundleShortVersionString": "0.20.0"'),
+              Path("scripts/build_installer.ps1"): ('[string]$Version = "0.19.1"', '[string]$Version = "0.20.0"'),
+          }
+          for path, (old, new) in replacements.items():
+              text = path.read_text(encoding="utf-8-sig")
+              if old not in text:
+                  raise SystemExit(f"expected version marker missing in {path}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git add OnePicDesktopPet.spec scripts/build_installer.ps1
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "feat: auto-select music providers with fallback"
