@@ -9,6 +9,7 @@ Adapter 使用 UI Automation 定位“歌曲”结果，macOS 优先使用 Apple
 from __future__ import annotations
 
 import logging
+import base64
 import random
 import subprocess
 import sys
@@ -491,6 +492,8 @@ class WindowsUIAutomationAdapter:
 
     def search(self, title: str, artist: str) -> Sequence[SongCandidate]:
         auto = self._automation()
+        if auto is None:
+            return self._powershell_search(title, artist)
         client = self.client_finder(self.provider, self._custom_path())
         if client is None:
             raise ProviderSearchError("music client not installed")
@@ -525,6 +528,8 @@ class WindowsUIAutomationAdapter:
 
     def play(self, candidate: SongCandidate) -> bool:
         control = candidate.native
+        if isinstance(control, tuple) and control and control[0] == "powershell":
+            return self._powershell_play(candidate)
         if control is None:
             return False
         row = self._matching_row(control, candidate.artist)
@@ -551,8 +556,114 @@ class WindowsUIAutomationAdapter:
         try:
             import uiautomation as auto
         except (ImportError, OSError) as exc:
-            raise ProviderSearchError("uiautomation is unavailable") from exc
+            # The packaged app may run without the optional Python wrapper.
+            # Windows' built-in UIAutomationClient is used as a fallback.
+            return None
         return auto
+
+    def _powershell_search(self, title: str, artist: str) -> Sequence[SongCandidate]:
+        client = self.client_finder(self.provider, self._custom_path())
+        if client is None:
+            raise ProviderSearchError("music client not installed")
+        script = r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Start-Process -FilePath $exe | Out-Null
+function Desc($root) {
+  $all = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
+  return $all
+}
+$root=[System.Windows.Automation.AutomationElement]::RootElement
+$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
+$deadline=(Get-Date).AddSeconds(12); $win=$null
+while((Get-Date) -lt $deadline -and $null -eq $win) {
+  foreach($candidate in @($root.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition))) {
+    if (($candidate.Current.Name -match $pattern) -or ($candidate.Current.ClassName -match $pattern)) { $win=$candidate; break }
+  }
+  if($null -eq $win){ Start-Sleep -Milliseconds 350 }
+}
+if($null -eq $win){ exit 10 }
+$items=Desc $win
+$edit=$items | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit } | Select-Object -First 1
+if($null -eq $edit){ exit 11 }
+try { $vp=$edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); $vp.SetValue($artist); $edit.SetFocus() } catch { exit 12 }
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 2
+$items=Desc $win
+$artistElements=@($items | Where-Object { $_.Current.Name -eq $artist })
+$out=@()
+foreach($ae in $artistElements){
+  $row=$ae
+  for($i=0;$i -lt 6 -and $null -ne $row;$i++){
+    $children=Desc $row | Where-Object { $_.Current.Name -and $_.Current.Name -ne $artist }
+    $title=$children | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -or $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::DataItem } | Select-Object -First 1
+    if($null -ne $title){ $out += ($title.Current.Name + "`t" + $artist); break }
+    try { $row=$walker.GetParent($row) } catch { break }
+  }
+}
+$out | Select-Object -Unique
+'''
+        script = (
+            "$exe=" + self._ps_literal(str(client)) + "; $pattern=" + self._ps_literal(self.window_pattern)
+            + "; $artist=" + self._ps_literal(artist) + ";\n" + script
+        )
+        completed = self._run_powershell(script)
+        if completed.returncode not in {0, 10, 11, 12}:
+            raise ProviderSearchError(str(completed.stderr or "UIAutomation search failed"))
+        candidates = []
+        for line in str(completed.stdout or "").splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2 and parts[0].strip():
+                candidates.append(SongCandidate(self.provider, parts[0].strip(), parts[1].strip(), "song", native=("powershell", parts[0].strip(), artist)))
+        return tuple(candidates)
+
+    def _powershell_play(self, candidate: SongCandidate) -> bool:
+        script = r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root=[System.Windows.Automation.AutomationElement]::RootElement
+$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
+function Desc($root) { @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)) }
+$win=$null
+foreach($candidate in @($root.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition))) { if(($candidate.Current.Name -match $pattern) -or ($candidate.Current.ClassName -match $pattern)){ $win=$candidate; break } }
+if($null -eq $win){ exit 10 }
+$titleElement=Desc $win | Where-Object { $_.Current.Name -eq $title } | Select-Object -First 1
+if($null -eq $titleElement){ exit 11 }
+$row=$titleElement
+for($i=0;$i -lt 6;$i++){
+  $children=Desc $row
+  if(@($children | Where-Object { $_.Current.Name -eq $artist }).Count -gt 0){
+    $button=$children | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $_.Current.IsEnabled } | Select-Object -First 1
+    if($null -ne $button){ try { $ip=$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern); $ip.Invoke(); 'PLAYED'; exit 0 } catch {} }
+  }
+  try { $row=$walker.GetParent($row) } catch { break }
+}
+exit 12
+'''
+        script = (
+            "$pattern=" + self._ps_literal(self.window_pattern) + "; $title=" + self._ps_literal(candidate.title)
+            + "; $artist=" + self._ps_literal(candidate.artist) + ";\n" + script
+        )
+        completed = self._run_powershell(script)
+        return completed.returncode == 0 and "PLAYED" in str(completed.stdout or "")
+
+    @staticmethod
+    def _ps_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def _run_powershell(script: str) -> subprocess.CompletedProcess:
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        try:
+            return subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                capture_output=True,
+                text=True,
+                timeout=25,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ProviderSearchError("PowerShell UIAutomation request failed") from exc
 
     def _wait_for_window(self, auto):
         deadline = time.monotonic() + self.wait_seconds
