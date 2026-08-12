@@ -40,6 +40,8 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
 
     assert "Lili-Windows-x64.zip" in workflow
     assert "Lili-Windows-x64-Setup.exe" in workflow
+    assert "tomllib.load(open('pyproject.toml', 'rb'))['project']['version']" in workflow
+    assert "-Version 0.18.1" not in workflow
     assert "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
     assert 'dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"' in macos_build
     assert 'arm64) release_arch="arm64"' in macos_build
@@ -52,6 +54,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
     assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
+    assert 'default: "v0.19.0"' in publisher
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
