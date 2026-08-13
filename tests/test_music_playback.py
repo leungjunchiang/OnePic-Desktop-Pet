@@ -90,7 +90,7 @@ def test_random_artist_uses_provider_native_fallback_when_ui_tree_is_unavailable
     assert adapter.native_calls == ["陈楚生"]
 
 
-def test_netease_default_desktop_script_is_dpi_aware_and_verifies_artist_title() -> None:
+def test_netease_default_desktop_script_is_dpi_aware_and_defers_verification_to_gsmtc() -> None:
     script = NeteaseMusicAdapter._netease_default_desktop_script(
         r"C:\Program Files\NetEase\CloudMusic\cloudmusic.exe",
         "陈楚生",
@@ -103,7 +103,9 @@ def test_netease_default_desktop_script_is_dpi_aware_and_verifies_artist_title()
     assert "width*0.385" in script
     assert "double[] songRows" in script
     assert "width*0.32" in script
-    assert "IndexOf(artist" in script
+    assert "titleArtistMatch" in script
+    assert 'result="PLAYED|' in script
+    assert "if($result -notlike 'PLAYED|*')" in script
     assert "$pick=3" in script
 
 
@@ -112,6 +114,7 @@ def test_random_artist_keeps_playing_when_media_information_is_unavailable() -> 
     manager = BasicRandomArtistPlaybackManager(
         {"qq": adapter},
         lambda _provider: None,
+        verify_timeout_seconds=0,
         sleep=lambda _seconds: None,
     )
 
@@ -120,6 +123,45 @@ def test_random_artist_keeps_playing_when_media_information_is_unavailable() -> 
     assert result.success is True
     assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
     assert adapter.played
+
+
+def test_random_artist_waits_for_gsmtc_playing_before_confirming_start() -> None:
+    adapter = FakeAdapter((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+    snapshots = iter(
+        (
+            TrackInfo("旧队列", "其他歌手", playback_status="paused"),
+            TrackInfo("随机歌曲", "陈楚生", playback_status="playing"),
+        )
+    )
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        lambda _provider: next(snapshots, None),
+        verify_timeout_seconds=1,
+        poll_interval_seconds=0.01,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+    assert result.current_title == "随机歌曲"
+    assert result.current_artist == "陈楚生"
+
+
+def test_random_artist_accepts_playing_session_without_metadata() -> None:
+    adapter = FakeAdapter((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        lambda _provider: TrackInfo("", "", playback_status="playing"),
+        verify_timeout_seconds=1,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
 
 
 def _manager(adapter: FakeAdapter, tracks, *, random_source=None) -> ExactMusicPlaybackManager:

@@ -544,6 +544,7 @@ class MusicSongResolver:
 
         ranked = self.manager.ranked_providers(probe_control=True)
         attempted: list[str] = []
+        failure_details: list[str] = []
         last_result: SongPlaybackResult | None = None
         for candidate in ranked:
             provider = candidate.provider
@@ -593,6 +594,7 @@ class MusicSongResolver:
                     attempted_providers=tuple(attempted),
                 )
             error = result.error_code.value if result.error_code else "UNKNOWN"
+            failure_details.append(f"{MUSIC_SERVICE_LABELS[provider]}：{error}")
             self.manager._record_provider_result(provider, False, error)
             LOGGER.debug(
                 "music_auto_select provider=%s score=%s reason=%s result=failed error=%s",
@@ -614,6 +616,8 @@ class MusicSongResolver:
                 f"{labels}已启动，但自动选歌失败。"
                 "如果你已在播放器中手动开始播放，播放/暂停、上一首和下一首仍可使用。"
             )
+        if failure_details:
+            failure_message += "\n失败阶段：" + "；".join(failure_details)
         return SongPlaybackResult(
             False,
             last_result.provider if last_result else "auto",
@@ -697,6 +701,8 @@ class MusicProviderManager:
         self.random_playback_manager = BasicRandomArtistPlaybackManager(
             adapters,
             self.current_track,
+            verify_timeout_seconds=playback_verify_timeout,
+            poll_interval_seconds=playback_poll_interval,
             sleep=playback_sleep or time.sleep,
         )
         self.transport_controller = MusicTransportController(
