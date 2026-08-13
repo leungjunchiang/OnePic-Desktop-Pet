@@ -51,24 +51,26 @@ class DesktopPetApplication:
         self.window = PetWindow(self.settings)
         self.window.quit_requested.connect(self.quit)
         self.tray = self._create_tray()
+        self.window.pet_name_changed.connect(self._pet_name_changed)
 
     def _create_tray(self) -> QSystemTrayIcon:
         """创建系统托盘图标及其操作菜单。"""
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
-        tray.setToolTip("Lili · 六毛")
+        pet_name = self.settings.pet_name or "六毛"
+        tray.setToolTip(f"Lili · {pet_name}")
         menu = QMenu()
 
         show_action = QAction("显示宠物", menu)
         show_action.triggered.connect(self.show_window)
         menu.addAction(show_action)
 
-        panel_action = QAction("六毛快捷口袋", menu)
+        panel_action = QAction(f"{pet_name}快捷口袋", menu)
         panel_action.triggered.connect(self.window.show_quick_panel)
         menu.addAction(panel_action)
 
-        dialogue_action = QAction("和六毛聊聊…", menu)
+        dialogue_action = QAction(f"和{pet_name}聊聊…", menu)
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
 
@@ -101,8 +103,18 @@ class DesktopPetApplication:
 
         tray.setContextMenu(menu)
         self.tray_menu = menu
+        self.panel_action = panel_action
+        self.dialogue_action = dialogue_action
         tray.activated.connect(self._tray_activated)
         return tray
+
+    def _pet_name_changed(self, pet_name: str) -> None:
+        """昵称保存后同步托盘提示和高频入口。"""
+
+        name = pet_name.strip() or "六毛"
+        self.tray.setToolTip(f"Lili · {name}")
+        self.panel_action.setText(f"{name}快捷口袋")
+        self.dialogue_action.setText(f"和{name}聊聊…")
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""

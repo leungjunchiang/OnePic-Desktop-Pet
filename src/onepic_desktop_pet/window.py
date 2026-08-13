@@ -127,6 +127,7 @@ from .growth import (
     time_of_day_activity,
 )
 from .local_content import find_audio_variants, load_local_lines
+from .liumao_worldview import family_music_mode
 from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
@@ -152,6 +153,13 @@ class PetWindow(QWidget):
     pause_changed = Signal(bool)
     work_timer_changed = Signal(bool)
     always_on_top_changed = Signal(bool)
+    pet_name_changed = Signal(str)
+
+    def _pet_name(self) -> str:
+        """返回当前昵称；兼容旧配置或测试替身缺少该字段的情况。"""
+
+        value = str(getattr(self.settings, "pet_name", "六毛")).replace("\x00", "").strip()
+        return value[:20] or "六毛"
 
     def __init__(
         self,
@@ -271,7 +279,7 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setWindowTitle(APP_DISPLAY_NAME)
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} · {self._pet_name()}")
         self.setMouseTracking(True)
 
         source = self._pixmaps[PetState.IDLE][0]
@@ -318,7 +326,7 @@ class PetWindow(QWidget):
         self.work_controls = WorkControlBubble()
         self.work_controls.pause_requested.connect(self.pause_work_timer)
         self.work_controls.finish_requested.connect(self.finish_work_timer)
-        self.quick_panel = QuickControlPanel()
+        self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
         self.quick_panel.music_control_requested.connect(self.control_music)
@@ -1679,12 +1687,12 @@ class PetWindow(QWidget):
         """在应用内预览工作卡，并提供打开本机相册的按钮。"""
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("今天六毛陪你做了什么")
+        dialog.setWindowTitle(f"今天{self._pet_name()}陪你做了什么")
         layout = QVBoxLayout(dialog)
         preview = QLabel(dialog); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card = QPixmap(str(path)).scaled(430, 570, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         preview.setPixmap(card); layout.addWidget(preview)
-        open_button = QPushButton("打开六毛相册", dialog)
+        open_button = QPushButton(f"打开{self._pet_name()}相册", dialog)
         open_button.clicked.connect(self.open_daily_album)
         layout.addWidget(open_button)
         dialog.exec()
@@ -1702,13 +1710,13 @@ class PetWindow(QWidget):
         if self._chat_dialog is None:
             # Keep chat as an independent utility window so it has a normal
             # taskbar/Dock entry and can be minimized without affecting pet.
-            self._chat_dialog = ChatDialog(None)
+            self._chat_dialog = ChatDialog(None, self._pet_name())
             self._chat_dialog.message_submitted.connect(self._submit_chat_message)
             self._chat_dialog.settings_requested.connect(self.open_settings)
             self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
             self._chat_dialog.append_message(
-                "六毛",
-                "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
+                self._pet_name(),
+                f"巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
             )
         status = self.agent_manager.status(self.settings.ai_provider)
         self._chat_dialog.set_provider(
@@ -1730,7 +1738,7 @@ class PetWindow(QWidget):
             return
         self._record_user_interaction()
         if self.chat_manager.busy:
-            self._chat_dialog.append_message("六毛", "上一句话还在路上，稍等我一下。")
+            self._chat_dialog.append_message(self._pet_name(), "上一句话还在路上，稍等我一下。")
             return
         self._chat_dialog.append_message("你", message)
         history_before = self._chat_memory.snapshot().as_history()
@@ -1743,7 +1751,7 @@ class PetWindow(QWidget):
 
         self._chat_memory.add("assistant", reply.text)
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("六毛", reply.text)
+            self._chat_dialog.append_message(self._pet_name(), reply.text)
             self._chat_dialog.show_recovery_actions(reply.show_recovery_actions)
         self._show_emotion(reply.state, 3000)
         self.show_speech(reply.text, 6500)
@@ -1758,7 +1766,7 @@ class PetWindow(QWidget):
         """显示非阻塞提示，不跳转设置页。"""
 
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("六毛", message)
+            self._chat_dialog.append_message(self._pet_name(), message)
 
     def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
         """后台检测完成后刷新缓存状态文案，恢复后下一条自然走 AI。"""
@@ -1794,11 +1802,19 @@ class PetWindow(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return True
         previous_always_on_top = self.settings.always_on_top
+        previous_pet_name = self._pet_name()
         try:
             dialog.apply()
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
             return True
+        current_pet_name = self._pet_name()
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} · {current_pet_name}")
+        if self._chat_dialog is not None:
+            self._chat_dialog.set_pet_name(current_pet_name)
+        self.quick_panel.set_pet_name(current_pet_name)
+        if current_pet_name != previous_pet_name:
+            self.pet_name_changed.emit(current_pet_name)
         if self.settings.always_on_top != previous_always_on_top:
             self.set_always_on_top(self.settings.always_on_top, persist=False)
         save_settings(self.settings)
@@ -2074,7 +2090,19 @@ class PetWindow(QWidget):
         """只展示系统控制层返回的真实结果和能力等级。"""
 
         is_status = isinstance(result, MusicControlResult) and result.action == "status"
-        if result.success and not is_status:
+        if isinstance(result, MusicControlResult):
+            track_artist = result.status.track.artist if result.status.track else ""
+            track_title = result.status.track.title if result.status.track else ""
+        else:
+            track_artist = result.current_artist
+            track_title = result.current_title
+        family_music = family_music_mode(track_artist, track_title)
+        if family_music:
+            # 听到爹的歌时让六毛先听歌，暂时减少普通主动打扰。
+            self._show_emotion(PetState.SIT, 2400)
+            self._set_temporary_activity("headphones", 120_000)
+            self._manual_activity_until = time.monotonic() + 120
+        if result.success and not is_status and not family_music:
             self._change_ambient_activity("headphones")
             self._manual_activity_until = time.monotonic() + 45
         if isinstance(result, SongPlaybackResult):
@@ -2103,7 +2131,7 @@ class PetWindow(QWidget):
     def open_size_control(self) -> None:
         """打开连续尺寸滑块并实时应用，不改变不同动作之间的比例。"""
 
-        dialog = SizeControlDialog(self.settings.display_height, self)
+        dialog = SizeControlDialog(self.settings.display_height, self, self._pet_name())
         dialog.value_changed.connect(self.set_display_height)
         dialog.exec()
         save_settings(self.settings)
@@ -2493,7 +2521,7 @@ class PetWindow(QWidget):
         """构建高频入口直达、低频选项收纳到二级菜单的右键菜单。"""
 
         menu = QMenu(self)
-        dialogue_action = QAction("和六毛聊聊…", self)
+        dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         menu.addAction(dialogue_action)
         work_menu = menu.addMenu("工作打卡/工作计时")
@@ -2505,7 +2533,7 @@ class PetWindow(QWidget):
             pause_work = QAction("暂停/结束工作", self)
             pause_work.triggered.connect(self.show_work_controls)
             work_menu.addAction(pause_work)
-        for label, callback in (("查看今日累计", self.show_work_time), ("查看今日成长", self.show_daily_growth), ("查看陪伴报告", self.show_daily_report), ("打开六毛相册", self.open_daily_album)):
+        for label, callback in (("查看今日累计", self.show_work_time), ("查看今日成长", self.show_daily_growth), ("查看陪伴报告", self.show_daily_report), (f"打开{self._pet_name()}相册", self.open_daily_album)):
             action = QAction(label, self)
             action.triggered.connect(callback)
             work_menu.addAction(action)
@@ -2538,7 +2566,7 @@ class PetWindow(QWidget):
         pause.setChecked(self.paused)
         pause.triggered.connect(lambda: self.set_paused(not self.paused))
         action_menu.addAction(pause)
-        food_menu = menu.addMenu("给六毛喂食")
+        food_menu = menu.addMenu(f"给{self._pet_name()}喂食")
         for food in FOOD_OPTIONS:
             action = QAction(food.label, self)
             action.triggered.connect(lambda _checked=False, key=food.key: self.feed_pet(key))
@@ -2548,7 +2576,7 @@ class PetWindow(QWidget):
         mood.triggered.connect(self.show_companion_status)
         food_menu.addAction(mood)
         outfit_menu = menu.addMenu("换装与外观")
-        classic = QAction("经典六毛", self)
+        classic = QAction(f"经典{self._pet_name()}", self)
         classic.setCheckable(True)
         classic.setChecked(not self.settings.equipped_outfit)
         classic.triggered.connect(lambda: self.equip_outfit(""))
@@ -2598,10 +2626,10 @@ class PetWindow(QWidget):
         focus_group = menu.addMenu("专注与自习")
         system_group = menu.addMenu("系统与显示")
 
-        dialogue_action = QAction("和六毛聊聊…", self)
+        dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         chat_group.addAction(dialogue_action)
-        social_action = QAction("六毛搭子自习室…", self)
+        social_action = QAction(f"{self._pet_name()}搭子自习室…", self)
         social_action.triggered.connect(self.open_social_hub)
         chat_group.addAction(social_action)
         action_menu = chat_group.addMenu("陪伴动作")
@@ -2621,7 +2649,7 @@ class PetWindow(QWidget):
             )
             food_menu.addAction(food_action)
         food_menu.addSeparator()
-        mood_action = QAction("查看六毛心情与能量", self)
+        mood_action = QAction(f"查看{self._pet_name()}心情与能量", self)
         mood_action.triggered.connect(self.show_companion_status)
         food_menu.addAction(mood_action)
 
@@ -2639,7 +2667,7 @@ class PetWindow(QWidget):
         selfie_action.triggered.connect(self.trigger_selfie)
         action_group.addAction(selfie_action)
         outfit_menu = action_group.addMenu("工作时长娃衣")
-        classic = QAction("经典六毛", self)
+        classic = QAction(f"经典{self._pet_name()}", self)
         classic.setCheckable(True)
         classic.setChecked(not self.settings.equipped_outfit)
         classic.triggered.connect(lambda: self.equip_outfit(""))
@@ -2700,10 +2728,10 @@ class PetWindow(QWidget):
         growth_action = QAction("查看今日 0–8 小时成长线", self)
         growth_action.triggered.connect(self.show_daily_growth)
         work_menu.addAction(growth_action)
-        report_action = QAction("今天六毛陪你做了什么", self)
+        report_action = QAction(f"今天{self._pet_name()}陪你做了什么", self)
         report_action.triggered.connect(self.show_daily_report)
         work_menu.addAction(report_action)
-        album_action = QAction("打开六毛相册", self)
+        album_action = QAction(f"打开{self._pet_name()}相册", self)
         album_action.triggered.connect(self.open_daily_album)
         work_menu.addAction(album_action)
         focus_social = QAction("打开搭子自习室…", self)

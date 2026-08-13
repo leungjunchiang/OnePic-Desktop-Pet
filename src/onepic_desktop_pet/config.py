@@ -34,6 +34,7 @@ from .resources import resource_path
 class PetSettings:
     """保存桌面宠物可配置参数和上次窗口位置。"""
 
+    pet_name: str = "六毛"
     display_height: int = 160
     movement_interval_ms: int = 16
     movement_step: int = 1
@@ -134,6 +135,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.inactive_sit_ms + 5000,
         int(settings.inactive_sleep_ms),
     )
+    settings.pet_name = str(settings.pet_name).replace("\x00", "").strip()[:20] or "六毛"
     settings.always_on_top = bool(settings.always_on_top)
     if settings.ai_provider not in {"offline", "codex", "claude", "deepseek", "kimi", "custom"}:
         settings.ai_provider = "offline"
@@ -211,6 +213,7 @@ def load_settings(
             for key, value in override.items()
             if key
             in {
+                "pet_name",
                 "display_height",
                 "start_x",
                 "start_y",
@@ -253,6 +256,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".json.tmp")
     state = {
+        "pet_name": settings.pet_name,
         "display_height": settings.display_height,
         "start_x": settings.start_x,
         "start_y": settings.start_y,
