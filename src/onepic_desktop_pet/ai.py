@@ -56,6 +56,13 @@ PROVIDER_PRESETS = {
     "offline": ProviderPreset("offline", "纯离线", "", "", False),
     "codex": ProviderPreset("codex", "Codex（使用本机登录）", "", "", False),
     "claude": ProviderPreset("claude", "Claude Code（使用本机登录）", "", "", False),
+    "openai": ProviderPreset(
+        "openai",
+        "OpenAI API（快速聊天）",
+        "https://api.openai.com/v1",
+        "gpt-4o-mini",
+        True,
+    ),
     "deepseek": ProviderPreset(
         "deepseek",
         "DeepSeek API",
@@ -156,7 +163,7 @@ def check_provider_connection(
         if not logged_in:
             raise AIConnectionError("已找到 Claude Code，但当前没有登录。")
         return "Claude Code 已安装并登录，可以连接。"
-    if provider not in {"deepseek", "kimi", "custom"}:
+    if provider not in {"openai", "deepseek", "kimi", "custom"}:
         raise AIConnectionError("未知的 AI 连接方式。")
     default_url, _model = provider_defaults(provider)
     token = token_override.strip() or credentials.get(provider)
@@ -414,29 +421,75 @@ def launch_codex_gui() -> bool:
 
 
 def _macos_codex_cli_path() -> Path | None:
-    """固定通过登录 zsh 查找 Codex CLI，并用绝对入口和入口 PATH 验证。"""
+    """Find Codex from the user's macOS shell, then keep the absolute path.
+
+    A GUI app is not launched from a login shell, so its inherited ``PATH``
+    commonly misses nvm/npm/pnpm directories.  Keep the required first probe
+    exactly as a login zsh command, then retry with the user's profile files
+    and interactive zsh before falling back to well-known per-user locations.
+    The fallback is deliberately only used when ``command -v`` returned no
+    executable; a ChatGPT.app installation is never treated as the CLI.
+    """
 
     if sys.platform != "darwin":
         return None
-    try:
-        completed = subprocess.run(
-            ["/bin/zsh", "-lc", "command -v codex"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=12,
-            env=_cli_environment(),
-            check=False,
+    lookup_commands = (
+        ["/bin/zsh", "-lc", "command -v codex"],
+        [
+            "/bin/zsh",
+            "-lc",
+            "for f in ~/.zprofile ~/.zshrc ~/.bash_profile; do "
+            "[ -r \"$f\" ] && source \"$f\" >/dev/null 2>&1; done; "
+            "command -v codex",
+        ],
+        ["/bin/zsh", "-lic", "command -v codex"],
+    )
+    candidate: Path | None = None
+    for lookup in lookup_commands:
+        try:
+            completed = subprocess.run(
+                lookup,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=12,
+                env=_cli_environment(),
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        for line in reversed(lines):
+            path = Path(line).expanduser()
+            if path.is_absolute() and path.is_file():
+                candidate = path
+                break
+        if candidate is not None:
+            break
+    if candidate is None:
+        home = Path.home()
+        fallback_paths = [
+            home / ".local" / "bin" / "codex",
+            home / ".npm-global" / "bin" / "codex",
+            home / ".bun" / "bin" / "codex",
+            home / ".volta" / "bin" / "codex",
+            home / "Library" / "pnpm" / "codex",
+            Path("/opt/homebrew/bin/codex"),
+            Path("/usr/local/bin/codex"),
+        ]
+        fallback_paths.extend(
+            sorted(
+                home.glob(".nvm/versions/node/*/bin/codex"),
+                key=lambda path: str(path),
+                reverse=True,
+            )
         )
-    except (OSError, subprocess.TimeoutExpired):
+        candidate = _newest_file(fallback_paths)
+    if candidate is None:
         return None
-    if completed.returncode != 0:
-        return None
-    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-    if not lines:
-        return None
-    candidate = Path(lines[-1]).expanduser()
     if not candidate.is_absolute() or not candidate.is_file():
         return None
     try:
@@ -481,6 +534,12 @@ def codex_detection_message() -> str:
     """返回供聊天和设置页复用的 GUI/CLI 分离状态文案。"""
 
     gui_app = find_codex_gui_app()
+    # A GUI app can be opened before the user's shell profile finishes
+    # installing/refreshing npm paths.  Refresh the cached CLI path whenever a
+    # settings page explicitly asks for the current status.
+    clear_cache = getattr(find_codex_executable, "cache_clear", None)
+    if callable(clear_cache):
+        clear_cache()
     cli = find_codex_executable()
     if gui_app is not None and cli is not None:
         return "Codex 已连接。"
@@ -737,6 +796,70 @@ def ask_compatible_api(
     return answer[:1600]
 
 
+def ask_openai_responses(
+    message: str,
+    history: Iterable[tuple[str, str]],
+    token: str,
+    base_url: str,
+    model: str,
+) -> str:
+    """Call OpenAI's Responses API as an optional fast chat backend.
+
+    It uses the same in-memory summary and recent 30-turn context as the
+    local agents and never sends project files or desktop context.
+    """
+
+    clean = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(clean)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AIConnectionError("API 地址必须是有效的 HTTPS 地址。")
+    if clean.endswith("/v1"):
+        endpoint = f"{clean}/responses"
+    elif clean.endswith("/responses"):
+        endpoint = clean
+    else:
+        endpoint = f"{clean}/v1/responses"
+    payload = {
+        "model": model.strip(),
+        "input": _conversation_text(message, history),
+        "max_output_tokens": 220,
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token.strip()}",
+            "Content-Type": "application/json",
+            "User-Agent": "LiliDesktopPet/0.21",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            detail = "API 令牌无效或没有权限。"
+        elif exc.code == 429:
+            detail = "API 额度不足或请求太频繁。"
+        else:
+            detail = f"API 返回错误（{exc.code}）。"
+        raise AIConnectionError(detail) from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise AIConnectionError("OpenAI 服务连接失败，已切回离线回答。") from exc
+    answer = str(data.get("output_text") or "").strip()
+    if not answer:
+        fragments: list[str] = []
+        for item in data.get("output") or []:
+            for content in item.get("content") or []:
+                if content.get("type") in {"output_text", "text"}:
+                    fragments.append(str(content.get("text") or ""))
+        answer = "".join(fragments).strip()
+    if not answer:
+        raise AIConnectionError("OpenAI 没有返回可识别的文字。")
+    return answer[:1600]
+
+
 class AIChatService:
     """根据当前设置选择后端；在线失败由窗口层决定如何离线回退。"""
 
@@ -755,6 +878,15 @@ class AIChatService:
             return ask_codex(message, history)
         if provider == "claude":
             return ask_claude(message, history)
+        if provider == "openai":
+            default_url, default_model = provider_defaults(provider)
+            return ask_openai_responses(
+                message,
+                history,
+                self.credentials.get(provider),
+                base_url or default_url,
+                model or default_model,
+            )
         if provider not in {"deepseek", "kimi", "custom"}:
             raise AIConnectionError("当前使用纯离线模式。")
         default_url, default_model = provider_defaults(provider)

@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.5
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.6
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |

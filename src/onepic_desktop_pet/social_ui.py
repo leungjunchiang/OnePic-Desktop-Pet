@@ -54,8 +54,11 @@ class SocialSyncThread(QThread):
 class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
+    interaction_requested = Signal(dict, str)
+
     def __init__(self, buddy: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
+        self.buddy = buddy
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
@@ -78,6 +81,15 @@ class BuddyCardWidget(QWidget):
         footer = QLabel(f"当前娃衣：{outfit}　·　双击或选中后可派六毛串门")
         footer.setStyleSheet("color:#61727d;font-size:11px;")
         root.addWidget(footer)
+        actions = QHBoxLayout()
+        for kind, label in (("poke", "戳一下"), ("cheer", "加油"), ("drink", "递奶茶")):
+            button = QPushButton(label)
+            button.setMinimumHeight(24)
+            button.clicked.connect(
+                lambda _checked=False, action=kind: self.interaction_requested.emit(self.buddy, action)
+            )
+            actions.addWidget(button)
+        root.addLayout(actions)
 
 
 class BuddyVisitWindow(QWidget):
@@ -195,12 +207,17 @@ class SocialHubDialog(QDialog):
     """提供首页、聊天、专注、我的四个清晰页面及统一操作反馈。"""
 
     active_visit = Signal(dict)
+    focus_start_requested = Signal()
+    focus_pause_requested = Signal()
+    focus_finish_requested = Signal()
 
     def __init__(self, client: SocialClient, outfit_key: str = "", parent=None) -> None:
         super().__init__(parent)
         self.client = client
         self.outfit_key = outfit_key
         self.data: dict[str, Any] = {}
+        self.current_room_id: str | None = None
+        self._focus_snapshot: Any = None
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
         # flags differ by platform and can omit the minimize button when a
@@ -259,6 +276,28 @@ class SocialHubDialog(QDialog):
         if client.signed_in:
             QTimer.singleShot(50, self.refresh)
 
+    def set_focus_snapshot(self, snapshot: Any) -> None:
+        """Render the desktop timer state without creating a second timer."""
+
+        self._focus_snapshot = snapshot
+        if not hasattr(self, "focus_status"):
+            return
+        status = getattr(snapshot, "status", None)
+        if isinstance(snapshot, dict):
+            status = snapshot.get("status")
+            session_seconds = snapshot.get("session_seconds", 0)
+            today_seconds = snapshot.get("today_seconds", 0)
+        else:
+            session_seconds = getattr(snapshot, "session_seconds", 0)
+            today_seconds = getattr(snapshot, "today_seconds", 0)
+        labels = {"focus": "专注中", "rest": "休息中", "idle": "尚未开始"}
+        self.focus_status.setText(labels.get(str(status), "等待同步"))
+        self.focus_clock.setText(format_work_duration(int(session_seconds)))
+        self.focus_today.setText(f"今日累计 {format_work_duration(int(today_seconds))}")
+        self.focus_start.setEnabled(str(status) != "focus")
+        self.focus_pause.setEnabled(str(status) == "focus")
+        self.focus_finish.setEnabled(int(session_seconds) > 0 or int(today_seconds) > 0)
+
     @staticmethod
     def _card(title: str, description: str = "") -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
@@ -311,17 +350,106 @@ class SocialHubDialog(QDialog):
 
     def _focus_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        focus_card, focus_layout = self._card("共同专注", "私人房间只同步最小在线和时长状态，不同步任务名称或桌面内容。")
-        preview = QLabel("功能预览：创建房间 · 分享 8 位房间码 · 查看共同专注人数 · 六毛串门")
-        preview.setWordWrap(True); preview.setObjectName("muted"); focus_layout.addWidget(preview)
+        focus_card, focus_layout = self._card(
+            "我的专注",
+            "桌面六毛与自习室共用同一个 FocusSession；这里不会再启动第二套计时器。",
+        )
+        self.focus_status = QLabel("等待同步")
+        self.focus_status.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
+        self.focus_clock = QLabel("0分钟")
+        self.focus_clock.setStyleSheet("font-size:28px;font-weight:700;color:#203847;")
+        self.focus_today = QLabel("今日累计 0分钟")
+        self.focus_today.setObjectName("muted")
+        focus_layout.addWidget(self.focus_status)
+        focus_layout.addWidget(self.focus_clock)
+        focus_layout.addWidget(self.focus_today)
+        controls = QHBoxLayout()
+        self.focus_start = QPushButton("开始专注")
+        self.focus_pause = QPushButton("暂停休息")
+        self.focus_finish = QPushButton("结束本轮")
+        self.focus_start.clicked.connect(self.focus_start_requested.emit)
+        self.focus_pause.clicked.connect(self.focus_pause_requested.emit)
+        self.focus_finish.clicked.connect(self.focus_finish_requested.emit)
+        for button in (self.focus_start, self.focus_pause, self.focus_finish):
+            controls.addWidget(button)
+        focus_layout.addLayout(controls)
         layout.addWidget(focus_card)
-        room_card, room_layout = self._card("私人自习室")
-        self.rooms = QListWidget(); room_layout.addWidget(self.rooms, 1)
+
+        room_card, room_layout = self._card(
+            "共同专注房间",
+            "只显示专注/休息和累计时长；不会上传正在使用的软件、窗口标题或任务内容。",
+        )
+        self.room_goal = QLabel("尚未选择房间目标")
+        self.room_goal.setObjectName("muted")
+        room_layout.addWidget(self.room_goal)
+        self.room_members = QListWidget(); self.room_members.setSpacing(5)
+        room_layout.addWidget(self.room_members, 1)
+        self.room_activity = QListWidget(); self.room_activity.setMaximumHeight(115)
+        room_layout.addWidget(self.room_activity)
+        self.rooms = QListWidget(); self.rooms.setMaximumHeight(100)
+        self.rooms.currentItemChanged.connect(self._room_selected)
+        room_layout.addWidget(self.rooms)
         row = QHBoxLayout(); create = QPushButton("创建自习室"); join = QPushButton("使用房间码加入")
         create.clicked.connect(self._create_room); join.clicked.connect(self._join_room)
         row.addWidget(create); row.addWidget(join); room_layout.addLayout(row)
         layout.addWidget(room_card, 1)
+        self.set_focus_snapshot(self._focus_snapshot or {"status": "idle", "session_seconds": 0, "today_seconds": 0})
         return page
+
+    def _room_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None = None) -> None:
+        room = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
+        self.current_room_id = str(room.get("id") or room.get("room_id")) if isinstance(room, dict) else None
+        if self.current_room_id:
+            self._set_status("已切换房间；下一次同步会带上当前专注状态。")
+
+    def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
+        if not self._require_login():
+            return
+        target = str(buddy.get("user_id") or buddy.get("id") or "")
+        nickname = str(buddy.get("nickname") or "搭子")
+        labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶"}
+        try:
+            sender = getattr(self.client, "send_interaction", None)
+            if callable(sender):
+                sender(target=target, kind=kind, room_id=self.current_room_id)
+            self._set_status(f"六毛已向 {nickname} {labels.get(kind, '送出互动')}。")
+        except SocialError:
+            # The interaction endpoint is optional on older Supabase projects.
+            # Keep the local feedback useful without breaking the study timer.
+            self._set_status(f"已记录对 {nickname} 的{labels.get(kind, '互动')}（服务器暂未启用同步）。")
+
+    def _render_room_people(self, people: list[dict[str, Any]]) -> None:
+        if not hasattr(self, "room_members"):
+            return
+        self.room_members.clear()
+        for buddy in people:
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 125))
+            widget = BuddyCardWidget(buddy, self.room_members)
+            widget.interaction_requested.connect(self._send_interaction)
+            item.setData(Qt.ItemDataRole.UserRole, buddy)
+            self.room_members.addItem(item)
+            self.room_members.setItemWidget(item, widget)
+        if not people:
+            empty = QListWidgetItem("加入房间后，这里会显示一起专注的六毛和累计时长。")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.room_members.addItem(empty)
+
+    def _render_room_activity(self, entries: list[Any]) -> None:
+        if not hasattr(self, "room_activity"):
+            return
+        self.room_activity.clear()
+        for entry in entries[-8:]:
+            if isinstance(entry, dict):
+                text = str(entry.get("text") or entry.get("message") or "")
+                if not text:
+                    text = f"{entry.get('nickname', '搭子')} {entry.get('kind', '更新了状态')}"
+            else:
+                text = str(entry)
+            if text:
+                self.room_activity.addItem(text)
+        if self.room_activity.count() == 0:
+            self.room_activity.addItem("房间动态会显示开始专注、完成一轮和六毛互动。")
 
     def _mine_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
@@ -401,6 +529,10 @@ class SocialHubDialog(QDialog):
         self.buddies.clear(); self.buddies.addItem("登录后，这里会显示搭子的在线与专注状态。")
         self.inbox.clear(); self.inbox.addItem("登录后可接收搭子申请与串门邀请。")
         self.rooms.clear(); self.rooms.addItem("登录后可创建或加入私人自习室。")
+        if hasattr(self, "room_members"):
+            self._render_room_people([])
+        if hasattr(self, "room_activity"):
+            self._render_room_activity([])
 
     def _error(self, exc: Exception) -> None:
         self._end_action()
@@ -455,9 +587,16 @@ class SocialHubDialog(QDialog):
             working_count += int(bool(buddy.get("working")))
             duration = buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
-            item=QListWidgetItem(); item.setSizeHint(QSize(0, 92)); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
-            self.buddies.setItemWidget(item, BuddyCardWidget(buddy, self.buddies))
-        self.study_summary.setText(f"现在 {working_count} 位搭子正在专注　·　可见今日合计 {format_work_duration(visible_total)}")
+            item=QListWidgetItem(); item.setSizeHint(QSize(0, 125)); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
+            buddy_widget = BuddyCardWidget(buddy, self.buddies)
+            buddy_widget.interaction_requested.connect(self._send_interaction)
+            self.buddies.setItemWidget(item, buddy_widget)
+        me_seconds = int((self.data.get("me") or {}).get("today_seconds") or 0)
+        self.study_summary.setText(
+            f"现在 {working_count} 位搭子正在专注　·　"
+            f"我的今日专注 {format_work_duration(me_seconds)}　·　"
+            f"房间可见合计 {format_work_duration(visible_total)}"
+        )
         if not seen:
             empty = QListWidgetItem("还没有搭子。点击下方“用搭子码添加”，一起工作时这里会显示清楚的专注时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
@@ -471,10 +610,27 @@ class SocialHubDialog(QDialog):
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
         self.rooms.clear()
         for room in self.data.get("rooms") or []:
-            self.rooms.addItem(f"{room.get('name')} · {room.get('members')} 人 · 房间码 {room.get('invite_code')}")
+            room_item = QListWidgetItem(
+                f"{room.get('name')} · {room.get('members')} 人 · 房间码 {room.get('invite_code')}"
+            )
+            room_item.setData(Qt.ItemDataRole.UserRole, room)
+            self.rooms.addItem(room_item)
         if self.rooms.count() == 0:
             empty_room = QListWidgetItem("还没有私人自习室；创建后可把房间码发给搭子。")
             empty_room.setFlags(Qt.ItemFlag.NoItemFlags); self.rooms.addItem(empty_room)
+        room_people = list(self.data.get("room_people") or [])
+        self._render_room_people(room_people)
+        goal = self.data.get("room_goal") or {}
+        if isinstance(goal, dict) and goal:
+            target = int(goal.get("target_seconds") or goal.get("target_minutes", 0) * 60)
+            current = int(goal.get("completed_seconds") or goal.get("current_seconds", 0))
+            self.room_goal.setText(
+                f"共同目标：{format_work_duration(current)} / {format_work_duration(target)}"
+                if target else f"共同目标：{goal.get('title') or '一起专注'}"
+            )
+        elif hasattr(self, "room_goal"):
+            self.room_goal.setText("尚未设置共同目标；创建房间后可以由 Social API 提供目标数据。")
+        self._render_room_activity(list(self.data.get("room_activity") or self.data.get("activity") or []))
         active=self.data.get("active_visits") or []
         if active: self.active_visit.emit(active[0])
         self._set_status("已刷新，页面内容是最新的。")

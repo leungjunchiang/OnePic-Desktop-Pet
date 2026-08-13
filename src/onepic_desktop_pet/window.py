@@ -111,6 +111,7 @@ from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
+from .focus_session import FocusSessionManager
 from .growth import (
     ACTION_GROUPS,
     ACTION_SPRITES,
@@ -161,6 +162,7 @@ class PetWindow(QWidget):
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
         self.work_timer = work_timer or WorkTimerModel()
+        self.focus_session = FocusSessionManager(self.work_timer, self)
         self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
@@ -230,6 +232,7 @@ class PetWindow(QWidget):
         self.chat_manager.busy_changed.connect(self._chat_busy_changed)
         self.chat_manager.notice.connect(self._chat_notice)
         self.music_controller.result_ready.connect(self._music_control_result)
+        self.focus_session.changed.connect(self._focus_snapshot_changed)
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
@@ -1318,7 +1321,7 @@ class PetWindow(QWidget):
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
 
         self._record_user_interaction()
-        started = self.work_timer.start()
+        started = self.focus_session.start()
         if started:
             self.set_paused(True)
         self._change_ambient_activity("computer")
@@ -1335,7 +1338,7 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         session_seconds = self.work_timer.session_seconds()
-        was_running = self.work_timer.pause()
+        was_running = self.focus_session.pause()
         if was_running:
             self.daily_stats.record_focus(session_seconds)
         self._award_focus_rewards()
@@ -1361,7 +1364,7 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         session_seconds = self.work_timer.session_seconds()
-        total = self.work_timer.finish()
+        total = self.focus_session.finish()
         self._award_focus_rewards()
         self.daily_stats.record_focus(session_seconds, completed=True)
         self.set_paused(False)
@@ -1439,6 +1442,7 @@ class PetWindow(QWidget):
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
         self.work_timer.checkpoint()
+        self.focus_session.refresh()
         self._award_focus_rewards()
         self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
@@ -1509,7 +1513,7 @@ class PetWindow(QWidget):
         if hasattr(self, "work_timer"):
             if self.work_timer.is_running:
                 self.daily_stats.record_focus(self.work_timer.session_seconds())
-            self.work_timer.pause()
+            self.focus_session.pause()
             if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
                 self._generate_daily_report(show_dialog=False)
 
@@ -1696,6 +1700,10 @@ class PetWindow(QWidget):
             self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, None)
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
             self._social_dialog.finished.connect(self._social_dialog_finished)
+            self._social_dialog.focus_start_requested.connect(self.start_work_timer)
+            self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
+            self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
+            self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
         # A second click on the menu must restore a minimized study-room
         # window instead of leaving it hidden in the taskbar/Dock.
         if self._social_dialog.isMinimized():
@@ -1703,6 +1711,10 @@ class PetWindow(QWidget):
         else:
             self._social_dialog.show()
         self._social_dialog.raise_(); self._social_dialog.activateWindow()
+
+    def _focus_snapshot_changed(self, snapshot: object) -> None:
+        if self._social_dialog is not None:
+            self._social_dialog.set_focus_snapshot(snapshot)
 
     def _social_dialog_finished(self) -> None:
         if self._social_dialog is not None:
@@ -1713,15 +1725,14 @@ class PetWindow(QWidget):
 
         if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
             return
-        started = None
-        if self.work_timer.is_running:
-            started = (datetime.now().astimezone() - timedelta(seconds=self.work_timer.session_seconds())).isoformat()
+        room_id = self._social_dialog.current_room_id if self._social_dialog is not None else None
+        snapshot = self.focus_session.snapshot()
         presence = {
-            "working": self.work_timer.is_running,
-            "today_seconds": self.work_timer.today_seconds(),
-            "session_started_at": started,
+            "working": snapshot.is_running,
+            "today_seconds": snapshot.today_seconds,
+            "session_started_at": snapshot.session_started_at,
             "outfit_key": self.settings.equipped_outfit,
-            "room_id": None,
+            "room_id": room_id,
         }
         thread = SocialSyncThread(self.social_client, presence, self)
         self._social_thread = thread
