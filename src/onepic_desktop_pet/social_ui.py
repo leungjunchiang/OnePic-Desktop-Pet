@@ -380,7 +380,12 @@ class SocialHubDialog(QDialog):
                 self._update_account_state(); self.refresh()
             else:
                 self._set_status("注册成功，请到邮箱确认后回来登录。")
-                QMessageBox.information(self, "请确认邮箱", "注册成功。请到邮箱完成确认，然后回到这里登录。")
+                QMessageBox.information(
+                    self,
+                    "请确认邮箱",
+                    "注册成功。请到邮箱完成确认，然后回到这里登录。\n\n"
+                    "确认页会打开六毛项目页面，不需要启动 localhost 服务。",
+                )
         except SocialError as exc:
             self._error(exc)
 
