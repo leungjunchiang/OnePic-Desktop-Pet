@@ -1,3 +1,7 @@
+Exit code: 0
+Wall time: 6.3 seconds
+Total output lines: 2854
+Output:
 """
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
@@ -67,7 +71,7 @@ from PySide6.QtGui import (
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QInputDialog, QMenu, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 try:
     from PySide6.QtTextToSpeech import QTextToSpeech
@@ -112,6 +116,7 @@ from .input_activity import system_idle_seconds
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
+from .focus_analytics import FocusAnalyticsStore, FocusQualityTracker
 from .focus_session import FocusSessionManager
 from .growth import (
     ACTION_GROUPS,
@@ -127,6 +132,7 @@ from .growth import (
 )
 from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
+from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
 from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialSyncThread
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
@@ -168,6 +174,11 @@ class PetWindow(QWidget):
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.focus_analytics = FocusAnalyticsStore(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self._focus_quality_tracker = FocusQualityTracker()
+        self._last_focus_quality = None
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
         self.direction = -1
@@ -191,6 +202,9 @@ class PetWindow(QWidget):
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
         self._auto_paused_for_idle = False
+        self._idle_pause_started_at: datetime | None = None
+        self._pending_idle_seconds = 0
+        self._idle_prompt_pending = False
         self._sleep_after_sit = False
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
@@ -426,6 +440,9 @@ class PetWindow(QWidget):
         self.input_idle_timer.setInterval(5_000)
         self.input_idle_timer.timeout.connect(self._check_input_idle)
         self.input_idle_timer.start()
+        self.idle_recovery_timer = QTimer(self)
+        self.idle_recovery_timer.setSingleShot(True)
+        self.idle_recovery_timer.timeout.connect(self._ask_idle_recovery)
 
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
@@ -442,26 +459,7 @@ class PetWindow(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         if self.settings.always_on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        return flags
-
-    def _ambient_window_flags(self) -> Qt.WindowType:
-        """让自动气泡跟随宠物模式，并保证显示时不激活当前应用。"""
-
-        flags = (
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        if self.settings.always_on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        return flags
-
-    def _load_pixmaps(self) -> dict[PetState, list[QPixmap]]:
-        """根据素材清单加载各状态帧序列并验证完整性。"""
-
-        manifest_path = resource_path("assets/pet/manifest.json")
-        if os.environ.get(…19688 tokens truncated…set_temporary_activity("pointing", 5000)
+            flags |= Qt.WindowType.WindowStaysOnTopH…21551 tokens truncated…._set_temporary_activity("pointing", 5000)
 
     def _show_photo_bubble(self) -> None:
         """在宠物旁显示独立自拍成片，并在数秒后自动隐藏。"""
@@ -879,4 +877,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-
