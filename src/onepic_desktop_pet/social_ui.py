@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout,
@@ -84,10 +84,20 @@ class BuddyVisitWindow(QWidget):
     """完全由本地素材绘制的双六毛陪伴窗口。"""
 
     def __init__(self, parent=None) -> None:
-        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        # Keep visits as ordinary top-level application windows.  The pet may
+        # be pinned, but a visit must have a taskbar entry and never force
+        # itself above the user's current application.
+        super().__init__(
+            parent,
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint,
+        )
         self.setFont(_social_font())
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setStyleSheet("QWidget#card{background:rgba(238,246,249,235);border:1px solid rgba(90,110,120,80);border-radius:20px;} QLabel{color:#263746;font-family:'Microsoft YaHei UI','PingFang SC';} QPushButton{padding:8px;border-radius:10px;background:#d7ece8;}")
         card = QWidget(self); card.setObjectName("card")
         root = QVBoxLayout(self); root.addWidget(card); layout = QVBoxLayout(card)
@@ -103,7 +113,7 @@ class BuddyVisitWindow(QWidget):
         self.clock = QLabel("00:00:00"); self.clock.setAlignment(Qt.AlignmentFlag.AlignCenter); self.clock.setStyleSheet("font-size:30px;font-weight:700;color:#087f74;")
         self.today = QLabel(); self.today.setAlignment(Qt.AlignmentFlag.AlignCenter); self.today.setStyleSheet("color:#61727d;")
         layout.addWidget(self.title); layout.addWidget(self.subtitle); layout.addWidget(self.clock); layout.addWidget(self.today)
-        close = QPushButton("结束这次串门"); close.clicked.connect(self.hide); layout.addWidget(close)
+        close = QPushButton("结束这次串门"); close.clicked.connect(self.hide_visit); layout.addWidget(close)
         self.elapsed = 0
         self._phase = 0
         self._mine_outfit = ""
@@ -112,8 +122,22 @@ class BuddyVisitWindow(QWidget):
         self._peer_actions = ("09-night-reading.png", "03-headphones.png", "19-tea.png")
         self.timer = QTimer(self); self.timer.timeout.connect(self._tick); self.timer.start(1000)
         self.resize(520, 430)
+        self.active_visit_id = ""
+        self.visible_requested = False
+        self.user_minimized = False
+        self._presented_visit_id = ""
 
     def show_peer(self, peer: dict[str, Any], mine_outfit: str = "", mine_today: int = 0) -> None:
+        visit_id = str(peer.get("id") or peer.get("visit_id") or "")
+        # Heartbeat/dashboard refreshes are idempotent.  Never resurrect a
+        # visit the user has minimized or hidden; only a new visit id may ask
+        # the window to become visible.
+        if visit_id and visit_id == self._presented_visit_id:
+            return
+        self.active_visit_id = visit_id
+        self._presented_visit_id = visit_id
+        self.visible_requested = True
+        self.user_minimized = False
         nickname = str(peer.get("nickname") or "搭子")
         self.title.setText(f"{nickname} 的六毛来串门了")
         self.subtitle.setText(f"💻 你的六毛　　{nickname} 的六毛 📖\n一起工作中")
@@ -133,6 +157,17 @@ class BuddyVisitWindow(QWidget):
         self._refresh_pets()
         self._tick()
         self.show()
+
+    def hide_visit(self) -> None:
+        """Hide this visit without allowing a background refresh to reopen it."""
+        self.visible_requested = False
+        self.user_minimized = False
+        self.hide()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.WindowStateChange:
+            self.user_minimized = bool(self.windowState() & Qt.WindowState.WindowMinimized)
+        super().changeEvent(event)
 
     def _load_pet(self, label: QLabel, outfit_key: str, fallback_name: str) -> None:
         relative = SPECIAL_OUTFIT_SPRITES.get(outfit_key, f"assets/pet/daily-actions/{fallback_name}")
@@ -181,6 +216,7 @@ class SocialHubDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("六毛搭子自习室")
         self.resize(760, 760)

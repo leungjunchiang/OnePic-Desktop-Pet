@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from onepic_desktop_pet.social import SocialClient, SocialSession
+from onepic_desktop_pet.social import HttpSocialBackend, SocialClient, SocialSession
 
 
 class RecordingClient(SocialClient):
@@ -47,3 +47,34 @@ def test_visit_dashboard_syncs_only_start_time_and_minimum_presence() -> None:
     assert "revoke execute on function public.lili_dashboard() from public, anon" in sql
     for forbidden in ("chat", "task", "window_title", "animation_frame"):
         assert forbidden not in sql
+
+
+class RecordingHttpBackend(HttpSocialBackend):
+    def __init__(self) -> None:
+        super().__init__("https://social.example.test", persist_tokens=False)
+        self.calls = []
+
+    def _raw(self, method, path, body=None, **kwargs):
+        self.calls.append((method, path, body, kwargs))
+        if path == "/auth/signin":
+            return {"access_token": "a", "refresh_token": "r", "expires_in": 3600, "user": {"id": "u"}}
+        return {}
+
+
+def test_http_social_backend_uses_proxy_routes_without_supabase_paths() -> None:
+    backend = RecordingHttpBackend()
+    backend.sign_in("a@example.com", "secret123")
+    backend.dashboard()
+    backend.rpc("lili_send_visit", {"target": "u2", "visit_kind": "visit"})
+
+    assert backend.calls[0][1] == "/auth/signin"
+    assert backend.calls[1][0:2] == ("GET", "/dashboard")
+    assert backend.calls[2][0:2] == ("POST", "/visits/send")
+    assert all("supabase" not in str(call[1]).lower() for call in backend.calls)
+
+
+def test_social_config_exposes_optional_proxy_base_url() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = (root / "config" / "social_backend.json").read_text(encoding="utf-8")
+    assert '"social_api_base_url"' in config
+    assert '"social_backend"' in config
