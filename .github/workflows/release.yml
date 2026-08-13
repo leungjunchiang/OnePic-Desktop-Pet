@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.3
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.4
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -111,7 +111,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $GITHUB_REF_NAME · 音乐后台执行与首次点击重试" \
+              --title "Lili $GITHUB_REF_NAME · 自习室窗口与手动换装修复" \
               --generate-notes \
-              --notes "修复音乐第一次点击偶尔无效、需要用户再次点击以及操作抢占前台的问题。随机选歌的搜索和播放动作各自最多自动重试一次；网易云 Default Desktop 回退完整桌面序列失败时也会自动重跑一次。音乐命令继续在 MusicCommandThread 后台执行，PowerShell 使用 CREATE_NO_WINDOW，不再闪出控制台；网易云完成必要的短暂交互后恢复原来的前台应用，不再保持播放器置顶。保留 GSMTC Playing 状态确认和 UIAutomation 失败阶段日志。完整测试通过。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "修复搭子自习室窗口缺少最小化按钮、最小化后无法恢复，以及工作时长解锁娃衣会强行覆盖用户手动换装的问题。自习室改为普通独立窗口，支持任务栏/Dock 最小化和恢复，不置顶、不影响桌宠；小时成长线只负责解锁，用户可以自由选择已解锁套装。保留 v0.21.3 的音乐首次点击重试、后台执行和前台恢复修复。Supabase 项目已验证 ACTIVE_HEALTHY，相关表均启用 RLS。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
           fi
