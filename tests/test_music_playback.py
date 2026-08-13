@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import random
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -96,6 +98,27 @@ class UIAutomationSearchFailureAdapter(QQMusicAdapter):
         raise ProviderSearchError("player window not found")
 
 
+class DelayedSearchAdapter(FakeAdapter):
+    def __init__(self) -> None:
+        super().__init__((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+        self.search_calls = 0
+
+    def search(self, _title: str, _artist: str):
+        self.search_calls += 1
+        return () if self.search_calls == 1 else self.candidates
+
+
+class FlakyPlayAdapter(FakeAdapter):
+    def __init__(self) -> None:
+        super().__init__((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+        self.play_calls = 0
+
+    def play(self, candidate: SongCandidate) -> bool:
+        self.play_calls += 1
+        self.played.append(candidate)
+        return self.play_calls >= 2
+
+
 def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_results() -> None:
     manager = BasicRandomArtistPlaybackManager({"qq": UnavailableAdapter()})
 
@@ -153,7 +176,56 @@ def test_netease_default_desktop_script_is_dpi_aware_and_defers_verification_to_
     assert "titleArtistMatch" in script
     assert 'result="PLAYED|' in script
     assert "if($result -notlike 'PLAYED|*')" in script
+    assert "previousWindow" in script
+    assert "restoredForeground" in script
+    assert "new IntPtr(-1)" not in script
     assert "$pick=3" in script
+
+
+def test_random_artist_retries_once_when_search_results_are_still_loading() -> None:
+    adapter = DelayedSearchAdapter()
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        verify_timeout_seconds=0,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert adapter.search_calls == 2
+
+
+def test_random_artist_retries_play_action_once_when_first_click_is_rejected() -> None:
+    adapter = FlakyPlayAdapter()
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        verify_timeout_seconds=0,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.play_attempts == 2
+    assert adapter.play_calls == 2
+
+
+def test_netease_native_random_retries_the_desktop_sequence_once(monkeypatch) -> None:
+    adapter = NeteaseMusicAdapter(
+        PetSettings(),
+        client_finder=lambda _provider, _custom: Path("cloudmusic.exe"),
+        process_launcher=lambda *args, **kwargs: None,
+    )
+    responses = iter(
+        (
+            subprocess.CompletedProcess([], 14, stdout="ERROR|window=0", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="PLAYED|restoredForeground=True", stderr=""),
+        )
+    )
+    monkeypatch.setattr(adapter, "_run_powershell", lambda _script: next(responses))
+
+    assert adapter.play_random_artist("陈楚生") is True
 
 
 def test_random_artist_keeps_playing_when_media_information_is_unavailable() -> None:
