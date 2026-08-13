@@ -67,7 +67,7 @@ from PySide6.QtGui import (
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QInputDialog, QMenu, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 try:
     from PySide6.QtTextToSpeech import QTextToSpeech
@@ -112,6 +112,7 @@ from .input_activity import system_idle_seconds
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
+from .focus_analytics import FocusAnalyticsStore, FocusQualityTracker
 from .focus_session import FocusSessionManager
 from .growth import (
     ACTION_GROUPS,
@@ -127,6 +128,7 @@ from .growth import (
 )
 from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
+from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
 from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialSyncThread
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
@@ -168,6 +170,11 @@ class PetWindow(QWidget):
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.focus_analytics = FocusAnalyticsStore(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self._focus_quality_tracker = FocusQualityTracker()
+        self._last_focus_quality = None
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
         self.direction = -1
@@ -191,6 +198,9 @@ class PetWindow(QWidget):
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
         self._auto_paused_for_idle = False
+        self._idle_pause_started_at: datetime | None = None
+        self._pending_idle_seconds = 0
+        self._idle_prompt_pending = False
         self._sleep_after_sit = False
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
@@ -426,6 +436,9 @@ class PetWindow(QWidget):
         self.input_idle_timer.setInterval(5_000)
         self.input_idle_timer.timeout.connect(self._check_input_idle)
         self.input_idle_timer.start()
+        self.idle_recovery_timer = QTimer(self)
+        self.idle_recovery_timer.setSingleShot(True)
+        self.idle_recovery_timer.timeout.connect(self._ask_idle_recovery)
 
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
@@ -1052,14 +1065,54 @@ class PetWindow(QWidget):
 
         if not getattr(self.settings, "auto_pause_on_idle", True):
             return
-        if not self.work_timer.is_running or self._auto_paused_for_idle:
-            return
         threshold = max(30, int(getattr(self.settings, "idle_pause_seconds", 300)))
         idle_seconds = system_idle_seconds()
+        if self._auto_paused_for_idle:
+            # The OS idle counter drops as soon as the user returns.  Delay
+            # the question to the event loop so the first input is not
+            # blocked by a modal dialog.
+            if idle_seconds < max(1, threshold - 1) and not self._idle_prompt_pending:
+                self._idle_prompt_pending = True
+                self.idle_recovery_timer.start(0)
+            return
+        if not self.work_timer.is_running:
+            return
         if idle_seconds < threshold:
             return
         self._auto_paused_for_idle = True
+        self._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=int(idle_seconds))
+        self._pending_idle_seconds = max(1, int(idle_seconds))
+        self._focus_quality_tracker.note_away()
         self.pause_work_timer(reason="idle")
+
+    def _ask_idle_recovery(self) -> None:
+        """Ask whether an automatically detected absence should be rest."""
+
+        self._idle_prompt_pending = False
+        seconds = max(1, int(self._pending_idle_seconds))
+        minutes = max(1, round(seconds / 60))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("回来啦")
+        box.setText(f"刚刚离开了约 {minutes} 分钟，要把这段时间算作休息吗？")
+        rest_button = box.addButton("算作休息", QMessageBox.ButtonRole.AcceptRole)
+        focus_button = box.addButton("继续计入专注", QMessageBox.ButtonRole.DestructiveRole)
+        box.exec()
+        if box.clickedButton() is focus_button:
+            # The timer remains paused until the user explicitly starts the
+            # next round, but the choice is reflected in local statistics.
+            self.focus_analytics.record_session(
+                seconds,
+                started_at=self._idle_pause_started_at or datetime.now().astimezone(),
+                completed=False,
+                away_count=1,
+                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            )
+            self.show_speech("好，这段离开时间先算在专注里。需要继续时点开始专注。", 5200)
+        elif box.clickedButton() is rest_button:
+            self.show_speech(f"已把约 {minutes} 分钟记为休息，回来后再开一轮吧。", 4800)
+        self._pending_idle_seconds = 0
+        self._idle_pause_started_at = None
 
     def _schedule_sleep_via_sit(self) -> None:
         """先完整坐下，再从坐姿播放入睡序列。"""
@@ -1358,6 +1411,10 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         self._auto_paused_for_idle = False
+        self._idle_prompt_pending = False
+        self._pending_idle_seconds = 0
+        self._idle_pause_started_at = None
+        self._focus_quality_tracker.start(active_application_category())
         started = self.focus_session.start()
         if started:
             self.set_paused(True)
@@ -1378,6 +1435,15 @@ class PetWindow(QWidget):
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause()
         if was_running:
+            self._last_focus_quality = self.focus_analytics.record_session(
+                session_seconds,
+                started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
+                completed=False,
+                application_switches=self._focus_quality_tracker.application_switches,
+                away_count=self._focus_quality_tracker.away_count,
+                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            )
+            self.focus_analytics.update_current_task_progress(session_seconds)
             self.daily_stats.record_focus(session_seconds)
         self._award_focus_rewards()
         self.work_activity_timer.stop()
@@ -1396,7 +1462,11 @@ class PetWindow(QWidget):
                 PetState.CURIOUS,
             )
         self._show_emotion(reply.state, 3200)
-        self.show_speech(reply.text, 5600)
+        quality_text = (
+            f"\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）"
+            if self._last_focus_quality else ""
+        )
+        self.show_speech(reply.text + quality_text, 5600)
         self.work_timer_changed.emit(False)
         self._schedule_social_tick()
         self.work_controls.hide()
@@ -1412,11 +1482,23 @@ class PetWindow(QWidget):
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
         self._award_focus_rewards()
+        self._last_focus_quality = self.focus_analytics.record_session(
+            session_seconds,
+            started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
+            completed=True,
+            application_switches=self._focus_quality_tracker.application_switches,
+            away_count=self._focus_quality_tracker.away_count,
+            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+        )
+        self.focus_analytics.update_current_task_progress(session_seconds)
         self.daily_stats.record_focus(session_seconds, completed=True)
         self.set_paused(False)
         reply = self.companion.work_finished(format_work_duration(total))
         self._show_emotion(reply.state, 3400)
-        self.show_speech(reply.text, 6200)
+        self.show_speech(
+            f"{reply.text}\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）",
+            6200,
+        )
         self.work_timer_changed.emit(False)
         self._schedule_social_tick()
         self.work_controls.hide()
@@ -1495,7 +1577,8 @@ class PetWindow(QWidget):
         self._award_focus_rewards()
         self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
-        wellness_kind = self.wellness.take_due(
+        quiet = detect_quiet_mode()
+        wellness_kind = None if quiet.blocked else self.wellness.take_due(
             self.settings.water_reminder_enabled,
             self.settings.stand_reminder_enabled,
             self.settings.water_interval_minutes,
@@ -1507,7 +1590,7 @@ class PetWindow(QWidget):
         elif wellness_kind == "stand":
             self._set_temporary_activity("football", 35_000)
             self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
-        reminder_kind = self.work_timer.take_due_reminder()
+        reminder_kind = None if quiet.blocked else self.work_timer.take_due_reminder()
         if reminder_kind is None:
             return
         duration = format_work_duration(self.work_timer.session_seconds())
@@ -1748,12 +1831,18 @@ class PetWindow(QWidget):
             # the same instance on a later menu click.
             self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, None)
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.room_event_received.connect(self._room_event_received)
+            self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
             self._social_dialog.finished.connect(self._social_dialog_finished)
             self._social_dialog.focus_start_requested.connect(self.start_work_timer)
             self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
             self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
+            self._social_dialog.focus_task_requested.connect(self._set_focus_task)
+            self._social_dialog.tomorrow_review_requested.connect(self._set_tomorrow_review)
+            self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
             self._social_dialog.room_changed.connect(self._social_room_changed)
             self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
         # A second click on the menu must restore a minimized study-room
         # window instead of leaving it hidden in the taskbar/Dock.
         if self._social_dialog.isMinimized():
@@ -1765,6 +1854,51 @@ class PetWindow(QWidget):
     def _focus_snapshot_changed(self, snapshot: object) -> None:
         if self._social_dialog is not None:
             self._social_dialog.set_focus_snapshot(snapshot)
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+
+    def _room_event_received(self, event: dict) -> None:
+        """Play a received room interaction on this desktop pet."""
+
+        if detect_quiet_mode().blocked:
+            return
+        kind = str(event.get("kind") or "")
+        actor = str(event.get("nickname") or "搭子")
+        message = str(event.get("message") or "")
+        labels = {"poke": "戳了戳你", "cheer": "给你加油", "drink": "递给你一杯奶茶"}
+        if kind == "phrase":
+            text = f"{actor}：{message[:100]}"
+            activity = "happy"
+        else:
+            text = f"{actor}{labels.get(kind, '给你发来一条房间动态')}"
+            activity = {"poke": "surprised", "cheer": "pointing", "drink": "tea"}.get(kind, "happy")
+        self._set_temporary_activity(activity, 20_000)
+        self.show_speech(text, 5200)
+
+    def _set_focus_task(self, title: str, minutes: int) -> None:
+        due_at = None
+        if int(minutes) > 0:
+            due_at = (datetime.now().astimezone() + timedelta(minutes=int(minutes))).isoformat()
+        self.focus_analytics.set_current_task(title, due_at=due_at, target_seconds=max(0, int(minutes)) * 60)
+        if self._social_dialog is not None:
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+        self.show_speech(f"这轮只盯一件事：{title[:80]}", 4200)
+
+    def _set_tomorrow_review(self, title: str) -> None:
+        self.focus_analytics.set_tomorrow_task(title)
+        if title:
+            self.show_speech(f"明天第一件事记好了：{title[:80]}", 4200)
+        else:
+            self.show_speech("明天第一件事已清空。", 3200)
+
+    def _room_ritual_due(self, label: str) -> None:
+        if detect_quiet_mode().blocked:
+            return
+        self.show_speech(f"房间提醒：{label}！大家一起动起来。", 5000)
+
+    def _buddy_subscription_notice(self, message: str) -> None:
+        if detect_quiet_mode().blocked:
+            return
+        self.show_speech(message, 4200)
 
     def _social_dialog_finished(self) -> None:
         if self._social_dialog is not None:
@@ -1803,6 +1937,8 @@ class PetWindow(QWidget):
         if self._social_dialog is not None:
             self._social_dialog.apply_dashboard(data)
 
+        if detect_quiet_mode().blocked:
+            return
         for visit in data.get("visits") or []:
             visit_id = str(visit.get("id", ""))
             if visit_id and visit_id not in self._seen_visit_ids:
@@ -1848,6 +1984,8 @@ class PetWindow(QWidget):
             timer.start(250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
+        if detect_quiet_mode().blocked:
+            return
         # Active visits normally carry a database id.  Keep a deterministic
         # fallback for older backend responses so a 30-second heartbeat does
         # not repeatedly reopen a minimized visit window.
@@ -1889,13 +2027,16 @@ class PetWindow(QWidget):
     def _app_awareness_tick(self) -> None:
         """只根据前台应用类别切换配饰动作，不读取标题或文档内容。"""
 
+        category = active_application_category()
+        if self.work_timer.is_running:
+            self._focus_quality_tracker.note_application_switch(category)
+
         if (
             not self.settings.app_awareness
             or self.work_timer.is_running
             or time.monotonic() < self._manual_activity_until
         ):
             return
-        category = active_application_category()
         if category == self._last_app_category:
             return
         self._last_app_category = category

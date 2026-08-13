@@ -51,6 +51,9 @@ class SocialBackend(Protocol):
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None: ...
+    def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None: ...
+    def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None: ...
+    def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None: ...
     def leave_room(self, *, room_id: str) -> None: ...
 
 
@@ -211,6 +214,15 @@ class HttpSocialBackend:
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
         self.rpc("lili_set_room_goal", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "due_at": due_at})
 
+    def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None:
+        self.rpc("lili_set_room_schedule", {"room_id": room_id, "start_at": start_at, "end_at": end_at, "enabled": bool(enabled)})
+
+    def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None:
+        self.rpc("lili_set_room_challenge", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "target_rounds": int(target_rounds)})
+
+    def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None:
+        self.rpc("lili_set_buddy_subscription", {"buddy_id": buddy_id, "on_focus_start": bool(on_focus_start), "on_focus_end": bool(on_focus_end), "muted": bool(muted)})
+
     def leave_room(self, *, room_id: str) -> None:
         self.rpc("lili_leave_room", {"room_id": room_id})
 
@@ -370,6 +382,19 @@ class SocialClient:
             ) or {}
             if isinstance(room, dict):
                 data.update(room)
+            try:
+                rituals = self._raw(
+                    "POST",
+                    "/rest/v1/rpc/lili_room_room_rituals",
+                    {"room_id": room_id},
+                    authenticated=True,
+                ) or {}
+                if isinstance(rituals, dict):
+                    data.update(rituals)
+            except SocialError:
+                # Older deployed projects may not have the optional ritual
+                # migration yet; the core room dashboard remains usable.
+                pass
         return data
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any:
@@ -403,6 +428,15 @@ class SocialClient:
 
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
         self.rpc("lili_set_room_goal", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "due_at": due_at})
+
+    def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None:
+        self.rpc("lili_set_room_schedule", {"room_id": room_id, "start_at": start_at, "end_at": end_at, "enabled": bool(enabled)})
+
+    def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None:
+        self.rpc("lili_set_room_challenge", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "target_rounds": int(target_rounds)})
+
+    def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None:
+        self.rpc("lili_set_buddy_subscription", {"buddy_id": buddy_id, "on_focus_start": bool(on_focus_start), "on_focus_end": bool(on_focus_end), "muted": bool(muted)})
 
     def leave_room(self, *, room_id: str) -> None:
         self.rpc("lili_leave_room", {"room_id": room_id})
