@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.2
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -111,7 +111,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $GITHUB_REF_NAME · GSMTC 播放状态确认与自动选歌修复" \
+              --title "Lili $GITHUB_REF_NAME · UIAutomation 回退与自动选歌修复" \
               --generate-notes \
-              --notes "修复网易云/QQ 自动选歌成功判定：窗口标题不再作为播放成功硬条件，歌曲点击后改为轮询目标播放器的 Windows GSMTC Session，进入 Playing 即记录 PLAYBACK_STARTED_UNVERIFIED；读取到陈楚生元数据时升级为 PLAYBACK_CONFIRMED。媒体信息暂不可读也不会阻止已经发出的播放动作。自动回退失败时显示每个 Provider 的 SEARCH_FAILED、UI_AUTOMATION_UNAVAILABLE、RESULT_NOT_FOUND、PLAY_ACTION_FAILED 等阶段码，并保留详细 debug 日志。完整测试通过。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "修复 Windows 自动选歌把 UIAutomation/PowerShell 窗口不可访问错误误报为 SEARCH_FAILED 的问题。网易云现在会在搜索树失败、PowerShell 超时、窗口或搜索框不可访问时继续尝试独立的本机随机播放回退；QQ 等没有 native 回退的 Provider 会明确显示 UI_AUTOMATION_UNAVAILABLE。保留 GSMTC Playing 状态确认：点击动作后目标 Session 进入 Playing 记录 PLAYBACK_STARTED_UNVERIFIED，读取到陈楚生元数据时升级为 PLAYBACK_CONFIRMED，媒体信息暂不可读不会取消已经发出的播放。完整测试通过。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
           fi
