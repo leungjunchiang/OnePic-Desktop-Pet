@@ -21,6 +21,36 @@ from .social import SocialClient, SocialError
 from .work_timer import format_work_duration
 
 
+def _presence_working(presence: dict[str, Any]) -> bool:
+    """Read both the legacy boolean and the new explicit presence status.
+
+    Older dashboard functions only returned ``working`` while the repaired
+    function also returns ``status``.  Keeping this normalization in the UI
+    prevents a mixed-version pair of clients from showing a false rest state.
+    """
+
+    status = str(presence.get("status") or "").strip().casefold()
+    if status in {"focus", "working", "专注", "工作", "专注中", "正在工作"}:
+        return True
+    if status in {"rest", "idle", "offline", "休息", "休息中", "离线"}:
+        return False
+    value = presence.get("working")
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "focus", "working", "专注", "工作", "专注中", "正在工作"}
+    return bool(value)
+
+
+def _presence_status(presence: dict[str, Any]) -> str:
+    """Return a stable user-facing status for old and new API payloads."""
+
+    status = str(presence.get("status") or "").strip().casefold()
+    if status in {"offline", "离线"}:
+        return "offline"
+    if _presence_working(presence):
+        return "focus"
+    return "rest"
+
+
 def _social_font() -> QFont:
     candidates = (
         (Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/simhei.ttf"))
@@ -64,16 +94,22 @@ class BuddyCardWidget(QWidget):
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(3)
         online = bool(buddy.get("online"))
-        working = bool(buddy.get("working"))
+        working = _presence_working(buddy)
         nickname = str(buddy.get("nickname") or "搭子")
+        is_self = bool(buddy.get("is_self"))
+        status = _presence_status(buddy)
+        status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         headline = QLabel(
             f"{'🟢' if online else '⚪'}  {nickname} 的六毛"
-            f"{'正在工作' if working else '正在休息'}"
+            f"{status_text}{'（我）' if is_self else ''}"
         )
         headline.setStyleSheet("font-size:15px;font-weight:600;color:#203847;")
         root.addWidget(headline)
         duration = buddy.get("today_seconds")
         time_text = "今日专注时长已隐藏" if duration is None else f"已专注 {format_work_duration(duration)}"
+        session_seconds = buddy.get("session_seconds")
+        if session_seconds is not None and status == "focus":
+            time_text = f"本轮专注 {format_work_duration(session_seconds)}　·　{time_text}"
         focus = QLabel(time_text)
         focus.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
@@ -210,6 +246,7 @@ class SocialHubDialog(QDialog):
     focus_start_requested = Signal()
     focus_pause_requested = Signal()
     focus_finish_requested = Signal()
+    room_changed = Signal(object)
 
     def __init__(self, client: SocialClient, outfit_key: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -400,6 +437,7 @@ class SocialHubDialog(QDialog):
         room = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
         self.current_room_id = str(room.get("id") or room.get("room_id")) if isinstance(room, dict) else None
         if self.current_room_id:
+            self.room_changed.emit(self.current_room_id)
             self._set_status("已切换房间；下一次同步会带上当前专注状态。")
 
     def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
@@ -571,10 +609,23 @@ class SocialHubDialog(QDialog):
     def refresh(self) -> None:
         if not self._require_login(): return
         self._begin_action("正在刷新搭子与专注状态…")
-        try: self.data=self.client.dashboard()
+        try: data=self.client.dashboard()
         except SocialError as exc: self._error(exc); return
         self._end_action()
-        me=self.data.get("me") or {}; self.identity.setText(f"{me.get('nickname','六毛搭子')} · 我的搭子码：{me.get('invite_code','--------')}")
+        self.apply_dashboard(data)
+
+    def apply_dashboard(self, data: dict[str, Any] | None) -> None:
+        """Render a dashboard already fetched by the background sync thread.
+
+        Heartbeats run off the UI thread.  Previously the completed payload was
+        only consumed for visit notifications, leaving the visible room cards
+        on the previous (often resting) state until the user clicked refresh.
+        """
+
+        self.data = dict(data or {})
+        me=self.data.get("me") or {}
+        me_presence = self.data.get("me_presence") or {}
+        self.identity.setText(f"{me.get('nickname','六毛搭子')} · 我的搭子码：{me.get('invite_code','--------')}")
         self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True)))
         self.buddies.clear()
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
@@ -591,7 +642,7 @@ class SocialHubDialog(QDialog):
             buddy_widget = BuddyCardWidget(buddy, self.buddies)
             buddy_widget.interaction_requested.connect(self._send_interaction)
             self.buddies.setItemWidget(item, buddy_widget)
-        me_seconds = int((self.data.get("me") or {}).get("today_seconds") or 0)
+        me_seconds = int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
         self.study_summary.setText(
             f"现在 {working_count} 位搭子正在专注　·　"
             f"我的今日专注 {format_work_duration(me_seconds)}　·　"
@@ -609,7 +660,9 @@ class SocialHubDialog(QDialog):
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
         self.rooms.clear()
-        for room in self.data.get("rooms") or []:
+        rooms = list(self.data.get("rooms") or [])
+        previous_room_id = self.current_room_id
+        for room in rooms:
             room_item = QListWidgetItem(
                 f"{room.get('name')} · {room.get('members')} 人 · 房间码 {room.get('invite_code')}"
             )
@@ -618,7 +671,45 @@ class SocialHubDialog(QDialog):
         if self.rooms.count() == 0:
             empty_room = QListWidgetItem("还没有私人自习室；创建后可把房间码发给搭子。")
             empty_room.setFlags(Qt.ItemFlag.NoItemFlags); self.rooms.addItem(empty_room)
+            self.current_room_id = None
+        else:
+            # QCombo/List widgets do not consistently select the first item
+            # after a clear() across Qt platforms.  Without a selected room
+            # the next heartbeat used to send room_id=NULL, so the server had
+            # no reliable way to associate this user's focus with a room.
+            selected = -1
+            for index, room in enumerate(rooms):
+                room_id = str(room.get("id") or room.get("room_id") or "")
+                if room_id and room_id == previous_room_id:
+                    selected = index
+                    break
+            if selected < 0:
+                selected = 0
+            self.rooms.setCurrentRow(selected)
         room_people = list(self.data.get("room_people") or [])
+        # Always render the local member as well.  The old SQL function only
+        # returned peers, which made the room look like everybody was resting
+        # when the local timer was the only state visible in the UI.
+        local_status = self._focus_snapshot
+        local_presence = dict(me_presence)
+        if isinstance(local_status, dict):
+            local_presence = {**local_presence, **local_status}
+        elif local_status is not None:
+            local_presence = {
+                **local_presence,
+                "status": getattr(local_status, "status", "idle"),
+                "working": bool(getattr(local_status, "is_running", False)),
+                "session_seconds": int(getattr(local_status, "session_seconds", 0)),
+                "today_seconds": int(getattr(local_status, "today_seconds", 0)),
+            }
+        local_presence.update({
+            "user_id": str(me.get("user_id") or me.get("id") or "me"),
+            "nickname": str(me.get("nickname") or "我"),
+            "outfit_key": str(me_presence.get("outfit_key") or self.outfit_key or me.get("outfit_key") or ""),
+            "online": True,
+            "is_self": True,
+        })
+        room_people = [local_presence] + [p for p in room_people if str(p.get("user_id")) != str(local_presence.get("user_id"))]
         self._render_room_people(room_people)
         goal = self.data.get("room_goal") or {}
         if isinstance(goal, dict) and goal:

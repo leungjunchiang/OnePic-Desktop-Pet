@@ -408,6 +408,9 @@ class PetWindow(QWidget):
         self.social_timer.setInterval(30_000)
         self.social_timer.timeout.connect(self._social_tick)
         self.social_timer.start()
+        self.social_sync_timer = QTimer(self)
+        self.social_sync_timer.setSingleShot(True)
+        self.social_sync_timer.timeout.connect(self._social_tick)
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
 
@@ -1330,6 +1333,7 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(self.work_timer.is_running)
+        self._schedule_social_tick()
         self._refresh_pixmap()
         return reply
 
@@ -1355,6 +1359,7 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3200)
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(False)
+        self._schedule_social_tick()
         self.work_controls.hide()
         self._refresh_pixmap()
         return reply
@@ -1372,6 +1377,7 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3400)
         self.show_speech(reply.text, 6200)
         self.work_timer_changed.emit(False)
+        self._schedule_social_tick()
         self.work_controls.hide()
         self.work_activity_timer.stop()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
@@ -1703,6 +1709,7 @@ class PetWindow(QWidget):
             self._social_dialog.focus_start_requested.connect(self.start_work_timer)
             self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
             self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
+            self._social_dialog.room_changed.connect(self._social_room_changed)
             self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
         # A second click on the menu must restore a minimized study-room
         # window instead of leaving it hidden in the taskbar/Dock.
@@ -1725,7 +1732,10 @@ class PetWindow(QWidget):
 
         if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
             return
-        room_id = self._social_dialog.current_room_id if self._social_dialog is not None else None
+        selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
+        room_id = selected_room or self.focus_session.room_id
+        if room_id != self.focus_session.room_id:
+            self.focus_session.set_room_id(room_id)
         snapshot = self.focus_session.snapshot()
         presence = {
             "working": snapshot.is_running,
@@ -1743,6 +1753,13 @@ class PetWindow(QWidget):
     def _social_dashboard_received(self, data: dict) -> None:
         """显示新串门提醒，并在双方本地打开双六毛画面。"""
 
+        # The sync thread already fetched this dashboard.  Render that exact
+        # payload instead of issuing a second blocking request from the UI
+        # thread; this is what makes a peer's fresh focus state visible within
+        # the same heartbeat.
+        if self._social_dialog is not None:
+            self._social_dialog.apply_dashboard(data)
+
         for visit in data.get("visits") or []:
             visit_id = str(visit.get("id", ""))
             if visit_id and visit_id not in self._seen_visit_ids:
@@ -1752,6 +1769,21 @@ class PetWindow(QWidget):
         active = data.get("active_visits") or []
         if active:
             self._show_buddy_visit(active[0])
+
+    def _social_room_changed(self, room_id: object) -> None:
+        """Bind room selection to the single local focus session."""
+
+        self.focus_session.set_room_id(str(room_id) if room_id else None)
+        self._schedule_social_tick()
+
+    def _schedule_social_tick(self) -> None:
+        """Push work/room transitions promptly instead of waiting 30 seconds."""
+
+        if not self.social_client.signed_in:
+            return
+        timer = getattr(self, "social_sync_timer", None)
+        if timer is not None:
+            timer.start(250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
         # Active visits normally carry a database id.  Keep a deterministic

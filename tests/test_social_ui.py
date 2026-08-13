@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QTabWidget
+from PySide6.QtWidgets import QApplication, QLabel, QTabWidget
 
 from onepic_desktop_pet.social_ui import BuddyVisitWindow, SocialHubDialog
 
@@ -130,7 +130,10 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
 
     assert dialog.focus_status.text() == "专注中"
     assert "42分钟" in dialog.focus_clock.text()
-    assert dialog.room_members.count() == 1
+    # 房间现在同时展示本人和搭子，避免只看到一个“休息中”的远端占位。
+    assert dialog.room_members.count() == 2
+    assert "（我）" in dialog.room_members.itemWidget(dialog.room_members.item(0)).findChildren(QLabel)[0].text()
+    assert "正在工作" in dialog.room_members.itemWidget(dialog.room_members.item(1)).findChildren(QLabel)[0].text()
     assert dialog.room_activity.count() == 2
     assert "35分钟" in dialog.room_goal.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
