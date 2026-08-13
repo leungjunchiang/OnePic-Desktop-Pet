@@ -90,6 +90,30 @@ class SocialSyncThread(QThread):
             self.failed.emit(str(exc))
 
 
+class SocialDashboardThread(QThread):
+    """Fetch one dashboard without blocking the Qt GUI thread."""
+
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, client: SocialClient, room_id: str | None, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.room_id = room_id
+
+    def run(self) -> None:
+        try:
+            try:
+                data = self.client.dashboard(room_id=self.room_id)
+            except TypeError:
+                # Keep small offline/test backends compatible with the room
+                # scoped dashboard while the real request stays off the GUI.
+                data = self.client.dashboard()
+            self.completed.emit(dict(data or {}))
+        except SocialError as exc:
+            self.failed.emit(str(exc))
+
+
 class SocialEventThread(QThread):
     """Send a room event without freezing pet animation or the study window."""
 
@@ -125,7 +149,7 @@ class BuddyCardWidget(QWidget):
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
-        root.setSpacing(3)
+        root.setSpacing(5)
         online = bool(buddy.get("online"))
         working = _presence_working(buddy)
         nickname = str(buddy.get("nickname") or "搭子")
@@ -136,6 +160,7 @@ class BuddyCardWidget(QWidget):
             f"{'🟢' if online else '⚪'}  {nickname} 的六毛"
             f"{status_text}{'（我）' if is_self else ''}"
         )
+        headline.setWordWrap(True)
         headline.setStyleSheet("font-size:15px;font-weight:600;color:#203847;")
         root.addWidget(headline)
         duration = buddy.get("today_seconds")
@@ -149,11 +174,13 @@ class BuddyCardWidget(QWidget):
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         footer = QLabel(f"当前娃衣：{outfit}　·　双击或选中后可派六毛串门")
         footer.setStyleSheet("color:#61727d;font-size:11px;")
+        footer.setWordWrap(True)
         root.addWidget(footer)
         actions = QHBoxLayout()
         for kind, label in (("poke", "戳一下"), ("cheer", "加油"), ("drink", "递奶茶")):
             button = QPushButton(label)
-            button.setMinimumHeight(24)
+            button.setMinimumHeight(32)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             button.clicked.connect(lambda _checked=False, action=kind: self._request_interaction(action))
             if is_self:
                 button.setEnabled(False)
@@ -336,6 +363,7 @@ class SocialHubDialog(QDialog):
         self._room_refresh_timer = QTimer(self)
         self._room_refresh_timer.setSingleShot(True)
         self._room_refresh_timer.timeout.connect(self._refresh_selected_room)
+        self._dashboard_thread: SocialDashboardThread | None = None
         self._event_threads: list[SocialEventThread] = []
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
@@ -389,6 +417,8 @@ class SocialHubDialog(QDialog):
         self.status_label.setObjectName("status")
         root.addWidget(self.status_label)
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setExpanding(True)
+        self.tabs.tabBar().setUsesScrollButtons(False)
         self.tabs.addTab(self._home_page(), "首页")
         self.tabs.addTab(self._chat_page(), "聊天")
         self.tabs.addTab(self._focus_page(), "专注")
@@ -484,6 +514,27 @@ class SocialHubDialog(QDialog):
         scroll.setWidget(page)
         return scroll
 
+    @staticmethod
+    def _fit_list_height(widget: QListWidget, minimum: int, maximum: int) -> None:
+        """Size short lists to their contents while retaining scrolling for long lists."""
+
+        widget.setMinimumHeight(minimum)
+        widget.setMaximumHeight(maximum)
+        widget.ensurePolished()
+        total = max(0, widget.frameWidth() * 2)
+        for index in range(widget.count()):
+            row_height = widget.sizeHintForRow(index)
+            total += row_height if row_height > 0 else widget.fontMetrics().lineSpacing() + 14
+        desired = min(maximum, max(minimum, total + 8))
+        widget.setFixedHeight(desired)
+
+    @staticmethod
+    def _set_buddy_item_height(item: QListWidgetItem, widget: BuddyCardWidget) -> None:
+        widget.ensurePolished()
+        # Leave room for Windows font/DPI metrics and the checkbox below the
+        # interaction row. The old fixed 125px rows clipped this content.
+        item.setSizeHint(QSize(0, max(132, widget.sizeHint().height() + 16)))
+
     def _home_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         welcome, welcome_layout = self._card("今天也一起往前一点", "查看搭子动态、待处理邀请和当前专注状态。")
@@ -497,7 +548,7 @@ class SocialHubDialog(QDialog):
         layout.addWidget(welcome)
         buddies_card, buddies_layout = self._card("我的搭子", "绿色表示两分钟内在线；选择后可到“聊天”页派六毛串门。")
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
-        self.buddies.setMinimumHeight(125); self.buddies.setMaximumHeight(360)
+        self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
         buddies_layout.addWidget(self.buddies)
         layout.addWidget(buddies_card)
@@ -576,7 +627,7 @@ class SocialHubDialog(QDialog):
         self.room_summary.setWordWrap(True)
         room_layout.addWidget(self.room_summary)
         self.room_members = QListWidget(); self.room_members.setSpacing(5)
-        self.room_members.setMinimumHeight(130); self.room_members.setMaximumHeight(310)
+        self.room_members.setMinimumHeight(46); self.room_members.setMaximumHeight(310)
         room_layout.addWidget(self.room_members)
         self.room_activity = QListWidget(); self.room_activity.setMinimumHeight(90); self.room_activity.setMaximumHeight(180)
         room_layout.addWidget(self.room_activity)
@@ -588,7 +639,7 @@ class SocialHubDialog(QDialog):
         self.room_challenge.setObjectName("muted")
         self.room_challenge.setWordWrap(True)
         room_layout.addWidget(self.room_challenge)
-        self.rooms = QListWidget(); self.rooms.setMinimumHeight(70); self.rooms.setMaximumHeight(140)
+        self.rooms = QListWidget(); self.rooms.setMinimumHeight(52); self.rooms.setMaximumHeight(140)
         self.rooms.currentItemChanged.connect(self._room_selected)
         room_layout.addWidget(self.rooms)
         row = QGridLayout(); create = QPushButton("创建自习室"); join = QPushButton("使用房间码加入")
@@ -626,26 +677,82 @@ class SocialHubDialog(QDialog):
         self.set_focus_analytics(self._focus_analytics)
         return self._scroll_page(page)
 
+    def _room_id_from_payload(self, room: dict[str, Any]) -> str | None:
+        room_id = str(room.get("id") or room.get("room_id") or "")
+        if not room_id and not isinstance(self.client, SocialClient):
+            # Lightweight offline clients often only expose the invite code.
+            # Real Supabase room payloads must carry the UUID used by the RPCs.
+            room_id = str(room.get("invite_code") or "")
+        return room_id or None
+
     def _room_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None = None) -> None:
         room = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
-        self.current_room_id = str(room.get("id") or room.get("room_id")) if isinstance(room, dict) else None
+        self.current_room_id = self._room_id_from_payload(room) if isinstance(room, dict) else None
         if self.current_room_id:
             self.room_changed.emit(self.current_room_id)
             self._set_status("已切换房间；正在同步这个房间的成员、目标和动态。")
             if not self._applying_dashboard:
                 self._room_refresh_timer.start(0)
 
+    def _start_dashboard_refresh(self, room_id: str | None, message: str) -> None:
+        """Start one coalesced dashboard request away from the GUI thread."""
+
+        if not self.client.signed_in:
+            return
+        if self._dashboard_thread is not None and self._dashboard_thread.isRunning():
+            return
+
+        # The application uses SocialClient, whose dashboard call performs
+        # network I/O and therefore must stay off the GUI thread.  The small
+        # in-memory clients used by the desktop smoke tests and offline demo
+        # are deliberately kept synchronous so a refresh remains immediately
+        # observable to callers without needing a second event-loop turn.
+        if not isinstance(self.client, SocialClient):
+            self._begin_action(message)
+            try:
+                try:
+                    data = self.client.dashboard(room_id=room_id)
+                except TypeError:
+                    data = self.client.dashboard()
+            except SocialError as exc:
+                self._dashboard_failed(str(exc))
+                return
+            self._end_action()
+            self.apply_dashboard(data)
+            return
+
+        self._begin_action(message)
+        thread = SocialDashboardThread(self.client, room_id, self)
+        self._dashboard_thread = thread
+        thread.completed.connect(
+            lambda data, requested_room=room_id: self._dashboard_received(data, requested_room)
+        )
+        thread.failed.connect(self._dashboard_failed)
+        thread.finished.connect(lambda: self._dashboard_thread_finished(thread))
+        thread.start()
+
+    def _dashboard_received(self, data: dict[str, Any], requested_room: str | None) -> None:
+        self._end_action()
+        # If the user changed rooms while an older request was in flight,
+        # render the base snapshot but queue one request for the new room.
+        if requested_room and requested_room != self.current_room_id:
+            self._room_refresh_timer.start(0)
+            return
+        self.apply_dashboard(data)
+
+    def _dashboard_failed(self, message: str) -> None:
+        self._end_action()
+        self._set_status(f"同步失败：{message}", error=True)
+
+    def _dashboard_thread_finished(self, thread: SocialDashboardThread) -> None:
+        if self._dashboard_thread is thread:
+            self._dashboard_thread = None
+        thread.deleteLater()
+
     def _refresh_selected_room(self) -> None:
         if not self.current_room_id or not self.client.signed_in:
             return
-        try:
-            try:
-                data = self.client.dashboard(room_id=self.current_room_id)
-            except TypeError:
-                data = self.client.dashboard()
-            self.apply_dashboard(data)
-        except SocialError as exc:
-            self._set_status(f"房间同步失败：{exc}", error=True)
+        self._start_dashboard_refresh(self.current_room_id, "正在同步当前自习室…")
 
     def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
@@ -769,7 +876,6 @@ class SocialHubDialog(QDialog):
         self.room_members.clear()
         for buddy in people:
             item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 125))
             widget = BuddyCardWidget(buddy, self.room_members)
             widget.interaction_requested.connect(self._send_interaction)
             widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
@@ -777,10 +883,12 @@ class SocialHubDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, buddy)
             self.room_members.addItem(item)
             self.room_members.setItemWidget(item, widget)
+            self._set_buddy_item_height(item, widget)
         if not people:
             empty = QListWidgetItem("加入房间后，这里会显示一起专注的六毛和累计时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             self.room_members.addItem(empty)
+        self._fit_list_height(self.room_members, 46, 310)
 
     def _render_room_activity(self, entries: list[Any]) -> None:
         if not hasattr(self, "room_activity"):
@@ -975,6 +1083,8 @@ class SocialHubDialog(QDialog):
         self.buddies.clear(); self.buddies.addItem("登录后，这里会显示搭子的在线与专注状态。")
         self.inbox.clear(); self.inbox.addItem("登录后可接收搭子申请与串门邀请。")
         self.rooms.clear(); self.rooms.addItem("登录后可创建或加入私人自习室。")
+        self._fit_list_height(self.buddies, 46, 360)
+        self._fit_list_height(self.rooms, 52, 140)
         if hasattr(self, "room_members"):
             self._render_room_people([])
         if hasattr(self, "room_activity"):
@@ -1016,15 +1126,7 @@ class SocialHubDialog(QDialog):
 
     def refresh(self) -> None:
         if not self._require_login(): return
-        self._begin_action("正在刷新搭子与专注状态…")
-        try:
-            try:
-                data = self.client.dashboard(room_id=self.current_room_id)
-            except TypeError:
-                data = self.client.dashboard()
-        except SocialError as exc: self._error(exc); return
-        self._end_action()
-        self.apply_dashboard(data)
+        self._start_dashboard_refresh(self.current_room_id, "正在刷新搭子与专注状态…")
 
     def apply_dashboard(self, data: dict[str, Any] | None) -> None:
         """Render a dashboard already fetched by the background sync thread.
@@ -1061,12 +1163,13 @@ class SocialHubDialog(QDialog):
             working_count += int(bool(buddy.get("working")))
             duration = buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
-            item=QListWidgetItem(); item.setSizeHint(QSize(0, 125)); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
+            item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
             buddy_widget = BuddyCardWidget(buddy, self.buddies)
             buddy_widget.interaction_requested.connect(self._send_interaction)
             buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
             buddy_widget.subscription_requested.connect(self._set_subscription)
             self.buddies.setItemWidget(item, buddy_widget)
+            self._set_buddy_item_height(item, buddy_widget)
         me_seconds = int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
         self.study_summary.setText(
             f"现在 {working_count} 位搭子正在专注　·　"
@@ -1076,6 +1179,7 @@ class SocialHubDialog(QDialog):
         if not seen:
             empty = QListWidgetItem("还没有搭子。点击下方“用搭子码添加”，一起工作时这里会显示清楚的专注时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
+        self._fit_list_height(self.buddies, 46, 360)
         self.inbox.clear()
         for request in self.data.get("requests") or []:
             item=QListWidgetItem(f"搭子申请：{request.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
@@ -1084,10 +1188,14 @@ class SocialHubDialog(QDialog):
         if self.inbox.count() == 0:
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
-        self._applying_dashboard = True
-        self.rooms.clear()
         rooms = list(self.data.get("rooms") or [])
         previous_room_id = self.current_room_id
+        self._applying_dashboard = True
+        # Rebuilding the list is an internal render operation.  Suppress the
+        # transient "selection cleared" and "selection restored" signals;
+        # otherwise each dashboard response schedules another network sync.
+        self.rooms.blockSignals(True)
+        self.rooms.clear()
         for room in rooms:
             room_item = QListWidgetItem(
                 f"{room.get('name')} · {room.get('members')} 人 · 房间码 {room.get('invite_code')}"
@@ -1105,7 +1213,7 @@ class SocialHubDialog(QDialog):
             # no reliable way to associate this user's focus with a room.
             selected = -1
             for index, room in enumerate(rooms):
-                room_id = str(room.get("id") or room.get("room_id") or "")
+                room_id = self._room_id_from_payload(room)
                 if room_id and room_id == previous_room_id:
                     selected = index
                     break
@@ -1118,15 +1226,21 @@ class SocialHubDialog(QDialog):
                     key=lambda index: int(rooms[index].get("members") or 0),
                 )
             self.rooms.setCurrentRow(selected)
+            selected_room = rooms[selected]
+            self.current_room_id = self._room_id_from_payload(selected_room)
+        self.rooms.blockSignals(False)
+        self._fit_list_height(self.rooms, 52, 140)
         self._applying_dashboard = False
-        if self.current_room_id and self.current_room_id != previous_room_id:
-            self._room_refresh_timer.start(0)
+        if self.current_room_id != previous_room_id:
+            self.room_changed.emit(self.current_room_id)
         # The room-scoped endpoint is authoritative for members and events.
         # Keep the legacy top-level fields as a compatibility fallback for
         # older proxy deployments and the offline UI tests.
         room_detail = self.data.get("current_room") or {}
         if not isinstance(room_detail, dict):
             room_detail = {}
+        if self.current_room_id and self.current_room_id != previous_room_id and not room_detail:
+            self._room_refresh_timer.start(0)
         room_people = list(room_detail.get("room_people") or self.data.get("room_people") or []) if self.current_room_id else []
         # Always render the local member as well.  The old SQL function only
         # returned peers, which made the room look like everybody was resting
