@@ -167,6 +167,21 @@ class SocialHubDialog(QDialog):
         self.outfit_key = outfit_key
         self.data: dict[str, Any] = {}
         self.setFont(_social_font())
+        # Make this a normal independent utility window.  QDialog's default
+        # flags differ by platform and can omit the minimize button when a
+        # parent is supplied, which made the study room feel like a modal
+        # sheet on Windows.  It deliberately does not include Tool or
+        # WindowStaysOnTopHint: minimizing it must only hide this window and
+        # never affect the desktop pet or its timers.
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setModal(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("六毛搭子自习室")
         self.resize(760, 760)
         self.setMinimumSize(680, 660)
