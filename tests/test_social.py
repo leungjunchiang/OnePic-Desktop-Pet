@@ -98,3 +98,17 @@ def test_social_config_exposes_optional_proxy_base_url() -> None:
     config = (root / "config" / "social_backend.json").read_text(encoding="utf-8")
     assert '"social_api_base_url"' in config
     assert '"social_backend"' in config
+
+
+def test_room_shared_state_migration_scopes_members_goals_events_and_cooldown() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.lili_room_goals" in migration
+    assert "create table if not exists public.lili_room_events" in migration
+    assert "lili_room_dashboard" in migration
+    assert "互动太频繁，请稍后再试" in migration
+    assert "lili_presence_room_event" in migration
+    assert "revoke execute on function public.lili_room_dashboard(uuid) from public, anon" in migration
+    totals = (root / "supabase" / "migrations" / "20260813153000_lili_room_focus_totals.sql").read_text(encoding="utf-8")
+    assert "lili_room_focus_totals" in totals
+    assert "cumulative_seconds" in totals

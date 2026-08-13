@@ -60,6 +60,8 @@ class PetSettings:
     stand_reminder_enabled: bool = False
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
+    auto_pause_on_idle: bool = True
+    idle_pause_seconds: int = 300
     music_service: str = "auto"
     music_provider_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     qq_music_path: str = ""
@@ -146,6 +148,8 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
+    settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
+    settings.idle_pause_seconds = min(3600, max(30, int(settings.idle_pause_seconds)))
     if settings.music_service not in {"auto", "qq", "netease", "kugou", "apple", "spotify"}:
         settings.music_service = "auto"
     def safe_int(value: Any, default: int = 0) -> int:
@@ -223,6 +227,8 @@ def load_settings(
                 "stand_reminder_enabled",
                 "water_interval_minutes",
                 "stand_interval_minutes",
+                "auto_pause_on_idle",
+                "idle_pause_seconds",
                 "music_service",
                 "music_provider_history",
                 "qq_music_path",
@@ -263,6 +269,8 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "stand_reminder_enabled": settings.stand_reminder_enabled,
         "water_interval_minutes": settings.water_interval_minutes,
         "stand_interval_minutes": settings.stand_interval_minutes,
+        "auto_pause_on_idle": settings.auto_pause_on_idle,
+        "idle_pause_seconds": settings.idle_pause_seconds,
         "music_service": settings.music_service,
         "music_provider_history": settings.music_provider_history,
         "qq_music_path": settings.qq_music_path,

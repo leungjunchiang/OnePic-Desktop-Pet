@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -76,8 +77,34 @@ class SocialSyncThread(QThread):
     def run(self) -> None:
         try:
             self.client.heartbeat(**self.presence)
-            self.completed.emit(self.client.dashboard())
+            room_id = self.presence.get("room_id")
+            try:
+                data = self.client.dashboard(room_id=room_id)
+            except TypeError:
+                # Keep third-party/test backends compatible while they adopt
+                # the room-scoped dashboard argument.
+                data = self.client.dashboard()
+            self.completed.emit(data)
         except SocialError as exc:
+            self.failed.emit(str(exc))
+
+
+class SocialEventThread(QThread):
+    """Send a room event without freezing pet animation or the study window."""
+
+    completed = Signal()
+    failed = Signal(str)
+
+    def __init__(self, client: SocialClient, event: dict[str, Any], parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.event = event
+
+    def run(self) -> None:
+        try:
+            self.client.record_room_event(**self.event)
+            self.completed.emit()
+        except (SocialError, AttributeError) as exc:
             self.failed.emit(str(exc))
 
 
@@ -85,10 +112,14 @@ class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
     interaction_requested = Signal(dict, str)
+    interaction_blocked = Signal(str)
 
     def __init__(self, buddy: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
         self.buddy = buddy
+        self._cooldown_seconds = 15
+        self._cooldown_until: dict[str, float] = {}
+        self._buttons: dict[str, QPushButton] = {}
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
@@ -121,11 +152,36 @@ class BuddyCardWidget(QWidget):
         for kind, label in (("poke", "戳一下"), ("cheer", "加油"), ("drink", "递奶茶")):
             button = QPushButton(label)
             button.setMinimumHeight(24)
-            button.clicked.connect(
-                lambda _checked=False, action=kind: self.interaction_requested.emit(self.buddy, action)
-            )
+            button.clicked.connect(lambda _checked=False, action=kind: self._request_interaction(action))
+            if is_self:
+                button.setEnabled(False)
+                button.setToolTip("互动按钮只对房间里的其他搭子开放")
+            self._buttons[kind] = button
             actions.addWidget(button)
         root.addLayout(actions)
+
+    def _request_interaction(self, kind: str) -> None:
+        now = time.monotonic()
+        remaining = self._cooldown_until.get(kind, 0.0) - now
+        if remaining > 0:
+            self.interaction_blocked.emit(f"互动冷却中，请 {int(remaining) + 1} 秒后再试。")
+            return
+        self._cooldown_until[kind] = now + self._cooldown_seconds
+        button = self._buttons.get(kind)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(f"已发送 ({self._cooldown_seconds}s)")
+            QTimer.singleShot(self._cooldown_seconds * 1000, lambda: self._restore_button(kind))
+        self.interaction_requested.emit(self.buddy, kind)
+
+    def _restore_button(self, kind: str) -> None:
+        button = self._buttons.get(kind)
+        if button is None:
+            return
+        labels = {"poke": "戳一下", "cheer": "加油", "drink": "递奶茶"}
+        button.setText(labels.get(kind, "互动"))
+        if not bool(self.buddy.get("is_self")):
+            button.setEnabled(True)
 
 
 class BuddyVisitWindow(QWidget):
@@ -255,6 +311,9 @@ class SocialHubDialog(QDialog):
         self.data: dict[str, Any] = {}
         self.current_room_id: str | None = None
         self._focus_snapshot: Any = None
+        self._applying_dashboard = False
+        self._room_goal_state: dict[str, Any] = {}
+        self._event_threads: list[SocialEventThread] = []
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
         # flags differ by platform and can omit the minimize button when a
@@ -274,7 +333,8 @@ class SocialHubDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("六毛搭子自习室")
         self.resize(760, 760)
-        self.setMinimumSize(680, 660)
+        self.setMinimumSize(520, 480)
+        self.setSizeGripEnabled(True)
         self.setStyleSheet("""
             QDialog { background:#edf4f7; }
             QLabel { color:#263746; }
@@ -419,16 +479,31 @@ class SocialHubDialog(QDialog):
         self.room_goal = QLabel("尚未选择房间目标")
         self.room_goal.setObjectName("muted")
         room_layout.addWidget(self.room_goal)
+        self.room_summary = QLabel("选择一个房间后，这里会显示共同专注人数和累计时长。")
+        self.room_summary.setObjectName("muted")
+        self.room_summary.setWordWrap(True)
+        room_layout.addWidget(self.room_summary)
         self.room_members = QListWidget(); self.room_members.setSpacing(5)
         room_layout.addWidget(self.room_members, 1)
-        self.room_activity = QListWidget(); self.room_activity.setMaximumHeight(115)
+        self.room_activity = QListWidget(); self.room_activity.setMinimumHeight(90)
         room_layout.addWidget(self.room_activity)
-        self.rooms = QListWidget(); self.rooms.setMaximumHeight(100)
+        self.rooms = QListWidget(); self.rooms.setMinimumHeight(70)
         self.rooms.currentItemChanged.connect(self._room_selected)
         room_layout.addWidget(self.rooms)
         row = QHBoxLayout(); create = QPushButton("创建自习室"); join = QPushButton("使用房间码加入")
         create.clicked.connect(self._create_room); join.clicked.connect(self._join_room)
         row.addWidget(create); row.addWidget(join); room_layout.addLayout(row)
+        room_actions = QHBoxLayout()
+        self.room_goal_button = QPushButton("设置共同目标")
+        self.room_leave_button = QPushButton("离开当前房间")
+        self.room_goal_button.clicked.connect(self._set_room_goal)
+        self.room_leave_button.clicked.connect(self._leave_room)
+        room_actions.addWidget(self.room_goal_button); room_actions.addWidget(self.room_leave_button)
+        room_layout.addLayout(room_actions)
+        self.room_goal_timer = QTimer(self)
+        self.room_goal_timer.setInterval(1000)
+        self.room_goal_timer.timeout.connect(self._refresh_room_goal_text)
+        self.room_goal_timer.start()
         layout.addWidget(room_card, 1)
         self.set_focus_snapshot(self._focus_snapshot or {"status": "idle", "session_seconds": 0, "today_seconds": 0})
         return page
@@ -438,7 +513,21 @@ class SocialHubDialog(QDialog):
         self.current_room_id = str(room.get("id") or room.get("room_id")) if isinstance(room, dict) else None
         if self.current_room_id:
             self.room_changed.emit(self.current_room_id)
-            self._set_status("已切换房间；下一次同步会带上当前专注状态。")
+            self._set_status("已切换房间；正在同步这个房间的成员、目标和动态。")
+            if not self._applying_dashboard:
+                self._refresh_selected_room()
+
+    def _refresh_selected_room(self) -> None:
+        if not self.current_room_id or not self.client.signed_in:
+            return
+        try:
+            try:
+                data = self.client.dashboard(room_id=self.current_room_id)
+            except TypeError:
+                data = self.client.dashboard()
+            self.apply_dashboard(data)
+        except SocialError as exc:
+            self._set_status(f"房间同步失败：{exc}", error=True)
 
     def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
@@ -446,15 +535,27 @@ class SocialHubDialog(QDialog):
         target = str(buddy.get("user_id") or buddy.get("id") or "")
         nickname = str(buddy.get("nickname") or "搭子")
         labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶"}
-        try:
-            sender = getattr(self.client, "send_interaction", None)
-            if callable(sender):
-                sender(target=target, kind=kind, room_id=self.current_room_id)
-            self._set_status(f"六毛已向 {nickname} {labels.get(kind, '送出互动')}。")
-        except SocialError:
-            # The interaction endpoint is optional on older Supabase projects.
-            # Keep the local feedback useful without breaking the study timer.
-            self._set_status(f"已记录对 {nickname} 的{labels.get(kind, '互动')}（服务器暂未启用同步）。")
+        if not self.current_room_id:
+            self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
+            return
+        event = {"room_id": self.current_room_id, "kind": kind, "target_id": target, "message": ""}
+        thread = SocialEventThread(self.client, event, self)
+        self._event_threads.append(thread)
+        thread.completed.connect(lambda: self._interaction_sent(nickname, kind))
+        thread.failed.connect(lambda message: self._set_status(f"互动没有送出：{message}", error=True))
+        thread.finished.connect(lambda: self._event_thread_finished(thread))
+        self._set_status(f"正在向 {nickname} {labels.get(kind, '送出互动')}…")
+        thread.start()
+
+    def _interaction_sent(self, nickname: str, kind: str) -> None:
+        labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶"}
+        self._set_status(f"六毛已向 {nickname} {labels.get(kind, '送出互动')}；对方房间动态会显示这次互动。")
+        QTimer.singleShot(0, self._refresh_selected_room)
+
+    def _event_thread_finished(self, thread: SocialEventThread) -> None:
+        if thread in self._event_threads:
+            self._event_threads.remove(thread)
+        thread.deleteLater()
 
     def _render_room_people(self, people: list[dict[str, Any]]) -> None:
         if not hasattr(self, "room_members"):
@@ -465,6 +566,7 @@ class SocialHubDialog(QDialog):
             item.setSizeHint(QSize(0, 125))
             widget = BuddyCardWidget(buddy, self.room_members)
             widget.interaction_requested.connect(self._send_interaction)
+            widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
             item.setData(Qt.ItemDataRole.UserRole, buddy)
             self.room_members.addItem(item)
             self.room_members.setItemWidget(item, widget)
@@ -479,15 +581,93 @@ class SocialHubDialog(QDialog):
         self.room_activity.clear()
         for entry in entries[-8:]:
             if isinstance(entry, dict):
+                created = str(entry.get("created_at") or "")
+                stamp = created[11:16] if len(created) >= 16 and "T" in created else ""
                 text = str(entry.get("text") or entry.get("message") or "")
                 if not text:
-                    text = f"{entry.get('nickname', '搭子')} {entry.get('kind', '更新了状态')}"
+                    actor = entry.get("nickname") or entry.get("actor_nickname") or "搭子"
+                    target = entry.get("target_nickname")
+                    target_text = f" → {target}" if target else ""
+                    kind_text = {
+                        "join": "进入房间", "leave": "离开房间", "focus_start": "开始专注",
+                        "focus_pause": "暂停休息", "focus_finish": "完成一轮",
+                        "poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶",
+                        "goal_set": "设置了共同目标",
+                    }.get(str(entry.get("kind")), "更新了状态")
+                    text = f"{actor}{target_text} {kind_text}"
+                if stamp:
+                    text = f"{stamp}  {text}"
             else:
                 text = str(entry)
             if text:
                 self.room_activity.addItem(text)
         if self.room_activity.count() == 0:
             self.room_activity.addItem("房间动态会显示开始专注、完成一轮和六毛互动。")
+
+    def _refresh_room_goal_text(self) -> None:
+        if not hasattr(self, "room_goal"):
+            return
+        goal = self._room_goal_state
+        if not goal:
+            self.room_goal.setText("尚未设置共同目标；房间成员可以在这里设定任务和倒计时。")
+            return
+        title = str(goal.get("title") or "一起专注")
+        target = int(goal.get("target_seconds") or goal.get("target_minutes", 0) * 60)
+        completed = int(goal.get("completed_seconds") or goal.get("current_seconds") or 0)
+        due = str(goal.get("due_at") or "")
+        remaining = ""
+        if due:
+            try:
+                due_dt = datetime.fromisoformat(due.replace("Z", "+00:00"))
+                if due_dt.tzinfo is None:
+                    due_dt = due_dt.astimezone()
+                seconds = max(0, int((due_dt - datetime.now().astimezone()).total_seconds()))
+                remaining = f" · 倒计时 {format_work_duration(seconds)}"
+            except ValueError:
+                pass
+        progress = f"{format_work_duration(completed)} / {format_work_duration(target)}" if target else "共同进行中"
+        self.room_goal.setText(f"共同任务：{title} · {progress}{remaining}")
+
+    def _set_room_goal(self) -> None:
+        if not self._require_login() or not self.current_room_id:
+            return
+        title, ok = QInputDialog.getText(self, "设置共同目标", "共同任务名称：", text="完成这一轮专注")
+        if not ok or not title.strip():
+            return
+        minutes, ok = QInputDialog.getInt(self, "设置倒计时", "共同专注分钟数：", 50, 1, 24 * 60, 5)
+        if not ok:
+            return
+        self._begin_action("正在保存共同任务…")
+        try:
+            due = datetime.now().astimezone().timestamp() + minutes * 60
+            due_at = datetime.fromtimestamp(due).astimezone().isoformat()
+            setter = getattr(self.client, "set_room_goal", None)
+            if callable(setter):
+                setter(room_id=self.current_room_id, title=title.strip()[:80], target_seconds=minutes * 60, due_at=due_at)
+            else:
+                self.client.rpc("lili_set_room_goal", {"room_id": self.current_room_id, "title": title.strip()[:80], "target_seconds": minutes * 60, "due_at": due_at})
+            self._end_action()
+            self._set_status("共同任务已更新，房间成员会看到同一个倒计时。")
+            self._refresh_selected_room()
+        except SocialError as exc:
+            self._error(exc)
+
+    def _leave_room(self) -> None:
+        if not self._require_login() or not self.current_room_id:
+            return
+        room_id = self.current_room_id
+        try:
+            leaver = getattr(self.client, "leave_room", None)
+            if callable(leaver):
+                leaver(room_id=room_id)
+            else:
+                self.client.rpc("lili_leave_room", {"room_id": room_id})
+            self.current_room_id = None
+            self.room_changed.emit(None)
+            self._set_status("已离开当前自习室。")
+            self.refresh()
+        except SocialError as exc:
+            self._error(exc)
 
     def _mine_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
@@ -609,7 +789,11 @@ class SocialHubDialog(QDialog):
     def refresh(self) -> None:
         if not self._require_login(): return
         self._begin_action("正在刷新搭子与专注状态…")
-        try: data=self.client.dashboard()
+        try:
+            try:
+                data = self.client.dashboard(room_id=self.current_room_id)
+            except TypeError:
+                data = self.client.dashboard()
         except SocialError as exc: self._error(exc); return
         self._end_action()
         self.apply_dashboard(data)
@@ -641,6 +825,7 @@ class SocialHubDialog(QDialog):
             item=QListWidgetItem(); item.setSizeHint(QSize(0, 125)); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
             buddy_widget = BuddyCardWidget(buddy, self.buddies)
             buddy_widget.interaction_requested.connect(self._send_interaction)
+            buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
             self.buddies.setItemWidget(item, buddy_widget)
         me_seconds = int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
         self.study_summary.setText(
@@ -659,6 +844,7 @@ class SocialHubDialog(QDialog):
         if self.inbox.count() == 0:
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
+        self._applying_dashboard = True
         self.rooms.clear()
         rooms = list(self.data.get("rooms") or [])
         previous_room_id = self.current_room_id
@@ -684,9 +870,24 @@ class SocialHubDialog(QDialog):
                     selected = index
                     break
             if selected < 0:
-                selected = 0
+                # On first open prefer the room with the most members.  This
+                # avoids silently landing in an old one-person room when the
+                # user has just joined a shared workroom.
+                selected = max(
+                    range(len(rooms)),
+                    key=lambda index: int(rooms[index].get("members") or 0),
+                )
             self.rooms.setCurrentRow(selected)
-        room_people = list(self.data.get("room_people") or [])
+        self._applying_dashboard = False
+        if self.current_room_id and self.current_room_id != previous_room_id:
+            QTimer.singleShot(0, self._refresh_selected_room)
+        # The room-scoped endpoint is authoritative for members and events.
+        # Keep the legacy top-level fields as a compatibility fallback for
+        # older proxy deployments and the offline UI tests.
+        room_detail = self.data.get("current_room") or {}
+        if not isinstance(room_detail, dict):
+            room_detail = {}
+        room_people = list(room_detail.get("room_people") or self.data.get("room_people") or [])
         # Always render the local member as well.  The old SQL function only
         # returned peers, which made the room look like everybody was resting
         # when the local timer was the only state visible in the UI.
@@ -711,17 +912,21 @@ class SocialHubDialog(QDialog):
         })
         room_people = [local_presence] + [p for p in room_people if str(p.get("user_id")) != str(local_presence.get("user_id"))]
         self._render_room_people(room_people)
-        goal = self.data.get("room_goal") or {}
-        if isinstance(goal, dict) and goal:
-            target = int(goal.get("target_seconds") or goal.get("target_minutes", 0) * 60)
-            current = int(goal.get("completed_seconds") or goal.get("current_seconds", 0))
-            self.room_goal.setText(
-                f"共同目标：{format_work_duration(current)} / {format_work_duration(target)}"
-                if target else f"共同目标：{goal.get('title') or '一起专注'}"
+        goal = room_detail.get("room_goal") or self.data.get("room_goal") or {}
+        summary = room_detail.get("room_summary") or self.data.get("room_summary") or {}
+        if isinstance(summary, dict) and summary:
+            self.room_summary.setText(
+                f"本房间 {int(summary.get('member_count') or len(room_people))} 人 · "
+                f"{int(summary.get('focus_count') or 0)} 人正在专注 · "
+                f"共同专注 {format_work_duration(int(summary.get('shared_focus_seconds') or 0))}"
             )
-        elif hasattr(self, "room_goal"):
-            self.room_goal.setText("尚未设置共同目标；创建房间后可以由 Social API 提供目标数据。")
-        self._render_room_activity(list(self.data.get("room_activity") or self.data.get("activity") or []))
+        elif hasattr(self, "room_summary"):
+            self.room_summary.setText("选择一个房间后，这里会显示共同专注人数和累计时长。")
+        self._room_goal_state = dict(goal) if isinstance(goal, dict) else {}
+        self.room_goal_button.setEnabled(bool(self.current_room_id))
+        self.room_leave_button.setEnabled(bool(self.current_room_id))
+        self._refresh_room_goal_text()
+        self._render_room_activity(list(room_detail.get("room_activity") or self.data.get("room_activity") or self.data.get("activity") or []))
         active=self.data.get("active_visits") or []
         if active: self.active_visit.emit(active[0])
         self._set_status("已刷新，页面内容是最新的。")

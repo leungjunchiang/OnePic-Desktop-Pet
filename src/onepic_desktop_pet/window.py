@@ -108,6 +108,7 @@ from .companion import (
 )
 from .config import PetSettings, save_settings
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
+from .input_activity import system_idle_seconds
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
@@ -127,7 +128,7 @@ from .growth import (
 from .local_content import find_audio_variants, load_local_lines
 from .resources import resource_path
 from .social import SocialClient
-from .social_ui import BuddyVisitWindow, SocialHubDialog, SocialSyncThread
+from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialSyncThread
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
@@ -189,6 +190,7 @@ class PetWindow(QWidget):
         self._animation_finished: Callable[[], None] | None = None
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
+        self._auto_paused_for_idle = False
         self._sleep_after_sit = False
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
@@ -203,6 +205,7 @@ class PetWindow(QWidget):
         )
         self._social_dialog: SocialHubDialog | None = None
         self._social_thread: SocialSyncThread | None = None
+        self._social_event_threads: list[SocialEventThread] = []
         self._buddy_visit_window = BuddyVisitWindow()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
@@ -405,7 +408,9 @@ class PetWindow(QWidget):
         self.topmost_timer.start()
 
         self.social_timer = QTimer(self)
-        self.social_timer.setInterval(30_000)
+        # Room members should see focus transitions and interactions quickly,
+        # while the heartbeat remains low-frequency enough for a desktop pet.
+        self.social_timer.setInterval(10_000)
         self.social_timer.timeout.connect(self._social_tick)
         self.social_timer.start()
         self.social_sync_timer = QTimer(self)
@@ -413,6 +418,14 @@ class PetWindow(QWidget):
         self.social_sync_timer.timeout.connect(self._social_tick)
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
+
+        # The focus timer follows real keyboard/mouse activity instead of
+        # continuing forever while the user has stepped away.  This timer
+        # only reads the OS-level idle duration; it never records input data.
+        self.input_idle_timer = QTimer(self)
+        self.input_idle_timer.setInterval(5_000)
+        self.input_idle_timer.timeout.connect(self._check_input_idle)
+        self.input_idle_timer.start()
 
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
@@ -1028,6 +1041,26 @@ class PetWindow(QWidget):
         self._last_user_interaction = time.monotonic()
         self._sleep_after_sit = False
 
+    def _check_input_idle(self) -> None:
+        """Automatically pause focus after a sustained keyboard/mouse idle.
+
+        A pause is deliberately not auto-resumed: a user may have switched to
+        reading, a meeting, or another task.  They can resume explicitly from
+        the pet bubble or the study-room page, while the room receives the
+        normal presence update on the next social heartbeat.
+        """
+
+        if not getattr(self.settings, "auto_pause_on_idle", True):
+            return
+        if not self.work_timer.is_running or self._auto_paused_for_idle:
+            return
+        threshold = max(30, int(getattr(self.settings, "idle_pause_seconds", 300)))
+        idle_seconds = system_idle_seconds()
+        if idle_seconds < threshold:
+            return
+        self._auto_paused_for_idle = True
+        self.pause_work_timer(reason="idle")
+
     def _schedule_sleep_via_sit(self) -> None:
         """先完整坐下，再从坐姿播放入睡序列。"""
 
@@ -1324,6 +1357,7 @@ class PetWindow(QWidget):
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
 
         self._record_user_interaction()
+        self._auto_paused_for_idle = False
         started = self.focus_session.start()
         if started:
             self.set_paused(True)
@@ -1337,7 +1371,7 @@ class PetWindow(QWidget):
         self._refresh_pixmap()
         return reply
 
-    def pause_work_timer(self) -> CompanionReply:
+    def pause_work_timer(self, reason: str = "") -> CompanionReply:
         """暂停工作计时并显示当天累计与休息建议。"""
 
         self._record_user_interaction()
@@ -1349,7 +1383,12 @@ class PetWindow(QWidget):
         self.work_activity_timer.stop()
         self._set_temporary_activity("tea", 25_000)
         duration = format_work_duration(self.work_timer.today_seconds())
-        if was_running:
+        if was_running and reason == "idle":
+            reply = CompanionReply(
+                f"检测到 {max(1, int(getattr(self.settings, 'idle_pause_seconds', 300) // 60))} 分钟没有键鼠操作，六毛先帮你暂停计时。需要继续时点‘开始专注’。",
+                PetState.CURIOUS,
+            )
+        elif was_running:
             reply = self.companion.work_paused(duration)
         else:
             reply = CompanionReply(
@@ -1368,6 +1407,8 @@ class PetWindow(QWidget):
         """完成本次工作、保留今日累计并播放庆祝动作。"""
 
         self._record_user_interaction()
+        self._auto_paused_for_idle = False
+        room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
         self._award_focus_rewards()
@@ -1383,6 +1424,8 @@ class PetWindow(QWidget):
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
         self._show_new_outfit_unlock()
         self._generate_daily_report(show_dialog=False)
+        if room_id:
+            self._record_social_room_event(room_id, "focus_finish")
         return reply
 
     def show_work_time(self) -> None:
@@ -1728,7 +1771,7 @@ class PetWindow(QWidget):
             self._social_dialog.deleteLater(); self._social_dialog = None
 
     def _social_tick(self) -> None:
-        """每 30 秒同步最小状态；失败时静默保留纯离线桌宠。"""
+        """每 10 秒同步房间状态；失败时静默保留纯离线桌宠。"""
 
         if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
             return
@@ -1769,6 +1812,25 @@ class PetWindow(QWidget):
         active = data.get("active_visits") or []
         if active:
             self._show_buddy_visit(active[0])
+
+    def _record_social_room_event(self, room_id: str, kind: str) -> None:
+        """Record a lifecycle event without blocking the desktop pet."""
+
+        if not self.social_client.signed_in:
+            return
+        thread = SocialEventThread(
+            self.social_client,
+            {"room_id": room_id, "kind": kind, "target_id": None, "message": ""},
+            self,
+        )
+        self._social_event_threads.append(thread)
+        thread.finished.connect(lambda: self._social_event_finished(thread))
+        thread.start()
+
+    def _social_event_finished(self, thread: SocialEventThread) -> None:
+        if thread in self._social_event_threads:
+            self._social_event_threads.remove(thread)
+        thread.deleteLater()
 
     def _social_room_changed(self, room_id: object) -> None:
         """Bind room selection to the single local focus session."""

@@ -76,6 +76,16 @@ def test_default_inactivity_uses_five_and_ten_minutes() -> None:
     assert settings.inactive_sleep_ms == 600000
 
 
+def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.auto_pause_on_idle is True
+    assert settings.idle_pause_seconds == 300
+    settings.idle_pause_seconds = 5
+    path = save_settings(settings, tmp_path / "settings.json")
+    loaded = load_settings(override_path=path)
+    assert loaded.idle_pause_seconds == 30
+
+
 def test_save_settings_writes_json(tmp_path) -> None:
     path = tmp_path / "nested" / "settings.json"
     saved = save_settings(
