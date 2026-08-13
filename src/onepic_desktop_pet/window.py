@@ -1689,7 +1689,11 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         if self._social_dialog is None:
-            self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, self)
+            # Keep the study room as an independent top-level application
+            # window so Windows gives it a normal taskbar button.  The pet
+            # retains ownership through the Python reference and can restore
+            # the same instance on a later menu click.
+            self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, None)
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
             self._social_dialog.finished.connect(self._social_dialog_finished)
         # A second click on the menu must restore a minimized study-room
@@ -1739,7 +1743,14 @@ class PetWindow(QWidget):
             self._show_buddy_visit(active[0])
 
     def _show_buddy_visit(self, peer: dict) -> None:
-        visit_id = str(peer.get("id", ""))
+        # Active visits normally carry a database id.  Keep a deterministic
+        # fallback for older backend responses so a 30-second heartbeat does
+        # not repeatedly reopen a minimized visit window.
+        visit_id = str(
+            peer.get("id")
+            or peer.get("visit_id")
+            or f"{peer.get('user_id', '')}:{peer.get('visit_started_at', '')}:{peer.get('nickname', '')}"
+        )
         if visit_id and visit_id in self._shown_active_visit_ids:
             return
         if visit_id:

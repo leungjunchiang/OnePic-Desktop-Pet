@@ -136,6 +136,7 @@ def test_study_room_menu_restores_minimized_window() -> None:
     window.open_social_hub()
     dialog = window._social_dialog
     assert dialog is not None
+    assert dialog.parent() is None
     dialog.showMinimized()
     app.processEvents()
 
@@ -144,6 +145,19 @@ def test_study_room_menu_restores_minimized_window() -> None:
     assert window._social_dialog is dialog
     assert not dialog.isMinimized()
     dialog.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_background_visit_refresh_does_not_reopen_same_window(monkeypatch) -> None:
+    app, window = _create_window()
+    calls = []
+    monkeypatch.setattr(window._buddy_visit_window, "show_peer", lambda *args, **kwargs: calls.append(args))
+    peer = {"id": "visit-1", "nickname": "搭子", "today_seconds": 5}
+    window._show_buddy_visit(peer)
+    window._show_buddy_visit(peer)
+    assert len(calls) == 1
     window.close()
     window.deleteLater()
     app.processEvents()
