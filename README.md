@@ -179,7 +179,7 @@ dist/Lili/Lili.exe
 维护者安装并登录 GitHub CLI 后，可不打开网页直接发布：
 
 ```powershell
-.\scripts\publish_release.ps1 -Version 0.21.4 -NotesFile .\release-notes.md
+.\scripts\publish_release.ps1 -Version 0.21.5 -NotesFile .\release-notes.md
 ```
 
 脚本会检查 `gh` 登录、主分支、干净工作区和测试结果，然后自动推送 `main`、标签和 Release；跨平台安装包继续由 GitHub Actions 自动附加。
