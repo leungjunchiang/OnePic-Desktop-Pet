@@ -139,6 +139,7 @@ class ChatDialog(QDialog):
 
     message_submitted = Signal(str)
     settings_requested = Signal(str)
+    rename_requested = Signal()
     reconnect_requested = Signal()
 
     def __init__(
@@ -172,6 +173,13 @@ class ChatDialog(QDialog):
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
+        self.rename_button = QPushButton("改名字")
+        self.rename_button.setObjectName("softButton")
+        self.rename_button.setToolTip("点击这里修改六毛的名字")
+        self.rename_button.setAutoDefault(False)
+        self.rename_button.setDefault(False)
+        self.rename_button.clicked.connect(self.rename_requested.emit)
+        header.addWidget(self.rename_button)
         self.settings_button = QPushButton("AI 设置")
         self.settings_button.setObjectName("softButton")
         self.settings_button.setAutoDefault(False)

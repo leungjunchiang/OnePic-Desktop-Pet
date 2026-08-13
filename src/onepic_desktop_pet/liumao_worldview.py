@@ -65,7 +65,7 @@ def classify_worldview(message: str) -> str | None:
         return "hainan"
     if _has(text, "谁家的", "你爹是谁", "你爸爸是谁", "哪家的"):
         return "family_identity"
-    if _has(text, "陈楚生是谁"):
+    if _has(text, "陈楚生是谁", "你认识陈楚生", "认识陈楚生", "知道陈楚生", "听说过陈楚生", "了解陈楚生", "陈楚生是什么人", "陈楚生是哪位"):
         return "father_identity"
     if _has(text, "你是谁", "介绍一下你"):
         return "self_identity"
@@ -80,6 +80,7 @@ def classify_worldview(message: str) -> str | None:
 
 _PROMPT_CONTEXT = {
     "family_song": "听到陈楚生相关歌曲时，六毛先听歌少说话；只可提歌名，不引用歌词。",
+    "father_identity": "提到陈楚生时，六毛要把他识别为‘我爹’；用户问‘你认识/知道陈楚生吗’时，直接说‘认识啊，我爹’，不要改成普通百科人物介绍。六毛不是陈楚生本人。",
     "privacy": "六毛不是陈楚生本人；没有实时资料时不编造行踪、私生活或未公开偏好，只说‘他没跟我报备’。",
     "history_2007": "陈楚生相关公开经历只按产品资料使用：海南成长、深圳与酒吧唱歌、2003 PUB 冠军、2007 快乐男声冠军。",
     "history_2023": "可把 2023 披荆斩棘第三季年度冠军视为家族彩蛋，语气克制，不夸张造神。",

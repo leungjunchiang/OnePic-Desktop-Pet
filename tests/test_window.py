@@ -123,6 +123,8 @@ def test_pet_name_can_be_changed_and_updates_chat_ui() -> None:
     chat = ChatDialog(None, settings.pet_name)
     assert chat.windowTitle() == "和团团聊聊"
     assert chat.pet_title.text() == "团团的小纸条"
+    assert chat.rename_button.text() == "改名字"
+    assert chat.rename_button.toolTip() == "点击这里修改六毛的名字"
     chat.set_pet_name("阿毛")
     assert chat.windowTitle() == "和阿毛聊聊"
     assert chat.input.placeholderText() == "跟阿毛说点什么……"
@@ -131,6 +133,28 @@ def test_pet_name_can_be_changed_and_updates_chat_ui() -> None:
     settings_dialog.deleteLater()
     chat.close()
     chat.deleteLater()
+    app.processEvents()
+
+
+def test_chat_rename_button_opens_visible_rename_flow(monkeypatch) -> None:
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.QInputDialog.getText",
+        lambda *args, **kwargs: ("团子", True),
+    )
+
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    assert window._chat_dialog.rename_button.isVisible()
+    window._chat_dialog.rename_button.click()
+    app.processEvents()
+
+    assert window.settings.pet_name == "团子"
+    assert window._chat_dialog.pet_title.text() == "团子的小纸条"
+    assert window.windowTitle().endswith("· 团子")
+    window.close()
+    window.deleteLater()
     app.processEvents()
 
 
@@ -481,7 +505,8 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     app, window = _create_window()
     menu = window._build_context_menu()
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-    assert labels[:7] == [
+    assert labels[:8] == [
+        "给六毛改名字…",
         "和六毛聊聊…",
         "工作打卡/工作计时",
         "音乐",

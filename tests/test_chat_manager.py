@@ -192,6 +192,27 @@ def test_connected_agent_uses_async_ai_and_keeps_connected_cache() -> None:
     manager.shutdown()
 
 
+def test_connected_agent_keeps_father_identity_local() -> None:
+    """即使 AI 已连接，陈楚生身份也必须优先走六毛世界观短回复。"""
+
+    app = _app()
+    settings = PetSettings(ai_provider="deepseek")
+    agents = AgentManager(settings, FakeCredentials())
+    agents.mark_runtime_success("deepseek")
+    service = FakeService(answer="陈楚生是一位歌手。")
+    manager = ChatManager(settings, service, agents, _offline_manager())
+    replies = []
+    manager.reply_ready.connect(replies.append)
+
+    assert manager.submit("你认识陈楚生吗", []) is True
+    app.processEvents()
+
+    assert replies[0].mode == "offline"
+    assert replies[0].text == "我爹。"
+    assert service.calls == 0
+    manager.shutdown()
+
+
 def test_offline_dialogue_uses_time_work_pet_state_and_complex_hint() -> None:
     """完全没有 AI 时仍能回答本地上下文，复杂问题才显示恢复操作。"""
 
