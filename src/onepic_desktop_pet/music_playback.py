@@ -353,11 +353,15 @@ class BasicRandomArtistPlaybackManager:
         track_reader: Callable[[str], TrackSnapshot | None] | None = None,
         *,
         random_source: random.Random | None = None,
+        verify_timeout_seconds: float = 5.0,
+        poll_interval_seconds: float = 0.55,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.adapters = dict(adapters)
         self.track_reader = track_reader
         self.random_source = random_source or random.Random()
+        self.verify_timeout_seconds = max(0.0, verify_timeout_seconds)
+        self.poll_interval_seconds = max(0.01, poll_interval_seconds)
         self.sleep = sleep
 
     def play_random_artist(self, provider: str, artist: str) -> SongPlaybackResult:
@@ -419,15 +423,13 @@ class BasicRandomArtistPlaybackManager:
             return self._failed(provider, artist, MusicPlaybackError.PLAY_ACTION_FAILED, selected=selected)
 
         current_title = current_artist = ""
+        current_status = ""
         if self.track_reader is not None:
-            try:
-                self.sleep(0.25)
-                current = self.track_reader(provider)
-                if current is not None:
-                    current_title = str(getattr(current, "title", "") or "")
-                    current_artist = str(getattr(current, "artist", "") or "")
-            except Exception as exc:
-                self._debug("media_read_error", provider, title, artist, error=repr(exc))
+            current = self._wait_for_playing(provider, artist)
+            if current is not None:
+                current_title = str(getattr(current, "title", "") or "")
+                current_artist = str(getattr(current, "artist", "") or "")
+                current_status = str(getattr(current, "playback_status", "") or "")
         confirmed = bool(_canonical(artist)) and _canonical(artist) in _canonical(current_artist)
         outcome = (
             MusicPlaybackOutcome.PLAYBACK_CONFIRMED
@@ -443,6 +445,7 @@ class BasicRandomArtistPlaybackManager:
             selected_artist=selected.artist,
             current_title=current_title,
             current_artist=current_artist,
+            playback_status=current_status,
             outcome=outcome.value,
         )
         return SongPlaybackResult(
@@ -457,6 +460,49 @@ class BasicRandomArtistPlaybackManager:
             play_attempts=1,
             outcome=outcome,
         )
+
+    def _wait_for_playing(self, provider: str, artist: str) -> TrackSnapshot | None:
+        """等待目标播放器进入 Playing；读不到 Session 不能阻止已发出的播放动作。
+
+        UI Automation 只负责把播放器带到歌曲区域并触发播放。播放是否真正启动，
+        优先观察该 Provider 的媒体 Session 的 playback_status；标题和歌手只用于
+        可选的歌曲确认，不再作为“已开始播放”的硬门槛。
+        """
+
+        deadline = time.monotonic() + self.verify_timeout_seconds
+        latest: TrackSnapshot | None = None
+        while True:
+            try:
+                latest = self.track_reader(provider) if self.track_reader else None
+            except Exception as exc:
+                self._debug("media_read_error", provider, "", artist, error=repr(exc))
+                latest = None
+            status = str(getattr(latest, "playback_status", "") or "").casefold()
+            title = str(getattr(latest, "title", "") or "")
+            current_artist = str(getattr(latest, "artist", "") or "")
+            if latest is not None and (status == "playing" or "playing" in status):
+                self._debug(
+                    "playback_started",
+                    provider,
+                    "",
+                    artist,
+                    playback_status=status,
+                    current_title=title,
+                    current_artist=current_artist,
+                )
+                return latest
+            if time.monotonic() >= deadline:
+                self._debug(
+                    "playback_unverified",
+                    provider,
+                    "",
+                    artist,
+                    playback_status=status,
+                    current_title=title,
+                    current_artist=current_artist,
+                )
+                return latest
+            self.sleep(min(self.poll_interval_seconds, max(0.0, deadline - time.monotonic())))
 
     def _try_native_random(
         self,
@@ -974,19 +1020,16 @@ public static class LiliNeteaseDefaultDesktop {
       double[] songRows={0.514,0.589,0.665,0.740,0.816};
       int songX=r.L+(int)(width*0.32);
       int songY=r.T+(int)(height*songRows[pick]);
-      Click(songX,songY); Thread.Sleep(120); Click(songX,songY); Thread.Sleep(1800);
-      string title="";
-      deadline=DateTime.UtcNow.AddSeconds(7);
-      while(DateTime.UtcNow<deadline) {
-        title=Title(win);
-        if(title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0) break;
-        Thread.Sleep(350);
-      }
+      // 点击动作只负责把客户端带到播放状态；窗口标题不能可靠地代表当前歌曲。
+      // 播放是否真正启动由 Python 侧的目标 GSMTC Session 轮询确认。
+      Click(songX,songY); Thread.Sleep(120); Click(songX,songY); Thread.Sleep(900);
+      string title=Title(win);
+      bool titleArtistMatch=title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0;
       SetWindowPos(win,new IntPtr(-2),0,0,0,0,0x13);
       AttachThreadInput(currentThread,targetThread,false);
       AttachThreadInput(currentThread,foregroundThread,false);
-      result=(title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0?"PLAYED|":"ERROR|")+
-        "pid_window="+win.ToInt64()+"|title="+title+"|width="+width+"|height="+height+"|pick="+pick;
+      result="PLAYED|pid_window="+win.ToInt64()+"|title="+title+
+        "|titleArtistMatch="+titleArtistMatch+"|width="+width+"|height="+height+"|pick="+pick;
     });
     thread.SetApartmentState(ApartmentState.STA);
     thread.Start(); thread.Join(30000);

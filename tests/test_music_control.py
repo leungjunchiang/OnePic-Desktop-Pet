@@ -481,7 +481,9 @@ def test_auto_provider_reports_failure_only_after_every_installed_provider() -> 
 
     assert result.success is False
     assert result.attempted_providers == ("qq", "netease", "kugou")
-    assert result.message == "暂时没能找到可以播放的音乐软件，点击重试。"
+    assert "暂时没能找到可以播放的音乐软件，点击重试。" in result.message
+    assert "失败阶段：" in result.message
+    assert "QQ 音乐：PLAY_ACTION_FAILED" in result.message
     assert all(adapter.played for adapter in adapters.values())
 
 

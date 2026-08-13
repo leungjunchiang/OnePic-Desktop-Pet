@@ -33,7 +33,7 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.0
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.21.1
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -111,7 +111,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $GITHUB_REF_NAME · 选歌与播放控制彻底解耦" \
+              --title "Lili $GITHUB_REF_NAME · GSMTC 播放状态确认与自动选歌修复" \
               --generate-notes \
-              --notes "音乐系统拆分为 MusicSongResolver 与 MusicTransportController：选歌 Adapter 只负责让歌曲开始播放，之后立即交给目标播放器的 Windows GSMTC Session 或 macOS Apple Events。基础播放控制不会调用搜索 UI；Windows 依次尝试目标 Session、等待并重新获取 Session，最后才在确认目标应用运行时使用媒体键。新增已启动、等待 Session、控制可用和正在播放状态；设置页分别显示应用、基础控制、自动选歌与当前歌曲。保留 v0.20.1 已真实验证的网易云陈楚生随机播放路径。完整 170 项测试通过。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "修复网易云/QQ 自动选歌成功判定：窗口标题不再作为播放成功硬条件，歌曲点击后改为轮询目标播放器的 Windows GSMTC Session，进入 Playing 即记录 PLAYBACK_STARTED_UNVERIFIED；读取到陈楚生元数据时升级为 PLAYBACK_CONFIRMED。媒体信息暂不可读也不会阻止已经发出的播放动作。自动回退失败时显示每个 Provider 的 SEARCH_FAILED、UI_AUTOMATION_UNAVAILABLE、RESULT_NOT_FOUND、PLAY_ACTION_FAILED 等阶段码，并保留详细 debug 日志。完整测试通过。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
           fi
