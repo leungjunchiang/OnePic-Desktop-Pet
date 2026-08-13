@@ -32,6 +32,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from .liumao_worldview import worldview_prompt_context
+
 
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 回复通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。
@@ -597,6 +599,9 @@ def _conversation_text(
     summary = next((content for role, content in entries if role == "summary"), "")
     recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
     lines = [SYSTEM_PROMPT]
+    worldview_context = worldview_prompt_context(message)
+    if worldview_context:
+        lines.extend(("", worldview_context))
     if summary:
         lines.extend(("", "更早对话的长期摘要：", summary))
     lines.extend(("", "以下是最近三十轮以内的完整对话："))
@@ -747,6 +752,9 @@ def ask_compatible_api(
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
     system_content = SYSTEM_PROMPT
+    worldview_context = worldview_prompt_context(message)
+    if worldview_context:
+        system_content += f"\n\n{worldview_context}"
     if summary:
         system_content += f"\n\n更早对话的长期摘要：\n{summary}"
     messages = [{"role": "system", "content": system_content}]
@@ -898,3 +906,4 @@ class AIChatService:
             base_url or default_url,
             model or default_model,
         )
+

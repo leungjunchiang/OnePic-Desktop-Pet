@@ -141,8 +141,13 @@ class ChatDialog(QDialog):
     settings_requested = Signal(str)
     reconnect_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        pet_name: str = "六毛",
+    ) -> None:
         super().__init__(parent)
+        self.pet_name = pet_name.strip() or "六毛"
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -151,7 +156,7 @@ class ChatDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setWindowTitle("和六毛聊聊")
+        self.setWindowTitle(f"和{self.pet_name}聊聊")
         self.setObjectName("liliPanel")
         self.setMinimumSize(430, 520)
         self.resize(470, 580)
@@ -162,7 +167,8 @@ class ChatDialog(QDialog):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        title = QLabel("六毛的小纸条")
+        title = QLabel(f"{self.pet_name}的小纸条")
+        self.pet_title = title
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
@@ -208,7 +214,7 @@ class ChatDialog(QDialog):
 
         entry = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("跟六毛说点什么……")
+        self.input.setPlaceholderText(f"跟{self.pet_name}说点什么……")
         self.input.setMaxLength(1200)
         self.input.returnPressed.connect(self._submit)
         entry.addWidget(self.input, 1)
@@ -223,6 +229,14 @@ class ChatDialog(QDialog):
         privacy.setObjectName("status")
         privacy.setWordWrap(True)
         layout.addWidget(privacy)
+
+    def set_pet_name(self, pet_name: str) -> None:
+        """更新聊天窗口中显示的昵称，不清空已有对话。"""
+
+        self.pet_name = pet_name.strip() or "六毛"
+        self.setWindowTitle(f"和{self.pet_name}聊聊")
+        self.pet_title.setText(f"{self.pet_name}的小纸条")
+        self.input.setPlaceholderText(f"跟{self.pet_name}说点什么……")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭按钮只隐藏聊天窗，不关闭桌宠或丢失会话。"""
@@ -265,8 +279,9 @@ class ChatDialog(QDialog):
         self.recovery_actions.setVisible(bool(visible))
 
     def append_message(self, role: str, text: str) -> None:
-        color = "#426b7c" if role == "六毛" else "#496f9b"
-        background = "#edf5f7" if role == "六毛" else "#eaf1fa"
+        is_pet = role != "你"
+        color = "#426b7c" if is_pet else "#496f9b"
+        background = "#edf5f7" if is_pet else "#eaf1fa"
         safe = escape(text).replace("\n", "<br>")
         self.transcript.append(
             f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
@@ -278,7 +293,7 @@ class ChatDialog(QDialog):
     def set_busy(self, busy: bool) -> None:
         self.input.setEnabled(not busy)
         self.send_button.setEnabled(not busy)
-        self.send_button.setText("六毛在想…" if busy else "发送")
+        self.send_button.setText(f"{self.pet_name}在想…" if busy else "发送")
         if not busy:
             self.input.setFocus()
 
@@ -300,7 +315,7 @@ class AISettingsDialog(QDialog):
         self.agent_manager = agent_manager
         self.music_manager = music_manager
         self._connection_thread: ConnectionCheckThread | None = None
-        self.setWindowTitle("Lili · 六毛设置")
+        self.setWindowTitle(f"Lili · {(settings.pet_name or '六毛')}设置")
         self.setObjectName("liliPanel")
         self.setMinimumWidth(500)
         self.resize(620, 760)
@@ -340,6 +355,10 @@ class AISettingsDialog(QDialog):
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("留空则保留已安全保存的令牌")
         form.addRow("API 令牌", self.token)
+        self.pet_name = QLineEdit(settings.pet_name)
+        self.pet_name.setMaxLength(20)
+        self.pet_name.setPlaceholderText("例如：六毛、团团、阿毛")
+        form.addRow("桌宠名字", self.pet_name)
         layout.addLayout(form)
 
         self.token_status = QLabel()
@@ -647,6 +666,7 @@ class AISettingsDialog(QDialog):
             thread.deleteLater()
 
     def apply(self) -> None:
+        self.settings.pet_name = self.pet_name.text().strip()[:20] or "六毛"
         provider = str(self.provider.currentData())
         self.settings.ai_provider = provider
         self.settings.ai_base_url = self.base_url.text().strip()

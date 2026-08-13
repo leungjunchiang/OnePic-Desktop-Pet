@@ -28,7 +28,7 @@ from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
-from onepic_desktop_pet.chat import AISettingsDialog
+from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -107,6 +107,30 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     assert dialog.always_on_top.isChecked()
     dialog.close()
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_pet_name_can_be_changed_and_updates_chat_ui() -> None:
+    app = QApplication.instance() or QApplication([])
+    settings = PetSettings()
+    settings_dialog = AISettingsDialog(settings, CredentialStore())
+
+    assert settings_dialog.pet_name.text() == "六毛"
+    settings_dialog.pet_name.setText("团团")
+    settings_dialog.apply()
+
+    assert settings.pet_name == "团团"
+    chat = ChatDialog(None, settings.pet_name)
+    assert chat.windowTitle() == "和团团聊聊"
+    assert chat.pet_title.text() == "团团的小纸条"
+    chat.set_pet_name("阿毛")
+    assert chat.windowTitle() == "和阿毛聊聊"
+    assert chat.input.placeholderText() == "跟阿毛说点什么……"
+
+    settings_dialog.close()
+    settings_dialog.deleteLater()
+    chat.close()
+    chat.deleteLater()
     app.processEvents()
 
 
@@ -962,3 +986,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+

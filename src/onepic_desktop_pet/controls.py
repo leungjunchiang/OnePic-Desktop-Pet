@@ -52,8 +52,9 @@ class QuickControlPanel(QWidget):
     size_requested = Signal()
     settings_requested = Signal(str)
 
-    def __init__(self) -> None:
+    def __init__(self, pet_name: str = "六毛") -> None:
         super().__init__(None)
+        pet_name = pet_name.strip() or "六毛"
         self.setObjectName("floatingPanel")
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -62,7 +63,7 @@ class QuickControlPanel(QWidget):
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
         layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9)
-        title = QLabel("六毛快捷口袋"); title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(title)
+        self.title = QLabel(f"{pet_name}快捷口袋"); self.title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(self.title)
         for label, signal, source in (
             ("聊聊", self.chat_requested, None),
             ("工作计时", self.work_requested, None),
@@ -81,6 +82,11 @@ class QuickControlPanel(QWidget):
                 )
             )
             layout.addWidget(button)
+
+    def set_pet_name(self, pet_name: str) -> None:
+        """昵称保存后同步快捷口袋标题。"""
+
+        self.title.setText(f"{pet_name.strip() or '六毛'}快捷口袋")
 
     def _choose(self, signal: object, source: str | None = None) -> None:
         """先收起口袋再发出操作信号，避免新窗口被它遮挡。"""
@@ -115,10 +121,11 @@ class SizeControlDialog(QDialog):
 
     value_changed = Signal(int)
 
-    def __init__(self, value: int, parent: QWidget | None = None) -> None:
+    def __init__(self, value: int, parent: QWidget | None = None, pet_name: str = "六毛") -> None:
         super().__init__(parent)
+        pet_name = pet_name.strip() or "六毛"
         self.setObjectName("floatingPanel")
-        self.setWindowTitle("六毛大小")
+        self.setWindowTitle(f"{pet_name}大小")
         self.setStyleSheet(CONTROL_STYLE)
         layout = QVBoxLayout(self)
         self.label = QLabel(); self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -131,3 +138,4 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
+

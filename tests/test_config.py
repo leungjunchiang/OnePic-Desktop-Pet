@@ -194,3 +194,26 @@ def test_window_mode_is_loaded_from_user_settings(tmp_path) -> None:
 
     assert load_settings(default_path, override_path).always_on_top is False
 
+
+
+def test_pet_name_is_loaded_validated_and_persisted(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps({"pet_name": "  团团\\u0000 "}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(default_path, override_path)
+
+    assert settings.pet_name == "团团"
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).pet_name == "团团"
+
+
+def test_empty_pet_name_falls_back_to_default(tmp_path) -> None:
+    path = tmp_path / "override.json"
+    path.write_text(json.dumps({"pet_name": "\\u0000  "}), encoding="utf-8")
+
+    assert load_settings(override_path=path).pet_name == "六毛"
