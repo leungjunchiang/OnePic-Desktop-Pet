@@ -355,6 +355,8 @@ class BasicRandomArtistPlaybackManager:
         random_source: random.Random | None = None,
         verify_timeout_seconds: float = 5.0,
         poll_interval_seconds: float = 0.55,
+        action_attempts: int = 2,
+        retry_delay_seconds: float = 0.65,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.adapters = dict(adapters)
@@ -362,6 +364,8 @@ class BasicRandomArtistPlaybackManager:
         self.random_source = random_source or random.Random()
         self.verify_timeout_seconds = max(0.0, verify_timeout_seconds)
         self.poll_interval_seconds = max(0.01, poll_interval_seconds)
+        self.action_attempts = max(1, int(action_attempts))
+        self.retry_delay_seconds = max(0.0, retry_delay_seconds)
         self.sleep = sleep
 
     def play_random_artist(self, provider: str, artist: str) -> SongPlaybackResult:
@@ -370,29 +374,42 @@ class BasicRandomArtistPlaybackManager:
         self._debug("search", provider, title, artist)
         if adapter is None:
             return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
-        try:
-            candidates = tuple(adapter.search("", artist))
-        except UIAutomationUnavailableError as exc:
-            self._debug("ui_automation_unavailable", provider, title, artist, error=str(exc))
-            native_result = self._try_native_random(adapter, provider, artist)
-            if native_result is not None:
-                return native_result
-            return self._failed(provider, artist, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
-        except ProviderSearchError as exc:
+        candidates: tuple[SongCandidate, ...] = ()
+        search_error: Exception | None = None
+        for search_attempt in range(1, self.action_attempts + 1):
+            try:
+                candidates = tuple(adapter.search("", artist))
+                self._debug(
+                    "search_attempt",
+                    provider,
+                    title,
+                    artist,
+                    attempt=search_attempt,
+                    candidate_count=len(candidates),
+                )
+                search_error = None
+                if candidates or search_attempt == self.action_attempts:
+                    break
+                self._debug("search_empty_retry", provider, title, artist, attempt=search_attempt)
+            except (UIAutomationUnavailableError, ProviderSearchError) as exc:
+                search_error = exc
+                self._debug("search_error", provider, title, artist, attempt=search_attempt, error=repr(exc))
+                if search_attempt == self.action_attempts:
+                    break
+            except Exception as exc:
+                self._debug("search_failed", provider, title, artist, attempt=search_attempt, error=repr(exc))
+                return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
+            self.sleep(self.retry_delay_seconds)
+
+        if search_error is not None:
             # Windows UI Automation and the PowerShell bridge can fail after
-            # the client was found (for example an empty RootElement, a
-            # missing window, or a timeout).  Preserve SEARCH_FAILED for real
-            # provider/search errors, but let adapters with a native random
-            # action try that path before giving up.
-            self._debug("search_error", provider, title, artist, error=repr(exc))
+            # the client was found. Let adapters with a native random action
+            # try that path before giving up.
             native_result = self._try_native_random(adapter, provider, artist)
             if native_result is not None:
                 return native_result
-            if isinstance(adapter, WindowsUIAutomationAdapter):
+            if isinstance(search_error, UIAutomationUnavailableError) or isinstance(adapter, WindowsUIAutomationAdapter):
                 return self._failed(provider, artist, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
-            return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
-        except Exception as exc:
-            self._debug("search_failed", provider, title, artist, error=repr(exc))
             return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
 
         # Song rows are preferred, but an artist page/playlist returned by an
@@ -426,23 +443,50 @@ class BasicRandomArtistPlaybackManager:
             selected_artist=selected.artist,
             selected_type=selected.result_type,
         )
-        try:
-            played = bool(adapter.play(selected))
-        except Exception as exc:
-            self._debug("play_exception", provider, title, artist, error=repr(exc))
-            played = False
-        if not played:
-            self._debug("play_action_failed", provider, title, artist)
-            return self._failed(provider, artist, MusicPlaybackError.PLAY_ACTION_FAILED, selected=selected)
-
         current_title = current_artist = ""
         current_status = ""
-        if self.track_reader is not None:
+        play_attempts = 0
+        current: TrackSnapshot | None = None
+        explicit_not_playing = False
+        for play_attempt in range(1, self.action_attempts + 1):
+            play_attempts = play_attempt
+            try:
+                played = bool(adapter.play(selected))
+            except Exception as exc:
+                self._debug("play_exception", provider, title, artist, attempt=play_attempt, error=repr(exc))
+                played = False
+            self._debug("play_attempt", provider, title, artist, attempt=play_attempt, accepted=played)
+            if not played:
+                if play_attempt < self.action_attempts:
+                    self.sleep(self.retry_delay_seconds)
+                    continue
+                self._debug("play_action_failed", provider, title, artist, attempts=play_attempt)
+                return self._failed(provider, artist, MusicPlaybackError.PLAY_ACTION_FAILED, selected=selected)
+
+            if self.track_reader is None:
+                break
             current = self._wait_for_playing(provider, artist)
-            if current is not None:
-                current_title = str(getattr(current, "title", "") or "")
-                current_artist = str(getattr(current, "artist", "") or "")
-                current_status = str(getattr(current, "playback_status", "") or "")
+            current_status = str(getattr(current, "playback_status", "") or "")
+            if "playing" in current_status.casefold() or not current_status:
+                break
+            explicit_not_playing = True
+            if play_attempt < self.action_attempts:
+                self._debug("playback_not_started_retry", provider, title, artist, attempt=play_attempt, playback_status=current_status)
+                self.sleep(self.retry_delay_seconds)
+                continue
+            self._debug("playback_not_started", provider, title, artist, attempts=play_attempt, playback_status=current_status)
+        if explicit_not_playing and "playing" not in current_status.casefold():
+            return self._failed(
+                provider,
+                artist,
+                MusicPlaybackError.PLAY_ACTION_FAILED,
+                selected=selected,
+                current=current,
+                attempts=play_attempts,
+            )
+        if current is not None:
+            current_title = str(getattr(current, "title", "") or "")
+            current_artist = str(getattr(current, "artist", "") or "")
         confirmed = bool(_canonical(artist)) and _canonical(artist) in _canonical(current_artist)
         outcome = (
             MusicPlaybackOutcome.PLAYBACK_CONFIRMED
@@ -470,7 +514,7 @@ class BasicRandomArtistPlaybackManager:
             selected=selected,
             current_title=current_title,
             current_artist=current_artist,
-            play_attempts=1,
+            play_attempts=play_attempts or 1,
             outcome=outcome,
         )
 
@@ -564,6 +608,8 @@ class BasicRandomArtistPlaybackManager:
         code: MusicPlaybackError,
         *,
         selected: SongCandidate | None = None,
+        current: TrackSnapshot | None = None,
+        attempts: int = 0,
     ) -> SongPlaybackResult:
         return SongPlaybackResult(
             False,
@@ -573,6 +619,9 @@ class BasicRandomArtistPlaybackManager:
             _failure_message(code, random_artist=True),
             code,
             selected,
+            str(getattr(current, "title", "") or ""),
+            str(getattr(current, "artist", "") or ""),
+            attempts,
         )
 
 class WindowsUIAutomationAdapter:
@@ -780,14 +829,21 @@ exit 12
     def _run_powershell(script: str) -> subprocess.CompletedProcess:
         encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
         try:
+            kwargs = {
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "timeout": 25,
+                "check": False,
+            }
+            if sys.platform == "win32":
+                # Do not flash a console window while the worker performs
+                # the interactive client handoff.
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             return subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=25,
-                check=False,
+                **kwargs,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise UIAutomationUnavailableError("PowerShell UIAutomation request failed") from exc
@@ -942,12 +998,34 @@ class NeteaseMusicAdapter(WindowsUIAutomationAdapter):
             return False
         # 首条搜索建议会进入陈楚生专辑/歌曲列表；直接随机双击可见歌曲行，
         # 避免“下一首”逸出目标队列，也不依赖 Chromium 未公开的内部控件树。
-        random_index = random.randint(0, 4)
-        completed = self._run_powershell(
-            self._netease_default_desktop_script(str(client), artist, random_index)
-        )
-        self._log_powershell_output(completed.stdout, provider=self.provider, stage="native_random")
-        return completed.returncode == 0 and "PLAYED|" in str(completed.stdout or "")
+        # The first click can arrive while the Chromium surface is still
+        # loading. Retry the complete native action once, inside the worker
+        # thread, so the user does not need to click Lili twice.
+        for attempt in range(1, 3):
+            random_index = random.randint(0, 4)
+            try:
+                completed = self._run_powershell(
+                    self._netease_default_desktop_script(str(client), artist, random_index)
+                )
+            except UIAutomationUnavailableError as exc:
+                LOGGER.debug(
+                    "music_playback provider=%s stage=native_random attempt=%s error=%r",
+                    self.provider,
+                    attempt,
+                    exc,
+                )
+                completed = None
+            if completed is not None:
+                self._log_powershell_output(
+                    completed.stdout,
+                    provider=self.provider,
+                    stage=f"native_random_attempt_{attempt}",
+                )
+                if completed.returncode == 0 and "PLAYED|" in str(completed.stdout or ""):
+                    return True
+            if attempt < 2:
+                time.sleep(0.65)
+        return False
 
     @classmethod
     def _netease_default_desktop_script(
@@ -1012,6 +1090,7 @@ public static class LiliNeteaseDefaultDesktop {
         if(win==IntPtr.Zero) Thread.Sleep(350);
       }
       if(win==IntPtr.Zero) { result="ERROR|window=0"; return; }
+      IntPtr previousWindow=GetForegroundWindow();
       uint targetPid, foregroundPid;
       uint targetThread=GetWindowThreadProcessId(win,out targetPid);
       uint foregroundThread=GetWindowThreadProcessId(GetForegroundWindow(),out foregroundPid);
@@ -1019,7 +1098,10 @@ public static class LiliNeteaseDefaultDesktop {
       AttachThreadInput(currentThread,targetThread,true);
       AttachThreadInput(currentThread,foregroundThread,true);
       ShowWindow(win,9);
-      SetWindowPos(win,new IntPtr(-1),0,0,0,0,0x13);
+      // The player must be briefly active for keyboard/mouse input, but do
+      // not make it topmost. The previous foreground app is restored after
+      // the click sequence so the command behaves like a background action.
+      SetWindowPos(win,IntPtr.Zero,0,0,0,0,0x17);
       SetForegroundWindow(win);
       Thread.Sleep(600);
       Rect r; if(!GetWindowRect(win,out r)) { result="ERROR|rect=0"; return; }
@@ -1040,11 +1122,20 @@ public static class LiliNeteaseDefaultDesktop {
       Click(songX,songY); Thread.Sleep(120); Click(songX,songY); Thread.Sleep(900);
       string title=Title(win);
       bool titleArtistMatch=title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0;
-      SetWindowPos(win,new IntPtr(-2),0,0,0,0,0x13);
+      SetWindowPos(win,IntPtr.Zero,0,0,0,0,0x17);
       AttachThreadInput(currentThread,targetThread,false);
       AttachThreadInput(currentThread,foregroundThread,false);
+      bool restored=false;
+      if(previousWindow!=IntPtr.Zero && previousWindow!=win) {
+        uint previousPid;
+        uint previousThread=GetWindowThreadProcessId(previousWindow,out previousPid);
+        AttachThreadInput(currentThread,previousThread,true);
+        restored=SetForegroundWindow(previousWindow);
+        AttachThreadInput(currentThread,previousThread,false);
+      }
       result="PLAYED|pid_window="+win.ToInt64()+"|title="+title+
-        "|titleArtistMatch="+titleArtistMatch+"|width="+width+"|height="+height+"|pick="+pick;
+        "|titleArtistMatch="+titleArtistMatch+"|restoredForeground="+restored+
+        "|width="+width+"|height="+height+"|pick="+pick;
     });
     thread.SetApartmentState(ApartmentState.STA);
     thread.Start(); thread.Join(30000);
