@@ -1,4 +1,4 @@
-≠rá^—f•ñÿ¶{_ly 'v√Æ∂õ≠-- Qualify room_id function parameters so PostgreSQL never confuses them with
+-- Qualify room_id function parameters so PostgreSQL never confuses them with
 -- room_id columns in room-scoped queries.
 
 create or replace function public.lili_leave_room(room_id uuid) returns void
