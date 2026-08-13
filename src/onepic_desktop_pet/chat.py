@@ -382,6 +382,10 @@ class AISettingsDialog(QDialog):
         self.stand.setChecked(settings.stand_reminder_enabled)
         self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
         form.addRow(self.stand, self.stand_minutes)
+        self.auto_pause_idle = QCheckBox("键鼠无操作时自动暂停专注计时")
+        self.auto_pause_idle.setChecked(settings.auto_pause_on_idle)
+        self.idle_pause_minutes = QSpinBox(); self.idle_pause_minutes.setRange(1, 60); self.idle_pause_minutes.setSuffix(" 分钟"); self.idle_pause_minutes.setValue(max(1, settings.idle_pause_seconds // 60))
+        form.addRow(self.auto_pause_idle, self.idle_pause_minutes)
         self.music_service = QComboBox()
         for label, key in (
             ("自动选择（推荐）", "auto"),
@@ -657,6 +661,8 @@ class AISettingsDialog(QDialog):
         self.settings.stand_reminder_enabled = self.stand.isChecked()
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
+        self.settings.auto_pause_on_idle = self.auto_pause_idle.isChecked()
+        self.settings.idle_pause_seconds = self.idle_pause_minutes.value() * 60
         self.settings.music_service = str(self.music_service.currentData())
         self.settings.qq_music_path = self.qq_music_path.text().strip()
         self.settings.netease_music_path = self.netease_music_path.text().strip()
@@ -668,3 +674,4 @@ class AISettingsDialog(QDialog):
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()
         if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())
+

@@ -44,11 +44,14 @@ class SocialBackend(Protocol):
     def sign_up(self, email: str, password: str, nickname: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
     def sign_out(self) -> None: ...
-    def dashboard(self) -> dict[str, Any]: ...
+    def dashboard(self, room_id: str | None = None) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
+    def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
+    def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None: ...
+    def leave_room(self, *, room_id: str) -> None: ...
 
 
 class HttpSocialBackend:
@@ -166,8 +169,13 @@ class HttpSocialBackend:
     def sign_out(self) -> None:
         self._clear_session()
 
-    def dashboard(self) -> dict[str, Any]:
-        return self._raw("GET", "/dashboard", authenticated=True) or {}
+    def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
+        data = self._raw("GET", "/dashboard", authenticated=True) or {}
+        if room_id:
+            room = self._raw("GET", f"/rooms/{urllib.parse.quote(str(room_id), safe='')}", authenticated=True) or {}
+            if isinstance(room, dict):
+                data.update(room)
+        return data
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any:
         routes = {
@@ -177,6 +185,10 @@ class HttpSocialBackend:
             "lili_respond_visit": "/visits/accept",
             "lili_create_room": "/rooms/create",
             "lili_join_room": "/rooms/join",
+            "lili_set_room_goal": "/rooms/goal",
+            "lili_leave_room": "/rooms/leave",
+            "lili_send_interaction": "/rooms/interaction",
+            "lili_record_room_event": "/rooms/events",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
@@ -195,6 +207,15 @@ class HttpSocialBackend:
             {"target": target, "kind": kind, "room_id": room_id},
             authenticated=True,
         )
+
+    def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
+        self.rpc("lili_set_room_goal", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "due_at": due_at})
+
+    def leave_room(self, *, room_id: str) -> None:
+        self.rpc("lili_leave_room", {"room_id": room_id})
+
+    def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
+        self.rpc("lili_record_room_event", {"room_id": room_id, "kind": kind, "target_id": target_id, "message": message})
 
 
 class SocialClient:
@@ -336,10 +357,20 @@ class SocialClient:
             return
         self._clear_session()
 
-    def dashboard(self) -> dict[str, Any]:
+    def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
         if self._http_backend is not None:
-            return self._http_backend.dashboard()
-        return self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
+            return self._http_backend.dashboard(room_id=room_id)
+        data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
+        if room_id:
+            room = self._raw(
+                "POST",
+                "/rest/v1/rpc/lili_room_dashboard",
+                {"room_id": room_id},
+                authenticated=True,
+            ) or {}
+            if isinstance(room, dict):
+                data.update(room)
+        return data
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any:
         if self._http_backend is not None:
@@ -369,3 +400,13 @@ class SocialClient:
             "lili_send_interaction",
             {"target": target, "kind": kind, "room_id": room_id},
         )
+
+    def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
+        self.rpc("lili_set_room_goal", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "due_at": due_at})
+
+    def leave_room(self, *, room_id: str) -> None:
+        self.rpc("lili_leave_room", {"room_id": room_id})
+
+    def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
+        self.rpc("lili_record_room_event", {"room_id": room_id, "kind": kind, "target_id": target_id, "message": message})
+
