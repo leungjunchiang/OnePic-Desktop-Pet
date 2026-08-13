@@ -11,9 +11,10 @@ from typing import Any
 from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout,
-    QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPushButton, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget,
+    QVBoxLayout, QWidget, QSizePolicy,
 )
 
 from .resources import resource_path
@@ -348,6 +349,7 @@ class SocialHubDialog(QDialog):
             | Qt.WindowType.WindowTitleHint
             | Qt.WindowType.WindowSystemMenuHint
             | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.setModal(False)
@@ -366,6 +368,7 @@ class SocialHubDialog(QDialog):
             QLabel#status { background:#e1efec; color:#087f74; border-radius:9px; padding:7px 10px; }
             QFrame#card, QWidget#buddyCard { background:#ffffff; border:1px solid #d6e1e6; border-radius:14px; }
             QLineEdit, QListWidget { background:#ffffff; border:1px solid #b9c8d0; border-radius:10px; padding:7px; }
+            QScrollArea#pageScroll { background:transparent; border:0; }
             QTabWidget::pane { border:0; }
             QTabBar::tab { min-width:105px; padding:10px 16px; color:#526872; }
             QTabBar::tab:selected { color:#087f74; font-weight:700; border-bottom:3px solid #38a397; }
@@ -468,6 +471,19 @@ class SocialHubDialog(QDialog):
             layout.addWidget(detail)
         return card, layout
 
+    @staticmethod
+    def _scroll_page(page: QWidget) -> QScrollArea:
+        """Keep dense pages usable when the utility window is made smaller."""
+
+        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        scroll = QScrollArea()
+        scroll.setObjectName("pageScroll")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        return scroll
+
     def _home_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         welcome, welcome_layout = self._card("今天也一起往前一点", "查看搭子动态、待处理邀请和当前专注状态。")
@@ -481,10 +497,12 @@ class SocialHubDialog(QDialog):
         layout.addWidget(welcome)
         buddies_card, buddies_layout = self._card("我的搭子", "绿色表示两分钟内在线；选择后可到“聊天”页派六毛串门。")
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
+        self.buddies.setMinimumHeight(125); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
-        buddies_layout.addWidget(self.buddies, 1)
-        layout.addWidget(buddies_card, 1)
-        return page
+        buddies_layout.addWidget(self.buddies)
+        layout.addWidget(buddies_card)
+        layout.addStretch()
+        return self._scroll_page(page)
 
     def _chat_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
@@ -496,10 +514,12 @@ class SocialHubDialog(QDialog):
         row.addWidget(add); row.addWidget(visit); action_layout.addLayout(row)
         layout.addWidget(actions)
         inbox_card, inbox_layout = self._card("待处理申请与串门", "选择一项后接受，操作结果会显示在页面顶部。")
-        self.inbox = QListWidget(); inbox_layout.addWidget(self.inbox, 1)
+        self.inbox = QListWidget(); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
+        inbox_layout.addWidget(self.inbox)
         accept = QPushButton("接受选中的项目"); accept.clicked.connect(self._accept_inbox); inbox_layout.addWidget(accept)
-        layout.addWidget(inbox_card, 1)
-        return page
+        layout.addWidget(inbox_card)
+        layout.addStretch()
+        return self._scroll_page(page)
 
     def _focus_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
@@ -524,21 +544,23 @@ class SocialHubDialog(QDialog):
         self.focus_insights.setObjectName("muted")
         self.focus_insights.setWordWrap(True)
         focus_layout.addWidget(self.focus_insights)
-        controls = QHBoxLayout()
+        controls = QGridLayout()
         self.focus_start = QPushButton("开始专注")
         self.focus_pause = QPushButton("暂停休息")
         self.focus_finish = QPushButton("结束本轮")
         self.focus_start.clicked.connect(self.focus_start_requested.emit)
         self.focus_pause.clicked.connect(self.focus_pause_requested.emit)
         self.focus_finish.clicked.connect(self.focus_finish_requested.emit)
-        for button in (self.focus_start, self.focus_pause, self.focus_finish):
-            controls.addWidget(button)
+        for column, button in enumerate((self.focus_start, self.focus_pause, self.focus_finish)):
+            controls.addWidget(button, 0, column)
+            controls.setColumnStretch(column, 1)
         focus_layout.addLayout(controls)
         task_button = QPushButton("设置一次只盯一件事")
         task_button.clicked.connect(self._set_focus_task)
         review_button = QPushButton("写下明天第一件事")
         review_button.clicked.connect(self._set_tomorrow_review)
-        task_row = QHBoxLayout(); task_row.addWidget(task_button); task_row.addWidget(review_button)
+        task_row = QGridLayout(); task_row.addWidget(task_button, 0, 0); task_row.addWidget(review_button, 0, 1)
+        task_row.setColumnStretch(0, 1); task_row.setColumnStretch(1, 1)
         focus_layout.addLayout(task_row)
         layout.addWidget(focus_card)
 
@@ -554,8 +576,9 @@ class SocialHubDialog(QDialog):
         self.room_summary.setWordWrap(True)
         room_layout.addWidget(self.room_summary)
         self.room_members = QListWidget(); self.room_members.setSpacing(5)
-        room_layout.addWidget(self.room_members, 1)
-        self.room_activity = QListWidget(); self.room_activity.setMinimumHeight(90)
+        self.room_members.setMinimumHeight(130); self.room_members.setMaximumHeight(310)
+        room_layout.addWidget(self.room_members)
+        self.room_activity = QListWidget(); self.room_activity.setMinimumHeight(90); self.room_activity.setMaximumHeight(180)
         room_layout.addWidget(self.room_activity)
         self.room_ritual = QLabel("共同开工/收工：未设置")
         self.room_ritual.setObjectName("muted")
@@ -565,13 +588,14 @@ class SocialHubDialog(QDialog):
         self.room_challenge.setObjectName("muted")
         self.room_challenge.setWordWrap(True)
         room_layout.addWidget(self.room_challenge)
-        self.rooms = QListWidget(); self.rooms.setMinimumHeight(70)
+        self.rooms = QListWidget(); self.rooms.setMinimumHeight(70); self.rooms.setMaximumHeight(140)
         self.rooms.currentItemChanged.connect(self._room_selected)
         room_layout.addWidget(self.rooms)
-        row = QHBoxLayout(); create = QPushButton("创建自习室"); join = QPushButton("使用房间码加入")
+        row = QGridLayout(); create = QPushButton("创建自习室"); join = QPushButton("使用房间码加入")
         create.clicked.connect(self._create_room); join.clicked.connect(self._join_room)
-        row.addWidget(create); row.addWidget(join); room_layout.addLayout(row)
-        room_actions = QHBoxLayout()
+        row.addWidget(create, 0, 0); row.addWidget(join, 0, 1)
+        row.setColumnStretch(0, 1); row.setColumnStretch(1, 1); room_layout.addLayout(row)
+        room_actions = QGridLayout()
         self.room_goal_button = QPushButton("设置共同目标")
         self.room_schedule_button = QPushButton("一起开工/收工")
         self.room_challenge_button = QPushButton("设置共同挑战")
@@ -580,24 +604,27 @@ class SocialHubDialog(QDialog):
         self.room_schedule_button.clicked.connect(self._set_room_schedule)
         self.room_challenge_button.clicked.connect(self._set_room_challenge)
         self.room_leave_button.clicked.connect(self._leave_room)
-        room_actions.addWidget(self.room_goal_button); room_actions.addWidget(self.room_schedule_button)
-        room_actions.addWidget(self.room_challenge_button); room_actions.addWidget(self.room_leave_button)
+        for index, button in enumerate((self.room_goal_button, self.room_schedule_button, self.room_challenge_button, self.room_leave_button)):
+            room_actions.addWidget(button, index // 2, index % 2)
+            room_actions.setColumnStretch(index % 2, 1)
         room_layout.addLayout(room_actions)
-        phrase_row = QHBoxLayout()
-        for phrase in ("我也开工了", "再卷 30 分钟", "去喝水", "下班没？"):
+        phrase_row = QGridLayout()
+        for index, phrase in enumerate(("我也开工了", "再卷 30 分钟", "去喝水", "下班没？")):
             button = QPushButton(phrase)
             button.setToolTip("发送给当前房间成员，短时间内不会重复骚扰同一人")
             button.clicked.connect(lambda _checked=False, value=phrase: self._send_phrase(value))
-            phrase_row.addWidget(button)
+            phrase_row.addWidget(button, index // 2, index % 2)
+            phrase_row.setColumnStretch(index % 2, 1)
         room_layout.addLayout(phrase_row)
         self.room_goal_timer = QTimer(self)
         self.room_goal_timer.setInterval(1000)
         self.room_goal_timer.timeout.connect(self._refresh_room_goal_text)
         self.room_goal_timer.start()
-        layout.addWidget(room_card, 1)
+        layout.addWidget(room_card)
+        layout.addStretch()
         self.set_focus_snapshot(self._focus_snapshot or {"status": "idle", "session_seconds": 0, "today_seconds": 0})
         self.set_focus_analytics(self._focus_analytics)
-        return page
+        return self._scroll_page(page)
 
     def _room_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None = None) -> None:
         room = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
@@ -883,7 +910,7 @@ class SocialHubDialog(QDialog):
         preview_layout.addWidget(QLabel("• 添加搭子并查看在线状态\n• 创建私人专注房间\n• 接收串门邀请并一起计时"))
         layout.addWidget(preview_card)
         layout.addStretch()
-        return page
+        return self._scroll_page(page)
 
     def _auth_card(self) -> QWidget:
         card, layout = self._card("账号", "邮箱只用于登录；密码不会保存在 Lili。")
