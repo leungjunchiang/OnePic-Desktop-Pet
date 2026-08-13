@@ -54,8 +54,11 @@ class SocialSyncThread(QThread):
 class BuddyCardWidget(QWidget):
     """æŠŠæ­å­çš„åœ¨çº¿ã€å·¥ä½œå’Œä»Šæ—¥æ—¶é•¿æ˜¾ç¤ºæˆä¸€çœ¼èƒ½çœ‹æ¸…çš„å¡ç‰‡ã€‚"""
 
+    interaction_requested = Signal(dict, str)
+
     def __init__(self, buddy: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
+        self.buddy = buddy
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
@@ -78,6 +81,15 @@ class BuddyCardWidget(QWidget):
         footer = QLabel(f"å½“å‰å¨ƒè¡£ï¼š{outfit}ã€€Â·ã€€åŒå‡»æˆ–é€‰ä¸­åŽå¯æ´¾å…­æ¯›ä¸²é—¨")
         footer.setStyleSheet("color:#61727d;font-size:11px;")
         root.addWidget(footer)
+        actions = QHBoxLayout()
+        for kind, label in (("poke", "æˆ³ä¸€ä¸‹"), ("cheer", "åŠ æ²¹"), ("drink", "é€’å¥¶èŒ¶")):
+            button = QPushButton(label)
+            button.setMinimumHeight(24)
+            button.clicked.connect(
+                lambda _checked=False, action=kind: self.interaction_requested.emit(self.buddy, action)
+            )
+            actions.addWidget(button)
+        root.addLayout(actions)
 
 
 class BuddyVisitWindow(QWidget):
@@ -195,12 +207,17 @@ class SocialHubDialog(QDialog):
     """æä¾›é¦–é¡µã€èŠå¤©ã€ä¸“æ³¨ã€æˆ‘çš„å››ä¸ªæ¸…æ™°é¡µé¢åŠç»Ÿä¸€æ“ä½œåé¦ˆã€‚"""
 
     active_visit = Signal(dict)
+    focus_start_requested = Signal()
+    focus_pause_requested = Signal()
+    focus_finish_requested = Signal()
 
     def __init__(self, client: SocialClient, outfit_key: str = "", parent=None) -> None:
         super().__init__(parent)
         self.client = client
         self.outfit_key = outfit_key
         self.data: dict[str, Any] = {}
+        self.current_room_id: str | None = None
+        self._focus_snapshot: Any = None
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
         # flags differ by platform and can omit the minimize button when a
@@ -259,6 +276,28 @@ class SocialHubDialog(QDialog):
         if client.signed_in:
             QTimer.singleShot(50, self.refresh)
 
+    def set_focus_snapshot(self, snapshot: Any) -> None:
+        """Render the desktop timer state without creating a second timer."""
+
+        self._focus_snapshot = snapshot
+        if not hasattr(self, "focus_status"):
+            return
+        status = getattr(snapshot, "status", None)
+        if isinstance(snapshot, dict):
+            status = snapshot.get("status")
+            session_seconds = snapshot.get("session_seconds", 0)
+            today_seconds = snapshot.get("today_seconds", 0)
+        else:
+            session_seconds = getattr(snapshot, "session_seconds", 0)
+            today_seconds = getattr(snapshot, "today_seconds", 0)
+        labels = {"focus": "ä¸“æ³¨ä¸­", "rest": "ä¼‘æ¯ä¸­", "idle": "å°šæœªå¼€å§‹"}
+        self.focus_status.setText(labels.get(str(status), "ç­‰å¾…åŒæ­¥"))
+        self.focus_clock.setText(format_work_duration(int(session_seconds)))
+        self.focus_today.setText(f"ä»Šæ—¥ç´¯è®¡ {format_work_duration(int(today_seconds))}")
+        self.focus_start.setEnabled(str(status) != "focus")
+        self.focus_pause.setEnabled(str(status) == "focus")
+        self.focus_finish.setEnabled(int(session_seconds) > 0 or int(today_seconds) > 0)
+
     @staticmethod
     def _card(title: str, description: str = "") -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
@@ -267,263 +306,20 @@ class SocialHubDialog(QDialog):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
         heading = QLabel(title)
-        heading.setObjectName("sectionTitle")
-        layout.addWidget(heading)
-        if description:
-            detail = QLabel(description)
-            detail.setObjectName("muted")
-            detail.setWordWrap(True)
-            layout.addWidget(detail)
-        return card, layout
-
-    def _home_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        welcome, welcome_layout = self._card("ä»Šå¤©ä¹Ÿä¸€èµ·å¾€å‰ä¸€ç‚¹", "æŸ¥çœ‹æ­å­åŠ¨æ€ã€å¾…å¤„ç†é‚€è¯·å’Œå½“å‰ä¸“æ³¨çŠ¶æ€ã€‚")
-        self.study_summary = QLabel("ç™»å½•åŽå¯æŸ¥çœ‹æ­å­ä¸“æ³¨æ—¶é—´ï¼›æœ¬åœ°å·¥ä½œè®¡æ—¶ä¸å—å½±å“ã€‚")
-        self.study_summary.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
-        self.study_summary.setWordWrap(True)
-        welcome_layout.addWidget(self.study_summary)
-        refresh = QPushButton("åˆ·æ–°é¦–é¡µ")
-        refresh.clicked.connect(self.refresh)
-        welcome_layout.addWidget(refresh)
-        layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("æˆ‘çš„æ­å­", "ç»¿è‰²è¡¨ç¤ºä¸¤åˆ†é’Ÿå†…åœ¨çº¿ï¼›é€‰æ‹©åŽå¯åˆ°â€œèŠå¤©â€é¡µæ´¾å…­æ¯›ä¸²é—¨ã€‚")
-        self.buddies = QListWidget(); self.buddies.setSpacing(5)
-        self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
-        buddies_layout.addWidget(self.buddies, 1)
-        layout.addWidget(buddies_card, 1)
-        return page
-
-    def _chat_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        actions, action_layout = self._card("æ­å­äº’åŠ¨", "æ·»åŠ æ­å­ã€æ´¾å…­æ¯›ä¸²é—¨ï¼›èŠå¤©æ­£æ–‡ä¸ä¼šä¸Šä¼ åˆ°è‡ªä¹ å®¤æœåŠ¡ã€‚")
-        row = QHBoxLayout()
-        add = QPushButton("ç”¨æ­å­ç æ·»åŠ ")
-        visit = QPushButton("æ´¾å…­æ¯›åŽ»ä¸²é—¨")
-        add.clicked.connect(self._add_buddy); visit.clicked.connect(self._send_visit)
-        row.addWidget(add); row.addWidget(visit); action_layout.addLayout(row)
-        layout.addWidget(actions)
-        inbox_card, inbox_layout = self._card("å¾…å¤„ç†ç”³è¯·ä¸Žä¸²é—¨", "é€‰æ‹©ä¸€é¡¹åŽæŽ¥å—ï¼Œæ“ä½œç»“æžœä¼šæ˜¾ç¤ºåœ¨é¡µé¢é¡¶éƒ¨ã€‚")
-        self.inbox = QListWidget(); inbox_layout.addWidget(self.inbox, 1)
-        accept = QPushButton("æŽ¥å—é€‰ä¸­çš„é¡¹ç›®"); accept.clicked.connect(self._accept_inbox); inbox_layout.addWidget(accept)
-        layout.addWidget(inbox_card, 1)
-        return page
-
-    def _focus_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        focus_card, focus_layout = self._card("å…±åŒä¸“æ³¨", "ç§äººæˆ¿é—´åªåŒæ­¥æœ€å°åœ¨çº¿å’Œæ—¶é•¿çŠ¶æ€ï¼Œä¸åŒæ­¥ä»»åŠ¡åç§°æˆ–æ¡Œé¢å†…å®¹ã€‚")
-        preview = QLabel("åŠŸèƒ½é¢„è§ˆï¼šåˆ›å»ºæˆ¿é—´ Â· åˆ†äº« 8 ä½æˆ¿é—´ç  Â· æŸ¥çœ‹å…±åŒä¸“æ³¨äººæ•° Â· å…­æ¯›ä¸²é—¨")
-        preview.setWordWrap(True); preview.setObjectName("muted"); focus_layout.addWidget(preview)
-        layout.addWidget(focus_card)
-        room_card, room_layout = self._card("ç§äººè‡ªä¹ å®¤")
-        self.rooms = QListWidget(); room_layout.addWidget(self.rooms, 1)
-        row = QHBoxLayout(); create = QPushButton("åˆ›å»ºè‡ªä¹ å®¤"); join = QPushButton("ä½¿ç”¨æˆ¿é—´ç åŠ å…¥")
-        create.clicked.connect(self._create_room); join.clicked.connect(self._join_room)
-        row.addWidget(create); row.addWidget(join); room_layout.addLayout(row)
-        layout.addWidget(room_card, 1)
-        return page
-
-    def _mine_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        self.account_stack = QStackedWidget()
-        self.account_stack.addWidget(self._auth_card())
-        self.account_stack.addWidget(self._profile_card())
-        layout.addWidget(self.account_stack)
-        preview_card, preview_layout = self._card(
-            "ç™»å½•åŽå¯ä»¥åšä»€ä¹ˆ",
-            "è´¦å·åªç”¨äºŽæ­å­ä¸Žç§äººè‡ªä¹ å®¤ï¼›èŠå¤©ã€è®¡æ—¶ã€åŠ¨ä½œå’Œç¦»çº¿é™ªä¼´ä¸ç™»å½•ä¹Ÿèƒ½ä½¿ç”¨ã€‚",
-        )
-        preview_layout.addWidget(QLabel("â€¢ æ·»åŠ æ­å­å¹¶æŸ¥çœ‹åœ¨çº¿çŠ¶æ€\nâ€¢ åˆ›å»ºç§äººä¸“æ³¨æˆ¿é—´\nâ€¢ æŽ¥æ”¶ä¸²é—¨é‚€è¯·å¹¶ä¸€èµ·è®¡æ—¶"))
-        layout.addWidget(preview_card)
-        layout.addStretch()
-        return page
-
-    def _auth_card(self) -> QWidget:
-        card, layout = self._card("è´¦å·", "é‚®ç®±åªç”¨äºŽç™»å½•ï¼›å¯†ç ä¸ä¼šä¿å­˜åœ¨ Liliã€‚")
-        auth_tabs = QTabWidget()
-        login = QWidget(); login_layout = QVBoxLayout(login); login_form = QFormLayout()
-        self.login_email = QLineEdit(); self.login_password = QLineEdit(); self.login_password.setEchoMode(QLineEdit.EchoMode.Password)
-        login_form.addRow("é‚®ç®±", self.login_email); login_form.addRow("å¯†ç ", self.login_password)
-        login_layout.addLayout(login_form); login_button = QPushButton("ç™»å½•")
-        login_button.clicked.connect(self._login); login_layout.addWidget(login_button); login_layout.addStretch()
-        register = QWidget(); register_layout = QVBoxLayout(register); register_form = QFormLayout()
-        self.signup_nickname = QLineEdit("å…­æ¯›æ­å­"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
-        register_form.addRow("æ˜µç§°", self.signup_nickname); register_form.addRow("é‚®ç®±", self.signup_email); register_form.addRow("å¯†ç ", self.signup_password)
-        register_layout.addLayout(register_form); signup_button = QPushButton("æ³¨å†Œ")
-        signup_button.clicked.connect(self._signup); register_layout.addWidget(signup_button); register_layout.addStretch()
-        auth_tabs.addTab(login, "ç™»å½•"); auth_tabs.addTab(register, "æ³¨å†Œ")
-        layout.addWidget(auth_tabs)
-        return card
-
-    def _profile_card(self) -> QWidget:
-        card, layout = self._card("æˆ‘çš„è´¦å·", "ç®¡ç†æ­å­ç ã€å¯è§æ€§å’Œä¸²é—¨æƒé™ã€‚")
-        self.identity = QLabel(); self.identity.setStyleSheet("font-size:18px;font-weight:650;"); self.identity.setWordWrap(True)
-        layout.addWidget(self.identity)
-        self.hidden = QCheckBox("éšèº«")
-        self.exact = QCheckBox("æ˜¾ç¤ºå‡†ç¡®æ—¶é•¿")
-        self.visits_allowed = QCheckBox("å…è®¸æ­å­ä¸²é—¨")
-        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed)
-        save = QPushButton("ä¿å­˜éšç§è®¾ç½®"); save.clicked.connect(self._save_profile); layout.addWidget(save)
-        logout = QPushButton("é€€å‡ºè´¦å·"); logout.clicked.connect(self._logout); layout.addWidget(logout)
-        layout.addStretch()
-        return card
-
-    def _set_status(self, message: str, *, error: bool = False) -> None:
-        self.status_label.setText(message)
-        color = "#a33a3a" if error else "#087f74"
-        background = "#f7e5e5" if error else "#e1efec"
-        self.status_label.setStyleSheet(f"background:{background};color:{color};border-radius:9px;padding:7px 10px;")
-
-    def _begin_action(self, message: str) -> None:
-        self._set_status(message)
-        if QApplication.overrideCursor() is None:
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-
-    @staticmethod
-    def _end_action() -> None:
-        if QApplication.overrideCursor() is not None:
-            QApplication.restoreOverrideCursor()
-
-    def _require_login(self) -> bool:
-        if self.client.signed_in:
-            return True
-        self.tabs.setCurrentIndex(3)
-        self._set_status("è¯·å…ˆåœ¨â€œæˆ‘çš„â€é¡µé¢ç™»å½•ï¼›å…¶ä»–ç¦»çº¿åŠŸèƒ½ä»å¯æ­£å¸¸ä½¿ç”¨ã€‚", error=True)
-        return False
-
-    def _update_account_state(self) -> None:
-        self.account_stack.setCurrentIndex(1 if self.client.signed_in else 0)
-        if not self.client.signed_in:
-            self._fill_signed_out_placeholders()
-
-    def _fill_signed_out_placeholders(self) -> None:
-        self.buddies.clear(); self.buddies.addItem("ç™»å½•åŽï¼Œè¿™é‡Œä¼šæ˜¾ç¤ºæ­å­çš„åœ¨çº¿ä¸Žä¸“æ³¨çŠ¶æ€ã€‚")
-        self.inbox.clear(); self.inbox.addItem("ç™»å½•åŽå¯æŽ¥æ”¶æ­å­ç”³è¯·ä¸Žä¸²é—¨é‚€è¯·ã€‚")
-        self.rooms.clear(); self.rooms.addItem("ç™»å½•åŽå¯åˆ›å»ºæˆ–åŠ å…¥ç§äººè‡ªä¹ å®¤ã€‚")
-
-    def _error(self, exc: Exception) -> None:
-        self._end_action()
-        self._set_status(str(exc), error=True)
-        QMessageBox.warning(self, "å…­æ¯›æ­å­è‡ªä¹ å®¤", str(exc))
-
-    def _signup(self) -> None:
-        self._begin_action("æ­£åœ¨åˆ›å»ºè´¦å·â€¦")
-        try:
-            signed = self.client.sign_up(self.signup_email.text(), self.signup_password.text(), self.signup_nickname.text())
-            self._end_action()
-            if signed:
-                self._update_account_state(); self.refresh()
-            else:
-                self._set_status("æ³¨å†ŒæˆåŠŸï¼Œè¯·åˆ°é‚®ç®±ç¡®è®¤åŽå›žæ¥ç™»å½•ã€‚")
-                QMessageBox.information(
-                    self,
-                    "è¯·ç¡®è®¤é‚®ç®±",
-                    "æ³¨å†ŒæˆåŠŸã€‚è¯·åˆ°é‚®ç®±å®Œæˆç¡®è®¤ï¼Œç„¶åŽå›žåˆ°è¿™é‡Œç™»å½•ã€‚\n\n"
-                    "ç¡®è®¤é¡µä¼šæ‰“å¼€å…­æ¯›é¡¹ç›®é¡µé¢ï¼Œä¸éœ€è¦å¯åŠ¨ localhost æœåŠ¡ã€‚",
-                )
-        except SocialError as exc:
-            self._error(exc)
-
-    def _login(self) -> None:
-        self._begin_action("æ­£åœ¨ç™»å½•æ­å­è‡ªä¹ å®¤â€¦")
-        try:
-            self.client.sign_in(self.login_email.text(), self.login_password.text())
-            self._end_action(); self._update_account_state(); self.tabs.setCurrentIndex(0); self.refresh()
-        except SocialError as exc:
-            self._error(exc)
-
-    def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._update_account_state(); self._set_status("å·²é€€å‡ºè´¦å·ï¼Œå…­æ¯›ç»§ç»­ç¦»çº¿é™ªä¼´ã€‚")
-
-    def refresh(self) -> None:
-        if not self._require_login(): return
-        self._begin_action("æ­£åœ¨åˆ·æ–°æ­å­ä¸Žä¸“æ³¨çŠ¶æ€â€¦")
-        try: self.data=self.client.dashboard()
-        except SocialError as exc: self._error(exc); return
-        self._end_action()
-        me=self.data.get("me") or {}; self.identity.setText(f"{me.get('nickname','å…­æ¯›æ­å­')} Â· æˆ‘çš„æ­å­ç ï¼š{me.get('invite_code','--------')}")
-        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True)))
-        self.buddies.clear()
-        people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
-        seen=set()
-        working_count = 0
-        visible_total = 0
-        for buddy in people:
-            if buddy.get("user_id") in seen: continue
-            seen.add(buddy.get("user_id"))
-            working_count += int(bool(buddy.get("working")))
-            duration = buddy.get("today_seconds")
-            if duration is not None: visible_total += max(0, int(duration))
-            item=QListWidgetItem(); item.setSizeHint(QSize(0, 92)); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
-            self.buddies.setItemWidget(item, BuddyCardWidget(buddy, self.buddies))
-        self.study_summary.setText(f"çŽ°åœ¨ {working_count} ä½æ­å­æ­£åœ¨ä¸“æ³¨ã€€Â·ã€€å¯è§ä»Šæ—¥åˆè®¡ {format_work_duration(visible_total)}")
-        if not seen:
-            empty = QListWidgetItem("è¿˜æ²¡æœ‰æ­å­ã€‚ç‚¹å‡»ä¸‹æ–¹â€œç”¨æ­å­ç æ·»åŠ â€ï¼Œä¸€èµ·å·¥ä½œæ—¶è¿™é‡Œä¼šæ˜¾ç¤ºæ¸…æ¥šçš„ä¸“æ³¨æ—¶é•¿ã€‚")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
-        self.inbox.clear()
-        for request in self.data.get("requests") or []:
-            item=QListWidgetItem(f"æ­å­ç”³è¯·ï¼š{request.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
-        for visit in self.data.get("visits") or []:
-            item=QListWidgetItem(f"ä¸²é—¨é‚€è¯·ï¼š{visit.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("visit",visit)); self.inbox.addItem(item)
-        if self.inbox.count() == 0:
-            empty = QListWidgetItem("å½“å‰æ²¡æœ‰å¾…å¤„ç†ç”³è¯·æˆ–ä¸²é—¨ï¼Œæ–°çš„é‚€è¯·ä¼šæ˜¾ç¤ºåœ¨è¿™é‡Œã€‚")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
-        self.rooms.clear()
-        for room in self.data.get("rooms") or []:
-            self.rooms.addItem(f"{room.get('name')} Â· {room.get('members')} äºº Â· æˆ¿é—´ç  {room.get('invite_code')}")
-        if self.rooms.count() == 0:
-            empty_room = QListWidgetItem("è¿˜æ²¡æœ‰ç§äººè‡ªä¹ å®¤ï¼›åˆ›å»ºåŽå¯æŠŠæˆ¿é—´ç å‘ç»™æ­å­ã€‚")
-            empty_room.setFlags(Qt.ItemFlag.NoItemFlags); self.rooms.addItem(empty_room)
-        active=self.data.get("active_visits") or []
-        if active: self.active_visit.emit(active[0])
-        self._set_status("å·²åˆ·æ–°ï¼Œé¡µé¢å†…å®¹æ˜¯æœ€æ–°çš„ã€‚")
-
-    def _save_profile(self) -> None:
-        if not self._require_login(): return
-        self._begin_action("æ­£åœ¨ä¿å­˜éšç§è®¾ç½®â€¦")
-        try:
-            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(me.get("nickname") or "å…­æ¯›æ­å­"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key); self.refresh()
-        except SocialError as exc: self._error(exc)
-    def _add_buddy(self) -> None:
-        if not self._require_login(): return
-        code,ok=QInputDialog.getText(self,"æ·»åŠ æ­å­","è¾“å…¥å¯¹æ–¹çš„ 8 ä½æ­å­ç ï¼š")
-        if ok and code:
-            self._begin_action("æ­£åœ¨å‘é€æ­å­ç”³è¯·â€¦")
-            try: self.client.rpc("lili_add_buddy_by_code",{"code":code}); self.refresh(); self._set_status("æ­å­ç”³è¯·å·²å‘é€ã€‚")
-            except SocialError as exc: self._error(exc)
-    def _send_visit(self) -> None:
-        if not self._require_login(): return
-        item=self.buddies.currentItem()
-        if not item: return self._error(SocialError("è¯·å…ˆé€‰æ‹©ä¸€ä½æ­å­ã€‚"))
-        buddy = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(buddy, dict): return self._error(SocialError("è¯·å…ˆé€‰æ‹©ä¸€ä½æ­å­ã€‚"))
-        self._begin_action("å…­æ¯›æ­£åœ¨å‡†å¤‡å‡ºå‘â€¦")
-        try:
-            self.client.rpc("lili_send_visit",{"target":buddy["user_id"],"visit_kind":"visit"}); self._end_action(); self._set_status("å…­æ¯›å·²ç»å‡ºå‘ï¼Œç­‰å¾…å¯¹æ–¹æŽ¥å—ä¸²é—¨ã€‚"); QMessageBox.information(self,"å·²å‡ºå‘","å…­æ¯›å·²ç»å‡ºå‘ï¼Œç­‰å¾…å¯¹æ–¹æŽ¥å—ä¸²é—¨ã€‚")
-        except SocialError as exc: self._error(exc)
-    def _accept_inbox(self) -> None:
-        if not self._require_login(): return
-        item=self.inbox.currentItem()
-        if not item: return self._error(SocialError("è¯·å…ˆé€‰æ‹©ä¸€é¡¹ç”³è¯·æˆ–ä¸²é—¨ã€‚"))
-        kind,data=item.data(Qt.ItemDataRole.UserRole)
-        self._begin_action("æ­£åœ¨å¤„ç†é€‰ä¸­çš„ç”³è¯·â€¦")
-        try:
-            if kind=="buddy": self.client.rpc("lili_respond_buddy",{"request_id":data["id"],"accept":True})
-            else: self.client.rpc("lili_respond_visit",{"event_id":data["id"],"accept":True})
-            self.refresh()
-        except SocialError as exc: self._error(exc)
-    def _create_room(self) -> None:
-        if not self._require_login(): return
-        name,ok=QInputDialog.getText(self,"åˆ›å»ºè‡ªä¹ å®¤","è‡ªä¹ å®¤åç§°ï¼š",text="å®‰é™å·¥ä½œé—´")
-        if ok and name:
-            self._begin_action("æ­£åœ¨åˆ›å»ºè‡ªä¹ å®¤â€¦")
-            try: self.client.rpc("lili_create_room",{"room_name":name}); self.refresh(); self._set_status("è‡ªä¹ å®¤å·²åˆ›å»ºï¼Œå¯ä»¥åˆ†äº«æˆ¿é—´ç äº†ã€‚")
-            except SocialError as exc: self._error(exc)
-    def _join_room(self) -> None:
-        if not self._require_login(): return
-        code,ok=QInputDialog.getText(self,"åŠ å…¥è‡ªä¹ å®¤","è¾“å…¥ 8 ä½æˆ¿é—´ç ï¼š")
-        if ok and code:
-            self._begin_action("æ­£åœ¨åŠ å…¥è‡ªä¹ å®¤â€¦")
-            try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("å·²åŠ å…¥è‡ªä¹ å®¤ã€‚")
-            except SocialError as exc: self._error(exc)
+        heading.setObjectName("sectÛ~ô¶‰žËkºwµç@ôE1¥ÍÑ]¥‘•Ñ%Ñ•´ ‹–*ƒ–—š"ÿ¦^Ó–B;¾ò3¢þg¦3’òkšbûž’ë’â¢Öß’âOšÎ£žj–·š¾o–J3žÒ¿¢º‡š^Û¦VÿŽˆ¤(€€€€€€€€€€€•µÁÑä¹Í•Ñ±…Ì¡EÐ¹%Ñ•µ±…œ¹9½%Ñ•µ±…Ì¤(€€€€€€€€€€€Í•±˜¹É½½µ}µ•µ‰•ÉÌ¹…‘‘%Ñ•´¡•µÁÑä¤((€€€‘•˜}É•¹‘•É}É½½µ}…Ñ¥Ù¥Ñä¡Í•±˜°•¹ÑÉ¥•Ìè±¥ÍÑm¹åt¤€´ø9½¹”è(€€€€€€€¥˜¹½Ð¡…Í…ÑÑÈ¡Í•±˜°€‰É½½µ}…Ñ¥Ù¥Ñäˆ¤è(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€Í•±˜¹É½½µ}…Ñ¥Ù¥Ñä¹±•…È ¤(€€€€€€€™½È•¹ÑÉä¥¸•¹ÑÉ¥•Íl´àétè(€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡•¹ÑÉä°‘¥Ð¤è(€€€€€€€€€€€€€€€Ñ•áÐ€ôÍÑÈ¡•¹ÑÉä¹•Ð ‰Ñ•áÐˆ¤½È•¹ÑÉä¹•Ð ‰µ•ÍÍ…”ˆ¤½È€ˆˆ¤(€€€€€€€€€€€€€€€¥˜¹½ÐÑ•áÐè(€€€€€€€€€€€€€€€€€€€Ñ•áÐ€ô˜‰í•¹ÑÉä¹•Ð ¹¥­¹…µ”œ°€ŸšB·–¶@œ¥ôí•¹ÑÉä¹•Ð ­¥¹œ°€ŸšnÓšZÃ’êž*Ûšœ¥ôˆ(€€€€€€€€€€€•±Í”è(€€€€€€€€€€€€€€€Ñ•áÐ€ôÍÑÈ¡•¹ÑÉä¤(€€€€€€€€€€€¥˜Ñ•áÐè(€€€€€€€€€€€€€€€Í•±˜¹É½½µ}…Ñ¥Ù¥Ñä¹…‘‘%Ñ•´¡Ñ•áÐ¤(€€€€€€€¥˜Í•±˜¹É½½µ}…Ñ¥Ù¥Ñä¹½Õ¹Ð ¤€ôô€Àè(€€€€€€€€€€€Í•±˜¹É½½µ}…Ñ¥Ù¥Ñä¹…‘‘%Ñ•´ ‹š"ÿ¦^Ó–*£š’òkšbûž’ë–ò–ž/’âOšÎ£Ž–º3š"C’â¢ö»–J3–·š¾o’êK–*£Žˆ¤((€€€‘•˜}µ¥¹•}Á…”¡Í•±˜¤€´øE]¥‘•Ðè(€€€€€€€Á…”€ôE]¥‘•Ð ¤ì±…å½ÕÐ€ôEY	½á1…å½ÕÐ¡Á…”¤ì±…å½ÕÐ¹Í•ÑMÁ…¥¹œ ÄÈ¤(€€€€€€€Í•±˜¹…½Õ¹Ñ}ÍÑ…¬€ôEMÑ…­•‘]¥‘•Ð ¤(€€€€€€€Í•±˜¹…½Õ¹Ñ}ÍÑ…¬¹…‘‘]¥‘•Ð¡Í•±˜¹}…ÕÑ¡}…É ¤¤(€€€€€€€Í•±˜¹…½Õ¹Ñ}ÍÑ…¬¹…‘‘]¥‘•Ð¡Í•±˜¹}ÁÉ½™¥±•}…É ¤¤(€€€€€€€±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í•±˜¹…½Õ¹Ñ}ÍÑ…¬¤(€€€€€€€ÁÉ•Ù¥•Ý}…É°ÁÉ•Ù¥•Ý}±…å½ÕÐ€ôÍ•±˜¹}…É (€€€€€€€€€€€€‹žfï–öW–B;–>¿’î—–k’î’æ ˆ°(€€€€€€€€€€€€‹¢Ò›–>ß–>«žR£’ê;šB·–¶C’â;žž’êë¢«’æƒ–º“¾òo¢+–’§Ž¢º‡š^ÛŽ–*£’ös–J3žšïžêÿ¦f«’òÓ’â7žfï–öW’æ¢÷’öÿžR£Žˆ°(€€€€€€€€¤(€€€€€€€ÁÉ•Ù¥•Ý}±…å½ÕÐ¹…‘‘]¥‘•Ð¡E1…‰•° ‹ŠˆƒšÞï–*ƒšB·–¶C–æÛš~—žr/–r£žêÿž*Ûšq»Šˆƒ–"o–îëžž’êë’âOšÎ£š"ÿ¦^Ñq»Šˆƒš:—šRÛ’âË¦^£¦
+¢¾ß–æÛ’â¢Öß¢º‡š^Øˆ¤¤(€€€€€€€±…å½ÕÐ¹…‘‘]¥‘•Ð¡ÁÉ•Ù¥•Ý}…É¤(€€€€€€€±…å½ÕÐ¹…‘‘MÑÉ•Ñ  ¤(€€€€€€€É•ÑÕÉ¸Á…”((€€€‘•˜}…ÕÑ¡}…É¡Í•±˜¤€´øE]¥‘•Ðè(€€€€€€€…É°±…å½ÕÐ€ôÍ•±˜¹}…É ‹¢Ò›–>Üˆ°€‹¦
+»žºÇ–>«žR£’ê;žfï–öW¾òo–¾ž‚’â7’òk’þw–¶c–r 1¥±§Žˆ¤(€€€€€€€…ÕÑ¡}Ñ…‰Ì€ôEQ…‰]¥‘•Ð ¤(€€€€€€€±½¥¸€ôE]¥‘•Ð ¤ì±½¥¹}±…å½ÕÐ€ôEY	½á1…å½ÕÐ¡±½¥¸¤ì±½¥¹}™½É´€ôE½Éµ1…å½ÕÐ ¤(€€€€€€€Í•±˜¹±½¥¹}•µ…¥°€ôE1¥¹•‘¥Ð ¤ìÍ•±˜¹±½¥¹}Á…ÍÍÝ½É€ôE1¥¹•‘¥Ð ¤ìÍ•±˜¹±½¥¹}Á…ÍÍÝ½É¹Í•Ñ¡½5½‘”¡E1¥¹•‘¥Ð¹¡½5½‘”¹A…ÍÍÝ½É¤(€€€€€€€±½¥¹}™½É´¹…‘‘I½Ü ‹¦
+»žºÄˆ°Í•±˜¹±½¥¹}•µ…¥°¤ì±½¥¹}™½É´¹…‘‘I½Ü ‹–¾ž‚ˆ°Í•±˜¹±½¥¹}Á…ÍÍÝ½É¤(€€€€€€€±½¥¹}±…å½ÕÐ¹…‘‘1…å½ÕÐ¡±½¥¹}™½É´¤ì±½¥¹}‰ÕÑÑ½¸€ôEAÕÍ¡	ÕÑÑ½¸ ‹žfï–öTˆ¤(€€€€€€€±½¥¹}‰ÕÑÑ½¸¹±¥­•¹½¹¹•Ð¡Í•±˜¹}±½¥¸¤ì±½¥¹}±…å½ÕÐ¹…‘‘]¥‘•Ð¡±½¥¹}‰ÕÑÑ½¸¤ì±½¥¹}±…å½ÕÐ¹…‘‘MÑÉ•Ñ  ¤(€€€€€€€É•¥ÍÑ•È€ôE]¥‘•Ð ¤ìÉ•¥ÍÑ•É}±…å½ÕÐ€ôEY	½á1…å½ÕÐ¡É•¥ÍÑ•È¤ìÉ•¥ÍÑ•É}™½É´€ôE½Éµ1…å½ÕÐ ¤(€€€€€€€Í•±˜¹Í¥¹ÕÁ}¹¥­¹…µ”€ôE1¥¹•‘¥Ð ‹–·š¾ošB·–¶@ˆ¤ìÍ•±˜¹Í¥¹ÕÁ}•µ…¥°€ôE1¥¹•‘¥Ð ¤ìÍ•±˜¹Í¥¹ÕÁ}Á…ÍÍÝ½É€ôE1¥¹•‘¥Ð ¤ìÍ•±˜¹Í¥¹ÕÁ}Á…ÍÍÝ½É¹Í•Ñ¡½5½‘”¡E1¥¹•‘¥Ð¹¡½5½‘”¹A…ÍÍÝ½É¤(€€€€€€€É•¥ÍÑ•É}™½É´¹…‘‘I½Ü ‹šb×žžÀˆ°Í•±˜¹Í¥¹ÕÁ}¹¥­¹…µ”¤ìÉ•¥ÍÑ•É}™½É´¹…‘‘I½Ü ‹¦
+»žºÄˆ°Í•±˜¹Í¥¹ÕÁ}•µ…¥°¤ìÉ•¥ÍÑ•É}™½É´¹…‘‘I½Ü ‹–¾ž‚ˆ°Í•±˜¹Í¥¹ÕÁ}Á…ÍÍÝ½É¤(€€€€€€€É•¥ÍÑ•É}±…å½ÕÐ¹…‘‘1…å½ÕÐ¡É•¥ÍÑ•É}™½É´¤ìÍ¥¹ÕÁ}‰ÕÑÑ½¸€ôEAÕÍ¡	ÕÑÑ½¸ ‹šÎ£–0ˆ¤(€€€€€€€Í¥¹ÕÁ}‰ÕÑÑ½¸¹±¥­•¹½¹¹•Ð¡Í•±˜¹}Í¥¹ÕÀ¤ìÉ•¥ÍÑ•É}±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í¥¹ÕÁ}‰ÕÑÑ½¸¤ìÉ•¥ÍÑ•É}±…å½ÕÐ¹…‘‘MÑÉ•Ñ  ¤(€€€€€€€…ÕÑ¡}Ñ…‰Ì¹…‘‘Q…ˆ¡±½¥¸°€‹žfï–öTˆ¤ì…ÕÑ¡}Ñ…‰Ì¹…‘‘Q…ˆ¡É•¥ÍÑ•È°€‹šÎ£–0ˆ¤(€€€€€€€±…å½ÕÐ¹…‘‘]¥‘•Ð¡…ÕÑ¡}Ñ…‰Ì¤(€€€€€€€É•ÑÕÉ¸…É((€€€‘•˜}ÁÉ½™¥±•}…É¡Í•±˜¤€´øE]¥‘•Ðè(€€€€€€€…É°±…å½ÕÐ€ôÍ•±˜¹}…É ‹š"Gžj¢Ò›–>Üˆ°€‹žº‡žBšB·–¶Cž‚Ž–>¿¢žšŸ–J3’âË¦^£šv¦fCŽˆ¤(€€€€€€€Í•±˜¹¥‘•¹Ñ¥Ñä€ôE1…‰•° ¤ìÍ•±˜¹¥‘•¹Ñ¥Ñä¹Í•ÑMÑå±•M¡••Ð ‰™½¹ÐµÍ¥é”èÄáÁàí™½¹ÐµÝ•¥¡ÐèØÔÀìˆ¤ìÍ•±˜¹¥‘•¹Ñ¥Ñä¹Í•Ñ]½É‘]É…À¡QÉÕ”¤(€€€€€€€±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í•±˜¹¥‘•¹Ñ¥Ñä¤(€€€€€€€Í•±˜¹¡¥‘‘•¸€ôE¡•­	½à ‹¦jC¢ê¬ˆ¤(€€€€€€€Í•±˜¹•á…Ð€ôE¡•­	½à ‹šbûž’ë–ž†»š^Û¦Vüˆ¤(€€€€€€€Í•±˜¹Ù¥Í¥ÑÍ}…±±½Ý•€ôE¡•­	½à ‹–¢ºãšB·–¶C’âË¦^ ˆ¤(€€€€€€€±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í•±˜¹¡¥‘‘•¸¤ì±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í•±˜¹•á…Ð¤ì±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í•±˜¹Ù¥Í¥ÑÍ}…±±½Ý•¤(€€€€€€€Í…Ù”€ôEAÕÍ¡	ÕÑÑ½¸ ‹’þw–¶c¦jCžž¢ºûžö¸ˆ¤ìÍ…Ù”¹±¥­•¹½¹¹•Ð¡Í•±˜¹}Í…Ù•}ÁÉ½™¥±”¤ì±…å½ÕÐ¹…‘‘]¥‘•Ð¡Í…Ù”¤(€€€€€€€±½½ÕÐ€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦–ë¢Ò›–>Üˆ¤ì±½½ÕÐ¹±¥­•¹½¹¹•Ð¡Í•±˜¹}±½½ÕÐ¤ì±…å½ÕÐ¹…‘‘]¥‘•Ð¡±½½ÕÐ¤(€€€€€€€±…å½ÕÐ¹…‘‘MÑÉ•Ñ  ¤(€€€€€€€É•ÑÕÉ¸…É((€€€‘•˜}Í•Ñ}ÍÑ…ÑÕÌ¡Í•±˜°µ•ÍÍ…”èÍÑÈ°€¨°•ÉÉ½Èè‰½½°€ô…±Í”¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÍÑ…ÑÕÍ}±…‰•°¹Í•ÑQ•áÐ¡µ•ÍÍ…”¤(€€€€€€€½±½È€ô€ˆ„ÌÍ„Í„ˆ¥˜•ÉÉ½È•±Í”€ˆŒÀàÝ˜ÜÐˆ(€€€€€€€‰…­É½Õ¹€ô€ˆ˜Ý”Õ”Ôˆ¥˜•ÉÉ½È•±Í”€ˆ”Å•™•Œˆ(€€€€€€€Í•±˜¹ÍÑ…ÑÕÍ}±…‰•°¹Í•ÑMÑå±•M¡••Ð¡˜‰‰…­É½Õ¹éí‰…­É½Õ¹‘ôí½±½Èéí½±½Éôí‰½É‘•ÈµÉ…‘¥ÕÌèåÁàíÁ…‘‘¥¹œèÝÁà€ÄÁÁàìˆ¤((€€€‘•˜}‰•¥¹}…Ñ¥½¸¡Í•±˜°µ•ÍÍ…”èÍÑÈ¤€´ø9½¹”è(€€€€€€€Í•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ¡µ•ÍÍ…”¤(€€€€€€€¥˜EÁÁ±¥…Ñ¥½¸¹½Ù•ÉÉ¥‘•ÕÉÍ½È ¤¥Ì9½¹”è(€€€€€€€€€€€EÁÁ±¥…Ñ¥½¸¹Í•Ñ=Ù•ÉÉ¥‘•ÕÉÍ½È¡EÐ¹ÕÉÍ½ÉM¡…Á”¹]…¥ÑÕÉÍ½È¤(€€€€€€€EÁÁ±¥…Ñ¥½¸¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}•¹‘}…Ñ¥½¸ ¤€´ø9½¹”è(€€€€€€€¥˜EÁÁ±¥…Ñ¥½¸¹½Ù•ÉÉ¥‘•ÕÉÍ½È ¤¥Ì¹½Ð9½¹”è(€€€€€€€€€€€EÁÁ±¥…Ñ¥½¸¹É•ÍÑ½É•=Ù•ÉÉ¥‘•ÕÉÍ½È ¤((€€€‘•˜}É•ÅÕ¥É•}±½¥¸¡Í•±˜¤€´ø‰½½°è(€€€€€€€¥˜Í•±˜¹±¥•¹Ð¹Í¥¹•‘}¥¸è(€€€€€€€€€€€É•ÑÕÉ¸QÉÕ”(€€€€€€€Í•±˜¹Ñ…‰Ì¹Í•ÑÕÉÉ•¹Ñ%¹‘•à Ì¤(€€€€€€€Í•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹¢¾ß–#–r£Šsš"GžjŠw¦†×¦v‹žfï–öW¾òo–Û’î[žšïžêÿ–*¢÷’î7–>¿š¶–âã’öÿžR£Žˆ°•ÉÉ½ÈõQÉÕ”¤(€€€€€€€É•ÑÕÉ¸…±Í”((€€€‘•˜}ÕÁ‘…Ñ•}…½Õ¹Ñ}ÍÑ…Ñ”¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹…½Õ¹Ñ}ÍÑ…¬¹Í•ÑÕÉÉ•¹Ñ%¹‘•à Ä¥˜Í•±˜¹±¥•¹Ð¹Í¥¹•‘}¥¸•±Í”€À¤(€€€€€€€¥˜¹½ÐÍ•±˜¹±¥•¹Ð¹Í¥¹•‘}¥¸è(€€€€€€€€€€€Í•±˜¹}™¥±±}Í¥¹•‘}½ÕÑ}Á±…•¡½±‘•ÉÌ ¤((€€€‘•˜}™¥±±}Í¥¹•‘}½ÕÑ}Á±…•¡½±‘•ÉÌ¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹‰Õ‘‘¥•Ì¹±•…È ¤ìÍ•±˜¹‰Õ‘‘¥•Ì¹…‘‘%Ñ•´ ‹žfï–öW–B;¾ò3¢þg¦3’òkšbûž’ëšB·–¶Cžj–r£žêÿ’â;’âOšÎ£ž*ÛšŽˆ¤(€€€€€€€Í•±˜¹¥¹‰½à¹±•…È ¤ìÍ•±˜¹¥¹‰½à¹…‘‘%Ñ•´ ‹žfï–öW–B;–>¿š:—šRÛšB·–¶CžRÏ¢¾ß’â;’âË¦^£¦
+¢¾ßŽˆ¤(€€€€€€€Í•±˜¹É½½µÌ¹±•…È ¤ìÍ•±˜¹É½½µÌ¹…‘‘%Ñ•´ ‹žfï–öW–B;–>¿–"o–îëš"[–*ƒ–—žž’êë¢«’æƒ–º“Žˆ¤(€€€€€€€¥˜¡…Í…ÑÑÈ¡Í•±˜°€‰É½½µ}µ•µ‰•ÉÌˆ¤è(€€€€€€€€€€€Í•±˜¹}É•¹‘•É}É½½µ}Á•½Á±”¡mt¤(€€€€€€€¥˜¡…Í…ÑÑÈ¡Í•±˜°€‰É½½µ}…Ñ¥Ù¥Ñäˆ¤è(€€€€€€€€€€€Í•±˜¹}É•¹‘•É}É½½µ}…Ñ¥Ù¥Ñä¡mt¤((€€€‘•˜}•ÉÉ½È¡Í•±˜°•áŒèá•ÁÑ¥½¸¤€´ø9½¹”è(€€€€€€€Í•±˜¹}•¹‘}…Ñ¥½¸ ¤(€€€€€€€Í•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ¡ÍÑÈ¡•áŒ¤°•ÉÉ½ÈõQÉÕ”¤(€€€€€€€E5•ÍÍ…•	½à¹Ý…É¹¥¹œ¡Í•±˜°€‹–·š¾ošB·–¶C¢«’æƒ–ºˆ°ÍÑÈ¡•áŒ¤¤((€€€‘•˜}Í¥¹ÕÀ¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£–"o–îë¢Ò›–>ßŠ˜ˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Í¥¹•€ôÍ•±˜¹±¥•¹Ð¹Í¥¹}ÕÀ¡Í•±˜¹Í¥¹ÕÁ}•µ…¥°¹Ñ•áÐ ¤°Í•±˜¹Í¥¹ÕÁ}Á…ÍÍÝ½É¹Ñ•áÐ ¤°Í•±˜¹Í¥¹ÕÁ}¹¥­¹…µ”¹Ñ•áÐ ¤¤(€€€€€€€€€€€Í•±˜¹}•¹‘}…Ñ¥½¸ ¤(€€€€€€€€€€€¥˜Í¥¹•è(€€€€€€€€€€€€€€€Í•±˜¹}ÕÁ‘…Ñ•}…½Õ¹Ñ}ÍÑ…Ñ” ¤ìÍ•±˜¹É•™É•Í  ¤(€€€€€€€€€€€•±Í”è(€€€€€€€€€€€€€€€Í•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹šÎ£–3š"C–*¾ò3¢¾ß–"Ã¦
+»žºÇž†»¢º“–B;–n{šv—žfï–öWŽˆ¤(€€€€€€€€€€€€€€€E5•ÍÍ…•	½à¹¥¹™½Éµ…Ñ¥½¸ (€€€€€€€€€€€€€€€€€€€Í•±˜°(€€€€€€€€€€€€€€€€€€€€‹¢¾ßž†»¢º“¦
+»žºÄˆ°(€€€€€€€€€€€€€€€€€€€€‹šÎ£–3š"C–*Ž¢¾ß–"Ã¦
+»žºÇ–º3š"Cž†»¢º“¾ò3žÛ–B;–n{–"Ã¢þg¦3žfï–öWŽ	q¹q¸ˆ(€€€€€€€€€€€€€€€€€€€€‹ž†»¢º“¦†×’òkš&O–ò–·š¾o¦†çžn»¦†×¦v‹¾ò3’â7¦r¢š–B¿–* ±½…±¡½ÍÐƒšr7–*‡Žˆ°(€€€€€€€€€€€€€€€€¤(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒè(€€€€€€€€€€€Í•±˜¹}•ÉÉ½È¡•áŒ¤((€€€‘•˜}±½¥¸¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£žfï–öWšB·–¶C¢«’æƒ–º“Š˜ˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Í•±˜¹±¥•¹Ð¹Í¥¹}¥¸¡Í•±˜¹±½¥¹}•µ…¥°¹Ñ•áÐ ¤°Í•±˜¹±½¥¹}Á…ÍÍÝ½É¹Ñ•áÐ ¤¤(€€€€€€€€€€€Í•±˜¹}•¹‘}…Ñ¥½¸ ¤ìÍ•±˜¹}ÕÁ‘…Ñ•}…½Õ¹Ñ}ÍÑ…Ñ” ¤ìÍ•±˜¹Ñ…‰Ì¹Í•ÑÕÉÉ•¹Ñ%¹‘•à À¤ìÍ•±˜¹É•™É•Í  ¤(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒè(€€€€€€€€€€€Í•±˜¹}•ÉÉ½È¡•áŒ¤((€€€‘•˜}±½½ÕÐ¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹±¥•¹Ð¹Í¥¹}½ÕÐ ¤ìÍ•±˜¹‘…Ñ„€ôíôìÍ•±˜¹}ÕÁ‘…Ñ•}…½Õ¹Ñ}ÍÑ…Ñ” ¤ìÍ•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹–ÞË¦–ë¢Ò›–>ß¾ò3–·š¾ožîŸžî·žšïžêÿ¦f«’òÓŽˆ¤((€€€‘•˜É•™É•Í ¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£–"ßšZÃšB·–¶C’â;’âOšÎ£ž*ÛšŠ˜ˆ¤(€€€€€€€ÑÉäèÍ•±˜¹‘…Ñ„õÍ•±˜¹±¥•¹Ð¹‘…Í¡‰½…É ¤(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤ìÉ•ÑÕÉ¸(€€€€€€€Í•±˜¹}•¹‘}…Ñ¥½¸ ¤(€€€€€€€µ”õÍ•±˜¹‘…Ñ„¹•Ð ‰µ”ˆ¤½ÈíôìÍ•±˜¹¥‘•¹Ñ¥Ñä¹Í•ÑQ•áÐ¡˜‰íµ”¹•Ð ¹¥­¹…µ”œ°Ÿ–·š¾ošB·–¶@œ¥ôƒ
+Üƒš"GžjšB·–¶Cž‚¾òiíµ”¹•Ð ¥¹Ù¥Ñ•}½‘”œ°œ´´´´´´´´œ¥ôˆ¤(€€€€€€€Í•±˜¹¡¥‘‘•¸¹Í•Ñ¡•­•¡µ”¹•Ð ‰Ù¥Í¥‰¥±¥Ñäˆ¤€ôô€‰¡¥‘‘•¸ˆ¤ìÍ•±˜¹•á…Ð¹Í•Ñ¡•­•¡‰½½°¡µ”¹•Ð ‰Í¡½Ý}•á…Ñ}Ñ¥µ”ˆ±QÉÕ”¤¤¤ìÍ•±˜¹Ù¥Í¥ÑÍ}…±±½Ý•¹Í•Ñ¡•­•¡‰½½°¡µ”¹•Ð ‰…±±½Ý}Ù¥Í¥ÑÌˆ±QÉÕ”¤¤¤(€€€€€€€Í•±˜¹‰Õ‘‘¥•Ì¹±•…È ¤(€€€€€€€Á•½Á±”ô¡Í•±˜¹‘…Ñ„¹•Ð ‰‰Õ‘‘¥•Ìˆ¤½Èmt¤¬¡Í•±˜¹‘…Ñ„¹•Ð ‰É½½µ}Á•½Á±”ˆ¤½Èmt¤(€€€€€€€Í••¸õÍ•Ð ¤(€€€€€€€Ý½É­¥¹}½Õ¹Ð€ô€À(€€€€€€€Ù¥Í¥‰±•}Ñ½Ñ…°€ô€À(€€€€€€€™½È‰Õ‘‘ä¥¸Á•½Á±”è(€€€€€€€€€€€¥˜‰Õ‘‘ä¹•Ð ‰ÕÍ•É}¥ˆ¤¥¸Í••¸è½¹Ñ¥¹Õ”(€€€€€€€€€€€Í••¸¹…‘¡‰Õ‘‘ä¹•Ð ‰ÕÍ•É}¥ˆ¤¤(€€€€€€€€€€€Ý½É­¥¹}½Õ¹Ð€¬ô¥¹Ð¡‰½½°¡‰Õ‘‘ä¹•Ð ‰Ý½É­¥¹œˆ¤¤¤(€€€€€€€€€€€‘ÕÉ…Ñ¥½¸€ô‰Õ‘‘ä¹•Ð ‰Ñ½‘…å}Í•½¹‘Ìˆ¤(€€€€€€€€€€€¥˜‘ÕÉ…Ñ¥½¸¥Ì¹½Ð9½¹”èÙ¥Í¥‰±•}Ñ½Ñ…°€¬ôµ…à À°¥¹Ð¡‘ÕÉ…Ñ¥½¸¤¤(€€€€€€€€€€€¥Ñ•´õE1¥ÍÑ]¥‘•Ñ%Ñ•´ ¤ì¥Ñ•´¹Í•ÑM¥é•!¥¹Ð¡EM¥é” À°€ÄÈÔ¤¤ì¥Ñ•´¹Í•Ñ…Ñ„¡EÐ¹%Ñ•µ…Ñ…I½±”¹UÍ•ÉI½±”±‰Õ‘‘ä¤ìÍ•±˜¹‰Õ‘‘¥•Ì¹…‘‘%Ñ•´¡¥Ñ•´¤(€€€€€€€€€€€‰Õ‘‘å}Ý¥‘•Ð€ô	Õ‘‘å…É‘]¥‘•Ð¡‰Õ‘‘ä°Í•±˜¹‰Õ‘‘¥•Ì¤(€€€€€€€€€€€‰Õ‘‘å}Ý¥‘•Ð¹¥¹Ñ•É…Ñ¥½¹}É•ÅÕ•ÍÑ•¹½¹¹•Ð¡Í•±˜¹}Í•¹‘}¥¹Ñ•É…Ñ¥½¸¤(€€€€€€€€€€€Í•±˜¹‰Õ‘‘¥•Ì¹Í•Ñ%Ñ•µ]¥‘•Ð¡¥Ñ•´°‰Õ‘‘å}Ý¥‘•Ð¤(€€€€€€€µ•}Í•½¹‘Ì€ô¥¹Ð ¡Í•±˜¹‘…Ñ„¹•Ð ‰µ”ˆ¤½Èíô¤¹•Ð ‰Ñ½‘…å}Í•½¹‘Ìˆ¤½È€À¤(€€€€€€€Í•±˜¹ÍÑÕ‘å}ÍÕµµ…Éä¹Í•ÑQ•áÐ (€€€€€€€€€€€˜‹ž:Ã–r íÝ½É­¥¹}½Õ¹Ñôƒ’ö7šB·–¶Cš¶–r£’âOšÎ£Ž
+ßŽ ˆ(€€€€€€€€€€€˜‹š"Gžj’î+š^—’âOšÎ í™½Éµ…Ñ}Ý½É­}‘ÕÉ…Ñ¥½¸¡µ•}Í•½¹‘Ì¥÷Ž
+ßŽ ˆ(€€€€€€€€€€€˜‹š"ÿ¦^Ó–>¿¢ž–B#¢º„í™½Éµ…Ñ}Ý½É­}‘ÕÉ…Ñ¥½¸¡Ù¥Í¥‰±•}Ñ½Ñ…°¥ôˆ(€€€€€€€€¤(€€€€€€€¥˜¹½ÐÍ••¸è(€€€€€€€€€€€•µÁÑä€ôE1¥ÍÑ]¥‘•Ñ%Ñ•´ ‹¢þcšÊ‡šr'šB·–¶CŽž
+ç–ï’â/šZçŠsžR£šB·–¶Cž‚šÞï–*ƒŠw¾ò3’â¢Öß–Þ—’ösš^Û¢þg¦3’òkšbûž’ëšâš–kžj’âOšÎ£š^Û¦VÿŽˆ¤(€€€€€€€€€€€•µÁÑä¹Í•Ñ±…Ì¡EÐ¹%Ñ•µ±…œ¹9½%Ñ•µ±…Ì¤ìÍ•±˜¹‰Õ‘‘¥•Ì¹…‘‘%Ñ•´¡•µÁÑä¤(€€€€€€€Í•±˜¹¥¹‰½à¹±•…È ¤(€€€€€€€™½ÈÉ•ÅÕ•ÍÐ¥¸Í•±˜¹‘…Ñ„¹•Ð ‰É•ÅÕ•ÍÑÌˆ¤½Èmtè(€€€€€€€€€€€¥Ñ•´õE1¥ÍÑ]¥‘•Ñ%Ñ•´¡˜‹šB·–¶CžRÏ¢¾ß¾òiíÉ•ÅÕ•ÍÐ¹•Ð ¹¥­¹…µ”œ¥ôˆ¤ì¥Ñ•´¹Í•Ñ…Ñ„¡EÐ¹%Ñ•µ…Ñ…I½±”¹UÍ•ÉI½±”° ‰‰Õ‘‘äˆ±É•ÅÕ•ÍÐ¤¤ìÍ•±˜¹¥¹‰½à¹…‘‘%Ñ•´¡¥Ñ•´¤(€€€€€€€™½ÈÙ¥Í¥Ð¥¸Í•±˜¹‘…Ñ„¹•Ð ‰Ù¥Í¥ÑÌˆ¤½Èmtè(€€€€€€€€€€€¥Ñ•´õE1¥ÍÑ]¥‘•Ñ%Ñ•´¡˜‹’âË¦^£¦
+¢¾ß¾òiíÙ¥Í¥Ð¹•Ð ¹¥­¹…µ”œ¥ôˆ¤ì¥Ñ•´¹Í•Ñ…Ñ„¡EÐ¹%Ñ•µ…Ñ…I½±”¹UÍ•ÉI½±”° ‰Ù¥Í¥Ðˆ±Ù¥Í¥Ð¤¤ìÍ•±˜¹¥¹‰½à¹…‘‘%Ñ•´¡¥Ñ•´¤(€€€€€€€¥˜Í•±˜¹¥¹‰½à¹½Õ¹Ð ¤€ôô€Àè(€€€€€€€€€€€•µÁÑä€ôE1¥ÍÑ]¥‘•Ñ%Ñ•´ ‹–öO–&7šÊ‡šr'–ú–’žBžRÏ¢¾ßš"[’âË¦^£¾ò3šZÃžj¦
+¢¾ß’òkšbûž’ë–r£¢þg¦3Žˆ¤(€€€€€€€€€€€•µÁÑä¹Í•Ñ±…Ì¡EÐ¹%Ñ•µ±…œ¹9½%Ñ•µ±…Ì¤ìÍ•±˜¹¥¹‰½à¹…‘‘%Ñ•´¡•µÁÑä¤(€€€€€€€Í•±˜¹É½½µÌ¹±•…È ¤(€€€€€€€™½ÈÉ½½´¥¸Í•±˜¹‘…Ñ„¹•Ð ‰É½½µÌˆ¤½Èmtè(€€€€€€€€€€€É½½µ}¥Ñ•´€ôE1¥ÍÑ]¥‘•Ñ%Ñ•´ (€€€€€€€€€€€€€€€˜‰íÉ½½´¹•Ð ¹…µ”œ¥ôƒ
+ÜíÉ½½´¹•Ð µ•µ‰•ÉÌœ¥ôƒ’êèƒ
+Üƒš"ÿ¦^Óž‚íÉ½½´¹•Ð ¥¹Ù¥Ñ•}½‘”œ¥ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€É½½µ}¥Ñ•´¹Í•Ñ…Ñ„¡EÐ¹%Ñ•µ…Ñ…I½±”¹UÍ•ÉI½±”°É½½´¤(€€€€€€€€€€€Í•±˜¹É½½µÌ¹…‘‘%Ñ•´¡É½½µ}¥Ñ•´¤(€€€€€€€¥˜Í•±˜¹É½½µÌ¹½Õ¹Ð ¤€ôô€Àè(€€€€€€€€€€€•µÁÑå}É½½´€ôE1¥ÍÑ]¥‘•Ñ%Ñ•´ ‹¢þcšÊ‡šr'žž’êë¢«’æƒ–º“¾òo–"o–îë–B;–>¿š*+š"ÿ¦^Óž‚–>GžîgšB·–¶CŽˆ¤(€€€€€€€€€€€•µÁÑå}É½½´¹Í•Ñ±…Ì¡EÐ¹%Ñ•µ±…œ¹9½%Ñ•µ±…Ì¤ìÍ•±˜¹É½½µÌ¹…‘‘%Ñ•´¡•µÁÑå}É½½´¤(€€€€€€€É½½µ}Á•½Á±”€ô±¥ÍÐ¡Í•±˜¹‘…Ñ„¹•Ð ‰É½½µ}Á•½Á±”ˆ¤½Èmt¤(€€€€€€€Í•±˜¹}É•¹‘•É}É½½µ}Á•½Á±”¡É½½µ}Á•½Á±”¤(€€€€€€€½…°€ôÍ•±˜¹‘…Ñ„¹•Ð ‰É½½µ}½…°ˆ¤½Èíô(€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡½…°°‘¥Ð¤…¹½…°è(€€€€€€€€€€€Ñ…É•Ð€ô¥¹Ð¡½…°¹•Ð ‰Ñ…É•Ñ}Í•½¹‘Ìˆ¤½È½…°¹•Ð ‰Ñ…É•Ñ}µ¥¹ÕÑ•Ìˆ°€À¤€¨€ØÀ¤(€€€€€€€€€€€ÕÉÉ•¹Ð€ô¥¹Ð¡½…°¹•Ð ‰½µÁ±•Ñ•‘}Í•½¹‘Ìˆ¤½È½…°¹•Ð ‰ÕÉÉ•¹Ñ}Í•½¹‘Ìˆ°€À¤¤(€€€€€€€€€€€Í•±˜¹É½½µ}½…°¹Í•ÑQ•áÐ (€€€€€€€€€€€€€€€˜‹–Ç–B3žn»š‚¾òií™½Éµ…Ñ}Ý½É­}‘ÕÉ…Ñ¥½¸¡ÕÉÉ•¹Ð¥ô€¼í™½Éµ…Ñ}Ý½É­}‘ÕÉ…Ñ¥½¸¡Ñ…É•Ð¥ôˆ(€€€€€€€€€€€€€€€¥˜Ñ…É•Ð•±Í”˜‹–Ç–B3žn»š‚¾òií½…°¹•Ð Ñ¥Ñ±”œ¤½È€Ÿ’â¢Öß’âOšÎ ôˆ(€€€€€€€€€€€€¤(€€€€€€€•±¥˜¡…Í…ÑÑÈ¡Í•±˜°€‰É½½µ}½…°ˆ¤è(€€€€€€€€€€€Í•±˜¹É½½µ}½…°¹Í•ÑQ•áÐ ‹–Âkšr«¢ºûžö»–Ç–B3žn»š‚¾òo–"o–îëš"ÿ¦^Ó–B;–>¿’î—žRÄM½¥…°A$ƒš>C’úožn»š‚šVÃš6»Žˆ¤(€€€€€€€Í•±˜¹}É•¹‘•É}É½½µ}…Ñ¥Ù¥Ñä¡±¥ÍÐ¡Í•±˜¹‘…Ñ„¹•Ð ‰É½½µ}…Ñ¥Ù¥Ñäˆ¤½ÈÍ•±˜¹‘…Ñ„¹•Ð ‰…Ñ¥Ù¥Ñäˆ¤½Èmt¤¤(€€€€€€€…Ñ¥Ù”õÍ•±˜¹‘…Ñ„¹•Ð ‰…Ñ¥Ù•}Ù¥Í¥ÑÌˆ¤½Èmt(€€€€€€€¥˜…Ñ¥Ù”èÍ•±˜¹…Ñ¥Ù•}Ù¥Í¥Ð¹•µ¥Ð¡…Ñ¥Ù•lÁt¤(€€€€€€€Í•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹–ÞË–"ßšZÃ¾ò3¦†×¦v‹––ºçšb¿šršZÃžjŽˆ¤((€€€‘•˜}Í…Ù•}ÁÉ½™¥±”¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£’þw–¶c¦jCžž¢ºûžö»Š˜ˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€µ”õÍ•±˜¹‘…Ñ„¹•Ð ‰µ”ˆ¤½ÈíôìÍ•±˜¹±¥•¹Ð¹ÕÁ‘…Ñ•}ÁÉ½™¥±”¡¹¥­¹…µ”õÍÑÈ¡µ”¹•Ð ‰¹¥­¹…µ”ˆ¤½È€‹–·š¾ošB·–¶@ˆ¤±Ù¥Í¥‰¥±¥Ñäô‰¡¥‘‘•¸ˆ¥˜Í•±˜¹¡¥‘‘•¸¹¥Í¡•­• ¤•±Í”€‰™É¥•¹‘Ìˆ±Í¡½Ý}•á…Ñ}Ñ¥µ”õÍ•±˜¹•á…Ð¹¥Í¡•­• ¤±…±±½Ý}Ù¥Í¥ÑÌõÍ•±˜¹Ù¥Í¥ÑÍ}…±±½Ý•¹¥Í¡•­• ¤±½ÕÑ™¥Ñ}­•äõÍ•±˜¹½ÕÑ™¥Ñ}­•ä¤ìÍ•±˜¹É•™É•Í  ¤(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤(€€€‘•˜}…‘‘}‰Õ‘‘ä¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€½‘”±½¬õE%¹ÁÕÑ¥…±½œ¹•ÑQ•áÐ¡Í•±˜°‹šÞï–*ƒšB·–¶@ˆ°‹¢úO–—–¾çšZçžj€àƒ’ö7šB·–¶Cž‚¾òhˆ¤(€€€€€€€¥˜½¬…¹½‘”è(€€€€€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£–>G¦šB·–¶CžRÏ¢¾ßŠ˜ˆ¤(€€€€€€€€€€€ÑÉäèÍ•±˜¹±¥•¹Ð¹ÉÁŒ ‰±¥±¥}…‘‘}‰Õ‘‘å}‰å}½‘”ˆ±ì‰½‘”ˆé½‘•ô¤ìÍ•±˜¹É•™É•Í  ¤ìÍ•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹šB·–¶CžRÏ¢¾ß–ÞË–>G¦Žˆ¤(€€€€€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤(€€€‘•˜}Í•¹‘}Ù¥Í¥Ð¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€¥Ñ•´õÍ•±˜¹‰Õ‘‘¥•Ì¹ÕÉÉ•¹Ñ%Ñ•´ ¤(€€€€€€€¥˜¹½Ð¥Ñ•´èÉ•ÑÕÉ¸Í•±˜¹}•ÉÉ½È¡M½¥…±ÉÉ½È ‹¢¾ß–#¦'š.§’â’ö7šB·–¶CŽˆ¤¤(€€€€€€€‰Õ‘‘ä€ô¥Ñ•´¹‘…Ñ„¡EÐ¹%Ñ•µ…Ñ…I½±”¹UÍ•ÉI½±”¤(€€€€€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡‰Õ‘‘ä°‘¥Ð¤èÉ•ÑÕÉ¸Í•±˜¹}•ÉÉ½È¡M½¥…±ÉÉ½È ‹¢¾ß–#¦'š.§’â’ö7šB·–¶CŽˆ¤¤(€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹–·š¾oš¶–r£––’–ë–>GŠ˜ˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Í•±˜¹±¥•¹Ð¹ÉÁŒ ‰±¥±¥}Í•¹‘}Ù¥Í¥Ðˆ±ì‰Ñ…É•Ðˆé‰Õ‘‘ål‰ÕÍ•É}¥‰t°‰Ù¥Í¥Ñ}­¥¹ˆè‰Ù¥Í¥Ð‰ô¤ìÍ•±˜¹}•¹‘}…Ñ¥½¸ ¤ìÍ•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹–·š¾o–ÞËžî?–ë–>G¾ò3ž¶'–ú–¾çšZçš:—–>_’âË¦^£Žˆ¤ìE5•ÍÍ…•	½à¹¥¹™½Éµ…Ñ¥½¸¡Í•±˜°‹–ÞË–ë–>Dˆ°‹–·š¾o–ÞËžî?–ë–>G¾ò3ž¶'–ú–¾çšZçš:—–>_’âË¦^£Žˆ¤(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤(€€€‘•˜}…•ÁÑ}¥¹‰½à¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€¥Ñ•´õÍ•±˜¹¥¹‰½à¹ÕÉÉ•¹Ñ%Ñ•´ ¤(€€€€€€€¥˜¹½Ð¥Ñ•´èÉ•ÑÕÉ¸Í•±˜¹}•ÉÉ½È¡M½¥…±ÉÉ½È ‹¢¾ß–#¦'š.§’â¦†çžRÏ¢¾ßš"[’âË¦^£Žˆ¤¤(€€€€€€€­¥¹±‘…Ñ„õ¥Ñ•´¹‘…Ñ„¡EÐ¹%Ñ•µ…Ñ…I½±”¹UÍ•ÉI½±”¤(€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£–’žB¦'’â·žjžRÏ¢¾ßŠ˜ˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€¥˜­¥¹ôô‰‰Õ‘‘äˆèÍ•±˜¹±¥•¹Ð¹ÉÁŒ ‰±¥±¥}É•ÍÁ½¹‘}‰Õ‘‘äˆ±ì‰É•ÅÕ•ÍÑ}¥ˆé‘…Ñ…l‰¥‰t°‰…•ÁÐˆéQÉÕ•ô¤(€€€€€€€€€€€•±Í”èÍ•±˜¹±¥•¹Ð¹ÉÁŒ ‰±¥±¥}É•ÍÁ½¹‘}Ù¥Í¥Ðˆ±ì‰•Ù•¹Ñ}¥ˆé‘…Ñ…l‰¥‰t°‰…•ÁÐˆéQÉÕ•ô¤(€€€€€€€€€€€Í•±˜¹É•™É•Í  ¤(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤(€€€‘•˜}É•…Ñ•}É½½´¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€¹…µ”±½¬õE%¹ÁÕÑ¥…±½œ¹•ÑQ•áÐ¡Í•±˜°‹–"o–îë¢«’æƒ–ºˆ°‹¢«’æƒ–º“–B7žžÃ¾òhˆ±Ñ•áÐô‹–º'¦vg–Þ—’ös¦^Ðˆ¤(€€€€€€€¥˜½¬…¹¹…µ”è(€€€€€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£–"o–îë¢«’æƒ–º“Š˜ˆ¤(€€€€€€€€€€€ÑÉäèÍ•±˜¹±¥•¹Ð¹ÉÁŒ ‰±¥±¥}É•…Ñ•}É½½´ˆ±ì‰É½½µ}¹…µ”ˆé¹…µ•ô¤ìÍ•±˜¹É•™É•Í  ¤ìÍ•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹¢«’æƒ–º“–ÞË–"o–îë¾ò3–>¿’î—–"’ê¯š"ÿ¦^Óž‚’êŽˆ¤(€€€€€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤(€€€‘•˜}©½¥¹}É½½´¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹}É•ÅÕ¥É•}±½¥¸ ¤èÉ•ÑÕÉ¸(€€€€€€€½‘”±½¬õE%¹ÁÕÑ¥…±½œ¹•ÑQ•áÐ¡Í•±˜°‹–*ƒ–—¢«’æƒ–ºˆ°‹¢úO–”€àƒ’ö7š"ÿ¦^Óž‚¾òhˆ¤(€€€€€€€¥˜½¬…¹½‘”è(€€€€€€€€€€€Í•±˜¹}‰•¥¹}…Ñ¥½¸ ‹š¶–r£–*ƒ–—¢«’æƒ–º“Š˜ˆ¤(€€€€€€€€€€€ÑÉäèÍ•±˜¹±¥•¹Ð¹ÉÁŒ ‰±¥±¥}©½¥¹}É½½´ˆ±ì‰½‘”ˆé½‘•ô¤ìÍ•±˜¹É•™É•Í  ¤ìÍ•±˜¹}Í•Ñ}ÍÑ…ÑÕÌ ‹–ÞË–*ƒ–—¢«’æƒ–º“Žˆ¤(€€€€€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒèÍ•±˜¹}•ÉÉ½È¡•áŒ¤

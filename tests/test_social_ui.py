@@ -35,6 +35,18 @@ class SignedInClient:
         }
 
 
+class RoomClient(SignedInClient):
+    def dashboard(self):
+        data = super().dashboard()
+        data["me"]["today_seconds"] = 1860
+        data["room_people"] = [
+            {"user_id": "buddy-1", "nickname": "胡老师", "online": True, "working": True, "today_seconds": 900},
+        ]
+        data["room_goal"] = {"target_seconds": 4800, "completed_seconds": 2100}
+        data["room_activity"] = ["16:32 胡老师开始专注", "16:49 六毛送来一杯奶茶"]
+        return data
+
+
 def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedOutClient())
@@ -107,3 +119,18 @@ def test_buddy_visit_is_a_normal_minimizable_taskbar_window() -> None:
     assert visit.isMinimized()
     visit.hide_visit()
     visit.close(); visit.deleteLater(); app.processEvents()
+
+
+def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(RoomClient())
+    dialog.set_focus_snapshot({"status": "focus", "session_seconds": 2520, "today_seconds": 1860})
+    dialog.refresh()
+    app.processEvents()
+
+    assert dialog.focus_status.text() == "专注中"
+    assert "42分钟" in dialog.focus_clock.text()
+    assert dialog.room_members.count() == 1
+    assert dialog.room_activity.count() == 2
+    assert "35分钟" in dialog.room_goal.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()

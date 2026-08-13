@@ -48,6 +48,7 @@ class SocialBackend(Protocol):
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None) -> None: ...
+    def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
 
 
 class HttpSocialBackend:
@@ -186,6 +187,14 @@ class HttpSocialBackend:
         if not self.session:
             return
         self._raw("POST", "/presence/heartbeat", {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "outfit_key": outfit_key[:60], "room_id": room_id, "last_seen": datetime.now().astimezone().isoformat()}, authenticated=True)
+
+    def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
+        self._raw(
+            "POST",
+            "/rooms/interaction",
+            {"target": target, "kind": kind, "room_id": room_id},
+            authenticated=True,
+        )
 
 
 class SocialClient:
@@ -352,3 +361,11 @@ class SocialClient:
             return
         body = {"user_id": self.session.user_id, "working": bool(working), "session_started_at": session_started_at, "focus_date": datetime.now().date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "last_seen": datetime.now().astimezone().isoformat(), "updated_at": datetime.now().astimezone().isoformat()}
         self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+
+    def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
+        if self._http_backend is not None:
+            return self._http_backend.send_interaction(target=target, kind=kind, room_id=room_id)
+        self.rpc(
+            "lili_send_interaction",
+            {"target": target, "kind": kind, "room_id": room_id},
+        )
