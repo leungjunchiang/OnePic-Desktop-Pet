@@ -438,7 +438,62 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
 
 
 def test_context_menu_uses_direct_high_frequency_entries() -> None:
-    """一级菜单直接呈现聊天��}m�G����ƭyւ食、饮品与状态"].menu()
+    """一级菜单直接呈现聊天、工作、音乐、自习室、动作和喂食入口。"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels[:7] == [
+        "和六毛聊聊…",
+        "工作打卡/工作计时",
+        "音乐",
+        "搭子自习室…",
+        "动作",
+        "给六毛喂食",
+        "换装与外观",
+    ]
+    assert "隐藏" in labels
+    assert "退出" in labels
+    assert "陪伴动作" not in labels
+    assert "完整图片动作" not in labels
+    assert not any("›" in label for label in labels)
+    music = next(action for action in menu.actions() if action.text() == "音乐")
+    music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
+    assert music_labels == ["随机听一首陈楚生", "播放/暂停", "下一首", "上一首", "音乐播放器设置"]
+    food = next(action for action in menu.actions() if action.text() == "给六毛喂食")
+    assert food.menu() is not None
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def _legacy_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
+    """右键菜单只保留五个一级分组，功能放入语义明确的子菜单。"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    actions = {action.text(): action for action in menu.actions()}
+    assert list(actions) == ["聊天与陪伴", "动作与外观", "音乐与娱乐", "专注与自习", "系统与显示"]
+
+    chat_actions = {action.text(): action for action in actions["聊天与陪伴"].menu().actions()}
+    appearance_actions = {action.text(): action for action in actions["动作与外观"].menu().actions()}
+    music_actions = {action.text(): action for action in actions["音乐与娱乐"].menu().actions()}
+    focus_actions = {action.text(): action for action in actions["专注与自习"].menu().actions()}
+    system_actions = {action.text(): action for action in actions["系统与显示"].menu().actions() if not action.isSeparator()}
+
+    assert "和六毛聊聊…" in chat_actions
+    assert "陪伴动作" in chat_actions
+    assert "喂食、饮品与状态" in chat_actions
+    assert "六毛搭子自习室…" in chat_actions
+    assert "完整图片动作" in appearance_actions
+    assert "工作时长娃衣" in appearance_actions
+    assert "控制正在运行的播放器" in music_actions
+    assert any(text.startswith("工作计时：") for text in focus_actions)
+    assert "AI 与陪伴设置…" in system_actions
+    assert system_actions["偶尔发牢骚"].isChecked()
+    assert not system_actions["整点报时"].isChecked()
+    food_menu = chat_actions["喂食、饮品与状态"].menu()
     assert food_menu is not None
     food_actions = [action.text() for action in food_menu.actions() if not action.isSeparator()]
     assert food_actions == [
