@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Existing GitHub Release tag"
         required: true
-      default: "v0.21.5"
+        default: "v0.21.5"
         type: string
 
 permissions:
