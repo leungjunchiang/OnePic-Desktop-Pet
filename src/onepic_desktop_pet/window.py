@@ -1475,24 +1475,22 @@ class PetWindow(QWidget):
             self._generate_daily_report(show_dialog=True)
 
     def _sync_hourly_outfit(self, *, announce: bool) -> None:
-        """按终身累计专注时长自动换上最新解锁娃衣。"""
+        """同步小时娃衣解锁，不覆盖用户主动选择的当前装备。
+
+        工作时长只决定哪些套装可用；装备本身是用户偏好，必须一直保留。
+        这样累计到 10 小时会解锁荒野相关套装，但不会把用户正在穿的
+        一小时兔兔装、经典外观或其他已解锁套装强行替换掉。
+        """
 
         count = self.work_timer.unlocked_outfit_count()
         latest = OUTFITS[count - 1] if count else None
-        desired = latest.key if latest is not None else ""
         newly_unlocked = self.work_timer.take_new_outfit_unlock()
-        if self.settings.equipped_outfit != desired:
-            self.settings.equipped_outfit = desired
-            save_settings(self.settings)
-            self._render_cache.clear()
-            self._mask_cache.clear()
-            if hasattr(self, "label"):
-                self._refresh_pixmap()
         if not announce or newly_unlocked is None or latest is None:
             return
         self._change_ambient_activity("none")
         self.show_speech(
-            f"累计专注 {newly_unlocked} 小时，自动换上「{latest.name}」！\n{latest.message}",
+            f"累计专注 {newly_unlocked} 小时，已解锁「{latest.name}」！\n"
+            f"你可以在“换装与外观”里选择，当前装备保持不变。",
             8200,
         )
 
@@ -1694,7 +1692,13 @@ class PetWindow(QWidget):
             self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, self)
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
             self._social_dialog.finished.connect(self._social_dialog_finished)
-        self._social_dialog.show(); self._social_dialog.raise_(); self._social_dialog.activateWindow()
+        # A second click on the menu must restore a minimized study-room
+        # window instead of leaving it hidden in the taskbar/Dock.
+        if self._social_dialog.isMinimized():
+            self._social_dialog.showNormal()
+        else:
+            self._social_dialog.show()
+        self._social_dialog.raise_(); self._social_dialog.activateWindow()
 
     def _social_dialog_finished(self) -> None:
         if self._social_dialog is not None:

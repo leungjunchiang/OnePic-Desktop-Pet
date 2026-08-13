@@ -110,6 +110,45 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     app.processEvents()
 
 
+def test_hourly_unlocks_never_override_manual_outfit_selection(monkeypatch) -> None:
+    """小时成长线只解锁娃衣，不能把用户选好的外观强行换掉。"""
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.settings.equipped_outfit = "hour-01"
+    window.work_timer._lifetime_seconds = 10 * 3600
+    window.work_timer._running_since = None
+    window.work_timer._notified_outfit_count = 0
+
+    window._sync_hourly_outfit(announce=False)
+    assert window.work_timer.unlocked_outfit_count() == 10
+    assert window.settings.equipped_outfit == "hour-01"
+
+    window._sync_hourly_outfit(announce=True)
+    assert window.settings.equipped_outfit == "hour-01"
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_study_room_menu_restores_minimized_window() -> None:
+    """再次点击自习室入口会恢复原窗口，而不是重复创建窗口。"""
+    app, window = _create_window()
+    window.open_social_hub()
+    dialog = window._social_dialog
+    assert dialog is not None
+    dialog.showMinimized()
+    app.processEvents()
+
+    window.open_social_hub()
+    app.processEvents()
+    assert window._social_dialog is dialog
+    assert not dialog.isMinimized()
+    dialog.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_window_uses_character_mask_and_reuses_render_cache() -> None:
     app, window = _create_window()
     initial_render_count = len(window._render_cache)
