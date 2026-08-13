@@ -60,6 +60,15 @@ def test_focus_presence_dashboard_returns_explicit_current_status() -> None:
     assert "f.last_seen>now()-interval '2 minutes'" in sql
 
 
+def test_social_helper_functions_are_executable_by_authenticated_rls() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = root / "supabase" / "migrations" / "20260813134500_lili_social_helper_permissions.sql"
+    sql = migration.read_text(encoding="utf-8")
+    assert "grant execute on function public.lili_are_buddies(uuid, uuid) to authenticated" in sql
+    assert "grant execute on function public.lili_share_room(uuid, uuid) to authenticated" in sql
+    assert "anon" not in sql.lower()
+
+
 class RecordingHttpBackend(HttpSocialBackend):
     def __init__(self) -> None:
         super().__init__("https://social.example.test", persist_tokens=False)
