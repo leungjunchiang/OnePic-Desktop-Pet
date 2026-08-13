@@ -15,6 +15,8 @@ def test_worldview_identity_and_boundaries_are_short() -> None:
     assert worldview_response("你是谁", random.Random(1)).text == "六毛。"
     assert worldview_response("谁家的", random.Random(1)).text == "陈楚生家的。"
     assert worldview_response("陈楚生是谁", random.Random(1)).text == "我爹。"
+    assert worldview_response("你认识陈楚生吗", random.Random(1)).key == "father_identity"
+    assert "我爹" in worldview_response("你认识陈楚生吗", random.Random(1)).text
     assert worldview_response("你爹现在在哪", random.Random(1)).key == "privacy"
     assert "没跟我报备" in worldview_response("你爹现在在哪", random.Random(1)).text
 
@@ -32,6 +34,7 @@ def test_family_song_and_prompt_are_on_demand() -> None:
     assert response.state is PetState.SIT
     assert worldview_prompt_context("今天写论文") == ""
     assert "少说话" in worldview_prompt_context("正在听有没有人告诉你")
+    assert "我爹" in worldview_prompt_context("你认识陈楚生吗")
 
 
 def test_family_music_mode_only_uses_public_track_metadata() -> None:

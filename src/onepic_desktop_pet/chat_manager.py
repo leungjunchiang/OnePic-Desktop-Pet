@@ -433,6 +433,12 @@ class ChatManager(QObject):
         if self.busy:
             self.notice.emit("上一句话还在路上，稍等我一下。")
             return False
+        # 角色身份和隐私边界不能交给在线模型自由改写；明确的世界观短问句
+        # 直接本地回答，确保“你认识陈楚生吗”不会退化成百科人物介绍。
+        worldview = worldview_response(message)
+        if worldview is not None:
+            self.reply_ready.emit(ManagedChatReply(worldview.text, worldview.state, "offline"))
+            return True
         provider = self.settings.ai_provider
         status = self.agents.status(provider)
         if provider == "offline" or status.state != AgentConnectionState.CONNECTED:

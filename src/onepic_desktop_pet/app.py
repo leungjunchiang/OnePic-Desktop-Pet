@@ -74,6 +74,10 @@ class DesktopPetApplication:
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
 
+        rename_action = QAction(f"给{pet_name}改名字…", menu)
+        rename_action.triggered.connect(self.window.rename_pet)
+        menu.addAction(rename_action)
+
         social_action = QAction("搭子与自习室…", menu)
         social_action.triggered.connect(self.window.open_social_hub)
         menu.addAction(social_action)
@@ -105,6 +109,7 @@ class DesktopPetApplication:
         self.tray_menu = menu
         self.panel_action = panel_action
         self.dialogue_action = dialogue_action
+        self.rename_action = rename_action
         tray.activated.connect(self._tray_activated)
         return tray
 
@@ -115,6 +120,7 @@ class DesktopPetApplication:
         self.tray.setToolTip(f"Lili · {name}")
         self.panel_action.setText(f"{name}快捷口袋")
         self.dialogue_action.setText(f"和{name}聊聊…")
+        self.rename_action.setText(f"给{name}改名字…")
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""

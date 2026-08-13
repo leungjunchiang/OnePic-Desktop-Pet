@@ -1713,6 +1713,7 @@ class PetWindow(QWidget):
             self._chat_dialog = ChatDialog(None, self._pet_name())
             self._chat_dialog.message_submitted.connect(self._submit_chat_message)
             self._chat_dialog.settings_requested.connect(self.open_settings)
+            self._chat_dialog.rename_requested.connect(self.rename_pet)
             self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
             self._chat_dialog.append_message(
                 self._pet_name(),
@@ -1730,6 +1731,30 @@ class PetWindow(QWidget):
             self._chat_dialog.show()
         self._chat_dialog.raise_()
         self._chat_dialog.activateWindow()
+
+    def rename_pet(self) -> None:
+        """通过明确的用户入口修改昵称，并立即同步所有可见窗口。"""
+
+        self._record_user_interaction()
+        name, accepted = QInputDialog.getText(
+            self,
+            "给六毛改名字",
+            "请输入新名字（最多 20 个字）：",
+            text=self._pet_name(),
+        )
+        if not accepted:
+            return
+        name = str(name).replace("\x00", "").strip()[:20] or "六毛"
+        previous_name = self._pet_name()
+        self.settings.pet_name = name
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} · {name}")
+        if self._chat_dialog is not None:
+            self._chat_dialog.set_pet_name(name)
+        self.quick_panel.set_pet_name(name)
+        if name != previous_name:
+            self.pet_name_changed.emit(name)
+        save_settings(self.settings)
+        self.show_speech(f"好，以后就叫我{name}。", 3500)
 
     def _submit_chat_message(self, message: str) -> None:
         """把消息交给 ChatManager；路由只读取缓存，不做同步检测。"""
@@ -2521,6 +2546,9 @@ class PetWindow(QWidget):
         """构建高频入口直达、低频选项收纳到二级菜单的右键菜单。"""
 
         menu = QMenu(self)
+        rename_action = QAction(f"给{self._pet_name()}改名字…", self)
+        rename_action.triggered.connect(self.rename_pet)
+        menu.addAction(rename_action)
         dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         menu.addAction(dialogue_action)
@@ -2629,6 +2657,9 @@ class PetWindow(QWidget):
         dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         chat_group.addAction(dialogue_action)
+        rename_action = QAction(f"给{self._pet_name()}改名字…", self)
+        rename_action.triggered.connect(self.rename_pet)
+        chat_group.addAction(rename_action)
         social_action = QAction(f"{self._pet_name()}搭子自习室…", self)
         social_action.triggered.connect(self.open_social_hub)
         chat_group.addAction(social_action)
