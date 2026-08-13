@@ -2551,3 +2551,332 @@ class PetWindow(QWidget):
         study_action = QAction("搭子自习室…", self)
         study_action.triggered.connect(self.open_social_hub)
         menu.addAction(study_action)
+        action_menu = menu.addMenu("动作")
+        for group_name, entries in ACTION_GROUPS:
+            group_menu = action_menu.addMenu(group_name)
+            for label, key in entries:
+                action = QAction(label, self)
+                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+                group_menu.addAction(action)
+        selfie = QAction("自拍", self)
+        selfie.triggered.connect(self.trigger_selfie)
+        action_menu.addAction(selfie)
+        pause = QAction("恢复动画" if self.paused else "暂停动画", self)
+        pause.setCheckable(True)
+        pause.setChecked(self.paused)
+        pause.triggered.connect(lambda: self.set_paused(not self.paused))
+        action_menu.addAction(pause)
+        food_menu = menu.addMenu(f"给{self._pet_name()}喂食")
+        for food in FOOD_OPTIONS:
+            action = QAction(food.label, self)
+            action.triggered.connect(lambda _checked=False, key=food.key: self.feed_pet(key))
+            food_menu.addAction(action)
+        food_menu.addSeparator()
+        mood = QAction("查看心情与能量", self)
+        mood.triggered.connect(self.show_companion_status)
+        food_menu.addAction(mood)
+        outfit_menu = menu.addMenu("换装与外观")
+        classic = QAction(f"经典{self._pet_name()}", self)
+        classic.setCheckable(True)
+        classic.setChecked(not self.settings.equipped_outfit)
+        classic.triggered.connect(lambda: self.equip_outfit(""))
+        outfit_menu.addAction(classic)
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        for outfit in OUTFITS:
+            action = QAction(outfit.name, self)
+            available = outfit in unlocked
+            action.setEnabled(available)
+            action.setCheckable(True)
+            action.setChecked(outfit.key == self.settings.equipped_outfit)
+            if available:
+                action.triggered.connect(lambda _checked=False, key=outfit.key: self.equip_outfit(key))
+            outfit_menu.addAction(action)
+        menu.addSeparator()
+        for label, callback, checked in (("偶尔发牢骚", self.set_automatic_grumbling, self.settings.automatic_grumbling), ("整点报时", self.set_hourly_announcement, self.settings.hourly_announcement), ("始终置顶", self.set_always_on_top, self.settings.always_on_top)):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(checked)
+            action.toggled.connect(callback)
+            menu.addAction(action)
+        system_menu = menu.addMenu("系统与设置")
+        ai_action = QAction("AI 与陪伴设置", self)
+        ai_action.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        system_menu.addAction(ai_action)
+        size_action = QAction("调整桌宠大小", self)
+        size_action.triggered.connect(self.open_size_control)
+        system_menu.addAction(size_action)
+        return_action = QAction("回到主屏幕", self)
+        return_action.triggered.connect(self.return_to_primary_screen)
+        system_menu.addAction(return_action)
+        hide_action = QAction("隐藏", self)
+        hide_action.triggered.connect(self.hide)
+        menu.addAction(hide_action)
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        menu.addAction(quit_action)
+        return menu
+
+    def _build_context_menu_legacy(self) -> QMenu:
+        """按五个稳定分组构建右键菜单，避免功能平铺和入口层级混乱。"""
+
+        menu = QMenu(self)
+        chat_group = menu.addMenu("聊天与陪伴")
+        action_group = menu.addMenu("动作与外观")
+        music_group = menu.addMenu("音乐与娱乐")
+        focus_group = menu.addMenu("专注与自习")
+        system_group = menu.addMenu("系统与显示")
+
+        dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
+        dialogue_action.triggered.connect(self.prompt_dialogue)
+        chat_group.addAction(dialogue_action)
+        social_action = QAction(f"{self._pet_name()}搭子自习室…", self)
+        social_action.triggered.connect(self.open_social_hub)
+        chat_group.addAction(social_action)
+        action_menu = chat_group.addMenu("陪伴动作")
+        for option in COMPANION_ACTIONS:
+            action = QAction(option.label, self)
+            action.triggered.connect(
+                lambda _checked=False, key=option.key: self.perform_companion_action(
+                    key
+                )
+            )
+            action_menu.addAction(action)
+        food_menu = chat_group.addMenu("喂食、饮品与状态")
+        for food in FOOD_OPTIONS:
+            food_action = QAction(food.label, self)
+            food_action.triggered.connect(
+                lambda _checked=False, key=food.key: self.feed_pet(key)
+            )
+            food_menu.addAction(food_action)
+        food_menu.addSeparator()
+        mood_action = QAction(f"查看{self._pet_name()}心情与能量", self)
+        mood_action.triggered.connect(self.show_companion_status)
+        food_menu.addAction(mood_action)
+
+        pause_action = QAction("恢复跑动" if self.paused else "暂停跑动", self)
+        pause_action.triggered.connect(lambda: self.set_paused(not self.paused))
+        action_group.addAction(pause_action)
+        picture_actions = action_group.addMenu("完整图片动作")
+        for group_name, entries in ACTION_GROUPS:
+            group_menu = picture_actions.addMenu(group_name)
+            for label, key in entries:
+                action = QAction(label, self)
+                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+                group_menu.addAction(action)
+        selfie_action = QAction("自拍一下", self)
+        selfie_action.triggered.connect(self.trigger_selfie)
+        action_group.addAction(selfie_action)
+        outfit_menu = action_group.addMenu("工作时长娃衣")
+        classic = QAction(f"经典{self._pet_name()}", self)
+        classic.setCheckable(True)
+        classic.setChecked(not self.settings.equipped_outfit)
+        classic.triggered.connect(lambda: self.equip_outfit(""))
+        outfit_menu.addAction(classic)
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        for hour, outfit in enumerate(OUTFITS, start=1):
+            available = outfit in unlocked
+            label = (
+                f"{hour} 小时 · {outfit.name}"
+                if available
+                else f"🔒 {hour} 小时 · {outfit.name}"
+            )
+            action = QAction(label, self)
+            action.setCheckable(available)
+            action.setChecked(outfit.key == self.settings.equipped_outfit)
+            action.setEnabled(available)
+            if available:
+                action.triggered.connect(
+                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
+                )
+            outfit_menu.addAction(action)
+
+        music_control_menu = music_group.addMenu("控制正在运行的播放器")
+        for label, command in (
+            ("播放 / 暂停", "toggle"),
+            ("上一首", "previous"),
+            ("下一首", "next"),
+            ("查看正在播放", "status"),
+        ):
+            control_action = QAction(label, self)
+            control_action.triggered.connect(
+                lambda _checked=False, value=command: self.control_music(value)
+            )
+            music_control_menu.addAction(control_action)
+        music_search_action = QAction("搜索一首陈楚生", self)
+        music_search_action.triggered.connect(self.play_random_song)
+        music_group.addAction(music_search_action)
+        music_move = music_group.addMenu("音乐动作")
+        for label, key in (("戴耳机", "headphones"), ("弹吉他", "guitar"), ("打鼓", "drums")):
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+            music_move.addAction(action)
+
+        work_menu = focus_group.addMenu(
+            f"工作计时：{format_work_duration(self.work_timer.today_seconds())}"
+        )
+        start_work_action = QAction("开始/继续工作", self)
+        start_work_action.setEnabled(not self.work_timer.is_running)
+        start_work_action.triggered.connect(self.start_work_timer)
+        work_menu.addAction(start_work_action)
+        if self.work_timer.is_running:
+            controls_action = QAction("摸头或点电脑进行暂停/结束", self)
+            controls_action.triggered.connect(self.show_work_controls)
+            work_menu.addAction(controls_action)
+        show_work_action = QAction("查看今日累计", self)
+        show_work_action.triggered.connect(self.show_work_time)
+        work_menu.addAction(show_work_action)
+        growth_action = QAction("查看今日 0–8 小时成长线", self)
+        growth_action.triggered.connect(self.show_daily_growth)
+        work_menu.addAction(growth_action)
+        report_action = QAction(f"今天{self._pet_name()}陪你做了什么", self)
+        report_action.triggered.connect(self.show_daily_report)
+        work_menu.addAction(report_action)
+        album_action = QAction(f"打开{self._pet_name()}相册", self)
+        album_action.triggered.connect(self.open_daily_album)
+        work_menu.addAction(album_action)
+        focus_social = QAction("打开搭子自习室…", self)
+        focus_social.triggered.connect(self.open_social_hub)
+        focus_group.addAction(focus_social)
+
+        ai_action = QAction("AI 与陪伴设置…", self)
+        ai_action.triggered.connect(
+            lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION)
+        )
+        system_group.addAction(ai_action)
+        grumble_action = QAction("偶尔发牢骚", self)
+        grumble_action.setCheckable(True)
+        grumble_action.setChecked(self.settings.automatic_grumbling)
+        grumble_action.toggled.connect(self.set_automatic_grumbling)
+        system_group.addAction(grumble_action)
+        hourly_action = QAction("整点报时", self)
+        hourly_action.setCheckable(True)
+        hourly_action.setChecked(self.settings.hourly_announcement)
+        hourly_action.toggled.connect(self.set_hourly_announcement)
+        system_group.addAction(hourly_action)
+        topmost_action = QAction("始终置顶（关闭即桌面模式）", self)
+        topmost_action.setCheckable(True)
+        topmost_action.setChecked(self.settings.always_on_top)
+        topmost_action.toggled.connect(self.set_always_on_top)
+        system_group.addAction(topmost_action)
+        size_action = QAction("连续调节宠物大小…", self)
+        size_action.triggered.connect(self.open_size_control)
+        system_group.addAction(size_action)
+        system_group.addSeparator()
+        return_action = QAction("回到主屏幕", self)
+        return_action.triggered.connect(self.return_to_primary_screen)
+        system_group.addAction(return_action)
+        hide_action = QAction("隐藏", self)
+        hide_action.triggered.connect(self.hide)
+        system_group.addAction(hide_action)
+        system_group.addSeparator()
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        system_group.addAction(quit_action)
+        return menu
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """稍候显示单次右键菜单，为双击右键的巴布达语音留出判定时间。"""
+
+        self._record_user_interaction()
+        if time.monotonic() < self._suppress_context_until:
+            event.accept()
+            return
+        self._pending_context_global = event.globalPos()
+        self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
+        event.accept()
+
+    def _show_deferred_context_menu(self) -> None:
+        """确认不是双击后，在原鼠标位置打开普通右键菜单。"""
+
+        if time.monotonic() >= self._suppress_context_until:
+            self._build_context_menu().exec(self._pending_context_global)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """记录左键按下；只有移动超过系统阈值后才真正进入拖拽。"""
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._record_user_interaction()
+            self._press_pending = True
+            self._long_press_triggered = False
+            self.long_press_timer.start(850)
+            self.dragging = False
+            self.state_timer.stop()
+            self.interaction_timer.stop()
+            self.hover_timer.stop()
+            self._press_local = event.position().toPoint()
+            self._press_global = event.globalPosition().toPoint()
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """拖动期间根据全局鼠标位置移动并限制窗口。"""
+
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            current_global = event.globalPosition().toPoint()
+            if (
+                self._press_pending
+                and (current_global - self._press_global).manhattanLength()
+                >= QApplication.startDragDistance()
+            ):
+                self.long_press_timer.stop()
+                self._press_pending = False
+                self.dragging = True
+                self.mood.receive_drag()
+                self.set_state(PetState.DRAG)
+            if not self.dragging:
+                event.accept()
+                return
+            target = event.globalPosition().toPoint() - self._drag_offset
+            self.move(self._constrained_position(target))
+            event.accept()
+            return
+        self._track_passive_motion(event.position().toPoint())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """左键释放时结束拖动并恢复待机。"""
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.long_press_timer.stop()
+            if self.dragging:
+                self.dragging = False
+                self._press_pending = False
+                self._show_emotion(PetState.SURPRISED, 1100)
+            elif self._long_press_triggered:
+                self._long_press_triggered = False
+            elif self._press_pending:
+                self._press_pending = False
+                self._handle_click(self._press_local)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """鼠标离开宠物时取消尚未触发的悬停和摸头轨迹。"""
+
+        self._hover_zone = ""
+        self._stroke_points.clear()
+        self.hover_timer.stop()
+        self.long_press_timer.stop()
+        super().leaveEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """双击左键打开快捷口袋；双击右键播放一声不同语气的巴布达。"""
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = False
+            self._press_pending = False
+            self._record_user_interaction()
+            self.show_quick_panel()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self.context_menu_timer.stop()
+            self._suppress_context_until = time.monotonic() + 0.8
+            self._record_user_interaction()
+            self.play_babuda_voice()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
