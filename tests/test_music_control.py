@@ -78,7 +78,7 @@ def test_windows_uses_matching_system_media_session_before_fallback() -> None:
 
     assert result.success is True
     assert result.used_fallback is False
-    assert result.status.state is MusicControlState.CONTROL_READY
+    assert result.status.state is MusicControlState.PLAYING
     assert result.status.track == session.track
     assert bridge.commands == [(session.source_id, "toggle")]
     assert fallback == []
@@ -174,6 +174,142 @@ def test_windows_installed_but_not_running_is_not_connected() -> None:
     assert sent == []
 
 
+def test_transport_launches_waits_for_target_session_then_controls_without_media_key() -> None:
+    """基础控制只查找目标 Session；启动和等待成功后不应触发全局媒体键。"""
+
+    session = WindowsSessionSnapshot(
+        "Tencent.QQMusic",
+        TrackInfo("有没有人告诉你", "陈楚生", playback_status="paused"),
+        frozenset({"play"}),
+    )
+    bridge = FakeWindowsBridge()
+    running = False
+    launches: list[tuple[str, Path]] = []
+    media_keys: list[str] = []
+
+    def launch(provider: str, client: Path) -> bool:
+        nonlocal running
+        running = True
+        bridge.snapshots = (session,)
+        launches.append((provider, client))
+        return True
+
+    manager = MusicProviderManager(
+        PetSettings(),
+        platform_name="win32",
+        windows_bridge=bridge,
+        client_finder=_client_finder,
+        process_checker=lambda name: running and name == "QQMusic.exe",
+        client_launcher=launch,
+        media_key_sender=lambda action: media_keys.append(action) or True,
+        transport_wait_timeout=0,
+    )
+
+    result = manager.control("qq", "play")
+
+    assert result.success is True
+    assert launches == [("qq", Path("detected-player.exe"))]
+    assert bridge.commands == [(session.source_id, "play")]
+    assert media_keys == []
+
+
+def test_transport_control_never_invokes_song_resolver_adapter() -> None:
+    """播放/暂停/切歌只能走 Transport，不得顺带搜索或点击播放器 UI。"""
+
+    session = WindowsSessionSnapshot(
+        "cloudmusic.exe",
+        TrackInfo("当前队列歌曲", "陈楚生", playback_status="playing"),
+        frozenset({"pause"}),
+    )
+
+    class ExplodingSearchAdapter(FakeRandomAdapter):
+        def search(self, _title: str, _artist: str):
+            raise AssertionError("基础控制不应进入 Song Resolver")
+
+    manager = MusicProviderManager(
+        PetSettings(),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge((session,)),
+        client_finder=_client_finder,
+        process_checker=lambda name: name.casefold().startswith("cloudmusic"),
+        playback_adapters={"netease": ExplodingSearchAdapter("netease", play_success=True)},
+    )
+
+    result = manager.control("netease", "pause")
+
+    assert result.success is True
+    assert result.status.state is MusicControlState.PLAYING
+
+
+def test_launched_process_still_initializing_has_distinct_state() -> None:
+    manager = MusicProviderManager(
+        PetSettings(),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge(),
+        client_finder=_client_finder,
+        process_checker=lambda _name: False,
+        client_launcher=lambda _provider, _client: True,
+        media_key_sender=lambda _action: False,
+        transport_wait_timeout=0,
+    )
+
+    result = manager.control("qq", "play")
+
+    assert result.success is False
+    assert result.status.state is MusicControlState.APP_STARTED
+    assert "正在等待应用初始化" in result.message
+
+
+def test_auto_transport_respects_explicit_preferred_player_before_first_song() -> None:
+    session = WindowsSessionSnapshot(
+        "Tencent.QQMusic",
+        TrackInfo("队列歌曲", "陈楚生", playback_status="paused"),
+        frozenset({"play"}),
+    )
+    bridge = FakeWindowsBridge()
+    running = False
+
+    def launch(_provider: str, _client: Path) -> bool:
+        nonlocal running
+        running = True
+        bridge.snapshots = (session,)
+        return True
+
+    manager = MusicProviderManager(
+        PetSettings(music_service="qq"),
+        platform_name="win32",
+        windows_bridge=bridge,
+        client_finder=lambda provider, _custom: Path("qq.exe") if provider == "qq" else None,
+        process_checker=lambda name: running and name == "QQMusic.exe",
+        client_launcher=launch,
+        transport_wait_timeout=0,
+    )
+
+    result = manager.control("auto", "play")
+
+    assert result.success is True
+    assert result.provider == "qq"
+    assert bridge.commands == [(session.source_id, "play")]
+
+
+def test_provider_status_separates_app_transport_and_song_selection() -> None:
+    manager = MusicProviderManager(
+        PetSettings(),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge(),
+        client_finder=_client_finder,
+        process_checker=lambda name: name.casefold().startswith("cloudmusic"),
+        transport_wait_timeout=0,
+    )
+    manager.inspect("netease")
+
+    text = manager.provider_status_text("netease")
+
+    assert "应用状态：正在运行" in text
+    assert "基础播放控制：已启动 · 正在等待播放控制" in text
+    assert "自动选歌：实验性" in text
+
+
 def test_macos_apple_music_uses_apple_events_and_reads_track() -> None:
     scripts: list[str] = []
 
@@ -200,6 +336,39 @@ def test_macos_apple_music_uses_apple_events_and_reads_track() -> None:
     assert result.status.track is not None
     assert result.status.track.title == "有没有人告诉你"
     assert any('tell application "Music"' in script and "pause" in script for script in scripts)
+
+
+def test_macos_explicit_player_launches_before_apple_events_control() -> None:
+    running = False
+    launches: list[str] = []
+
+    def launch(provider: str, _client: Path) -> bool:
+        nonlocal running
+        running = True
+        launches.append(provider)
+        return True
+
+    def runner(command, **_kwargs):
+        output = "playing\t瘾\t陈楚生\t专辑\n" if "set t" in command[-1] else ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    manager = MusicProviderManager(
+        PetSettings(music_service="apple"),
+        platform_name="darwin",
+        client_finder=_client_finder,
+        process_checker=lambda name: running and name == "Music",
+        client_launcher=launch,
+        command_runner=runner,
+        transport_wait_timeout=0,
+    )
+
+    result = manager.control("auto", "play")
+
+    assert result.success is True
+    assert result.provider == "apple"
+    assert launches == ["apple"]
+    assert result.status.track is not None
+    assert result.status.track.artist == "陈楚生"
 
 
 def test_macos_automation_permission_error_is_explicit_and_has_no_fallback() -> None:
@@ -314,3 +483,24 @@ def test_auto_provider_reports_failure_only_after_every_installed_provider() -> 
     assert result.attempted_providers == ("qq", "netease", "kugou")
     assert result.message == "暂时没能找到可以播放的音乐软件，点击重试。"
     assert all(adapter.played for adapter in adapters.values())
+
+
+def test_song_selection_failure_does_not_misreport_transport_as_disconnected() -> None:
+    adapter = FakeRandomAdapter("netease", play_success=False)
+    manager = MusicProviderManager(
+        PetSettings(),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge(),
+        client_finder=lambda provider, _custom: Path("cloudmusic.exe") if provider == "netease" else None,
+        process_checker=lambda name: name.casefold().startswith("cloudmusic"),
+        playback_adapters={"netease": adapter},
+        playback_sleep=lambda _seconds: None,
+        transport_wait_timeout=0,
+    )
+
+    result = manager.play_random_artist_auto("陈楚生")
+
+    assert result.success is False
+    assert "自动选歌失败" in result.message
+    assert "播放/暂停" in result.message
+    assert "连接失败" not in result.message

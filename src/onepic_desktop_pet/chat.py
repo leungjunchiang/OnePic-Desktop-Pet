@@ -473,7 +473,7 @@ class AISettingsDialog(QDialog):
         self._music_provider_changed()
 
     def _music_provider_changed(self) -> None:
-        """显示缓存的真实能力等级；实际命令会在后台再次刷新系统状态。"""
+        """分别显示应用、Transport 与自动选歌能力，不把安装称为已连接。"""
 
         provider = str(self.music_service.currentData())
         if self.music_manager is None:
@@ -482,8 +482,10 @@ class AISettingsDialog(QDialog):
         if provider == "auto":
             self.music_status.setText(self.music_manager.auto_status_text())
             return
-        status = self.music_manager.cached_status(provider)
-        self.music_status.setText(f"自动选择已开启；优先尝试{self.music_service.currentText()}。\n{status.message}")
+        self.music_status.setText(
+            f"自动选择已开启；优先尝试{self.music_service.currentText()}。\n"
+            f"{self.music_manager.provider_status_text(provider)}"
+        )
 
     def _provider_changed(self) -> None:
         provider = str(self.provider.currentData())
