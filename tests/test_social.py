@@ -19,6 +19,9 @@ class RecordingClient(SocialClient):
 def test_signup_and_presence_never_include_password_or_task_content() -> None:
     client = RecordingClient()
     assert client.sign_up("a@example.com", "secret123", "小梁") is True
+    signup_call = client.calls[0]
+    assert "redirect_to=https%3A%2F%2Fgithub.com%2Fleungjunchiang%2FOnePic-Desktop-Pet" in signup_call[1]
+    assert signup_call[2] == {"email": "a@example.com", "password": "secret123", "data": {"nickname": "小梁"}}
     client.heartbeat(working=True, today_seconds=2520, session_started_at=None, outfit_key="wild-king")
     presence = client.calls[-1][2]
     assert set(presence) == {"user_id","working","session_started_at","focus_date","today_seconds","outfit_key","room_id","last_seen","updated_at"}

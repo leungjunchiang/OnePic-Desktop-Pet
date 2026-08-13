@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -38,6 +39,13 @@ class SocialClient:
         config = json.loads(resource_path("config/social_backend.json").read_text(encoding="utf-8"))
         self.url = str(config.get("url", "")).rstrip("/")
         self.key = str(config.get("publishable_key", ""))
+        # Supabase uses this URL after email confirmation. Keep it explicit so
+        # desktop builds never inherit the hosted project's localhost default.
+        self.email_redirect_url = (
+            os.environ.get("LILI_AUTH_REDIRECT_URL", "").strip()
+            or str(config.get("email_redirect_to", "")).strip()
+            or "https://github.com/leungjunchiang/OnePic-Desktop-Pet"
+        )
         self.persist_tokens = persist_tokens
         self.session: SocialSession | None = None
         self._load_session()
@@ -120,7 +128,16 @@ class SocialClient:
             self._clear_session()
 
     def sign_up(self, email: str, password: str, nickname: str) -> bool:
-        data = self._raw("POST", "/auth/v1/signup", {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "六毛搭子"}})
+        # redirect_to is a query parameter for GoTrue's signup endpoint. It
+        # must also be present in Supabase Auth's allow-list; the production
+        # project is configured with the same URL. Passing it explicitly keeps
+        # future dashboard changes from silently restoring localhost redirects.
+        redirect = urllib.parse.urlencode({"redirect_to": self.email_redirect_url})
+        data = self._raw(
+            "POST",
+            f"/auth/v1/signup?{redirect}",
+            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "六毛搭子"}},
+        )
         return self._accept_auth(data)
 
     def sign_in(self, email: str, password: str) -> None:
