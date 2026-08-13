@@ -49,6 +49,17 @@ def test_visit_dashboard_syncs_only_start_time_and_minimum_presence() -> None:
         assert forbidden not in sql
 
 
+def test_focus_presence_dashboard_returns_explicit_current_status() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = root / "supabase" / "migrations" / "20260813130000_lili_focus_presence_sync.sql"
+    sql = migration.read_text(encoding="utf-8")
+    assert "'me_presence'" in sql
+    assert "'session_seconds'" in sql
+    assert "'status'" in sql
+    assert "'focus'" in sql and "'rest'" in sql and "'offline'" in sql
+    assert "f.last_seen>now()-interval '2 minutes'" in sql
+
+
 class RecordingHttpBackend(HttpSocialBackend):
     def __init__(self) -> None:
         super().__init__("https://social.example.test", persist_tokens=False)
