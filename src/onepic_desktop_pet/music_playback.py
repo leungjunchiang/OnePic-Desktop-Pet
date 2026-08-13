@@ -378,6 +378,19 @@ class BasicRandomArtistPlaybackManager:
             if native_result is not None:
                 return native_result
             return self._failed(provider, artist, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+        except ProviderSearchError as exc:
+            # Windows UI Automation and the PowerShell bridge can fail after
+            # the client was found (for example an empty RootElement, a
+            # missing window, or a timeout).  Preserve SEARCH_FAILED for real
+            # provider/search errors, but let adapters with a native random
+            # action try that path before giving up.
+            self._debug("search_error", provider, title, artist, error=repr(exc))
+            native_result = self._try_native_random(adapter, provider, artist)
+            if native_result is not None:
+                return native_result
+            if isinstance(adapter, WindowsUIAutomationAdapter):
+                return self._failed(provider, artist, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+            return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
         except Exception as exc:
             self._debug("search_failed", provider, title, artist, error=repr(exc))
             return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
@@ -602,16 +615,16 @@ class WindowsUIAutomationAdapter:
         window = self._wait_for_window(auto)
         search_box = self._find_search_box(window)
         if search_box is None:
-            raise ProviderSearchError("search box not exposed through UI Automation")
+            raise UIAutomationUnavailableError("search box not exposed through UI Automation")
         try:
             search_box.SetFocus()
             search_box.SendKeys("{Ctrl}a{Del}")
             search_box.SendKeys(f"{artist} {title}".strip())
             search_box.SendKeys("{Enter}")
         except Exception as exc:
-            raise ProviderSearchError("search input failed") from exc
+            raise UIAutomationUnavailableError("search input failed") from exc
         if not self._select_song_tab(window) and title:
-            raise ProviderSearchError("song results tab not found")
+            raise UIAutomationUnavailableError("song results tab not found")
         deadline = time.monotonic() + self.wait_seconds
         while time.monotonic() < deadline:
             candidates = self._song_candidates(window, title, artist)
@@ -712,7 +725,9 @@ Write-Output ("UI|candidateCount=" + $out.Count)
         if completed.returncode in {10, 11, 12}:
             raise UIAutomationUnavailableError("UIAutomation root/window/search controls unavailable")
         if completed.returncode != 0:
-            raise ProviderSearchError(str(completed.stderr or "UIAutomation search failed"))
+            raise UIAutomationUnavailableError(
+                str(completed.stderr or "UIAutomation search failed")
+            )
         candidates = []
         for line in str(completed.stdout or "").splitlines():
             parts = line.split("\t", 1)
@@ -775,7 +790,7 @@ exit 12
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ProviderSearchError("PowerShell UIAutomation request failed") from exc
+            raise UIAutomationUnavailableError("PowerShell UIAutomation request failed") from exc
 
     def _wait_for_window(self, auto):
         deadline = time.monotonic() + self.wait_seconds
@@ -788,7 +803,7 @@ exit 12
                 if window.Exists():
                     return window
             time.sleep(0.3)
-        raise ProviderSearchError("player window not found")
+        raise UIAutomationUnavailableError("player window not found")
 
     def _find_search_box(self, window):
         wanted = {_canonical(name) for name in self.search_names}

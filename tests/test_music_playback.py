@@ -21,6 +21,7 @@ from onepic_desktop_pet.music_playback import (
     MusicPlaybackError,
     MusicPlaybackOutcome,
     NeteaseMusicAdapter,
+    ProviderSearchError,
     QQMusicAdapter,
     SongCandidate,
     SpotifyWindowsAdapter,
@@ -70,6 +71,31 @@ class NativeRandomAdapter(UnavailableAdapter):
         return self.native_success
 
 
+class NativeRandomSearchFailureAdapter(NeteaseMusicAdapter):
+    """模拟 UIA 搜索异常，但保留网易云本机随机播放回退。"""
+
+    def __init__(self) -> None:
+        super().__init__(PetSettings(), client_finder=lambda _provider, _custom: None)
+        self.native_calls: list[str] = []
+
+    def search(self, _title: str, _artist: str):
+        raise ProviderSearchError("PowerShell UIAutomation request failed")
+
+    def play_random_artist(self, artist: str) -> bool:
+        self.native_calls.append(artist)
+        return True
+
+
+class UIAutomationSearchFailureAdapter(QQMusicAdapter):
+    """模拟 QQ UI 树不可访问且没有 native fallback 的情况。"""
+
+    def __init__(self) -> None:
+        super().__init__(PetSettings(), client_finder=lambda _provider, _custom: None)
+
+    def search(self, _title: str, _artist: str):
+        raise ProviderSearchError("player window not found")
+
+
 def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_results() -> None:
     manager = BasicRandomArtistPlaybackManager({"qq": UnavailableAdapter()})
 
@@ -88,6 +114,27 @@ def test_random_artist_uses_provider_native_fallback_when_ui_tree_is_unavailable
     assert result.success is True
     assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
     assert adapter.native_calls == ["陈楚生"]
+
+
+def test_random_artist_uses_native_fallback_for_wrapped_ui_automation_errors() -> None:
+    adapter = NativeRandomSearchFailureAdapter()
+    manager = BasicRandomArtistPlaybackManager({"netease": adapter})
+
+    result = manager.play_random_artist("netease", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert adapter.native_calls == ["陈楚生"]
+
+
+def test_random_artist_reports_ui_automation_unavailable_instead_of_search_failed() -> None:
+    adapter = UIAutomationSearchFailureAdapter()
+    manager = BasicRandomArtistPlaybackManager({"qq": adapter})
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is False
+    assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
 
 
 def test_netease_default_desktop_script_is_dpi_aware_and_defers_verification_to_gsmtc() -> None:
