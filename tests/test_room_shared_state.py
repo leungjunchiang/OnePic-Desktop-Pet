@@ -97,10 +97,48 @@ def test_idle_input_pauses_focus_without_resuming_automatically(monkeypatch, tmp
     monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 31.0)
     window.start_work_timer()
     assert window.work_timer.is_running
+    # A single native reading is not enough to pause the session.
+    window._check_input_idle()
+    assert window.work_timer.is_running
     window._check_input_idle()
     assert not window.work_timer.is_running
     assert window._auto_paused_for_idle is True
     assert "暂停" in window.speech_bubble.text()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    window = PetWindow(PetSettings(idle_pause_seconds=60))
+    readings = iter((61.0, 61.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_idle_seconds",
+        lambda: next(readings, 0.0),
+    )
+    window.start_work_timer()
+    window._check_input_idle()
+    window._check_input_idle()
+    assert window._auto_paused_for_idle is True
+    window._check_input_idle()
+    window._ask_idle_recovery()
+    dialog = window._idle_recovery_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert "1 分 01 秒" in dialog.summary_label.text()
+
+    # More return samples reuse the same window and never create another one.
+    window._check_input_idle()
+    window._ask_idle_recovery()
+    assert window._idle_recovery_dialog is dialog
+    dialog.focus_button.click()
+    app.processEvents()
+    assert window._idle_recovery_resolved is True
+    assert not dialog.isVisible()
+
+    # The resolved episode is one-shot even if the OS counter stays active.
+    window._check_input_idle()
+    window._ask_idle_recovery()
+    assert not dialog.isVisible()
     window.close(); window.deleteLater(); app.processEvents()
 
 
