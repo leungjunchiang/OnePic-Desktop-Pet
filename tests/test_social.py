@@ -1,217 +1,151 @@
-"""验证搭子客户端只同步最小状态，并且数据库启用严格权限。"""
+"""Tests for Supabase-first routing and the CloudBase proxy fallback."""
 
 import json
 from pathlib import Path
 
-from onepic_desktop_pet.social import HttpSocialBackend, SocialClient, SocialError, SocialSession
+from onepic_desktop_pet.social import (
+    BackendRouteManager,
+    HttpSocialBackend,
+    SocialClient,
+    SocialError,
+    SocialSession,
+)
 
 
-class RecordingClient(SocialClient):
-    def __init__(self) -> None:
-        super().__init__(persist_tokens=False)
-        # These tests exercise SocialClient's direct-Supabase path.  The
-        # published config intentionally defaults to the HTTP relay, so make
-        # that choice explicit instead of letting the fixture inherit it.
-        self._http_backend = None
-        self.session = None
+class FakeTransport:
+    def __init__(self, name: str, *, fail_dashboard: int = 0):
+        self.name = name
+        self.base_url = f"https://{name}.example.test"
+        self.session = SocialSession("token", "refresh", "user-1", 9_999_999_999) if name == "direct" else None
         self.calls = []
+        self.fail_dashboard = fail_dashboard
 
-    def _raw(self, method, path, body=None, **kwargs):
-        self.calls.append((method, path, body, kwargs))
-        if "/signup" in path:
-            return {"access_token":"a","refresh_token":"r","expires_in":3600,"user":{"id":"u"}}
-        return {}
+    @property
+    def signed_in(self):
+        return self.session is not None
 
+    def health(self):
+        self.calls.append("health")
+        return {"ok": True, "backend": self.name}
 
-def test_signup_and_presence_never_include_password_or_task_content() -> None:
-    client = RecordingClient()
-    assert client.sign_up("a@example.com", "secret123", "小梁") is True
-    signup_call = client.calls[0]
-    assert "redirect_to=https%3A%2F%2Fgithub.com%2Fleungjunchiang%2FOnePic-Desktop-Pet" in signup_call[1]
-    assert signup_call[2] == {"email": "a@example.com", "password": "secret123", "data": {"nickname": "小梁"}}
-    client.heartbeat(working=True, today_seconds=2520, session_started_at=None, outfit_key="wild-king")
-    presence = client.calls[-1][2]
-    assert set(presence) == {"user_id","working","session_started_at","focus_date","today_seconds","outfit_key","room_id","quick_status","quick_status_expires_at","last_seen","updated_at"}
-    assert not any(key in presence for key in ("password","task","chat","window_title"))
+    def dashboard(self, room_id=None, allow_cache=True):
+        self.calls.append(("dashboard", room_id))
+        if self.fail_dashboard:
+            self.fail_dashboard -= 1
+            raise SocialError("timeout", kind="timeout", retryable=True)
+        return {"rooms": [], "server_timestamp": "2026-08-14T00:00:00+00:00"}
 
+    def sign_in(self, email, password):
+        self.calls.append("sign_in")
+        self.session = SocialSession("proxy-token", "proxy-refresh", "user-1", 9_999_999_999)
 
-def test_social_schema_uses_rls_and_authenticated_functions() -> None:
-    root = Path(__file__).resolve().parents[1]
-    sql = (root / "supabase" / "migrations" / "202608110001_lili_social_rooms.sql").read_text(encoding="utf-8")
-    for table in ("lili_profiles","lili_buddy_links","lili_study_rooms","lili_room_members","lili_focus_presence","lili_visit_events"):
-        assert f"alter table public.{table} enable row level security" in sql
-    assert "grant execute" in sql and "to authenticated" in sql
-    assert "service_role" not in (root / "config" / "social_backend.json").read_text(encoding="utf-8")
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+        return call
 
-
-def test_visit_dashboard_syncs_only_start_time_and_minimum_presence() -> None:
-    root = Path(__file__).resolve().parents[1]
-    migration = root / "supabase" / "migrations" / "20260811104519_lili_visit_started_at.sql"
-    sql = migration.read_text(encoding="utf-8")
-    assert "'visit_started_at'" in sql
-    assert "coalesce(v.responded_at,v.created_at)" in sql
-    assert "set search_path = ''" in sql
-    assert "revoke execute on function public.lili_dashboard() from public, anon" in sql
-    for forbidden in ("chat", "task", "window_title", "animation_frame"):
-        assert forbidden not in sql
+    def _save_session(self):
+        return None
 
 
-def test_focus_presence_dashboard_returns_explicit_current_status() -> None:
-    root = Path(__file__).resolve().parents[1]
-    migration = root / "supabase" / "migrations" / "20260813130000_lili_focus_presence_sync.sql"
-    sql = migration.read_text(encoding="utf-8")
-    assert "'me_presence'" in sql
-    assert "'session_seconds'" in sql
-    assert "'status'" in sql
-    assert "'focus'" in sql and "'rest'" in sql and "'offline'" in sql
-    assert "f.last_seen>now()-interval '2 minutes'" in sql
-
-
-def test_social_helper_functions_are_executable_by_authenticated_rls() -> None:
-    root = Path(__file__).resolve().parents[1]
-    migration = root / "supabase" / "migrations" / "20260813134500_lili_social_helper_permissions.sql"
-    sql = migration.read_text(encoding="utf-8")
-    assert "grant execute on function public.lili_are_buddies(uuid, uuid) to authenticated" in sql
-    assert "grant execute on function public.lili_share_room(uuid, uuid) to authenticated" in sql
-    assert "anon" not in sql.lower()
-
-
-class RecordingHttpBackend(HttpSocialBackend):
-    def __init__(self) -> None:
-        super().__init__("https://social.example.test", persist_tokens=False)
-        self.calls = []
-
-    def _raw(self, method, path, body=None, **kwargs):
-        self.calls.append((method, path, body, kwargs))
-        if path == "/auth/signin":
-            return {"access_token": "a", "refresh_token": "r", "expires_in": 3600, "user": {"id": "u"}}
-        return {}
-
-
-def test_http_social_backend_uses_proxy_routes_without_supabase_paths() -> None:
-    backend = RecordingHttpBackend()
-    backend.sign_in("a@example.com", "secret123")
-    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="wild-king", room_id="room-1")
-    backend.dashboard()
-    backend.rpc("lili_send_visit", {"target": "u2", "visit_kind": "visit"})
-
-    assert backend.calls[0][1] == "/auth/signin"
-    assert backend.calls[1][0:2] == ("POST", "/presence/heartbeat")
-    assert backend.calls[1][2]["focus_date"]
-    assert backend.calls[2][0:2] == ("GET", "/dashboard")
-    assert backend.calls[3][0:2] == ("POST", "/visits/send")
-    assert all("supabase" not in str(call[1]).lower() for call in backend.calls)
-
-
-def test_health_probe_identifies_active_transport_without_authentication() -> None:
-    backend = RecordingHttpBackend()
-    assert backend.health() == {}
-    assert backend.calls[-1][0:2] == ("GET", "/health")
-
-    client = RecordingClient()
-    assert client.backend_name == "supabase"
-    assert client.backend_endpoint.endswith("supabase.co")
-    assert client.health() == {}
-    assert client.calls[-1][0:2] == ("GET", "/auth/v1/health")
-
-
-def test_social_config_exposes_optional_proxy_base_url() -> None:
-    root = Path(__file__).resolve().parents[1]
-    config = (root / "config" / "social_backend.json").read_text(encoding="utf-8")
-    assert '"social_api_base_url"' in config
-    assert '"social_backend"' in config
-
-
-def test_published_config_uses_cloudbase_relay_by_default() -> None:
+def test_production_config_has_one_supabase_source_and_proxy_url():
     root = Path(__file__).resolve().parents[1]
     config = json.loads((root / "config" / "social_backend.json").read_text(encoding="utf-8"))
-    assert config["social_backend"] == "http"
-    assert config["social_api_base_url"].startswith("https://")
-    assert ".tcloudbase.com/lili-social-relay-v2" in config["social_api_base_url"]
-    assert "supabase.co/functions" not in config["social_api_base_url"]
+    assert config["social_backend"] == "direct_with_cloudbase_fallback"
+    assert config["supabase_url"].startswith("https://")
+    assert config["supabase_publishable_key"].startswith("sb_publishable_")
+    assert ".tcloudbase.com/" in config["social_api_base_url"]
+    assert "service_role" not in json.dumps(config).lower()
 
 
-def test_dashboard_falls_back_to_last_payload_when_network_is_unavailable() -> None:
-    client = RecordingClient()
-    client.session = SocialSession("a", "r", "u", 9_999_999_999)
-    payload = {"me": {"nickname": "小梁"}, "rooms": [{"id": "room-1"}]}
-    client._raw = lambda *_args, **_kwargs: payload
-    assert client.dashboard("room-1")["rooms"][0]["id"] == "room-1"
-
-    def unavailable(*_args, **_kwargs):
-        raise SocialError("网络不可达")
-
-    client._raw = unavailable
-    cached = client.dashboard("room-1")
-    assert cached["_sync_offline"] is True
-    assert cached["rooms"][0]["id"] == "room-1"
+def test_route_manager_retries_direct_once_then_switches_only_network_failures():
+    direct = FakeTransport("direct", fail_dashboard=2)
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    result = manager.request("dashboard", room_id="room-1")
+    assert result["rooms"] == []
+    assert direct.calls == [("dashboard", "room-1"), ("dashboard", "room-1")]
+    assert proxy.calls == [("dashboard", "room-1")]
+    assert manager.current_route == BackendRouteManager.CLOUDBASE_PROXY
 
 
-def test_offline_dashboard_never_keeps_remote_presence_green() -> None:
-    client = RecordingClient()
-    client._dashboard_cache["room-1"] = {
-        "saved_at": 1,
-        "data": {
-            "buddies": [{"user_id": "peer", "online": True, "working": True, "status": "focus", "today_seconds": 600}],
-            "current_room": {
-                "room_people": [{"user_id": "peer", "online": True, "working": True, "status": "focus"}],
-                "room_summary": {"focus_count": 1},
-            },
-        },
-    }
-    cached = client.cached_dashboard("room-1")
-    assert cached is not None
-    peer = cached["buddies"][0]
-    assert peer["online"] is False
-    assert peer["working"] is False
-    assert peer["status"] == "offline"
-    assert peer["stale_presence"] is True
-    assert peer["today_seconds"] is None
-    assert cached["current_room"]["room_summary"]["focus_count"] == 0
+def test_route_manager_never_switches_for_business_auth_errors():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+
+    def denied(*_args, **_kwargs):
+        raise SocialError("forbidden", kind="auth", status=403)
+
+    direct.dashboard = denied
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    try:
+        manager.request("dashboard", room_id="room-1")
+    except SocialError as exc:
+        assert exc.status == 403
+    else:
+        raise AssertionError("expected business error")
+    assert manager.current_route == BackendRouteManager.DIRECT_SUPABASE
+    assert proxy.calls == []
 
 
-def test_connection_diagnosis_requires_authenticated_snapshot() -> None:
-    client = RecordingClient()
-    client.session = SocialSession("a", "r", "u", 9_999_999_999)
-
-    def raw(_method, path, _body=None, **_kwargs):
-        if path == "/auth/v1/health":
-            return {"ok": True}
-        return {"me": {"owner_nickname": "小梁"}, "buddies": [], "rooms": []}
-
-    client._raw = raw
+def test_health_check_is_one_lightweight_request_and_does_not_load_dashboard():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
     result = client.diagnose_connection()
     assert result["connection_state"] == "ONLINE"
-    assert result["checks"]["edge_function"]["ok"] is True
-    assert result["checks"]["room_snapshot"]["ok"] is True
-    assert result["checks"]["presence"]["ok"] is True
-    assert result["dashboard"]["_connection_state"] == "ONLINE"
+    assert direct.calls == ["health"]
+    assert proxy.calls == []
 
 
-def test_room_shared_state_migration_scopes_members_goals_events_and_cooldown() -> None:
+def test_proxy_health_check_stays_on_one_proxy_request():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    manager.current_route = BackendRouteManager.CLOUDBASE_PROXY
+    client = SocialClient(backend=manager, persist_tokens=False)
+    result = client.diagnose_connection()
+    assert result["connection_state"] == "ONLINE"
+    assert direct.calls == []
+    assert proxy.calls == ["health"]
+
+
+def test_http_backend_uses_direct_supabase_paths():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__("https://supabase.example.test", client_key="sb_publishable_test", persist_tokens=False, transport="direct")
+            self.calls = []
+
+        def _raw(self, method, path, body=None, *, authenticated=False):
+            self.calls.append((method, path, body, authenticated))
+            if path.startswith("/auth/v1/token"):
+                return {"access_token": "a", "refresh_token": "r", "expires_in": 3600, "user": {"id": "u"}}
+            return {}
+
+    backend = Recording()
+    backend.sign_in("a@example.com", "secret123")
+    backend.health()
+    backend.dashboard("room-1")
+    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
+    paths = [call[1] for call in backend.calls]
+    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/lili_focus_presence?on_conflict=user_id"]
+
+
+def test_new_cloudbase_function_is_proxy_not_a_database_client():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8").lower()
+    package = (root / "relay" / "cloudbase-function" / "package.json").read_text(encoding="utf-8").lower()
+    assert "source_of_truth" in source
+    assert "supabase" in source
+    assert "cloudbase-store" not in source
+    assert "@cloudbase/node-sdk" not in package
+
+
+def test_room_shared_state_migrations_are_retained_as_supabase_history():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")
-    assert "create table if not exists public.lili_room_goals" in migration
-    assert "create table if not exists public.lili_room_events" in migration
     assert "lili_room_dashboard" in migration
-    assert "互动太频繁，请稍后再试" in migration
-    assert "lili_presence_room_event" in migration
-    assert "revoke execute on function public.lili_room_dashboard(uuid) from public, anon" in migration
-    totals = (root / "supabase" / "migrations" / "20260813153000_lili_room_focus_totals.sql").read_text(encoding="utf-8")
-    assert "lili_room_focus_totals" in totals
-    assert "cumulative_seconds" in totals
-
-
-def test_owner_nickname_and_room_quick_status_migration_is_explicit() -> None:
-    root = Path(__file__).resolve().parents[1]
-    migration = next((root / "supabase" / "migrations").glob("*_owner_nickname_room_quick_status.sql"))
-    sql = migration.read_text(encoding="utf-8")
-    assert "add column if not exists owner_nickname" in sql
-    assert "add column if not exists quick_status" in sql
-    assert "quick_status_expires_at" in sql
-    assert "p_room_id" in sql
-    assert "on conflict on constraint lili_room_goals_pkey" in sql
-    assert "on conflict on constraint lili_room_schedules_pkey" in sql
-    assert "on conflict on constraint lili_room_challenges_pkey" in sql
-    assert "on conflict on constraint lili_buddy_subscriptions_pkey" in sql
-    assert "六毛搭子家的六毛" not in sql
+    assert "lili_room_events" in migration

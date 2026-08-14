@@ -43,6 +43,8 @@ def test_study_room_is_resizable_and_renders_room_scoped_summary():
     dialog = SocialHubDialog(RoomClient())
     dialog.refresh()
     app.processEvents()
+    dialog.rooms.setCurrentRow(0)
+    app.processEvents()
     assert dialog.minimumWidth() <= 520
     assert dialog.minimumHeight() <= 480
     assert dialog.isSizeGripEnabled()
@@ -52,7 +54,7 @@ def test_study_room_is_resizable_and_renders_room_scoped_summary():
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
-def test_first_open_prefers_shared_room_over_an_old_single_member_room():
+def test_first_open_does_not_enter_any_room_implicitly():
     app = QApplication.instance() or QApplication([])
 
     class MultiRoomClient(RoomClient):
@@ -66,6 +68,10 @@ def test_first_open_prefers_shared_room_over_an_old_single_member_room():
 
     dialog = SocialHubDialog(MultiRoomClient())
     dialog.refresh(); app.processEvents()
+    assert dialog.current_room_id is None
+    assert dialog._room_selection_explicit is False
+    dialog.rooms.setCurrentRow(1)
+    app.processEvents()
     assert dialog.current_room_id == "shared"
     dialog.close(); dialog.deleteLater(); app.processEvents()
 

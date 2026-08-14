@@ -26,8 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Check relay syntax and routes
-        working-directory: relay/cloudflare-worker
+      - name: Check CloudBase proxy syntax and routes
+        working-directory: relay/cloudbase-function
         run: |
-          node --check src/index.js
-          node --test
+          npm test
+          npm run check

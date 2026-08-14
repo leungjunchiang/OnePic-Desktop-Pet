@@ -2,28 +2,53 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { main } = require("../index.js");
 
-test("health endpoint is public and reports CloudBase relay", async () => {
-  const previousUrl = process.env.SUPABASE_URL;
-  const previousKey = process.env.SUPABASE_PUBLISHABLE_KEY;
-  process.env.SUPABASE_URL = "https://example.supabase.co";
-  process.env.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test";
+const env = {
+  SUPABASE_URL: "https://example.supabase.co",
+  SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+  ALLOWED_ORIGIN: "*",
+};
+
+test("CloudBase proxy health performs one lightweight Supabase health request", async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    calls.push([String(url), options]);
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+  };
   try {
-    const result = await main({ httpMethod: "GET", path: "/lili-social-relay-v2/health", headers: {} }, {});
+    const result = await main({ httpMethod: "GET", path: "/lili-social-relay-v2/health", headers: {} }, { env });
     assert.equal(result.statusCode, 200);
-    const body = JSON.parse(result.body);
-    assert.equal(body.ok, true);
-    assert.equal(body.backend, "cloudbase-function");
-    assert.equal(body.supabase_configured, true);
+    assert.equal(JSON.parse(result.body).source_of_truth, "supabase");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0][0], /\/auth\/v1\/health$/);
   } finally {
-    if (previousUrl === undefined) delete process.env.SUPABASE_URL;
-    else process.env.SUPABASE_URL = previousUrl;
-    if (previousKey === undefined) delete process.env.SUPABASE_PUBLISHABLE_KEY;
-    else process.env.SUPABASE_PUBLISHABLE_KEY = previousKey;
+    global.fetch = originalFetch;
   }
 });
 
-test("unknown route is rejected without contacting Supabase", async () => {
-  const result = await main({ httpMethod: "GET", path: "/not-a-route", headers: {} }, {});
+test("room dashboard query is forwarded through one CloudBase invocation", async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    calls.push([String(url), options]);
+    return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const result = await main({
+      httpMethod: "GET",
+      path: "/lili-social-relay-v2/dashboard?room_id=room-1",
+      headers: { authorization: "Bearer user.jwt.token" },
+    }, { env });
+    assert.equal(result.statusCode, 200);
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every(([, options]) => options.headers.Authorization === "Bearer user.jwt.token"));
+    assert.ok(calls.every(([url]) => url.startsWith(env.SUPABASE_URL)));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("unknown route is rejected without an upstream request", async () => {
+  const result = await main({ httpMethod: "GET", path: "/not-a-route", headers: {} }, { env });
   assert.equal(result.statusCode, 404);
-  assert.match(result.body, /找不到/);
 });
