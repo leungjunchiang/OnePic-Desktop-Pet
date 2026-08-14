@@ -127,6 +127,8 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     dialog.set_focus_snapshot({"status": "focus", "session_seconds": 2520, "today_seconds": 1860})
     dialog.refresh()
     app.processEvents()
+    dialog.rooms.setCurrentRow(0)
+    app.processEvents()
 
     assert dialog.focus_status.text() == "专注中"
     assert "42分钟" in dialog.focus_clock.text()

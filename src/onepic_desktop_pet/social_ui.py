@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +74,23 @@ def _owner_label(record: dict[str, Any] | None) -> str:
     return social_pet_label(_owner_nickname(record))
 
 
+def _live_session_seconds(record: dict[str, Any]) -> int | None:
+    """Calculate a peer's current round from the server start timestamp."""
+    if _presence_status(record) != "focus":
+        return 0
+    started = str(record.get("session_started_at") or "")
+    if not started:
+        value = record.get("session_seconds")
+        return int(value) if value is not None else None
+    try:
+        stamp = str(record.get("_server_timestamp") or "")
+        now = datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else datetime.now().astimezone()
+        return max(0, int((now - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds()))
+    except (TypeError, ValueError):
+        value = record.get("session_seconds")
+        return int(value) if value is not None else None
+
+
 def _social_font() -> QFont:
     candidates = (
         (Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/simhei.ttf"))
@@ -93,12 +110,13 @@ class SocialSyncThread(QThread):
     completed = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, client: SocialClient, presence: dict[str, Any], parent=None) -> None:
-        super().__init__(parent); self.client = client; self.presence = presence
+    def __init__(self, client: SocialClient, presence: dict[str, Any], parent=None, *, send_heartbeat: bool = True) -> None:
+        super().__init__(parent); self.client = client; self.presence = presence; self.send_heartbeat = send_heartbeat
 
     def run(self) -> None:
         try:
-            self.client.heartbeat(**self.presence)
+            if self.send_heartbeat:
+                self.client.heartbeat(**self.presence)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -254,7 +272,7 @@ class BuddyCardWidget(QWidget):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
             time_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
-        session_seconds = buddy.get("session_seconds")
+        session_seconds = _live_session_seconds(buddy)
         if session_seconds is not None and status == "focus":
             time_text = f"本轮专注 {format_work_duration(session_seconds)}　·　{time_text}"
         focus = QLabel(time_text)
@@ -446,6 +464,7 @@ class SocialHubDialog(QDialog):
         self.owner_nickname = owner_nickname.strip()[:24]
         self.data: dict[str, Any] = {}
         self.current_room_id: str | None = None
+        self._room_selection_explicit = False
         self._focus_snapshot: Any = None
         self._applying_dashboard = False
         self._room_goal_state: dict[str, Any] = {}
@@ -822,13 +841,14 @@ class SocialHubDialog(QDialog):
         room_id = str(room.get("id") or room.get("room_id") or "")
         if not room_id and not isinstance(self.client, SocialClient):
             # Lightweight offline clients often only expose the invite code.
-            # Real Supabase room payloads must carry the UUID used by the RPCs.
+            # Real room payloads carry the ID used by the API.
             room_id = str(room.get("invite_code") or "")
         return room_id or None
 
     def _room_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None = None) -> None:
         room = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
         self.current_room_id = self._room_id_from_payload(room) if isinstance(room, dict) else None
+        self._room_selection_explicit = bool(self.current_room_id)
         if self.current_room_id:
             self.room_changed.emit(self.current_room_id)
             self._set_status("已切换房间；正在同步这个房间的成员、目标和动态。")
@@ -884,13 +904,12 @@ class SocialHubDialog(QDialog):
         if state == "DEGRADED":
             self._set_status("自习室网络可达，但账号或房间数据还未验证。")
             return
-        # Compatibility path for lightweight clients that only expose health().
-        # A health response alone is never advertised as a synchronized room.
+        # Health is deliberately separate from business-data initialization.
+        # The normal dashboard timer will refresh room data independently.
         if getattr(self.client, "signed_in", False):
-            self._set_status("网络可达，正在拉取房间数据。")
-            self._start_dashboard_refresh(self.current_room_id, "正在同步房间状态")
+            self._set_status("自习室网络正常；房间数据将按正常同步节奏更新。")
             return
-        self._set_status("自习室网络检查通过，请登录后才能同步房间。")
+        self._set_status("自习室网络可达，请登录后同步房间。")
 
     def _network_check_failed(self, error: object) -> None:
         self._end_action()
@@ -1114,7 +1133,9 @@ class SocialHubDialog(QDialog):
         if not hasattr(self, "room_activity"):
             return
         self.room_activity.clear()
-        for entry in entries[-8:]:
+        # The room RPC returns newest-first; keep the newest eight events so
+        # recent interactions cannot disappear behind older activity.
+        for entry in entries[:8]:
             if isinstance(entry, dict):
                 created = str(entry.get("created_at") or "")
                 stamp = created[11:16] if len(created) >= 16 and "T" in created else ""
@@ -1210,6 +1231,7 @@ class SocialHubDialog(QDialog):
             else:
                 self.client.rpc("lili_leave_room", {"p_room_id": room_id})
             self.current_room_id = None
+            self._room_selection_explicit = False
             self.room_changed.emit(None)
             self._set_status("已离开当前自习室，本次共同专注已保留在房间动态中。")
             if isinstance(summary, dict) and summary:
@@ -1442,28 +1464,22 @@ class SocialHubDialog(QDialog):
             empty_room = QListWidgetItem("还没有私人自习室；创建后可把房间码发给搭子。")
             empty_room.setFlags(Qt.ItemFlag.NoItemFlags); self.rooms.addItem(empty_room)
             self.current_room_id = None
+            self._room_selection_explicit = False
         else:
-            # QCombo/List widgets do not consistently select the first item
-            # after a clear() across Qt platforms.  Without a selected room
-            # the next heartbeat used to send room_id=NULL, so the server had
-            # no reliable way to associate this user's focus with a room.
+            # A server membership is not an active desktop selection.  The
+            # user must explicitly choose a room after opening the window.
             selected = -1
-            for index, room in enumerate(rooms):
-                room_id = self._room_id_from_payload(room)
-                if room_id and room_id == previous_room_id:
-                    selected = index
-                    break
-            if selected < 0:
-                # On first open prefer the room with the most members.  This
-                # avoids silently landing in an old one-person room when the
-                # user has just joined a shared workroom.
-                selected = max(
-                    range(len(rooms)),
-                    key=lambda index: int(rooms[index].get("members") or 0),
-                )
-            self.rooms.setCurrentRow(selected)
-            selected_room = rooms[selected]
-            self.current_room_id = self._room_id_from_payload(selected_room)
+            if self._room_selection_explicit and previous_room_id:
+                for index, room in enumerate(rooms):
+                    if self._room_id_from_payload(room) == previous_room_id:
+                        selected = index
+                        break
+            if selected >= 0:
+                self.rooms.setCurrentRow(selected)
+                self.current_room_id = self._room_id_from_payload(rooms[selected])
+            else:
+                self.rooms.setCurrentRow(-1)
+                self.current_room_id = None
         self.rooms.blockSignals(False)
         self._fit_list_height(self.rooms, 52, 140)
         self._applying_dashboard = False
@@ -1478,6 +1494,9 @@ class SocialHubDialog(QDialog):
         if self.current_room_id and self.current_room_id != previous_room_id and not room_detail:
             self._room_refresh_timer.start(0)
         room_people = list(room_detail.get("room_people") or self.data.get("room_people") or []) if self.current_room_id else []
+        server_timestamp = str(self.data.get("server_timestamp") or self.data.get("_server_timestamp") or "")
+        if server_timestamp:
+            room_people = [{**person, "_server_timestamp": server_timestamp} for person in room_people]
         # Always render the local member as well.  The old SQL function only
         # returned peers, which made the room look like everybody was resting
         # when the local timer was the only state visible in the UI.

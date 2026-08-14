@@ -1,3 +1,12 @@
+# Lili v0.22.19
+
+- Supabase remains the only authentication, PostgreSQL/RLS, room, focus and interaction source of truth.
+- Added a single BackendRouteManager: Supabase Direct is preferred; CloudBase is only a restricted mainland HTTP proxy fallback and never a second business database.
+- Health checks are lightweight and isolated: one request, no dashboard/presence/listener initialization. Visible room snapshots refresh about every 30 seconds; presence writes are limited to state changes and about 90-second heartbeats.
+- Network failures retry once before fallback; authentication and business errors do not switch routes. Two spaced recovery probes return the client to direct Supabase.
+- Kept explicit room selection, exclusive room membership, room-scoped events/interactions, live server-time rendering and room-scoped cumulative focus totals.
+- Added route/proxy contract tests and updated the CloudBase function source to forward only allowlisted Supabase Auth/REST/RPC requests without service-role credentials in the desktop app.
+
 # Lili v0.22.12
 
 - Fixed the deployed Supabase Edge Function relay to normalize both gateway-prefixed and function-prefixed request paths.

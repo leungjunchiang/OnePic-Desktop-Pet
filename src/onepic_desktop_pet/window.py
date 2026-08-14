@@ -537,10 +537,12 @@ class PetWindow(QWidget):
         self.topmost_timer.timeout.connect(self._ensure_on_top)
         self.topmost_timer.start()
 
+        self._last_social_heartbeat_at = 0.0
+        self._social_heartbeat_due = True
         self.social_timer = QTimer(self)
-        # Room members should see focus transitions and interactions quickly,
-        # while the heartbeat remains low-frequency enough for a desktop pet.
-        self.social_timer.setInterval(10_000)
+        # Refresh visible room state every 30 seconds, but write presence only
+        # every 90 seconds or immediately after an explicit state transition.
+        self.social_timer.setInterval(30_000)
         self.social_timer.timeout.connect(self._social_tick)
         self.social_timer.start()
         self.social_sync_timer = QTimer(self)
@@ -2199,13 +2201,15 @@ class PetWindow(QWidget):
             self._social_dialog.deleteLater(); self._social_dialog = None
 
     def _social_tick(self) -> None:
-        """每 10 秒同步房间状态；失败时静默保留纯离线桌宠。"""
+        """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
 
         if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
             return
         self._maybe_sync_owner_nickname()
         selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
-        room_id = selected_room or self.focus_session.room_id
+        # A persisted local room ID is not an invitation to re-enter a room.
+        # Only the room explicitly selected in the study-room window is sent.
+        room_id = selected_room
         if room_id != self.focus_session.room_id:
             self.focus_session.set_room_id(room_id)
         snapshot = self.focus_session.snapshot()
@@ -2219,7 +2223,11 @@ class PetWindow(QWidget):
             "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
             if self._room_quick_status_expires_at is not None else None,
         }
-        thread = SocialSyncThread(self.social_client, presence, self)
+        send_heartbeat = self._social_heartbeat_due or time.monotonic() - self._last_social_heartbeat_at >= 90.0
+        if send_heartbeat:
+            self._last_social_heartbeat_at = time.monotonic()
+            self._social_heartbeat_due = False
+        thread = SocialSyncThread(self.social_client, presence, self, send_heartbeat=send_heartbeat)
         self._social_thread = thread
         thread.completed.connect(self._social_dashboard_received)
         thread.failed.connect(self._social_sync_failed)
@@ -2332,6 +2340,7 @@ class PetWindow(QWidget):
             return
         timer = getattr(self, "social_sync_timer", None)
         if timer is not None:
+            self._social_heartbeat_due = True
             timer.start(250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
