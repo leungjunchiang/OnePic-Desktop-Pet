@@ -8,7 +8,13 @@ from onepic_desktop_pet.social import HttpSocialBackend, SocialClient, SocialErr
 
 class RecordingClient(SocialClient):
     def __init__(self) -> None:
-        super().__init__(persist_tokens=False); self.calls = []
+        super().__init__(persist_tokens=False)
+        # These tests exercise SocialClient's direct-Supabase path.  The
+        # published config intentionally defaults to the HTTP relay, so make
+        # that choice explicit instead of letting the fixture inherit it.
+        self._http_backend = None
+        self.session = None
+        self.calls = []
 
     def _raw(self, method, path, body=None, **kwargs):
         self.calls.append((method, path, body, kwargs))
