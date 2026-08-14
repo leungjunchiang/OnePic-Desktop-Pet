@@ -1,4 +1,4 @@
-from __future__ import annotations
+�r�^�f��ئ{��y�'vî���from __future__ import annotations
 
 import random
 
@@ -35,6 +35,29 @@ def test_family_song_and_prompt_are_on_demand() -> None:
     assert worldview_prompt_context("今天写论文") == ""
     assert "少说话" in worldview_prompt_context("正在听有没有人告诉你")
     assert "我爹" in worldview_prompt_context("你认识陈楚生吗")
+
+
+def test_follow_up_uses_family_context_and_does_not_guess_lyrics() -> None:
+    history = [("user", "你爹是谁"), ("assistant", "我爹。")]
+    answer = worldview_response("他唱歌怎么样", random.Random(1), history)
+    assert answer is not None
+    assert answer.key == "father_music"
+    assert "挺好听" in answer.text
+    lyric_answer = worldview_response(
+        "有没有人告诉你，后面一句是什么",
+        random.Random(1),
+        history,
+    )
+    assert lyric_answer is not None
+    assert lyric_answer.key == "family_song_lyrics"
+    assert "不能替你续歌词" in lyric_answer.text
+
+
+def test_family_prompt_includes_retrieved_context_for_pronoun_follow_up() -> None:
+    history = [("user", "你爹是谁"), ("assistant", "我爹。")]
+    prompt = worldview_prompt_context("他唱歌怎么样", history)
+    assert "追问" in prompt
+    assert "挺好听" in prompt
 
 
 def test_family_music_mode_only_uses_public_track_metadata() -> None:

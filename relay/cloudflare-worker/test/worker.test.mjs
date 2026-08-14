@@ -1,4 +1,4 @@
-import test from "node:test";
+­r‡^Ñf¥–Ø¦{Ÿ,yÊ'vÃ®¶›­import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
 
@@ -18,6 +18,8 @@ test("health is public and does not expose secrets", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "lili-social-relay",
+    backend: "cloudflare-worker",
+    realtime: "desktop short-polling",
     supabase_configured: true,
   });
 });

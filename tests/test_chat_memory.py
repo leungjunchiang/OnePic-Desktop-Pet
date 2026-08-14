@@ -1,4 +1,4 @@
-"""验证六毛只在内存中保留长期摘要与最近三十轮完整对话。"""
+�r�^�f��ئ{�ly�'vî���"""验证六毛只在内存中保留长期摘要与最近三十轮完整对话。"""
 
 from onepic_desktop_pet.ai import _conversation_text
 from onepic_desktop_pet.chat_memory import ConversationMemory
@@ -44,3 +44,23 @@ def test_older_rounds_roll_into_bounded_summary_and_keep_latest_thirty() -> None
     assert "第 0 轮" in prompt
     assert "第 4 轮：我喜欢安静工作" in prompt
     assert "第 33 轮：我会陪你" in prompt
+
+
+def test_bounded_memory_can_round_trip_through_local_file(tmp_path) -> None:
+    path = tmp_path / "conversation-memory.json"
+    memory = ConversationMemory(persist_path=path)
+    memory.add("user", "你爹是谁")
+    memory.add("assistant", "我爹。")
+
+    restored = ConversationMemory(persist_path=path)
+    assert restored.recent == (("user", "你爹是谁"), ("assistant", "我爹。"))
+    assert "access_token" not in path.read_text(encoding="utf-8")
+
+
+def test_memory_clear_removes_local_file(tmp_path) -> None:
+    path = tmp_path / "conversation-memory.json"
+    memory = ConversationMemory(persist_path=path)
+    memory.add("user", "只在本机保存")
+    assert path.exists()
+    memory.clear()
+    assert not path.exists()

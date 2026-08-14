@@ -1,4 +1,4 @@
-"""Lili 搭子自习室的最小社交客户端与可替换网络后端。
+�r�^�f��ئ{��y�'vî���"""Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
 只发送账号认证、昵称、六毛外观、工作状态、累计秒数、房间与串门事件。密码从不保存；
 刷新令牌保存在系统凭据库。网络失败不会影响离线桌宠、计时、AI 或本地素材。
@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -21,7 +23,43 @@ from .resources import resource_path
 
 
 class SocialError(RuntimeError):
-    """面向用户的社交网络错误。"""
+    """面向用户的社交网络错误，并保留可记录的诊断分类。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "unknown",
+        endpoint: str = "",
+        retryable: bool = False,
+        status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.endpoint = endpoint
+        self.retryable = retryable
+        self.status = status
+
+
+def _endpoint_host(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(str(base_url or ""))
+    return parsed.netloc or "未配置"
+
+
+def _network_error(exc: BaseException, base_url: str) -> SocialError:
+    """把 urllib/Windows 错误转成用户能采取行动的分类。"""
+
+    reason = getattr(exc, "reason", exc)
+    host = _endpoint_host(base_url)
+    if isinstance(reason, socket.gaierror) or "getaddrinfo" in str(reason).lower():
+        return SocialError(f"DNS 解析失败：找不到自习室服务器（{host}）。", kind="dns", endpoint=host, retryable=True)
+    if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason).lower():
+        return SocialError(f"连接超时：自习室服务器（{host}）没有及时回应。", kind="timeout", endpoint=host, retryable=True)
+    if isinstance(reason, ConnectionRefusedError) or "refused" in str(reason).lower():
+        return SocialError(f"服务器拒绝连接：请检查自习室中转服务（{host}）是否在线。", kind="refused", endpoint=host, retryable=True)
+    if isinstance(reason, ssl.SSLError) or "ssl" in str(reason).lower() or "certificate" in str(reason).lower():
+        return SocialError(f"TLS/证书连接失败：无法安全连接自习室服务器（{host}）。", kind="tls", endpoint=host)
+    return SocialError(f"网络不可达：无法连接自习室服务器（{host}）。", kind="network", endpoint=host, retryable=True)
 
 
 def _social_request_timeout() -> float:
@@ -57,6 +95,7 @@ class SocialBackend(Protocol):
     def sign_up(self, email: str, password: str, nickname: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
     def sign_out(self) -> None: ...
+    def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
@@ -147,11 +186,17 @@ class HttpSocialBackend:
                 message = data.get("message") or data.get("error") or raw
             except json.JSONDecodeError:
                 message = raw or str(exc)
-            raise SocialError(str(message)[:300]) from exc
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            status = int(exc.code)
+            kind = "auth" if status in (401, 403) else "server" if status >= 500 else "http"
             raise SocialError(
-                "自习室网络暂时不可达；已保留本地状态，恢复网络后会自动重试。"
+                str(message)[:300],
+                kind=kind,
+                endpoint=_endpoint_host(self.base_url),
+                retryable=status >= 500,
+                status=status,
             ) from exc
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            raise _network_error(exc, self.base_url) from exc
 
     def _accept_auth(self, data: dict[str, Any] | None) -> bool:
         if not data or not data.get("access_token"):
@@ -187,6 +232,10 @@ class HttpSocialBackend:
 
     def sign_out(self) -> None:
         self._clear_session()
+
+    def health(self) -> dict[str, Any]:
+        """Check the relay without requiring a user session."""
+        return dict(self._raw("GET", "/health") or {})
 
     def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
         data = self._raw("GET", "/dashboard", authenticated=True) or {}
@@ -260,33 +309,26 @@ class SocialClient:
         self.key = str(config.get("publishable_key", ""))
         self.social_api_base_url = (
             os.environ.get("LILI_SOCIAL_API_BASE_URL", "").strip()
-            or str(config.get("social_api_base_url", "")).strip()
-        ).rstrip("/")
-        # Supabase uses this URL after email confirmation.  Keep it explicit so
-        # desktop builds never inherit the hosted project's localhost default.
-        self.email_redirect_url = (
-            os.environ.get("LILI_AUTH_REDIRECT_URL", "").strip()
-            or str(config.get("email_redirect_to", "")).strip()
-            or "https://github.com/leungjunchiang/OnePic-Desktop-Pet"
-        )
-        self.persist_tokens = persist_tokens
-        self._dashboard_cache: dict[str, dict[str, Any]] = {}
-        self.session: SocialSession | None = None
-        self._http_backend: SocialBackend | None = backend
-        if self._http_backend is None and self.social_api_base_url:
-            self._http_backend = HttpSocialBackend(
-                self.social_api_base_url,
-                client_key=self.key,
-                persist_tokens=persist_tokens,
-                email_redirect_url=self.email_redirect_url,
-            )
-        if self._http_backend is None:
-            self._load_session()
-        self._load_dashboard_cache()
+  ��-�G����ƭy�f._load_dashboard_cache()
 
     @property
     def backend_name(self) -> str:
         return "http" if self._http_backend is not None else "supabase"
+
+    @property
+    def backend_endpoint(self) -> str:
+        if self._http_backend is not None:
+            return str(getattr(self._http_backend, "base_url", "") or "")
+        return self.url
+
+    def health(self) -> dict[str, Any]:
+        """Probe the active social transport without requiring authentication."""
+        if self._http_backend is not None:
+            checker = getattr(self._http_backend, "health", None)
+            if callable(checker):
+                return dict(checker() or {})
+            raise SocialError("当前自习室中转服务未提供健康检查。", kind="config")
+        return dict(self._raw("GET", "/auth/v1/health") or {})
 
     @property
     def signed_in(self) -> bool:
@@ -383,7 +425,7 @@ class SocialClient:
         age_minutes = max(0, int((time.time() - saved_at) / 60)) if saved_at else 0
         data["_sync_offline"] = True
         data["_sync_age_minutes"] = age_minutes
-        data["_sync_error"] = "当前网络无法访问自习室服务"
+        data["_sync_error"] = self._last_error or "当前网络无法访问自习室服务"
         return data
 
     def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None) -> Any:
@@ -408,11 +450,17 @@ class SocialClient:
                 message = data.get("msg") or data.get("message") or data.get("error_description") or raw
             except json.JSONDecodeError:
                 message = raw or str(exc)
-            raise SocialError(str(message)[:300]) from exc
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            status = int(exc.code)
+            kind = "auth" if status in (401, 403) else "server" if status >= 500 else "http"
             raise SocialError(
-                "自习室网络暂时不可达；已保留本地状态，恢复网络后会自动重试。"
+                str(message)[:300],
+                kind=kind,
+                endpoint=_endpoint_host(self.url),
+                retryable=status >= 500,
+                status=status,
             ) from exc
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            raise _network_error(exc, self.url) from exc
 
     def _accept_auth(self, data: dict[str, Any]) -> bool:
         token = data.get("access_token")
@@ -484,9 +532,11 @@ class SocialClient:
                         # migration yet; the core room dashboard remains usable.
                         pass
             result = dict(data or {})
+            self._last_error = ""
             self._remember_dashboard(room_id, result)
             return result
-        except SocialError:
+        except SocialError as exc:
+            self._last_error = str(exc)
             cached = self.cached_dashboard(room_id)
             if cached is not None:
                 return cached

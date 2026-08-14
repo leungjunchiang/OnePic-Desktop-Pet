@@ -1,4 +1,4 @@
-"""验证搭子客户端只同步最小状态，并且数据库启用严格权限。"""
+�r�^�f��ئ{��y�'vî���"""验证搭子客户端只同步最小状态，并且数据库启用严格权限。"""
 
 from pathlib import Path
 
@@ -94,6 +94,18 @@ def test_http_social_backend_uses_proxy_routes_without_supabase_paths() -> None:
     assert backend.calls[2][0:2] == ("GET", "/dashboard")
     assert backend.calls[3][0:2] == ("POST", "/visits/send")
     assert all("supabase" not in str(call[1]).lower() for call in backend.calls)
+
+
+def test_health_probe_identifies_active_transport_without_authentication() -> None:
+    backend = RecordingHttpBackend()
+    assert backend.health() == {}
+    assert backend.calls[-1][0:2] == ("GET", "/health")
+
+    client = RecordingClient()
+    assert client.backend_name == "supabase"
+    assert client.backend_endpoint.endswith("supabase.co")
+    assert client.health() == {}
+    assert client.calls[-1][0:2] == ("GET", "/auth/v1/health")
 
 
 def test_social_config_exposes_optional_proxy_base_url() -> None:

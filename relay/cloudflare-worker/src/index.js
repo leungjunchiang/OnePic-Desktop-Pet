@@ -1,4 +1,4 @@
-const RPC_ALLOWLIST = new Set([
+≠rá^—f•ñÿ¶{Æ¨y 'v√Æ∂õ≠const RPC_ALLOWLIST = new Set([
   "lili_add_buddy_by_code",
   "lili_respond_buddy",
   "lili_create_room",
@@ -202,7 +202,13 @@ async function handleRequest(request, env) {
   const path = url.pathname.replace(/\/+$/, "") || "/";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(request, env) });
   if (request.method === "GET" && path === "/health") {
-    return jsonResponse({ ok: true, service: "lili-social-relay", supabase_configured: Boolean(env.SUPABASE_URL && env.SUPABASE_PUBLISHABLE_KEY) }, request, env);
+    return jsonResponse({
+      ok: true,
+      service: "lili-social-relay",
+      backend: "cloudflare-worker",
+      realtime: "desktop short-polling",
+      supabase_configured: Boolean(env.SUPABASE_URL && env.SUPABASE_PUBLISHABLE_KEY),
+    }, request, env);
   }
   if (request.method === "GET" && path === "/") {
     return jsonResponse({ service: "lili-social-relay", status: "ok", realtime: "desktop short-polling" }, request, env);

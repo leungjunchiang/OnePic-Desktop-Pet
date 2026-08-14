@@ -1,13 +1,17 @@
-"""在进程内维护六毛的长期摘要与最近三十轮完整聊天。
+�r�^�f��ئ{��y�'vî���"""维护六毛的长期摘要与最近三十轮完整聊天。
 
 本模块只接收用户与六毛的聊天文本，不读取项目、文件、窗口标题或开发上下文。
 最近三十轮（最多六十条消息）保持原文；更早内容滚动压缩为有长度上限的摘要，
-供所有可选 AI 提供方复用。记忆仅存在于当前进程内，不写入磁盘或服务器。
+供所有可选 AI 提供方复用。窗口实例可以把同样的有界内容落盘到本机，
+不会上传到自习室服务；API 令牌、项目文件和窗口内容不在这里保存。
 """
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 MAX_RECENT_ROUNDS = 30
@@ -35,10 +39,17 @@ class ConversationSnapshot:
 class ConversationMemory:
     """滚动保留三十轮原文，并以简短片段更新更早对话摘要。"""
 
-    def __init__(self, max_recent_rounds: int = MAX_RECENT_ROUNDS) -> None:
+    def __init__(
+        self,
+        max_recent_rounds: int = MAX_RECENT_ROUNDS,
+        persist_path: Path | None = None,
+    ) -> None:
         self.max_recent_messages = max(2, int(max_recent_rounds) * 2)
         self._recent: list[tuple[str, str]] = []
         self._summary_items: list[str] = []
+        self.persist_path = Path(persist_path) if persist_path is not None else None
+        if self.persist_path is not None:
+            self.load()
 
     @property
     def summary(self) -> str:
@@ -70,6 +81,65 @@ class ConversationMemory:
         self._recent.append((role, clean))
         while len(self._recent) > self.max_recent_messages:
             self._compress_oldest_round()
+        self.save()
+
+    def load(self) -> None:
+        """从本机恢复有界记忆；损坏或旧格式只会被忽略。"""
+
+        if self.persist_path is None:
+            return
+        try:
+            payload = json.loads(self.persist_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("version") != 1:
+                return
+            recent = payload.get("recent") or []
+            summary = payload.get("summary") or []
+            if isinstance(recent, list):
+                self._recent = [
+                    (str(item[0]), str(item[1]))
+                    for item in recent
+                    if isinstance(item, list)
+                    and len(item) == 2
+                    and item[0] in {"user", "assistant"}
+                    and str(item[1]).strip()
+                ][-self.max_recent_messages :]
+            if isinstance(summary, list):
+                self._summary_items = [str(item)[:180] for item in summary if str(item).strip()]
+                while len(self.summary) > MAX_SUMMARY_CHARS and len(self._summary_items) > 1:
+                    self._summary_items.pop(0)
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            self._recent = []
+            self._summary_items = []
+
+    def save(self) -> None:
+        """原子保存摘要和最近消息，不向任何网络服务发送。"""
+
+        if self.persist_path is None:
+            return
+        payload = {
+            "version": 1,
+            "summary": self._summary_items,
+            "recent": [[role, content] for role, content in self._recent],
+        }
+        temporary = self.persist_path.with_suffix(".json.tmp")
+        try:
+            self.persist_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(self.persist_path)
+        except OSError:
+            # Memory persistence is best effort and must never block chat.
+            return
+
+    def clear(self) -> None:
+        """清除本机聊天记忆。"""
+
+        self._recent.clear()
+        self._summary_items.clear()
+        if self.persist_path is not None:
+            try:
+                self.persist_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _compress_oldest_round(self) -> None:
         """移出最早的一问一答，并提炼人物、状态、偏好、话题与约定。"""
@@ -105,3 +175,11 @@ class ConversationMemory:
         if any(marker in text for marker in agreement_markers):
             return f"六毛曾回应：{text[:120]}"
         return ""
+
+
+def conversation_memory_path() -> Path:
+    """返回六毛本机聊天记忆路径；不使用项目目录或云端存储。"""
+
+    base = os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / ".desktop_pet"
+    return root / "Lili" / "conversation-memory.json"
