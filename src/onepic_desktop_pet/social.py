@@ -60,7 +60,8 @@ class SocialBackend(Protocol):
     def dashboard(self, room_id: str | None = None) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None) -> None: ...
+    def update_owner_nickname(self, nickname: str) -> None: ...
+    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None: ...
@@ -174,7 +175,7 @@ class HttpSocialBackend:
     def sign_up(self, email: str, password: str, nickname: str) -> bool:
         if self._http_backend is not None:
             return self._http_backend.sign_up(email, password, nickname)
-        body = {"email": email.strip(), "password": password, "nickname": nickname.strip()[:24] or "六毛搭子", "data": {"nickname": nickname.strip()[:24] or "六毛搭子"}}
+        body = {"email": email.strip(), "password": password, "nickname": nickname.strip()[:24] or "搭子", "data": {"nickname": nickname.strip()[:24] or "搭子"}}
         if self.email_redirect_url:
             body["redirect_to"] = self.email_redirect_url
         return self._accept_auth(self._raw("POST", "/auth/signup", body))
@@ -211,39 +212,42 @@ class HttpSocialBackend:
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None:
-        self._raw("PATCH", "/profile", {"nickname": nickname.strip()[:24] or "六毛搭子", "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60]}, authenticated=True)
+        self._raw("PATCH", "/profile", {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60]}, authenticated=True)
 
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None) -> None:
+    def update_owner_nickname(self, nickname: str) -> None:
+        self._raw("PATCH", "/profile", {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24]}, authenticated=True)
+
+    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if not self.session:
             return
         now = datetime.now().astimezone()
-        self._raw("POST", "/presence/heartbeat", {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "last_seen": now.isoformat()}, authenticated=True)
+        self._raw("POST", "/presence/heartbeat", {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "last_seen": now.isoformat()}, authenticated=True)
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         self._raw(
             "POST",
             "/rooms/interaction",
-            {"target": target, "kind": kind, "room_id": room_id},
+            {"p_target": target, "p_kind": kind, "p_room_id": room_id},
             authenticated=True,
         )
 
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
-        self.rpc("lili_set_room_goal", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "due_at": due_at})
+        self.rpc("lili_set_room_goal", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_due_at": due_at})
 
     def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None:
-        self.rpc("lili_set_room_schedule", {"room_id": room_id, "start_at": start_at, "end_at": end_at, "enabled": bool(enabled)})
+        self.rpc("lili_set_room_schedule", {"p_room_id": room_id, "p_start_at": start_at, "p_end_at": end_at, "p_enabled": bool(enabled)})
 
     def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None:
-        self.rpc("lili_set_room_challenge", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "target_rounds": int(target_rounds)})
+        self.rpc("lili_set_room_challenge", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_target_rounds": int(target_rounds)})
 
     def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None:
-        self.rpc("lili_set_buddy_subscription", {"buddy_id": buddy_id, "on_focus_start": bool(on_focus_start), "on_focus_end": bool(on_focus_end), "muted": bool(muted)})
+        self.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": bool(on_focus_start), "p_on_focus_end": bool(on_focus_end), "p_muted": bool(muted)})
 
     def leave_room(self, *, room_id: str) -> None:
-        self.rpc("lili_leave_room", {"room_id": room_id})
+        self.rpc("lili_leave_room", {"p_room_id": room_id})
 
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
-        self.rpc("lili_record_room_event", {"room_id": room_id, "kind": kind, "target_id": target_id, "message": message})
+        self.rpc("lili_record_room_event", {"p_room_id": room_id, "p_kind": kind, "p_target_id": target_id, "p_message": message})
 
 
 class SocialClient:
@@ -434,7 +438,7 @@ class SocialClient:
         data = self._raw(
             "POST",
             f"/auth/v1/signup?{redirect}",
-            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "六毛搭子"}},
+            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "搭子"}},
         )
         return self._accept_auth(data)
 
@@ -461,7 +465,7 @@ class SocialClient:
                     room = self._raw(
                         "POST",
                         "/rest/v1/rpc/lili_room_dashboard",
-                        {"room_id": room_id},
+                        {"p_room_id": room_id},
                         authenticated=True,
                     ) or {}
                     if isinstance(room, dict):
@@ -470,7 +474,7 @@ class SocialClient:
                         rituals = self._raw(
                             "POST",
                             "/rest/v1/rpc/lili_room_room_rituals",
-                            {"room_id": room_id},
+                            {"p_room_id": room_id},
                             authenticated=True,
                         ) or {}
                         if isinstance(rituals, dict):
@@ -499,38 +503,48 @@ class SocialClient:
         if not self.session:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": nickname.strip()[:24] or "六毛搭子", "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        clean = nickname.strip()[:24]
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None) -> None:
+    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if self._http_backend is not None:
-            return self._http_backend.heartbeat(working=working, today_seconds=today_seconds, session_started_at=session_started_at, outfit_key=outfit_key, room_id=room_id)
+            return self._http_backend.heartbeat(working=working, today_seconds=today_seconds, session_started_at=session_started_at, outfit_key=outfit_key, room_id=room_id, quick_status=quick_status, quick_status_expires_at=quick_status_expires_at)
         if not self.session:
             return
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_started_at": session_started_at, "focus_date": datetime.now().date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "last_seen": datetime.now().astimezone().isoformat(), "updated_at": datetime.now().astimezone().isoformat()}
+        body = {"user_id": self.session.user_id, "working": bool(working), "session_started_at": session_started_at, "focus_date": datetime.now().date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "last_seen": datetime.now().astimezone().isoformat(), "updated_at": datetime.now().astimezone().isoformat()}
         self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+
+    def update_owner_nickname(self, nickname: str) -> None:
+        if self._http_backend is not None:
+            return self._http_backend.update_owner_nickname(nickname)
+        if not self.session:
+            raise SocialError("请先登录。")
+        query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
+        clean = nickname.strip()[:24]
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self._http_backend is not None:
             return self._http_backend.send_interaction(target=target, kind=kind, room_id=room_id)
         self.rpc(
             "lili_send_interaction",
-            {"target": target, "kind": kind, "room_id": room_id},
+            {"p_target": target, "p_kind": kind, "p_room_id": room_id},
         )
 
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
-        self.rpc("lili_set_room_goal", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "due_at": due_at})
+        self.rpc("lili_set_room_goal", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_due_at": due_at})
 
     def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None:
-        self.rpc("lili_set_room_schedule", {"room_id": room_id, "start_at": start_at, "end_at": end_at, "enabled": bool(enabled)})
+        self.rpc("lili_set_room_schedule", {"p_room_id": room_id, "p_start_at": start_at, "p_end_at": end_at, "p_enabled": bool(enabled)})
 
     def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None:
-        self.rpc("lili_set_room_challenge", {"room_id": room_id, "title": title, "target_seconds": int(target_seconds), "target_rounds": int(target_rounds)})
+        self.rpc("lili_set_room_challenge", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_target_rounds": int(target_rounds)})
 
     def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None:
-        self.rpc("lili_set_buddy_subscription", {"buddy_id": buddy_id, "on_focus_start": bool(on_focus_start), "on_focus_end": bool(on_focus_end), "muted": bool(muted)})
+        self.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": bool(on_focus_start), "p_on_focus_end": bool(on_focus_end), "p_muted": bool(muted)})
 
     def leave_room(self, *, room_id: str) -> None:
-        self.rpc("lili_leave_room", {"room_id": room_id})
+        self.rpc("lili_leave_room", {"p_room_id": room_id})
 
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
-        self.rpc("lili_record_room_event", {"room_id": room_id, "kind": kind, "target_id": target_id, "message": message})
+        self.rpc("lili_record_room_event", {"p_room_id": room_id, "p_kind": kind, "p_target_id": target_id, "p_message": message})

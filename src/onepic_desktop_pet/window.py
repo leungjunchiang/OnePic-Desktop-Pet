@@ -106,7 +106,7 @@ from .companion import (
     CompanionModel,
     CompanionReply,
 )
-from .config import PetSettings, save_settings
+from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .input_activity import system_idle_seconds
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
@@ -131,7 +131,7 @@ from .liumao_worldview import family_music_mode
 from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
-from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialSyncThread
+from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialProfileThread, SocialSyncThread
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
@@ -154,12 +154,15 @@ class PetWindow(QWidget):
     work_timer_changed = Signal(bool)
     always_on_top_changed = Signal(bool)
     pet_name_changed = Signal(str)
+    owner_nickname_changed = Signal(str)
 
     def _pet_name(self) -> str:
-        """返回当前昵称；兼容旧配置或测试替身缺少该字段的情况。"""
+        """Return the immutable character identity used by every local UI."""
 
-        value = str(getattr(self.settings, "pet_name", "六毛")).replace("\x00", "").strip()
-        return value[:20] or "六毛"
+        return PET_NAME
+
+    def _owner_nickname(self) -> str:
+        return clean_owner_nickname(getattr(self.settings, "owner_nickname", ""))
 
     def _walk_allowed(self) -> bool:
         """返回当前是否允许六毛自主横向跑动。"""
@@ -215,6 +218,8 @@ class PetWindow(QWidget):
         self._pending_idle_seconds = 0
         self._idle_prompt_pending = False
         self._sleep_after_sit = False
+        self._room_quick_status = ""
+        self._room_quick_status_expires_at: datetime | None = None
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
         self._pixmaps = self._load_pixmaps()
@@ -229,6 +234,7 @@ class PetWindow(QWidget):
         self._social_dialog: SocialHubDialog | None = None
         self._social_thread: SocialSyncThread | None = None
         self._social_event_threads: list[SocialEventThread] = []
+        self._social_profile_threads: list[SocialProfileThread] = []
         self._buddy_visit_window = BuddyVisitWindow()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
@@ -1767,28 +1773,54 @@ class PetWindow(QWidget):
         self._chat_dialog.activateWindow()
 
     def rename_pet(self) -> None:
-        """通过明确的用户入口修改昵称，并立即同步所有可见窗口。"""
+        """Edit the owner's social nickname; the pet remains 六毛 forever."""
 
         self._record_user_interaction()
         name, accepted = QInputDialog.getText(
             self,
-            "给六毛改名字",
-            "请输入新名字（最多 20 个字）：",
-            text=self._pet_name(),
+            "修改主人称呼",
+            "主人称呼\n用于自习室、串门和搭子互动时区分不同六毛。\n例如填写“小梁”，其他搭子将看到“小梁家的六毛”。",
+            text=self._owner_nickname(),
         )
         if not accepted:
             return
-        name = str(name).replace("\x00", "").strip()[:20] or "六毛"
-        previous_name = self._pet_name()
-        self.settings.pet_name = name
-        self.setWindowTitle(f"{APP_DISPLAY_NAME} · {name}")
-        if self._chat_dialog is not None:
-            self._chat_dialog.set_pet_name(name)
-        self.quick_panel.set_pet_name(name)
-        if name != previous_name:
-            self.pet_name_changed.emit(name)
+        name = clean_owner_nickname(name)
+        previous_name = self._owner_nickname()
+        self.settings.owner_nickname = name
+        self.settings.pet_name = PET_NAME
         save_settings(self.settings)
-        self.show_speech(f"好，以后就叫我{name}。", 3500)
+        if name != previous_name:
+            self.owner_nickname_changed.emit(name)
+            self._sync_owner_nickname(name)
+            if self._social_dialog is not None:
+                self._social_dialog.set_owner_nickname(name)
+        label = social_pet_label(name)
+        self.show_speech(f"好，社交场景里就叫{label}。我还是六毛。", 4200)
+
+    def _sync_owner_nickname(self, nickname: str) -> None:
+        """Persist the social-only nickname without blocking the desktop pet."""
+
+        if not self.social_client.signed_in:
+            return
+        updater = getattr(self.social_client, "update_owner_nickname", None)
+        if not callable(updater):
+            return
+        thread = SocialProfileThread(self.social_client, nickname, self)
+        self._social_profile_threads.append(thread)
+        thread.failed.connect(
+            lambda message: self._social_dialog._set_status(
+                "主人称呼已保存在本机，但云端同步失败，请稍后重试。", error=True
+            ) if self._social_dialog is not None else None
+        )
+        thread.finished.connect(
+            lambda: self._social_profile_thread_finished(thread)
+        )
+        thread.start()
+
+    def _social_profile_thread_finished(self, thread: SocialProfileThread) -> None:
+        if thread in self._social_profile_threads:
+            self._social_profile_threads.remove(thread)
+        thread.deleteLater()
 
     def _submit_chat_message(self, message: str) -> None:
         """把消息交给 ChatManager；路由只读取缓存，不做同步检测。"""
@@ -1865,6 +1897,7 @@ class PetWindow(QWidget):
             getattr(self.settings, "allow_autonomous_walk", False)
         )
         previous_pet_name = self._pet_name()
+        previous_owner_nickname = self._owner_nickname()
         try:
             dialog.apply()
         except Exception as exc:
@@ -1877,6 +1910,12 @@ class PetWindow(QWidget):
         self.quick_panel.set_pet_name(current_pet_name)
         if current_pet_name != previous_pet_name:
             self.pet_name_changed.emit(current_pet_name)
+        current_owner_nickname = self._owner_nickname()
+        if current_owner_nickname != previous_owner_nickname:
+            self.owner_nickname_changed.emit(current_owner_nickname)
+            self._sync_owner_nickname(current_owner_nickname)
+            if self._social_dialog is not None:
+                self._social_dialog.set_owner_nickname(current_owner_nickname)
         if self.settings.always_on_top != previous_always_on_top:
             self.set_always_on_top(self.settings.always_on_top, persist=False)
         if bool(self.settings.allow_autonomous_walk) != previous_allow_autonomous_walk:
@@ -1912,7 +1951,12 @@ class PetWindow(QWidget):
             # window so Windows gives it a normal taskbar button.  The pet
             # retains ownership through the Python reference and can restore
             # the same instance on a later menu click.
-            self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, None)
+            self._social_dialog = SocialHubDialog(
+                self.social_client,
+                self.settings.equipped_outfit,
+                self._owner_nickname(),
+                None,
+            )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
             self._social_dialog.room_event_received.connect(self._room_event_received)
             self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
@@ -1924,6 +1968,7 @@ class PetWindow(QWidget):
             self._social_dialog.tomorrow_review_requested.connect(self._set_tomorrow_review)
             self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
             self._social_dialog.room_changed.connect(self._social_room_changed)
+            self._social_dialog.quick_action_requested.connect(self._room_quick_action)
             self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
         # A second click on the menu must restore a minimized study-room
@@ -1945,7 +1990,7 @@ class PetWindow(QWidget):
         if detect_quiet_mode().blocked:
             return
         kind = str(event.get("kind") or "")
-        actor = str(event.get("nickname") or "搭子")
+        actor = social_pet_label(event.get("nickname"))
         message = str(event.get("message") or "")
         labels = {"poke": "戳了戳你", "cheer": "给你加油", "drink": "递给你一杯奶茶"}
         if kind == "phrase":
@@ -2003,6 +2048,9 @@ class PetWindow(QWidget):
             "session_started_at": snapshot.session_started_at,
             "outfit_key": self.settings.equipped_outfit,
             "room_id": room_id,
+            "quick_status": self._active_room_quick_status(),
+            "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
+            if self._room_quick_status_expires_at is not None else None,
         }
         thread = SocialSyncThread(self.social_client, presence, self)
         self._social_thread = thread
@@ -2028,7 +2076,7 @@ class PetWindow(QWidget):
             if visit_id and visit_id not in self._seen_visit_ids:
                 self._seen_visit_ids.add(visit_id)
                 self._set_temporary_activity("pointing", 20_000)
-                self.show_speech(f"{visit.get('nickname','搭子')} 的六毛来串门啦！\n打开“搭子自习室”可以接受。", 7600)
+                self.show_speech(f"{social_pet_label(visit.get('nickname'))}来串门啦！\n打开“搭子自习室”可以接受。", 7600)
         active = data.get("active_visits") or []
         if active:
             self._show_buddy_visit(active[0])
@@ -2065,6 +2113,42 @@ class PetWindow(QWidget):
         """Bind room selection to the single local focus session."""
 
         self.focus_session.set_room_id(str(room_id) if room_id else None)
+        if not room_id:
+            self._room_quick_status = ""
+            self._room_quick_status_expires_at = None
+        self._schedule_social_tick()
+
+    def _active_room_quick_status(self) -> str:
+        if self._room_quick_status_expires_at is not None and datetime.now().astimezone() >= self._room_quick_status_expires_at:
+            self._room_quick_status = ""
+            self._room_quick_status_expires_at = None
+        return self._room_quick_status
+
+    def _room_quick_action(self, action: str) -> None:
+        """Turn room action phrases into real local focus state changes."""
+
+        action = str(action).strip()
+        if action == "我也开工了":
+            self._room_quick_status = ""
+            self._room_quick_status_expires_at = None
+            self.start_work_timer()
+        elif action == "再卷 30 分钟":
+            self._room_quick_status = "再卷30分钟"
+            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=30)
+            if not self.work_timer.is_running:
+                self.start_work_timer()
+            elif self._social_dialog is not None:
+                self._social_dialog.set_room_quick_status(self._room_quick_status, self._room_quick_status_expires_at)
+        elif action == "去喝水":
+            self._room_quick_status = "去喝水"
+            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=10)
+            self.pause_work_timer()
+        else:
+            return
+        if self._social_dialog is not None:
+            self._social_dialog.set_room_quick_status(
+                self._active_room_quick_status(), self._room_quick_status_expires_at
+            )
         self._schedule_social_tick()
 
     def _schedule_social_tick(self) -> None:
@@ -2606,7 +2690,7 @@ class PetWindow(QWidget):
         """构建高频入口直达、低频选项收纳到二级菜单的右键菜单。"""
 
         menu = QMenu(self)
-        rename_action = QAction(f"给{self._pet_name()}改名字…", self)
+        rename_action = QAction("修改主人称呼…", self)
         rename_action.triggered.connect(self.rename_pet)
         menu.addAction(rename_action)
         dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
@@ -2722,7 +2806,7 @@ class PetWindow(QWidget):
         dialogue_action = QAction(f"和{self._pet_name()}聊聊…", self)
         dialogue_action.triggered.connect(self.prompt_dialogue)
         chat_group.addAction(dialogue_action)
-        rename_action = QAction(f"给{self._pet_name()}改名字…", self)
+        rename_action = QAction("修改主人称呼…", self)
         rename_action.triggered.connect(self.rename_pet)
         chat_group.addAction(rename_action)
         social_action = QAction(f"{self._pet_name()}搭子自习室…", self)

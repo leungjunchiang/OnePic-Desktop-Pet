@@ -57,6 +57,7 @@ from .ai import (
     launch_codex_gui,
     provider_defaults,
 )
+from .config import PET_NAME
 from .config import PetSettings
 from .chat_manager import AgentConnectionState, AgentManager
 
@@ -148,7 +149,7 @@ class ChatDialog(QDialog):
         pet_name: str = "六毛",
     ) -> None:
         super().__init__(parent)
-        self.pet_name = pet_name.strip() or "六毛"
+        self.pet_name = PET_NAME
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -173,9 +174,9 @@ class ChatDialog(QDialog):
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
-        self.rename_button = QPushButton("改名字")
+        self.rename_button = QPushButton("修改主人称呼")
         self.rename_button.setObjectName("softButton")
-        self.rename_button.setToolTip("点击这里修改六毛的名字")
+        self.rename_button.setToolTip("用于自习室、串门和搭子互动时区分不同六毛")
         self.rename_button.setAutoDefault(False)
         self.rename_button.setDefault(False)
         self.rename_button.clicked.connect(self.rename_requested.emit)
@@ -241,7 +242,7 @@ class ChatDialog(QDialog):
     def set_pet_name(self, pet_name: str) -> None:
         """更新聊天窗口中显示的昵称，不清空已有对话。"""
 
-        self.pet_name = pet_name.strip() or "六毛"
+        self.pet_name = PET_NAME
         self.setWindowTitle(f"和{self.pet_name}聊聊")
         self.pet_title.setText(f"{self.pet_name}的小纸条")
         self.input.setPlaceholderText(f"跟{self.pet_name}说点什么……")
@@ -323,7 +324,7 @@ class AISettingsDialog(QDialog):
         self.agent_manager = agent_manager
         self.music_manager = music_manager
         self._connection_thread: ConnectionCheckThread | None = None
-        self.setWindowTitle(f"Lili · {(settings.pet_name or '六毛')}设置")
+        self.setWindowTitle(f"Lili · {PET_NAME}设置")
         self.setObjectName("liliPanel")
         self.setMinimumWidth(500)
         self.resize(620, 760)
@@ -363,10 +364,10 @@ class AISettingsDialog(QDialog):
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("留空则保留已安全保存的令牌")
         form.addRow("API 令牌", self.token)
-        self.pet_name = QLineEdit(settings.pet_name)
-        self.pet_name.setMaxLength(20)
-        self.pet_name.setPlaceholderText("例如：六毛、团团、阿毛")
-        form.addRow("桌宠名字", self.pet_name)
+        self.owner_nickname = QLineEdit(getattr(settings, "owner_nickname", ""))
+        self.owner_nickname.setMaxLength(24)
+        self.owner_nickname.setPlaceholderText("例如：小梁、mianmian；留空则显示搭子家的六毛")
+        form.addRow("主人称呼", self.owner_nickname)
         layout.addLayout(form)
 
         self.token_status = QLabel()
@@ -683,7 +684,8 @@ class AISettingsDialog(QDialog):
             thread.deleteLater()
 
     def apply(self) -> None:
-        self.settings.pet_name = self.pet_name.text().strip()[:20] or "六毛"
+        self.settings.owner_nickname = self.owner_nickname.text().strip()[:24]
+        self.settings.pet_name = PET_NAME
         provider = str(self.provider.currentData())
         self.settings.ai_provider = provider
         self.settings.ai_base_url = self.base_url.text().strip()

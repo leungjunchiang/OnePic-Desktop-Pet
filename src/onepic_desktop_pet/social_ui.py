@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,10 @@ from PySide6.QtWidgets import (
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import SocialClient, SocialError
+from .config import PET_NAME, social_pet_label
 from .work_timer import format_work_duration
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _presence_working(presence: dict[str, Any]) -> bool:
@@ -143,6 +147,23 @@ class SocialEventThread(QThread):
             self.failed.emit(str(exc))
 
 
+class SocialProfileThread(QThread):
+    """Persist an owner nickname away from the Qt GUI thread."""
+
+    failed = Signal(str)
+
+    def __init__(self, client: SocialClient, nickname: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.nickname = nickname
+
+    def run(self) -> None:
+        try:
+            self.client.update_owner_nickname(self.nickname)
+        except (SocialError, AttributeError) as exc:
+            self.failed.emit(str(exc))
+
+
 class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
@@ -167,7 +188,7 @@ class BuddyCardWidget(QWidget):
         status = _presence_status(buddy)
         status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         headline = QLabel(
-            f"{'🟢' if online else '⚪'}  {nickname} 的六毛"
+            f"{'🟢' if online else '⚪'}  {social_pet_label(nickname)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
         headline.setWordWrap(True)
@@ -181,6 +202,12 @@ class BuddyCardWidget(QWidget):
         focus = QLabel(time_text)
         focus.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
+        quick_status = str(buddy.get("quick_status") or "").strip()
+        expires = str(buddy.get("quick_status_expires_at") or "")
+        if quick_status and (not expires or expires > datetime.now().astimezone().isoformat()):
+            quick = QLabel(f"状态：{quick_status[:40]}")
+            quick.setStyleSheet("color:#b36b2c;font-size:12px;font-weight:600;")
+            root.addWidget(quick)
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         footer = QLabel(f"当前娃衣：{outfit}　·　双击或选中后可派六毛串门")
         footer.setStyleSheet("color:#61727d;font-size:11px;")
@@ -286,9 +313,9 @@ class BuddyVisitWindow(QWidget):
         self._presented_visit_id = visit_id
         self.visible_requested = True
         self.user_minimized = False
-        nickname = str(peer.get("nickname") or "搭子")
-        self.title.setText(f"{nickname} 的六毛来串门了")
-        self.subtitle.setText(f"💻 你的六毛　　{nickname} 的六毛 📖\n一起工作中")
+        nickname = social_pet_label(peer.get("nickname"))
+        self.title.setText(f"{nickname}来串门了")
+        self.subtitle.setText(f"💻 {PET_NAME}　　{nickname} 📖\n一起工作中")
         peer_today = peer.get("today_seconds")
         peer_text = "时长隐藏" if peer_today is None else format_work_duration(peer_today)
         self.today.setText(f"你今日 {format_work_duration(mine_today)}　·　{nickname} 今日 {peer_text}")
@@ -352,11 +379,13 @@ class SocialHubDialog(QDialog):
     room_event_received = Signal(dict)
     room_ritual_due = Signal(str)
     buddy_subscription_notice = Signal(str)
+    quick_action_requested = Signal(str)
 
-    def __init__(self, client: SocialClient, outfit_key: str = "", parent=None) -> None:
+    def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
         super().__init__(parent)
         self.client = client
         self.outfit_key = outfit_key
+        self.owner_nickname = owner_nickname.strip()[:24]
         self.data: dict[str, Any] = {}
         self.current_room_id: str | None = None
         self._focus_snapshot: Any = None
@@ -459,6 +488,25 @@ class SocialHubDialog(QDialog):
         self.focus_start.setEnabled(str(status) != "focus")
         self.focus_pause.setEnabled(str(status) == "focus")
         self.focus_finish.setEnabled(int(session_seconds) > 0 or int(today_seconds) > 0)
+
+    def set_room_quick_status(self, status: str, expires_at: datetime | None = None) -> None:
+        """Render the local room action immediately, before the next heartbeat."""
+
+        clean = str(status or "").strip()[:40]
+        expiry = expires_at.isoformat() if expires_at is not None else None
+        for person in getattr(self, "_room_people", []):
+            if person.get("is_self"):
+                person["quick_status"] = clean
+                person["quick_status_expires_at"] = expiry
+        if hasattr(self, "room_members") and getattr(self, "_room_people", None):
+            self._render_room_people(self._room_people)
+
+    def set_owner_nickname(self, nickname: str) -> None:
+        self.owner_nickname = str(nickname or "").strip()[:24]
+        if self.data:
+            me = self.data.get("me") or {}
+            own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
+            self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
 
     def set_focus_analytics(self, snapshot: dict[str, Any] | None) -> None:
         """Render local continuity metrics and the one-task countdown."""
@@ -673,7 +721,7 @@ class SocialHubDialog(QDialog):
         for index, phrase in enumerate(("我也开工了", "再卷 30 分钟", "去喝水", "下班没？")):
             button = QPushButton(phrase)
             button.setToolTip("发送给当前房间成员，短时间内不会重复骚扰同一人")
-            button.clicked.connect(lambda _checked=False, value=phrase: self._send_phrase(value))
+            button.clicked.connect(lambda _checked=False, value=phrase: self._quick_action_clicked(value))
             phrase_row.addWidget(button, index // 2, index % 2)
             phrase_row.setColumnStretch(index % 2, 1)
         room_layout.addLayout(phrase_row)
@@ -686,6 +734,16 @@ class SocialHubDialog(QDialog):
         self.set_focus_snapshot(self._focus_snapshot or {"status": "idle", "session_seconds": 0, "today_seconds": 0})
         self.set_focus_analytics(self._focus_analytics)
         return self._scroll_page(page)
+
+    def _quick_action_clicked(self, action: str) -> None:
+        if action == "下班没？":
+            self._send_phrase(action)
+            return
+        if not self._require_login() or not self.current_room_id:
+            self._set_status("请先加入一个共同房间，再改变房间状态。", error=True)
+            return
+        self.quick_action_requested.emit(action)
+        self._set_status(f"正在把“{action}”同步给当前房间…")
 
     def _room_id_from_payload(self, room: dict[str, Any]) -> str | None:
         room_id = str(room.get("id") or room.get("room_id") or "")
@@ -768,7 +826,7 @@ class SocialHubDialog(QDialog):
         if not self._require_login():
             return
         target = str(buddy.get("user_id") or buddy.get("id") or "")
-        nickname = str(buddy.get("nickname") or "搭子")
+        nickname = social_pet_label(buddy.get("nickname"))
         labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶"}
         if not self.current_room_id:
             self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
@@ -840,7 +898,7 @@ class SocialHubDialog(QDialog):
             if callable(setter):
                 setter(room_id=self.current_room_id, start_at=start.strip(), end_at=end.strip(), enabled=True)
             else:
-                self.client.rpc("lili_set_room_schedule", {"room_id": self.current_room_id, "start_at": start.strip(), "end_at": end.strip(), "enabled": True})
+                self.client.rpc("lili_set_room_schedule", {"p_room_id": self.current_room_id, "p_start_at": start.strip(), "p_end_at": end.strip(), "p_enabled": True})
             self._set_status(f"已设定 {start.strip()} 一起开工，{end.strip()} 一起收工。")
             self._refresh_selected_room()
         except SocialError as exc:
@@ -863,7 +921,7 @@ class SocialHubDialog(QDialog):
             if callable(setter):
                 setter(room_id=self.current_room_id, title=title.strip()[:80], target_seconds=hours * 3600, target_rounds=rounds)
             else:
-                self.client.rpc("lili_set_room_challenge", {"room_id": self.current_room_id, "title": title.strip()[:80], "target_seconds": hours * 3600, "target_rounds": rounds})
+                self.client.rpc("lili_set_room_challenge", {"p_room_id": self.current_room_id, "p_title": title.strip()[:80], "p_target_seconds": hours * 3600, "p_target_rounds": rounds})
             self._set_status("共同挑战已保存，完成时会写入房间动态。")
             self._refresh_selected_room()
         except SocialError as exc:
@@ -871,7 +929,7 @@ class SocialHubDialog(QDialog):
 
     def _interaction_sent(self, nickname: str, kind: str) -> None:
         labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶", "phrase": "发送了快速短语"}
-        self._set_status(f"六毛已向 {nickname} {labels.get(kind, '送出互动')}；对方房间动态会显示这次互动。")
+        self._set_status(f"{PET_NAME}已向 {nickname} {labels.get(kind, '送出互动')}；对方房间动态会显示这次互动。")
         QTimer.singleShot(0, self._refresh_selected_room)
 
     def _event_thread_finished(self, thread: SocialEventThread) -> None:
@@ -910,9 +968,9 @@ class SocialHubDialog(QDialog):
                 stamp = created[11:16] if len(created) >= 16 and "T" in created else ""
                 text = str(entry.get("text") or entry.get("message") or "")
                 if not text:
-                    actor = entry.get("nickname") or entry.get("actor_nickname") or "搭子"
+                    actor = social_pet_label(entry.get("nickname") or entry.get("actor_nickname"))
                     target = entry.get("target_nickname")
-                    target_text = f" → {target}" if target else ""
+                    target_text = f" → {social_pet_label(target)}" if target else ""
                     kind_text = {
                         "join": "进入房间", "leave": "离开房间", "focus_start": "开始专注",
                         "focus_pause": "暂停休息", "focus_finish": "完成一轮",
@@ -980,7 +1038,7 @@ class SocialHubDialog(QDialog):
             if callable(setter):
                 setter(room_id=self.current_room_id, title=title.strip()[:80], target_seconds=minutes * 60, due_at=due_at)
             else:
-                self.client.rpc("lili_set_room_goal", {"room_id": self.current_room_id, "title": title.strip()[:80], "target_seconds": minutes * 60, "due_at": due_at})
+                self.client.rpc("lili_set_room_goal", {"p_room_id": self.current_room_id, "p_title": title.strip()[:80], "p_target_seconds": minutes * 60, "p_due_at": due_at})
             self._end_action()
             self._set_status("共同任务已更新，房间成员会看到同一个倒计时。")
             self._refresh_selected_room()
@@ -998,7 +1056,7 @@ class SocialHubDialog(QDialog):
             if callable(leaver):
                 leaver(room_id=room_id)
             else:
-                self.client.rpc("lili_leave_room", {"room_id": room_id})
+                self.client.rpc("lili_leave_room", {"p_room_id": room_id})
             self.current_room_id = None
             self.room_changed.emit(None)
             self._set_status("已离开当前自习室，本次共同专注已保留在房间动态中。")
@@ -1042,8 +1100,8 @@ class SocialHubDialog(QDialog):
         login_layout.addLayout(login_form); login_button = QPushButton("登录")
         login_button.clicked.connect(self._login); login_layout.addWidget(login_button); login_layout.addStretch()
         register = QWidget(); register_layout = QVBoxLayout(register); register_form = QFormLayout()
-        self.signup_nickname = QLineEdit("六毛搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
-        register_form.addRow("昵称", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
+        self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
+        register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
         register_layout.addLayout(register_form); signup_button = QPushButton("注册")
         signup_button.clicked.connect(self._signup); register_layout.addWidget(signup_button); register_layout.addStretch()
         auth_tabs.addTab(login, "登录"); auth_tabs.addTab(register, "注册")
@@ -1105,8 +1163,11 @@ class SocialHubDialog(QDialog):
 
     def _error(self, exc: Exception) -> None:
         self._end_action()
-        self._set_status(str(exc), error=True)
-        QMessageBox.warning(self, "六毛搭子自习室", str(exc))
+        raw = str(exc)
+        LOGGER.warning("social room operation failed: %s", raw)
+        message = "共同房间状态保存失败，请稍后重试。" if "ambiguous" in raw.lower() or "room_id" in raw.lower() else raw
+        self._set_status(message, error=True)
+        QMessageBox.warning(self, "六毛搭子自习室", message)
 
     def _signup(self) -> None:
         self._begin_action("正在创建账号…")
@@ -1153,7 +1214,8 @@ class SocialHubDialog(QDialog):
         self.data = dict(data or {})
         me=self.data.get("me") or {}
         me_presence = self.data.get("me_presence") or {}
-        self.identity.setText(f"{me.get('nickname','六毛搭子')} · 我的搭子码：{me.get('invite_code','--------')}")
+        own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
+        self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
         self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True)))
         self.buddies.clear()
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
@@ -1172,7 +1234,7 @@ class SocialHubDialog(QDialog):
                 previous = previous_buddies.get(str(buddy.get("user_id")))
                 if previous is not None and bool(previous.get("working")) != bool(buddy.get("working")):
                     state_text = "开始专注" if buddy.get("working") else "结束专注"
-                    self.buddy_subscription_notice.emit(f"{buddy.get('nickname', '搭子')} {state_text}了。")
+                    self.buddy_subscription_notice.emit(f"{social_pet_label(buddy.get('nickname'))} {state_text}了。")
             working_count += int(bool(buddy.get("working")))
             duration = buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
@@ -1272,7 +1334,7 @@ class SocialHubDialog(QDialog):
             }
         local_presence.update({
             "user_id": str(me.get("user_id") or me.get("id") or "me"),
-            "nickname": str(me.get("nickname") or "我"),
+            "nickname": self.owner_nickname or str(me.get("nickname") or "搭子"),
             "outfit_key": str(me_presence.get("outfit_key") or self.outfit_key or me.get("outfit_key") or ""),
             "online": True,
             "is_self": True,
@@ -1351,7 +1413,7 @@ class SocialHubDialog(QDialog):
         if not self._require_login(): return
         self._begin_action("正在保存隐私设置…")
         try:
-            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(me.get("nickname") or "六毛搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key); self.refresh()
+            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key); self.refresh()
         except SocialError as exc: self._error(exc)
 
     def _set_subscription(self, buddy: dict[str, Any], enabled: bool) -> None:
@@ -1365,7 +1427,7 @@ class SocialHubDialog(QDialog):
             if callable(setter):
                 setter(buddy_id=buddy_id, on_focus_start=enabled, on_focus_end=enabled, muted=not enabled)
             else:
-                self.client.rpc("lili_set_buddy_subscription", {"buddy_id": buddy_id, "on_focus_start": enabled, "on_focus_end": enabled, "muted": not enabled})
+                self.client.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": enabled, "p_on_focus_end": enabled, "p_muted": not enabled})
             self._set_status("搭子状态订阅已开启。" if enabled else "搭子状态订阅已关闭。")
         except SocialError as exc:
             self._error(exc)

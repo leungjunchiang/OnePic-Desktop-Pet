@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.social_ui import BuddyCardWidget, SocialHubDialog
 from onepic_desktop_pet.window import PetWindow
+from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
 class RoomClient:
@@ -79,6 +81,15 @@ def test_interaction_button_has_a_visible_cooldown():
     widget.deleteLater(); app.processEvents()
 
 
+def test_social_card_uses_owner_nickname_without_renaming_pet():
+    app = QApplication.instance() or QApplication([])
+    widget = BuddyCardWidget({"user_id": "peer", "nickname": "小梁", "online": True, "working": True})
+    headline = widget.findChildren(QLabel)[0].text()
+    assert "小梁家的六毛正在工作" in headline
+    assert "小梁家的六毛家的六毛" not in headline
+    widget.deleteLater(); app.processEvents()
+
+
 def test_idle_input_pauses_focus_without_resuming_automatically(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
@@ -90,4 +101,18 @@ def test_idle_input_pauses_focus_without_resuming_automatically(monkeypatch, tmp
     assert not window.work_timer.is_running
     assert window._auto_paused_for_idle is True
     assert "暂停" in window.speech_bubble.text()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_room_quick_actions_change_real_focus_state_and_expire_status(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    timer = WorkTimerModel(path=Path(tmp_path) / "timer.json")
+    window = PetWindow(PetSettings(), timer)
+    window._room_quick_action("再卷 30 分钟")
+    assert timer.is_running
+    assert window._room_quick_status == "再卷30分钟"
+    assert window._room_quick_status_expires_at is not None
+    window._room_quick_action("去喝水")
+    assert not timer.is_running
+    assert window._room_quick_status == "去喝水"
     window.close(); window.deleteLater(); app.processEvents()

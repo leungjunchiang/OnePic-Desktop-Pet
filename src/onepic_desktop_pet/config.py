@@ -30,11 +30,34 @@ from typing import Any
 from .resources import resource_path
 
 
+PET_NAME = "六毛"
+DEFAULT_OWNER_NICKNAME = "搭子"
+
+
+def clean_owner_nickname(value: Any) -> str:
+    """Return the short social nickname, never a mutable pet identity."""
+
+    clean = str(value or "").replace("\x00", "").strip()[:24]
+    # The old default was accidentally rendered as “六毛搭子的六毛”.  Treat
+    # it as an unset owner nickname while preserving real historical names.
+    return "" if clean in {PET_NAME, "六毛搭子"} else clean
+
+
+def social_pet_label(owner_nickname: Any) -> str:
+    """Build the only social-facing identity used for another user's pet."""
+
+    owner = clean_owner_nickname(owner_nickname) or DEFAULT_OWNER_NICKNAME
+    return f"{owner}家的{PET_NAME}"
+
+
 @dataclass
 class PetSettings:
     """保存桌面宠物可配置参数和上次窗口位置。"""
 
-    pet_name: str = "六毛"
+    # Kept as a compatibility field for old settings files and integrations.
+    # It is always normalised back to PET_NAME and is never edited by the UI.
+    pet_name: str = PET_NAME
+    owner_nickname: str = ""
     display_height: int = 160
     movement_interval_ms: int = 16
     movement_step: int = 1
@@ -77,6 +100,11 @@ class PetSettings:
     local_lyrics_path: str = ""
     lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "pet_name":
+            value = PET_NAME
+        super().__setattr__(name, value)
 
 
 def user_settings_path() -> Path:
@@ -138,7 +166,11 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.inactive_sit_ms + 5000,
         int(settings.inactive_sleep_ms),
     )
-    settings.pet_name = str(settings.pet_name).replace("\x00", "").strip()[:20] or "六毛"
+    legacy_name = settings.pet_name
+    settings.owner_nickname = clean_owner_nickname(
+        settings.owner_nickname or (legacy_name if legacy_name != PET_NAME else "")
+    )
+    settings.pet_name = PET_NAME
     settings.always_on_top = bool(settings.always_on_top)
     settings.allow_autonomous_walk = bool(settings.allow_autonomous_walk)
     if settings.ai_provider not in {"offline", "codex", "claude", "deepseek", "kimi", "custom"}:
@@ -218,6 +250,7 @@ def load_settings(
             if key
             in {
                 "pet_name",
+                "owner_nickname",
                 "display_height",
                 "start_x",
                 "start_y",
@@ -251,6 +284,15 @@ def load_settings(
             }
         }
     )
+    # Older builds used pet_name/name/display_name/nickname for the editable
+    # value.  Preserve that value as the new owner nickname, but never let it
+    # alter the fixed pet identity.
+    if not str(base.get("owner_nickname") or "").strip():
+        for legacy_key in ("nickname", "display_name", "name", "pet_name"):
+            legacy_value = str(override.get(legacy_key) or "").strip()
+            if legacy_value and legacy_value != PET_NAME:
+                base["owner_nickname"] = legacy_value
+                break
     return _validated(base)
 
 
@@ -261,7 +303,8 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".json.tmp")
     state = {
-        "pet_name": settings.pet_name,
+        "pet_name": PET_NAME,
+        "owner_nickname": clean_owner_nickname(settings.owner_nickname),
         "display_height": settings.display_height,
         "start_x": settings.start_x,
         "start_y": settings.start_y,
