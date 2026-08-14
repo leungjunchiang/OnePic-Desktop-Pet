@@ -185,7 +185,16 @@ class SocialEventThread(QThread):
 
     def run(self) -> None:
         try:
-            self.client.record_room_event(**self.event)
+            kind = str(self.event.get("kind") or "")
+            sender = getattr(self.client, "send_interaction", None)
+            if kind in {"poke", "cheer", "drink"} and callable(sender):
+                sender(
+                    target=str(self.event.get("target_id") or ""),
+                    kind=kind,
+                    room_id=str(self.event.get("room_id") or "") or None,
+                )
+            else:
+                self.client.record_room_event(**self.event)
             self.completed.emit()
         except (SocialError, AttributeError) as exc:
             self.failed.emit(str(exc))
@@ -194,6 +203,7 @@ class SocialEventThread(QThread):
 class SocialProfileThread(QThread):
     """Persist an owner nickname away from the Qt GUI thread."""
 
+    completed = Signal()
     failed = Signal(str)
 
     def __init__(self, client: SocialClient, nickname: str, parent=None) -> None:
@@ -204,6 +214,7 @@ class SocialProfileThread(QThread):
     def run(self) -> None:
         try:
             self.client.update_owner_nickname(self.nickname)
+            self.completed.emit()
         except (SocialError, AttributeError) as exc:
             self.failed.emit(str(exc))
 
@@ -450,6 +461,7 @@ class SocialHubDialog(QDialog):
         self._room_refresh_timer.setSingleShot(True)
         self._room_refresh_timer.timeout.connect(self._refresh_selected_room)
         self._dashboard_thread: SocialDashboardThread | None = None
+        self._room_refresh_pending = False
         self._health_thread: SocialHealthThread | None = None
         self._event_threads: list[SocialEventThread] = []
         self.setFont(_social_font())
@@ -741,6 +753,10 @@ class SocialHubDialog(QDialog):
         self.room_summary.setObjectName("muted")
         self.room_summary.setWordWrap(True)
         room_layout.addWidget(self.room_summary)
+        room_exclusive_note = QLabel("同一时间一个账号只会出现在一个自习室；加入或创建新房间会自动离开旧房间。")
+        room_exclusive_note.setObjectName("muted")
+        room_exclusive_note.setWordWrap(True)
+        room_layout.addWidget(room_exclusive_note)
         self.room_members = QListWidget(); self.room_members.setSpacing(5)
         self.room_members.setMinimumHeight(46); self.room_members.setMaximumHeight(310)
         room_layout.addWidget(self.room_members)
@@ -899,6 +915,8 @@ class SocialHubDialog(QDialog):
         if not self.client.signed_in:
             return
         if self._dashboard_thread is not None and self._dashboard_thread.isRunning():
+            if room_id and room_id == self.current_room_id:
+                self._room_refresh_pending = True
             return
 
         # The application uses SocialClient, whose dashboard call performs
@@ -947,6 +965,9 @@ class SocialHubDialog(QDialog):
         if self._dashboard_thread is thread:
             self._dashboard_thread = None
         thread.deleteLater()
+        if self._room_refresh_pending and self.current_room_id and self.client.signed_in:
+            self._room_refresh_pending = False
+            QTimer.singleShot(0, self._refresh_selected_room)
 
     def _refresh_selected_room(self) -> None:
         if not self.current_room_id or not self.client.signed_in:

@@ -329,6 +329,8 @@ class PetWindow(QWidget):
         self._social_thread: SocialSyncThread | None = None
         self._social_event_threads: list[SocialEventThread] = []
         self._social_profile_threads: list[SocialProfileThread] = []
+        self._owner_nickname_sync_key: tuple[str, str] | None = None
+        self._owner_nickname_sync_inflight = False
         self._buddy_visit_window = BuddyVisitWindow()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
@@ -1944,20 +1946,42 @@ class PetWindow(QWidget):
 
         if not self.social_client.signed_in:
             return
+        session = getattr(self.social_client, "session", None)
+        user_id = str(getattr(session, "user_id", "") or "")
+        if not user_id or self._owner_nickname_sync_inflight:
+            return
+        clean = clean_owner_nickname(nickname)
+        key = (user_id, clean)
+        if self._owner_nickname_sync_key == key:
+            return
         updater = getattr(self.social_client, "update_owner_nickname", None)
         if not callable(updater):
             return
-        thread = SocialProfileThread(self.social_client, nickname, self)
+        self._owner_nickname_sync_inflight = True
+        thread = SocialProfileThread(self.social_client, clean, self)
         self._social_profile_threads.append(thread)
-        thread.failed.connect(
-            lambda message: self._social_dialog._set_status(
-                "主人称呼已保存在本机，但云端同步失败，请稍后重试。", error=True
-            ) if self._social_dialog is not None else None
-        )
+        thread.completed.connect(lambda sync_key=key: self._owner_nickname_sync_succeeded(sync_key))
+        thread.failed.connect(self._owner_nickname_sync_failed)
         thread.finished.connect(
             lambda: self._social_profile_thread_finished(thread)
         )
         thread.start()
+
+    def _maybe_sync_owner_nickname(self) -> None:
+        """Sync a locally configured owner nickname after every account login."""
+
+        if self.social_client.signed_in:
+            self._sync_owner_nickname(self._owner_nickname())
+
+    def _owner_nickname_sync_succeeded(self, key: tuple[str, str]) -> None:
+        self._owner_nickname_sync_inflight = False
+        self._owner_nickname_sync_key = key
+        self._schedule_social_tick()
+
+    def _owner_nickname_sync_failed(self, _message: str) -> None:
+        self._owner_nickname_sync_inflight = False
+        if self._social_dialog is not None:
+            self._social_dialog._set_status("主人称呼已保存在本机，但云端同步失败，请稍后重试。", error=True)
 
     def _social_profile_thread_finished(self, thread: SocialProfileThread) -> None:
         if thread in self._social_profile_threads:
@@ -2179,6 +2203,7 @@ class PetWindow(QWidget):
 
         if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
             return
+        self._maybe_sync_owner_nickname()
         selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
         room_id = selected_room or self.focus_session.room_id
         if room_id != self.focus_session.room_id:

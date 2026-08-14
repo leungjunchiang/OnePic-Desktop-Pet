@@ -4,5 +4,5 @@
   "social_api_base_url": "https://lilipet-d0g7yhape72730290-1340860245.ap-shanghai.app.tcloudbase.com/lili-social-relay-v2",
   "social_backend": "http",
   "email_redirect_to": "https://github.com/leungjunchiang/OnePic-Desktop-Pet",
-  "privacy_note": "只同步昵称、六毛外观、在线/工作状态、今日累计、自习室与串门事件。"
+  "privacy_note": "仅同步昵称、六毛外观、在线和工作状态、自习室与互动事件。"
 }
