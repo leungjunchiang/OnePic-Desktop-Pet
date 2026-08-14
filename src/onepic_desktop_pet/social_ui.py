@@ -49,6 +49,11 @@ def _presence_working(presence: dict[str, Any]) -> bool:
 def _presence_status(presence: dict[str, Any]) -> str:
     """Return a stable user-facing status for old and new API payloads."""
 
+    # A cached snapshot is deliberately not current presence.  Check this
+    # before the legacy ``working`` value because stale payloads can still
+    # contain the last known focus state.
+    if bool(presence.get("stale_presence")):
+        return "offline"
     status = str(presence.get("status") or "").strip().casefold()
     if status in {"offline", "离线"}:
         return "offline"
