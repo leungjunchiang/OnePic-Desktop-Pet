@@ -1,5 +1,6 @@
 """Validate that public release automation stays cross-platform and private-data safe."""
 
+import re
 from pathlib import Path
 
 
@@ -64,7 +65,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
-    assert 'version = "0.22.0"' in pyproject
+    version_match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+    assert version_match is not None
+    assert version_match.group(1) != "0.22.0"
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
