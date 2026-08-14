@@ -122,11 +122,13 @@ def test_social_config_exposes_optional_proxy_base_url() -> None:
     assert '"social_backend"' in config
 
 
-def test_published_config_uses_supabase_edge_relay_by_default() -> None:
+def test_published_config_uses_cloudbase_relay_by_default() -> None:
     root = Path(__file__).resolve().parents[1]
     config = json.loads((root / "config" / "social_backend.json").read_text(encoding="utf-8"))
     assert config["social_backend"] == "http"
-    assert config["social_api_base_url"].endswith("/functions/v1/lili-social-relay-v2")
+    assert config["social_api_base_url"].startswith("https://")
+    assert ".tcloudbase.com/lili-social-relay-v2" in config["social_api_base_url"]
+    assert "supabase.co/functions" not in config["social_api_base_url"]
 
 
 def test_dashboard_falls_back_to_last_payload_when_network_is_unavailable() -> None:

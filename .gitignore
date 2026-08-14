@@ -40,3 +40,6 @@ user_assets/*
 # Cloudflare Worker local state
 relay/cloudflare-worker/node_modules/
 relay/cloudflare-worker/.wrangler/
+
+# CloudBase deployment archives are generated locally and never committed
+relay/*-deploy.zip
