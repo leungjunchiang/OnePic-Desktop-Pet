@@ -149,4 +149,3 @@ def worldview_response(
     }
     state = PetState.SIT if key in {"family_song", "effort", "hainan"} else PetState.CURIOUS
     return WorldviewResponse(randomizer.choice(replies[key]), state, key)
-

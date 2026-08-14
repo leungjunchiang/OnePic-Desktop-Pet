@@ -24,7 +24,7 @@ def test_signup_and_presence_never_include_password_or_task_content() -> None:
     assert signup_call[2] == {"email": "a@example.com", "password": "secret123", "data": {"nickname": "小梁"}}
     client.heartbeat(working=True, today_seconds=2520, session_started_at=None, outfit_key="wild-king")
     presence = client.calls[-1][2]
-    assert set(presence) == {"user_id","working","session_started_at","focus_date","today_seconds","outfit_key","room_id","last_seen","updated_at"}
+    assert set(presence) == {"user_id","working","session_started_at","focus_date","today_seconds","outfit_key","room_id","quick_status","quick_status_expires_at","last_seen","updated_at"}
     assert not any(key in presence for key in ("password","task","chat","window_title"))
 
 
@@ -131,3 +131,18 @@ def test_room_shared_state_migration_scopes_members_goals_events_and_cooldown() 
     totals = (root / "supabase" / "migrations" / "20260813153000_lili_room_focus_totals.sql").read_text(encoding="utf-8")
     assert "lili_room_focus_totals" in totals
     assert "cumulative_seconds" in totals
+
+
+def test_owner_nickname_and_room_quick_status_migration_is_explicit() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = next((root / "supabase" / "migrations").glob("*_owner_nickname_room_quick_status.sql"))
+    sql = migration.read_text(encoding="utf-8")
+    assert "add column if not exists owner_nickname" in sql
+    assert "add column if not exists quick_status" in sql
+    assert "quick_status_expires_at" in sql
+    assert "p_room_id" in sql
+    assert "on conflict on constraint lili_room_goals_pkey" in sql
+    assert "on conflict on constraint lili_room_schedules_pkey" in sql
+    assert "on conflict on constraint lili_room_challenges_pkey" in sql
+    assert "on conflict on constraint lili_buddy_subscriptions_pkey" in sql
+    assert "六毛搭子家的六毛" not in sql

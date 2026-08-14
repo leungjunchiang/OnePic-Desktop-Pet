@@ -8,11 +8,22 @@
 import json
 
 from onepic_desktop_pet.config import (
+    PET_NAME,
     PetSettings,
+    social_pet_label,
     load_settings,
     save_settings,
     user_settings_path,
 )
+
+
+def test_social_owner_label_keeps_pet_identity_fixed() -> None:
+    assert PET_NAME == "六毛"
+    assert social_pet_label("小梁") == "小梁家的六毛"
+    assert social_pet_label("") == "搭子家的六毛"
+    settings = PetSettings(pet_name="团团", owner_nickname="小梁")
+    assert settings.pet_name == PET_NAME
+    assert settings.owner_nickname == "小梁"
 
 
 def test_load_settings_merges_position_and_user_selected_size(tmp_path) -> None:
@@ -151,7 +162,7 @@ def test_local_path_and_lyric_interval_validation(tmp_path) -> None:
     assert settings.lyric_interval_minutes == 2
 
 
-def test_pet_name_is_loaded_validated_and_persisted(tmp_path) -> None:
+def test_legacy_pet_name_is_migrated_to_owner_nickname(tmp_path) -> None:
     default_path = tmp_path / "default.json"
     override_path = tmp_path / "override.json"
     default_path.write_text("{}", encoding="utf-8")
@@ -162,16 +173,21 @@ def test_pet_name_is_loaded_validated_and_persisted(tmp_path) -> None:
 
     settings = load_settings(default_path, override_path)
 
-    assert settings.pet_name == "团团"
+    assert settings.pet_name == "六毛"
+    assert settings.owner_nickname == "团团"
     path = save_settings(settings, tmp_path / "settings.json")
-    assert load_settings(override_path=path).pet_name == "团团"
+    loaded = load_settings(override_path=path)
+    assert loaded.pet_name == "六毛"
+    assert loaded.owner_nickname == "团团"
 
 
-def test_empty_pet_name_falls_back_to_default(tmp_path) -> None:
+def test_empty_legacy_pet_name_keeps_fixed_identity_and_empty_owner(tmp_path) -> None:
     path = tmp_path / "override.json"
     path.write_text(json.dumps({"pet_name": "\u0000  "}), encoding="utf-8")
 
-    assert load_settings(override_path=path).pet_name == "六毛"
+    settings = load_settings(override_path=path)
+    assert settings.pet_name == "六毛"
+    assert settings.owner_nickname == ""
 
 
 def test_music_provider_history_is_safely_validated(tmp_path) -> None:

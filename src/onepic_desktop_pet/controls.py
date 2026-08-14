@@ -138,4 +138,3 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
-

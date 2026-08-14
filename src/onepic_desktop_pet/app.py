@@ -29,7 +29,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .config import PetSettings, load_settings, save_settings
+from .config import PET_NAME, PetSettings, load_settings, save_settings
 from .companion import APP_DISPLAY_NAME
 from .resources import resource_path
 from .window import PetWindow
@@ -51,14 +51,14 @@ class DesktopPetApplication:
         self.window = PetWindow(self.settings)
         self.window.quit_requested.connect(self.quit)
         self.tray = self._create_tray()
-        self.window.pet_name_changed.connect(self._pet_name_changed)
+        self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
     def _create_tray(self) -> QSystemTrayIcon:
         """创建系统托盘图标及其操作菜单。"""
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
-        pet_name = self.settings.pet_name or "六毛"
+        pet_name = PET_NAME
         tray.setToolTip(f"Lili · {pet_name}")
         menu = QMenu()
 
@@ -74,7 +74,7 @@ class DesktopPetApplication:
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
 
-        rename_action = QAction(f"给{pet_name}改名字…", menu)
+        rename_action = QAction("修改主人称呼…", menu)
         rename_action.triggered.connect(self.window.rename_pet)
         menu.addAction(rename_action)
 
@@ -113,14 +113,13 @@ class DesktopPetApplication:
         tray.activated.connect(self._tray_activated)
         return tray
 
-    def _pet_name_changed(self, pet_name: str) -> None:
-        """昵称保存后同步托盘提示和高频入口。"""
+    def _owner_nickname_changed(self, _owner_nickname: str) -> None:
+        """Keep the pet identity fixed while refreshing the rename entry."""
 
-        name = pet_name.strip() or "六毛"
-        self.tray.setToolTip(f"Lili · {name}")
-        self.panel_action.setText(f"{name}快捷口袋")
-        self.dialogue_action.setText(f"和{name}聊聊…")
-        self.rename_action.setText(f"给{name}改名字…")
+        self.tray.setToolTip(f"Lili · {PET_NAME}")
+        self.panel_action.setText(f"{PET_NAME}快捷口袋")
+        self.dialogue_action.setText(f"和{PET_NAME}聊聊…")
+        self.rename_action.setText("修改主人称呼…")
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
@@ -166,4 +165,3 @@ def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
     return DesktopPetApplication().start(smoke_test_ms=smoke_test_ms)
-

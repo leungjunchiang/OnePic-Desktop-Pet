@@ -111,24 +111,25 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     app.processEvents()
 
 
-def test_pet_name_can_be_changed_and_updates_chat_ui() -> None:
+def test_owner_nickname_changes_social_identity_without_changing_pet_name() -> None:
     app = QApplication.instance() or QApplication([])
     settings = PetSettings()
     settings_dialog = AISettingsDialog(settings, CredentialStore())
 
-    assert settings_dialog.pet_name.text() == "六毛"
-    settings_dialog.pet_name.setText("团团")
+    assert settings_dialog.owner_nickname.text() == ""
+    settings_dialog.owner_nickname.setText("团团")
     settings_dialog.apply()
 
-    assert settings.pet_name == "团团"
+    assert settings.owner_nickname == "团团"
+    assert settings.pet_name == "六毛"
     chat = ChatDialog(None, settings.pet_name)
-    assert chat.windowTitle() == "和团团聊聊"
-    assert chat.pet_title.text() == "团团的小纸条"
-    assert chat.rename_button.text() == "改名字"
-    assert chat.rename_button.toolTip() == "点击这里修改六毛的名字"
+    assert chat.windowTitle() == "和六毛聊聊"
+    assert chat.pet_title.text() == "六毛的小纸条"
+    assert chat.rename_button.text() == "修改主人称呼"
+    assert "主人称呼" in chat.rename_button.toolTip() or "自习室" in chat.rename_button.toolTip()
     chat.set_pet_name("阿毛")
-    assert chat.windowTitle() == "和阿毛聊聊"
-    assert chat.input.placeholderText() == "跟阿毛说点什么……"
+    assert chat.windowTitle() == "和六毛聊聊"
+    assert chat.input.placeholderText() == "跟六毛说点什么……"
 
     settings_dialog.close()
     settings_dialog.deleteLater()
@@ -169,9 +170,10 @@ def test_chat_rename_button_opens_visible_rename_flow(monkeypatch) -> None:
     window._chat_dialog.rename_button.click()
     app.processEvents()
 
-    assert window.settings.pet_name == "团子"
-    assert window._chat_dialog.pet_title.text() == "团子的小纸条"
-    assert window.windowTitle().endswith("· 团子")
+    assert window.settings.owner_nickname == "团子"
+    assert window.settings.pet_name == "六毛"
+    assert window._chat_dialog.pet_title.text() == "六毛的小纸条"
+    assert window.windowTitle().endswith("· 六毛")
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -525,7 +527,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     menu = window._build_context_menu()
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     assert labels[:8] == [
-        "给六毛改名字…",
+        "修改主人称呼…",
         "和六毛聊聊…",
         "工作打卡/工作计时",
         "音乐",

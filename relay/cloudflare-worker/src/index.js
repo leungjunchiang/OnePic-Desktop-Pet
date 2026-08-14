@@ -160,10 +160,10 @@ async function handleDashboard(env, request, roomId = "") {
   const data = await callRpc(env, request, "lili_dashboard", {});
   if (!roomId) return data || {};
   if (!UUID_RE.test(roomId)) throw new RelayError(400, "房间编号格式不正确。");
-  const room = await callRpc(env, request, "lili_room_dashboard", { room_id: roomId });
+  const room = await callRpc(env, request, "lili_room_dashboard", { p_room_id: roomId });
   const result = { ...(data || {}), ...(room || {}) };
   try {
-    const rituals = await callRpc(env, request, "lili_room_room_rituals", { room_id: roomId });
+    const rituals = await callRpc(env, request, "lili_room_room_rituals", { p_room_id: roomId });
     Object.assign(result, rituals || {});
   } catch (error) {
     // Rituals are optional for older Supabase projects; room state remains usable.
@@ -178,7 +178,7 @@ async function handlePresence(env, request, body) {
   const now = new Date().toISOString();
   const payload = {
     ...safeBody(body, [
-      "working", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "last_seen",
+      "working", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "quick_status", "quick_status_expires_at", "last_seen",
     ]),
     user_id: userId,
     focus_date: String(body.focus_date || now.slice(0, 10)),
@@ -189,6 +189,8 @@ async function handlePresence(env, request, body) {
   payload.today_seconds = Math.min(86400, Math.max(0, Number(payload.today_seconds) || 0));
   payload.room_id = payload.room_id ? String(payload.room_id) : null;
   payload.outfit_key = String(payload.outfit_key || "").slice(0, 60);
+  payload.quick_status = String(payload.quick_status || "").trim().slice(0, 40);
+  payload.quick_status_expires_at = payload.quick_status_expires_at ? String(payload.quick_status_expires_at) : null;
   return callSupabase(env, request, "/rest/v1/lili_focus_presence?on_conflict=user_id", {
     body: payload,
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -233,8 +235,9 @@ async function handleRequest(request, env) {
     const auth = bearer(request);
     const userId = userIdFromBearer(auth);
     const body = await parseJsonBody(request);
-    const profile = safeBody(body, ["nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key"]);
-    if (profile.nickname !== undefined) profile.nickname = String(profile.nickname).trim().slice(0, 24) || "六毛搭子";
+    const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key"]);
+    if (profile.owner_nickname !== undefined) profile.owner_nickname = String(profile.owner_nickname).trim().slice(0, 24);
+    if (profile.nickname !== undefined) profile.nickname = String(profile.nickname).trim().slice(0, 24) || "搭子";
     if (profile.outfit_key !== undefined) profile.outfit_key = String(profile.outfit_key).slice(0, 60);
     return jsonResponse(await callSupabase(env, request, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(userId)}`, {
       method: "PATCH", body: profile, headers: { Prefer: "return=minimal" },

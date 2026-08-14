@@ -906,4 +906,3 @@ class AIChatService:
             base_url or default_url,
             model or default_model,
         )
-
