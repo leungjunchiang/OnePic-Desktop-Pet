@@ -50,8 +50,10 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
-    assert 'gh release view "$GITHUB_REF_NAME"' in workflow
-    assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
+    assert 'release_tag="${GITHUB_REF_NAME#release/}"' in workflow
+    assert 'gh release view "$release_tag"' in workflow
+    assert 'gh release upload "$release_tag"' in workflow
+    assert '--target "$GITHUB_SHA"' in workflow
     assert "--clobber" in workflow
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
