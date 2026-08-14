@@ -1,4 +1,4 @@
-�r�^�f��ئ{�ly�'vî���"""验证六毛只在内存中保留长期摘要与最近三十轮完整对话。"""
+"""验证六毛只在内存中保留长期摘要与最近三十轮完整对话。"""
 
 from onepic_desktop_pet.ai import _conversation_text
 from onepic_desktop_pet.chat_memory import ConversationMemory

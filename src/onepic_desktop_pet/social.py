@@ -1,4 +1,4 @@
-�r�^�f��ئ{��y�'vî���"""Lili 搭子自习室的最小社交客户端与可替换网络后端。
+"""Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
 只发送账号认证、昵称、六毛外观、工作状态、累计秒数、房间与串门事件。密码从不保存；
 刷新令牌保存在系统凭据库。网络失败不会影响离线桌宠、计时、AI 或本地素材。
@@ -309,7 +309,30 @@ class SocialClient:
         self.key = str(config.get("publishable_key", ""))
         self.social_api_base_url = (
             os.environ.get("LILI_SOCIAL_API_BASE_URL", "").strip()
-  ��-�G����ƭy�f._load_dashboard_cache()
+            or str(config.get("social_api_base_url", "")).strip()
+        ).rstrip("/")
+        # Supabase uses this URL after email confirmation.  Keep it explicit so
+        # desktop builds never inherit the hosted project's localhost default.
+        self.email_redirect_url = (
+            os.environ.get("LILI_AUTH_REDIRECT_URL", "").strip()
+            or str(config.get("email_redirect_to", "")).strip()
+            or "https://github.com/leungjunchiang/OnePic-Desktop-Pet"
+        )
+        self.persist_tokens = persist_tokens
+        self._dashboard_cache: dict[str, dict[str, Any]] = {}
+        self._last_error = ""
+        self.session: SocialSession | None = None
+        self._http_backend: SocialBackend | None = backend
+        if self._http_backend is None and self.social_api_base_url:
+            self._http_backend = HttpSocialBackend(
+                self.social_api_base_url,
+                client_key=self.key,
+                persist_tokens=persist_tokens,
+                email_redirect_url=self.email_redirect_url,
+            )
+        if self._http_backend is None:
+            self._load_session()
+        self._load_dashboard_cache()
 
     @property
     def backend_name(self) -> str:

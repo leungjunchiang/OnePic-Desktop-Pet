@@ -1,4 +1,4 @@
-­r‡^Ñf¥–Ø¦{,yÊ'vÃ®¶›­"""
+"""
 æœ¬æ¨¡å—ä¸º Lili æä¾›å¯é€‰çš„ Codexã€Claude Codeã€DeepSeekã€Kimi ä¸å…¼å®¹æ¥å£å¯¹è¯åç«¯ã€‚
 
 èŒè´£èŒƒå›´ï¼š
@@ -372,4 +372,539 @@ def find_chatgpt_desktop_app() -> Path | None:
         all_candidates = list(candidates)
         if command:
             all_candidates.append(Path(command))
-        retur×¼¶‰Ëkºwµçs¢¾½‘•à1'¾òo–nû–ö‹–êSR£ššÖ/RÄ™¥¹‘}½‘•á}Õ¥}…ÁÀ ¤ƒ¢Ò¢Òˆˆˆ((€€€¥˜ÍåÌ¹Á±…Ñ™½É´€ôô€‰‘…Éİ¥¸ˆè(€€€€€€€É•ÑÕÉ¸}µ…½Í}½‘•á}±¥}Á…Ñ  ¤(€€€½µµ…¹€ô}İ¡¥¡}±¤ ‰½‘•àˆ¤(€€€¥˜½µµ…¹è(€€€€€€€É•ÑÕÉ¸½µµ…¹(€€€¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆè(€€€€€€€±½…°€ôA…Ñ ¡½Ì¹•¹Ù¥É½¸¹•Ğ ‰1=1AAQˆ°€ˆˆ¤¤(€€€€€€€É½½Ğ€ô±½…°€¼€‰=Á•¹$ˆ€¼€‰½‘•àˆ€¼€‰‰¥¸ˆ(€€€€€€€É•ÑÕÉ¸}¹•İ•ÍÑ}™¥±”¡É½½Ğ¹±½ˆ ˆ¨½½‘•à¹•á”ˆ¤¤¥˜É½½Ğ¹¥Í}‘¥È ¤•±Í”9½¹”(€€€É•ÑÕÉ¸9½¹”(()‘•˜½‘•á}…Ù…¥±…‰±” ¤€´ø‰½½°è(€€€€ˆˆ‹¢şS–n{–öO–&7R×¢Gšb¿–B›¢÷š&û–"À½‘•à1'ˆˆˆ((€€€É•ÑÕÉ¸™¥¹‘}½‘•á}•á•ÕÑ…‰±” ¤¥Ì¹½Ğ9½¹”(()‘•˜½‘•á}‘•Ñ•Ñ¥½¹}µ•ÍÍ…” ¤€´øÍÑÈè(€€€€ˆˆ‹¢şS–n{’úo¢+–’§–J3¢ºûö»¦†×–’7R£jU$½1$ƒ–"šï*ÛššZš†#ˆˆˆ((€€€Õ¥}…ÁÀ€ô™¥¹‘}½‘•á}Õ¥}…ÁÀ ¤(€€€€ŒU$…ÁÀ…¸‰”½Á•¹•‰•™½É”Ñ¡”ÕÍ•ÈÌÍ¡•±°ÁÉ½™¥±”™¥¹¥Í¡•Ì(€€€€Œ¥¹ÍÑ…±±¥¹œ½É•™É•Í¡¥¹œ¹Á´Á…Ñ¡Ì¸€I•™É•Í Ñ¡”…¡•1$Á…Ñ İ¡•¹•Ù•È„(€€€€ŒÍ•ÑÑ¥¹ÌÁ…”•áÁ±¥¥Ñ±ä…Í­Ì™½ÈÑ¡”ÕÉÉ•¹ĞÍÑ…ÑÕÌ¸(€€€±•…É}…¡”€ô•Ñ…ÑÑÈ¡™¥¹‘}½‘•á}•á•ÕÑ…‰±”°€‰…¡•}±•…Èˆ°9½¹”¤(€€€¥˜…±±…‰±”¡±•…É}…¡”¤è(€€€€€€€±•…É}…¡” ¤(€€€±¤€ô™¥¹‘}½‘•á}•á•ÕÑ…‰±” ¤(€€€¥˜Õ¥}…ÁÀ¥Ì¹½Ğ9½¹”…¹±¤¥Ì¹½Ğ9½¹”è(€€€€€€€É•ÑÕÉ¸€‰½‘•àƒ–ŞË¢ş{š:—ˆ(€€€¥˜Õ¥}…ÁÀ¥Ì¹½Ğ9½¹”è(€€€€€€€¥˜}¥Í}¡…ÑÁÑ}‘•Í­Ñ½Á}…ÁÀ¡Õ¥}…ÁÀ¤è(€€€€€€€€€€€É•ÑÕÉ¸€‹–ŞËššÖ/–"À¡…ÑAS¾ò#–2–B¬½‘•ã¾ò'¾ò3’öšr«ššÖ/–"À½‘•à1'ˆ(€€€€€€€É•ÑÕÉ¸€‹–ŞËššÖ/–"À½‘•à•Í­Ñ½Ã¾ò3’öšr«ššÖ/–"À½‘•à1'ˆ(€€€¥˜±¤¥Ì¹½Ğ9½¹”è(€€€€€€€É•ÑÕÉ¸€‹–ŞËššÖ/–"À½‘•à1'¾òošr«ššÖ/–"À¡…ÑAP•Í­Ñ½ÀÁÃˆ(€€€É•ÑÕÉ¸€‹šr«ššÖ/–"À½‘•à1'¾òo¢+–’§š^Û’òk’öÿR£šïêÿ¦f«’òÓš¢‡–ò?ˆ(()‘•˜™¥¹‘}±…Õ‘•}•á•ÕÑ…‰±” ¤€´øA…Ñ ğ9½¹”è(€€€€ˆˆ‹–¾ïš&ø¹Á·–:R–º'¢–f£š"[î#®¼AQ ƒ’â·j±…Õ‘”½‘—ˆˆˆ((€€€¹…µ•Ì€ô€ ‰±…Õ‘”¹µˆ°€‰±…Õ‘”¹•á”ˆ°€‰±…Õ‘”ˆ¤¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆ•±Í”€ ‰±…Õ‘”ˆ°¤(€€€™½È¹…µ”¥¸¹…µ•Ìè(€€€€€€€½µµ…¹€ô}İ¡¥¡}±¤¡¹…µ”¤(€€€€€€€¥˜½µµ…¹è(€€€€€€€€€€€É•ÑÕÉ¸½µµ…¹(€€€¡½µ”€ôA…Ñ ¹¡½µ” ¤(€€€…¹‘¥‘…Ñ•Ì€ôm¡½µ”€¼€ˆ¹±½…°ˆ€¼€‰‰¥¸ˆ€¼€ ‰±…Õ‘”¹•á”ˆ¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆ•±Í”€‰±…Õ‘”ˆ¥t(€€€¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆè(€€€€€€€…¹‘¥‘…Ñ•Ì¹•áÑ•¹ (€€€€€€€€€€€€ (€€€€€€€€€€€€€€€A…Ñ ¡½Ì¹•¹Ù¥É½¸¹•Ğ ‰AAQˆ°€ˆˆ¤¤€¼€‰¹Á´ˆ€¼€‰±…Õ‘”¹µˆ°(€€€€€€€€€€€€€€€¡½µ”€¼€ˆ¹±…Õ‘”ˆ€¼€‰±½…°ˆ€¼€‰±…Õ‘”¹•á”ˆ°(€€€€€€€€€€€€¤(€€€€€€€€¤(€€€É•ÑÕÉ¸}¹•İ•ÍÑ}™¥±”¡…¹‘¥‘…Ñ•Ì¤(()‘•˜±…Õ‘•}…Ù…¥±…‰±” ¤€´ø‰½½°è(€€€€ˆˆ‹¢şS–n{–öO–&7R×¢Gšb¿–B›¢÷š&û–"À±…Õ‘”½‘—ˆˆˆ((€€€É•ÑÕÉ¸™¥¹‘}±…Õ‘•}•á•ÕÑ…‰±” ¤¥Ì¹½Ğ9½¹”(()‘•˜}±¥}½µµ…¹¡•á•ÕÑ…‰±”èA…Ñ °€©…ÉÕµ•¹ÑÌèÍÑÈ¤€´ø±¥ÍÑmÍÑÉtè(€€€€ˆˆ‹–º'–£¢şC¢†0]¥¹‘½İÌƒš&ç–’B–2¢–f£¾ò3–Û’ög–æÏ–>ÃnÓš:—š&Ÿ¢†3’ê3¢şo–"Ûˆˆˆ((€€€¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆ…¹•á•ÕÑ…‰±”¹ÍÕ™™¥à¹…Í•™½± ¤¥¸ìˆ¹µˆ°€ˆ¹‰…Ğ‰ôè(€€€€€€€½µµ…¹‘}ÁÉ½•ÍÍ½È€ô½Ì¹•¹Ù¥É½¸¹•Ğ ‰=5MAˆ¤½È€‰µ¹•á”ˆ(€€€€€€€É•ÑÕÉ¸m½µµ…¹‘}ÁÉ½•ÍÍ½È°€ˆ½ˆ°€ˆ½Ìˆ°€ˆ½Œˆ°ÍÑÈ¡•á•ÕÑ…‰±”¤°€©…ÉÕµ•¹ÑÍt(€€€É•ÑÕÉ¸mÍÑÈ¡•á•ÕÑ…‰±”¤°€©…ÉÕµ•¹ÑÍt(()‘•˜}½¹Ù•ÉÍ…Ñ¥½¹}Ñ•áĞ (€€€µ•ÍÍ…”èÍÑÈ°(€€€¡¥ÍÑ½Éäè%Ñ•É…‰±•mÑÕÁ±•mÍÑÈ°ÍÑÉut°(¤€´øÍÑÈè(€€€€ˆˆ‹š*+¦VÿšršFc¢š’â;šr¢şG’â'–6¢ö»–:šZšVÓB’âè½‘•àƒj–6Wš²‡–º'–£¢úO–—ˆˆˆ((€€€•¹ÑÉ¥•Ì€ô±¥ÍĞ¡¡¥ÍÑ½Éä¤(€€€ÍÕµµ…Éä€ô¹•áĞ ¡½¹Ñ•¹Ğ™½ÈÉ½±”°½¹Ñ•¹Ğ¥¸•¹ÑÉ¥•Ì¥˜É½±”€ôô€‰ÍÕµµ…Éäˆ¤°€ˆˆ¤(€€€É••¹Ğ€ôl¡É½±”°½¹Ñ•¹Ğ¤™½ÈÉ½±”°½¹Ñ•¹Ğ¥¸•¹ÑÉ¥•Ì¥˜É½±”¥¸ì‰ÕÍ•Èˆ°€‰…ÍÍ¥ÍÑ…¹Ğ‰õul´ØÀét(€€€±¥¹•Ì€ômMeMQ5}AI=5AQt(€€€İ½É±‘Ù¥•İ}½¹Ñ•áĞ€ôİ½É±‘Ù¥•İ}ÁÉ½µÁÑ}½¹Ñ•áĞ¡µ•ÍÍ…”°•¹ÑÉ¥•Ì¤(€€€¥˜İ½É±‘Ù¥•İ}½¹Ñ•áĞè(€€€€€€€±¥¹•Ì¹•áÑ•¹  ˆˆ°İ½É±‘Ù¥•İ}½¹Ñ•áĞ¤¤(€€€¥˜ÍÕµµ…Éäè(€€€€€€€±¥¹•Ì¹•áÑ•¹  ˆˆ°€‹šnÓš^§–¾ç¢¾wj¦VÿšršFc¢š¾òhˆ°ÍÕµµ…Éä¤¤(€€€±¥¹•Ì¹•áÑ•¹  ˆˆ°€‹’î—’â/šb¿šr¢şG’â'–6¢ö»’î—–j–º3šVÓ–¾ç¢¾w¾òhˆ¤¤(€€€™½ÈÉ½±”°½¹Ñ•¹Ğ¥¸É••¹Ğè(€€€€€€€±…‰•°€ô€‹R£š"Üˆ¥˜É½±”€ôô€‰ÕÍ•Èˆ•±Í”€‹–·š¾lˆ(€€€€€€€±¥¹•Ì¹…ÁÁ•¹¡˜‰í±…‰•±÷¾òií½¹Ñ•¹Ñôˆ¤(€€€±¥¹•Ì¹•áÑ•¹ ¡˜‹R£š"ß¾òiíµ•ÍÍ…•ôˆ°€‹–·š¾o¾òhˆ¤¤(€€€É•ÑÕÉ¸€‰q¸ˆ¹©½¥¸¡±¥¹•Ì¤(()‘•˜}Á…ÉÍ•}½‘•á}©Í½¹°¡½ÕÑÁÕĞèÍÑÈ¤€´øÍÑÈè(€€€€ˆˆ‹’î8½‘•à•á•Œƒj)M=90ƒ’ê/’îÛ’â·š>C–>[šr–B;’âšv‡–*§š&/šÚ#š¿ˆˆˆ((€€€…¹Íİ•È€ô€ˆˆ(€€€™½È±¥¹”¥¸½ÕÑÁÕĞ¹ÍÁ±¥Ñ±¥¹•Ì ¤è(€€€€€€€ÑÉäè(€€€€€€€€€€€•Ù•¹Ğ€ô©Í½¸¹±½…‘Ì¡±¥¹”¤(€€€€€€€•á•ÁĞ©Í½¸¹)M=9•½‘•ÉÉ½Èè(€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€¥Ñ•´€ô•Ù•¹Ğ¹•Ğ ‰¥Ñ•´ˆ¤½Èíô(€€€€€€€¥˜•Ù•¹Ğ¹•Ğ ‰ÑåÁ”ˆ¤€ôô€‰¥Ñ•´¹½µÁ±•Ñ•ˆ…¹¥Ñ•´¹•Ğ ‰ÑåÁ”ˆ¤€ôô€‰…•¹Ñ}µ•ÍÍ…”ˆè(€€€€€€€€€€€…¹Íİ•È€ôÍÑÈ¡¥Ñ•´¹•Ğ ‰Ñ•áĞˆ¤½È¥Ñ•´¹•Ğ ‰½¹Ñ•¹Ğˆ¤½È€ˆˆ¤¹ÍÑÉ¥À ¤(€€€É•ÑÕÉ¸…¹Íİ•È(()‘•˜…Í­}½‘•à¡µ•ÍÍ…”èÍÑÈ°¡¥ÍÑ½Éäè%Ñ•É…‰±•mÑÕÁ±•mÍÑÈ°ÍÑÉut¤€´øÍÑÈè(€€€€ˆˆ‹’öÿR£šr³šrë–ŞËfï–öT½‘•àƒj’âÓš^Û–>«¢¾ï’òk¢¾wRš"C’âšv‡–n{–’7ˆˆˆ((€€€•á•ÕÑ…‰±”€ô™¥¹‘}½‘•á}•á•ÕÑ…‰±” ¤(€€€¥˜•á•ÕÑ…‰±”¥Ì9½¹”è(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‹šÊ‡šr'š&û–"À½‘•ã¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤(€€€İ½É­¥¹}É½½Ğ€ôA…Ñ ¡Ñ•µÁ™¥±”¹•ÑÑ•µÁ‘¥È ¤¤€¼€‰1¥±¥½‘•á¡…Ğˆ(€€€İ½É­¥¹}É½½Ğ¹µ­‘¥È¡Á…É•¹ÑÌõQÉÕ”°•á¥ÍÑ}½¬õQÉÕ”¤(€€€½µµ…¹€ô}±¥}½µµ…¹ (€€€€€€€•á•ÕÑ…‰±”°(€€€€€€€€‰•á•Œˆ°(€€€€€€€€ˆ´µ•Á¡•µ•É…°ˆ°(€€€€€€€€ˆ´µÍ­¥Àµ¥ĞµÉ•Á¼µ¡•¬ˆ°(€€€€€€€€ˆ´µ¥¹½É”µÉÕ±•Ìˆ°(€€€€€€€€ˆ´µ½¹™¥œˆ°(€€€€€€€€µ½‘•±}É•…Í½¹¥¹}•™™½ÉĞô‰±½Üˆœ°(€€€€€€€€ˆ´µÍ…¹‘‰½àˆ°(€€€€€€€€‰É•…µ½¹±äˆ°(€€€€€€€€ˆ´µ©Í½¸ˆ°(€€€€€€€€ˆ´ˆ°(€€€€¤(€€€ÍÑ…ÉÑÕÁ¥¹™¼€ô9½¹”(€€€É•…Ñ¥½¹™±…Ì€ô€À(€€€¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆè(€€€€€€€ÍÑ…ÉÑÕÁ¥¹™¼€ôÍÕ‰ÁÉ½•ÍÌ¹MQIQUA%9< ¤(€€€€€€€ÍÑ…ÉÑÕÁ¥¹™¼¹‘İ±…ÌğôÍÕ‰ÁÉ½•ÍÌ¹MQIQ}UMM!=]]%9=\(€€€€€€€É•…Ñ¥½¹™±…Ì€ôÍÕ‰ÁÉ½•ÍÌ¹IQ}9=}]%9=\(€€€ÑÉäè(€€€€€€€½µÁ±•Ñ•€ôÍÕ‰ÁÉ½•ÍÌ¹ÉÕ¸ (€€€€€€€€€€€½µµ…¹°(€€€€€€€€€€€İõİ½É­¥¹}É½½Ğ°(€€€€€€€€€€€¥¹ÁÕĞõ}½¹Ù•ÉÍ…Ñ¥½¹}Ñ•áĞ¡µ•ÍÍ…”°¡¥ÍÑ½Éä¤°(€€€€€€€€€€€…ÁÑÕÉ•}½ÕÑÁÕĞõQÉÕ”°(€€€€€€€€€€€Ñ•áĞõQÉÕ”°(€€€€€€€€€€€•¹½‘¥¹œô‰ÕÑ˜´àˆ°(€€€€€€€€€€€•ÉÉ½ÉÌô‰É•Á±…”ˆ°(€€€€€€€€€€€Ñ¥µ•½ÕĞôÜÔ°(€€€€€€€€€€€•¹Øõ}±¥}•¹Ù¥É½¹µ•¹Ğ¡•á•ÕÑ…‰±”¤°(€€€€€€€€€€€ÍÑ…ÉÑÕÁ¥¹™¼õÍÑ…ÉÑÕÁ¥¹™¼°(€€€€€€€€€€€É•…Ñ¥½¹™±…ÌõÉ•…Ñ¥½¹™±…Ì°(€€€€€€€€€€€¡•¬õ…±Í”°(€€€€€€€€¤(€€€•á•ÁĞ€¡=MÉÉ½È°ÍÕ‰ÁÉ½•ÍÌ¹Q¥µ•½ÕÑáÁ¥É•¤…Ì•áŒè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰½‘•àƒšjš^ÛšÊ‡šr'–n{–êS¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤™É½´•áŒ(€€€…¹Íİ•È€ô}Á…ÉÍ•}½‘•á}©Í½¹°¡½µÁ±•Ñ•¹ÍÑ‘½ÕĞ¤(€€€¥˜½µÁ±•Ñ•¹É•ÑÕÉ¹½‘”€„ô€À½È¹½Ğ…¹Íİ•Èè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰½‘•àƒ–Âkšr«fï–öWš"[¢ş{š:—–’Ç¢Ò—¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤(€€€É•ÑÕÉ¸…¹Íİ•ÉlèÄØÀÁt(()‘•˜…Í­}±…Õ‘”¡µ•ÍÍ…”èÍÑÈ°¡¥ÍÑ½Éäè%Ñ•É…‰±•mÑÕÁ±•mÍÑÈ°ÍÑÉut¤€´øÍÑÈè(€€€€ˆˆ‹¦k¢şÍÑ‘¥¸ƒ¢ÂR£šr³šrè±…Õ‘”½‘”ƒj’âš²‡šŸš^ƒ–Ş—–ß’òk¢¾wˆˆˆ((€€€•á•ÕÑ…‰±”€ô™¥¹‘}±…Õ‘•}•á•ÕÑ…‰±” ¤(€€€¥˜•á•ÕÑ…‰±”¥Ì9½¹”è(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‹šÊ‡šr'š&û–"À±…Õ‘”½‘—¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤(€€€½µµ…¹€ô}±¥}½µµ…¹ (€€€€€€€•á•ÕÑ…‰±”°€ˆµÀˆ°€ˆ´µ½ÕÑÁÕĞµ™½Éµ…Ğˆ°€‰©Í½¸ˆ°(€€€€€€€€ˆ´µ¹¼µÍ•ÍÍ¥½¸µÁ•ÉÍ¥ÍÑ•¹”ˆ°€ˆ´µÁ•Éµ¥ÍÍ¥½¸µµ½‘”ˆ°€‰Á±…¸ˆ°(€€€€€€€€ˆ´µÑ½½±Ìˆ°€ˆˆ°€ˆ´µµ…àµÑÕÉ¹Ìˆ°€ˆÄˆ°(€€€€¤(€€€ÍÑ…ÉÑÕÁ¥¹™¼€ô9½¹”(€€€É•…Ñ¥½¹™±…Ì€ô€À(€€€¥˜½Ì¹¹…µ”€ôô€‰¹Ğˆè(€€€€€€€ÍÑ…ÉÑÕÁ¥¹™¼€ôÍÕ‰ÁÉ½•ÍÌ¹MQIQUA%9< ¤(€€€€€€€ÍÑ…ÉÑÕÁ¥¹™¼¹‘İ±…ÌğôÍÕ‰ÁÉ½•ÍÌ¹MQIQ}UMM!=]]%9=\(€€€€€€€É•…Ñ¥½¹™±…Ì€ôÍÕ‰ÁÉ½•ÍÌ¹IQ}9=}]%9=\(€€€İ½É­¥¹}É½½Ğ€ôA…Ñ ¡Ñ•µÁ™¥±”¹•ÑÑ•µÁ‘¥È ¤¤€¼€‰1¥±¥±…Õ‘•¡…Ğˆ(€€€İ½É­¥¹}É½½Ğ¹µ­‘¥È¡Á…É•¹ÑÌõQÉÕ”°•á¥ÍÑ}½¬õQÉÕ”¤(€€€ÑÉäè(€€€€€€€½µÁ±•Ñ•€ôÍÕ‰ÁÉ½•ÍÌ¹ÉÕ¸ (€€€€€€€€€€€½µµ…¹°(€€€€€€€€€€€İõİ½É­¥¹}É½½Ğ°(€€€€€€€€€€€¥¹ÁÕĞõ}½¹Ù•ÉÍ…Ñ¥½¹}Ñ•áĞ¡µ•ÍÍ…”°¡¥ÍÑ½Éä¤°(€€€€€€€€€€€…ÁÑÕÉ•}½ÕÑÁÕĞõQÉÕ”°(€€€€€€€€€€€Ñ•áĞõQÉÕ”°(€€€€€€€€€€€•¹½‘¥¹œô‰ÕÑ˜´àˆ°(€€€€€€€€€€€•ÉÉ½ÉÌô‰É•Á±…”ˆ°(€€€€€€€€€€€Ñ¥µ•½ÕĞôÜÔ°(€€€€€€€€€€€•¹Øõ}±¥}•¹Ù¥É½¹µ•¹Ğ¡•á•ÕÑ…‰±”¤°(€€€€€€€€€€€ÍÑ…ÉÑÕÁ¥¹™¼õÍÑ…ÉÑÕÁ¥¹™¼°(€€€€€€€€€€€É•…Ñ¥½¹™±…ÌõÉ•…Ñ¥½¹™±…Ì°(€€€€€€€€€€€¡•¬õ…±Í”°(€€€€€€€€¤(€€€•á•ÁĞ€¡=MÉÉ½È°ÍÕ‰ÁÉ½•ÍÌ¹Q¥µ•½ÕÑáÁ¥É•¤…Ì•áŒè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰±…Õ‘”½‘”ƒšjš^ÛšÊ‡šr'–n{–êS¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤™É½´•áŒ(€€€ÑÉäè(€€€€€€€Á…å±½…€ô©Í½¸¹±½…‘Ì¡½µÁ±•Ñ•¹ÍÑ‘½ÕĞ¤(€€€€€€€…¹Íİ•È€ôÍÑÈ¡Á…å±½…¹•Ğ ‰É•ÍÕ±Ğˆ¤½È€ˆˆ¤¹ÍÑÉ¥À ¤(€€€•á•ÁĞ€¡Y…±Õ•ÉÉ½È°©Í½¸¹)M=9•½‘•ÉÉ½È°ÑÑÉ¥‰ÕÑ•ÉÉ½È¤…Ì•áŒè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰±…Õ‘”½‘”ƒ¢şS–n{’êš^ƒšÎW¢¾–"¯j––ºçˆ¤™É½´•áŒ(€€€¥˜½µÁ±•Ñ•¹É•ÑÕÉ¹½‘”€„ô€À½È¹½Ğ…¹Íİ•Èè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰±…Õ‘”½‘”ƒ–Âkšr«fï–öWš"[¢ş{š:—–’Ç¢Ò—¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤(€€€É•ÑÕÉ¸…¹Íİ•ÉlèÄØÀÁt(()‘•˜}¡…Ñ}•¹‘Á½¥¹Ğ¡‰…Í•}ÕÉ°èÍÑÈ¤€´øÍÑÈè(€€€€ˆˆ‹¦ª3¢¾–~ë†–rÃ–v–æÛ¢†—¦ö@¡…Ğ½µÁ±•Ñ¥½¹Ìƒ¢Ş¿–úˆˆˆ((€€€±•…¸€ô‰…Í•}ÕÉ°¹ÍÑÉ¥À ¤¹ÉÍÑÉ¥À ˆ¼ˆ¤(€€€Á…ÉÍ•€ôÕÉ±±¥ˆ¹Á…ÉÍ”¹ÕÉ±Á…ÉÍ”¡±•…¸¤(€€€¥˜Á…ÉÍ•¹Í¡•µ”€„ô€‰¡ÑÑÁÌˆ½È¹½ĞÁ…ÉÍ•¹¹•Ñ±½Œè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰A$ƒ–rÃ–v–ş¦†ïšb¿šr'šV#j!QQALƒ–rÃ–vˆ¤(€€€¥˜±•…¸¹•¹‘Íİ¥Ñ  ˆ½¡…Ğ½½µÁ±•Ñ¥½¹Ìˆ¤è(€€€€€€€É•ÑÕÉ¸±•…¸(€€€É•ÑÕÉ¸˜‰í±•…¹ô½¡…Ğ½½µÁ±•Ñ¥½¹Ìˆ(()‘•˜…Í­}½µÁ…Ñ¥‰±•}…Á¤ (€€€ÁÉ½Ù¥‘•ÈèÍÑÈ°(€€€µ•ÍÍ…”èÍÑÈ°(€€€¡¥ÍÑ½Éäè%Ñ•É…‰±•mÑÕÁ±•mÍÑÈ°ÍÑÉut°(€€€Ñ½­•¸èÍÑÈ°(€€€‰…Í•}ÕÉ°èÍÑÈ°(€€€µ½‘•°èÍÑÈ°(¤€´øÍÑÈè(€€€€ˆˆ‹¢ÂR =Á•¹$ƒ–ó–ºä¡…Ğ½µÁ±•Ñ¥½¹Ìƒš:—–>–æÛ¢şS–n{ê¿šZšr³ˆˆˆ((€€€¥˜¹½ĞÑ½­•¸¹ÍÑÉ¥À ¤è(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‹¢şcšÊ‡šr'’şw–¶`A$ƒ’î“&3ˆ¤(€€€¥˜¹½Ğµ½‘•°¹ÍÑÉ¥À ¤è(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‹¢şcšÊ‡šr'–†¯–gš¢‡–z/–B7Ãˆ¤(€€€•¹ÑÉ¥•Ì€ô±¥ÍĞ¡¡¥ÍÑ½Éä¤(€€€ÍÕµµ…Éä€ô¹•áĞ ¡½¹Ñ•¹Ğ™½ÈÉ½±”°½¹Ñ•¹Ğ¥¸•¹ÑÉ¥•Ì¥˜É½±”€ôô€‰ÍÕµµ…Éäˆ¤°€ˆˆ¤(€€€ÍåÍÑ•µ}½¹Ñ•¹Ğ€ôMeMQ5}AI=5AP(€€€İ½É±‘Ù¥•İ}½¹Ñ•áĞ€ôİ½É±‘Ù¥•İ}ÁÉ½µÁÑ}½¹Ñ•áĞ¡µ•ÍÍ…”°•¹ÑÉ¥•Ì¤(€€€¥˜İ½É±‘Ù¥•İ}½¹Ñ•áĞè(€€€€€€€ÍåÍÑ•µ}½¹Ñ•¹Ğ€¬ô˜‰q¹q¹íİ½É±‘Ù¥•İ}½¹Ñ•áÑôˆ(€€€¥˜ÍÕµµ…Éäè(€€€€€€€ÍåÍÑ•µ}½¹Ñ•¹Ğ€¬ô˜‰q¹q»šnÓš^§–¾ç¢¾wj¦VÿšršFc¢š¾òiq¹íÍÕµµ…Éåôˆ(€€€µ•ÍÍ…•Ì€ômì‰É½±”ˆè€‰ÍåÍÑ•´ˆ°€‰½¹Ñ•¹ĞˆèÍåÍÑ•µ}½¹Ñ•¹Ñõt(€€€™½ÈÉ½±”°½¹Ñ•¹Ğ¥¸l¡È°Œ¤™½ÈÈ°Œ¥¸•¹ÑÉ¥•Ì¥˜È¥¸ì‰ÕÍ•Èˆ°€‰…ÍÍ¥ÍÑ…¹Ğ‰õul´ØÀétè(€€€€€€€¥˜É½±”¥¸ì‰ÕÍ•Èˆ°€‰…ÍÍ¥ÍÑ…¹Ğ‰ôè(€€€€€€€€€€€µ•ÍÍ…•Ì¹…ÁÁ•¹¡ì‰É½±”ˆèÉ½±”°€‰½¹Ñ•¹Ğˆè½¹Ñ•¹Ñô¤(€€€µ•ÍÍ…•Ì¹…ÁÁ•¹¡ì‰É½±”ˆè€‰ÕÍ•Èˆ°€‰½¹Ñ•¹Ğˆèµ•ÍÍ…•ô¤(€€€Á…å±½…è‘¥ÑmÍÑÈ°½‰©•Ñt€ôì(€€€€€€€€‰µ½‘•°ˆèµ½‘•°¹ÍÑÉ¥À ¤°(€€€€€€€€‰µ•ÍÍ…•Ìˆèµ•ÍÍ…•Ì°(€€€€€€€€‰µ…á}Ñ½­•¹Ìˆè€ÈØÀ°(€€€€€€€€‰ÍÑÉ•…´ˆè…±Í”°(€€€ô(€€€¥˜ÁÉ½Ù¥‘•È€ôô€‰‘••ÁÍ••¬ˆè(€€€€€€€Á…å±½…‘l‰Ñ¡¥¹­¥¹œ‰t€ôì‰ÑåÁ”ˆè€‰‘¥Í…‰±•‰ô(€€€•±¥˜ÁÉ½Ù¥‘•È€ôô€‰­¥µ¤ˆ…¹µ½‘•°¹ÍÑÉ¥À ¤€ôô€‰­¥µ¤µ¬Ìˆè(€€€€€€€Á…å±½…‘l‰É•…Í½¹¥¹}•™™½ÉĞ‰t€ô€‰±½Üˆ(€€€É•ÅÕ•ÍĞ€ôÕÉ±±¥ˆ¹É•ÅÕ•ÍĞ¹I•ÅÕ•ÍĞ (€€€€€€€}¡…Ñ}•¹‘Á½¥¹Ğ¡‰…Í•}ÕÉ°¤°(€€€€€€€‘…Ñ„õ©Í½¸¹‘ÕµÁÌ¡Á…å±½…°•¹ÍÕÉ•}…Í¥¤õ…±Í”¤¹•¹½‘” ‰ÕÑ˜´àˆ¤°(€€€€€€€¡•…‘•ÉÌõì(€€€€€€€€€€€€‰ÕÑ¡½É¥é…Ñ¥½¸ˆè˜‰	•…É•ÈíÑ½­•¸¹ÍÑÉ¥À ¥ôˆ°(€€€€€€€€€€€€‰½¹Ñ•¹ĞµQåÁ”ˆè€‰…ÁÁ±¥…Ñ¥½¸½©Í½¸ˆ°(€€€€€€€€€€€€‰UÍ•Èµ•¹Ğˆè€‰1¥±¥•Í­Ñ½ÁA•Ğ¼À¸Øˆ°(€€€€€€€ô°(€€€€€€€µ•Ñ¡½ô‰A=MPˆ°(€€€€¤(€€€ÑÉäè(€€€€€€€İ¥Ñ ÕÉ±±¥ˆ¹É•ÅÕ•ÍĞ¹ÕÉ±½Á•¸¡É•ÅÕ•ÍĞ°Ñ¥µ•½ÕĞôĞÔ¤…ÌÉ•ÍÁ½¹Í”è(€€€€€€€€€€€‘…Ñ„€ô©Í½¸¹±½…‘Ì¡É•ÍÁ½¹Í”¹É•… ¤¹‘•½‘” ‰ÕÑ˜´àˆ¤¤(€€€•á•ÁĞÕÉ±±¥ˆ¹•ÉÉ½È¹!QQAÉÉ½È…Ì•áŒè(€€€€€€€¥˜•áŒ¹½‘”¥¸ìĞÀÄ°€ĞÀÍôè(€€€€€€€€€€€‘•Ñ…¥°€ô€‰A$ƒ’î“&3š^ƒšV#š"[šÊ‡šr'šv¦fCˆ(€€€€€€€•±¥˜•áŒ¹½‘”€ôô€ĞÈäè(€€€€€€€€€€€‘•Ñ…¥°€ô€‰A$ƒ¦Šw–ê›’â7¢ÚÏš"[¢¾ßšÆ–’«¦ŠGæˆ(€€€€€€€•±Í”è(€€€€€€€€€€€‘•Ñ…¥°€ô˜‰A$ƒ¢şS–n{¦Rg¢¾¿¾ò!í•áŒ¹½‘•÷¾ò'ˆ(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È¡‘•Ñ…¥°¤™É½´•áŒ(€€€•á•ÁĞ€¡=MÉÉ½È°Y…±Õ•ÉÉ½È°©Í½¸¹)M=9•½‘•ÉÉ½È¤…Ì•áŒè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰$ƒšr7–*‡¢ş{š:—–’Ç¢Ò—¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤™É½´•áŒ(€€€ÑÉäè(€€€€€€€…¹Íİ•È€ôÍÑÈ¡‘…Ñ…l‰¡½¥•Ì‰ulÁul‰µ•ÍÍ…”‰ul‰½¹Ñ•¹Ğ‰t¤¹ÍÑÉ¥À ¤(€€€•á•ÁĞ€¡-•åÉÉ½È°%¹‘•áÉÉ½È°QåÁ•ÉÉ½È¤…Ì•áŒè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰$ƒšr7–*‡¢şS–n{’êš^ƒšÎW¢¾–"¯j––ºçˆ¤™É½´•áŒ(€€€¥˜¹½Ğ…¹Íİ•Èè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰$ƒšr7–*‡šÊ‡šr'¢şS–n{šZ–¶_ˆ¤(€€€É•ÑÕÉ¸…¹Íİ•ÉlèÄØÀÁt(()‘•˜…Í­}½Á•¹…¥}É•ÍÁ½¹Í•Ì (€€€µ•ÍÍ…”èÍÑÈ°(€€€¡¥ÍÑ½Éäè%Ñ•É…‰±•mÑÕÁ±•mÍÑÈ°ÍÑÉut°(€€€Ñ½­•¸èÍÑÈ°(€€€‰…Í•}ÕÉ°èÍÑÈ°(€€€µ½‘•°èÍÑÈ°(¤€´øÍÑÈè(€€€€ˆˆ‰…±°=Á•¹$ÌI•ÍÁ½¹Í•ÌA$…Ì…¸½ÁÑ¥½¹…°™…ÍĞ¡…Ğ‰…­•¹¸((€€€%ĞÕÍ•ÌÑ¡”Í…µ”¥¸µµ•µ½ÉäÍÕµµ…Éä…¹É••¹Ğ€ÌÀµÑÕÉ¸½¹Ñ•áĞ…ÌÑ¡”(€€€±½…°…•¹ÑÌ…¹¹•Ù•ÈÍ•¹‘ÌÁÉ½©•Ğ™¥±•Ì½È‘•Í­Ñ½À½¹Ñ•áĞ¸(€€€€ˆˆˆ((€€€±•…¸€ô‰…Í•}ÕÉ°¹ÍÑÉ¥À ¤¹ÉÍÑÉ¥À ˆ¼ˆ¤(€€€Á…ÉÍ•€ôÕÉ±±¥ˆ¹Á…ÉÍ”¹ÕÉ±Á…ÉÍ”¡±•…¸¤(€€€¥˜Á…ÉÍ•¹Í¡•µ”€„ô€‰¡ÑÑÁÌˆ½È¹½ĞÁ…ÉÍ•¹¹•Ñ±½Œè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰A$ƒ–rÃ–v–ş¦†ïšb¿šr'šV#j!QQALƒ–rÃ–vˆ¤(€€€¥˜±•…¸¹•¹‘Íİ¥Ñ  ˆ½ØÄˆ¤è(€€€€€€€•¹‘Á½¥¹Ğ€ô˜‰í±•…¹ô½É•ÍÁ½¹Í•Ìˆ(€€€•±¥˜±•…¸¹•¹‘Íİ¥Ñ  ˆ½É•ÍÁ½¹Í•Ìˆ¤è(€€€€€€€•¹‘Á½¥¹Ğ€ô±•…¸(€€€•±Í”è(€€€€€€€•¹‘Á½¥¹Ğ€ô˜‰í±•…¹ô½ØÄ½É•ÍÁ½¹Í•Ìˆ(€€€Á…å±½…€ôì(€€€€€€€€‰µ½‘•°ˆèµ½‘•°¹ÍÑÉ¥À ¤°(€€€€€€€€‰¥¹ÁÕĞˆè}½¹Ù•ÉÍ…Ñ¥½¹}Ñ•áĞ¡µ•ÍÍ…”°¡¥ÍÑ½Éä¤°(€€€€€€€€‰µ…á}½ÕÑÁÕÑ}Ñ½­•¹Ìˆè€ÈÈÀ°(€€€ô(€€€É•ÅÕ•ÍĞ€ôÕÉ±±¥ˆ¹É•ÅÕ•ÍĞ¹I•ÅÕ•ÍĞ (€€€€€€€•¹‘Á½¥¹Ğ°(€€€€€€€‘…Ñ„õ©Í½¸¹‘ÕµÁÌ¡Á…å±½…°•¹ÍÕÉ•}…Í¥¤õ…±Í”¤¹•¹½‘” ‰ÕÑ˜´àˆ¤°(€€€€€€€¡•…‘•ÉÌõì(€€€€€€€€€€€€‰ÕÑ¡½É¥é…Ñ¥½¸ˆè˜‰	•…É•ÈíÑ½­•¸¹ÍÑÉ¥À ¥ôˆ°(€€€€€€€€€€€€‰½¹Ñ•¹ĞµQåÁ”ˆè€‰…ÁÁ±¥…Ñ¥½¸½©Í½¸ˆ°(€€€€€€€€€€€€‰UÍ•Èµ•¹Ğˆè€‰1¥±¥•Í­Ñ½ÁA•Ğ¼À¸ÈÄˆ°(€€€€€€€ô°(€€€€€€€µ•Ñ¡½ô‰A=MPˆ°(€€€€¤(€€€ÑÉäè(€€€€€€€İ¥Ñ ÕÉ±±¥ˆ¹É•ÅÕ•ÍĞ¹ÕÉ±½Á•¸¡É•ÅÕ•ÍĞ°Ñ¥µ•½ÕĞôÌÀ¤…ÌÉ•ÍÁ½¹Í”è(€€€€€€€€€€€‘…Ñ„€ô©Í½¸¹±½…‘Ì¡É•ÍÁ½¹Í”¹É•… ¤¹‘•½‘” ‰ÕÑ˜´àˆ¤¤(€€€•á•ÁĞÕÉ±±¥ˆ¹•ÉÉ½È¹!QQAÉÉ½È…Ì•áŒè(€€€€€€€¥˜•áŒ¹½‘”¥¸ìĞÀÄ°€ĞÀÍôè(€€€€€€€€€€€‘•Ñ…¥°€ô€‰A$ƒ’î“&3š^ƒšV#š"[šÊ‡šr'šv¦fCˆ(€€€€€€€•±¥˜•áŒ¹½‘”€ôô€ĞÈäè(€€€€€€€€€€€‘•Ñ…¥°€ô€‰A$ƒ¦Šw–ê›’â7¢ÚÏš"[¢¾ßšÆ–’«¦ŠGæˆ(€€€€€€€•±Í”è(€€€€€€€€€€€‘•Ñ…¥°€ô˜‰A$ƒ¢şS–n{¦Rg¢¾¿¾ò!í•áŒ¹½‘•÷¾ò'ˆ(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È¡‘•Ñ…¥°¤™É½´•áŒ(€€€•á•ÁĞ€¡=MÉÉ½È°Y…±Õ•ÉÉ½È°©Í½¸¹)M=9•½‘•ÉÉ½È¤…Ì•áŒè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰=Á•¹$ƒšr7–*‡¢ş{š:—–’Ç¢Ò—¾ò3–ŞË–"–n{šïêÿ–n{¶Sˆ¤™É½´•áŒ(€€€…¹Íİ•È€ôÍÑÈ¡‘…Ñ„¹•Ğ ‰½ÕÑÁÕÑ}Ñ•áĞˆ¤½È€ˆˆ¤¹ÍÑÉ¥À ¤(€€€¥˜¹½Ğ…¹Íİ•Èè(€€€€€€€™É…µ•¹ÑÌè±¥ÍÑmÍÑÉt€ômt(€€€€€€€™½È¥Ñ•´¥¸‘…Ñ„¹•Ğ ‰½ÕÑÁÕĞˆ¤½Èmtè(€€€€€€€€€€€™½È½¹Ñ•¹Ğ¥¸¥Ñ•´¹•Ğ ‰½¹Ñ•¹Ğˆ¤½Èmtè(€€€€€€€€€€€€€€€¥˜½¹Ñ•¹Ğ¹•Ğ ‰ÑåÁ”ˆ¤¥¸ì‰½ÕÑÁÕÑ}Ñ•áĞˆ°€‰Ñ•áĞ‰ôè(€€€€€€€€€€€€€€€€€€€™É…µ•¹ÑÌ¹…ÁÁ•¹¡ÍÑÈ¡½¹Ñ•¹Ğ¹•Ğ ‰Ñ•áĞˆ¤½È€ˆˆ¤¤(€€€€€€€…¹Íİ•È€ô€ˆˆ¹©½¥¸¡™É…µ•¹ÑÌ¤¹ÍÑÉ¥À ¤(€€€¥˜¹½Ğ…¹Íİ•Èè(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰=Á•¹$ƒšÊ‡šr'¢şS–n{–>¿¢¾–"¯jšZ–¶_ˆ¤(€€€É•ÑÕÉ¸…¹Íİ•ÉlèÄØÀÁt(()±…ÍÌ%¡…ÑM•ÉÙ¥”è(€€€€ˆˆ‹š‚çš6»–öO–&7¢ºûö»¦'š.§–B;®¿¾òo–r£êÿ–’Ç¢Ò—RÇª_–>–Æ–Ï–ºk–š’öWšïêÿ–n{¦ˆˆˆ((€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°É•‘•¹Ñ¥…±}ÍÑ½É”èÉ•‘•¹Ñ¥…±MÑ½É”ğ9½¹”€ô9½¹”¤€´ø9½¹”è(€€€€€€€Í•±˜¹É•‘•¹Ñ¥…±Ì€ôÉ•‘•¹Ñ¥…±}ÍÑ½É”½ÈÉ•‘•¹Ñ¥…±MÑ½É” ¤((€€€‘•˜É•Á±ä (€€€€€€€Í•±˜°(€€€€€€€ÁÉ½Ù¥‘•ÈèÍÑÈ°(€€€€€€€µ•ÍÍ…”èÍÑÈ°(€€€€€€€¡¥ÍÑ½Éäè%Ñ•É…‰±•mÑÕÁ±•mÍÑÈ°ÍÑÉut°(€€€€€€€‰…Í•}ÕÉ°èÍÑÈ€ô€ˆˆ°(€€€€€€€µ½‘•°èÍÑÈ€ô€ˆˆ°(€€€€¤€´øÍÑÈè(€€€€€€€¥˜ÁÉ½Ù¥‘•È€ôô€‰½‘•àˆè(€€€€€€€€€€€É•ÑÕÉ¸…Í­}½‘•à¡µ•ÍÍ…”°¡¥ÍÑ½Éä¤(€€€€€€€¥˜ÁÉ½Ù¥‘•È€ôô€‰±…Õ‘”ˆè(€€€€€€€€€€€É•ÑÕÉ¸…Í­}±…Õ‘”¡µ•ÍÍ…”°¡¥ÍÑ½Éä¤(€€€€€€€¥˜ÁÉ½Ù¥‘•È€ôô€‰½Á•¹…¤ˆè(€€€€€€€€€€€‘•™…Õ±Ñ}ÕÉ°°‘•™…Õ±Ñ}µ½‘•°€ôÁÉ½Ù¥‘•É}‘•™…Õ±ÑÌ¡ÁÉ½Ù¥‘•È¤(€€€€€€€€€€€É•ÑÕÉ¸…Í­}½Á•¹…¥}É•ÍÁ½¹Í•Ì (€€€€€€€€€€€€€€€µ•ÍÍ…”°(€€€€€€€€€€€€€€€¡¥ÍÑ½Éä°(€€€€€€€€€€€€€€€Í•±˜¹É•‘•¹Ñ¥…±Ì¹•Ğ¡ÁÉ½Ù¥‘•È¤°(€€€€€€€€€€€€€€€‰…Í•}ÕÉ°½È‘•™…Õ±Ñ}ÕÉ°°(€€€€€€€€€€€€€€€µ½‘•°½È‘•™…Õ±Ñ}µ½‘•°°(€€€€€€€€€€€€¤(€€€€€€€¥˜ÁÉ½Ù¥‘•È¹½Ğ¥¸ì‰‘••ÁÍ••¬ˆ°€‰­¥µ¤ˆ°€‰ÕÍÑ½´‰ôè(€€€€€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‹–öO–&7’öÿR£ê¿šïêÿš¢‡–ò?ˆ¤(€€€€€€€‘•™…Õ±Ñ}ÕÉ°°‘•™…Õ±Ñ}µ½‘•°€ôÁÉ½Ù¥‘•É}‘•™…Õ±ÑÌ¡ÁÉ½Ù¥‘•È¤(€€€€€€€É•ÑÕÉ¸…Í­}½µÁ…Ñ¥‰±•}…Á¤ (€€€€€€€€€€€ÁÉ½Ù¥‘•È°(€€€€€€€€€€€µ•ÍÍ…”°(€€€€€€€€€€€¡¥ÍÑ½Éä°(€€€€€€€€€€€Í•±˜¹É•‘•¹Ñ¥…±Ì¹•Ğ¡ÁÉ½Ù¥‘•È¤°(€€€€€€€€€€€‰…Í•}ÕÉ°½È‘•™…Õ±Ñ}ÕÉ°°(€€€€€€€€€€€µ½‘•°½È‘•™…Õ±Ñ}µ½‘•°°(€€€€€€€€¤(
+        return _newest_file(all_candidates)
+    return None
+
+
+def find_codex_gui_app() -> Path | None:
+    """è¿”å›å¯ä¾›ç”¨æˆ·ä¸»åŠ¨æ‰“å¼€çš„ OpenAI GUIï¼›ä¸å‚ä¸ CLI å¯ç”¨æ€§åˆ¤æ–­ã€‚"""
+
+    chatgpt = find_chatgpt_desktop_app()
+    if chatgpt is not None:
+        return chatgpt
+    if os.name != "nt":
+        return None
+    local = Path(os.environ.get("LOCALAPPDATA", ""))
+    candidates = [
+        local / "Programs" / "Codex" / "Codex.exe",
+        local / "OpenAI" / "Codex" / "Codex.exe",
+    ]
+    root = local / "OpenAI" / "Codex"
+    if root.is_dir():
+        candidates.extend(root.glob("app-*/Codex.exe"))
+    return _newest_file(candidates)
+
+
+def _is_chatgpt_desktop_app(application: Path) -> bool:
+    """åŒºåˆ†æ–°ç‰ˆ ChatGPT GUI ä¸ Windows æ—§ç‰ˆ Codex Desktopã€‚"""
+
+    return application.name.casefold() in {"chatgpt.app", "chatgpt.exe"}
+
+
+def launch_codex_gui() -> bool:
+    """åªåœ¨ç”¨æˆ·ä¸»åŠ¨ç‚¹å‡»æ—¶æ‰“å¼€ ChatGPT/Codex GUIï¼Œä¸å½±å“ CLI è°ƒç”¨çŠ¶æ€ã€‚"""
+
+    application = find_codex_gui_app()
+    if application is None:
+        return False
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", "-a", "ChatGPT"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        elif os.name == "nt":
+            os.startfile(str(application))  # type: ignore[attr-defined]
+        else:
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _macos_codex_cli_path() -> Path | None:
+    """Find Codex from the user's macOS shell, then keep the absolute path.
+
+    A GUI app is not launched from a login shell, so its inherited ``PATH``
+    commonly misses nvm/npm/pnpm directories.  Keep the required first probe
+    exactly as a login zsh command, then retry with the user's profile files
+    and interactive zsh before falling back to well-known per-user locations.
+    The fallback is deliberately only used when ``command -v`` returned no
+    executable; a ChatGPT.app installation is never treated as the CLI.
+    """
+
+    if sys.platform != "darwin":
+        return None
+    lookup_commands = (
+        ["/bin/zsh", "-lc", "command -v codex"],
+        [
+            "/bin/zsh",
+            "-lc",
+            "for f in ~/.zprofile ~/.zshrc ~/.bash_profile; do "
+            "[ -r \"$f\" ] && source \"$f\" >/dev/null 2>&1; done; "
+            "command -v codex",
+        ],
+        ["/bin/zsh", "-lic", "command -v codex"],
+    )
+    candidate: Path | None = None
+    for lookup in lookup_commands:
+        try:
+            completed = subprocess.run(
+                lookup,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=12,
+                env=_cli_environment(),
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        for line in reversed(lines):
+            path = Path(line).expanduser()
+            if path.is_absolute() and path.is_file():
+                candidate = path
+                break
+        if candidate is not None:
+            break
+    if candidate is None:
+        home = Path.home()
+        fallback_paths = [
+            home / ".local" / "bin" / "codex",
+            home / ".npm-global" / "bin" / "codex",
+            home / ".bun" / "bin" / "codex",
+            home / ".volta" / "bin" / "codex",
+            home / "Library" / "pnpm" / "codex",
+            Path("/opt/homebrew/bin/codex"),
+            Path("/usr/local/bin/codex"),
+        ]
+        fallback_paths.extend(
+            sorted(
+                home.glob(".nvm/versions/node/*/bin/codex"),
+                key=lambda path: str(path),
+                reverse=True,
+            )
+        )
+        candidate = _newest_file(fallback_paths)
+    if candidate is None:
+        return None
+    if not candidate.is_absolute() or not candidate.is_file():
+        return None
+    try:
+        version = subprocess.run(
+            [str(candidate), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=12,
+            env=_cli_environment(candidate),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return candidate if version.returncode == 0 else None
+
+
+@lru_cache(maxsize=1)
+def find_codex_executable() -> Path | None:
+    """å¯»æ‰¾å¹¶éªŒè¯ Codex CLIï¼›å›¾å½¢åº”ç”¨æ£€æµ‹ç”± find_codex_gui_app() è´Ÿè´£ã€‚"""
+
+    if sys.platform == "darwin":
+        return _macos_codex_cli_path()
+    command = _which_cli("codex")
+    if command:
+        return command
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        root = local / "OpenAI" / "Codex" / "bin"
+        return _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
+    return None
+
+
+def codex_available() -> bool:
+    """è¿”å›å½“å‰ç”µè„‘æ˜¯å¦èƒ½æ‰¾åˆ° Codex CLIã€‚"""
+
+    return find_codex_executable() is not None
+
+
+def codex_detection_message() -> str:
+    """è¿”å›ä¾›èŠå¤©å’Œè®¾ç½®é¡µå¤ç”¨çš„ GUI/CLI åˆ†ç¦»çŠ¶æ€æ–‡æ¡ˆã€‚"""
+
+    gui_app = find_codex_gui_app()
+    # A GUI app can be opened before the user's shell profile finishes
+    # installing/refreshing npm paths.  Refresh the cached CLI path whenever a
+    # settings page explicitly asks for the current status.
+    clear_cache = getattr(find_codex_executable, "cache_clear", None)
+    if callable(clear_cache):
+        clear_cache()
+    cli = find_codex_executable()
+    if gui_app is not None and cli is not None:
+        return "Codex å·²è¿æ¥ã€‚"
+    if gui_app is not None:
+        if _is_chatgpt_desktop_app(gui_app):
+            return "å·²æ£€æµ‹åˆ° ChatGPTï¼ˆåŒ…å« Codexï¼‰ï¼Œä½†æœªæ£€æµ‹åˆ° Codex CLIã€‚"
+        return "å·²æ£€æµ‹åˆ° Codex Desktopï¼Œä½†æœªæ£€æµ‹åˆ° Codex CLIã€‚"
+    if cli is not None:
+        return "å·²æ£€æµ‹åˆ° Codex CLIï¼›æœªæ£€æµ‹åˆ° ChatGPT Desktop Appã€‚"
+    return "æœªæ£€æµ‹åˆ° Codex CLIï¼›èŠå¤©æ—¶ä¼šä½¿ç”¨ç¦»çº¿é™ªä¼´æ¨¡å¼ã€‚"
+
+
+def find_claude_executable() -> Path | None:
+    """å¯»æ‰¾ npmã€åŸç”Ÿå®‰è£…å™¨æˆ–ç»ˆç«¯ PATH ä¸­çš„ Claude Codeã€‚"""
+
+    names = ("claude.cmd", "claude.exe", "claude") if os.name == "nt" else ("claude",)
+    for name in names:
+        command = _which_cli(name)
+        if command:
+            return command
+    home = Path.home()
+    candidates = [home / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude")]
+    if os.name == "nt":
+        candidates.extend(
+            (
+                Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
+                home / ".claude" / "local" / "claude.exe",
+            )
+        )
+    return _newest_file(candidates)
+
+
+def claude_available() -> bool:
+    """è¿”å›å½“å‰ç”µè„‘æ˜¯å¦èƒ½æ‰¾åˆ° Claude Codeã€‚"""
+
+    return find_claude_executable() is not None
+
+
+def _cli_command(executable: Path, *arguments: str) -> list[str]:
+    """å®‰å…¨è¿è¡Œ Windows æ‰¹å¤„ç†åŒ…è£…å™¨ï¼Œå…¶ä½™å¹³å°ç›´æ¥æ‰§è¡ŒäºŒè¿›åˆ¶ã€‚"""
+
+    if os.name == "nt" and executable.suffix.casefold() in {".cmd", ".bat"}:
+        command_processor = os.environ.get("COMSPEC") or "cmd.exe"
+        return [command_processor, "/d", "/s", "/c", str(executable), *arguments]
+    return [str(executable), *arguments]
+
+
+def _conversation_text(
+    message: str,
+    history: Iterable[tuple[str, str]],
+) -> str:
+    """æŠŠé•¿æœŸæ‘˜è¦ä¸æœ€è¿‘ä¸‰åè½®åŸæ–‡æ•´ç†ä¸º Codex çš„å•æ¬¡å®‰å…¨è¾“å…¥ã€‚"""
+
+    entries = list(history)
+    summary = next((content for role, content in entries if role == "summary"), "")
+    recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
+    lines = [SYSTEM_PROMPT]
+    worldview_context = worldview_prompt_context(message, entries)
+    if worldview_context:
+        lines.extend(("", worldview_context))
+    if summary:
+        lines.extend(("", "æ›´æ—©å¯¹è¯çš„é•¿æœŸæ‘˜è¦ï¼š", summary))
+    lines.extend(("", "ä»¥ä¸‹æ˜¯æœ€è¿‘ä¸‰åè½®ä»¥å†…çš„å®Œæ•´å¯¹è¯ï¼š"))
+    for role, content in recent:
+        label = "ç”¨æˆ·" if role == "user" else "å…­æ¯›"
+        lines.append(f"{label}ï¼š{content}")
+    lines.extend((f"ç”¨æˆ·ï¼š{message}", "å…­æ¯›ï¼š"))
+    return "\n".join(lines)
+
+
+def _parse_codex_jsonl(output: str) -> str:
+    """ä» codex exec çš„ JSONL äº‹ä»¶ä¸­æå–æœ€åä¸€æ¡åŠ©æ‰‹æ¶ˆæ¯ã€‚"""
+
+    answer = ""
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") or {}
+        if event.get("type") == "item.completed" and item.get("type") == "agent_message":
+            answer = str(item.get("text") or item.get("content") or "").strip()
+    return answer
+
+
+def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
+    """ä½¿ç”¨æœ¬æœºå·²ç™»å½• Codex çš„ä¸´æ—¶åªè¯»ä¼šè¯ç”Ÿæˆä¸€æ¡å›å¤ã€‚"""
+
+    executable = find_codex_executable()
+    if executable is None:
+        raise AIConnectionError("æ²¡æœ‰æ‰¾åˆ° Codexï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚")
+    working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
+    working_root.mkdir(parents=True, exist_ok=True)
+    command = _cli_command(
+        executable,
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--ignore-rules",
+        "--config",
+        'model_reasoning_effort="low"',
+        "--sandbox",
+        "read-only",
+        "--json",
+        "-",
+    )
+    startupinfo = None
+    creationflags = 0
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=working_root,
+            input=_conversation_text(message, history),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=75,
+            env=_cli_environment(executable),
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AIConnectionError("Codex æš‚æ—¶æ²¡æœ‰å›åº”ï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚") from exc
+    answer = _parse_codex_jsonl(completed.stdout)
+    if completed.returncode != 0 or not answer:
+        raise AIConnectionError("Codex å°šæœªç™»å½•æˆ–è¿æ¥å¤±è´¥ï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚")
+    return answer[:1600]
+
+
+def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
+    """é€šè¿‡ stdin è°ƒç”¨æœ¬æœº Claude Code çš„ä¸€æ¬¡æ€§æ— å·¥å…·ä¼šè¯ã€‚"""
+
+    executable = find_claude_executable()
+    if executable is None:
+        raise AIConnectionError("æ²¡æœ‰æ‰¾åˆ° Claude Codeï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚")
+    command = _cli_command(
+        executable, "-p", "--output-format", "json",
+        "--no-session-persistence", "--permission-mode", "plan",
+        "--tools", "", "--max-turns", "1",
+    )
+    startupinfo = None
+    creationflags = 0
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+    working_root = Path(tempfile.gettempdir()) / "LiliClaudeChat"
+    working_root.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=working_root,
+            input=_conversation_text(message, history),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=75,
+            env=_cli_environment(executable),
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AIConnectionError("Claude Code æš‚æ—¶æ²¡æœ‰å›åº”ï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚") from exc
+    try:
+        payload = json.loads(completed.stdout)
+        answer = str(payload.get("result") or "").strip()
+    except (ValueError, json.JSONDecodeError, AttributeError) as exc:
+        raise AIConnectionError("Claude Code è¿”å›äº†æ— æ³•è¯†åˆ«çš„å†…å®¹ã€‚") from exc
+    if completed.returncode != 0 or not answer:
+        raise AIConnectionError("Claude Code å°šæœªç™»å½•æˆ–è¿æ¥å¤±è´¥ï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚")
+    return answer[:1600]
+
+
+def _chat_endpoint(base_url: str) -> str:
+    """éªŒè¯åŸºç¡€åœ°å€å¹¶è¡¥é½ Chat Completions è·¯å¾„ã€‚"""
+
+    clean = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(clean)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AIConnectionError("API åœ°å€å¿…é¡»æ˜¯æœ‰æ•ˆçš„ HTTPS åœ°å€ã€‚")
+    if clean.endswith("/chat/completions"):
+        return clean
+    return f"{clean}/chat/completions"
+
+
+def ask_compatible_api(
+    provider: str,
+    message: str,
+    history: Iterable[tuple[str, str]],
+    token: str,
+    base_url: str,
+    model: str,
+) -> str:
+    """è°ƒç”¨ OpenAI å…¼å®¹ Chat Completions æ¥å£å¹¶è¿”å›çº¯æ–‡æœ¬ã€‚"""
+
+    if not token.strip():
+        raise AIConnectionError("è¿˜æ²¡æœ‰ä¿å­˜ API ä»¤ç‰Œã€‚")
+    if not model.strip():
+        raise AIConnectionError("è¿˜æ²¡æœ‰å¡«å†™æ¨¡å‹åç§°ã€‚")
+    entries = list(history)
+    summary = next((content for role, content in entries if role == "summary"), "")
+    system_content = SYSTEM_PROMPT
+    worldview_context = worldview_prompt_context(message, entries)
+    if worldview_context:
+        system_content += f"\n\n{worldview_context}"
+    if summary:
+        system_content += f"\n\næ›´æ—©å¯¹è¯çš„é•¿æœŸæ‘˜è¦ï¼š\n{summary}"
+    messages = [{"role": "system", "content": system_content}]
+    for role, content in [(r, c) for r, c in entries if r in {"user", "assistant"}][-60:]:
+        if role in {"user", "assistant"}:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": message})
+    payload: dict[str, object] = {
+        "model": model.strip(),
+        "messages": messages,
+        "max_tokens": 260,
+        "stream": False,
+    }
+    if provider == "deepseek":
+        payload["thinking"] = {"type": "disabled"}
+    elif provider == "kimi" and model.strip() == "kimi-k3":
+        payload["reasoning_effort"] = "low"
+    request = urllib.request.Request(
+        _chat_endpoint(base_url),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token.strip()}",
+            "Content-Type": "application/json",
+            "User-Agent": "LiliDesktopPet/0.6",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            detail = "API ä»¤ç‰Œæ— æ•ˆæˆ–æ²¡æœ‰æƒé™ã€‚"
+        elif exc.code == 429:
+            detail = "API é¢åº¦ä¸è¶³æˆ–è¯·æ±‚å¤ªé¢‘ç¹ã€‚"
+        else:
+            detail = f"API è¿”å›é”™è¯¯ï¼ˆ{exc.code}ï¼‰ã€‚"
+        raise AIConnectionError(detail) from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise AIConnectionError("AI æœåŠ¡è¿æ¥å¤±è´¥ï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚") from exc
+    try:
+        answer = str(data["choices"][0]["message"]["content"]).strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise AIConnectionError("AI æœåŠ¡è¿”å›äº†æ— æ³•è¯†åˆ«çš„å†…å®¹ã€‚") from exc
+    if not answer:
+        raise AIConnectionError("AI æœåŠ¡æ²¡æœ‰è¿”å›æ–‡å­—ã€‚")
+    return answer[:1600]
+
+
+def ask_openai_responses(
+    message: str,
+    history: Iterable[tuple[str, str]],
+    token: str,
+    base_url: str,
+    model: str,
+) -> str:
+    """Call OpenAI's Responses API as an optional fast chat backend.
+
+    It uses the same in-memory summary and recent 30-turn context as the
+    local agents and never sends project files or desktop context.
+    """
+
+    clean = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(clean)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AIConnectionError("API åœ°å€å¿…é¡»æ˜¯æœ‰æ•ˆçš„ HTTPS åœ°å€ã€‚")
+    if clean.endswith("/v1"):
+        endpoint = f"{clean}/responses"
+    elif clean.endswith("/responses"):
+        endpoint = clean
+    else:
+        endpoint = f"{clean}/v1/responses"
+    payload = {
+        "model": model.strip(),
+        "input": _conversation_text(message, history),
+        "max_output_tokens": 220,
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token.strip()}",
+            "Content-Type": "application/json",
+            "User-Agent": "LiliDesktopPet/0.21",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            detail = "API ä»¤ç‰Œæ— æ•ˆæˆ–æ²¡æœ‰æƒé™ã€‚"
+        elif exc.code == 429:
+            detail = "API é¢åº¦ä¸è¶³æˆ–è¯·æ±‚å¤ªé¢‘ç¹ã€‚"
+        else:
+            detail = f"API è¿”å›é”™è¯¯ï¼ˆ{exc.code}ï¼‰ã€‚"
+        raise AIConnectionError(detail) from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise AIConnectionError("OpenAI æœåŠ¡è¿æ¥å¤±è´¥ï¼Œå·²åˆ‡å›ç¦»çº¿å›ç­”ã€‚") from exc
+    answer = str(data.get("output_text") or "").strip()
+    if not answer:
+        fragments: list[str] = []
+        for item in data.get("output") or []:
+            for content in item.get("content") or []:
+                if content.get("type") in {"output_text", "text"}:
+                    fragments.append(str(content.get("text") or ""))
+        answer = "".join(fragments).strip()
+    if not answer:
+        raise AIConnectionError("OpenAI æ²¡æœ‰è¿”å›å¯è¯†åˆ«çš„æ–‡å­—ã€‚")
+    return answer[:1600]
+
+
+class AIChatService:
+    """æ ¹æ®å½“å‰è®¾ç½®é€‰æ‹©åç«¯ï¼›åœ¨çº¿å¤±è´¥ç”±çª—å£å±‚å†³å®šå¦‚ä½•ç¦»çº¿å›é€€ã€‚"""
+
+    def __init__(self, credential_store: CredentialStore | None = None) -> None:
+        self.credentials = credential_store or CredentialStore()
+
+    def reply(
+        self,
+        provider: str,
+        message: str,
+        history: Iterable[tuple[str, str]],
+        base_url: str = "",
+        model: str = "",
+    ) -> str:
+        if provider == "codex":
+            return ask_codex(message, history)
+        if provider == "claude":
+            return ask_claude(message, history)
+        if provider == "openai":
+            default_url, default_model = provider_defaults(provider)
+            return ask_openai_responses(
+                message,
+                history,
+                self.credentials.get(provider),
+                base_url or default_url,
+                model or default_model,
+            )
+        if provider not in {"deepseek", "kimi", "custom"}:
+            raise AIConnectionError("å½“å‰ä½¿ç”¨çº¯ç¦»çº¿æ¨¡å¼ã€‚")
+        default_url, default_model = provider_defaults(provider)
+        return ask_compatible_api(
+            provider,
+            message,
+            history,
+            self.credentials.get(provider),
+            base_url or default_url,
+            model or default_model,
+        )

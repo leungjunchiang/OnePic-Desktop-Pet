@@ -1,4 +1,4 @@
-­r‡^Ñf¥–Ø¦{®lyÊ'vÃ®¶›­"""
+"""
 æœ¬æ¨¡å—å®ç°æ¡Œé¢å® ç‰©çš„é€æ˜çª—å£ã€è¿ç»­åŠ¨ç”»ã€é¼ æ ‡äº¤äº’ã€å¿«æ·æ§åˆ¶å’Œæƒ…å¢ƒé™ªä¼´ã€‚
 
 èŒè´£èŒƒå›´ï¼š
@@ -362,13 +362,522 @@ class PetWindow(QWidget):
         self.chat_manager.reply_ready.connect(self._managed_chat_reply)
         self.chat_manager.busy_changed.connect(self._chat_busy_changed)
         self.chat_manager.notice.connect(self._chat_notice)
-        self.music_controller.result_ready.connect(self._music_control_resultß½õæÚ$z{-®éÜj×VÆbç6†÷uö6ö×æ–öå÷7FGW2¢fööEöÖVçRæFD7F–öâ†ÖööB¢÷WFf—EöÖVçRÒÖVçRæFDÖVçR‚.hÚ.Š8^KˆîZInŠx""¢6Æ76–2Ò7F–öâ†b.{¸şX[‡·6VÆbå÷WEöæÖR‚—Ò"Â6VÆb¢6Æ76–2ç6WD6†V6¶&ÆR…G'VR¢6Æ76–2ç6WD6†V6¶VB†æ÷B6VÆbç6WGF–æw2æWV—VEö÷WFf—B¢6Æ76–2çG&–vvW&VBæ6öææV7B†ÆÖ&F¢6VÆbæWV—ö÷WFf—B‚""’¢÷WFf—EöÖVçRæFD7F–öâ†6Æ76–2¢VæÆö6¶VBÒVæÆö6¶VEö÷WFf—G2‡6VÆbçv÷&µ÷F–ÖW"çVæÆö6¶VEö÷WFf—Eö6÷VçB‚’¢f÷"÷WFf—B–âõUDd•E3 ¢7F–öâÒ7F–öâ†÷WFf—BææÖRÂ6VÆb¢f–Æ&ÆRÒ÷WFf—B–âVæÆö6¶V@¢7F–öâç6WDVæ&ÆVB†f–Æ&ÆR¢7F–öâç6WD6†V6¶&ÆR…G'VR¢7F–öâç6WD6†V6¶VB†÷WFf—Bæ¶W’ÓÒ6VÆbç6WGF–æw2æWV—VEö÷WFf—B¢–bf–Æ&ÆS ¢7F–öâçG&–vvW&VBæ6öææV7B†ÆÖ&Fö6†V6¶VCÔfÇ6RÂ¶W“Ö÷WFf—Bæ¶W“¢6VÆbæWV—ö÷WFf—B†¶W’’¢÷WFf—EöÖVçRæFD7F–öâ†7F–öâ¢ÖVçRæFE6W&F÷"‚¢f÷"Æ&VÂÂ6ÆÆ&6²Â6†V6¶VB–â‚‚.Xn[	NXùxš.š©¢"Â6VÆbç6WEöWFöÖF–5öw'VÖ&Æ–ærÂ6VÆbç6WGF–æw2æWFöÖF–5öw'VÖ&Æ–ær’Â‚.i[Nx+hª^i{b"Â6VÆbç6WEö†÷W&Ç•öææ÷Væ6VÖVçBÂ6VÆbç6WGF–æw2æ†÷W&Ç•öææ÷Væ6VÖVçB’Â‚.Zx¾{¸{Úîšb"Â6VÆbç6WEöÇv—5ööå÷F÷Â6VÆbç6WGF–æw2æÇv—5ööå÷F÷’“ ¢7F–öâÒ7F–öâ†Æ&VÂÂ6VÆb¢7F–öâç6WD6†V6¶&ÆR…G'VR¢7F–öâç6WD6†V6¶VB†6†V6¶VB¢7F–öâçFövvÆVBæ6öææV7B†6ÆÆ&6²¢ÖVçRæFD7F–öâ†7F–öâ¢7—7FVÕöÖVçRÒÖVçRæFDÖVçR‚.{;¾{¹şKˆîŠëî{Úâ"¢•ö7F–öâÒ7F–öâ‚$’Kˆî™š®KËNŠëî{Úâ"Â6VÆb¢•ö7F–öâçG&–vvW&VBæ6öææV7B†ÆÖ&F¢6VÆbæ÷Vå÷6WGF–æw2…4UED”äu5õ4õU$4UõU4U%ô5D”ôâ’¢7—7FVÕöÖVçRæFD7F–öâ†•ö7F–öâ¢6—¦Uö7F–öâÒ7F–öâ‚.‹>i[NjÎZêZJ~[ò"Â6VÆb¢6—¦Uö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbæ÷Vå÷6—¦Uö6öçG&öÂ¢7—7FVÕöÖVçRæFD7F–öâ‡6—¦Uö7F–öâ¢&WGW&åö7F–öâÒ7F–öâ‚.Y¹îX‹K‹¾[ş[™R"Â6VÆb¢&WGW&åö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç&WGW&å÷Fõ÷&–Ö'•÷67&VVâ¢7—7FVÕöÖVçRæFD7F–öâ‡&WGW&åö7F–öâ¢†–FUö7F–öâÒ7F–öâ‚.™©‰xò"Â6VÆb¢†–FUö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbæ†–FR¢ÖVçRæFD7F–öâ††–FUö7F–öâ¢V—Eö7F–öâÒ7F–öâ‚.˜X{¢"Â6VÆb¢V—Eö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbçV—E÷&WVW7FVBæVÖ—B¢ÖVçRæFD7F–öâ‡V—Eö7F–öâ¢&WGW&âÖVçP ¢FVbö'V–ÆEö6öçFW‡EöÖVçUöÆVv7’‡6VÆb’ÓâÖVçS ¢"".hÈK©NKŠ®z‹>Zé®Xˆn{¸NièN[»®Xû>™JîˆùÎXÙ^ûÈÎ˜şXXŞX©şˆ;Ş[›>™;®Y(ÎXZ^Xú>[.{ª~k{~K›8"""  ¢ÖVçRÒÖVçR‡6VÆb¢6†Eöw&÷WÒÖVçRæFDÖVçR‚.ˆ®ZJKˆî™š®KËB"¢7F–öåöw&÷WÒÖVçRæFDÖVçR‚.XªKÙÎKˆîZInŠx""¢×W6–5öw&÷WÒÖVçRæFDÖVçR‚.™û>K™KˆîZ‹K™"¢fö7W5öw&÷WÒÖVçRæFDÖVçR‚.K‰>k:Kˆîˆz®Kš"¢7—7FVÕöw&÷WÒÖVçRæFDÖVçR‚.{;¾{¹şKˆîi‹îzK¢" ¢F–ÆöwVUö7F–öâÒ7F–öâ†b.Y(Ç·6VÆbå÷WEöæÖR‚—Şˆ®ˆ®(
-b"Â6VÆb¢F–ÆöwVUö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç&ö×EöF–ÆöwVR¢6†Eöw&÷WæFD7F–öâ†F–ÆöwVUö7F–öâ¢&VæÖUö7F–öâÒ7F–öâ‚.KúîiKK‹¾K«®z{YÎ(
-b"Â6VÆb¢&VæÖUö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç&VæÖU÷WB¢6†Eöw&÷WæFD7F–öâ‡&VæÖUö7F–öâ¢6ö6–Åö7F–öâÒ7F–öâ†b'·6VÆbå÷WEöæÖR‚—Şi
-ŞZÙˆz®KšZêN(
-b"Â6VÆb¢6ö6–Åö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbæ÷Vå÷6ö6–Åö‡V"¢6†Eöw&÷WæFD7F–öâ‡6ö6–Åö7F–öâ¢7F–öåöÖVçRÒ6†Eöw&÷WæFDÖVçR‚.™š®KËNXªKÙÂ"¢f÷"÷F–öâ–â4ôÕä”ôåô5D”ôå3 ¢7F–öâÒ7F–öâ†÷F–öâæÆ&VÂÂ6VÆb¢7F–öâçG&–vvW&VBæ6öææV7B€¢ÆÖ&Fö6†V6¶VCÔfÇ6RÂ¶W“Ö÷F–öâæ¶W“¢6VÆbçW&f÷&Õö6ö×æ–öåö7F–öâ€¢¶W¢¢¢7F–öåöÖVçRæFD7F–öâ†7F–öâ¢fööEöÖVçRÒ6†Eöw&÷WæFDÖVçR‚.Yh.š9ş8šZîY8Kˆîx«nh"¢f÷"fööB–âdôôEôõD”ôå3 ¢fööEö7F–öâÒ7F–öâ†fööBæÆ&VÂÂ6VÆb¢fööEö7F–öâçG&–vvW&VBæ6öææV7B€¢ÆÖ&Fö6†V6¶VCÔfÇ6RÂ¶W“ÖfööBæ¶W“¢6VÆbæfVVE÷WB†¶W’¢¢fööEöÖVçRæFD7F–öâ†fööEö7F–öâ¢fööEöÖVçRæFE6W&F÷"‚¢ÖööEö7F–öâÒ7F–öâ†b.iú^yÈ··6VÆbå÷WEöæÖR‚—Ş[ø>h8^Kˆîˆ;Ş˜xò"Â6VÆb¢ÖööEö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç6†÷uö6ö×æ–öå÷7FGW2¢fööEöÖVçRæFD7F–öâ†ÖööEö7F–öâ ¢W6Uö7F–öâÒ7F–öâ€¢.[ÈY
-şˆz®Xª‹yXª‚ ¢–bæ÷BvWFGG"‡6VÆbç6WGF–æw2Â&ÆÆ÷uöWFöæöÖ÷W5÷vÆ²"ÂfÇ6R¢VÇ6R‚.h.ZHŞ‹yXª‚"–b6VÆbçW6VBVÇ6R.i¨.XÎ‹yXª‚"’À¢6VÆbÀ¢¢W6Uö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbå÷FövvÆU÷vÆµög&öÕöÖVçR¢7F–öåöw&÷WæFD7F–öâ‡W6Uö7F–öâ¢–7GW&Uö7F–öç2Ò7F–öåöw&÷WæFDÖVçR‚.ZèÎi[NY»îx˜~XªKÙÂ"¢f÷"w&÷WöæÖRÂVçG&–W2–â5D”ôåôu$õU3 ¢w&÷WöÖVçRÒ–7GW&Uö7F–öç2æFDÖVçR†w&÷WöæÖR¢f÷"Æ&VÂÂ¶W’–âVçG&–W3 ¢7F–öâÒ7F–öâ†Æ&VÂÂ6VÆb¢7F–öâçG&–vvW&VBæ6öææV7B†ÆÖ&Fö6†V6¶VCÔfÇ6RÂfÇVSÖ¶W“¢6VÆbç6WEö7F—f—G’‡fÇVR’¢w&÷WöÖVçRæFD7F–öâ†7F–öâ¢6VÆf–Uö7F–öâÒ7F–öâ‚.ˆz®h¸ŞKˆKˆ²"Â6VÆb¢6VÆf–Uö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbçG&–vvW%÷6VÆf–R¢7F–öåöw&÷WæFD7F–öâ‡6VÆf–Uö7F–öâ¢÷WFf—EöÖVçRÒ7F–öåöw&÷WæFDÖVçR‚.[z^KÙÎi{n™[şZˆ>Š2"¢6Æ76–2Ò7F–öâ†b.{¸şX[‡·6VÆbå÷WEöæÖR‚—Ò"Â6VÆb¢6Æ76–2ç6WD6†V6¶&ÆR…G'VR¢6Æ76–2ç6WD6†V6¶VB†æ÷B6VÆbç6WGF–æw2æWV—VEö÷WFf—B¢6Æ76–2çG&–vvW&VBæ6öææV7B†ÆÖ&F¢6VÆbæWV—ö÷WFf—B‚""’¢÷WFf—EöÖVçRæFD7F–öâ†6Æ76–2¢VæÆö6¶VBÒVæÆö6¶VEö÷WFf—G2‡6VÆbçv÷&µ÷F–ÖW"çVæÆö6¶VEö÷WFf—Eö6÷VçB‚’¢f÷"†÷W"Â÷WFf—B–âVçVÖW&FR„õUDd•E2Â7F'CÓ“ ¢f–Æ&ÆRÒ÷WFf—B–âVæÆö6¶V@¢Æ&VÂÒ€¢b'¶†÷W'Ò[şi{b+r¶÷WFf—BææÖWÒ ¢–bf–Æ&ÆP¢VÇ6Rb/	ùI"¶†÷W'Ò[şi{b+r¶÷WFf—BææÖWÒ ¢¢7F–öâÒ7F–öâ†Æ&VÂÂ6VÆb¢7F–öâç6WD6†V6¶&ÆR†f–Æ&ÆR¢7F–öâç6WD6†V6¶VB†÷WFf—Bæ¶W’ÓÒ6VÆbç6WGF–æw2æWV—VEö÷WFf—B¢7F–öâç6WDVæ&ÆVB†f–Æ&ÆR¢–bf–Æ&ÆS ¢7F–öâçG&–vvW&VBæ6öææV7B€¢ÆÖ&Fö6†V6¶VCÔfÇ6RÂ¶W“Ö÷WFf—Bæ¶W“¢6VÆbæWV—ö÷WFf—B†¶W’¢¢÷WFf—EöÖVçRæFD7F–öâ†7F–öâ ¢×W6–5ö6öçG&öÅöÖVçRÒ×W6–5öw&÷WæFDÖVçR‚.hê~X‹njÚ>YÊ‹ùŠÎy¨Ni*ŞiKîYš‚"¢f÷"Æ&VÂÂ6öÖÖæB–â€¢‚.i*ŞiKâòi¨.XÂ"Â'FövvÆR"’À¢‚.Kˆ®Kˆšib"Â'&Wf–÷W2"’À¢‚.Kˆ¾Kˆšib"Â&æW‡B"’À¢‚.iú^yÈ¾jÚ>YÊi*ŞiKâ"Â'7FGW2"’À¢“ ¢6öçG&öÅö7F–öâÒ7F–öâ†Æ&VÂÂ6VÆb¢6öçG&öÅö7F–öâçG&–vvW&VBæ6öææV7B€¢ÆÖ&Fö6†V6¶VCÔfÇ6RÂfÇVSÖ6öÖÖæC¢6VÆbæ6öçG&öÅö×W6–2‡fÇVR¢¢×W6–5ö6öçG&öÅöÖVçRæFD7F–öâ†6öçG&öÅö7F–öâ¢×W6–5÷6V&6…ö7F–öâÒ7F–öâ‚.i	Î{J.Kˆšin™˜jY®yIò"Â6VÆb¢×W6–5÷6V&6…ö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbçÆ•÷&æFöÕ÷6öær¢×W6–5öw&÷WæFD7F–öâ†×W6–5÷6V&6…ö7F–öâ¢×W6–5öÖ÷fRÒ×W6–5öw&÷WæFDÖVçR‚.™û>K™XªKÙÂ"¢f÷"Æ&VÂÂ¶W’–â‚‚.h‹Nˆ>iË¢"Â&†VG†öæW2"’Â‚.[ËYK¹b"Â&wV—F""’Â‚.h™>›É2"Â&G'V×2"’“ ¢7F–öâÒ7F–öâ†Æ&VÂÂ6VÆb¢7F–öâçG&–vvW&VBæ6öææV7B†ÆÖ&Fö6†V6¶VCÔfÇ6RÂfÇVSÖ¶W“¢6VÆbç6WEö7F—f—G’‡fÇVR’¢×W6–5öÖ÷fRæFD7F–öâ†7F–öâ ¢v÷&µöÖVçRÒfö7W5öw&÷WæFDÖVçR€¢b.[z^KÙÎŠêi{nûÉ§¶f÷&ÖE÷v÷&µöGW&F–öâ‡6VÆbçv÷&µ÷F–ÖW"çFöF•÷6V6öæG2‚’—Ò ¢¢7F'E÷v÷&µö7F–öâÒ7F–öâ‚.[ÈZx²ş{º~{ºŞ[z^KÙÂ"Â6VÆb¢7F'E÷v÷&µö7F–öâç6WDVæ&ÆVB†æ÷B6VÆbçv÷&µ÷F–ÖW"æ—5÷'Vææ–ær¢7F'E÷v÷&µö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç7F'E÷v÷&µ÷F–ÖW"¢v÷&µöÖVçRæFD7F–öâ‡7F'E÷v÷&µö7F–öâ¢–b6VÆbçv÷&µ÷F–ÖW"æ—5÷'Vææ–æs ¢6öçG&öÇ5ö7F–öâÒ7F–öâ‚.iZKNh‰nx+yK^ˆI‹ù¾ŠÎi¨.XÂş{¹>iÙò"Â6VÆb¢6öçG&öÇ5ö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç6†÷u÷v÷&µö6öçG&öÇ2¢v÷&µöÖVçRæFD7F–öâ†6öçG&öÇ5ö7F–öâ¢6†÷u÷v÷&µö7F–öâÒ7F–öâ‚.iú^yÈ¾K¸®iz^{JşŠê"Â6VÆb¢6†÷u÷v÷&µö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç6†÷u÷v÷&µ÷F–ÖR¢v÷&µöÖVçRæFD7F–öâ‡6†÷u÷v÷&µö7F–öâ¢w&÷wF…ö7F–öâÒ7F–öâ‚.iú^yÈ¾K¸®izR(	3‚[şi{nh‰™[ş{«ò"Â6VÆb¢w&÷wF…ö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç6†÷uöF–Ç•öw&÷wF‚¢v÷&µöÖVçRæFD7F–öâ†w&÷wF…ö7F–öâ¢&W÷'Eö7F–öâÒ7F–öâ†b.K¸®ZJ—·6VÆbå÷WEöæÖR‚—Ş™š®KÚX®K¨nK¸K˜‚"Â6VÆb¢&W÷'Eö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç6†÷uöF–Ç•÷&W÷'B¢v÷&µöÖVçRæFD7F–öâ‡&W÷'Eö7F–öâ¢Æ'VÕö7F–öâÒ7F–öâ†b.h™>[È·6VÆbå÷WEöæÖR‚—Şy»XhÂ"Â6VÆb¢Æ'VÕö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbæ÷VåöF–Ç•öÆ'VÒ¢v÷&µöÖVçRæFD7F–öâ†Æ'VÕö7F–öâ¢fö7W5÷6ö6–ÂÒ7F–öâ‚.h™>[Èi
-ŞZÙˆz®KšZêN(
-b"Â6VÆb¢fö7W5÷6ö6–ÂçG&–vvW&VBæ6öææV7B‡6VÆbæ÷Vå÷6ö6–Åö‡V"¢fö7W5öw&÷WæFD7F–öâ†fö7W5÷6ö6–Â ¢•ö7F–öâÒ7F–öâ‚$’Kˆî™š®KËNŠëî{Úî(
-b"Â6VÆb¢•ö7F–öâçG&–vvW&VBæ6öææV7B€¢ÆÖ&Fö6†V6¶VCÔfÇ6S¢6VÆbæ÷Vå÷6WGF–æw2…4UED”äu5õ4õU$4UõU4U%ô5D”ôâ¢¢7—7FVÕöw&÷WæFD7F–öâ†•ö7F–öâ¢w'VÖ&ÆUö7F–öâÒ7F–öâ‚.Xn[	NXùxš.š©¢"Â6VÆb¢w'VÖ&ÆUö7F–öâç6WD6†V6¶&ÆR…G'VR¢w'VÖ&ÆUö7F–öâç6WD6†V6¶VB‡6VÆbç6WGF–æw2æWFöÖF–5öw'VÖ&Æ–ær¢w'VÖ&ÆUö7F–öâçFövvÆVBæ6öææV7B‡6VÆbç6WEöWFöÖF–5öw'VÖ&Æ–ær¢7—7FVÕöw&÷WæFD7F–öâ†w'VÖ&ÆUö7F–öâ¢†÷W&Ç•ö7F–öâÒ7F–öâ‚.i[Nx+hª^i{b"Â6VÆb¢†÷W&Ç•ö7F–öâç6WD6†V6¶&ÆR…G'VR¢†÷W&Ç•ö7F–öâç6WD6†V6¶VB‡6VÆbç6WGF–æw2æ†÷W&Ç•öææ÷Væ6VÖVçB¢†÷W&Ç•ö7F–öâçFövvÆVBæ6öææV7B‡6VÆbç6WEö†÷W&Ç•öææ÷Væ6VÖVçB¢7—7FVÕöw&÷WæFD7F–öâ††÷W&Ç•ö7F–öâ¢F÷Ö÷7Eö7F–öâÒ7F–öâ‚.Zx¾{¸{ÚîšnûÈX[>™zŞXÛ>jÎ™Ú.jŠ[ÈşûÈ’"Â6VÆb¢F÷Ö÷7Eö7F–öâç6WD6†V6¶&ÆR…G'VR¢F÷Ö÷7Eö7F–öâç6WD6†V6¶VB‡6VÆbç6WGF–æw2æÇv—5ööå÷F÷¢F÷Ö÷7Eö7F–öâçFövvÆVBæ6öææV7B‡6VÆbç6WEöÇv—5ööå÷F÷¢7—7FVÕöw&÷WæFD7F–öâ‡F÷Ö÷7Eö7F–öâ¢6—¦Uö7F–öâÒ7F–öâ‚.‹ùî{ºŞ‹>ˆ¨.ZêxšZJ~[ş(
-b"Â6VÆb¢6—¦Uö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbæ÷Vå÷6—¦Uö6öçG&öÂ¢7—7FVÕöw&÷WæFD7F–öâ‡6—¦Uö7F–öâ¢7—7FVÕöw&÷WæFE6W&F÷"‚¢&WGW&åö7F–öâÒ7F–öâ‚.Y¹îX‹K‹¾[ş[™R"Â6VÆb¢&WGW&åö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbç&WGW&å÷Fõ÷&–Ö'•÷67&VVâ¢7—7FVÕöw&÷WæFD7F–öâ‡&WGW&åö7F–öâ¢†–FUö7F–öâÒ7F–öâ‚.™©‰xò"Â6VÆb¢†–FUö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbæ†–FR¢7—7FVÕöw&÷WæFD7F–öâ††–FUö7F–öâ¢7—7FVÕöw&÷WæFE6W&F÷"‚¢V—Eö7F–öâÒ7F–öâ‚.˜X{¢"Â6VÆb¢V—Eö7F–öâçG&–vvW&VBæ6öææV7B‡6VÆbçV—E÷&WVW7FVBæVÖ—B¢7—7FVÕöw&÷WæFD7F–öâ‡V—Eö7F–öâ¢&WGW&âÖVçP ¢FVb6öçFW‡DÖVçTWfVçB‡6VÆbÂWfVçC¢6öçFW‡DÖVçTWfVçB’ÓâæöæS ¢"".zˆŞX	i‹îzK®XÙ^jÊXû>™JîˆùÎXÙ^ûÈÎK‹®XøÎX{¾Xû>™Jîy¨N[{N[ˆ>‹ëîŠúŞ™û>yYX{®XŠNZé®i{n™{N8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢–bF–ÖRæÖöæ÷Föæ–2‚’Â6VÆbå÷7W&W75ö6öçFW‡E÷VçF–Ã ¢WfVçBæ66WB‚¢&WGW&à¢6VÆbå÷VæF–æuö6öçFW‡EövÆö&ÂÒWfVçBævÆö&Å÷2‚¢6VÆbæ6öçFW‡EöÖVçU÷F–ÖW"ç7F'B…Æ–6F–öâæF÷V&ÆT6Æ–6´–çFW'fÂ‚’²c¢WfVçBæ66WB‚ ¢FVb÷6†÷uöFVfW'&VEö6öçFW‡EöÖVçR‡6VÆb’ÓâæöæS ¢"".zîŠêNKˆŞiŠşXøÎX{¾YîûÈÎYÊXéş›Êj~KØŞ{Úîh™>[Èišî˜	®Xû>™JîˆùÎXÙ^8"""  ¢–bF–ÖRæÖöæ÷Föæ–2‚’ãÒ6VÆbå÷7W&W75ö6öçFW‡E÷VçF–Ã ¢6VÆbåö'V–ÆEö6öçFW‡EöÖVçR‚’æW†V2‡6VÆbå÷VæF–æuö6öçFW‡EövÆö&Â ¢FVbÖ÷W6U&W74WfVçB‡6VÆbÂWfVçC¢Ö÷W6TWfVçB’ÓâæöæS ¢"".Šë[Ù^[zn™JîhÈKˆ¾ûÉ¾Xú®iÈz{¾Xª‹h^‹ø~{;¾{¹ş™ˆXÎYîh˜ŞyÉşjÚ>‹ù¾XZ^h¹nh»Ş8"""  ¢–bWfVçBæ'WGFöâ‚’ÓÒBäÖ÷W6T'WGFöâäÆVgD'WGFöã ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢6VÆbå÷&W75÷VæF–ærÒG'VP¢6VÆbåöÆöæu÷&W75÷G&–vvW&VBÒfÇ6P¢6VÆbæÆöæu÷&W75÷F–ÖW"ç7F'BƒƒS¢6VÆbæG&vv–ærÒfÇ6P¢6VÆbç7FFU÷F–ÖW"ç7F÷‚¢6VÆbæ–çFW&7F–öå÷F–ÖW"ç7F÷‚¢6VÆbæ†÷fW%÷F–ÖW"ç7F÷‚¢6VÆbå÷&W75öÆö6ÂÒWfVçBç÷6—F–öâ‚’çFõö–çB‚¢6VÆbå÷&W75övÆö&ÂÒWfVçBævÆö&Å÷6—F–öâ‚’çFõö–çB‚¢6VÆbåöG&uööfg6WBÒWfVçBævÆö&Å÷6—F–öâ‚’çFõö–çB‚’Ò6VÆbæg&ÖTvVöÖWG'’‚’çF÷ÆVgB‚¢WfVçBæ66WB‚¢&WGW&à¢7WW"‚’æÖ÷W6U&W74WfVçB†WfVçB ¢FVbÖ÷W6TÖ÷fTWfVçB‡6VÆbÂWfVçC¢Ö÷W6TWfVçB’ÓâæöæS ¢"".h¹nXªiÉş™{NjhÚîXZ[›Êj~KØŞ{Úîz{¾Xª[›n™™X‹nz©~Xú>8"""  ¢–bWfVçBæ'WGFöç2‚’bBäÖ÷W6T'WGFöâäÆVgD'WGFöã ¢7W'&VçEövÆö&ÂÒWfVçBævÆö&Å÷6—F–öâ‚’çFõö–çB‚¢–b€¢6VÆbå÷&W75÷VæF–æp¢æB†7W'&VçEövÆö&ÂÒ6VÆbå÷&W75övÆö&Â’æÖæ†GFäÆVæwF‚‚¢ãÒÆ–6F–öâç7F'DG&tF—7Fæ6R‚¢“ ¢6VÆbæÆöæu÷&W75÷F–ÖW"ç7F÷‚¢6VÆbå÷&W75÷VæF–ærÒfÇ6P¢6VÆbæG&vv–ærÒG'VP¢6VÆbæÖööBç&V6V—fUöG&r‚¢6VÆbç6WE÷7FFR…WE7FFRäE$r¢–bæ÷B6VÆbæG&vv–æs ¢WfVçBæ66WB‚¢&WGW&à¢F&vWBÒWfVçBævÆö&Å÷6—F–öâ‚’çFõö–çB‚’Ò6VÆbåöG&uööfg6W@¢6VÆbæÖ÷fR‡6VÆbåö6öç7G&–æVE÷÷6—F–öâ‡F&vWB’¢WfVçBæ66WB‚¢&WGW&à¢6VÆbå÷G&6µ÷76—fUöÖ÷F–öâ†WfVçBç÷6—F–öâ‚’çFõö–çB‚’¢7WW"‚’æÖ÷W6TÖ÷fTWfVçB†WfVçB ¢FVbÖ÷W6U&VÆV6TWfVçB‡6VÆbÂWfVçC¢Ö÷W6TWfVçB’ÓâæöæS ¢"".[zn™Jî˜x®iKîi{n{¹>iÙşh¹nXª[›nh.ZHŞ[è^iË®8"""  ¢–bWfVçBæ'WGFöâ‚’ÓÒBäÖ÷W6T'WGFöâäÆVgD'WGFöã ¢6VÆbæÆöæu÷&W75÷F–ÖW"ç7F÷‚¢–b6VÆbæG&vv–æs ¢6VÆbæG&vv–ærÒfÇ6P¢6VÆbå÷&W75÷VæF–ærÒfÇ6P¢6VÆbå÷6†÷uöVÖ÷F–öâ…WE7FFRå5U%$•4TBÂ¢VÆ–b6VÆbåöÆöæu÷&W75÷G&–vvW&VC ¢6VÆbåöÆöæu÷&W75÷G&–vvW&VBÒfÇ6P¢VÆ–b6VÆbå÷&W75÷VæF–æs ¢6VÆbå÷&W75÷VæF–ærÒfÇ6P¢6VÆbåö†æFÆUö6Æ–6²‡6VÆbå÷&W75öÆö6Â¢WfVçBæ66WB‚¢&WGW&à¢7WW"‚’æÖ÷W6U&VÆV6TWfVçB†WfVçB ¢FVbÆVfTWfVçB‡6VÆbÂWfVçB’ÓâæöæS ¢"".›Êj~zk¾[ÈZêxši{nXùnkh[	®iÊ®ŠznXùy¨Nh*ÎXÎY(ÎiZKN‹Ú‹û8"""  ¢6VÆbåö†÷fW%÷¦öæRÒ" ¢6VÆbå÷7G&ö¶U÷ö–çG2æ6ÆV"‚¢6VÆbæ†÷fW%÷F–ÖW"ç7F÷‚¢6VÆbæÆöæu÷&W75÷F–ÖW"ç7F÷‚¢7WW"‚’æÆVfTWfVçB†WfVçB ¢FVbÖ÷W6TF÷V&ÆT6Æ–6´WfVçB‡6VÆbÂWfVçC¢Ö÷W6TWfVçB’ÓâæöæS ¢"".XøÎX{¾[zn™Jîh™>[È[ú¾hÛ~Xú>Š(¾ûÉ¾XøÎX{¾Xû>™Jîi*ŞiKîKˆZ;KˆŞYÎŠúŞk	Ny¨N[{N[ˆ>‹ëî8"""  ¢–bWfVçBæ'WGFöâ‚’ÓÒBäÖ÷W6T'WGFöâäÆVgD'WGFöã ¢6VÆbæG&vv–ærÒfÇ6P¢6VÆbå÷&W75÷VæF–ærÒfÇ6P¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢6VÆbç6†÷u÷V–6µ÷æVÂ‚¢WfVçBæ66WB‚¢&WGW&à¢–bWfVçBæ'WGFöâ‚’ÓÒBäÖ÷W6T'WGFöâå&–v‡D'WGFöã ¢6VÆbæ6öçFW‡EöÖVçU÷F–ÖW"ç7F÷‚¢6VÆbå÷7W&W75ö6öçFW‡E÷VçF–ÂÒF–ÖRæÖöæ÷Föæ–2‚’²ã€¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢6VÆbçÆ•ö&'VF÷fö–6R‚¢WfVçBæ66WB‚¢&WGW&à¢7WW"‚’æÖ÷W6TF÷V&ÆT6Æ–6´WfVçB†WfVçB 
+        self.music_controller.result_ready.connect(self._music_control_result)
+        self.focus_session.changed.connect(self._focus_snapshot_changed)
+        self._action_sequence_id = 0
+        self._last_announced_hour = ""
+        self._ambient_activity = "none"
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_step = 0
+        self._activity_transition_steps = 8
+        self._manual_activity_until = 0.0
+        self._last_app_category = "other"
+        self._late_wakeup_shown = False
+        self._last_growth_hour = stage_for_seconds(self.work_timer.today_seconds()).hour
+        self._long_press_triggered = False
+        self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
+        self._babuda_variant_index = 0
+        self._pending_context_global = QPoint()
+        self._suppress_context_until = 0.0
+        self._audio_output = QAudioOutput(self) if QAudioOutput is not None else None
+        self._media_player = QMediaPlayer(self) if QMediaPlayer is not None else None
+        if self._audio_output is not None and self._media_player is not None:
+            self._audio_output.setVolume(0.9)
+            self._media_player.setAudioOutput(self._audio_output)
+
+        self.setWindowFlags(self._pet_window_flags())
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} Â· {self._pet_name()}")
+        self.setMouseTracking(True)
+
+        source = self._pixmaps[PetState.IDLE][0]
+        width = round(settings.display_height * source.width() / source.height())
+        self.setFixedSize(width + 12, settings.display_height + 14)
+        self.label = QLabel(self)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setGeometry(6, 0, width, settings.display_height + 8)
+
+        self.photo_bubble = QLabel()
+        self.photo_bubble.setWindowFlags(self._ambient_window_flags())
+        self.photo_bubble.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            True,
+        )
+        self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.photo_bubble.setStyleSheet("background: transparent;")
+
+        self.speech_bubble = QLabel()
+        self.speech_bubble.setWindowFlags(self._ambient_window_flags())
+        self.speech_bubble.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            True,
+        )
+        self.speech_bubble.setWordWrap(True)
+        bubble_font = QFont()
+        bubble_font.setFamilies(
+            ["PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", "Arial"]
+        )
+        bubble_font.setPointSize(10)
+        self.speech_bubble.setFont(bubble_font)
+        self.speech_bubble.setMinimumWidth(180)
+        self.speech_bubble.setMaximumWidth(280)
+        self.speech_bubble.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.speech_bubble.setStyleSheet(
+            "QLabel { background: rgba(239, 245, 248, 175); "
+            "color: #27313d; border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px; "
+            "padding: 10px 13px; font-size: 14px; }"
+        )
+
+        self.work_controls = WorkControlBubble()
+        self.work_controls.pause_requested.connect(self.pause_work_timer)
+        self.work_controls.finish_requested.connect(self.finish_work_timer)
+        self.quick_panel = QuickControlPanel(self._pet_name())
+        self.quick_panel.chat_requested.connect(self.prompt_dialogue)
+        self.quick_panel.work_requested.connect(self._quick_work_action)
+        self.quick_panel.music_control_requested.connect(self.control_music)
+        self.quick_panel.music_requested.connect(self.play_random_song)
+        self.quick_panel.size_requested.connect(self.open_size_control)
+        self.quick_panel.settings_requested.connect(self.open_settings)
+
+        self.movement_timer = QTimer(self)
+        self.movement_timer.setInterval(settings.movement_interval_ms)
+        self.movement_timer.timeout.connect(self._movement_tick)
+        self.movement_timer.start()
+
+        self.state_timer = QTimer(self)
+        self.state_timer.setSingleShot(True)
+        self.state_timer.timeout.connect(self._state_timeout)
+
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self._animation_tick)
+
+        self.turn_timer = QTimer(self)
+        self.turn_timer.setSingleShot(True)
+        self.turn_timer.timeout.connect(self._finish_turn)
+
+        self.interaction_timer = QTimer(self)
+        self.interaction_timer.setSingleShot(True)
+        self.interaction_timer.timeout.connect(self._finish_interaction)
+
+        self.long_press_timer = QTimer(self)
+        self.long_press_timer.setSingleShot(True)
+        self.long_press_timer.timeouâ€¦25486 tokens truncatedâ€¦t() - self.photo_bubble.height()) // 2)
+        self.photo_bubble.move(x, y)
+        self.photo_bubble.show()
+        self.photo_timer.start(3800)
+
+    def _scaled_selfie_photo(self, ratio: float) -> QPixmap:
+        """æŒ‰è®¾å¤‡åƒç´ æ¯”ç”Ÿæˆç…§ç‰‡ç¼©ç•¥å›¾ï¼Œé¿å…é«˜ DPI å±å¹•äºŒæ¬¡æ”¾å¤§å¯¼è‡´æ¨¡ç³Šã€‚"""
+
+        if self._selfie_photo.isNull():
+            return QPixmap()
+        ratio = max(1.0, ratio)
+        photo = self._selfie_photo.scaled(
+            max(1, round(150 * ratio)),
+            max(1, round(210 * ratio)),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        photo.setDevicePixelRatio(ratio)
+        return photo
+
+    def _finish_interaction(self) -> None:
+        """ç»“æŸäº’åŠ¨å¹¶æ¢å¤è‡ªä¸»å¾…æœºã€‚"""
+
+        if not self.dragging:
+            if self.state is PetState.SELFIE:
+                self._show_photo_bubble()
+            self._schedule(self.behavior.initial_idle())
+
+    def _toggle_walk_from_menu(self) -> None:
+        """è®©å³é”®èœå•åŒæ—¶è¦†ç›–é¦–æ¬¡å¼€å¯å’Œæ—¥å¸¸æš‚åœä¸¤ç§è·‘åŠ¨æ“ä½œã€‚"""
+
+        if not getattr(self.settings, "allow_autonomous_walk", False):
+            self.set_allow_autonomous_walk(True)
+            return
+        self.set_paused(not self.paused)
+
+    def _build_context_menu(self) -> QMenu:
+        """æ„å»ºé«˜é¢‘å…¥å£ç›´è¾¾ã€ä½é¢‘é€‰é¡¹æ”¶çº³åˆ°äºŒçº§èœå•çš„å³é”®èœå•ã€‚"""
+
+        menu = QMenu(self)
+        rename_action = QAction("ä¿®æ”¹ä¸»äººç§°å‘¼â€¦", self)
+        rename_action.triggered.connect(self.rename_pet)
+        menu.addAction(rename_action)
+        dialogue_action = QAction(f"å’Œ{self._pet_name()}èŠèŠâ€¦", self)
+        dialogue_action.triggered.connect(self.prompt_dialogue)
+        menu.addAction(dialogue_action)
+        work_menu = menu.addMenu("å·¥ä½œæ‰“å¡/å·¥ä½œè®¡æ—¶")
+        start_work = QAction("å¼€å§‹å·¥ä½œè®¡æ—¶" if not self.work_timer.is_running else "å·¥ä½œè®¡æ—¶è¿›è¡Œä¸­", self)
+        start_work.setEnabled(not self.work_timer.is_running)
+        start_work.triggered.connect(self.start_work_timer)
+        work_menu.addAction(start_work)
+        if self.work_timer.is_running:
+            pause_work = QAction("æš‚åœ/ç»“æŸå·¥ä½œ", self)
+            pause_work.triggered.connect(self.show_work_controls)
+            work_menu.addAction(pause_work)
+        for label, callback in (("æŸ¥çœ‹ä»Šæ—¥ç´¯è®¡", self.show_work_time), ("æŸ¥çœ‹ä»Šæ—¥æˆé•¿", self.show_daily_growth), ("æŸ¥çœ‹é™ªä¼´æŠ¥å‘Š", self.show_daily_report), (f"æ‰“å¼€{self._pet_name()}ç›¸å†Œ", self.open_daily_album)):
+            action = QAction(label, self)
+            action.triggered.connect(callback)
+            work_menu.addAction(action)
+        music_menu = menu.addMenu("éŸ³ä¹")
+        random_song = QAction("éšæœºå¬ä¸€é¦–é™ˆæ¥šç”Ÿ", self)
+        random_song.triggered.connect(self.play_random_song)
+        music_menu.addAction(random_song)
+        for label, command in (("æ’­æ”¾/æš‚åœ", "toggle"), ("ä¸‹ä¸€é¦–", "next"), ("ä¸Šä¸€é¦–", "previous")):
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, value=command: self.control_music(value))
+            music_menu.addAction(action)
+        music_settings = QAction("éŸ³ä¹æ’­æ”¾å™¨è®¾ç½®", self)
+        music_settings.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        music_menu.addAction(music_settings)
+        study_action = QAction("æ­å­è‡ªä¹ å®¤â€¦", self)
+        study_action.triggered.connect(self.open_social_hub)
+        menu.addAction(study_action)
+        action_menu = menu.addMenu("åŠ¨ä½œ")
+        for group_name, entries in ACTION_GROUPS:
+            group_menu = action_menu.addMenu(group_name)
+            for label, key in entries:
+                action = QAction(label, self)
+                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+                group_menu.addAction(action)
+        selfie = QAction("è‡ªæ‹", self)
+        selfie.triggered.connect(self.trigger_selfie)
+        action_menu.addAction(selfie)
+        pause_label = (
+            "å¼€å¯è‡ªåŠ¨è·‘åŠ¨"
+            if not getattr(self.settings, "allow_autonomous_walk", False)
+            else ("æ¢å¤è·‘åŠ¨" if self.paused else "æš‚åœè·‘åŠ¨")
+        )
+        pause = QAction(pause_label, self)
+        pause.setCheckable(True)
+        pause.setChecked(bool(getattr(self.settings, "allow_autonomous_walk", False)) and not self.paused)
+        pause.triggered.connect(self._toggle_walk_from_menu)
+        action_menu.addAction(pause)
+        food_menu = menu.addMenu(f"ç»™{self._pet_name()}å–‚é£Ÿ")
+        for food in FOOD_OPTIONS:
+            action = QAction(food.label, self)
+            action.triggered.connect(lambda _checked=False, key=food.key: self.feed_pet(key))
+            food_menu.addAction(action)
+        food_menu.addSeparator()
+        mood = QAction("æŸ¥çœ‹å¿ƒæƒ…ä¸èƒ½é‡", self)
+        mood.triggered.connect(self.show_companion_status)
+        food_menu.addAction(mood)
+        outfit_menu = menu.addMenu("æ¢è£…ä¸å¤–è§‚")
+        classic = QAction(f"ç»å…¸{self._pet_name()}", self)
+        classic.setCheckable(True)
+        classic.setChecked(not self.settings.equipped_outfit)
+        classic.triggered.connect(lambda: self.equip_outfit(""))
+        outfit_menu.addAction(classic)
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        for outfit in OUTFITS:
+            action = QAction(outfit.name, self)
+            available = outfit in unlocked
+            action.setEnabled(available)
+            action.setCheckable(True)
+            action.setChecked(outfit.key == self.settings.equipped_outfit)
+            if available:
+                action.triggered.connect(lambda _checked=False, key=outfit.key: self.equip_outfit(key))
+            outfit_menu.addAction(action)
+        menu.addSeparator()
+        for label, callback, checked in (("å¶å°”å‘ç‰¢éªš", self.set_automatic_grumbling, self.settings.automatic_grumbling), ("æ•´ç‚¹æŠ¥æ—¶", self.set_hourly_announcement, self.settings.hourly_announcement), ("å§‹ç»ˆç½®é¡¶", self.set_always_on_top, self.settings.always_on_top)):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(checked)
+            action.toggled.connect(callback)
+            menu.addAction(action)
+        system_menu = menu.addMenu("ç³»ç»Ÿä¸è®¾ç½®")
+        ai_action = QAction("AI ä¸é™ªä¼´è®¾ç½®", self)
+        ai_action.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        system_menu.addAction(ai_action)
+        size_action = QAction("è°ƒæ•´æ¡Œå® å¤§å°", self)
+        size_action.triggered.connect(self.open_size_control)
+        system_menu.addAction(size_action)
+        return_action = QAction("å›åˆ°ä¸»å±å¹•", self)
+        return_action.triggered.connect(self.return_to_primary_screen)
+        system_menu.addAction(return_action)
+        hide_action = QAction("éšè—", self)
+        hide_action.triggered.connect(self.hide)
+        menu.addAction(hide_action)
+        quit_action = QAction("é€€å‡º", self)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        menu.addAction(quit_action)
+        return menu
+
+    def _build_context_menu_legacy(self) -> QMenu:
+        """æŒ‰äº”ä¸ªç¨³å®šåˆ†ç»„æ„å»ºå³é”®èœå•ï¼Œé¿å…åŠŸèƒ½å¹³é“ºå’Œå…¥å£å±‚çº§æ··ä¹±ã€‚"""
+
+        menu = QMenu(self)
+        chat_group = menu.addMenu("èŠå¤©ä¸é™ªä¼´")
+        action_group = menu.addMenu("åŠ¨ä½œä¸å¤–è§‚")
+        music_group = menu.addMenu("éŸ³ä¹ä¸å¨±ä¹")
+        focus_group = menu.addMenu("ä¸“æ³¨ä¸è‡ªä¹ ")
+        system_group = menu.addMenu("ç³»ç»Ÿä¸æ˜¾ç¤º")
+
+        dialogue_action = QAction(f"å’Œ{self._pet_name()}èŠèŠâ€¦", self)
+        dialogue_action.triggered.connect(self.prompt_dialogue)
+        chat_group.addAction(dialogue_action)
+        rename_action = QAction("ä¿®æ”¹ä¸»äººç§°å‘¼â€¦", self)
+        rename_action.triggered.connect(self.rename_pet)
+        chat_group.addAction(rename_action)
+        social_action = QAction(f"{self._pet_name()}æ­å­è‡ªä¹ å®¤â€¦", self)
+        social_action.triggered.connect(self.open_social_hub)
+        chat_group.addAction(social_action)
+        action_menu = chat_group.addMenu("é™ªä¼´åŠ¨ä½œ")
+        for option in COMPANION_ACTIONS:
+            action = QAction(option.label, self)
+            action.triggered.connect(
+                lambda _checked=False, key=option.key: self.perform_companion_action(
+                    key
+                )
+            )
+            action_menu.addAction(action)
+        food_menu = chat_group.addMenu("å–‚é£Ÿã€é¥®å“ä¸çŠ¶æ€")
+        for food in FOOD_OPTIONS:
+            food_action = QAction(food.label, self)
+            food_action.triggered.connect(
+                lambda _checked=False, key=food.key: self.feed_pet(key)
+            )
+            food_menu.addAction(food_action)
+        food_menu.addSeparator()
+        mood_action = QAction(f"æŸ¥çœ‹{self._pet_name()}å¿ƒæƒ…ä¸èƒ½é‡", self)
+        mood_action.triggered.connect(self.show_companion_status)
+        food_menu.addAction(mood_action)
+
+        pause_action = QAction(
+            "å¼€å¯è‡ªåŠ¨è·‘åŠ¨"
+            if not getattr(self.settings, "allow_autonomous_walk", False)
+            else ("æ¢å¤è·‘åŠ¨" if self.paused else "æš‚åœè·‘åŠ¨"),
+            self,
+        )
+        pause_action.triggered.connect(self._toggle_walk_from_menu)
+        action_group.addAction(pause_action)
+        picture_actions = action_group.addMenu("å®Œæ•´å›¾ç‰‡åŠ¨ä½œ")
+        for group_name, entries in ACTION_GROUPS:
+            group_menu = picture_actions.addMenu(group_name)
+            for label, key in entries:
+                action = QAction(label, self)
+                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+                group_menu.addAction(action)
+        selfie_action = QAction("è‡ªæ‹ä¸€ä¸‹", self)
+        selfie_action.triggered.connect(self.trigger_selfie)
+        action_group.addAction(selfie_action)
+        outfit_menu = action_group.addMenu("å·¥ä½œæ—¶é•¿å¨ƒè¡£")
+        classic = QAction(f"ç»å…¸{self._pet_name()}", self)
+        classic.setCheckable(True)
+        classic.setChecked(not self.settings.equipped_outfit)
+        classic.triggered.connect(lambda: self.equip_outfit(""))
+        outfit_menu.addAction(classic)
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        for hour, outfit in enumerate(OUTFITS, start=1):
+            available = outfit in unlocked
+            label = (
+                f"{hour} å°æ—¶ Â· {outfit.name}"
+                if available
+                else f"ğŸ”’ {hour} å°æ—¶ Â· {outfit.name}"
+            )
+            action = QAction(label, self)
+            action.setCheckable(available)
+            action.setChecked(outfit.key == self.settings.equipped_outfit)
+            action.setEnabled(available)
+            if available:
+                action.triggered.connect(
+                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
+                )
+            outfit_menu.addAction(action)
+
+        music_control_menu = music_group.addMenu("æ§åˆ¶æ­£åœ¨è¿è¡Œçš„æ’­æ”¾å™¨")
+        for label, command in (
+            ("æ’­æ”¾ / æš‚åœ", "toggle"),
+            ("ä¸Šä¸€é¦–", "previous"),
+            ("ä¸‹ä¸€é¦–", "next"),
+            ("æŸ¥çœ‹æ­£åœ¨æ’­æ”¾", "status"),
+        ):
+            control_action = QAction(label, self)
+            control_action.triggered.connect(
+                lambda _checked=False, value=command: self.control_music(value)
+            )
+            music_control_menu.addAction(control_action)
+        music_search_action = QAction("æœç´¢ä¸€é¦–é™ˆæ¥šç”Ÿ", self)
+        music_search_action.triggered.connect(self.play_random_song)
+        music_group.addAction(music_search_action)
+        music_move = music_group.addMenu("éŸ³ä¹åŠ¨ä½œ")
+        for label, key in (("æˆ´è€³æœº", "headphones"), ("å¼¹å‰ä»–", "guitar"), ("æ‰“é¼“", "drums")):
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
+            music_move.addAction(action)
+
+        work_menu = focus_group.addMenu(
+            f"å·¥ä½œè®¡æ—¶ï¼š{format_work_duration(self.work_timer.today_seconds())}"
+        )
+        start_work_action = QAction("å¼€å§‹/ç»§ç»­å·¥ä½œ", self)
+        start_work_action.setEnabled(not self.work_timer.is_running)
+        start_work_action.triggered.connect(self.start_work_timer)
+        work_menu.addAction(start_work_action)
+        if self.work_timer.is_running:
+            controls_action = QAction("æ‘¸å¤´æˆ–ç‚¹ç”µè„‘è¿›è¡Œæš‚åœ/ç»“æŸ", self)
+            controls_action.triggered.connect(self.show_work_controls)
+            work_menu.addAction(controls_action)
+        show_work_action = QAction("æŸ¥çœ‹ä»Šæ—¥ç´¯è®¡", self)
+        show_work_action.triggered.connect(self.show_work_time)
+        work_menu.addAction(show_work_action)
+        growth_action = QAction("æŸ¥çœ‹ä»Šæ—¥ 0â€“8 å°æ—¶æˆé•¿çº¿", self)
+        growth_action.triggered.connect(self.show_daily_growth)
+        work_menu.addAction(growth_action)
+        report_action = QAction(f"ä»Šå¤©{self._pet_name()}é™ªä½ åšäº†ä»€ä¹ˆ", self)
+        report_action.triggered.connect(self.show_daily_report)
+        work_menu.addAction(report_action)
+        album_action = QAction(f"æ‰“å¼€{self._pet_name()}ç›¸å†Œ", self)
+        album_action.triggered.connect(self.open_daily_album)
+        work_menu.addAction(album_action)
+        focus_social = QAction("æ‰“å¼€æ­å­è‡ªä¹ å®¤â€¦", self)
+        focus_social.triggered.connect(self.open_social_hub)
+        focus_group.addAction(focus_social)
+
+        ai_action = QAction("AI ä¸é™ªä¼´è®¾ç½®â€¦", self)
+        ai_action.triggered.connect(
+            lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION)
+        )
+        system_group.addAction(ai_action)
+        grumble_action = QAction("å¶å°”å‘ç‰¢éªš", self)
+        grumble_action.setCheckable(True)
+        grumble_action.setChecked(self.settings.automatic_grumbling)
+        grumble_action.toggled.connect(self.set_automatic_grumbling)
+        system_group.addAction(grumble_action)
+        hourly_action = QAction("æ•´ç‚¹æŠ¥æ—¶", self)
+        hourly_action.setCheckable(True)
+        hourly_action.setChecked(self.settings.hourly_announcement)
+        hourly_action.toggled.connect(self.set_hourly_announcement)
+        system_group.addAction(hourly_action)
+        topmost_action = QAction("å§‹ç»ˆç½®é¡¶ï¼ˆå…³é—­å³æ¡Œé¢æ¨¡å¼ï¼‰", self)
+        topmost_action.setCheckable(True)
+        topmost_action.setChecked(self.settings.always_on_top)
+        topmost_action.toggled.connect(self.set_always_on_top)
+        system_group.addAction(topmost_action)
+        size_action = QAction("è¿ç»­è°ƒèŠ‚å® ç‰©å¤§å°â€¦", self)
+        size_action.triggered.connect(self.open_size_control)
+        system_group.addAction(size_action)
+        system_group.addSeparator()
+        return_action = QAction("å›åˆ°ä¸»å±å¹•", self)
+        return_action.triggered.connect(self.return_to_primary_screen)
+        system_group.addAction(return_action)
+        hide_action = QAction("éšè—", self)
+        hide_action.triggered.connect(self.hide)
+        system_group.addAction(hide_action)
+        system_group.addSeparator()
+        quit_action = QAction("é€€å‡º", self)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        system_group.addAction(quit_action)
+        return menu
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """ç¨å€™æ˜¾ç¤ºå•æ¬¡å³é”®èœå•ï¼Œä¸ºåŒå‡»å³é”®çš„å·´å¸ƒè¾¾è¯­éŸ³ç•™å‡ºåˆ¤å®šæ—¶é—´ã€‚"""
+
+        self._record_user_interaction()
+        if time.monotonic() < self._suppress_context_until:
+            event.accept()
+            return
+        self._pending_context_global = event.globalPos()
+        self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
+        event.accept()
+
+    def _show_deferred_context_menu(self) -> None:
+        """ç¡®è®¤ä¸æ˜¯åŒå‡»åï¼Œåœ¨åŸé¼ æ ‡ä½ç½®æ‰“å¼€æ™®é€šå³é”®èœå•ã€‚"""
+
+        if time.monotonic() >= self._suppress_context_until:
+            self._build_context_menu().exec(self._pending_context_global)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """è®°å½•å·¦é”®æŒ‰ä¸‹ï¼›åªæœ‰ç§»åŠ¨è¶…è¿‡ç³»ç»Ÿé˜ˆå€¼åæ‰çœŸæ­£è¿›å…¥æ‹–æ‹½ã€‚"""
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._record_user_interaction()
+            self._press_pending = True
+            self._long_press_triggered = False
+            self.long_press_timer.start(850)
+            self.dragging = False
+            self.state_timer.stop()
+            self.interaction_timer.stop()
+            self.hover_timer.stop()
+            self._press_local = event.position().toPoint()
+            self._press_global = event.globalPosition().toPoint()
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """æ‹–åŠ¨æœŸé—´æ ¹æ®å…¨å±€é¼ æ ‡ä½ç½®ç§»åŠ¨å¹¶é™åˆ¶çª—å£ã€‚"""
+
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            current_global = event.globalPosition().toPoint()
+            if (
+                self._press_pending
+                and (current_global - self._press_global).manhattanLength()
+                >= QApplication.startDragDistance()
+            ):
+                self.long_press_timer.stop()
+                self._press_pending = False
+                self.dragging = True
+                self.mood.receive_drag()
+                self.set_state(PetState.DRAG)
+            if not self.dragging:
+                event.accept()
+                return
+            target = event.globalPosition().toPoint() - self._drag_offset
+            self.move(self._constrained_position(target))
+            event.accept()
+            return
+        self._track_passive_motion(event.position().toPoint())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """å·¦é”®é‡Šæ”¾æ—¶ç»“æŸæ‹–åŠ¨å¹¶æ¢å¤å¾…æœºã€‚"""
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.long_press_timer.stop()
+            if self.dragging:
+                self.dragging = False
+                self._press_pending = False
+                self._show_emotion(PetState.SURPRISED, 1100)
+            elif self._long_press_triggered:
+                self._long_press_triggered = False
+            elif self._press_pending:
+                self._press_pending = False
+                self._handle_click(self._press_local)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """é¼ æ ‡ç¦»å¼€å® ç‰©æ—¶å–æ¶ˆå°šæœªè§¦å‘çš„æ‚¬åœå’Œæ‘¸å¤´è½¨è¿¹ã€‚"""
+
+        self._hover_zone = ""
+        self._stroke_points.clear()
+        self.hover_timer.stop()
+        self.long_press_timer.stop()
+        super().leaveEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """åŒå‡»å·¦é”®æ‰“å¼€å¿«æ·å£è¢‹ï¼›åŒå‡»å³é”®æ’­æ”¾ä¸€å£°ä¸åŒè¯­æ°”çš„å·´å¸ƒè¾¾ã€‚"""
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = False
+            self._press_pending = False
+            self._record_user_interaction()
+            self.show_quick_panel()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self.context_menu_timer.stop()
+            self._suppress_context_until = time.monotonic() + 0.8
+            self._record_user_interaction()
+            self.play_babuda_voice()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)

@@ -1,4 +1,4 @@
-≠rá^—f•ñÿ¶{Æ¨y 'v√Æ∂õ≠const RPC_ALLOWLIST = new Set([
+const RPC_ALLOWLIST = new Set([
   "lili_add_buddy_by_code",
   "lili_respond_buddy",
   "lili_create_room",

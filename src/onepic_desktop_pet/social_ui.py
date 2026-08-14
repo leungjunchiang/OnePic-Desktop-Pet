@@ -1,4 +1,4 @@
-­r‡^Ñf¥–Ø¦{¯,yÊ'vÃ®¶›­"""æ­å­è‡ªä¹ å®¤ç•Œé¢ã€åå°åŒæ­¥çº¿ç¨‹å’ŒåŒå…­æ¯›æœ¬åœ°ä¸²é—¨çª—å£ã€‚"""
+"""æ­å­è‡ªä¹ å®¤ç•Œé¢ã€åå°åŒæ­¥çº¿ç¨‹å’ŒåŒå…­æ¯›æœ¬åœ°ä¸²é—¨çª—å£ã€‚"""
 
 from __future__ import annotations
 
@@ -337,26 +337,454 @@ class BuddyVisitWindow(QWidget):
         self.user_minimized = False
         nickname = social_pet_label(peer.get("nickname"))
         self.title.setText(f"{nickname}æ¥ä¸²é—¨äº†")
-        self.subtitle.setText(f×½ûêÚ$z{-®éÜj×f–÷W2—2æ÷BæöæRæB&ööÂ‡&Wf–÷W2ævWB‚'v÷&¶–ær"’’Ò&ööÂ†'VFG’ævWB‚'v÷&¶–ær"’“ ¢7FFU÷FW‡BÒ.[ÈZx¾K‰>k:‚"–b'VFG’ævWB‚'v÷&¶–ær"’VÇ6R.{¹>iÙşK‰>k:‚ ¢6VÆbæ'VFG•÷7V'67&—F–öåöæ÷F–6RæVÖ—B†b'·6ö6–Å÷WEöÆ&VÂ†'VFG’ævWB‚væ–6¶æÖRr’—Ò·7FFU÷FW‡GŞK¨n8""¢v÷&¶–æuö6÷VçB³Ò–çB†&ööÂ†'VFG’ævWB‚'v÷&¶–ær"’’¢GW&F–öâÒ'VFG’ævWB‚'FöF•÷6V6öæG2"¢–bGW&F–öâ—2æ÷BæöæS¢f—6–&ÆU÷F÷FÂ³ÒÖ‚ƒÂ–çB†GW&F–öâ’¢—FVÓÕÆ—7Ev–FvWD—FVÒ‚“²—FVÒç6WDFF…Bä—FVÔFF&öÆRåW6W%&öÆRÆ'VFG’“²6VÆbæ'VFF–W2æFD—FVÒ†—FVÒ¢'VFG•÷v–FvWBÒ'VFG”6&Ev–FvWB†'VFG’Â6VÆbæ'VFF–W2¢'VFG•÷v–FvWBæ–çFW&7F–öå÷&WVW7FVBæ6öææV7B‡6VÆbå÷6VæEö–çFW&7F–öâ¢'VFG•÷v–FvWBæ–çFW&7F–öåö&Æö6¶VBæ6öææV7B†ÆÖ&FÖW76vS¢6VÆbå÷6WE÷7FGW2†ÖW76vRÂW'&÷#ÕG'VR’¢'VFG•÷v–FvWBç7V'67&—F–öå÷&WVW7FVBæ6öææV7B‡6VÆbå÷6WE÷7V'67&—F–öâ¢6VÆbæ'VFF–W2ç6WD—FVÕv–FvWB†—FVÒÂ'VFG•÷v–FvWB¢6VÆbå÷6WEö'VFG•ö—FVÕö†V–v‡B†—FVÒÂ'VFG•÷v–FvWB¢ÖU÷6V6öæG2Ò–çB†ÖU÷&W6Væ6RævWB‚'FöF•÷6V6öæG2"’÷"ÖRævWB‚'FöF•÷6V6öæG2"’÷"¢6VÆbç7GVG•÷7VÖÖ'’ç6WEFW‡B€¢b.xëYÊ‚·v÷&¶–æuö6÷VçGÒKØŞi
-ŞZÙjÚ>YÊK‰>k:8+~8 ¢b.h‰y¨NK¸®iz^K‰>k:‚¶f÷&ÖE÷v÷&µöGW&F–öâ†ÖU÷6V6öæG2—Ş8+~8 ¢b.h‹ş™{NXúşŠxYŠê¶f÷&ÖE÷v÷&µöGW&F–öâ‡f—6–&ÆU÷F÷FÂ—Ò ¢¢–bæ÷B6VVã ¢V×G’ÒÆ—7Ev–FvWD—FVÒ‚.‹ùk*iÈi
-ŞZÙ8.x+X{¾Kˆ¾ik(	ÎyJi
-ŞZÙzk{¾Xª(	ŞûÈÎKˆ‹[~[z^KÙÎi{n‹ù˜xÎKÉ®i‹îzK®kˆ^jY®y¨NK‰>k:i{n™[ş8""¢V×G’ç6WDfÆw2…Bä—FVÔfÆräæô—FVÔfÆw2“²6VÆbæ'VFF–W2æFD—FVÒ†V×G’¢6VÆbåöf—EöÆ—7Eö†V–v‡B‡6VÆbæ'VFF–W2ÂCbÂ3c¢6VÆbæ–æ&÷‚æ6ÆV"‚¢f÷"&WVW7B–â6VÆbæFFævWB‚'&WVW7G2"’÷"µÓ ¢—FVÓÕÆ—7Ev–FvWD—FVÒ†b.i
-ŞZÙyK>Šû~ûÉ§·&WVW7BævWB‚væ–6¶æÖRr—Ò"“²—FVÒç6WDFF…Bä—FVÔFF&öÆRåW6W%&öÆRÂ‚&'VFG’"Ç&WVW7B’“²6VÆbæ–æ&÷‚æFD—FVÒ†—FVÒ¢f÷"f—6—B–â6VÆbæFFævWB‚'f—6—G2"’÷"µÓ ¢—FVÓÕÆ—7Ev–FvWD—FVÒ†b.K‹.™z˜(Šû~ûÉ§·f—6—BævWB‚væ–6¶æÖRr—Ò"“²—FVÒç6WDFF…Bä—FVÔFF&öÆRåW6W%&öÆRÂ‚'f—6—B"Çf—6—B’“²6VÆbæ–æ&÷‚æFD—FVÒ†—FVÒ¢–b6VÆbæ–æ&÷‚æ6÷VçB‚’ÓÒ ¢V×G’ÒÆ—7Ev–FvWD—FVÒ‚.[Ù>X˜Şk*iÈ[è^ZHNynyK>Šû~h‰nK‹.™zûÈÎiky¨N˜(Šû~KÉ®i‹îzK®YÊ‹ù˜xÎ8""¢V×G’ç6WDfÆw2…Bä—FVÔfÆräæô—FVÔfÆw2“²6VÆbæ–æ&÷‚æFD—FVÒ†V×G’¢&öö×2ÒÆ—7B‡6VÆbæFFævWB‚'&öö×2"’÷"µÒ¢&Wf–÷W5÷&ööÕö–BÒ6VÆbæ7W'&VçE÷&ööÕö–@¢6VÆbåöÇ––æuöF6†&ö&BÒG'VP¢2&V'V–ÆF–ærF†RÆ—7B—2â–çFW&æÂ&VæFW"÷W&F–öââ7W&W72F†P¢2G&ç6–VçB'6VÆV7F–öâ6ÆV&VB"æB'6VÆV7F–öâ&W7F÷&VB"6–væÇ3°¢2÷F†W'v—6RV6‚F6†&ö&B&W7öç6R66†VGVÆW2æ÷F†W"æWGv÷&²7–æ2à¢6VÆbç&öö×2æ&Æö6µ6–væÇ2…G'VR¢6VÆbç&öö×2æ6ÆV"‚¢f÷"&ööÒ–â&öö×3 ¢&ööÕö—FVÒÒÆ—7Ev–FvWD—FVÒ€¢b'·&ööÒævWB‚væÖRr—Ò+r·&ööÒævWB‚vÖVÖ&W'2r—ÒK«¢+rh‹ş™{Nz·&ööÒævWB‚v–çf—FUö6öFRr—Ò ¢¢&ööÕö—FVÒç6WDFF…Bä—FVÔFF&öÆRåW6W%&öÆRÂ&ööÒ¢6VÆbç&öö×2æFD—FVÒ‡&ööÕö—FVÒ¢–b6VÆbç&öö×2æ6÷VçB‚’ÓÒ ¢V×G•÷&ööÒÒÆ—7Ev–FvWD—FVÒ‚.‹ùk*iÈzxK«®ˆz®KšZêNûÉ¾X‰¾[»®YîXúşh¨®h‹ş™{NzXù{¹i
-ŞZÙ8""¢V×G•÷&ööÒç6WDfÆw2…Bä—FVÔfÆräæô—FVÔfÆw2“²6VÆbç&öö×2æFD—FVÒ†V×G•÷&ööÒ¢6VÆbæ7W'&VçE÷&ööÕö–BÒæöæP¢VÇ6S ¢26öÖ&òôÆ—7Bv–FvWG2Fòæ÷B6öç6—7FVçFÇ’6VÆV7BF†Rf—'7B—FVĞ¢2gFW"6ÆV"‚’7&÷72BÆFf÷&×2âv—F†÷WB6VÆV7FVB&ööĞ¢2F†RæW‡B†V'F&VBW6VBFò6VæB&ööÕö–CÔåTÄÂÂ6òF†R6W'fW"†@¢2æò&VÆ–&ÆRv’Fò76ö6–FRF†—2W6W"w2fö7W2v—F‚&ööÒà¢6VÆV7FVBÒÓ¢f÷"–æFW‚Â&ööÒ–âVçVÖW&FR‡&öö×2“ ¢&ööÕö–BÒ6VÆbå÷&ööÕö–Eög&öÕ÷–ÆöB‡&ööÒ¢–b&ööÕö–BæB&ööÕö–BÓÒ&Wf–÷W5÷&ööÕö–C ¢6VÆV7FVBÒ–æFW€¢'&V°¢–b6VÆV7FVBÂ ¢2öâf—'7B÷Vâ&VfW"F†R&ööÒv—F‚F†RÖ÷7BÖVÖ&W'2âF†—0¢2fö–G26–ÆVçFÇ’ÆæF–ær–ââöÆBöæR×W'6öâ&ööÒv†VâF†P¢2W6W"†2§W7B¦ö–æVB6†&VBv÷&·&ööÒà¢6VÆV7FVBÒÖ‚€¢&ævR†ÆVâ‡&öö×2’’À¢¶W“ÖÆÖ&F–æFWƒ¢–çB‡&öö×5¶–æFW…ÒævWB‚&ÖVÖ&W'2"’÷"’À¢¢6VÆbç&öö×2ç6WD7W'&VçE&÷r‡6VÆV7FVB¢6VÆV7FVE÷&ööÒÒ&öö×5·6VÆV7FVEĞ¢6VÆbæ7W'&VçE÷&ööÕö–BÒ6VÆbå÷&ööÕö–Eög&öÕ÷–ÆöB‡6VÆV7FVE÷&ööÒ¢6VÆbç&öö×2æ&Æö6µ6–væÇ2„fÇ6R¢6VÆbåöf—EöÆ—7Eö†V–v‡B‡6VÆbç&öö×2ÂS"ÂC¢6VÆbåöÇ––æuöF6†&ö&BÒfÇ6P¢–b6VÆbæ7W'&VçE÷&ööÕö–BÒ&Wf–÷W5÷&ööÕö–C ¢6VÆbç&ööÕö6†ævVBæVÖ—B‡6VÆbæ7W'&VçE÷&ööÕö–B¢2F†R&ööÒ×66÷VBVæGö–çB—2WF†÷&—FF—fRf÷"ÖVÖ&W'2æBWfVçG2à¢2¶VWF†RÆVv7’F÷ÖÆWfVÂf–VÆG226ö×F–&–Æ—G’fÆÆ&6²f÷ ¢2öÆFW"&÷‡’FWÆ÷–ÖVçG2æBF†RöffÆ–æRT’FW7G2à¢&ööÕöFWF–ÂÒ6VÆbæFFævWB‚&7W'&VçE÷&ööÒ"’÷"·Ğ¢–bæ÷B—6–ç7Fæ6R‡&ööÕöFWF–ÂÂF–7B“ ¢&ööÕöFWF–ÂÒ·Ğ¢–b6VÆbæ7W'&VçE÷&ööÕö–BæB6VÆbæ7W'&VçE÷&ööÕö–BÒ&Wf–÷W5÷&ööÕö–BæBæ÷B&ööÕöFWF–Ã ¢6VÆbå÷&ööÕ÷&Vg&W6…÷F–ÖW"ç7F'Bƒ¢&ööÕ÷V÷ÆRÒÆ—7B‡&ööÕöFWF–ÂævWB‚'&ööÕ÷V÷ÆR"’÷"6VÆbæFFævWB‚'&ööÕ÷V÷ÆR"’÷"µÒ’–b6VÆbæ7W'&VçE÷&ööÕö–BVÇ6RµĞ¢2Çv—2&VæFW"F†RÆö6ÂÖVÖ&W"2vVÆÂâF†RöÆB5ÂgVæ7F–öâöæÇ¢2&WGW&æVBVW'2Âv†–6‚ÖFRF†R&ööÒÆöö²Æ–¶RWfW'–&öG’v2&W7F–æp¢2v†VâF†RÆö6ÂF–ÖW"v2F†RöæÇ’7FFRf—6–&ÆR–âF†RT’à¢Æö6Å÷7FGW2Ò6VÆbåöfö7W5÷6æ6†÷@¢Æö6Å÷&W6Væ6RÒF–7B†ÖU÷&W6Væ6R¢–b—6–ç7Fæ6R†Æö6Å÷7FGW2ÂF–7B“ ¢Æö6Å÷&W6Væ6RÒ²¢¦Æö6Å÷&W6Væ6RÂ¢¦Æö6Å÷7FGW7Ğ¢VÆ–bÆö6Å÷7FGW2—2æ÷BæöæS ¢Æö6Å÷&W6Væ6RÒ°¢¢¦Æö6Å÷&W6Væ6RÀ¢'7FGW2#¢vWFGG"†Æö6Å÷7FGW2Â'7FGW2"Â&–FÆR"’À¢'v÷&¶–ær#¢&ööÂ†vWFGG"†Æö6Å÷7FGW2Â&—5÷'Vææ–ær"ÂfÇ6R’’À¢'6W76–öå÷6V6öæG2#¢–çB†vWFGG"†Æö6Å÷7FGW2Â'6W76–öå÷6V6öæG2"Â’’À¢'FöF•÷6V6öæG2#¢–çB†vWFGG"†Æö6Å÷7FGW2Â'FöF•÷6V6öæG2"Â’’À¢Ğ¢Æö6Å÷&W6Væ6RçWFFR‡°¢'W6W%ö–B#¢7G"†ÖRævWB‚'W6W%ö–B"’÷"ÖRævWB‚&–B"’÷"&ÖR"’À¢&æ–6¶æÖR#¢6VÆbæ÷væW%öæ–6¶æÖR÷"7G"†ÖRævWB‚&æ–6¶æÖR"’÷".i
-ŞZÙ"’À¢&÷WFf—Eö¶W’#¢7G"†ÖU÷&W6Væ6RævWB‚&÷WFf—Eö¶W’"’÷"6VÆbæ÷WFf—Eö¶W’÷"ÖRævWB‚&÷WFf—Eö¶W’"’÷"""’À¢&öæÆ–æR#¢G'VRÀ¢&—5÷6VÆb#¢G'VRÀ¢Ò¢–b6VÆbæ7W'&VçE÷&ööÕö–C ¢&ööÕ÷V÷ÆRÒ¶Æö6Å÷&W6Væ6UÒ²·f÷"–â&ööÕ÷V÷ÆR–b7G"‡ævWB‚'W6W%ö–B"’’Ò7G"†Æö6Å÷&W6Væ6RævWB‚'W6W%ö–B"’•Ğ¢VÇ6S ¢&ööÕ÷V÷ÆRÒµĞ¢6VÆbå÷&VæFW%÷&ööÕ÷V÷ÆR‡&ööÕ÷V÷ÆR¢vöÂÒ&ööÕöFWF–ÂævWB‚'&ööÕövöÂ"’÷"6VÆbæFFævWB‚'&ööÕövöÂ"’÷"·Ğ¢7VÖÖ'’Ò&ööÕöFWF–ÂævWB‚'&ööÕ÷7VÖÖ'’"’÷"6VÆbæFFævWB‚'&ööÕ÷7VÖÖ'’"’÷"·Ğ¢–b—6–ç7Fæ6R‡7VÖÖ'’ÂF–7B’æB7VÖÖ'“ ¢6VÆbç&ööÕ÷7VÖÖ'’ç6WEFW‡B€¢b.iÊÎh‹ş™{B¶–çB‡7VÖÖ'’ævWB‚vÖVÖ&W%ö6÷VçBr’÷"ÆVâ‡&ööÕ÷V÷ÆR’—ÒK«¢+r ¢b'¶–çB‡7VÖÖ'’ævWB‚vfö7W5ö6÷VçBr’÷"—ÒK«®jÚ>YÊK‰>k:‚+r ¢b.X[YÎK‰>k:‚¶f÷&ÖE÷v÷&µöGW&F–öâ†–çB‡7VÖÖ'’ævWB‚w6†&VEöfö7W5÷6V6öæG2r’÷"’—Ò ¢¢VÆ–b†6GG"‡6VÆbÂ'&ööÕ÷7VÖÖ'’"“ ¢6VÆbç&ööÕ÷7VÖÖ'’ç6WEFW‡B‚.KÚ[Ù>X˜Şk*iÈXªXZ^[z^KÙÎ™{N8.X‰¾[»®[z^KÙÎ™{Nh‰n‹é>XZ^h‹ş™{NzXªXZ^YîûÈÎ‹ù˜xÎh˜ŞKÉ®i‹îzK®X[YÎx«nh8""¢6VÆbå÷&ööÕövöÅ÷7FFRÒF–7B†vöÂ’–b—6–ç7Fæ6R†vöÂÂF–7B’VÇ6R·Ğ¢66†VGVÆRÒ&ööÕöFWF–ÂævWB‚'&ööÕ÷66†VGVÆR"’÷"6VÆbæFFævWB‚'&ööÕ÷66†VGVÆR"’÷"·Ğ¢6†ÆÆVævRÒ&ööÕöFWF–ÂævWB‚'&ööÕö6†ÆÆVævR"’÷"6VÆbæFFævWB‚'&ööÕö6†ÆÆVævR"’÷"·Ğ¢6VÆbå÷&ööÕ÷66†VGVÆU÷7FFRÒF–7B‡66†VGVÆR’–b—6–ç7Fæ6R‡66†VGVÆRÂF–7B’VÇ6R·Ğ¢6VÆbå÷&ööÕö6†ÆÆVævU÷7FFRÒF–7B†6†ÆÆVævR’–b—6–ç7Fæ6R†6†ÆÆVævRÂF–7B’VÇ6R·Ğ¢6VÆbç&ööÕövöÅö'WGFöâç6WDVæ&ÆVB†&ööÂ‡6VÆbæ7W'&VçE÷&ööÕö–B’¢–b†6GG"‡6VÆbÂ'&ööÕ÷66†VGVÆUö'WGFöâ"“ ¢6VÆbç&ööÕ÷66†VGVÆUö'WGFöâç6WDVæ&ÆVB†&ööÂ‡6VÆbæ7W'&VçE÷&ööÕö–B’¢–b†6GG"‡6VÆbÂ'&ööÕö6†ÆÆVævUö'WGFöâ"“ ¢6VÆbç&ööÕö6†ÆÆVævUö'WGFöâç6WDVæ&ÆVB†&ööÂ‡6VÆbæ7W'&VçE÷&ööÕö–B’¢6VÆbç&ööÕöÆVfUö'WGFöâç6WDVæ&ÆVB†&ööÂ‡6VÆbæ7W'&VçE÷&ööÕö–B’¢6VÆbå÷&Vg&W6…÷&ööÕövöÅ÷FW‡B‚¢–b†6GG"‡6VÆbÂ'&ööÕ÷&—GVÂ"“ ¢–b6VÆbå÷&ööÕ÷66†VGVÆU÷7FFS ¢6VÆbç&ööÕ÷&—GVÂç6WEFW‡B€¢b.X[YÎ[È[zRşiKn[z^ûÉ§·6VÆbå÷&ööÕ÷66†VGVÆU÷7FFRævWB‚w7F'EöBrÂrÒÓ¢ÒÒr—Ò[È[zR+r ¢b'·6VÆbå÷&ööÕ÷66†VGVÆU÷7FFRævWB‚vVæEöBrÂrÒÓ¢ÒÒr—ÒiKn[zR ¢¢VÇ6S ¢6VÆbç&ööÕ÷&—GVÂç6WEFW‡B‚.X[YÎ[È[zRşiKn[z^ûÉ®iÊ®Šëî{Úâ"¢–b†6GG"‡6VÆbÂ'&ööÕö6†ÆÆVævR"“ ¢–b6VÆbå÷&ööÕö6†ÆÆVævU÷7FFS ¢6VÆbç&ööÕö6†ÆÆVævRç6WEFW‡B€¢b.X[YÎhÉh‰ûÉ§·6VÆbå÷&ööÕö6†ÆÆVævU÷7FFRævWB‚wF—FÆRrÂ~Kˆ‹[~ZèÎh‰r—Ò+r ¢b'¶f÷&ÖE÷v÷&µöGW&F–öâ†–çB‡6VÆbå÷&ööÕö6†ÆÆVævU÷7FFRævWB‚wF&vWE÷6V6öæG2r’÷"’—Ò+r ¢b.jøşK«¢¶–çB‡6VÆbå÷&ööÕö6†ÆÆVævU÷7FFRævWB‚wF&vWE÷&÷VæG2r’÷"—Ò‹Úâ ¢¢VÇ6S ¢6VÆbç&ööÕö6†ÆÆVævRç6WEFW‡B‚.X[YÎhÉh‰ûÉ®iÊ®Šëî{Úâ"¢7F—f—G’ÒÆ—7B‡&ööÕöFWF–ÂævWB‚'&ööÕö7F—f—G’"’÷"6VÆbæFFævWB‚'&ööÕö7F—f—G’"’÷"6VÆbæFFævWB‚&7F—f—G’"’÷"µÒ¢ÖUö–BÒ7G"†ÖRævWB‚'W6W%ö–B"’÷"ÖRævWB‚&–B"’÷"""¢f÷"WfVçB–â7F—f—G“ ¢–bæ÷B—6–ç7Fæ6R†WfVçBÂF–7B“ ¢6öçF–çVP¢WfVçEö–BÒ7G"†WfVçBævWB‚&–B"’÷"""¢F&vWEö–BÒ7G"†WfVçBævWB‚'F&vWEö–B"’÷"""¢–bWfVçEö–BæBWfVçEö–Bæ÷B–â6VÆbå÷6VVå÷&ööÕöWfVçEö–G3 ¢6VÆbå÷6VVå÷&ööÕöWfVçEö–G2æFB†WfVçEö–B¢—5÷F&vWBÒF&vWEö–BÓÒÖUö–B÷"€¢æ÷BF&vWEö–BæB7G"†WfVçBævWB‚'F&vWEöæ–6¶æÖR"’÷"""’ÓÒ7G"†ÖRævWB‚&æ–6¶æÖR"’÷"""¢¢–bÖUö–BæB—5÷F&vWBæB7G"†WfVçBævWB‚&7F÷%ö–B"’÷"""’ÒÖUö–C ¢6VÆbç&ööÕöWfVçE÷&V6V—fVBæVÖ—B†F–7B†WfVçB’¢6VÆbå÷&VæFW%÷&ööÕö7F—f—G’†7F—f—G’¢7F—fS×6VÆbæFFævWB‚&7F—fU÷f—6—G2"’÷"µĞ¢–b7F—fS¢6VÆbæ7F—fU÷f—6—BæVÖ—B†7F—fU³Ò¢–b6VÆbæFFævWB‚%÷7–æ5ööffÆ–æR"“ ¢vRÒ–çB‡6VÆbæFFævWB‚%÷7–æ5övUöÖ–çWFW2"’÷"¢vU÷FW‡BÒb.{ªb¶vWÒXˆn™)şX˜Ò"–bvRVÇ6R.X‰®h˜Ò ¢6VÆbå÷6WE÷7FGW2€¢b.[Ù>X˜Şizk9^‹ùîhê^ˆz®KšZêNûÈÎ[{.i‹îzK§¶vU÷FW‡GŞy¨NiÊÎYËx«nhûÉ¾{Ù{¹Îh.ZHŞYîKÉ®ˆz®XªYÎjÚ^8" ¢¢VÇ6S ¢6VÆbå÷6WE÷7FGW2‚.[{.X‹~ikûÈÎš^™Ú.Xh^ZëiŠşiÈiky¨N8"" ¢FVb÷6fU÷&öf–ÆR‡6VÆb’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“¢&WGW&à¢6VÆbåö&Vv–åö7F–öâ‚.jÚ>YÊKùŞZÙ™©zxŠëî{Úî(
-b"¢G'“ ¢ÖS×6VÆbæFFævWB‚&ÖR"’÷"·Ó²6VÆbæ6Æ–VçBçWFFU÷&öf–ÆR†æ–6¶æÖS×7G"‡6VÆbæ÷væW%öæ–6¶æÖR÷"ÖRævWB‚&æ–6¶æÖR"’÷".i
-ŞZÙ"’Çf—6–&–Æ—G“Ò&†–FFVâ"–b6VÆbæ†–FFVâæ—46†V6¶VB‚’VÇ6R&g&–VæG2"Ç6†÷uöW†7E÷F–ÖS×6VÆbæW†7Bæ—46†V6¶VB‚’ÆÆÆ÷u÷f—6—G3×6VÆbçf—6—G5öÆÆ÷vVBæ—46†V6¶VB‚’Æ÷WFf—Eö¶W“×6VÆbæ÷WFf—Eö¶W’“²6VÆbç&Vg&W6‚‚¢W†6WB6ö6–ÄW'&÷"2W†3¢6VÆbåöW'&÷"†W†2 ¢FVb÷6WE÷7V'67&—F–öâ‡6VÆbÂ'VFG“¢F–7E·7G"Âç•ÒÂVæ&ÆVC¢&ööÂ’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“ ¢&WGW&à¢'VFG•ö–BÒ7G"†'VFG’ævWB‚'W6W%ö–B"’÷"'VFG’ævWB‚&–B"’÷"""¢–bæ÷B'VFG•ö–C ¢&WGW&à¢G'“ ¢6WGFW"ÒvWFGG"‡6VÆbæ6Æ–VçBÂ'6WEö'VFG•÷7V'67&—F–öâ"ÂæöæR¢–b6ÆÆ&ÆR‡6WGFW"“ ¢6WGFW"†'VFG•ö–CÖ'VFG•ö–BÂöåöfö7W5÷7F'CÖVæ&ÆVBÂöåöfö7W5öVæCÖVæ&ÆVBÂ×WFVCÖæ÷BVæ&ÆVB¢VÇ6S ¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•÷6WEö'VFG•÷7V'67&—F–öâ"Â²'ö'VFG•ö–B#¢'VFG•ö–BÂ'ööåöfö7W5÷7F'B#¢Væ&ÆVBÂ'ööåöfö7W5öVæB#¢Væ&ÆVBÂ'ö×WFVB#¢æ÷BVæ&ÆVGÒ¢6VÆbå÷6WE÷7FGW2‚.i
-ŞZÙx«nhŠê.™ˆ^[{.[ÈY
-ş8""–bVæ&ÆVBVÇ6R.i
-ŞZÙx«nhŠê.™ˆ^[{.X[>™zŞ8""¢W†6WB6ö6–ÄW'&÷"2W†3 ¢6VÆbåöW'&÷"†W†2 ¢FVböFEö'VFG’‡6VÆb’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“¢&WGW&à¢6öFRÆö³Õ–çWDF–ÆörævWEFW‡B‡6VÆbÂ.k{¾Xªi
-ŞZÙ"Â.‹é>XZ^Zûiky¨B‚KØŞi
-ŞZÙzûÉ¢"¢–bö²æB6öFS ¢6VÆbåö&Vv–åö7F–öâ‚.jÚ>YÊXù˜i
-ŞZÙyK>Šû~(
-b"¢G'“¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•öFEö'VFG•ö'•ö6öFR"Ç²&6öFR#¦6öFWÒ“²6VÆbç&Vg&W6‚‚“²6VÆbå÷6WE÷7FGW2‚.i
-ŞZÙyK>Šû~[{.Xù˜8""¢W†6WB6ö6–ÄW'&÷"2W†3¢6VÆbåöW'&÷"†W†2¢FVb÷6VæE÷f—6—B‡6VÆb’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“¢&WGW&à¢—FVÓ×6VÆbæ'VFF–W2æ7W'&VçD—FVÒ‚¢–bæ÷B—FVÓ¢&WGW&â6VÆbåöW'&÷"…6ö6–ÄW'&÷"‚.Šû~XX˜hºKˆKØŞi
-ŞZÙ8""’¢'VFG’Ò—FVÒæFF…Bä—FVÔFF&öÆRåW6W%&öÆR¢–bæ÷B—6–ç7Fæ6R†'VFG’ÂF–7B“¢&WGW&â6VÆbåöW'&÷"…6ö6–ÄW'&÷"‚.Šû~XX˜hºKˆKØŞi
-ŞZÙ8""’¢6VÆbåö&Vv–åö7F–öâ‚.XZŞjù¾jÚ>YÊXxnZH~X{®Xù(
-b"¢G'“ ¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•÷6VæE÷f—6—B"Ç²'F&vWB#¦'VFG•²'W6W%ö–B%ÒÂ'f—6—Eö¶–æB#¢'f—6—B'Ò“²6VÆbåöVæEö7F–öâ‚“²6VÆbå÷6WE÷7FGW2‚.XZŞjù¾[{.{¸şX{®XùûÈÎzØ[è^Zûikhê^Xù~K‹.™z8""“²ÖW76vT&÷‚æ–æf÷&ÖF–öâ‡6VÆbÂ.[{.X{®Xù"Â.XZŞjù¾[{.{¸şX{®XùûÈÎzØ[è^Zûikhê^Xù~K‹.™z8""¢W†6WB6ö6–ÄW'&÷"2W†3¢6VÆbåöW'&÷"†W†2¢FVbö66WEö–æ&÷‚‡6VÆb’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“¢&WGW&à¢—FVÓ×6VÆbæ–æ&÷‚æ7W'&VçD—FVÒ‚¢–bæ÷B—FVÓ¢&WGW&â6VÆbåöW'&÷"…6ö6–ÄW'&÷"‚.Šû~XX˜hºKˆšyK>Šû~h‰nK‹.™z8""’¢¶–æBÆFFÖ—FVÒæFF…Bä—FVÔFF&öÆRåW6W%&öÆR¢6VÆbåö&Vv–åö7F–öâ‚.jÚ>YÊZHNyn˜KŠŞy¨NyK>Šû~(
-b"¢G'“ ¢–b¶–æCÓÒ&'VFG’#¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•÷&W7öæEö'VFG’"Ç²'&WVW7Eö–B#¦FF²&–B%ÒÂ&66WB#¥G'VWÒ¢VÇ6S¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•÷&W7öæE÷f—6—B"Ç²&WfVçEö–B#¦FF²&–B%ÒÂ&66WB#¥G'VWÒ¢6VÆbç&Vg&W6‚‚¢W†6WB6ö6–ÄW'&÷"2W†3¢6VÆbåöW'&÷"†W†2¢FVbö7&VFU÷&ööÒ‡6VÆb’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“¢&WGW&à¢æÖRÆö³Õ–çWDF–ÆörævWEFW‡B‡6VÆbÂ.X‰¾[»®ˆz®KšZêB"Â.ˆz®KšZêNYŞz{ûÉ¢"ÇFW‡CÒ.Zè™Ù[z^KÙÎ™{B"¢–bö²æBæÖS ¢6VÆbåö&Vv–åö7F–öâ‚.jÚ>YÊX‰¾[»®ˆz®KšZêN(
-b"¢G'“¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•ö7&VFU÷&ööÒ"Ç²'&ööÕöæÖR#¦æÖWÒ“²6VÆbç&Vg&W6‚‚“²6VÆbå÷6WE÷7FGW2‚.ˆz®KšZêN[{.X‰¾[»®ûÈÎXúşKº^XˆnKª¾h‹ş™{NzK¨n8""¢W†6WB6ö6–ÄW'&÷"2W†3¢6VÆbåöW'&÷"†W†2¢FVbö¦ö–å÷&ööÒ‡6VÆb’ÓâæöæS ¢–bæ÷B6VÆbå÷&WV—&UöÆöv–â‚“¢&WGW&à¢6öFRÆö³Õ–çWDF–ÆörævWEFW‡B‡6VÆbÂ.XªXZ^ˆz®KšZêB"Â.‹é>XZR‚KØŞh‹ş™{NzûÉ¢"¢–bö²æB6öFS ¢6VÆbåö&Vv–åö7F–öâ‚.jÚ>YÊXªXZ^ˆz®KšZêN(
-b"¢G'“¢6VÆbæ6Æ–VçBç'2‚&Æ–Æ•ö¦ö–å÷&ööÒ"Ç²&6öFR#¦6öFWÒ“²6VÆbç&Vg&W6‚‚“²6VÆbå÷6WE÷7FGW2‚.[{.XªXZ^ˆz®KšZêN8""¢W†6WB6ö6–ÄW'&÷"2W†3¢6VÆbåöW'&÷"†W†2 
+        self.subtitle.setText(f"ğŸ’» {PET_NAME}ã€€ã€€{nickname} ğŸ“–\nä¸€èµ·å·¥ä½œä¸­")
+        peer_today = peer.get("today_seconds")
+        peer_text = "æ—¶é•¿éšè—" if peer_today is None else format_work_duration(peer_today)
+        self.today.setText(f"ä½ ä»Šæ—¥ {format_work_duration(mine_today)}ã€€Â·ã€€{nickname} ä»Šæ—¥ {peer_text}")
+        self._mine_outfit = mine_outfit
+        self._peer_outfit = str(peer.get("outfit_key") or "")
+        self._phase = 0
+        self.elapsed = 0
+        started = peer.get("visit_started_at")
+        if started:
+            try:
+                self.elapsed = max(0, int((datetime.now().astimezone() - datetime.fromisoformat(str(started))).total_seconds()))
+            except ValueError:
+                self.elapsed = 0
+        self._refresh_pets()
+        self._tick()
+        self.show()
+
+    def hide_visit(self) -> None:
+        """Hide this visit without allowing a background refresh to reopen it."""
+        self.visible_requested = False
+        self.user_minimized = False
+        self.hide()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.WindowStateChange:
+            self.user_minimized = bool(self.windowState() & Qt.WindowState.WindowMinimized)
+        super().changeEvent(event)
+
+    def _load_pet(self, label: QLabel, outfit_key: str, fallback_name: str) -> None:
+        relative = SPECIAL_OUTFIT_SPRITES.get(outfit_key, f"assets/pet/daily-actions/{fallback_name}")
+        pix = QPixmap(str(resource_path(relative)))
+        label.setPixmap(pix)
+
+    def _refresh_pets(self) -> None:
+        mine_action = self._mine_actions[self._phase % len(self._mine_actions)]
+        peer_action = self._peer_actions[self._phase % len(self._peer_actions)]
+        # ç¬¬ä¸€å¹•å±•ç¤ºåŒæ–¹å½“å‰å¨ƒè¡£ï¼Œåç»­åŠ¨ä½œå‡ç”±æœ¬åœ°è½®æ¢ï¼Œä¸åŒæ­¥åŠ¨ç”»å¸§ã€‚
+        self._load_pet(self.mine, self._mine_outfit if self._phase == 0 else "", mine_action)
+        self._load_pet(self.peer, self._peer_outfit if self._phase == 0 else "", peer_action)
+
+    def _tick(self) -> None:
+        if self.isVisible():
+            self.elapsed += 1
+            if self.elapsed % 15 == 0:
+                self._phase += 1
+                self._refresh_pets()
+        h, rest = divmod(self.elapsed, 3600); m, s = divmod(rest, 60)
+        self.clock.setText(f"{h:02d}:{m:02d}:{s:02d}")
+
+
+class SocialHubDialog(QDialog):
+    """æä¾›é¦–é¡µã€èŠå¤©ã€ä¸“æ³¨ã€æˆ‘çš„å››ä¸ªæ¸…æ™°é¡µé¢åŠç»Ÿä¸€æ“ä½œåé¦ˆã€‚"""
+
+    active_visit = Signal(dict)
+    focus_start_requested = Signal()
+    focus_pause_requested = Signal()
+    focus_finish_requested = Signal()
+    focus_task_requested = Signal(str, int)
+    tomorrow_review_requested = Signal(str)
+    room_changed = Signal(object)
+    room_event_received = Signal(dict)
+    room_ritual_due = Signal(str)
+    buddy_subscription_notice = Signal(str)
+    quick_action_requested = Signal(str)
+
+    def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.outfit_key = outfit_key
+        self.owner_nickname = owner_nickname.strip()[:24]
+        self.data: dict[str, Any] = {}
+        self.current_room_id: str | None = None
+        self._focus_snapshot: Any = None
+        self._applying_dashboard = False
+        self._room_goal_state: dict[str, Any] = {}
+        self._room_schedule_state: dict[str, Any] = {}
+        self._room_challenge_state: dict[str, Any] = {}
+        self._seen_room_event_ids: set[str] = set()
+        self._focus_analytics: dict[str, Any] = {}
+        self._last_ritual_notice = ""
+        self._initial_refresh_timer = QTimer(self)
+        self._initial_refresh_timer.setSingleShot(True)
+        self._initial_refresh_timer.timeout.connect(self.refresh)
+        self._room_refresh_timer = QTimer(self)
+        self._room_refresh_timer.setSingleShot(True)
+        self._room_refresh_timer.timeout.connect(self._refresh_selected_room)
+        self._dashboard_thread: SocialDashboardThread | None = None
+        self._health_thread: SocialHealthThread | None = None
+        self._event_threads: list[SocialEventThread] = []
+        self.setFont(_social_font())
+        # Make this a normal independent utility window.  QDialog's default
+        # flags differ by platform and can omit the minimize button when a
+        # parent is supplied, which made the study room feel like a modal
+        # sheet on Windows.  It deliberately does not include Tool or
+        # WindowStaysOnTopHint: minimizing it must only hide this window and
+        # never affect the desktop pet or its timers.
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setModal(Falseâ€¦10532 tokens truncatedâ€¦def _end_action() -> None:
+        if QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+
+    def _require_login(self) -> bool:
+        if self.client.signed_in:
+            return True
+        self.tabs.setCurrentIndex(3)
+        self._set_status("è¯·å…ˆåœ¨â€œæˆ‘çš„â€é¡µé¢ç™»å½•ï¼›å…¶ä»–ç¦»çº¿åŠŸèƒ½ä»å¯æ­£å¸¸ä½¿ç”¨ã€‚", error=True)
+        return False
+
+    def _update_account_state(self) -> None:
+        self.account_stack.setCurrentIndex(1 if self.client.signed_in else 0)
+        if not self.client.signed_in:
+            self._fill_signed_out_placeholders()
+
+    def _fill_signed_out_placeholders(self) -> None:
+        self.buddies.clear(); self.buddies.addItem("ç™»å½•åï¼Œè¿™é‡Œä¼šæ˜¾ç¤ºæ­å­çš„åœ¨çº¿ä¸ä¸“æ³¨çŠ¶æ€ã€‚")
+        self.inbox.clear(); self.inbox.addItem("ç™»å½•åå¯æ¥æ”¶æ­å­ç”³è¯·ä¸ä¸²é—¨é‚€è¯·ã€‚")
+        self.rooms.clear(); self.rooms.addItem("ç™»å½•åå¯åˆ›å»ºæˆ–åŠ å…¥ç§äººè‡ªä¹ å®¤ã€‚")
+        self._fit_list_height(self.buddies, 46, 360)
+        self._fit_list_height(self.rooms, 52, 140)
+        if hasattr(self, "room_members"):
+            self._render_room_people([])
+        if hasattr(self, "room_activity"):
+            self._render_room_activity([])
+
+    def _error(self, exc: Exception) -> None:
+        self._end_action()
+        raw = str(exc)
+        LOGGER.warning(
+            "social room operation failed kind=%s endpoint=%s status=%s: %s",
+            getattr(exc, "kind", "unknown"),
+            getattr(exc, "endpoint", ""),
+            getattr(exc, "status", None),
+            raw,
+        )
+        message = "å…±åŒæˆ¿é—´çŠ¶æ€ä¿å­˜å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•ã€‚" if "ambiguous" in raw.lower() or "room_id" in raw.lower() else raw
+        self._set_status(message, error=True)
+        QMessageBox.warning(self, "å…­æ¯›æ­å­è‡ªä¹ å®¤", message)
+
+    def _signup(self) -> None:
+        self._begin_action("æ­£åœ¨åˆ›å»ºè´¦å·â€¦")
+        try:
+            signed = self.client.sign_up(self.signup_email.text(), self.signup_password.text(), self.signup_nickname.text())
+            self._end_action()
+            if signed:
+                self._update_account_state(); self.refresh()
+            else:
+                self._set_status("æ³¨å†ŒæˆåŠŸï¼Œè¯·åˆ°é‚®ç®±ç¡®è®¤åå›æ¥ç™»å½•ã€‚")
+                QMessageBox.information(
+                    self,
+                    "è¯·ç¡®è®¤é‚®ç®±",
+                    "æ³¨å†ŒæˆåŠŸã€‚è¯·åˆ°é‚®ç®±å®Œæˆç¡®è®¤ï¼Œç„¶åå›åˆ°è¿™é‡Œç™»å½•ã€‚\n\n"
+                    "ç¡®è®¤é¡µä¼šæ‰“å¼€å…­æ¯›é¡¹ç›®é¡µé¢ï¼Œä¸éœ€è¦å¯åŠ¨ localhost æœåŠ¡ã€‚",
+                )
+        except SocialError as exc:
+            self._error(exc)
+
+    def _login(self) -> None:
+        self._begin_action("æ­£åœ¨ç™»å½•æ­å­è‡ªä¹ å®¤â€¦")
+        try:
+            self.client.sign_in(self.login_email.text(), self.login_password.text())
+            self._end_action(); self._update_account_state(); self.tabs.setCurrentIndex(0); self.refresh()
+        except SocialError as exc:
+            self._error(exc)
+
+    def _logout(self) -> None:
+        self.client.sign_out(); self.data = {}; self._update_account_state(); self._set_status("å·²é€€å‡ºè´¦å·ï¼Œå…­æ¯›ç»§ç»­ç¦»çº¿é™ªä¼´ã€‚")
+
+    def refresh(self) -> None:
+        if not self._require_login(): return
+        self._start_dashboard_refresh(self.current_room_id, "æ­£åœ¨åˆ·æ–°æ­å­ä¸ä¸“æ³¨çŠ¶æ€â€¦")
+
+    def apply_dashboard(self, data: dict[str, Any] | None) -> None:
+        """Render a dashboard already fetched by the background sync thread.
+
+        Heartbeats run off the UI thread.  Previously the completed payload was
+        only consumed for visit notifications, leaving the visible room cards
+        on the previous (often resting) state until the user clicked refresh.
+        """
+
+        previous_data = self.data
+        self.data = dict(data or {})
+        me=self.data.get("me") or {}
+        me_presence = self.data.get("me_presence") or {}
+        own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
+        self.identity.setText(f"{own_label} Â· æˆ‘çš„æ­å­ç ï¼š{me.get('invite_code','--------')}")
+        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True)))
+        self.buddies.clear()
+        people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
+        seen=set()
+        working_count = 0
+        visible_total = 0
+        for buddy in people:
+            if buddy.get("user_id") in seen: continue
+            seen.add(buddy.get("user_id"))
+            if buddy.get("subscribed"):
+                previous_buddies = {
+                    str(item.get("user_id")): item
+                    for item in (previous_data.get("buddies") or [])
+                    if isinstance(item, dict)
+                }
+                previous = previous_buddies.get(str(buddy.get("user_id")))
+                if previous is not None and bool(previous.get("working")) != bool(buddy.get("working")):
+                    state_text = "å¼€å§‹ä¸“æ³¨" if buddy.get("working") else "ç»“æŸä¸“æ³¨"
+                    self.buddy_subscription_notice.emit(f"{social_pet_label(buddy.get('nickname'))} {state_text}äº†ã€‚")
+            working_count += int(bool(buddy.get("working")))
+            duration = buddy.get("today_seconds")
+            if duration is not None: visible_total += max(0, int(duration))
+            item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
+            buddy_widget = BuddyCardWidget(buddy, self.buddies)
+            buddy_widget.interaction_requested.connect(self._send_interaction)
+            buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
+            buddy_widget.subscription_requested.connect(self._set_subscription)
+            self.buddies.setItemWidget(item, buddy_widget)
+            self._set_buddy_item_height(item, buddy_widget)
+        me_seconds = int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
+        self.study_summary.setText(
+            f"ç°åœ¨ {working_count} ä½æ­å­æ­£åœ¨ä¸“æ³¨ã€€Â·ã€€"
+            f"æˆ‘çš„ä»Šæ—¥ä¸“æ³¨ {format_work_duration(me_seconds)}ã€€Â·ã€€"
+            f"æˆ¿é—´å¯è§åˆè®¡ {format_work_duration(visible_total)}"
+        )
+        if not seen:
+            empty = QListWidgetItem("è¿˜æ²¡æœ‰æ­å­ã€‚ç‚¹å‡»ä¸‹æ–¹â€œç”¨æ­å­ç æ·»åŠ â€ï¼Œä¸€èµ·å·¥ä½œæ—¶è¿™é‡Œä¼šæ˜¾ç¤ºæ¸…æ¥šçš„ä¸“æ³¨æ—¶é•¿ã€‚")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
+        self._fit_list_height(self.buddies, 46, 360)
+        self.inbox.clear()
+        for request in self.data.get("requests") or []:
+            item=QListWidgetItem(f"æ­å­ç”³è¯·ï¼š{request.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
+        for visit in self.data.get("visits") or []:
+            item=QListWidgetItem(f"ä¸²é—¨é‚€è¯·ï¼š{visit.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("visit",visit)); self.inbox.addItem(item)
+        if self.inbox.count() == 0:
+            empty = QListWidgetItem("å½“å‰æ²¡æœ‰å¾…å¤„ç†ç”³è¯·æˆ–ä¸²é—¨ï¼Œæ–°çš„é‚€è¯·ä¼šæ˜¾ç¤ºåœ¨è¿™é‡Œã€‚")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
+        rooms = list(self.data.get("rooms") or [])
+        previous_room_id = self.current_room_id
+        self._applying_dashboard = True
+        # Rebuilding the list is an internal render operation.  Suppress the
+        # transient "selection cleared" and "selection restored" signals;
+        # otherwise each dashboard response schedules another network sync.
+        self.rooms.blockSignals(True)
+        self.rooms.clear()
+        for room in rooms:
+            room_item = QListWidgetItem(
+                f"{room.get('name')} Â· {room.get('members')} äºº Â· æˆ¿é—´ç  {room.get('invite_code')}"
+            )
+            room_item.setData(Qt.ItemDataRole.UserRole, room)
+            self.rooms.addItem(room_item)
+        if self.rooms.count() == 0:
+            empty_room = QListWidgetItem("è¿˜æ²¡æœ‰ç§äººè‡ªä¹ å®¤ï¼›åˆ›å»ºåå¯æŠŠæˆ¿é—´ç å‘ç»™æ­å­ã€‚")
+            empty_room.setFlags(Qt.ItemFlag.NoItemFlags); self.rooms.addItem(empty_room)
+            self.current_room_id = None
+        else:
+            # QCombo/List widgets do not consistently select the first item
+            # after a clear() across Qt platforms.  Without a selected room
+            # the next heartbeat used to send room_id=NULL, so the server had
+            # no reliable way to associate this user's focus with a room.
+            selected = -1
+            for index, room in enumerate(rooms):
+                room_id = self._room_id_from_payload(room)
+                if room_id and room_id == previous_room_id:
+                    selected = index
+                    break
+            if selected < 0:
+                # On first open prefer the room with the most members.  This
+                # avoids silently landing in an old one-person room when the
+                # user has just joined a shared workroom.
+                selected = max(
+                    range(len(rooms)),
+                    key=lambda index: int(rooms[index].get("members") or 0),
+                )
+            self.rooms.setCurrentRow(selected)
+            selected_room = rooms[selected]
+            self.current_room_id = self._room_id_from_payload(selected_room)
+        self.rooms.blockSignals(False)
+        self._fit_list_height(self.rooms, 52, 140)
+        self._applying_dashboard = False
+        if self.current_room_id != previous_room_id:
+            self.room_changed.emit(self.current_room_id)
+        # The room-scoped endpoint is authoritative for members and events.
+        # Keep the legacy top-level fields as a compatibility fallback for
+        # older proxy deployments and the offline UI tests.
+        room_detail = self.data.get("current_room") or {}
+        if not isinstance(room_detail, dict):
+            room_detail = {}
+        if self.current_room_id and self.current_room_id != previous_room_id and not room_detail:
+            self._room_refresh_timer.start(0)
+        room_people = list(room_detail.get("room_people") or self.data.get("room_people") or []) if self.current_room_id else []
+        # Always render the local member as well.  The old SQL function only
+        # returned peers, which made the room look like everybody was resting
+        # when the local timer was the only state visible in the UI.
+        local_status = self._focus_snapshot
+        local_presence = dict(me_presence)
+        if isinstance(local_status, dict):
+            local_presence = {**local_presence, **local_status}
+        elif local_status is not None:
+            local_presence = {
+                **local_presence,
+                "status": getattr(local_status, "status", "idle"),
+                "working": bool(getattr(local_status, "is_running", False)),
+                "session_seconds": int(getattr(local_status, "session_seconds", 0)),
+                "today_seconds": int(getattr(local_status, "today_seconds", 0)),
+            }
+        local_presence.update({
+            "user_id": str(me.get("user_id") or me.get("id") or "me"),
+            "nickname": self.owner_nickname or str(me.get("nickname") or "æ­å­"),
+            "outfit_key": str(me_presence.get("outfit_key") or self.outfit_key or me.get("outfit_key") or ""),
+            "online": True,
+            "is_self": True,
+        })
+        if self.current_room_id:
+            room_people = [local_presence] + [p for p in room_people if str(p.get("user_id")) != str(local_presence.get("user_id"))]
+        else:
+            room_people = []
+        self._render_room_people(room_people)
+        goal = room_detail.get("room_goal") or self.data.get("room_goal") or {}
+        summary = room_detail.get("room_summary") or self.data.get("room_summary") or {}
+        if isinstance(summary, dict) and summary:
+            self.room_summary.setText(
+                f"æœ¬æˆ¿é—´ {int(summary.get('member_count') or len(room_people))} äºº Â· "
+                f"{int(summary.get('focus_count') or 0)} äººæ­£åœ¨ä¸“æ³¨ Â· "
+                f"å…±åŒä¸“æ³¨ {format_work_duration(int(summary.get('shared_focus_seconds') or 0))}"
+            )
+        elif hasattr(self, "room_summary"):
+            self.room_summary.setText("ä½ å½“å‰æ²¡æœ‰åŠ å…¥å·¥ä½œé—´ã€‚åˆ›å»ºå·¥ä½œé—´æˆ–è¾“å…¥æˆ¿é—´ç åŠ å…¥åï¼Œè¿™é‡Œæ‰ä¼šæ˜¾ç¤ºå…±åŒçŠ¶æ€ã€‚")
+        self._room_goal_state = dict(goal) if isinstance(goal, dict) else {}
+        schedule = room_detail.get("room_schedule") or self.data.get("room_schedule") or {}
+        challenge = room_detail.get("room_challenge") or self.data.get("room_challenge") or {}
+        self._room_schedule_state = dict(schedule) if isinstance(schedule, dict) else {}
+        self._room_challenge_state = dict(challenge) if isinstance(challenge, dict) else {}
+        self.room_goal_button.setEnabled(bool(self.current_room_id))
+        if hasattr(self, "room_schedule_button"):
+            self.room_schedule_button.setEnabled(bool(self.current_room_id))
+        if hasattr(self, "room_challenge_button"):
+            self.room_challenge_button.setEnabled(bool(self.current_room_id))
+        self.room_leave_button.setEnabled(bool(self.current_room_id))
+        self._refresh_room_goal_text()
+        if hasattr(self, "room_ritual"):
+            if self._room_schedule_state:
+                self.room_ritual.setText(
+                    f"å…±åŒå¼€å·¥/æ”¶å·¥ï¼š{self._room_schedule_state.get('start_at', '--:--')} å¼€å·¥ Â· "
+                    f"{self._room_schedule_state.get('end_at', '--:--')} æ”¶å·¥"
+                )
+            else:
+                self.room_ritual.setText("å…±åŒå¼€å·¥/æ”¶å·¥ï¼šæœªè®¾ç½®")
+        if hasattr(self, "room_challenge"):
+            if self._room_challenge_state:
+                self.room_challenge.setText(
+                    f"å…±åŒæŒ‘æˆ˜ï¼š{self._room_challenge_state.get('title', 'ä¸€èµ·å®Œæˆ')} Â· "
+                    f"{format_work_duration(int(self._room_challenge_state.get('target_seconds') or 0))} Â· "
+                    f"æ¯äºº {int(self._room_challenge_state.get('target_rounds') or 0)} è½®"
+                )
+            else:
+                self.room_challenge.setText("å…±åŒæŒ‘æˆ˜ï¼šæœªè®¾ç½®")
+        activity = list(room_detail.get("room_activity") or self.data.get("room_activity") or self.data.get("activity") or [])
+        me_id = str(me.get("user_id") or me.get("id") or "")
+        for event in activity:
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("id") or "")
+            target_id = str(event.get("target_id") or "")
+            if event_id and event_id not in self._seen_room_event_ids:
+                self._seen_room_event_ids.add(event_id)
+                is_target = target_id == me_id or (
+                    not target_id and str(event.get("target_nickname") or "") == str(me.get("nickname") or "")
+                )
+                if me_id and is_target and str(event.get("actor_id") or "") != me_id:
+                    self.room_event_received.emit(dict(event))
+        self._render_room_activity(activity)
+        active=self.data.get("active_visits") or []
+        if active: self.active_visit.emit(active[0])
+        if self.data.get("_sync_offline"):
+            age = int(self.data.get("_sync_age_minutes") or 0)
+            age_text = f"çº¦ {age} åˆ†é’Ÿå‰" if age else "åˆšæ‰"
+            self._set_status(
+                f"å½“å‰æ— æ³•è¿æ¥è‡ªä¹ å®¤ï¼Œå·²æ˜¾ç¤º{age_text}çš„æœ¬åœ°çŠ¶æ€ï¼›ç½‘ç»œæ¢å¤åä¼šè‡ªåŠ¨åŒæ­¥ã€‚"
+            )
+        else:
+            self._set_status("å·²åˆ·æ–°ï¼Œé¡µé¢å†…å®¹æ˜¯æœ€æ–°çš„ã€‚")
+
+    def _save_profile(self) -> None:
+        if not self._require_login(): return
+        self._begin_action("æ­£åœ¨ä¿å­˜éšç§è®¾ç½®â€¦")
+        try:
+            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "æ­å­"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key); self.refresh()
+        except SocialError as exc: self._error(exc)
+
+    def _set_subscription(self, buddy: dict[str, Any], enabled: bool) -> None:
+        if not self._require_login():
+            return
+        buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+        if not buddy_id:
+            return
+        try:
+            setter = getattr(self.client, "set_buddy_subscription", None)
+            if callable(setter):
+                setter(buddy_id=buddy_id, on_focus_start=enabled, on_focus_end=enabled, muted=not enabled)
+            else:
+                self.client.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": enabled, "p_on_focus_end": enabled, "p_muted": not enabled})
+            self._set_status("æ­å­çŠ¶æ€è®¢é˜…å·²å¼€å¯ã€‚" if enabled else "æ­å­çŠ¶æ€è®¢é˜…å·²å…³é—­ã€‚")
+        except SocialError as exc:
+            self._error(exc)
+
+    def _add_buddy(self) -> None:
+        if not self._require_login(): return
+        code,ok=QInputDialog.getText(self,"æ·»åŠ æ­å­","è¾“å…¥å¯¹æ–¹çš„ 8 ä½æ­å­ç ï¼š")
+        if ok and code:
+            self._begin_action("æ­£åœ¨å‘é€æ­å­ç”³è¯·â€¦")
+            try: self.client.rpc("lili_add_buddy_by_code",{"code":code}); self.refresh(); self._set_status("æ­å­ç”³è¯·å·²å‘é€ã€‚")
+            except SocialError as exc: self._error(exc)
+    def _send_visit(self) -> None:
+        if not self._require_login(): return
+        item=self.buddies.currentItem()
+        if not item: return self._error(SocialError("è¯·å…ˆé€‰æ‹©ä¸€ä½æ­å­ã€‚"))
+        buddy = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(buddy, dict): return self._error(SocialError("è¯·å…ˆé€‰æ‹©ä¸€ä½æ­å­ã€‚"))
+        self._begin_action("å…­æ¯›æ­£åœ¨å‡†å¤‡å‡ºå‘â€¦")
+        try:
+            self.client.rpc("lili_send_visit",{"target":buddy["user_id"],"visit_kind":"visit"}); self._end_action(); self._set_status("å…­æ¯›å·²ç»å‡ºå‘ï¼Œç­‰å¾…å¯¹æ–¹æ¥å—ä¸²é—¨ã€‚"); QMessageBox.information(self,"å·²å‡ºå‘","å…­æ¯›å·²ç»å‡ºå‘ï¼Œç­‰å¾…å¯¹æ–¹æ¥å—ä¸²é—¨ã€‚")
+        except SocialError as exc: self._error(exc)
+    def _accept_inbox(self) -> None:
+        if not self._require_login(): return
+        item=self.inbox.currentItem()
+        if not item: return self._error(SocialError("è¯·å…ˆé€‰æ‹©ä¸€é¡¹ç”³è¯·æˆ–ä¸²é—¨ã€‚"))
+        kind,data=item.data(Qt.ItemDataRole.UserRole)
+        self._begin_action("æ­£åœ¨å¤„ç†é€‰ä¸­çš„ç”³è¯·â€¦")
+        try:
+            if kind=="buddy": self.client.rpc("lili_respond_buddy",{"request_id":data["id"],"accept":True})
+            else: self.client.rpc("lili_respond_visit",{"event_id":data["id"],"accept":True})
+            self.refresh()
+        except SocialError as exc: self._error(exc)
+    def _create_room(self) -> None:
+        if not self._require_login(): return
+        name,ok=QInputDialog.getText(self,"åˆ›å»ºè‡ªä¹ å®¤","è‡ªä¹ å®¤åç§°ï¼š",text="å®‰é™å·¥ä½œé—´")
+        if ok and name:
+            self._begin_action("æ­£åœ¨åˆ›å»ºè‡ªä¹ å®¤â€¦")
+            try: self.client.rpc("lili_create_room",{"room_name":name}); self.refresh(); self._set_status("è‡ªä¹ å®¤å·²åˆ›å»ºï¼Œå¯ä»¥åˆ†äº«æˆ¿é—´ç äº†ã€‚")
+            except SocialError as exc: self._error(exc)
+    def _join_room(self) -> None:
+        if not self._require_login(): return
+        code,ok=QInputDialog.getText(self,"åŠ å…¥è‡ªä¹ å®¤","è¾“å…¥ 8 ä½æˆ¿é—´ç ï¼š")
+        if ok and code:
+            self._begin_action("æ­£åœ¨åŠ å…¥è‡ªä¹ å®¤â€¦")
+            try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("å·²åŠ å…¥è‡ªä¹ å®¤ã€‚")
+            except SocialError as exc: self._error(exc)
