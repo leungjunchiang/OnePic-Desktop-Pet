@@ -1,3 +1,8 @@
+# Lili v0.22.11
+
+- Fixed Supabase Edge Function route normalization so hosted `/functions/v1/<function>/...` request paths correctly reach authentication, dashboard, presence, and study-room routes instead of returning `Study-room route not found`.
+- Redeployed `lili-social-relay-v2` as an active version and added a route contract assertion.
+
 # Lili v0.22.9
 
 - The published desktop configuration now routes study-room traffic through the deployed `lili-social-relay-v2` Supabase Edge Function instead of calling the Supabase REST API directly.

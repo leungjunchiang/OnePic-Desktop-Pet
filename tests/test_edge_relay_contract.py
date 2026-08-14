@@ -7,6 +7,8 @@ def test_social_edge_relay_has_stable_routes_and_no_server_secret() -> None:
 
     for route in ("/health", "/auth/signup", "/auth/signin", "/auth/refresh", "/dashboard", "/presence/heartbeat", "/rpc/"):
         assert route in source
+    assert "function relativePath(url: URL)" in source
+    assert "/functions/v1/" in source
     for operation in ("lili_room_dashboard", "lili_set_room_goal", "lili_set_room_schedule", "lili_set_room_challenge", "lili_leave_room"):
         assert operation in source
     assert "service_role" not in source
