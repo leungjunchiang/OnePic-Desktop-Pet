@@ -391,4 +391,324 @@ class AISettingsDialog(QDialog):
         )
         self.allow_autonomous_walk.setChecked(settings.allow_autonomous_walk)
         self.allow_autonomous_walk.setToolTip(
-           ×O<¶‰Ëkºwµç}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡ÅÅ}É½Ü¤ìÅÅ}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€ÅÅ}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ìÅÅ}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ìÅÅ}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}ÅÅ}µÕÍ¥Œ¤(€€€€€€€ÅÅ}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹ÅÅ}µÕÍ¥}Á…Ñ °€Ä¤ìÅÅ}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡ÅÅ}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‰EDƒ¦~Ï’æC¢/–ê<ˆ°ÅÅ}É½Ü¤((€€€€€€€Í•±˜¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ €ôE1¥¹•‘¥Ğ¡Í•ÑÑ¥¹Ì¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ ¤(€€€€€€€Í•±˜¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ ¹Í•ÑA±…•¡½±‘•ÉQ•áĞ ‹¢«–*£–¾ïš&û¾ò3š"[¦'š.¤±½Õ‘µÕÍ¥Œ¹•á”€¼ƒöGšbO’êG¦~Ï’æ@¹…ÁÀˆ¤(€€€€€€€¹•Ñ•…Í•}É½Ü€ôE]¥‘•Ğ ¤ì¹•Ñ•…Í•}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡¹•Ñ•…Í•}É½Ü¤ì¹•Ñ•…Í•}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€¹•Ñ•…Í•}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ì¹•Ñ•…Í•}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ì¹•Ñ•…Í•}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}¹•Ñ•…Í•}µÕÍ¥Œ¤(€€€€€€€¹•Ñ•…Í•}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ °€Ä¤ì¹•Ñ•…Í•}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡¹•Ñ•…Í•}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‹öGšbO’êG¢/–ê<ˆ°¹•Ñ•…Í•}É½Ü¤((€€€€€€€Í•±˜¹­Õ½Õ}µÕÍ¥}Á…Ñ €ôE1¥¹•‘¥Ğ¡Í•ÑÑ¥¹Ì¹­Õ½Õ}µÕÍ¥}Á…Ñ ¤(€€€€€€€Í•±˜¹­Õ½Õ}µÕÍ¥}Á…Ñ ¹Í•ÑA±…•¡½±‘•ÉQ•áĞ ‹¢«–*£–¾ïš&û¾ò3š"[¦'š.¤-Õ½Ô¹•á”€¼ƒ¦ß._¦~Ï’æ@¹…ÁÀˆ¤(€€€€€€€­Õ½Õ}É½Ü€ôE]¥‘•Ğ ¤ì­Õ½Õ}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡­Õ½Õ}É½Ü¤ì­Õ½Õ}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€­Õ½Õ}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ì­Õ½Õ}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ì­Õ½Õ}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}­Õ½Õ}µÕÍ¥Œ¤(€€€€€€€­Õ½Õ}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹­Õ½Õ}µÕÍ¥}Á…Ñ °€Ä¤ì­Õ½Õ}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡­Õ½Õ}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‹¦ß._¦~Ï’æC¢/–ê<ˆ°­Õ½Õ}É½Ü¤((€€€€€€€Í•±˜¹…ÁÁ±•}µÕÍ¥}Á…Ñ €ôE1¥¹•‘¥Ğ¡Í•ÑÑ¥¹Ì¹…ÁÁ±•}µÕÍ¥}Á…Ñ ¤(€€€€€€€Í•±˜¹…ÁÁ±•}µÕÍ¥}Á…Ñ ¹Í•ÑA±…•¡½±‘•ÉQ•áĞ ‹¢«–*£–¾ïš&û¾ò3š"[¦'š.¤ÁÁ±•5ÕÍ¥Œ¹•á”€¼5ÕÍ¥Œ¹…ÁÀˆ¤(€€€€€€€…ÁÁ±•}É½Ü€ôE]¥‘•Ğ ¤ì…ÁÁ±•}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡…ÁÁ±•}É½Ü¤ì…ÁÁ±•}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€…ÁÁ±•}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ì…ÁÁ±•}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ì…ÁÁ±•}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}…ÁÁ±•}µÕÍ¥Œ¤(€€€€€€€…ÁÁ±•}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹…ÁÁ±•}µÕÍ¥}Á…Ñ °€Ä¤ì…ÁÁ±•}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡…ÁÁ±•}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‰ÁÁ±”5ÕÍ¥Œƒ¢/–ê<ˆ°…ÁÁ±•}É½Ü¤((€€€€€€€Í•±˜¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ €ôE1¥¹•‘¥Ğ¡Í•ÑÑ¥¹Ì¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ ¤(€€€€€€€Í•±˜¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ ¹Í•ÑA±…•¡½±‘•ÉQ•áĞ ‹¢«–*£–¾ïš&û¾ò3š"[¦'š.¤MÁ½Ñ¥™ä¹•á”€¼MÁ½Ñ¥™ä¹…ÁÀˆ¤(€€€€€€€ÍÁ½Ñ¥™å}É½Ü€ôE]¥‘•Ğ ¤ìÍÁ½Ñ¥™å}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡ÍÁ½Ñ¥™å}É½Ü¤ìÍÁ½Ñ¥™å}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€ÍÁ½Ñ¥™å}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ìÍÁ½Ñ¥™å}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ìÍÁ½Ñ¥™å}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}ÍÁ½Ñ¥™å}µÕÍ¥Œ¤(€€€€€€€ÍÁ½Ñ¥™å}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ °€Ä¤ìÍÁ½Ñ¥™å}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡ÍÁ½Ñ¥™å}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‰MÁ½Ñ¥™äƒ¢/–ê<ˆ°ÍÁ½Ñ¥™å}É½Ü¤((€€€€€€€Í•±˜¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ €ôE1¥¹•‘¥Ğ¡Í•ÑÑ¥¹Ì¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ ¤(€€€€€€€Í•±˜¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ ¹Í•ÑA±…•¡½±‘•ÉQ•áĞ ‹¦'š.§²³’âšºÔ‰…‰Õ‘„ƒ¦~Ï¦ŠG¾òo–B3n»–öW–’kšº×’òk¢«–*£¢ö»š6ˆˆ¤(€€€€€€€…Õ‘¥½}É½Ü€ôE]¥‘•Ğ ¤ì…Õ‘¥½}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡…Õ‘¥½}É½Ü¤ì…Õ‘¥½}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€…Õ‘¥½}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ì…Õ‘¥½}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ì…Õ‘¥½}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}‰…‰Õ‘…}…Õ‘¥¼¤(€€€€€€€…Õ‘¥½}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ °€Ä¤ì…Õ‘¥½}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡…Õ‘¥½}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‹–ŞÓ–â¢úû¦~Ï¦ŠDˆ°…Õ‘¥½}É½Ü¤((€€€€€€€Í•±˜¹±½…±}±åÉ¥Í}Á…Ñ €ôE1¥¹•‘¥Ğ¡Í•ÑÑ¥¹Ì¹±½…±}±åÉ¥Í}Á…Ñ ¤(€€€€€€€Í•±˜¹±½…±}±åÉ¥Í}Á…Ñ ¹Í•ÑA±…•¡½±‘•ÉQ•áĞ ‹–>¿¦'¾òk’öƒšr'šv’öÿR£jQaS¾ò3š¾?¢†3’â–>”ˆ¤(€€€€€€€±åÉ¥Í}É½Ü€ôE]¥‘•Ğ ¤ì±åÉ¥Í}±…å½ÕĞ€ôE!	½á1…å½ÕĞ¡±åÉ¥Í}É½Ü¤ì±åÉ¥Í}±…å½ÕĞ¹Í•Ñ½¹Ñ•¹ÑÍ5…É¥¹Ì À°€À°€À°€À¤(€€€€€€€±åÉ¥Í}Á¥¬€ôEAÕÍ¡	ÕÑÑ½¸ ‹¦'š.§Š˜ˆ¤ì±åÉ¥Í}Á¥¬¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤ì±åÉ¥Í}Á¥¬¹±¥­•¹½¹¹•Ğ¡Í•±˜¹}¡½½Í•}±½…±}±åÉ¥Ì¤(€€€€€€€±åÉ¥Í}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡Í•±˜¹±½…±}±åÉ¥Í}Á…Ñ °€Ä¤ì±åÉ¥Í}±…å½ÕĞ¹…‘‘]¥‘•Ğ¡±åÉ¥Í}Á¥¬¤(€€€€€€€™½É´¹…‘‘I½Ü ‹šr³–rÃš¶3¢¾7šZšr°ˆ°±åÉ¥Í}É½Ü¤(€€€€€€€Í•±˜¹±åÉ¥}µ¥¹ÕÑ•Ì€ôEMÁ¥¹	½à ¤ìÍ•±˜¹±åÉ¥}µ¥¹ÕÑ•Ì¹Í•ÑI…¹” È°€ÄÈÀ¤ìÍ•±˜¹±åÉ¥}µ¥¹ÕÑ•Ì¹Í•ÑMÕ™™¥à ˆƒ–"¦J|ˆ¤ìÍ•±˜¹±åÉ¥}µ¥¹ÕÑ•Ì¹Í•ÑY…±Õ”¡Í•ÑÑ¥¹Ì¹±åÉ¥}¥¹Ñ•ÉÙ…±}µ¥¹ÕÑ•Ì¤(€€€€€€€™½É´¹…‘‘I½Ü ‹š¶3¢¾7šÂSšÎ‡¦^Ó¦jPˆ°Í•±˜¹±åÉ¥}µ¥¹ÕÑ•Ì¤((€€€€€€€¹½Ñ”€ôE1…‰•° (€€€€€€€€€€€€‰½‘•à½±…Õ‘”½‘”ƒš¢‡–ò?–’7R£šr³šrëfï–öW¾ò3’â7¦r¢šA$-•ç¾òm••ÁM••¬½-¥µ¤ƒ’î“&3’şw–¶c–r£Îïî–º'–£–·š6»–êOˆ(€€€€€€€€€€€€‹–ºcšZç–Âkšr«š>C’úo¢º§–’[¦£¢/–ê?š:—º„½‘•àƒ–ö»–ºƒ&§jš:—–>¾ò3’ö1¥±¤ƒ–>¿’ös’âë.³®/–ºƒ&§’öÿR ½‘•àƒ–¾ç¢¾wˆ(€€€€€€€€¤(€€€€€€€¹½Ñ”¹Í•Ñ=‰©•Ñ9…µ” ‰ÍÑ…ÑÕÌˆ¤(€€€€€€€¹½Ñ”¹Í•Ñ]½É‘]É…À¡QÉÕ”¤(€€€€€€€±…å½ÕĞ¹…‘‘]¥‘•Ğ¡¹½Ñ”¤((€€€€€€€‰ÕÑÑ½¹Ì€ôE!	½á1…å½ÕĞ ¤(€€€€€€€‰ÕÑÑ½¹Ì¹…‘‘MÑÉ•Ñ  Ä¤(€€€€€€€Í•±˜¹…¹•±}‰ÕÑÑ½¸€ôEAÕÍ¡	ÕÑÑ½¸ ‹–>[šÚ ˆ¤(€€€€€€€Í•±˜¹…¹•±}‰ÕÑÑ½¸¹Í•Ñ=‰©•Ñ9…µ” ‰Í½™Ñ	ÕÑÑ½¸ˆ¤(€€€€€€€Í•±˜¹…¹•±}‰ÕÑÑ½¸¹±¥­•¹½¹¹•Ğ¡Í•±˜¹É•©•Ğ¤(€€€€€€€‰ÕÑÑ½¹Ì¹…‘‘]¥‘•Ğ¡Í•±˜¹…¹•±}‰ÕÑÑ½¸¤(€€€€€€€Í•±˜¹Í…Ù•}‰ÕÑÑ½¸€ôEAÕÍ¡	ÕÑÑ½¸ ‹’şw–¶`ˆ¤(€€€€€€€Í•±˜¹Í…Ù•}‰ÕÑÑ½¸¹±¥­•¹½¹¹•Ğ¡Í•±˜¹…•ÁĞ¤(€€€€€€€‰ÕÑÑ½¹Ì¹…‘‘]¥‘•Ğ¡Í•±˜¹Í…Ù•}‰ÕÑÑ½¸¤(€€€€€€€½ÕÑ•É}±…å½ÕĞ¹…‘‘1…å½ÕĞ¡‰ÕÑÑ½¹Ì¤(€€€€€€€Í•±˜¹}ÁÉ½Ù¥‘•É}¡…¹• ¤(€€€€€€€Í•±˜¹}µÕÍ¥}ÁÉ½Ù¥‘•É}¡…¹• ¤((€€€‘•˜}µÕÍ¥}ÁÉ½Ù¥‘•É}¡…¹•¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹–"–"¯šbû’ë–êSR£QÉ…¹ÍÁ½ÉĞƒ’â;¢«–*£¦'š¶3¢÷–*o¾ò3’â7š*+–º'¢Ã’âë–ŞË¢ş{š:—ˆˆˆ((€€€€€€€ÁÉ½Ù¥‘•È€ôÍÑÈ¡Í•±˜¹µÕÍ¥}Í•ÉÙ¥”¹ÕÉÉ•¹Ñ…Ñ„ ¤¤(€€€€€€€¥˜Í•±˜¹µÕÍ¥}µ…¹…•È¥Ì9½¹”è(€€€€€€€€€€€Í•±˜¹µÕÍ¥}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ ‹¦~Ï’æCšJ·šRû–f£¾òk¢«–*£¦'š.¥q»–öO–&7’öÿR£¾òk–Âkšr«–ò–/šJ·šRùq»¦š[š²‡šJ·šRûš^Û–ÂššÖ/šr³šrëšJ·šRû–f£ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€¥˜ÁÉ½Ù¥‘•È€ôô€‰…ÕÑ¼ˆè(€€€€€€€€€€€Í•±˜¹µÕÍ¥}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ¡Í•±˜¹µÕÍ¥}µ…¹…•È¹…ÕÑ½}ÍÑ…ÑÕÍ}Ñ•áĞ ¤¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€Í•±˜¹µÕÍ¥}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ (€€€€€€€€€€€˜‹¢«–*£¦'š.§–ŞË–ò–B¿¾òo’òc–#–Âw¢¾UíÍ•±˜¹µÕÍ¥}Í•ÉÙ¥”¹ÕÉÉ•¹ÑQ•áĞ ¥÷	q¸ˆ(€€€€€€€€€€€˜‰íÍ•±˜¹µÕÍ¥}µ…¹…•È¹ÁÉ½Ù¥‘•É}ÍÑ…ÑÕÍ}Ñ•áĞ¡ÁÉ½Ù¥‘•È¥ôˆ(€€€€€€€€¤((€€€‘•˜}ÁÉ½Ù¥‘•É}¡…¹•¡Í•±˜¤€´ø9½¹”è(€€€€€€€ÁÉ½Ù¥‘•È€ôÍÑÈ¡Í•±˜¹ÁÉ½Ù¥‘•È¹ÕÉÉ•¹Ñ…Ñ„ ¤¤(€€€€€€€‰…Í•}ÕÉ°°µ½‘•°€ôÁÉ½Ù¥‘•É}‘•™…Õ±ÑÌ¡ÁÉ½Ù¥‘•È¤(€€€€€€€¥˜ÁÉ½Ù¥‘•È¹½Ğ¥¸ì‰½™™±¥¹”ˆ°€‰½‘•àˆ°€‰±…Õ‘”‰ôè(€€€€€€€€€€€¥˜¹½ĞÍ•±˜¹‰…Í•}ÕÉ°¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤½ÈÍ•±˜¹Í•ÑÑ¥¹Ì¹…¥}ÁÉ½Ù¥‘•È€„ôÁÉ½Ù¥‘•Èè(€€€€€€€€€€€€€€€Í•±˜¹‰…Í•}ÕÉ°¹Í•ÑQ•áĞ¡‰…Í•}ÕÉ°¤(€€€€€€€€€€€¥˜¹½ĞÍ•±˜¹µ½‘•°¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤½ÈÍ•±˜¹Í•ÑÑ¥¹Ì¹…¥}ÁÉ½Ù¥‘•È€„ôÁÉ½Ù¥‘•Èè(€€€€€€€€€€€€€€€Í•±˜¹µ½‘•°¹Í•ÑQ•áĞ¡µ½‘•°¤(€€€€€€€•¹…‰±•€ôÁÉ½Ù¥‘•È¹½Ğ¥¸ì‰½™™±¥¹”ˆ°€‰½‘•àˆ°€‰±…Õ‘”‰ô(€€€€€€€Í•±˜¹‰…Í•}ÕÉ°¹Í•Ñ¹…‰±•¡•¹…‰±•¤(€€€€€€€Í•±˜¹µ½‘•°¹Í•Ñ¹…‰±•¡•¹…‰±•¤(€€€€€€€Í•±˜¹Ñ½­•¸¹Í•Ñ¹…‰±•¡•¹…‰±•¤(€€€€€€€¥˜ÁÉ½Ù¥‘•È€„ô€‰½™™±¥¹”ˆ…¹Í•±˜¹…•¹Ñ}µ…¹…•È¥Ì¹½Ğ9½¹”è(€€€€€€€€€€€…¡•€ôÍ•±˜¹…•¹Ñ}µ…¹…•È¹ÍÑ…ÑÕÌ¡ÁÉ½Ù¥‘•È¤(€€€€€€€€€€€±…‰•±Ì€ôì(€€€€€€€€€€€€€€€•¹Ñ½¹¹•Ñ¥½¹MÑ…Ñ”¹!-%9è€‹š¶–r£–B;–>ÃššÖ/¾òo–öO–&7¢+–’§’î7–>¿’öÿR£šïêÿ¦f«’òÓˆ°(€€€€€€€€€€€€€€€•¹Ñ½¹¹•Ñ¥½¹MÑ…Ñ”¹=99Qè…¡•¹‘•Ñ…¥°°(€€€€€€€€€€€€€€€•¹Ñ½¹¹•Ñ¥½¹MÑ…Ñ”¹%M=99Qè˜‰í…¡•¹‘•Ñ…¥±õq»¢+–’§’òk¢«–*£’öÿR£šïêÿ¦f«’òÓˆ°(€€€€€€€€€€€€€€€•¹Ñ½¹¹•Ñ¥½¹MÑ…Ñ”¹II=Hè˜‰í…¡•¹‘•Ñ…¥±õq»¢7–B;’òk’ö;¦ŠG¢«–*£¦7¢ş{ˆ°(€€€€€€€€€€€ô(€€€€€€€€€€€ÍÑ…ÑÕÌ€ô±…‰•±Ím…¡•¹ÍÑ…Ñ•t(€€€€€€€•±¥˜ÁÉ½Ù¥‘•È€ôô€‰½‘•àˆè(€€€€€€€€€€€ÍÑ…ÑÕÌ€ô½‘•á}‘•Ñ•Ñ¥½¹}µ•ÍÍ…” ¤(€€€€€€€•±¥˜ÁÉ½Ù¥‘•È€ôô€‰±…Õ‘”ˆè(€€€€€€€€€€€ÍÑ…ÑÕÌ€ô€‹–ŞËššÖ/–"Ãšr³šrè±…Õ‘”½‘—ˆ¥˜±…Õ‘•}…Ù…¥±…‰±” ¤•±Í”€‹šjšr«ššÖ/–"À±…Õ‘”½‘—¾ò3¢+–’§š^Û’òk’öÿR£šïêÿ–n{¶Sˆ(€€€€€€€•±¥˜•¹…‰±•è(€€€€€€€€€€€ÍÑ…ÑÕÌ€ô€‹Îïî–·š6»–êO’â·–ŞËšr'’î“&3ˆ¥˜Í•±˜¹É•‘•¹Ñ¥…±Ì¹¡…Ì¡ÁÉ½Ù¥‘•È¤•±Í”€‹–Âkšr«’şw–¶c’î“&3ˆ(€€€€€€€•±Í”è(€€€€€€€€€€€ÍÑ…ÑÕÌ€ô€‹š&šr'–n{¶S¦÷–r£šr³šrëRš"Cˆ(€€€€€€€Í•±˜¹Ñ½­•¹}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ¡ÍÑ…ÑÕÌ¤(€€€€€€€Í•±˜¹½Á•¹}¡…ÑÁÑ}‰ÕÑÑ½¸¹Í•ÑY¥Í¥‰±”¡ÁÉ½Ù¥‘•È€ôô€‰½‘•àˆ¤(€€€€€€€Í•±˜¹½Á•¹}¡…ÑÁÑ}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡™¥¹‘}½‘•á}Õ¥}…ÁÀ ¤¥Ì¹½Ğ9½¹”¤((€€€‘•˜}½Á•¹}½‘•á}Õ¤¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹RÇR£š"ß’âï–*£š&O–ò ¡…ÑAP•Í­Ñ½ÀÁÃ¾ò3’â7š*(U$ƒ–öO’öp½‘•à1'ˆˆˆ((€€€€€€€¥˜±…Õ¹¡}½‘•á}Õ¤ ¤è(€€€€€€€€€€€Í•±˜¹Ñ½­•¹}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ ‹–ŞËš&O–ò ¡…ÑAS¾òo’î‚’îï–*‡’î7RÇ.³®/j½‘•à1$ƒš&Ÿ¢†3ˆ¤(€€€€€€€•±Í”è(€€€€€€€€€€€Í•±˜¹Ñ½­•¹}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ ‹šr«ššÖ/–"Ã–>¿š&O–òj¡…ÑAP•Í­Ñ½ÀÁÃˆ¤((€€€‘•˜}¡½½Í•}ÅÅ}µÕÍ¥Œ¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§šr³šrèEDƒ¦~Ï’æC¢/–ê?¾ò3’â7¢¾ï–>[¢/–ê?––ºçˆˆˆ((€€€€€€€Á…Ñ €ôÍ•±˜¹}¡½½Í•}µÕÍ¥}ÁÉ½É…´ ‹¦'š.¤EDƒ¦~Ï’æC¢/–ê<ˆ°Í•±˜¹ÅÅ}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹ÅÅ}µÕÍ¥}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}¡½½Í•}¹•Ñ•…Í•}µÕÍ¥Œ¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§šr³šrëöGšbO’êG¦~Ï’æC¢/–ê?¾ò3’â7¢¾ï–>[¢/–ê?––ºçˆˆˆ((€€€€€€€Á…Ñ €ôÍ•±˜¹}¡½½Í•}µÕÍ¥}ÁÉ½É…´ ‹¦'š.§öGšbO’êG¦~Ï’æC¢/–ê<ˆ°Í•±˜¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}¡½½Í•}­Õ½Õ}µÕÍ¥Œ¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§šr³šrë¦ß._¦~Ï’æC¢/–ê?¾ò3’â7¢¾ï–>[¢/–ê?––ºçˆˆˆ((€€€€€€€Á…Ñ €ôÍ•±˜¹}¡½½Í•}µÕÍ¥}ÁÉ½É…´ ‹¦'š.§¦ß._¦~Ï’æC¢/–ê<ˆ°Í•±˜¹­Õ½Õ}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹­Õ½Õ}µÕÍ¥}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}¡½½Í•}…ÁÁ±•}µÕÍ¥Œ¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§šr³šrèÁÁ±”5ÕÍ¥Œƒ¢/–ê?ˆˆˆ((€€€€€€€Á…Ñ €ôÍ•±˜¹}¡½½Í•}µÕÍ¥}ÁÉ½É…´ ‹¦'š.¤ÁÁ±”5ÕÍ¥Œƒ¢/–ê<ˆ°Í•±˜¹…ÁÁ±•}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹…ÁÁ±•}µÕÍ¥}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}¡½½Í•}ÍÁ½Ñ¥™å}µÕÍ¥Œ¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§šr³šrèMÁ½Ñ¥™äƒ¢/–ê?ˆˆˆ((€€€€€€€Á…Ñ €ôÍ•±˜¹}¡½½Í•}µÕÍ¥}ÁÉ½É…´ ‹¦'š.¤MÁ½Ñ¥™äƒ¢/–ê<ˆ°Í•±˜¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}¡½½Í•}µÕÍ¥}ÁÉ½É…´¡Í•±˜°Ñ¥Ñ±”èÍÑÈ°ÕÉÉ•¹ĞèÍÑÈ¤€´øÍÑÈè(€€€€€€€€ˆˆ‰]¥¹‘½İÌƒ¦'š.¤a¾ò1µ…=Lƒ¦'š.§–êSR£–2n»–öW¾òo¢úO–—š†’î7–¢ºãš&/–Ş—Êc¢ÒÓ¢Ş¿–úˆˆˆ((€€€€€€€¥˜ÍåÌ¹Á±…Ñ™½É´€ôô€‰‘…Éİ¥¸ˆè(€€€€€€€€€€€É•ÑÕÉ¸E¥±•¥…±½œ¹•Ñá¥ÍÑ¥¹¥É•Ñ½Éä¡Í•±˜°Ñ¥Ñ±”°ÕÉÉ•¹Ğ½È€ˆ½ÁÁ±¥…Ñ¥½¹Ìˆ¤(€€€€€€€Á…Ñ °|€ôE¥±•¥…±½œ¹•Ñ=Á•¹¥±•9…µ” (€€€€€€€€€€€Í•±˜°(€€€€€€€€€€€Ñ¥Ñ±”°(€€€€€€€€€€€ÕÉÉ•¹Ğ°(€€€€€€€€€€€€‹¢/–ê<€ ¨¹•á”¤ìïš&šr'šZ’îØ€ ¨¤ˆ°(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸Á…Ñ ((€€€‘•˜}¡½½Í•}‰…‰Õ‘…}…Õ‘¥¼¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§šr³–rÃ–ŞÓ–â¢úû¦~Ï¦ŠG¾òo–B3n»–öWnã–B3–&7òšZ’îÛ’òk’ös’âë¢¾·šÂS–>c’öOˆˆˆ((€€€€€€€Á…Ñ °|€ôE¥±•¥…±½œ¹•Ñ=Á•¹¥±•9…µ”¡Í•±˜°€‹¦'š.§–ŞÓ–â¢úû¦~Ï¦ŠDˆ°Í•±˜¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ ¹Ñ•áĞ ¤°€‹¦~Ï¦ŠD€ ¨¹İ…Ø€¨¹µÀÌ€¨¹´Ñ„€¨¹……Œ€¨¹½œ¤ìïš&šr'šZ’îØ€ ¨¤ˆ¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}¡½½Í•}±½…±}±åÉ¥Ì¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹¦'š.§R£š"ßšr'šv–r£šr³šrë’öÿR£j¦C¢†3šZšr³ˆˆˆ((€€€€€€€Á…Ñ °|€ôE¥±•¥…±½œ¹•Ñ=Á•¹¥±•9…µ”¡Í•±˜°€‹¦'š.§šr³–rÃš¶3¢¾7šZšr°ˆ°Í•±˜¹±½…±}±åÉ¥Í}Á…Ñ ¹Ñ•áĞ ¤°€‹šZšr°€ ¨¹ÑáĞ¤ìïš&šr'šZ’îØ€ ¨¤ˆ¤(€€€€€€€¥˜Á…Ñ è(€€€€€€€€€€€Í•±˜¹±½…±}±åÉ¥Í}Á…Ñ ¹Í•ÑQ•áĞ¡Á…Ñ ¤((€€€‘•˜}Ñ•ÍÑ}½¹¹•Ñ¥½¸¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹–r£–B;–>ÃššÖ/šr³šrè•¹Ğƒfï–öWš"XA'¾ò3’â7¦bï–†{–Û’ög¢ºûö»¦'¦†çˆˆˆ((€€€€€€€¥˜Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…¥Ì¹½Ğ9½¹”…¹Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…¹¥ÍIÕ¹¹¥¹œ ¤è(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ÁÉ½Ù¥‘•È€ôÍÑÈ¡Í•±˜¹ÁÉ½Ù¥‘•È¹ÕÉÉ•¹Ñ…Ñ„ ¤¤(€€€€€€€Í•±˜¹½¹¹•Ñ¥½¹}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡…±Í”¤(€€€€€€€Í•±˜¹½¹¹•Ñ¥½¹}‰ÕÑÑ½¸¹Í•ÑQ•áĞ ‹š¶–r£ššÖ/Š˜ˆ¤(€€€€€€€Í•±˜¹…¹•±}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡…±Í”¤(€€€€€€€Í•±˜¹Í…Ù•}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡…±Í”¤(€€€€€€€Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…€ô½¹¹•Ñ¥½¹¡•­Q¡É•… (€€€€€€€€€€€ÁÉ½Ù¥‘•È°(€€€€€€€€€€€Í•±˜¹É•‘•¹Ñ¥…±Ì°(€€€€€€€€€€€Í•±˜¹‰…Í•}ÕÉ°¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤°(€€€€€€€€€€€Í•±˜¹Ñ½­•¸¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤°(€€€€€€€€€€€Í•±˜°(€€€€€€€€¤(€€€€€€€Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…¹ÍÕ••‘•¹½¹¹•Ğ¡Í•±˜¹}µ…¹Õ…±}¡•­}ÍÕ••‘•¤(€€€€€€€Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…¹™…¥±•¹½¹¹•Ğ¡Í•±˜¹}µ…¹Õ…±}¡•­}™…¥±•¤(€€€€€€€Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…¹™¥¹¥Í¡•¹½¹¹•Ğ¡Í•±˜¹}½¹¹•Ñ¥½¹}™¥¹¥Í¡•¤(€€€€€€€Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…¹ÍÑ…ÉĞ ¤((€€€‘•˜}µ…¹Õ…±}¡•­}ÍÕ••‘•¡Í•±˜°É•ÍÕ±ĞèÍÑÈ¤€´ø9½¹”è(€€€€€€€€ˆˆ‹š&/–*£ššÖ/š"C–*š^ÛšnÓšZÃ–>¿¢šZš†#’â;–Ç’ê¯òO–¶cˆˆˆ((€€€€€€€Í•±˜¹Ñ½­•¹}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ¡˜‹ŠríÉ•ÍÕ±Ñôˆ¤(€€€€€€€¥˜Í•±˜¹…•¹Ñ}µ…¹…•È¥Ì¹½Ğ9½¹”è(€€€€€€€€€€€ÁÉ½Ù¥‘•È€ôÍÑÈ¡Í•±˜¹ÁÉ½Ù¥‘•È¹ÕÉÉ•¹Ñ…Ñ„ ¤¤(€€€€€€€€€€€¥˜€‹šr«ššÖ/–"À½‘•à1$ˆ¥¸É•ÍÕ±Ğè(€€€€€€€€€€€€€€€Í•±˜¹…•¹Ñ}µ…¹…•È¹µ…É­}‘¥Í½¹¹•Ñ•¡ÁÉ½Ù¥‘•È°É•ÍÕ±Ğ¤(€€€€€€€€€€€•±Í”è(€€€€€€€€€€€€€€€Í•±˜¹…•¹Ñ}µ…¹…•È¹µ…É­}ÉÕ¹Ñ¥µ•}ÍÕ•ÍÌ¡ÁÉ½Ù¥‘•È¤((€€€‘•˜}µ…¹Õ…±}¡•­}™…¥±•¡Í•±˜°•ÉÉ½ÈèÍÑÈ¤€´ø9½¹”è(€€€€€€€€ˆˆ‹š&/–*£ššÖ/–’Ç¢Ò—–>«šnÓšZÃ–öO–&7¢ºûö»¦†×¾ò3’â7š&O–ò–Û’î[ª_–>ˆˆˆ((€€€€€€€Í•±˜¹Ñ½­•¹}ÍÑ…ÑÕÌ¹Í•ÑQ•áĞ¡˜‹Šv0í•ÉÉ½Éôˆ¤(€€€€€€€¥˜Í•±˜¹…•¹Ñ}µ…¹…•È¥Ì¹½Ğ9½¹”è(€€€€€€€€€€€Í•±˜¹…•¹Ñ}µ…¹…•È¹µ…É­}ÉÕ¹Ñ¥µ•}•ÉÉ½È¡ÍÑÈ¡Í•±˜¹ÁÉ½Ù¥‘•È¹ÕÉÉ•¹Ñ…Ñ„ ¤¤°•ÉÉ½È¤((€€€‘•˜}½¹¹•Ñ¥½¹}™¥¹¥Í¡•¡Í•±˜¤€´ø9½¹”è(€€€€€€€€ˆˆ‹š‹–’7ššÖ/’â;’şw–¶cš2'¦J»–æÛ¦+šRû–ŞË–º3š"Cjêÿ¢/ˆˆˆ((€€€€€€€Ñ¡É•…€ôÍ•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…(€€€€€€€Í•±˜¹}½¹¹•Ñ¥½¹}Ñ¡É•…€ô9½¹”(€€€€€€€Í•±˜¹½¹¹•Ñ¥½¹}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡QÉÕ”¤(€€€€€€€Í•±˜¹½¹¹•Ñ¥½¹}‰ÕÑÑ½¸¹Í•ÑQ•áĞ ‹ššÖ/šb¿–B›¢ş{š:”ˆ¤(€€€€€€€Í•±˜¹…¹•±}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡QÉÕ”¤(€€€€€€€Í•±˜¹Í…Ù•}‰ÕÑÑ½¸¹Í•Ñ¹…‰±•¡QÉÕ”¤(€€€€€€€¥˜Ñ¡É•…¥Ì¹½Ğ9½¹”è(€€€€€€€€€€€Ñ¡É•…¹‘•±•Ñ•1…Ñ•È ¤((€€€‘•˜…ÁÁ±ä¡Í•±˜¤€´ø9½¹”è(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹Á•Ñ}¹…µ”€ôÍ•±˜¹Á•Ñ}¹…µ”¹Ñ•áĞ ¤¹ÍÑÉ¥À ¥lèÈÁt½È€‹–·š¾lˆ(€€€€€€€ÁÉ½Ù¥‘•È€ôÍÑÈ¡Í•±˜¹ÁÉ½Ù¥‘•È¹ÕÉÉ•¹Ñ…Ñ„ ¤¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…¥}ÁÉ½Ù¥‘•È€ôÁÉ½Ù¥‘•È(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…¥}‰…Í•}ÕÉ°€ôÍ•±˜¹‰…Í•}ÕÉ°¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…¥}µ½‘•°€ôÍ•±˜¹µ½‘•°¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…±İ…åÍ}½¹}Ñ½À€ôÍ•±˜¹…±İ…åÍ}½¹}Ñ½À¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…±±½İ}…ÕÑ½¹½µ½ÕÍ}İ…±¬€ôÍ•±˜¹…±±½İ}…ÕÑ½¹½µ½ÕÍ}İ…±¬¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…ÕÑ½µ…Ñ¥}ÉÕµ‰±¥¹œ€ôÍ•±˜¹ÉÕµ‰±¥¹œ¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹¡½ÕÉ±å}…¹¹½Õ¹•µ•¹Ğ€ôÍ•±˜¹¡½ÕÉ±ä¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…ÁÁ}…İ…É•¹•ÍÌ€ôÍ•±˜¹…ÁÁ}…İ…É•¹•ÍÌ¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹Ù½¥•}•¹…‰±•€ôÍ•±˜¹Ù½¥”¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹±åÉ¥}¥¹ÍÁ¥É…Ñ¥½¹}•¹…‰±•€ôÍ•±˜¹±åÉ¥}¥¹ÍÁ¥É…Ñ¥½¸¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹İ…Ñ•É}É•µ¥¹‘•É}•¹…‰±•€ôÍ•±˜¹İ…Ñ•È¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹ÍÑ…¹‘}É•µ¥¹‘•É}•¹…‰±•€ôÍ•±˜¹ÍÑ…¹¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹İ…Ñ•É}¥¹Ñ•ÉÙ…±}µ¥¹ÕÑ•Ì€ôÍ•±˜¹İ…Ñ•É}µ¥¹ÕÑ•Ì¹Ù…±Õ” ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹ÍÑ…¹‘}¥¹Ñ•ÉÙ…±}µ¥¹ÕÑ•Ì€ôÍ•±˜¹ÍÑ…¹‘}µ¥¹ÕÑ•Ì¹Ù…±Õ” ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…ÕÑ½}Á…ÕÍ•}½¹}¥‘±”€ôÍ•±˜¹…ÕÑ½}Á…ÕÍ•}¥‘±”¹¥Í¡•­• ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹¥‘±•}Á…ÕÍ•}Í•½¹‘Ì€ôÍ•±˜¹¥‘±•}Á…ÕÍ•}µ¥¹ÕÑ•Ì¹Ù…±Õ” ¤€¨€ØÀ(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹µÕÍ¥}Í•ÉÙ¥”€ôÍÑÈ¡Í•±˜¹µÕÍ¥}Í•ÉÙ¥”¹ÕÉÉ•¹Ñ…Ñ„ ¤¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹ÅÅ}µÕÍ¥}Á…Ñ €ôÍ•±˜¹ÅÅ}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ €ôÍ•±˜¹¹•Ñ•…Í•}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹­Õ½Õ}µÕÍ¥}Á…Ñ €ôÍ•±˜¹­Õ½Õ}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹…ÁÁ±•}µÕÍ¥}Á…Ñ €ôÍ•±˜¹…ÁÁ±•}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ €ôÍ•±˜¹ÍÁ½Ñ¥™å}µÕÍ¥}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ €ôÍ•±˜¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹±½…±}±åÉ¥Í}Á…Ñ €ôÍ•±˜¹±½…±}±åÉ¥Í}Á…Ñ ¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤(€€€€€€€Í•±˜¹Í•ÑÑ¥¹Ì¹±åÉ¥}¥¹Ñ•ÉÙ…±}µ¥¹ÕÑ•Ì€ôÍ•±˜¹±åÉ¥}µ¥¹ÕÑ•Ì¹Ù…±Õ” ¤(€€€€€€€¥˜ÁÉ½Ù¥‘•È¹½Ğ¥¸ì‰½™™±¥¹”ˆ°€‰½‘•àˆ°€‰±…Õ‘”‰ô…¹Í•±˜¹Ñ½­•¸¹Ñ•áĞ ¤¹ÍÑÉ¥À ¤è(€€€€€€€€€€€Í•±˜¹É•‘•¹Ñ¥…±Ì¹Í•Ğ¡ÁÉ½Ù¥‘•È°Í•±˜¹Ñ½­•¸¹Ñ•áĞ ¤¤
+            "å…³é—­æ—¶ä»ä¿ç•™çœ¨çœ¼ã€åä¸‹ã€ç¡è§‰å’Œäº’åŠ¨åŠ¨ç”»ï¼Œåªæ˜¯ä¸è‡ªåŠ¨æ¨ªå‘è·‘åŠ¨ã€‚"
+        )
+        layout.addWidget(self.allow_autonomous_walk)
+
+        self.grumbling = QCheckBox("å…è®¸å…­æ¯›å¶å°”å‘ä¸€å¥è½»æ¾çš„ç‰¢éªš")
+        self.grumbling.setChecked(settings.automatic_grumbling)
+        layout.addWidget(self.grumbling)
+        self.hourly = QCheckBox("æ•´ç‚¹æŠ¥æ—¶ï¼ˆé»˜è®¤å…³é—­ï¼Œå¯éšæ—¶å–æ¶ˆï¼‰")
+        self.hourly.setChecked(settings.hourly_announcement)
+        layout.addWidget(self.hourly)
+        self.app_awareness = QCheckBox("æ ¹æ®å½“å‰åº”ç”¨åˆ‡æ¢é™ªä¼´åŠ¨ä½œï¼ˆåªè¯†åˆ«åº”ç”¨ç±»åˆ«ï¼‰")
+        self.app_awareness.setChecked(settings.app_awareness)
+        layout.addWidget(self.app_awareness)
+        self.voice = QCheckBox("åŒå‡»å³é”®æ—¶è®©å…­æ¯›è¯´â€œå·´å¸ƒè¾¾â€")
+        self.voice.setChecked(settings.voice_enabled)
+        layout.addWidget(self.voice)
+        self.lyric_inspiration = QCheckBox("å®šæ—¶æ˜¾ç¤ºæ­Œåæ„è±¡æˆ–æœ¬åœ°æ­Œè¯")
+        self.lyric_inspiration.setChecked(settings.lyric_inspiration_enabled)
+        layout.addWidget(self.lyric_inspiration)
+        self.water = QCheckBox("å–æ°´æé†’")
+        self.water.setChecked(settings.water_reminder_enabled)
+        self.water_minutes = QSpinBox(); self.water_minutes.setRange(10, 240); self.water_minutes.setSuffix(" åˆ†é’Ÿ"); self.water_minutes.setValue(settings.water_interval_minutes)
+        form.addRow(self.water, self.water_minutes)
+        self.stand = QCheckBox("ç«™ç«‹ä¼‘æ¯æé†’")
+        self.stand.setChecked(settings.stand_reminder_enabled)
+        self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" åˆ†é’Ÿ"); self.stand_minutes.setValue(settings.stand_interval_minutes)
+        form.addRow(self.stand, self.stand_minutes)
+        self.auto_pause_idle = QCheckBox("é”®é¼ æ— æ“ä½œæ—¶è‡ªåŠ¨æš‚åœä¸“æ³¨è®¡æ—¶")
+        self.auto_pause_idle.setChecked(settings.auto_pause_on_idle)
+        self.idle_pause_minutes = QSpinBox(); self.idle_pause_minutes.setRange(1, 60); self.idle_pause_minutes.setSuffix(" åˆ†é’Ÿ"); self.idle_pause_minutes.setValue(max(1, settings.idle_pause_seconds // 60))
+        form.addRow(self.auto_pause_idle, self.idle_pause_minutes)
+        self.music_service = QComboBox()
+        for label, key in (
+            ("è‡ªåŠ¨é€‰æ‹©ï¼ˆæ¨èï¼‰", "auto"),
+            ("ç½‘æ˜“äº‘éŸ³ä¹", "netease"),
+            ("QQ éŸ³ä¹", "qq"),
+            ("é…·ç‹—éŸ³ä¹", "kugou"),
+            ("Apple Music", "apple"),
+            ("Spotify", "spotify"),
+        ):
+            self.music_service.addItem(label, key)
+        self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
+        self.music_service.currentIndexChanged.connect(self._music_provider_changed)
+        form.addRow("ä¼˜å…ˆæ’­æ”¾å™¨ï¼ˆé«˜çº§ï¼‰", self.music_service)
+        self.music_status = QLabel()
+        self.music_status.setObjectName("status")
+        self.music_status.setWordWrap(True)
+        form.addRow("è‡ªåŠ¨é€‰æ‹©çŠ¶æ€", self.music_status)
+
+        self.qq_music_path = QLineEdit(settings.qq_music_path)
+        self.qq_music_path.setPlaceholderText("è‡ªåŠ¨å¯»æ‰¾ï¼Œæˆ–é€‰æ‹© QQMusic.exe / QQMusic.app")
+        qq_row = QWidget(); qq_layout = QHBoxLayout(qq_row); qq_layout.setContentsMargins(0, 0, 0, 0)
+        qq_pick = QPushButton("é€‰æ‹©â€¦"); qq_pick.setObjectName("softButton"); qq_pick.clicked.connect(self._choose_qq_music)
+        qq_layout.addWidget(self.qq_music_path, 1); qq_layout.addWidget(qq_pick)
+        form.addRow("QQ éŸ³ä¹ç¨‹åº", qq_row)
+
+        self.netease_music_path = QLineEdit(settings.netease_music_path)
+        self.netease_music_path.setPlaceholderText("è‡ªåŠ¨å¯»æ‰¾ï¼Œæˆ–é€‰æ‹© cloudmusic.exe / ç½‘æ˜“äº‘éŸ³ä¹.app")
+        netease_row = QWidget(); netease_layout = QHBoxLayout(netease_row); netease_layout.setContentsMargins(0, 0, 0, 0)
+        netease_pick = QPushButton("é€‰æ‹©â€¦"); netease_pick.setObjectName("softButton"); netease_pick.clicked.connect(self._choose_netease_music)
+        netease_layout.addWidget(self.netease_music_path, 1); netease_layout.addWidget(netease_pick)
+        form.addRow("ç½‘æ˜“äº‘ç¨‹åº", netease_row)
+
+        self.kugou_music_path = QLineEdit(settings.kugou_music_path)
+        self.kugou_music_path.setPlaceholderText("è‡ªåŠ¨å¯»æ‰¾ï¼Œæˆ–é€‰æ‹© KuGou.exe / é…·ç‹—éŸ³ä¹.app")
+        kugou_row = QWidget(); kugou_layout = QHBoxLayout(kugou_row); kugou_layout.setContentsMargins(0, 0, 0, 0)
+        kugou_pick = QPushButton("é€‰æ‹©â€¦"); kugou_pick.setObjectName("softButton"); kugou_pick.clicked.connect(self._choose_kugou_music)
+        kugou_layout.addWidget(self.kugou_music_path, 1); kugou_layout.addWidget(kugou_pick)
+        form.addRow("é…·ç‹—éŸ³ä¹ç¨‹åº", kugou_row)
+
+        self.apple_music_path = QLineEdit(settings.apple_music_path)
+        self.apple_music_path.setPlaceholderText("è‡ªåŠ¨å¯»æ‰¾ï¼Œæˆ–é€‰æ‹© AppleMusic.exe / Music.app")
+        apple_row = QWidget(); apple_layout = QHBoxLayout(apple_row); apple_layout.setContentsMargins(0, 0, 0, 0)
+        apple_pick = QPushButton("é€‰æ‹©â€¦"); apple_pick.setObjectName("softButton"); apple_pick.clicked.connect(self._choose_apple_music)
+        apple_layout.addWidget(self.apple_music_path, 1); apple_layout.addWidget(apple_pick)
+        form.addRow("Apple Music ç¨‹åº", apple_row)
+
+        self.spotify_music_path = QLineEdit(settings.spotify_music_path)
+        self.spotify_music_path.setPlaceholderText("è‡ªåŠ¨å¯»æ‰¾ï¼Œæˆ–é€‰æ‹© Spotify.exe / Spotify.app")
+        spotify_row = QWidget(); spotify_layout = QHBoxLayout(spotify_row); spotify_layout.setContentsMargins(0, 0, 0, 0)
+        spotify_pick = QPushButton("é€‰æ‹©â€¦"); spotify_pick.setObjectName("softButton"); spotify_pick.clicked.connect(self._choose_spotify_music)
+        spotify_layout.addWidget(self.spotify_music_path, 1); spotify_layout.addWidget(spotify_pick)
+        form.addRow("Spotify ç¨‹åº", spotify_row)
+
+        self.babuda_audio_path = QLineEdit(settings.babuda_audio_path)
+        self.babuda_audio_path.setPlaceholderText("é€‰æ‹©ç¬¬ä¸€æ®µ babuda éŸ³é¢‘ï¼›åŒç›®å½•å¤šæ®µä¼šè‡ªåŠ¨è½®æ¢")
+        audio_row = QWidget(); audio_layout = QHBoxLayout(audio_row); audio_layout.setContentsMargins(0, 0, 0, 0)
+        audio_pick = QPushButton("é€‰æ‹©â€¦"); audio_pick.setObjectName("softButton"); audio_pick.clicked.connect(self._choose_babuda_audio)
+        audio_layout.addWidget(self.babuda_audio_path, 1); audio_layout.addWidget(audio_pick)
+        form.addRow("å·´å¸ƒè¾¾éŸ³é¢‘", audio_row)
+
+        self.local_lyrics_path = QLineEdit(settings.local_lyrics_path)
+        self.local_lyrics_path.setPlaceholderText("å¯é€‰ï¼šä½ æœ‰æƒä½¿ç”¨çš„ TXTï¼Œæ¯è¡Œä¸€å¥")
+        lyrics_row = QWidget(); lyrics_layout = QHBoxLayout(lyrics_row); lyrics_layout.setContentsMargins(0, 0, 0, 0)
+        lyrics_pick = QPushButton("é€‰æ‹©â€¦"); lyrics_pick.setObjectName("softButton"); lyrics_pick.clicked.connect(self._choose_local_lyrics)
+        lyrics_layout.addWidget(self.local_lyrics_path, 1); lyrics_layout.addWidget(lyrics_pick)
+        form.addRow("æœ¬åœ°æ­Œè¯æ–‡æœ¬", lyrics_row)
+        self.lyric_minutes = QSpinBox(); self.lyric_minutes.setRange(2, 120); self.lyric_minutes.setSuffix(" åˆ†é’Ÿ"); self.lyric_minutes.setValue(settings.lyric_interval_minutes)
+        form.addRow("æ­Œè¯æ°”æ³¡é—´éš”", self.lyric_minutes)
+
+        note = QLabel(
+            "Codex/Claude Code æ¨¡å¼å¤ç”¨æœ¬æœºç™»å½•ï¼Œä¸éœ€è¦ API Keyï¼›DeepSeek/Kimi ä»¤ç‰Œä¿å­˜åœ¨ç³»ç»Ÿå®‰å…¨å‡­æ®åº“ã€‚"
+            "å®˜æ–¹å°šæœªæä¾›è®©å¤–éƒ¨ç¨‹åºæ¥ç®¡ Codex å†…ç½®å® ç‰©çš„æ¥å£ï¼Œä½† Lili å¯ä½œä¸ºç‹¬ç«‹å® ç‰©ä½¿ç”¨ Codex å¯¹è¯ã€‚"
+        )
+        note.setObjectName("status")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.cancel_button = QPushButton("å–æ¶ˆ")
+        self.cancel_button.setObjectName("softButton")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button)
+        self.save_button = QPushButton("ä¿å­˜")
+        self.save_button.clicked.connect(self.accept)
+        buttons.addWidget(self.save_button)
+        outer_layout.addLayout(buttons)
+        self._provider_changed()
+        self._music_provider_changed()
+
+    def _music_provider_changed(self) -> None:
+        """åˆ†åˆ«æ˜¾ç¤ºåº”ç”¨ã€Transport ä¸è‡ªåŠ¨é€‰æ­Œèƒ½åŠ›ï¼Œä¸æŠŠå®‰è£…ç§°ä¸ºå·²è¿æ¥ã€‚"""
+
+        provider = str(self.music_service.currentData())
+        if self.music_manager is None:
+            self.music_status.setText("éŸ³ä¹æ’­æ”¾å™¨ï¼šè‡ªåŠ¨é€‰æ‹©\nå½“å‰ä½¿ç”¨ï¼šå°šæœªå¼€å§‹æ’­æ”¾\né¦–æ¬¡æ’­æ”¾æ—¶å°†æ£€æµ‹æœ¬æœºæ’­æ”¾å™¨ã€‚")
+            return
+        if provider == "auto":
+            self.music_status.setText(self.music_manager.auto_status_text())
+            return
+        self.music_status.setText(
+            f"è‡ªåŠ¨é€‰æ‹©å·²å¼€å¯ï¼›ä¼˜å…ˆå°è¯•{self.music_service.currentText()}ã€‚\n"
+            f"{self.music_manager.provider_status_text(provider)}"
+        )
+
+    def _provider_changed(self) -> None:
+        provider = str(self.provider.currentData())
+        base_url, model = provider_defaults(provider)
+        if provider not in {"offline", "codex", "claude"}:
+            if not self.base_url.text().strip() or self.settings.ai_provider != provider:
+                self.base_url.setText(base_url)
+            if not self.model.text().strip() or self.settings.ai_provider != provider:
+                self.model.setText(model)
+        enabled = provider not in {"offline", "codex", "claude"}
+        self.base_url.setEnabled(enabled)
+        self.model.setEnabled(enabled)
+        self.token.setEnabled(enabled)
+        if provider != "offline" and self.agent_manager is not None:
+            cached = self.agent_manager.status(provider)
+            labels = {
+                AgentConnectionState.CHECKING: "æ­£åœ¨åå°æ£€æµ‹ï¼›å½“å‰èŠå¤©ä»å¯ä½¿ç”¨ç¦»çº¿é™ªä¼´ã€‚",
+                AgentConnectionState.CONNECTED: cached.detail,
+                AgentConnectionState.DISCONNECTED: f"{cached.detail}\nèŠå¤©ä¼šè‡ªåŠ¨ä½¿ç”¨ç¦»çº¿é™ªä¼´ã€‚",
+                AgentConnectionState.ERROR: f"{cached.detail}\nç¨åä¼šä½é¢‘è‡ªåŠ¨é‡è¿ã€‚",
+            }
+            status = labels[cached.state]
+        elif provider == "codex":
+            status = codex_detection_message()
+        elif provider == "claude":
+            status = "å·²æ£€æµ‹åˆ°æœ¬æœº Claude Codeã€‚" if claude_available() else "æš‚æœªæ£€æµ‹åˆ° Claude Codeï¼ŒèŠå¤©æ—¶ä¼šä½¿ç”¨ç¦»çº¿å›ç­”ã€‚"
+        elif enabled:
+            status = "ç³»ç»Ÿå‡­æ®åº“ä¸­å·²æœ‰ä»¤ç‰Œã€‚" if self.credentials.has(provider) else "å°šæœªä¿å­˜ä»¤ç‰Œã€‚"
+        else:
+            status = "æ‰€æœ‰å›ç­”éƒ½åœ¨æœ¬æœºç”Ÿæˆã€‚"
+        self.token_status.setText(status)
+        self.open_chatgpt_button.setVisible(provider == "codex")
+        self.open_chatgpt_button.setEnabled(find_codex_gui_app() is not None)
+
+    def _open_codex_gui(self) -> None:
+        """ç”±ç”¨æˆ·ä¸»åŠ¨æ‰“å¼€ ChatGPT Desktop Appï¼Œä¸æŠŠ GUI å½“ä½œ Codex CLIã€‚"""
+
+        if launch_codex_gui():
+            self.token_status.setText("å·²æ‰“å¼€ ChatGPTï¼›ä»£ç ä»»åŠ¡ä»ç”±ç‹¬ç«‹çš„ Codex CLI æ‰§è¡Œã€‚")
+        else:
+            self.token_status.setText("æœªæ£€æµ‹åˆ°å¯æ‰“å¼€çš„ ChatGPT Desktop Appã€‚")
+
+    def _choose_qq_music(self) -> None:
+        """é€‰æ‹©æœ¬æœº QQ éŸ³ä¹ç¨‹åºï¼Œä¸è¯»å–ç¨‹åºå†…å®¹ã€‚"""
+
+        path = self._choose_music_program("é€‰æ‹© QQ éŸ³ä¹ç¨‹åº", self.qq_music_path.text())
+        if path:
+            self.qq_music_path.setText(path)
+
+    def _choose_netease_music(self) -> None:
+        """é€‰æ‹©æœ¬æœºç½‘æ˜“äº‘éŸ³ä¹ç¨‹åºï¼Œä¸è¯»å–ç¨‹åºå†…å®¹ã€‚"""
+
+        path = self._choose_music_program("é€‰æ‹©ç½‘æ˜“äº‘éŸ³ä¹ç¨‹åº", self.netease_music_path.text())
+        if path:
+            self.netease_music_path.setText(path)
+
+    def _choose_kugou_music(self) -> None:
+        """é€‰æ‹©æœ¬æœºé…·ç‹—éŸ³ä¹ç¨‹åºï¼Œä¸è¯»å–ç¨‹åºå†…å®¹ã€‚"""
+
+        path = self._choose_music_program("é€‰æ‹©é…·ç‹—éŸ³ä¹ç¨‹åº", self.kugou_music_path.text())
+        if path:
+            self.kugou_music_path.setText(path)
+
+    def _choose_apple_music(self) -> None:
+        """é€‰æ‹©æœ¬æœº Apple Music ç¨‹åºã€‚"""
+
+        path = self._choose_music_program("é€‰æ‹© Apple Music ç¨‹åº", self.apple_music_path.text())
+        if path:
+            self.apple_music_path.setText(path)
+
+    def _choose_spotify_music(self) -> None:
+        """é€‰æ‹©æœ¬æœº Spotify ç¨‹åºã€‚"""
+
+        path = self._choose_music_program("é€‰æ‹© Spotify ç¨‹åº", self.spotify_music_path.text())
+        if path:
+            self.spotify_music_path.setText(path)
+
+    def _choose_music_program(self, title: str, current: str) -> str:
+        """Windows é€‰æ‹© EXEï¼ŒmacOS é€‰æ‹©åº”ç”¨åŒ…ç›®å½•ï¼›è¾“å…¥æ¡†ä»å…è®¸æ‰‹å·¥ç²˜è´´è·¯å¾„ã€‚"""
+
+        if sys.platform == "darwin":
+            return QFileDialog.getExistingDirectory(self, title, current or "/Applications")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            title,
+            current,
+            "ç¨‹åº (*.exe);;æ‰€æœ‰æ–‡ä»¶ (*)",
+        )
+        return path
+
+    def _choose_babuda_audio(self) -> None:
+        """é€‰æ‹©æœ¬åœ°å·´å¸ƒè¾¾éŸ³é¢‘ï¼›åŒç›®å½•ç›¸åŒå‰ç¼€æ–‡ä»¶ä¼šä½œä¸ºè¯­æ°”å˜ä½“ã€‚"""
+
+        path, _ = QFileDialog.getOpenFileName(self, "é€‰æ‹©å·´å¸ƒè¾¾éŸ³é¢‘", self.babuda_audio_path.text(), "éŸ³é¢‘ (*.wav *.mp3 *.m4a *.aac *.ogg);;æ‰€æœ‰æ–‡ä»¶ (*)")
+        if path:
+            self.babuda_audio_path.setText(path)
+
+    def _choose_local_lyrics(self) -> None:
+        """é€‰æ‹©ç”¨æˆ·æœ‰æƒåœ¨æœ¬æœºä½¿ç”¨çš„é€è¡Œæ–‡æœ¬ã€‚"""
+
+        path, _ = QFileDialog.getOpenFileName(self, "é€‰æ‹©æœ¬åœ°æ­Œè¯æ–‡æœ¬", self.local_lyrics_path.text(), "æ–‡æœ¬ (*.txt);;æ‰€æœ‰æ–‡ä»¶ (*)")
+        if path:
+            self.local_lyrics_path.setText(path)
+
+    def _test_connection(self) -> None:
+        """åœ¨åå°æ£€æµ‹æœ¬æœº Agent ç™»å½•æˆ– APIï¼Œä¸é˜»å¡å…¶ä½™è®¾ç½®é€‰é¡¹ã€‚"""
+
+        if self._connection_thread is not None and self._connection_thread.isRunning():
+            return
+        provider = str(self.provider.currentData())
+        self.connection_button.setEnabled(False)
+        self.connection_button.setText("æ­£åœ¨æ£€æµ‹â€¦")
+        self.cancel_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self._connection_thread = ConnectionCheckThread(
+            provider,
+            self.credentials,
+            self.base_url.text().strip(),
+            self.token.text().strip(),
+            self,
+        )
+        self._connection_thread.succeeded.connect(self._manual_check_succeeded)
+        self._connection_thread.failed.connect(self._manual_check_failed)
+        self._connection_thread.finished.connect(self._connection_finished)
+        self._connection_thread.start()
+
+    def _manual_check_succeeded(self, result: str) -> None:
+        """æ‰‹åŠ¨æ£€æµ‹æˆåŠŸæ—¶æ›´æ–°å¯è§æ–‡æ¡ˆä¸å…±äº«ç¼“å­˜ã€‚"""
+
+        self.token_status.setText(f"âœ… {result}")
+        if self.agent_manager is not None:
+            provider = str(self.provider.currentData())
+            if "æœªæ£€æµ‹åˆ° Codex CLI" in result:
+                self.agent_manager.mark_disconnected(provider, result)
+            else:
+                self.agent_manager.mark_runtime_success(provider)
+
+    def _manual_check_failed(self, error: str) -> None:
+        """æ‰‹åŠ¨æ£€æµ‹å¤±è´¥åªæ›´æ–°å½“å‰è®¾ç½®é¡µï¼Œä¸æ‰“å¼€å…¶ä»–çª—å£ã€‚"""
+
+        self.token_status.setText(f"âŒ {error}")
+        if self.agent_manager is not None:
+            self.agent_manager.mark_runtime_error(str(self.provider.currentData()), error)
+
+    def _connection_finished(self) -> None:
+        """æ¢å¤æ£€æµ‹ä¸ä¿å­˜æŒ‰é’®å¹¶é‡Šæ”¾å·²å®Œæˆçš„çº¿ç¨‹ã€‚"""
+
+        thread = self._connection_thread
+        self._connection_thread = None
+        self.connection_button.setEnabled(True)
+        self.connection_button.setText("æ£€æµ‹æ˜¯å¦è¿æ¥")
+        self.cancel_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        if thread is not None:
+            thread.deleteLater()
+
+    def apply(self) -> None:
+        self.settings.pet_name = self.pet_name.text().strip()[:20] or "å…­æ¯›"
+        provider = str(self.provider.currentData())
+        self.settings.ai_provider = provider
+        self.settings.ai_base_url = self.base_url.text().strip()
+        self.settings.ai_model = self.model.text().strip()
+        self.settings.always_on_top = self.always_on_top.isChecked()
+        self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
+        self.settings.automatic_grumbling = self.grumbling.isChecked()
+        self.settings.hourly_announcement = self.hourly.isChecked()
+        self.settings.app_awareness = self.app_awareness.isChecked()
+        self.settings.voice_enabled = self.voice.isChecked()
+        self.settings.lyric_inspiration_enabled = self.lyric_inspiration.isChecked()
+        self.settings.water_reminder_enabled = self.water.isChecked()
+        self.settings.stand_reminder_enabled = self.stand.isChecked()
+        self.settings.water_interval_minutes = self.water_minutes.value()
+        self.settings.stand_interval_minutes = self.stand_minutes.value()
+        self.settings.auto_pause_on_idle = self.auto_pause_idle.isChecked()
+        self.settings.idle_pause_seconds = self.idle_pause_minutes.value() * 60
+        self.settings.music_service = str(self.music_service.currentData())
+        self.settings.qq_music_path = self.qq_music_path.text().strip()
+        self.settings.netease_music_path = self.netease_music_path.text().strip()
+        self.settings.kugou_music_path = self.kugou_music_path.text().strip()
+        self.settings.apple_music_path = self.apple_music_path.text().strip()
+        self.settings.spotify_music_path = self.spotify_music_path.text().strip()
+        self.settings.babuda_audio_path = self.babuda_audio_path.text().strip()
+        self.settings.local_lyrics_path = self.local_lyrics_path.text().strip()
+        self.settings.lyric_interval_minutes = self.lyric_minutes.value()
+        if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
+            self.credentials.set(provider, self.token.text())
