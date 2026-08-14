@@ -198,9 +198,19 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
   });
 }
 
+function relativePath(url: URL): string {
+  const raw = url.pathname.replace(/\/+$/, "") || "/";
+  const gatewayPrefix = "/functions/v1/";
+  const prefixIndex = raw.indexOf(gatewayPrefix);
+  if (prefixIndex < 0) return raw;
+  const functionPath = raw.slice(prefixIndex + gatewayPrefix.length);
+  const separator = functionPath.indexOf("/");
+  return separator < 0 ? "/" : functionPath.slice(separator) || "/";
+}
+
 async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const path = relativePath(url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(request, env) });
   if (request.method === "GET" && (path === "/health" || path === "/")) {
     return json(request, env, {
