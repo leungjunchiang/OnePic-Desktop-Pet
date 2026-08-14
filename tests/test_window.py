@@ -179,6 +179,15 @@ def test_chat_rename_button_opens_visible_rename_flow(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_chat_connected_status_is_not_rendered_twice() -> None:
+    dialog = ChatDialog()
+    dialog.set_provider("codex", "connected", "Codex 已连接。")
+    assert dialog.status_label.text() == "Codex（使用本机登录） · 已连接，优先使用 AI"
+    assert "\n" not in dialog.status_label.text()
+    dialog.close()
+    dialog.deleteLater()
+
+
 def test_hourly_unlocks_never_override_manual_outfit_selection(monkeypatch) -> None:
     """小时成长线只解锁娃衣，不能把用户选好的外观强行换掉。"""
     app, window = _create_window()

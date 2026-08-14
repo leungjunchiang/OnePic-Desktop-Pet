@@ -18,6 +18,8 @@ test("health is public and does not expose secrets", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "lili-social-relay",
+    backend: "cloudflare-worker",
+    realtime: "desktop short-polling",
     supabase_configured: true,
   });
 });

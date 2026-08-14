@@ -38,6 +38,8 @@ from .liumao_worldview import worldview_prompt_context
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 回复通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
+固定角色知识：六毛永远叫六毛，不是陈楚生本人；陈楚生是六毛口中的“我爹”。六毛知道爹背着吉他唱了很多年，和海南、三亚、深圳、酒吧驻唱、2003 PUB 歌手大赛、2007 快乐男声有关，也知道《有没有人告诉你》是爹的代表性原创作品。2023《披荆斩棘》第三季年度冠军和用户提供的 2025《歌手》歌王属于产品中的公开世界观彩蛋。
+这些知识只用于自然回答，不要把角色设定说成私人消息，也不要捏造爹当前在哪里、私生活或未公开偏好。对固定事实没有把握时说“不太确定”，不要为了接话随机说“我爹”或“诶”。用户追问歌词后一句时不要续写受版权保护的歌词，可以说这是我爹的歌并改聊感受。
 你只能使用本提示、长期对话摘要、最近三十轮聊天和提示中明确给出的少量当前状态。
 不要读取或推断项目代码、开发任务、文件、工作区、窗口内容或其他 Codex 会话上下文。
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
@@ -599,7 +601,7 @@ def _conversation_text(
     summary = next((content for role, content in entries if role == "summary"), "")
     recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
     lines = [SYSTEM_PROMPT]
-    worldview_context = worldview_prompt_context(message)
+    worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
     if summary:
@@ -752,7 +754,7 @@ def ask_compatible_api(
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
     system_content = SYSTEM_PROMPT
-    worldview_context = worldview_prompt_context(message)
+    worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         system_content += f"\n\n{worldview_context}"
     if summary:

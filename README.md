@@ -45,7 +45,7 @@
 - 社交同步每 10 秒只发送昵称、六毛外观、在线/工作状态、累计秒数、房间与串门事件；密码不保存，刷新令牌进入系统凭据库；
 - 支持隐身、隐藏准确时长和拒绝串门；网络故障只会停用社交状态，不影响本地计时、动作、AI 或音乐；
 
-自习室网络通过 `SocialClient` 的后端接口解耦：默认使用现有 Supabase；仓库同时提供受限的 Cloudflare Worker 中转服务源码，位于 [`relay/`](relay/)。部署后，可在 `config/social_backend.json` 或环境变量 `LILI_SOCIAL_API_BASE_URL` 设置 `social_api_base_url`，客户端将改走 `/auth/*`、`/presence/*`、`/dashboard`、`/buddies/*`、`/rooms/*` 与 `/visits/*` 等稳定接口。客户端不包含 service-role key。当前桌面端采用后台短轮询：正常网络下约 10 秒同步一次，切换房间和互动会立即刷新；若当前网络无法直连 Supabase，客户端会快速失败、显示最近一次房间状态并自动重试，不会阻塞桌宠、计时或窗口。中转服务部署说明见 [`relay/README.md`](relay/README.md)。
+自习室网络通过 `SocialClient` 的后端接口解耦：默认使用现有 Supabase；仓库同时提供受限的 Cloudflare Worker 中转服务源码，位于 [`relay/`](relay/)。部署后，可在 `config/social_backend.json` 或环境变量 `LILI_SOCIAL_API_BASE_URL` 设置 `social_api_base_url`，客户端将改走 `/auth/*`、`/presence/*`、`/dashboard`、`/buddies/*`、`/rooms/*` 与 `/visits/*` 等稳定接口。客户端不包含 service-role key。当前桌面端采用后台短轮询：正常网络下约 10 秒同步一次，切换房间和互动会立即刷新；首页提供“检测自习室网络”，会显示实际后端并区分 DNS、超时、拒绝连接、TLS、认证和服务器错误；若当前网络无法直连，客户端会快速失败、显示最近一次房间状态并自动重试，不会阻塞桌宠、计时或窗口。中转服务部署说明见 [`relay/README.md`](relay/README.md)。仓库不把未经目标网络实测的公网中转地址标记为已验证。
 - 扩充对工作压力、自我怀疑、拖延、犯错、孤独与爱意的暖心回应；
 - 跑动结束后随机站立、坐下或自拍；
 - 默认 5 分钟无互动后坐下、10 分钟后入睡；

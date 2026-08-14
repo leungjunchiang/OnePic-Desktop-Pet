@@ -96,6 +96,18 @@ def test_http_social_backend_uses_proxy_routes_without_supabase_paths() -> None:
     assert all("supabase" not in str(call[1]).lower() for call in backend.calls)
 
 
+def test_health_probe_identifies_active_transport_without_authentication() -> None:
+    backend = RecordingHttpBackend()
+    assert backend.health() == {}
+    assert backend.calls[-1][0:2] == ("GET", "/health")
+
+    client = RecordingClient()
+    assert client.backend_name == "supabase"
+    assert client.backend_endpoint.endswith("supabase.co")
+    assert client.health() == {}
+    assert client.calls[-1][0:2] == ("GET", "/auth/v1/health")
+
+
 def test_social_config_exposes_optional_proxy_base_url() -> None:
     root = Path(__file__).resolve().parents[1]
     config = (root / "config" / "social_backend.json").read_text(encoding="utf-8")

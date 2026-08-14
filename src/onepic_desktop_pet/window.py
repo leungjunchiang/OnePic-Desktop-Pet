@@ -107,7 +107,7 @@ from .chat_manager import (
     OfflineDialogueManager,
     should_start_startup_detection,
 )
-from .chat_memory import ConversationMemory
+from .chat_memory import ConversationMemory, conversation_memory_path
 from .companion import (
     ACTION_BY_KEY,
     APP_DISPLAY_NAME,
@@ -333,7 +333,12 @@ class PetWindow(QWidget):
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
         self._chat_dialog: ChatDialog | None = None
-        self._chat_memory = ConversationMemory(max_recent_rounds=30)
+        self._chat_memory = ConversationMemory(
+            max_recent_rounds=30,
+            persist_path=conversation_memory_path()
+            if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+            else None,
+        )
         self.agent_manager = AgentManager(self.settings, self.credentials, self)
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,

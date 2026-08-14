@@ -234,7 +234,7 @@ class ChatDialog(QDialog):
         entry.addWidget(self.send_button)
         layout.addLayout(entry)
 
-        privacy = QLabel("🔒 对话不落盘。在线模式只把当前消息和最近少量上下文发给所选 AI。")
+        privacy = QLabel("🔒 对话摘要和最近消息只保存在本机；在线模式只把角色设定、相关知识和有限上下文发给所选 AI。")
         privacy.setObjectName("status")
         privacy.setWordWrap(True)
         layout.addWidget(privacy)
@@ -279,7 +279,11 @@ class ChatDialog(QDialog):
                 AgentConnectionState.ERROR.value: "暂时出错，已自动使用离线陪伴",
             }
             label = state_labels.get(state, "已自动使用离线陪伴")
-            detail = f"{preset.label} · {label}" + (f"\n{detail}" if detail else "")
+            # AgentManager 的 detail 可能是“Codex 已连接。”，再拼在
+            # “Codex（使用本机登录）· 已连接”下面会造成截图中的重复状态。
+            # 成功状态只保留一个稳定标签；失败状态才显示诊断原因。
+            suffix = "" if state == AgentConnectionState.CONNECTED.value else (f"\n{detail}" if detail else "")
+            detail = f"{preset.label} · {label}{suffix}"
         self.status_label.setText(detail)
 
     def show_recovery_actions(self, visible: bool) -> None:

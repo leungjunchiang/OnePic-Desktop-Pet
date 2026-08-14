@@ -8,6 +8,7 @@
 - 客户端只需要访问 Worker 地址，不必直接访问 Supabase REST 域名。
 - `/health` 可用于检查 Worker 是否在线；响应不会泄露密钥。
 - 客户端仍保留最近一次房间状态，网络短暂中断时不会卡住桌宠或计时器。
+- 桌面端会显示当前使用的后端地址，并把 DNS 失败、连接超时、拒绝连接、TLS、认证和服务器错误分开提示。
 
 这套实现是“短轮询的近实时同步”，不是 WebSocket 推送。桌面端现有 Python 网络层不维护长连接；如果未来要做真正的推送，再单独接入 Supabase Realtime 或 WebSocket 客户端。
 
@@ -29,6 +30,8 @@ npx wrangler deploy
 ```text
 https://lili-social-relay.<account>.workers.dev
 ```
+
+仓库不内置未经实际网络验收的公网地址。`workers.dev` 地址是否能被某个地区或运营商稳定访问，必须在目标网络（包括中国大陆家庭宽带、校园网和手机热点）逐一访问 `/health` 验证；仅在开发机或开启代理时可访问，不代表国内直连已解决。
 
 不要把 Supabase key 写进 `wrangler.toml` 或提交到仓库。`SUPABASE_PUBLISHABLE_KEY` 是 publishable/anon key；绝不能使用 `service_role`。
 

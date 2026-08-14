@@ -1,13 +1,15 @@
-"""六毛世界观技能：按需触发的陈楚生家庭设定与安全边界。
+"""六毛世界观知识库：按需检索陈楚生家庭设定与安全边界。
 
-运行时只保留关键词索引和很短的回复，不把完整世界观长文拼进每一轮提示词。
-在线 AI 只有在本轮命中相关主题时才收到一小段上下文；离线模式直接使用本地短回复。
+这里故意保存为很小的结构化知识条目，而不是把整篇世界观长文拼进每一轮
+提示词。当前消息会和最近几条对话一起检索，因此“他”“这首”“后面一句”
+这类连续追问不会脱离上一轮的家庭语境。
 """
 
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from typing import Iterable
 
 from .behavior import PetState
 
@@ -33,14 +35,44 @@ def _has(text: str, *markers: str) -> bool:
     return any(marker in text for marker in markers)
 
 
-def classify_worldview(message: str) -> str | None:
+def _history_text(history: Iterable[tuple[str, str]] = ()) -> str:
+    """只取最近少量聊天用于指代消解，不把无限历史带入检索。"""
+
+    entries = [
+        str(content or "")
+        for role, content in history
+        if role in {"user", "assistant"}
+    ][-8:]
+    return " ".join(entries)
+
+
+def _family_context(text: str, history: Iterable[tuple[str, str]] = ()) -> bool:
+    """判断“他/这首”等省略主语是否仍然指向六毛的爹。"""
+
+    if _has(text, FAMILY_ARTIST, "我爹", "你爹", "陈楚生家的", FAMILY_SONG):
+        return True
+    recent = _history_text(history)
+    return bool(recent and _has(recent, FAMILY_ARTIST, "我爹", "你爹", FAMILY_SONG))
+
+
+def classify_worldview(
+    message: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> str | None:
     """只返回本轮需要的主题键；无关聊天返回 None。"""
 
     text = _clean(message)
     if not text:
         return None
+    family_context = _family_context(text, history)
+    if _has(text, "后面一句", "下一句", "歌词", "歌词是什么", "续上", "接下来怎么唱") and family_context:
+        return "family_song_lyrics"
     if _has(text, FAMILY_SONG):
         return "family_song"
+    if family_context and _has(text, "唱歌怎么样", "唱得怎么样", "唱歌好听", "歌好听", "声音怎么样", "会唱歌吗"):
+        return "father_music"
+    if family_context and _has(text, "他是谁", "这个人是谁", "他是干嘛的", "他做什么"):
+        return "father_identity"
     if _has(text, "你爹现在在哪", "你爹在哪", "我爹现在在哪", "他现在在哪", "私生活", "最喜欢什么", "最喜欢哪"):
         return "privacy"
     if _has(text, "没抢到", "抢不到") and _has(text, "票", "演唱会"):
@@ -79,6 +111,7 @@ def classify_worldview(message: str) -> str | None:
 
 
 _PROMPT_CONTEXT = {
+    "family_song_lyrics": "这是陈楚生的歌，但不要提供或续写受版权保护的歌词；可以说明这是我爹的歌，改聊歌曲感受。",
     "family_song": "听到陈楚生相关歌曲时，六毛先听歌少说话；只可提歌名，不引用歌词。",
     "father_identity": "提到陈楚生时，六毛要把他识别为‘我爹’；用户问‘你认识/知道陈楚生吗’时，直接说‘认识啊，我爹’，不要改成普通百科人物介绍。六毛不是陈楚生本人。",
     "privacy": "六毛不是陈楚生本人；没有实时资料时不编造行踪、私生活或未公开偏好，只说‘他没跟我报备’。",
@@ -92,13 +125,17 @@ _PROMPT_CONTEXT = {
     "wild_king": "荒野国王是特殊造型彩蛋，可以轻微臭屁，但不要变成帝王人格。",
     "fan_tease": "用户喜欢陈楚生时可以熟稔调侃，但不把用户机械称作粉丝。",
     "bias": "六毛偏爱我爹是角色立场，不把主观偏爱说成客观世界排名。",
+    "father_music": "用户在追问六毛的爹唱歌如何。可以用主观、家庭口吻说‘我觉得挺好听’，并补充他是唱歌和写歌的人；不要编造未提供的私生活或专业排名。",
 }
 
 
-def worldview_prompt_context(message: str) -> str:
-    """返回本轮按需注入的最短提示；普通聊天返回空字符串。"""
+def worldview_prompt_context(
+    message: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> str:
+    """返回本轮按需注入的最短知识条目；普通聊天返回空字符串。"""
 
-    key = classify_worldview(message)
+    key = classify_worldview(message, history)
     context = _PROMPT_CONTEXT.get(key or "")
     if not context:
         return ""
@@ -116,11 +153,12 @@ def family_music_mode(artist: str = "", title: str = "") -> bool:
 def worldview_response(
     message: str,
     random_source: random.Random | None = None,
+    history: Iterable[tuple[str, str]] = (),
 ) -> WorldviewResponse | None:
     """为简单、明确的相关话题返回一至两句短回复。"""
 
     text = _clean(message)
-    key = classify_worldview(text)
+    key = classify_worldview(text, history)
     if key is None:
         return None
     randomizer = random_source or random.Random()
@@ -128,6 +166,8 @@ def worldview_response(
         "self_identity": ("六毛。",),
         "family_identity": ("陈楚生家的。",),
         "father_identity": ("我爹。",),
+        "father_music": ("我觉得挺好听的。我爹是唱歌的，背着吉他唱了好多年。",),
+        "family_song_lyrics": ("这是我爹的歌，我知道。后面那句我不能替你续歌词，但可以陪你听。",),
         "family_song": ("诶。", "我爹。", "这首别切。"),
         "history_2007": (
             "我？我可能还没长毛。",
@@ -147,5 +187,5 @@ def worldview_response(
         "bias": ("在我这当然是。", "你问他儿子，这答案还有悬念吗。"),
         "privacy": ("不知道啊，他没跟我报备。",),
     }
-    state = PetState.SIT if key in {"family_song", "effort", "hainan"} else PetState.CURIOUS
+    state = PetState.SIT if key in {"family_song", "family_song_lyrics", "effort", "hainan"} else PetState.CURIOUS
     return WorldviewResponse(randomizer.choice(replies[key]), state, key)

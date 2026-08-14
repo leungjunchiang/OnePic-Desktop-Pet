@@ -128,6 +128,28 @@ class SocialDashboardThread(QThread):
                 self.failed.emit(str(exc))
 
 
+class SocialHealthThread(QThread):
+    """Probe the configured social endpoint without blocking the UI."""
+
+    completed = Signal(dict)
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+
+    def run(self) -> None:
+        try:
+            checker = getattr(self.client, "health", None)
+            if not callable(checker):
+                raise SocialError("当前自习室后端未提供健康检查。", kind="config")
+            self.completed.emit(dict(checker() or {}))
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception as exc:
+            self.failed.emit(SocialError(f"健康检查失败：{exc}", kind="network"))
+
+
 class SocialEventThread(QThread):
     """Send a room event without freezing pet animation or the study window."""
 
@@ -403,6 +425,7 @@ class SocialHubDialog(QDialog):
         self._room_refresh_timer.setSingleShot(True)
         self._room_refresh_timer.timeout.connect(self._refresh_selected_room)
         self._dashboard_thread: SocialDashboardThread | None = None
+        self._health_thread: SocialHealthThread | None = None
         self._event_threads: list[SocialEventThread] = []
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
@@ -603,6 +626,15 @@ class SocialHubDialog(QDialog):
         refresh = QPushButton("刷新首页")
         refresh.clicked.connect(self.refresh)
         welcome_layout.addWidget(refresh)
+        network_row = QHBoxLayout()
+        self.network_hint = QLabel(self._backend_hint())
+        self.network_hint.setObjectName("muted")
+        self.network_hint.setWordWrap(True)
+        network_row.addWidget(self.network_hint, 1)
+        network_check = QPushButton("检测自习室网络")
+        network_check.clicked.connect(self._check_network)
+        network_row.addWidget(network_check)
+        welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
         buddies_card, buddies_layout = self._card("我的搭子", "绿色表示两分钟内在线；选择后可到“聊天”页派六毛串门。")
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
@@ -761,6 +793,57 @@ class SocialHubDialog(QDialog):
             self._set_status("已切换房间；正在同步这个房间的成员、目标和动态。")
             if not self._applying_dashboard:
                 self._room_refresh_timer.start(0)
+
+    def _backend_hint(self) -> str:
+        backend = str(getattr(self.client, "backend_name", "unknown") or "unknown")
+        endpoint = str(getattr(self.client, "backend_endpoint", "") or "")
+        if endpoint:
+            return f"当前自习室后端：{backend} · {endpoint}"
+        return f"当前自习室后端：{backend} · 未配置独立中转服务"
+
+    def _check_network(self) -> None:
+        if self._health_thread is not None and self._health_thread.isRunning():
+            return
+        self._begin_action("正在检测自习室网络…")
+        if not isinstance(self.client, SocialClient):
+            try:
+                checker = getattr(self.client, "health", None)
+                if not callable(checker):
+                    raise SocialError("当前测试后端未提供健康检查。", kind="config")
+                self._network_check_succeeded(dict(checker() or {}))
+            except Exception as exc:
+                self._network_check_failed(exc)
+            return
+        thread = SocialHealthThread(self.client, self)
+        self._health_thread = thread
+        thread.completed.connect(self._network_check_succeeded)
+        thread.failed.connect(self._network_check_failed)
+        thread.finished.connect(lambda: self._health_thread_finished(thread))
+        thread.start()
+
+    def _network_check_succeeded(self, data: dict[str, Any]) -> None:
+        self._end_action()
+        backend = str(data.get("backend") or getattr(self.client, "backend_name", "social"))
+        service = str(data.get("service") or "服务可达")
+        self.network_hint.setText(f"当前自习室后端：{backend} · {service}")
+        self._set_status("自习室网络检查通过，可以同步房间状态。")
+
+    def _network_check_failed(self, error: object) -> None:
+        self._end_action()
+        exc = error if isinstance(error, SocialError) else SocialError(str(error), kind="network")
+        LOGGER.warning(
+            "social health check failed kind=%s endpoint=%s status=%s: %s",
+            exc.kind,
+            exc.endpoint,
+            exc.status,
+            exc,
+        )
+        self._set_status(f"网络检查失败：{exc}", error=True)
+
+    def _health_thread_finished(self, thread: SocialHealthThread) -> None:
+        if self._health_thread is thread:
+            self._health_thread = None
+        thread.deleteLater()
 
     def _start_dashboard_refresh(self, room_id: str | None, message: str) -> None:
         """Start one coalesced dashboard request away from the GUI thread."""
@@ -1164,7 +1247,13 @@ class SocialHubDialog(QDialog):
     def _error(self, exc: Exception) -> None:
         self._end_action()
         raw = str(exc)
-        LOGGER.warning("social room operation failed: %s", raw)
+        LOGGER.warning(
+            "social room operation failed kind=%s endpoint=%s status=%s: %s",
+            getattr(exc, "kind", "unknown"),
+            getattr(exc, "endpoint", ""),
+            getattr(exc, "status", None),
+            raw,
+        )
         message = "共同房间状态保存失败，请稍后重试。" if "ambiguous" in raw.lower() or "room_id" in raw.lower() else raw
         self._set_status(message, error=True)
         QMessageBox.warning(self, "六毛搭子自习室", message)

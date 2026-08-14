@@ -311,7 +311,11 @@ class OfflineDialogueManager:
         self.now = now or datetime.now
         self.random = random_source or random.Random()
 
-    def reply(self, message: str) -> ManagedChatReply:
+    def reply(
+        self,
+        message: str,
+        history: Iterable[tuple[str, str]] = (),
+    ) -> ManagedChatReply:
         """优先处理本地上下文，再回退到现有陪伴关键词库。"""
 
         text = " ".join(message.split())[:1200]
@@ -322,7 +326,7 @@ class OfflineDialogueManager:
                 "offline",
                 True,
             )
-        worldview = worldview_response(text, self.random)
+        worldview = worldview_response(text, self.random, history)
         if worldview is not None:
             return ManagedChatReply(worldview.text, worldview.state, "offline")
         if any(marker in text for marker in ("几点", "现在时间", "当前时间", "星期几", "几号")):
@@ -421,6 +425,7 @@ class ChatManager(QObject):
         self.offline = offline
         self._thread: AIReplyThread | None = None
         self._pending_message = ""
+        self._pending_history: list[tuple[str, str]] = []
         self._pending_provider = "offline"
 
     @property
@@ -435,16 +440,17 @@ class ChatManager(QObject):
             return False
         # 角色身份和隐私边界不能交给在线模型自由改写；明确的世界观短问句
         # 直接本地回答，确保“你认识陈楚生吗”不会退化成百科人物介绍。
-        worldview = worldview_response(message)
+        worldview = worldview_response(message, history=history)
         if worldview is not None:
             self.reply_ready.emit(ManagedChatReply(worldview.text, worldview.state, "offline"))
             return True
         provider = self.settings.ai_provider
         status = self.agents.status(provider)
         if provider == "offline" or status.state != AgentConnectionState.CONNECTED:
-            self.reply_ready.emit(self.offline.reply(message))
+            self.reply_ready.emit(self.offline.reply(message, history))
             return True
         self._pending_message = message
+        self._pending_history = list(history)
         self._pending_provider = provider
         self._thread = AIReplyThread(
             self.service,
@@ -474,7 +480,7 @@ class ChatManager(QObject):
 
     def _ai_failed(self, error: str) -> None:
         self.agents.mark_runtime_error(self._pending_provider, error)
-        self.reply_ready.emit(self.offline.reply(self._pending_message))
+        self.reply_ready.emit(self.offline.reply(self._pending_message, self._pending_history))
 
     def _thread_finished(self) -> None:
         thread = self._thread
