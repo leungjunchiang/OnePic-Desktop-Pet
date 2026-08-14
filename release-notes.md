@@ -1,3 +1,11 @@
+# Lili v0.22.9
+
+- The published desktop configuration now routes study-room traffic through the deployed `lili-social-relay-v2` Supabase Edge Function instead of calling the Supabase REST API directly.
+- Added stable relay routes for authentication, presence heartbeat, dashboard, room state, room events, interactions, and the allowlisted study-room RPCs.
+- The relay validates the current user's Bearer token upstream and never ships a `service_role` key to the desktop client.
+- Added contract tests for the default relay configuration and the Edge Function route/security boundary.
+- The Edge Function is deployed and healthy in Supabase; Mainland China no-VPN reachability still requires a real target-network `/health` test.
+
 # Lili v0.22.7
 
 本次版本把六毛对话和搭子自习室的两条链路重新接稳：

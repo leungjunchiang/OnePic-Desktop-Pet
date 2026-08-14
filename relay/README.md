@@ -1,5 +1,17 @@
 # 六毛自习室中转服务
 
+## 当前发布默认通道
+
+桌面端发布配置默认使用 Supabase Edge Function：
+
+```text
+https://zkgctfntrioffpifiggk.supabase.co/functions/v1/lili-social-relay-v2
+```
+
+源码位于 `supabase/functions/lili-social-relay/`，提供 `/health`、认证、presence、dashboard、房间和白名单 RPC 路由。它使用当前用户的 Supabase Bearer token 让 Supabase Auth/RLS 做权限判断，不把 service-role key 放进客户端或仓库。
+
+这条通道已经部署在当前 Supabase 项目中。它解决的是客户端直接 REST 路径和房间接口不一致的问题；是否能在中国大陆具体运营商网络下不开代理访问，仍必须用目标宽带、校园网和手机热点实际打开 `/health` 验收。若这些网络仍无法访问 Supabase 域名，需要把同一 relay 部署到可直连的外部域名（例如已备案的国内或香港节点），不能仅靠客户端重试保证可达。
+
 这里是一个可部署的 Cloudflare Worker 中转层。它只允许六毛客户端所需的固定接口，把请求转发到已有 Supabase 项目；不会暴露 service-role key，也不会接受任意目标 URL。
 
 ## 能解决什么

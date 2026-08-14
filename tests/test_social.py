@@ -1,5 +1,6 @@
 """验证搭子客户端只同步最小状态，并且数据库启用严格权限。"""
 
+import json
 from pathlib import Path
 
 from onepic_desktop_pet.social import HttpSocialBackend, SocialClient, SocialError, SocialSession
@@ -113,6 +114,13 @@ def test_social_config_exposes_optional_proxy_base_url() -> None:
     config = (root / "config" / "social_backend.json").read_text(encoding="utf-8")
     assert '"social_api_base_url"' in config
     assert '"social_backend"' in config
+
+
+def test_published_config_uses_supabase_edge_relay_by_default() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = json.loads((root / "config" / "social_backend.json").read_text(encoding="utf-8"))
+    assert config["social_backend"] == "http"
+    assert config["social_api_base_url"].endswith("/functions/v1/lili-social-relay-v2")
 
 
 def test_dashboard_falls_back_to_last_payload_when_network_is_unavailable() -> None:
