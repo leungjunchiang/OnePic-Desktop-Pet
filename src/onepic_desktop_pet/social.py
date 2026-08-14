@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import ssl
@@ -20,6 +21,50 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .resources import resource_path
+
+
+LOGGER = logging.getLogger(__name__)
+
+CONNECTION_STATES = {"CONNECTING", "ONLINE", "DEGRADED", "OFFLINE", "RECONNECTING"}
+
+
+class ConnectionStateStore:
+    """Single source of truth for the study-room transport state.
+
+    The desktop currently uses an authenticated HTTPS snapshot plus short
+    polling, not a separate websocket subscription.  A successful /health
+    response therefore never proves that the room is online by itself.
+    """
+
+    def __init__(self) -> None:
+        self.state = "OFFLINE"
+        self.data_source = "local_cache"
+        self.realtime_state = "not_started"
+        self.last_success_at = ""
+        self.last_failure_at = ""
+        self.server_timestamp = ""
+
+    def set(self, state: str, *, data_source: str, realtime_state: str = "not_started", server_timestamp: str = "") -> None:
+        self.state = state if state in CONNECTION_STATES else "OFFLINE"
+        self.data_source = data_source
+        self.realtime_state = realtime_state
+        if server_timestamp:
+            self.server_timestamp = server_timestamp
+        now = datetime.now().astimezone().isoformat()
+        if self.state == "ONLINE":
+            self.last_success_at = now
+        elif self.state in {"OFFLINE", "RECONNECTING"}:
+            self.last_failure_at = now
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "connection_state": self.state,
+            "data_source": self.data_source,
+            "realtime_state": self.realtime_state,
+            "last_success_at": self.last_success_at,
+            "last_failure_at": self.last_failure_at,
+            "server_timestamp": self.server_timestamp,
+        }
 
 
 class SocialError(RuntimeError):
@@ -96,7 +141,7 @@ class SocialBackend(Protocol):
     def sign_in(self, email: str, password: str) -> None: ...
     def sign_out(self) -> None: ...
     def health(self) -> dict[str, Any]: ...
-    def dashboard(self, room_id: str | None = None) -> dict[str, Any]: ...
+    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
@@ -237,7 +282,7 @@ class HttpSocialBackend:
         """Check the relay without requiring a user session."""
         return dict(self._raw("GET", "/health") or {})
 
-    def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
+    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
         data = self._raw("GET", "/dashboard", authenticated=True) or {}
         if room_id:
             room = self._raw("GET", f"/rooms/{urllib.parse.quote(str(room_id), safe='')}", authenticated=True) or {}
@@ -321,6 +366,7 @@ class SocialClient:
         self.persist_tokens = persist_tokens
         self._dashboard_cache: dict[str, dict[str, Any]] = {}
         self._last_error = ""
+        self.connection = ConnectionStateStore()
         self.session: SocialSession | None = None
         self._http_backend: SocialBackend | None = backend
         if self._http_backend is None and self.social_api_base_url:
@@ -352,6 +398,120 @@ class SocialClient:
                 return dict(checker() or {})
             raise SocialError("当前自习室中转服务未提供健康检查。", kind="config")
         return dict(self._raw("GET", "/auth/v1/health") or {})
+
+    @property
+    def connection_state(self) -> str:
+        return self.connection.state
+
+    def diagnose_connection(self, room_id: str | None = None) -> dict[str, Any]:
+        """Validate the complete study-room path, not just the public probe."""
+
+        started = time.monotonic()
+        probe_state = "RECONNECTING" if self.connection.state in {"OFFLINE", "DEGRADED"} and self.connection.last_failure_at else "CONNECTING"
+        self.connection.set(probe_state, data_source=self.connection.data_source, realtime_state="checking")
+        checks: dict[str, Any] = {
+            "edge_function": {"ok": False},
+            "authentication": {"ok": bool(self.signed_in)},
+            "room_snapshot": {"ok": False},
+            "presence": {"ok": False},
+            "realtime": {"ok": False},
+        }
+        backend_name = self.backend_name
+        service_endpoint = self.backend_endpoint
+        try:
+            health = self.health()
+            checks["edge_function"] = {
+                "ok": True,
+                "backend": health.get("backend") or self.backend_name,
+                "transport": health.get("transport") or "https-rest",
+            }
+            backend_name = str(health.get("backend") or backend_name)
+            service_endpoint = str(health.get("service") or service_endpoint)
+        except SocialError as exc:
+            self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
+            self._diagnostic_log("health", room_id, exc=exc, elapsed=time.monotonic() - started)
+            raise
+
+        if not self.signed_in:
+            self.connection.set("DEGRADED", data_source="local_live", realtime_state="not_authenticated")
+            result = {
+                "connection_state": "DEGRADED",
+                "data_source": "local_live",
+                "realtime_state": "not_authenticated",
+                "backend": backend_name,
+                "service": service_endpoint,
+                "checks": checks,
+                "dashboard": None,
+            }
+            self._diagnostic_log("connection", room_id, result=result, elapsed=time.monotonic() - started)
+            return result
+
+        checks["authentication"] = {"ok": True}
+        try:
+            snapshot = self.dashboard(room_id, allow_cache=False)
+            checks["room_snapshot"] = {"ok": True}
+            checks["presence"] = {"ok": True, "source": "server_snapshot"}
+            # The current product deliberately uses authenticated short
+            # polling.  That is the realtime/sync mechanism we can prove here.
+            checks["realtime"] = {
+                "ok": True,
+                "mode": str((health or {}).get("realtime") or "desktop short-polling"),
+            }
+            self.connection.set(
+                "ONLINE",
+                data_source="server",
+                realtime_state="polling",
+                server_timestamp=str(snapshot.get("_server_timestamp") or ""),
+            )
+            result = {
+                "connection_state": "ONLINE",
+                "data_source": "server",
+                "realtime_state": "polling",
+                "backend": backend_name,
+                "service": service_endpoint,
+                "checks": checks,
+                "dashboard": snapshot,
+            }
+        except SocialError as exc:
+            checks["room_snapshot"] = {"ok": False, "kind": exc.kind, "status": exc.status}
+            state = "DEGRADED" if exc.kind == "auth" else "OFFLINE"
+            realtime_state = "not_authenticated" if state == "DEGRADED" else "unavailable"
+            self.connection.set(state, data_source="local_cache", realtime_state=realtime_state)
+            cached = self.cached_dashboard(room_id)
+            if cached is not None:
+                cached["_connection_state"] = state
+            result = {
+                "connection_state": state,
+                "data_source": "local_cache" if cached is not None else "none",
+                "realtime_state": realtime_state,
+                "backend": backend_name,
+                "service": service_endpoint,
+                "checks": checks,
+                "dashboard": cached,
+                "error": str(exc),
+            }
+        self._diagnostic_log("connection", room_id, result=result, elapsed=time.monotonic() - started)
+        return result
+
+    def _diagnostic_log(self, request_type: str, room_id: str | None, *, result: dict[str, Any] | None = None, exc: SocialError | None = None, elapsed: float = 0.0) -> None:
+        """Emit structured diagnostics without logging credentials or payloads."""
+
+        entry = {
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "connection_state": self.connection.state,
+            "request_type": request_type,
+            "url": self.backend_endpoint,
+            "http_status": exc.status if exc else None,
+            "latency_ms": round(max(0.0, elapsed) * 1000),
+            "auth_state": "signed_in" if self.signed_in else "signed_out",
+            "room_id": room_id or "",
+            "realtime_state": self.connection.realtime_state,
+            "last_success_at": self.connection.last_success_at,
+            "last_failure_at": self.connection.last_failure_at,
+            "data_source": (result or {}).get("data_source", self.connection.data_source),
+            "error_kind": exc.kind if exc else "",
+        }
+        LOGGER.info("study_room_diagnostic %s", json.dumps(entry, ensure_ascii=False, sort_keys=True))
 
     @property
     def signed_in(self) -> bool:
@@ -446,10 +606,48 @@ class SocialClient:
         data = json.loads(json.dumps(entry["data"], ensure_ascii=False))
         saved_at = float(entry.get("saved_at") or 0)
         age_minutes = max(0, int((time.time() - saved_at) / 60)) if saved_at else 0
+        self._mark_remote_presence_stale(data)
         data["_sync_offline"] = True
+        data["_connection_state"] = "OFFLINE"
+        data["data_source"] = "local_cache"
+        data["_data_source"] = "local_cache"
         data["_sync_age_minutes"] = age_minutes
+        try:
+            data["_server_timestamp"] = datetime.fromtimestamp(saved_at).astimezone().isoformat() if saved_at else ""
+        except (OSError, OverflowError, ValueError):
+            data["_server_timestamp"] = ""
         data["_sync_error"] = self._last_error or "当前网络无法访问自习室服务"
         return data
+
+    @staticmethod
+    def _mark_remote_presence_stale(data: dict[str, Any]) -> None:
+        """Never render cached remote presence as current online activity."""
+
+        def mark(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict) or item.get("is_self"):
+                    continue
+                item["online"] = False
+                item["working"] = False
+                item["status"] = "offline"
+                item["session_seconds"] = 0
+                item["today_seconds"] = None
+                item["stale_presence"] = True
+
+        mark(data.get("buddies"))
+        mark(data.get("room_people"))
+        mark(data.get("active_visits"))
+        room = data.get("current_room")
+        if isinstance(room, dict):
+            mark(room.get("room_people"))
+            summary = room.get("room_summary")
+            if isinstance(summary, dict):
+                summary["focus_count"] = 0
+        summary = data.get("room_summary")
+        if isinstance(summary, dict):
+            summary["focus_count"] = 0
 
     def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -526,7 +724,8 @@ class SocialClient:
             return
         self._clear_session()
 
-    def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
+    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
+        self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
         try:
             if self._http_backend is not None:
                 data = self._http_backend.dashboard(room_id=room_id)
@@ -556,10 +755,23 @@ class SocialClient:
                         pass
             result = dict(data or {})
             self._last_error = ""
+            result["_connection_state"] = "ONLINE"
+            result["data_source"] = "server"
+            result["_data_source"] = "server"
+            result["_server_timestamp"] = datetime.now().astimezone().isoformat()
+            self.connection.set(
+                "ONLINE",
+                data_source="server",
+                realtime_state="polling",
+                server_timestamp=result["_server_timestamp"],
+            )
             self._remember_dashboard(room_id, result)
             return result
         except SocialError as exc:
             self._last_error = str(exc)
+            self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
+            if not allow_cache:
+                raise
             cached = self.cached_dashboard(room_id)
             if cached is not None:
                 return cached

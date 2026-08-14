@@ -145,6 +145,47 @@ def test_dashboard_falls_back_to_last_payload_when_network_is_unavailable() -> N
     assert cached["rooms"][0]["id"] == "room-1"
 
 
+def test_offline_dashboard_never_keeps_remote_presence_green() -> None:
+    client = RecordingClient()
+    client._dashboard_cache["room-1"] = {
+        "saved_at": 1,
+        "data": {
+            "buddies": [{"user_id": "peer", "online": True, "working": True, "status": "focus", "today_seconds": 600}],
+            "current_room": {
+                "room_people": [{"user_id": "peer", "online": True, "working": True, "status": "focus"}],
+                "room_summary": {"focus_count": 1},
+            },
+        },
+    }
+    cached = client.cached_dashboard("room-1")
+    assert cached is not None
+    peer = cached["buddies"][0]
+    assert peer["online"] is False
+    assert peer["working"] is False
+    assert peer["status"] == "offline"
+    assert peer["stale_presence"] is True
+    assert peer["today_seconds"] is None
+    assert cached["current_room"]["room_summary"]["focus_count"] == 0
+
+
+def test_connection_diagnosis_requires_authenticated_snapshot() -> None:
+    client = RecordingClient()
+    client.session = SocialSession("a", "r", "u", 9_999_999_999)
+
+    def raw(_method, path, _body=None, **_kwargs):
+        if path == "/auth/v1/health":
+            return {"ok": True}
+        return {"me": {"owner_nickname": "小梁"}, "buddies": [], "rooms": []}
+
+    client._raw = raw
+    result = client.diagnose_connection()
+    assert result["connection_state"] == "ONLINE"
+    assert result["checks"]["edge_function"]["ok"] is True
+    assert result["checks"]["room_snapshot"]["ok"] is True
+    assert result["checks"]["presence"]["ok"] is True
+    assert result["dashboard"]["_connection_state"] == "ONLINE"
+
+
 def test_room_shared_state_migration_scopes_members_goals_events_and_cooldown() -> None:
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")

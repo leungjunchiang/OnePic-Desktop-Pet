@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import SocialClient, SocialError
-from .config import PET_NAME, social_pet_label
+from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .work_timer import format_work_duration
 
 LOGGER = logging.getLogger(__name__)
@@ -55,6 +55,18 @@ def _presence_status(presence: dict[str, Any]) -> str:
     if _presence_working(presence):
         return "focus"
     return "rest"
+
+
+def _owner_nickname(record: dict[str, Any] | None) -> str:
+    """Prefer the explicit social owner field while keeping old payloads usable."""
+
+    if not isinstance(record, dict):
+        return "搭子"
+    return str(record.get("owner_nickname") or record.get("nickname") or "搭子").strip() or "搭子"
+
+
+def _owner_label(record: dict[str, Any] | None) -> str:
+    return social_pet_label(_owner_nickname(record))
 
 
 def _social_font() -> QFont:
@@ -134,12 +146,17 @@ class SocialHealthThread(QThread):
     completed = Signal(dict)
     failed = Signal(object)
 
-    def __init__(self, client: SocialClient, parent=None) -> None:
+    def __init__(self, client: SocialClient, room_id: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self.client = client
+        self.room_id = room_id
 
     def run(self) -> None:
         try:
+            checker = getattr(self.client, "diagnose_connection", None)
+            if callable(checker):
+                self.completed.emit(dict(checker(room_id=self.room_id) or {}))
+                return
             checker = getattr(self.client, "health", None)
             if not callable(checker):
                 raise SocialError("当前自习室后端未提供健康检查。", kind="config")
@@ -203,9 +220,9 @@ class BuddyCardWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(5)
-        online = bool(buddy.get("online"))
+        online = bool(buddy.get("online")) and not bool(buddy.get("stale_presence"))
         working = _presence_working(buddy)
-        nickname = str(buddy.get("nickname") or "搭子")
+        nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         status = _presence_status(buddy)
         status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
@@ -217,7 +234,10 @@ class BuddyCardWidget(QWidget):
         headline.setStyleSheet("font-size:15px;font-weight:600;color:#203847;")
         root.addWidget(headline)
         duration = buddy.get("today_seconds")
-        time_text = "今日专注时长已隐藏" if duration is None else f"已专注 {format_work_duration(duration)}"
+        if buddy.get("stale_presence"):
+            time_text = "离线缓存；上次状态不计入当前专注"
+        else:
+            time_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
         session_seconds = buddy.get("session_seconds")
         if session_seconds is not None and status == "focus":
             time_text = f"本轮专注 {format_work_duration(session_seconds)}　·　{time_text}"
@@ -335,7 +355,7 @@ class BuddyVisitWindow(QWidget):
         self._presented_visit_id = visit_id
         self.visible_requested = True
         self.user_minimized = False
-        nickname = social_pet_label(peer.get("nickname"))
+        nickname = _owner_label(peer)
         self.title.setText(f"{nickname}来串门了")
         self.subtitle.setText(f"💻 {PET_NAME}　　{nickname} 📖\n一起工作中")
         peer_today = peer.get("today_seconds")
@@ -814,7 +834,7 @@ class SocialHubDialog(QDialog):
             except Exception as exc:
                 self._network_check_failed(exc)
             return
-        thread = SocialHealthThread(self.client, self)
+        thread = SocialHealthThread(self.client, self.current_room_id, self)
         self._health_thread = thread
         thread.completed.connect(self._network_check_succeeded)
         thread.failed.connect(self._network_check_failed)
@@ -824,9 +844,32 @@ class SocialHubDialog(QDialog):
     def _network_check_succeeded(self, data: dict[str, Any]) -> None:
         self._end_action()
         backend = str(data.get("backend") or getattr(self.client, "backend_name", "social"))
-        service = str(data.get("service") or "服务可达")
+        service = str(data.get("service") or getattr(self.client, "backend_endpoint", "服务可达"))
         self.network_hint.setText(f"当前自习室后端：{backend} · {service}")
-        self._set_status("自习室网络检查通过，可以同步房间状态。")
+        state = str(data.get("connection_state") or "")
+        snapshot = data.get("dashboard")
+        if isinstance(snapshot, dict):
+            snapshot = dict(snapshot)
+            snapshot["_connection_state"] = state or snapshot.get("_connection_state")
+            snapshot["data_source"] = data.get("data_source") or snapshot.get("data_source")
+            self.apply_dashboard(snapshot)
+            if state == "ONLINE":
+                self._set_status("自习室已连接，房间状态已完整同步。")
+            elif state == "DEGRADED":
+                self._set_status("自习室已连接，但实时同步暂时不可用，继续重新连接。")
+            else:
+                self._set_status("当前显示离线缓存，等网络恢复后再同步。")
+            return
+        if state == "DEGRADED":
+            self._set_status("自习室网络可达，但账号或房间数据还未验证。")
+            return
+        # Compatibility path for lightweight clients that only expose health().
+        # A health response alone is never advertised as a synchronized room.
+        if getattr(self.client, "signed_in", False):
+            self._set_status("网络可达，正在拉取房间数据。")
+            self._start_dashboard_refresh(self.current_room_id, "正在同步房间状态")
+            return
+        self._set_status("自习室网络检查通过，请登录后才能同步房间。")
 
     def _network_check_failed(self, error: object) -> None:
         self._end_action()
@@ -909,7 +952,7 @@ class SocialHubDialog(QDialog):
         if not self._require_login():
             return
         target = str(buddy.get("user_id") or buddy.get("id") or "")
-        nickname = social_pet_label(buddy.get("nickname"))
+        nickname = _owner_label(buddy)
         labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶"}
         if not self.current_room_id:
             self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
@@ -934,7 +977,7 @@ class SocialHubDialog(QDialog):
         if target is None:
             self._set_status("当前房间还没有可接收短语的搭子。", error=True)
             return
-        nickname = str(target.get("nickname") or "搭子")
+        nickname = _owner_nickname(target)
         event = {"room_id": self.current_room_id, "kind": "phrase", "target_id": str(target.get("user_id") or ""), "message": phrase[:80]}
         thread = SocialEventThread(self.client, event, self)
         self._event_threads.append(thread)
@@ -1051,8 +1094,8 @@ class SocialHubDialog(QDialog):
                 stamp = created[11:16] if len(created) >= 16 and "T" in created else ""
                 text = str(entry.get("text") or entry.get("message") or "")
                 if not text:
-                    actor = social_pet_label(entry.get("nickname") or entry.get("actor_nickname"))
-                    target = entry.get("target_nickname")
+                    actor = social_pet_label(entry.get("owner_nickname") or entry.get("nickname") or entry.get("actor_nickname"))
+                    target = entry.get("target_owner_nickname") or entry.get("target_nickname")
                     target_text = f" → {social_pet_label(target)}" if target else ""
                     kind_text = {
                         "join": "进入房间", "leave": "离开房间", "focus_start": "开始专注",
@@ -1302,6 +1345,8 @@ class SocialHubDialog(QDialog):
         previous_data = self.data
         self.data = dict(data or {})
         me=self.data.get("me") or {}
+        if not self.owner_nickname:
+            self.owner_nickname = clean_owner_nickname(me.get("owner_nickname") or me.get("nickname"))
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
         self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
@@ -1323,9 +1368,10 @@ class SocialHubDialog(QDialog):
                 previous = previous_buddies.get(str(buddy.get("user_id")))
                 if previous is not None and bool(previous.get("working")) != bool(buddy.get("working")):
                     state_text = "开始专注" if buddy.get("working") else "结束专注"
-                    self.buddy_subscription_notice.emit(f"{social_pet_label(buddy.get('nickname'))} {state_text}了。")
-            working_count += int(bool(buddy.get("working")))
-            duration = buddy.get("today_seconds")
+                    self.buddy_subscription_notice.emit(f"{_owner_label(buddy)} {state_text}了。")
+            is_stale = bool(buddy.get("stale_presence")) or self.data.get("_sync_offline")
+            working_count += int(bool(buddy.get("working")) and not is_stale)
+            duration = None if is_stale else buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
             item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
             buddy_widget = BuddyCardWidget(buddy, self.buddies)
@@ -1346,9 +1392,9 @@ class SocialHubDialog(QDialog):
         self._fit_list_height(self.buddies, 46, 360)
         self.inbox.clear()
         for request in self.data.get("requests") or []:
-            item=QListWidgetItem(f"搭子申请：{request.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
+            item=QListWidgetItem(f"搭子申请：{_owner_label(request)}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
         for visit in self.data.get("visits") or []:
-            item=QListWidgetItem(f"串门邀请：{visit.get('nickname')}"); item.setData(Qt.ItemDataRole.UserRole,("visit",visit)); self.inbox.addItem(item)
+            item=QListWidgetItem(f"串门邀请：{_owner_label(visit)}"); item.setData(Qt.ItemDataRole.UserRole,("visit",visit)); self.inbox.addItem(item)
         if self.inbox.count() == 0:
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
@@ -1423,6 +1469,7 @@ class SocialHubDialog(QDialog):
             }
         local_presence.update({
             "user_id": str(me.get("user_id") or me.get("id") or "me"),
+            "owner_nickname": self.owner_nickname or clean_owner_nickname(me.get("owner_nickname") or me.get("nickname")),
             "nickname": self.owner_nickname or str(me.get("nickname") or "搭子"),
             "outfit_key": str(me_presence.get("outfit_key") or self.outfit_key or me.get("outfit_key") or ""),
             "online": True,
@@ -1482,19 +1529,24 @@ class SocialHubDialog(QDialog):
             if event_id and event_id not in self._seen_room_event_ids:
                 self._seen_room_event_ids.add(event_id)
                 is_target = target_id == me_id or (
-                    not target_id and str(event.get("target_nickname") or "") == str(me.get("nickname") or "")
+                    not target_id and str(event.get("target_owner_nickname") or event.get("target_nickname") or "") == str(me.get("owner_nickname") or me.get("nickname") or "")
                 )
-                if me_id and is_target and str(event.get("actor_id") or "") != me_id:
+                if not self.data.get("_sync_offline") and me_id and is_target and str(event.get("actor_id") or "") != me_id:
                     self.room_event_received.emit(dict(event))
         self._render_room_activity(activity)
         active=self.data.get("active_visits") or []
-        if active: self.active_visit.emit(active[0])
-        if self.data.get("_sync_offline"):
+        if active and not self.data.get("_sync_offline"): self.active_visit.emit(active[0])
+        state = str(self.data.get("_connection_state") or "")
+        if self.data.get("_sync_offline") or state == "OFFLINE":
             age = int(self.data.get("_sync_age_minutes") or 0)
             age_text = f"约 {age} 分钟前" if age else "刚才"
             self._set_status(
                 f"当前无法连接自习室，已显示{age_text}的本地状态；网络恢复后会自动同步。"
             )
+        elif state == "DEGRADED":
+            self._set_status("自习室已连接，实时同步暂时不可用，继续重新连接。")
+        elif state == "ONLINE":
+            self._set_status("自习室已连接，房间状态已同步。")
         else:
             self._set_status("已刷新，页面内容是最新的。")
 

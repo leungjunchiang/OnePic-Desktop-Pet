@@ -2211,6 +2211,13 @@ class PetWindow(QWidget):
         if self._social_dialog is not None:
             self._social_dialog.apply_dashboard(data)
 
+        # A cached snapshot is useful for explaining the last known state,
+        # but it is not permission to reopen a visit window or emit a new
+        # interaction.  Only a server-confirmed payload may trigger social
+        # side effects.
+        if data.get("_sync_offline") or data.get("data_source") == "local_cache":
+            return
+
         if detect_quiet_mode().blocked:
             return
         for visit in data.get("visits") or []:
@@ -2218,7 +2225,7 @@ class PetWindow(QWidget):
             if visit_id and visit_id not in self._seen_visit_ids:
                 self._seen_visit_ids.add(visit_id)
                 self._set_temporary_activity("pointing", 20_000)
-                self.show_speech(f"{social_pet_label(visit.get('nickname'))}来串门啦！\n打开“搭子自习室”可以接受。", 7600)
+                self.show_speech(f"{social_pet_label(visit.get('owner_nickname') or visit.get('nickname'))}来串门啦！\n打开“搭子自习室”可以接受。", 7600)
         active = data.get("active_visits") or []
         if active:
             self._show_buddy_visit(active[0])
