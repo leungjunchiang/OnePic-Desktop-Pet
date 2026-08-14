@@ -35,3 +35,8 @@ user_assets/*
 .tools/
 .test-tmp/
 .test-localappdata/
+.test-localdata-*/
+
+# Cloudflare Worker local state
+relay/cloudflare-worker/node_modules/
+relay/cloudflare-worker/.wrangler/

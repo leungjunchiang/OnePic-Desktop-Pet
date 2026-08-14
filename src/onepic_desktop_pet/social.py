@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from .resources import resource_path
@@ -21,6 +22,18 @@ from .resources import resource_path
 
 class SocialError(RuntimeError):
     """面向用户的社交网络错误。"""
+
+
+def _social_request_timeout() -> float:
+    """Keep an unreachable Supabase endpoint from freezing a user action."""
+
+    try:
+        return min(
+            8.0,
+            max(2.0, float(os.environ.get("LILI_SOCIAL_TIMEOUT_SECONDS", "4"))),
+        )
+    except ValueError:
+        return 4.0
 
 
 @dataclass
@@ -123,7 +136,7 @@ class HttpSocialBackend:
             headers["Authorization"] = f"Bearer {self.session.access_token}"
         request = urllib.request.Request(f"{self.base_url}{path}", data=payload, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=_social_request_timeout()) as response:
                 raw = response.read()
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
@@ -134,8 +147,10 @@ class HttpSocialBackend:
             except json.JSONDecodeError:
                 message = raw or str(exc)
             raise SocialError(str(message)[:300]) from exc
-        except (OSError, urllib.error.URLError) as exc:
-            raise SocialError("暂时连不上搭子自习室，六毛已继续离线陪伴。") from exc
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            raise SocialError(
+                "自习室网络暂时不可达；已保留本地状态，恢复网络后会自动重试。"
+            ) from exc
 
     def _accept_auth(self, data: dict[str, Any] | None) -> bool:
         if not data or not data.get("access_token"):
@@ -201,7 +216,8 @@ class HttpSocialBackend:
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None) -> None:
         if not self.session:
             return
-        self._raw("POST", "/presence/heartbeat", {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "outfit_key": outfit_key[:60], "room_id": room_id, "last_seen": datetime.now().astimezone().isoformat()}, authenticated=True)
+        now = datetime.now().astimezone()
+        self._raw("POST", "/presence/heartbeat", {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "last_seen": now.isoformat()}, authenticated=True)
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         self._raw(
@@ -250,6 +266,7 @@ class SocialClient:
             or "https://github.com/leungjunchiang/OnePic-Desktop-Pet"
         )
         self.persist_tokens = persist_tokens
+        self._dashboard_cache: dict[str, dict[str, Any]] = {}
         self.session: SocialSession | None = None
         self._http_backend: SocialBackend | None = backend
         if self._http_backend is None and self.social_api_base_url:
@@ -261,6 +278,7 @@ class SocialClient:
             )
         if self._http_backend is None:
             self._load_session()
+        self._load_dashboard_cache()
 
     @property
     def backend_name(self) -> str:
@@ -302,6 +320,68 @@ class SocialClient:
             except Exception:
                 pass
 
+    def _dashboard_cache_path(self) -> Path:
+        """Return a local cache path that contains no access tokens."""
+
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path.home() / ".desktop_pet"
+        return root / "Lili" / "social-dashboard-cache.json"
+
+    def _load_dashboard_cache(self) -> None:
+        if not self.persist_tokens:
+            return
+        try:
+            raw = json.loads(self._dashboard_cache_path().read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                self._dashboard_cache = {
+                    str(key): value
+                    for key, value in raw.items()
+                    if isinstance(value, dict) and isinstance(value.get("data"), dict)
+                }
+        except (OSError, ValueError, TypeError):
+            self._dashboard_cache = {}
+
+    def _save_dashboard_cache(self) -> None:
+        if not self.persist_tokens:
+            return
+        target = self._dashboard_cache_path()
+        temporary = target.with_suffix(".json.tmp")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(
+                json.dumps(self._dashboard_cache, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary.replace(target)
+        except OSError:
+            # Cache failure must never break the live sync path.
+            return
+
+    def _remember_dashboard(self, room_id: str | None, data: dict[str, Any]) -> None:
+        key = str(room_id or "")
+        self._dashboard_cache[key] = {
+            "saved_at": time.time(),
+            "data": json.loads(json.dumps(data, ensure_ascii=False)),
+        }
+        self._save_dashboard_cache()
+
+    def cached_dashboard(self, room_id: str | None = None) -> dict[str, Any] | None:
+        """Return the latest payload for offline rendering, if available."""
+
+        key = str(room_id or "")
+        entry = self._dashboard_cache.get(key)
+        if entry is None and key:
+            entry = self._dashboard_cache.get("")
+        if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict):
+            return None
+        data = json.loads(json.dumps(entry["data"], ensure_ascii=False))
+        saved_at = float(entry.get("saved_at") or 0)
+        age_minutes = max(0, int((time.time() - saved_at) / 60)) if saved_at else 0
+        data["_sync_offline"] = True
+        data["_sync_age_minutes"] = age_minutes
+        data["_sync_error"] = "当前网络无法访问自习室服务"
+        return data
+
     def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {"apikey": self.key, "Content-Type": "application/json", "Accept": "application/json"}
@@ -314,7 +394,7 @@ class SocialClient:
             headers.update(extra_headers)
         request = urllib.request.Request(f"{self.url}{path}", data=payload, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=_social_request_timeout()) as response:
                 raw = response.read()
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
@@ -325,8 +405,10 @@ class SocialClient:
             except json.JSONDecodeError:
                 message = raw or str(exc)
             raise SocialError(str(message)[:300]) from exc
-        except (OSError, urllib.error.URLError) as exc:
-            raise SocialError("暂时连不上搭子自习室，六毛已继续离线陪伴。") from exc
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            raise SocialError(
+                "自习室网络暂时不可达；已保留本地状态，恢复网络后会自动重试。"
+            ) from exc
 
     def _accept_auth(self, data: dict[str, Any]) -> bool:
         token = data.get("access_token")
@@ -370,32 +452,41 @@ class SocialClient:
         self._clear_session()
 
     def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
-        if self._http_backend is not None:
-            return self._http_backend.dashboard(room_id=room_id)
-        data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
-        if room_id:
-            room = self._raw(
-                "POST",
-                "/rest/v1/rpc/lili_room_dashboard",
-                {"room_id": room_id},
-                authenticated=True,
-            ) or {}
-            if isinstance(room, dict):
-                data.update(room)
-            try:
-                rituals = self._raw(
-                    "POST",
-                    "/rest/v1/rpc/lili_room_room_rituals",
-                    {"room_id": room_id},
-                    authenticated=True,
-                ) or {}
-                if isinstance(rituals, dict):
-                    data.update(rituals)
-            except SocialError:
-                # Older deployed projects may not have the optional ritual
-                # migration yet; the core room dashboard remains usable.
-                pass
-        return data
+        try:
+            if self._http_backend is not None:
+                data = self._http_backend.dashboard(room_id=room_id)
+            else:
+                data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
+                if room_id:
+                    room = self._raw(
+                        "POST",
+                        "/rest/v1/rpc/lili_room_dashboard",
+                        {"room_id": room_id},
+                        authenticated=True,
+                    ) or {}
+                    if isinstance(room, dict):
+                        data.update(room)
+                    try:
+                        rituals = self._raw(
+                            "POST",
+                            "/rest/v1/rpc/lili_room_room_rituals",
+                            {"room_id": room_id},
+                            authenticated=True,
+                        ) or {}
+                        if isinstance(rituals, dict):
+                            data.update(rituals)
+                    except SocialError:
+                        # Older deployed projects may not have the optional ritual
+                        # migration yet; the core room dashboard remains usable.
+                        pass
+            result = dict(data or {})
+            self._remember_dashboard(room_id, result)
+            return result
+        except SocialError:
+            cached = self.cached_dashboard(room_id)
+            if cached is not None:
+                return cached
+            raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any:
         if self._http_backend is not None:
