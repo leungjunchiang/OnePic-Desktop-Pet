@@ -47,6 +47,9 @@ class PetSettings:
     inactive_sit_ms: int = 300000
     inactive_sleep_ms: int = 600000
     always_on_top: bool = True
+    # Keep the pet's ambient animation alive, but do not make it cross the
+    # desktop until the user explicitly enables autonomous walking.
+    allow_autonomous_walk: bool = False
     start_x: int | None = None
     start_y: int | None = None
     ai_provider: str = "offline"
@@ -137,6 +140,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     )
     settings.pet_name = str(settings.pet_name).replace("\x00", "").strip()[:20] or "六毛"
     settings.always_on_top = bool(settings.always_on_top)
+    settings.allow_autonomous_walk = bool(settings.allow_autonomous_walk)
     if settings.ai_provider not in {"offline", "codex", "claude", "deepseek", "kimi", "custom"}:
         settings.ai_provider = "offline"
     settings.ai_base_url = str(settings.ai_base_url).strip()[:500]
@@ -218,6 +222,7 @@ def load_settings(
                 "start_x",
                 "start_y",
                 "always_on_top",
+                "allow_autonomous_walk",
                 "ai_provider",
                 "ai_base_url",
                 "ai_model",
@@ -261,6 +266,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "start_x": settings.start_x,
         "start_y": settings.start_y,
         "always_on_top": settings.always_on_top,
+        "allow_autonomous_walk": settings.allow_autonomous_walk,
         "ai_provider": settings.ai_provider,
         "ai_base_url": settings.ai_base_url,
         "ai_model": settings.ai_model,

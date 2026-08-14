@@ -202,7 +202,7 @@ class BehaviorModel:
     def next_autonomous_state(
         self,
         current: PetState,
-        allow_walk: bool = True,
+        allow_walk: bool = False,
     ) -> StateDecision:
         """按当前状态和跑动开关选择下一生活状态及持续时间。"""
 

@@ -386,6 +386,15 @@ class AISettingsDialog(QDialog):
         self.always_on_top.setChecked(settings.always_on_top)
         layout.addWidget(self.always_on_top)
 
+        self.allow_autonomous_walk = QCheckBox(
+            "允许六毛自动跑动（默认关闭；打开后会在桌面上来回移动）"
+        )
+        self.allow_autonomous_walk.setChecked(settings.allow_autonomous_walk)
+        self.allow_autonomous_walk.setToolTip(
+            "关闭时仍保留眨眼、坐下、睡觉和互动动画，只是不自动横向跑动。"
+        )
+        layout.addWidget(self.allow_autonomous_walk)
+
         self.grumbling = QCheckBox("允许六毛偶尔发一句轻松的牢骚")
         self.grumbling.setChecked(settings.automatic_grumbling)
         layout.addWidget(self.grumbling)
@@ -680,6 +689,7 @@ class AISettingsDialog(QDialog):
         self.settings.ai_base_url = self.base_url.text().strip()
         self.settings.ai_model = self.model.text().strip()
         self.settings.always_on_top = self.always_on_top.isChecked()
+        self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
         self.settings.app_awareness = self.app_awareness.isChecked()

@@ -96,6 +96,7 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     app = QApplication.instance() or QApplication([])
     dialog = AISettingsDialog(PetSettings(), CredentialStore())
     assert dialog.findChild(QScrollArea) is not None
+    assert dialog.allow_autonomous_walk.isChecked() is False
     services = {
         dialog.music_service.itemData(index)
         for index in range(dialog.music_service.count())
@@ -133,6 +134,24 @@ def test_pet_name_can_be_changed_and_updates_chat_ui() -> None:
     settings_dialog.deleteLater()
     chat.close()
     chat.deleteLater()
+    app.processEvents()
+
+
+def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
+    app, window = _create_window()
+    assert window.settings.allow_autonomous_walk is False
+    assert window._walk_allowed() is False
+    assert window.animation_timer.isActive()
+
+    window.set_allow_autonomous_walk(True, persist=False)
+    assert window.settings.allow_autonomous_walk is True
+    assert window._walk_allowed() is True
+
+    window.set_allow_autonomous_walk(False, persist=False)
+    assert window._walk_allowed() is False
+    assert window.animation_timer.isActive()
+    window.close()
+    window.deleteLater()
     app.processEvents()
 
 

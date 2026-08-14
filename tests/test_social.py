@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from onepic_desktop_pet.social import HttpSocialBackend, SocialClient, SocialSession
+from onepic_desktop_pet.social import HttpSocialBackend, SocialClient, SocialError, SocialSession
 
 
 class RecordingClient(SocialClient):
@@ -84,12 +84,15 @@ class RecordingHttpBackend(HttpSocialBackend):
 def test_http_social_backend_uses_proxy_routes_without_supabase_paths() -> None:
     backend = RecordingHttpBackend()
     backend.sign_in("a@example.com", "secret123")
+    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="wild-king", room_id="room-1")
     backend.dashboard()
     backend.rpc("lili_send_visit", {"target": "u2", "visit_kind": "visit"})
 
     assert backend.calls[0][1] == "/auth/signin"
-    assert backend.calls[1][0:2] == ("GET", "/dashboard")
-    assert backend.calls[2][0:2] == ("POST", "/visits/send")
+    assert backend.calls[1][0:2] == ("POST", "/presence/heartbeat")
+    assert backend.calls[1][2]["focus_date"]
+    assert backend.calls[2][0:2] == ("GET", "/dashboard")
+    assert backend.calls[3][0:2] == ("POST", "/visits/send")
     assert all("supabase" not in str(call[1]).lower() for call in backend.calls)
 
 
@@ -98,6 +101,22 @@ def test_social_config_exposes_optional_proxy_base_url() -> None:
     config = (root / "config" / "social_backend.json").read_text(encoding="utf-8")
     assert '"social_api_base_url"' in config
     assert '"social_backend"' in config
+
+
+def test_dashboard_falls_back_to_last_payload_when_network_is_unavailable() -> None:
+    client = RecordingClient()
+    client.session = SocialSession("a", "r", "u", 9_999_999_999)
+    payload = {"me": {"nickname": "小梁"}, "rooms": [{"id": "room-1"}]}
+    client._raw = lambda *_args, **_kwargs: payload
+    assert client.dashboard("room-1")["rooms"][0]["id"] == "room-1"
+
+    def unavailable(*_args, **_kwargs):
+        raise SocialError("网络不可达")
+
+    client._raw = unavailable
+    cached = client.dashboard("room-1")
+    assert cached["_sync_offline"] is True
+    assert cached["rooms"][0]["id"] == "room-1"
 
 
 def test_room_shared_state_migration_scopes_members_goals_events_and_cooldown() -> None:

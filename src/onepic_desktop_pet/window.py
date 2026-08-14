@@ -161,6 +161,11 @@ class PetWindow(QWidget):
         value = str(getattr(self.settings, "pet_name", "六毛")).replace("\x00", "").strip()
         return value[:20] or "六毛"
 
+    def _walk_allowed(self) -> bool:
+        """返回当前是否允许六毛自主横向跑动。"""
+
+        return bool(getattr(self.settings, "allow_autonomous_walk", False)) and not self.paused
+
     def __init__(
         self,
         settings: PetSettings,
@@ -1038,7 +1043,7 @@ class PetWindow(QWidget):
             return
         decision = self.behavior.next_autonomous_state(
             self.state,
-            allow_walk=not self.paused,
+            allow_walk=self._walk_allowed(),
         )
         if decision.state is PetState.SLEEP:
             self._schedule_sleep_via_sit()
@@ -1223,6 +1228,9 @@ class PetWindow(QWidget):
         self._turn_paused = False
         self._movement_x = float(self.x())
         self._last_movement_at = time.monotonic()
+        # A manually requested walk animation should still finish its turn;
+        # the setting only controls whether autonomous state selection can
+        # enter WALK in the first place.
         if self.state is PetState.WALK and not self.paused and not self.dragging:
             self.animation_timer.start(
                 self._frame_interval(PetState.WALK, self._frame_index)
@@ -1267,7 +1275,33 @@ class PetWindow(QWidget):
                 self._schedule(decision)
         elif not paused and not self.dragging and not self.state_timer.isActive():
             self._schedule(self.behavior.initial_idle())
-        self.show_speech("六毛先在这里安静待着。" if paused else "六毛恢复跑动啦。", 2800)
+        if paused:
+            message = "六毛先在这里安静待着。"
+        elif getattr(self.settings, "allow_autonomous_walk", False):
+            message = "六毛恢复跑动啦。"
+        else:
+            message = "自动跑动还没开启；去设置里打开后，我就能在桌面上跑啦。"
+        self.show_speech(message, 3200)
+
+    def set_allow_autonomous_walk(self, enabled: bool, *, persist: bool = True) -> None:
+        """切换自主跑动总开关；不影响眨眼、坐下和互动动画。"""
+
+        enabled = bool(enabled)
+        self.settings.allow_autonomous_walk = enabled
+        if not enabled and self.state is PetState.WALK:
+            self.state_timer.stop()
+            decision = self.behavior.next_autonomous_state(PetState.IDLE, allow_walk=False)
+            self._schedule_sleep_via_sit() if decision.state is PetState.SLEEP else self._schedule(decision)
+        elif enabled and not self.paused and not self.dragging and not self.state_timer.isActive():
+            self._schedule(self.behavior.initial_idle())
+        if persist:
+            save_settings(self.settings)
+        self.show_speech(
+            "已开启自动跑动；六毛之后会在桌面上来回移动。"
+            if enabled
+            else "已关闭自动跑动；六毛会安静待在原地，但其他动画仍然正常。",
+            3600,
+        )
 
     def set_display_height(self, display_height: int) -> None:
         """应用右键菜单尺寸预设，保持窗口底部中心位置并立即重绘。"""
@@ -1827,6 +1861,9 @@ class PetWindow(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return True
         previous_always_on_top = self.settings.always_on_top
+        previous_allow_autonomous_walk = bool(
+            getattr(self.settings, "allow_autonomous_walk", False)
+        )
         previous_pet_name = self._pet_name()
         try:
             dialog.apply()
@@ -1842,6 +1879,11 @@ class PetWindow(QWidget):
             self.pet_name_changed.emit(current_pet_name)
         if self.settings.always_on_top != previous_always_on_top:
             self.set_always_on_top(self.settings.always_on_top, persist=False)
+        if bool(self.settings.allow_autonomous_walk) != previous_allow_autonomous_walk:
+            self.set_allow_autonomous_walk(
+                self.settings.allow_autonomous_walk,
+                persist=False,
+            )
         save_settings(self.settings)
         self._schedule_ambient()
         self._schedule_song_inspiration()
@@ -1965,6 +2007,7 @@ class PetWindow(QWidget):
         thread = SocialSyncThread(self.social_client, presence, self)
         self._social_thread = thread
         thread.completed.connect(self._social_dashboard_received)
+        thread.failed.connect(self._social_sync_failed)
         thread.finished.connect(self._social_thread_finished)
         thread.start()
 
@@ -1989,6 +2032,15 @@ class PetWindow(QWidget):
         active = data.get("active_visits") or []
         if active:
             self._show_buddy_visit(active[0])
+
+    def _social_sync_failed(self, message: str) -> None:
+        """Keep the pet quiet while making an unavailable room understandable."""
+
+        if self._social_dialog is not None:
+            self._social_dialog._set_status(
+                f"自习室暂时离线：{message}"
+                "；六毛仍会本地计时，网络恢复后自动重试。"
+            )
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""
@@ -2542,6 +2594,14 @@ class PetWindow(QWidget):
                 self._show_photo_bubble()
             self._schedule(self.behavior.initial_idle())
 
+    def _toggle_walk_from_menu(self) -> None:
+        """让右键菜单同时覆盖首次开启和日常暂停两种跑动操作。"""
+
+        if not getattr(self.settings, "allow_autonomous_walk", False):
+            self.set_allow_autonomous_walk(True)
+            return
+        self.set_paused(not self.paused)
+
     def _build_context_menu(self) -> QMenu:
         """构建高频入口直达、低频选项收纳到二级菜单的右键菜单。"""
 
@@ -2589,10 +2649,15 @@ class PetWindow(QWidget):
         selfie = QAction("自拍", self)
         selfie.triggered.connect(self.trigger_selfie)
         action_menu.addAction(selfie)
-        pause = QAction("恢复动画" if self.paused else "暂停动画", self)
+        pause_label = (
+            "开启自动跑动"
+            if not getattr(self.settings, "allow_autonomous_walk", False)
+            else ("恢复跑动" if self.paused else "暂停跑动")
+        )
+        pause = QAction(pause_label, self)
         pause.setCheckable(True)
-        pause.setChecked(self.paused)
-        pause.triggered.connect(lambda: self.set_paused(not self.paused))
+        pause.setChecked(bool(getattr(self.settings, "allow_autonomous_walk", False)) and not self.paused)
+        pause.triggered.connect(self._toggle_walk_from_menu)
         action_menu.addAction(pause)
         food_menu = menu.addMenu(f"给{self._pet_name()}喂食")
         for food in FOOD_OPTIONS:
@@ -2684,8 +2749,13 @@ class PetWindow(QWidget):
         mood_action.triggered.connect(self.show_companion_status)
         food_menu.addAction(mood_action)
 
-        pause_action = QAction("恢复跑动" if self.paused else "暂停跑动", self)
-        pause_action.triggered.connect(lambda: self.set_paused(not self.paused))
+        pause_action = QAction(
+            "开启自动跑动"
+            if not getattr(self.settings, "allow_autonomous_walk", False)
+            else ("恢复跑动" if self.paused else "暂停跑动"),
+            self,
+        )
+        pause_action.triggered.connect(self._toggle_walk_from_menu)
         action_group.addAction(pause_action)
         picture_actions = action_group.addMenu("完整图片动作")
         for group_name, entries in ACTION_GROUPS:

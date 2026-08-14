@@ -87,7 +87,12 @@ class SocialSyncThread(QThread):
                 data = self.client.dashboard()
             self.completed.emit(data)
         except SocialError as exc:
-            self.failed.emit(str(exc))
+            cached_loader = getattr(self.client, "cached_dashboard", None)
+            cached = cached_loader(self.presence.get("room_id")) if callable(cached_loader) else None
+            if cached is not None:
+                self.completed.emit(cached)
+            else:
+                self.failed.emit(str(exc))
 
 
 class SocialDashboardThread(QThread):
@@ -111,7 +116,12 @@ class SocialDashboardThread(QThread):
                 data = self.client.dashboard()
             self.completed.emit(dict(data or {}))
         except SocialError as exc:
-            self.failed.emit(str(exc))
+            cached_loader = getattr(self.client, "cached_dashboard", None)
+            cached = cached_loader(self.room_id) if callable(cached_loader) else None
+            if cached is not None:
+                self.completed.emit(cached)
+            else:
+                self.failed.emit(str(exc))
 
 
 class SocialEventThread(QThread):
@@ -1021,7 +1031,10 @@ class SocialHubDialog(QDialog):
         return self._scroll_page(page)
 
     def _auth_card(self) -> QWidget:
-        card, layout = self._card("账号", "邮箱只用于登录；密码不会保存在 Lili。")
+        card, layout = self._card(
+            "账号",
+            "邮箱只用于登录；密码不会保存在 Lili。网络暂时不可达时会显示最近状态，恢复后自动同步。",
+        )
         auth_tabs = QTabWidget()
         login = QWidget(); login_layout = QVBoxLayout(login); login_form = QFormLayout()
         self.login_email = QLineEdit(); self.login_password = QLineEdit(); self.login_password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -1325,7 +1338,14 @@ class SocialHubDialog(QDialog):
         self._render_room_activity(activity)
         active=self.data.get("active_visits") or []
         if active: self.active_visit.emit(active[0])
-        self._set_status("已刷新，页面内容是最新的。")
+        if self.data.get("_sync_offline"):
+            age = int(self.data.get("_sync_age_minutes") or 0)
+            age_text = f"约 {age} 分钟前" if age else "刚才"
+            self._set_status(
+                f"当前无法连接自习室，已显示{age_text}的本地状态；网络恢复后会自动同步。"
+            )
+        else:
+            self._set_status("已刷新，页面内容是最新的。")
 
     def _save_profile(self) -> None:
         if not self._require_login(): return
