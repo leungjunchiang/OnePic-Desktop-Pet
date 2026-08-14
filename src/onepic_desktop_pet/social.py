@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import ssl
@@ -20,6 +21,50 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .resources import resource_path
+
+
+LOGGER = logging.getLogger(__name__)
+
+CONNECTION_STATES = {"CONNECTING", "ONLINE", "DEGRADED", "OFFLINE", "RECONNECTING"}
+
+
+class ConnectionStateStore:
+    """Single source of truth for the study-room transport state.
+
+    The desktop currently uses an authenticated HTTPS snapshot plus short
+    polling, not a separate websocket subscription.  A successful /health
+    response therefore never proves that the room is online by itself.
+    """
+
+    def __init__(self) -> None:
+        self.state = "OFFLINE"
+        self.data_source = "local_cache"
+        self.realtime_state = "not_started"
+        self.last_success_at = ""
+        self.last_failure_at = ""
+        self.server_timestamp = ""
+
+    def set(self, state: str, *, data_source: str, realtime_state: str = "not_started", server_timestamp: str = "") -> None:
+        self.state = state if state in CONNECTION_STATES else "OFFLINE"
+        self.data_source = data_source
+        self.realtime_state = realtime_state
+        if server_timestamp:
+            self.server_timestamp = server_timestamp
+        now = datetime.now().astimezone().isoformat()
+        if self.state == "ONLINE":
+            self.last_success_at = now
+        elif self.state in {"OFFLINE", "RECONNECTING"}:
+            self.last_failure_at = now
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "connection_state": self.state,
+            "data_source": self.data_source,
+            "realtime_state": self.realtime_state,
+            "last_success_at": self.last_success_at,
+            "last_failure_at": self.last_failure_at,
+            "server_timestamp": self.server_timestamp,
+        }
 
 
 class SocialError(RuntimeError):
@@ -96,7 +141,7 @@ class SocialBackend(Protocol):
     def sign_in(self, email: str, password: str) -> None: ...
     def sign_out(self) -> None: ...
     def health(self) -> dict[str, Any]: ...
-    def dashboard(self, room_id: str | None = None) -> dict[str, Any]: ...
+    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
@@ -237,7 +282,7 @@ class HttpSocialBackend:
         """Check the relay without requiring a user session."""
         return dict(self._raw("GET", "/health") or {})
 
-    def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
+    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
         data = self._raw("GET", "/dashboard", authenticated=True) or {}
         if room_id:
             room = self._raw("GET", f"/rooms/{urllib.parse.quote(str(room_id), safe='')}", authenticated=True) or {}
@@ -281,343 +326,5 @@ class HttpSocialBackend:
         )
 
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
-        self.rpc("lili_set_room_goal", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_due_at": due_at})
-
-    def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None:
-        self.rpc("lili_set_room_schedule", {"p_room_id": room_id, "p_start_at": start_at, "p_end_at": end_at, "p_enabled": bool(enabled)})
-
-    def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None:
-        self.rpc("lili_set_room_challenge", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_target_rounds": int(target_rounds)})
-
-    def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None:
-        self.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": bool(on_focus_start), "p_on_focus_end": bool(on_focus_end), "p_muted": bool(muted)})
-
-    def leave_room(self, *, room_id: str) -> None:
-        self.rpc("lili_leave_room", {"p_room_id": room_id})
-
-    def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
-        self.rpc("lili_record_room_event", {"p_room_id": room_id, "p_kind": kind, "p_target_id": target_id, "p_message": message})
-
-
-class SocialClient:
-    SERVICE_NAME = "LiliSocial"
-    ACCOUNT_NAME = "supabase-session"
-
-    def __init__(self, *, persist_tokens: bool = True, backend: SocialBackend | None = None) -> None:
-        config = json.loads(resource_path("config/social_backend.json").read_text(encoding="utf-8"))
-        self.url = str(config.get("url", "")).rstrip("/")
-        self.key = str(config.get("publishable_key", ""))
-        self.social_api_base_url = (
-            os.environ.get("LILI_SOCIAL_API_BASE_URL", "").strip()
-            or str(config.get("social_api_base_url", "")).strip()
-        ).rstrip("/")
-        # Supabase uses this URL after email confirmation.  Keep it explicit so
-        # desktop builds never inherit the hosted project's localhost default.
-        self.email_redirect_url = (
-            os.environ.get("LILI_AUTH_REDIRECT_URL", "").strip()
-            or str(config.get("email_redirect_to", "")).strip()
-            or "https://github.com/leungjunchiang/OnePic-Desktop-Pet"
-        )
-        self.persist_tokens = persist_tokens
-        self._dashboard_cache: dict[str, dict[str, Any]] = {}
-        self._last_error = ""
-        self.session: SocialSession | None = None
-        self._http_backend: SocialBackend | None = backend
-        if self._http_backend is None and self.social_api_base_url:
-            self._http_backend = HttpSocialBackend(
-                self.social_api_base_url,
-                client_key=self.key,
-                persist_tokens=persist_tokens,
-                email_redirect_url=self.email_redirect_url,
-            )
-        if self._http_backend is None:
-            self._load_session()
-        self._load_dashboard_cache()
-
-    @property
-    def backend_name(self) -> str:
-        return "http" if self._http_backend is not None else "supabase"
-
-    @property
-    def backend_endpoint(self) -> str:
-        if self._http_backend is not None:
-            return str(getattr(self._http_backend, "base_url", "") or "")
-        return self.url
-
-    def health(self) -> dict[str, Any]:
-        """Probe the active social transport without requiring authentication."""
-        if self._http_backend is not None:
-            checker = getattr(self._http_backend, "health", None)
-            if callable(checker):
-                return dict(checker() or {})
-            raise SocialError("å½“å‰è‡ªä¹ å®¤ä¸­è½¬æœåŠ¡æœªæä¾›å¥åº·æ£€æŸ¥ã€‚", kind="config")
-        return dict(self._raw("GET", "/auth/v1/health") or {})
-
-    @property
-    def signed_in(self) -> bool:
-        return self._http_backend.signed_in if self._http_backend is not None else self.session is not None
-
-    @staticmethod
-    def _keyring():
-        import keyring
-        return keyring
-
-    def _load_session(self) -> None:
-        if not self.persist_tokens:
-            return
-        try:
-            raw = self._keyring().get_password(self.SERVICE_NAME, self.ACCOUNT_NAME)
-            if raw:
-                data = json.loads(raw)
-                self.session = SocialSession(
-                    str(data["access_token"]), str(data["refresh_token"]),
-                    str(data["user_id"]), float(data.get("expires_at", 0)),
-                )
-        except Exception:
-            self.session = None
-
-    def _save_session(self) -> None:
-        if not self.persist_tokens or self.session is None:
-            return
-        self._keyring().set_password(self.SERVICE_NAME, self.ACCOUNT_NAME, json.dumps(self.session.__dict__))
-
-    def _clear_session(self) -> None:
-        self.session = None
-        if self.persist_tokens:
-            try:
-                self._keyring().delete_password(self.SERVICE_NAME, self.ACCOUNT_NAME)
-            except Exception:
-                pass
-
-    def _dashboard_cache_path(self) -> Path:
-        """Return a local cache path that contains no access tokens."""
-
-        base = os.environ.get("LOCALAPPDATA")
-        root = Path(base) if base else Path.home() / ".desktop_pet"
-        return root / "Lili" / "social-dashboard-cache.json"
-
-    def _load_dashboard_cache(self) -> None:
-        if not self.persist_tokens:
-            return
-        try:
-            raw = json.loads(self._dashboard_cache_path().read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self._dashboard_cache = {
-                    str(key): value
-                    for key, value in raw.items()
-                    if isinstance(value, dict) and isinstance(value.get("data"), dict)
-                }
-        except (OSError, ValueError, TypeError):
-            self._dashboard_cache = {}
-
-    def _save_dashboard_cache(self) -> None:
-        if not self.persist_tokens:
-            return
-        target = self._dashboard_cache_path()
-        temporary = target.with_suffix(".json.tmp")
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(
-                json.dumps(self._dashboard_cache, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            temporary.replace(target)
-        except OSError:
-            # Cache failure must never break the live sync path.
-            return
-
-    def _remember_dashboard(self, room_id: str | None, data: dict[str, Any]) -> None:
-        key = str(room_id or "")
-        self._dashboard_cache[key] = {
-            "saved_at": time.time(),
-            "data": json.loads(json.dumps(data, ensure_ascii=False)),
-        }
-        self._save_dashboard_cache()
-
-    def cached_dashboard(self, room_id: str | None = None) -> dict[str, Any] | None:
-        """Return the latest payload for offline rendering, if available."""
-
-        key = str(room_id or "")
-        entry = self._dashboard_cache.get(key)
-        if entry is None and key:
-            entry = self._dashboard_cache.get("")
-        if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict):
-            return None
-        data = json.loads(json.dumps(entry["data"], ensure_ascii=False))
-        saved_at = float(entry.get("saved_at") or 0)
-        age_minutes = max(0, int((time.time() - saved_at) / 60)) if saved_at else 0
-        data["_sync_offline"] = True
-        data["_sync_age_minutes"] = age_minutes
-        data["_sync_error"] = self._last_error or "å½“å‰ç½‘ç»œæ— æ³•è®¿é—®è‡ªä¹ å®¤æœåŠ¡"
-        return data
-
-    def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None) -> Any:
-        payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-        headers = {"apikey": self.key, "Content-Type": "application/json", "Accept": "application/json"}
-        if authenticated:
-            self._ensure_fresh()
-            if not self.session:
-                raise SocialError("è¯·å…ˆç™»å½•æ­å­è‡ªä¹ å®¤ã€‚")
-            headers["Authorization"] = f"Bearer {self.session.access_token}"
-        if extra_headers:
-            headers.update(extra_headers)
-        request = urllib.request.Request(f"{self.url}{path}", data=payload, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=_social_request_timeout()) as response:
-                raw = response.read()
-                return json.loads(raw.decode("utf-8")) if raw else None
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            try:
-                data = json.loads(raw)
-                message = data.get("msg") or data.get("message") or data.get("error_description") or raw
-            except json.JSONDecodeError:
-                message = raw or str(exc)
-            status = int(exc.code)
-            kind = "auth" if status in (401, 403) else "server" if status >= 500 else "http"
-            raise SocialError(
-                str(message)[:300],
-                kind=kind,
-                endpoint=_endpoint_host(self.url),
-                retryable=status >= 500,
-                status=status,
-            ) from exc
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
-            raise _network_error(exc, self.url) from exc
-
-    def _accept_auth(self, data: dict[str, Any]) -> bool:
-        token = data.get("access_token")
-        if not token:
-            return False
-        user = data.get("user") or {}
-        self.session = SocialSession(str(token), str(data.get("refresh_token", "")), str(user.get("id", "")), time.time() + int(data.get("expires_in", 3600)))
-        self._save_session(); return True
-
-    def _ensure_fresh(self) -> None:
-        if not self.session or self.session.expires_at > time.time() + 90:
-            return
-        data = self._raw("POST", "/auth/v1/token?grant_type=refresh_token", {"refresh_token": self.session.refresh_token})
-        if not self._accept_auth(data):
-            self._clear_session()
-
-    def sign_up(self, email: str, password: str, nickname: str) -> bool:
-        # `redirect_to` is a query parameter for GoTrue's signup endpoint.  It
-        # must also be present in Supabase Auth's allow-list; the production
-        # project is configured with the same URL.  Passing it explicitly keeps
-        # future dashboard changes from silently restoring localhost redirects.
-        redirect = urllib.parse.urlencode({"redirect_to": self.email_redirect_url})
-        data = self._raw(
-            "POST",
-            f"/auth/v1/signup?{redirect}",
-            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "æ­å­"}},
-        )
-        return self._accept_auth(data)
-
-    def sign_in(self, email: str, password: str) -> None:
-        if self._http_backend is not None:
-            return self._http_backend.sign_in(email, password)
-        data = self._raw("POST", "/auth/v1/token?grant_type=password", {"email": email.strip(), "password": password})
-        if not self._accept_auth(data):
-            raise SocialError("ç™»å½•æ²¡æœ‰æˆåŠŸï¼Œè¯·æ£€æŸ¥é‚®ç®±ç¡®è®¤æˆ–å¯†ç ã€‚")
-
-    def sign_out(self) -> None:
-        if self._http_backend is not None:
-            self._http_backend.sign_out()
-            return
-        self._clear_session()
-
-    def dashboard(self, room_id: str | None = None) -> dict[str, Any]:
-        try:
-            if self._http_backend is not None:
-                data = self._http_backend.dashboard(room_id=room_id)
-            else:
-                data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
-                if room_id:
-                    room = self._raw(
-                        "POST",
-                        "/rest/v1/rpc/lili_room_dashboard",
-                        {"p_room_id": room_id},
-                        authenticated=True,
-                    ) or {}
-                    if isinstance(room, dict):
-                        data.update(room)
-                    try:
-                        rituals = self._raw(
-                            "POST",
-                            "/rest/v1/rpc/lili_room_room_rituals",
-                            {"p_room_id": room_id},
-                            authenticated=True,
-                        ) or {}
-                        if isinstance(rituals, dict):
-                            data.update(rituals)
-                    except SocialError:
-                        # Older deployed projects may not have the optional ritual
-                        # migration yet; the core room dashboard remains usable.
-                        pass
-            result = dict(data or {})
-            self._last_error = ""
-            self._remember_dashboard(room_id, result)
-            return result
-        except SocialError as exc:
-            self._last_error = str(exc)
-            cached = self.cached_dashboard(room_id)
-            if cached is not None:
-                return cached
-            raise
-
-    def rpc(self, name: str, body: dict[str, Any]) -> Any:
-        if self._http_backend is not None:
-            return self._http_backend.rpc(name, body)
-        return self._raw("POST", f"/rest/v1/rpc/{name}", body, authenticated=True)
-
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None:
-        if self._http_backend is not None:
-            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key)
-        if not self.session:
-            raise SocialError("è¯·å…ˆç™»å½•ã€‚")
-        query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
-        clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "æ­å­", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
-
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
-        if self._http_backend is not None:
-            return self._http_backend.heartbeat(working=working, today_seconds=today_seconds, session_started_at=session_started_at, outfit_key=outfit_key, room_id=room_id, quick_status=quick_status, quick_status_expires_at=quick_status_expires_at)
-        if not self.session:
-            return
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_started_at": session_started_at, "focus_date": datetime.now().date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "last_seen": datetime.now().astimezone().isoformat(), "updated_at": datetime.now().astimezone().isoformat()}
-        self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
-
-    def update_owner_nickname(self, nickname: str) -> None:
-        if self._http_backend is not None:
-            return self._http_backend.update_owner_nickname(nickname)
-        if not self.session:
-            raise SocialError("è¯·å…ˆç™»å½•ã€‚")
-        query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
-        clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "æ­å­", "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
-
-    def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
-        if self._http_backend is not None:
-            return self._http_backend.send_interaction(target=target, kind=kind, room_id=room_id)
-        self.rpc(
-            "lili_send_interaction",
-            {"p_target": target, "p_kind": kind, "p_room_id": room_id},
-        )
-
-    def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None:
-        self.rpc("lili_set_room_goal", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_due_at": due_at})
-
-    def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None:
-        self.rpc("lili_set_room_schedule", {"p_room_id": room_id, "p_start_at": start_at, "p_end_at": end_at, "p_enabled": bool(enabled)})
-
-    def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None:
-        self.rpc("lili_set_room_challenge", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_target_rounds": int(target_rounds)})
-
-    def set_buddy_subscription(self, *, buddy_id: str, on_focus_start: bool, on_focus_end: bool, muted: bool = False) -> None:
-        self.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": bool(on_focus_start), "p_on_focus_end": bool(on_focus_end), "p_muted": bool(muted)})
-
-    def leave_room(self, *, room_id: str) -> None:
-        self.rpc("lili_leave_room", {"p_room_id": room_id})
-
-    def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
-        self.rpc("lili_record_room_event", {"p_room_id": room_id, "p_kind": kind, "p_target_id": target_id, "p_message": message})
+        self.rpc("lili_set_room_goal", {"p_room_id": room_id, "p_title": title, "p_target_seconds": int(target_seconds), "p_dßžö¶‰žËkºwµçy‘•Í­Ñ½Á}Á•Ðˆ(€€€€€€€É•ÑÕÉ¸É½½Ð€¼€‰1¥±¤ˆ€¼€‰Í½¥…°µ‘…Í¡‰½…Éµ…¡”¹©Í½¸ˆ((€€€‘•˜}±½…‘}‘…Í¡‰½…É‘}…¡”¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹Á•ÉÍ¥ÍÑ}Ñ½­•¹Ìè(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ÑÉäè(€€€€€€€€€€€É…Ü€ô©Í½¸¹±½…‘Ì¡Í•±˜¹}‘…Í¡‰½…É‘}…¡•}Á…Ñ  ¤¹É•…‘}Ñ•áÐ¡•¹½‘¥¹œô‰ÕÑ˜´àˆ¤¤(€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡É…Ü°‘¥Ð¤è(€€€€€€€€€€€€€€€Í•±˜¹}‘…Í¡‰½…É‘}…¡”€ôì(€€€€€€€€€€€€€€€€€€€ÍÑÈ¡­•ä¤èÙ…±Õ”(€€€€€€€€€€€€€€€€€€€™½È­•ä°Ù…±Õ”¥¸É…Ü¹¥Ñ•µÌ ¤(€€€€€€€€€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡Ù…±Õ”°‘¥Ð¤…¹¥Í¥¹ÍÑ…¹”¡Ù…±Õ”¹•Ð ‰‘…Ñ„ˆ¤°‘¥Ð¤(€€€€€€€€€€€€€€€ô(€€€€€€€•á•ÁÐ€¡=MÉÉ½È°Y…±Õ•ÉÉ½È°QåÁ•ÉÉ½È¤è(€€€€€€€€€€€Í•±˜¹}‘…Í¡‰½…É‘}…¡”€ôíô((€€€‘•˜}Í…Ù•}‘…Í¡‰½…É‘}…¡”¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹Á•ÉÍ¥ÍÑ}Ñ½­•¹Ìè(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€Ñ…É•Ð€ôÍ•±˜¹}‘…Í¡‰½…É‘}…¡•}Á…Ñ  ¤(€€€€€€€Ñ•µÁ½É…Éä€ôÑ…É•Ð¹Ý¥Ñ¡}ÍÕ™™¥à ˆ¹©Í½¸¹ÑµÀˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Ñ…É•Ð¹Á…É•¹Ð¹µ­‘¥È¡Á…É•¹ÑÌõQÉÕ”°•á¥ÍÑ}½¬õQÉÕ”¤(€€€€€€€€€€€Ñ•µÁ½É…Éä¹ÝÉ¥Ñ•}Ñ•áÐ (€€€€€€€€€€€€€€€©Í½¸¹‘ÕµÁÌ¡Í•±˜¹}‘…Í¡‰½…É‘}…¡”°•¹ÍÕÉ•}…Í¥¤õ…±Í”¤°(€€€€€€€€€€€€€€€•¹½‘¥¹œô‰ÕÑ˜´àˆ°(€€€€€€€€€€€€¤(€€€€€€€€€€€Ñ•µÁ½É…Éä¹É•Á±…”¡Ñ…É•Ð¤(€€€€€€€•á•ÁÐ=MÉÉ½Èè(€€€€€€€€€€€€Œ…¡”™…¥±ÕÉ”µÕÍÐ¹•Ù•È‰É•…¬Ñ¡”±¥Ù”Íå¹ŒÁ…Ñ ¸(€€€€€€€€€€€É•ÑÕÉ¸((€€€‘•˜}É•µ•µ‰•É}‘…Í¡‰½…É¡Í•±˜°É½½µ}¥èÍÑÈð9½¹”°‘…Ñ„è‘¥ÑmÍÑÈ°¹åt¤€´ø9½¹”è(€€€€€€€­•ä€ôÍÑÈ¡É½½µ}¥½È€ˆˆ¤(€€€€€€€Í•±˜¹}‘…Í¡‰½…É‘}…¡•m­•åt€ôì(€€€€€€€€€€€€‰Í…Ù•‘}…ÐˆèÑ¥µ”¹Ñ¥µ” ¤°(€€€€€€€€€€€€‰‘…Ñ„ˆè©Í½¸¹±½…‘Ì¡©Í½¸¹‘ÕµÁÌ¡‘…Ñ„°•¹ÍÕÉ•}…Í¥¤õ…±Í”¤¤°(€€€€€€€ô(€€€€€€€Í•±˜¹}Í…Ù•}‘…Í¡‰½…É‘}…¡” ¤((€€€‘•˜…¡•‘}‘…Í¡‰½…É¡Í•±˜°É½½µ}¥èÍÑÈð9½¹”€ô9½¹”¤€´ø‘¥ÑmÍÑÈ°¹åtð9½¹”è(€€€€€€€€ˆˆ‰I•ÑÕÉ¸Ñ¡”±…Ñ•ÍÐÁ…å±½…™½È½™™±¥¹”É•¹‘•É¥¹œ°¥˜…Ù…¥±…‰±”¸ˆˆˆ((€€€€€€€­•ä€ôÍÑÈ¡É½½µ}¥½È€ˆˆ¤(€€€€€€€•¹ÑÉä€ôÍ•±˜¹}‘…Í¡‰½…É‘}…¡”¹•Ð¡­•ä¤(€€€€€€€¥˜•¹ÑÉä¥Ì9½¹”…¹­•äè(€€€€€€€€€€€•¹ÑÉä€ôÍ•±˜¹}‘…Í¡‰½…É‘}…¡”¹•Ð ˆˆ¤(€€€€€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡•¹ÑÉä°‘¥Ð¤½È¹½Ð¥Í¥¹ÍÑ…¹”¡•¹ÑÉä¹•Ð ‰‘…Ñ„ˆ¤°‘¥Ð¤è(€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€‘…Ñ„€ô©Í½¸¹±½…‘Ì¡©Í½¸¹‘ÕµÁÌ¡•¹ÑÉål‰‘…Ñ„‰t°•¹ÍÕÉ•}…Í¥¤õ…±Í”¤¤(€€€€€€€Í…Ù•‘}…Ð€ô™±½…Ð¡•¹ÑÉä¹•Ð ‰Í…Ù•‘}…Ðˆ¤½È€À¤(€€€€€€€…•}µ¥¹ÕÑ•Ì€ôµ…à À°¥¹Ð ¡Ñ¥µ”¹Ñ¥µ” ¤€´Í…Ù•‘}…Ð¤€¼€ØÀ¤¤¥˜Í…Ù•‘}…Ð•±Í”€À(€€€€€€€Í•±˜¹}µ…É­}É•µ½Ñ•}ÁÉ•Í•¹•}ÍÑ…±”¡‘…Ñ„¤(€€€€€€€‘…Ñ…l‰}Íå¹}½™™±¥¹”‰t€ôQÉÕ”(€€€€€€€‘…Ñ…l‰}½¹¹•Ñ¥½¹}ÍÑ…Ñ”‰t€ô€‰=1%9ˆ(€€€€€€€‘…Ñ…l‰‘…Ñ…}Í½ÕÉ”‰t€ô€‰±½…±}…¡”ˆ(€€€€€€€‘…Ñ…l‰}‘…Ñ…}Í½ÕÉ”‰t€ô€‰±½…±}…¡”ˆ(€€€€€€€‘…Ñ…l‰}Íå¹}…•}µ¥¹ÕÑ•Ì‰t€ô…•}µ¥¹ÕÑ•Ì(€€€€€€€ÑÉäè(€€€€€€€€€€€‘…Ñ…l‰}Í•ÉÙ•É}Ñ¥µ•ÍÑ…µÀ‰t€ô‘…Ñ•Ñ¥µ”¹™É½µÑ¥µ•ÍÑ…µÀ¡Í…Ù•‘}…Ð¤¹…ÍÑ¥µ•é½¹” ¤¹¥Í½™½Éµ…Ð ¤¥˜Í…Ù•‘}…Ð•±Í”€ˆˆ(€€€€€€€•á•ÁÐ€¡=MÉÉ½È°=Ù•É™±½ÝÉÉ½È°Y…±Õ•ÉÉ½È¤è(€€€€€€€€€€€‘…Ñ…l‰}Í•ÉÙ•É}Ñ¥µ•ÍÑ…µÀ‰t€ô€ˆˆ(€€€€€€€‘…Ñ…l‰}Íå¹}•ÉÉ½È‰t€ôÍ•±˜¹}±…ÍÑ}•ÉÉ½È½È€‹–öO–&7žöGžîsš^ƒšÎW¢ºÿ¦^»¢«’æƒ–º“šr7–*„ˆ(€€€€€€€É•ÑÕÉ¸‘…Ñ„((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}µ…É­}É•µ½Ñ•}ÁÉ•Í•¹•}ÍÑ…±”¡‘…Ñ„è‘¥ÑmÍÑÈ°¹åt¤€´ø9½¹”è(€€€€€€€€ˆˆ‰9•Ù•ÈÉ•¹‘•È…¡•É•µ½Ñ”ÁÉ•Í•¹”…ÌÕÉÉ•¹Ð½¹±¥¹”…Ñ¥Ù¥Ñä¸ˆˆˆ((€€€€€€€‘•˜µ…É¬¡¥Ñ•µÌè¹ä¤€´ø9½¹”è(€€€€€€€€€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡¥Ñ•µÌ°±¥ÍÐ¤è(€€€€€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€€€€€™½È¥Ñ•´¥¸¥Ñ•µÌè(€€€€€€€€€€€€€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡¥Ñ•´°‘¥Ð¤½È¥Ñ•´¹•Ð ‰¥Í}Í•±˜ˆ¤è(€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€€€€€¥Ñ•µl‰½¹±¥¹”‰t€ô…±Í”(€€€€€€€€€€€€€€€¥Ñ•µl‰Ý½É­¥¹œ‰t€ô…±Í”(€€€€€€€€€€€€€€€¥Ñ•µl‰ÍÑ…ÑÕÌ‰t€ô€‰½™™±¥¹”ˆ(€€€€€€€€€€€€€€€¥Ñ•µl‰Í•ÍÍ¥½¹}Í•½¹‘Ì‰t€ô€À(€€€€€€€€€€€€€€€¥Ñ•µl‰Ñ½‘…å}Í•½¹‘Ì‰t€ô9½¹”(€€€€€€€€€€€€€€€¥Ñ•µl‰ÍÑ…±•}ÁÉ•Í•¹”‰t€ôQÉÕ”((€€€€€€€µ…É¬¡‘…Ñ„¹•Ð ‰‰Õ‘‘¥•Ìˆ¤¤(€€€€€€€µ…É¬¡‘…Ñ„¹•Ð ‰É½½µ}Á•½Á±”ˆ¤¤(€€€€€€€µ…É¬¡‘…Ñ„¹•Ð ‰…Ñ¥Ù•}Ù¥Í¥ÑÌˆ¤¤(€€€€€€€É½½´€ô‘…Ñ„¹•Ð ‰ÕÉÉ•¹Ñ}É½½´ˆ¤(€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡É½½´°‘¥Ð¤è(€€€€€€€€€€€µ…É¬¡É½½´¹•Ð ‰É½½µ}Á•½Á±”ˆ¤¤(€€€€€€€€€€€ÍÕµµ…Éä€ôÉ½½´¹•Ð ‰É½½µ}ÍÕµµ…Éäˆ¤(€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡ÍÕµµ…Éä°‘¥Ð¤è(€€€€€€€€€€€€€€€ÍÕµµ…Éål‰™½ÕÍ}½Õ¹Ð‰t€ô€À(€€€€€€€ÍÕµµ…Éä€ô‘…Ñ„¹•Ð ‰É½½µ}ÍÕµµ…Éäˆ¤(€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡ÍÕµµ…Éä°‘¥Ð¤è(€€€€€€€€€€€ÍÕµµ…Éål‰™½ÕÍ}½Õ¹Ð‰t€ô€À((€€€‘•˜}É…Ü¡Í•±˜°µ•Ñ¡½èÍÑÈ°Á…Ñ èÍÑÈ°‰½‘äè¹ä€ô9½¹”°€¨°…ÕÑ¡•¹Ñ¥…Ñ•è‰½½°€ô…±Í”°•áÑÉ…}¡•…‘•ÉÌè‘¥ÑmÍÑÈ°ÍÑÉtð9½¹”€ô9½¹”¤€´ø¹äè(€€€€€€€Á…å±½…€ô9½¹”¥˜‰½‘ä¥Ì9½¹”•±Í”©Í½¸¹‘ÕµÁÌ¡‰½‘ä°•¹ÍÕÉ•}…Í¥¤õ…±Í”¤¹•¹½‘” ‰ÕÑ˜´àˆ¤(€€€€€€€¡•…‘•ÉÌ€ôì‰…Á¥­•äˆèÍ•±˜¹­•ä°€‰½¹Ñ•¹ÐµQåÁ”ˆè€‰…ÁÁ±¥…Ñ¥½¸½©Í½¸ˆ°€‰•ÁÐˆè€‰…ÁÁ±¥…Ñ¥½¸½©Í½¸‰ô(€€€€€€€¥˜…ÕÑ¡•¹Ñ¥…Ñ•è(€€€€€€€€€€€Í•±˜¹}•¹ÍÕÉ•}™É•Í  ¤(€€€€€€€€€€€¥˜¹½ÐÍ•±˜¹Í•ÍÍ¥½¸è(€€€€€€€€€€€€€€€É…¥Í”M½¥…±ÉÉ½È ‹¢¾ß–#žfï–öWšB·–¶C¢«’æƒ–º“Žˆ¤(€€€€€€€€€€€¡•…‘•ÉÍl‰ÕÑ¡½É¥é…Ñ¥½¸‰t€ô˜‰	•…É•ÈíÍ•±˜¹Í•ÍÍ¥½¸¹…•ÍÍ}Ñ½­•¹ôˆ(€€€€€€€¥˜•áÑÉ…}¡•…‘•ÉÌè(€€€€€€€€€€€¡•…‘•ÉÌ¹ÕÁ‘…Ñ”¡•áÑÉ…}¡•…‘•ÉÌ¤(€€€€€€€É•ÅÕ•ÍÐ€ôÕÉ±±¥ˆ¹É•ÅÕ•ÍÐ¹I•ÅÕ•ÍÐ¡˜‰íÍ•±˜¹ÕÉ±õíÁ…Ñ¡ôˆ°‘…Ñ„õÁ…å±½…°¡•…‘•ÉÌõ¡•…‘•ÉÌ°µ•Ñ¡½õµ•Ñ¡½¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Ý¥Ñ ÕÉ±±¥ˆ¹É•ÅÕ•ÍÐ¹ÕÉ±½Á•¸¡É•ÅÕ•ÍÐ°Ñ¥µ•½ÕÐõ}Í½¥…±}É•ÅÕ•ÍÑ}Ñ¥µ•½ÕÐ ¤¤…ÌÉ•ÍÁ½¹Í”è(€€€€€€€€€€€€€€€É…Ü€ôÉ•ÍÁ½¹Í”¹É•… ¤(€€€€€€€€€€€€€€€É•ÑÕÉ¸©Í½¸¹±½…‘Ì¡É…Ü¹‘•½‘” ‰ÕÑ˜´àˆ¤¤¥˜É…Ü•±Í”9½¹”(€€€€€€€•á•ÁÐÕÉ±±¥ˆ¹•ÉÉ½È¹!QQAÉÉ½È…Ì•áŒè(€€€€€€€€€€€É…Ü€ô•áŒ¹É•… ¤¹‘•½‘” ‰ÕÑ˜´àˆ°•ÉÉ½ÉÌô‰É•Á±…”ˆ¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€‘…Ñ„€ô©Í½¸¹±½…‘Ì¡É…Ü¤(€€€€€€€€€€€€€€€µ•ÍÍ…”€ô‘…Ñ„¹•Ð ‰µÍœˆ¤½È‘…Ñ„¹•Ð ‰µ•ÍÍ…”ˆ¤½È‘…Ñ„¹•Ð ‰•ÉÉ½É}‘•ÍÉ¥ÁÑ¥½¸ˆ¤½ÈÉ…Ü(€€€€€€€€€€€•á•ÁÐ©Í½¸¹)M=9•½‘•ÉÉ½Èè(€€€€€€€€€€€€€€€µ•ÍÍ…”€ôÉ…Ü½ÈÍÑÈ¡•áŒ¤(€€€€€€€€€€€ÍÑ…ÑÕÌ€ô¥¹Ð¡•áŒ¹½‘”¤(€€€€€€€€€€€­¥¹€ô€‰…ÕÑ ˆ¥˜ÍÑ…ÑÕÌ¥¸€ ÐÀÄ°€ÐÀÌ¤•±Í”€‰Í•ÉÙ•Èˆ¥˜ÍÑ…ÑÕÌ€øô€ÔÀÀ•±Í”€‰¡ÑÑÀˆ(€€€€€€€€€€€É…¥Í”M½¥…±ÉÉ½È (€€€€€€€€€€€€€€€ÍÑÈ¡µ•ÍÍ…”¥lèÌÀÁt°(€€€€€€€€€€€€€€€­¥¹õ­¥¹°(€€€€€€€€€€€€€€€•¹‘Á½¥¹Ðõ}•¹‘Á½¥¹Ñ}¡½ÍÐ¡Í•±˜¹ÕÉ°¤°(€€€€€€€€€€€€€€€É•ÑÉå…‰±”õÍÑ…ÑÕÌ€øô€ÔÀÀ°(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌõÍÑ…ÑÕÌ°(€€€€€€€€€€€€¤™É½´•áŒ(€€€€€€€•á•ÁÐ€¡=MÉÉ½È°ÕÉ±±¥ˆ¹•ÉÉ½È¹UI1ÉÉ½È°Q¥µ•½ÕÑÉÉ½È¤…Ì•áŒè(€€€€€€€€€€€É…¥Í”}¹•ÑÝ½É­}•ÉÉ½È¡•áŒ°Í•±˜¹ÕÉ°¤™É½´•áŒ((€€€‘•˜}…•ÁÑ}…ÕÑ ¡Í•±˜°‘…Ñ„è‘¥ÑmÍÑÈ°¹åt¤€´ø‰½½°è(€€€€€€€Ñ½­•¸€ô‘…Ñ„¹•Ð ‰…•ÍÍ}Ñ½­•¸ˆ¤(€€€€€€€¥˜¹½ÐÑ½­•¸è(€€€€€€€€€€€É•ÑÕÉ¸…±Í”(€€€€€€€ÕÍ•È€ô‘…Ñ„¹•Ð ‰ÕÍ•Èˆ¤½Èíô(€€€€€€€Í•±˜¹Í•ÍÍ¥½¸€ôM½¥…±M•ÍÍ¥½¸¡ÍÑÈ¡Ñ½­•¸¤°ÍÑÈ¡‘…Ñ„¹•Ð ‰É•™É•Í¡}Ñ½­•¸ˆ°€ˆˆ¤¤°ÍÑÈ¡ÕÍ•È¹•Ð ‰¥ˆ°€ˆˆ¤¤°Ñ¥µ”¹Ñ¥µ” ¤€¬¥¹Ð¡‘…Ñ„¹•Ð ‰•áÁ¥É•Í}¥¸ˆ°€ÌØÀÀ¤¤¤(€€€€€€€Í•±˜¹}Í…Ù•}Í•ÍÍ¥½¸ ¤ìÉ•ÑÕÉ¸QÉÕ”((€€€‘•˜}•¹ÍÕÉ•}™É•Í ¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜¹½ÐÍ•±˜¹Í•ÍÍ¥½¸½ÈÍ•±˜¹Í•ÍÍ¥½¸¹•áÁ¥É•Í}…Ð€øÑ¥µ”¹Ñ¥µ” ¤€¬€äÀè(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€‘…Ñ„€ôÍ•±˜¹}É…Ü ‰A=MPˆ°€ˆ½…ÕÑ ½ØÄ½Ñ½­•¸ýÉ…¹Ñ}ÑåÁ”õÉ•™É•Í¡}Ñ½­•¸ˆ°ì‰É•™É•Í¡}Ñ½­•¸ˆèÍ•±˜¹Í•ÍÍ¥½¸¹É•™É•Í¡}Ñ½­•¹ô¤(€€€€€€€¥˜¹½ÐÍ•±˜¹}…•ÁÑ}…ÕÑ ¡‘…Ñ„¤è(€€€€€€€€€€€Í•±˜¹}±•…É}Í•ÍÍ¥½¸ ¤((€€€‘•˜Í¥¹}ÕÀ¡Í•±˜°•µ…¥°èÍÑÈ°Á…ÍÍÝ½ÉèÍÑÈ°¹¥­¹…µ”èÍÑÈ¤€´ø‰½½°è(€€€€€€€€ŒÉ•‘¥É•Ñ}Ñ½€¥Ì„ÅÕ•ÉäÁ…É…µ•Ñ•È™½È½QÉÕ”ÌÍ¥¹ÕÀ•¹‘Á½¥¹Ð¸€%Ð(€€€€€€€€ŒµÕÍÐ…±Í¼‰”ÁÉ•Í•¹Ð¥¸MÕÁ…‰…Í”ÕÑ Ì…±±½Üµ±¥ÍÐìÑ¡”ÁÉ½‘ÕÑ¥½¸(€€€€€€€€ŒÁÉ½©•Ð¥Ì½¹™¥ÕÉ•Ý¥Ñ Ñ¡”Í…µ”UI0¸€A…ÍÍ¥¹œ¥Ð•áÁ±¥¥Ñ±ä­••ÁÌ(€€€€€€€€Œ™ÕÑÕÉ”‘…Í¡‰½…É¡…¹•Ì™É½´Í¥±•¹Ñ±äÉ•ÍÑ½É¥¹œ±½…±¡½ÍÐÉ•‘¥É•ÑÌ¸(€€€€€€€É•‘¥É•Ð€ôÕÉ±±¥ˆ¹Á…ÉÍ”¹ÕÉ±•¹½‘”¡ì‰É•‘¥É•Ñ}Ñ¼ˆèÍ•±˜¹•µ…¥±}É•‘¥É•Ñ}ÕÉ±ô¤(€€€€€€€‘…Ñ„€ôÍ•±˜¹}É…Ü (€€€€€€€€€€€€‰A=MPˆ°(€€€€€€€€€€€˜ˆ½…ÕÑ ½ØÄ½Í¥¹ÕÀýíÉ•‘¥É•Ñôˆ°(€€€€€€€€€€€ì‰•µ…¥°ˆè•µ…¥°¹ÍÑÉ¥À ¤°€‰Á…ÍÍÝ½ÉˆèÁ…ÍÍÝ½É°€‰‘…Ñ„ˆèì‰¹¥­¹…µ”ˆè¹¥­¹…µ”¹ÍÑÉ¥À ¥lèÈÑt½È€‹šB·–¶@‰õô°(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸Í•±˜¹}…•ÁÑ}…ÕÑ ¡‘…Ñ„¤((€€€‘•˜Í¥¹}¥¸¡Í•±˜°•µ…¥°èÍÑÈ°Á…ÍÍÝ½ÉèÍÑÈ¤€´ø9½¹”è(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸Í•±˜¹}¡ÑÑÁ}‰…­•¹¹Í¥¹}¥¸¡•µ…¥°°Á…ÍÍÝ½É¤(€€€€€€€‘…Ñ„€ôÍ•±˜¹}É…Ü ‰A=MPˆ°€ˆ½…ÕÑ ½ØÄ½Ñ½­•¸ýÉ…¹Ñ}ÑåÁ”õÁ…ÍÍÝ½Éˆ°ì‰•µ…¥°ˆè•µ…¥°¹ÍÑÉ¥À ¤°€‰Á…ÍÍÝ½ÉˆèÁ…ÍÍÝ½É‘ô¤(€€€€€€€¥˜¹½ÐÍ•±˜¹}…•ÁÑ}…ÕÑ ¡‘…Ñ„¤è(€€€€€€€€€€€É…¥Í”M½¥…±ÉÉ½È ‹žfï–öWšÊ‡šr'š"C–*¾ò3¢¾ßšŽš~—¦
+»žºÇž†»¢º“š"[–¾ž‚Žˆ¤((€€€‘•˜Í¥¹}½ÕÐ¡Í•±˜¤€´ø9½¹”è(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€Í•±˜¹}¡ÑÑÁ}‰…­•¹¹Í¥¹}½ÕÐ ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€Í•±˜¹}±•…É}Í•ÍÍ¥½¸ ¤((€€€‘•˜‘…Í¡‰½…É¡Í•±˜°É½½µ}¥èÍÑÈð9½¹”€ô9½¹”°€¨°…±±½Ý}…¡”è‰½½°€ôQÉÕ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€Í•±˜¹½¹¹•Ñ¥½¸¹Í•Ð ‰=99Q%9ˆ°‘…Ñ…}Í½ÕÉ”õÍ•±˜¹½¹¹•Ñ¥½¸¹‘…Ñ…}Í½ÕÉ”°É•…±Ñ¥µ•}ÍÑ…Ñ”ô‰Á½±±¥¹œˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€€€€€‘…Ñ„€ôÍ•±˜¹}¡ÑÑÁ}‰…­•¹¹‘…Í¡‰½…É¡É½½µ}¥õÉ½½µ}¥¤(€€€€€€€€€€€•±Í”è(€€€€€€€€€€€€€€€‘…Ñ„€ôÍ•±˜¹}É…Ü ‰A=MPˆ°€ˆ½É•ÍÐ½ØÄ½ÉÁŒ½±¥±¥}‘…Í¡‰½…Éˆ°íô°…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”¤½Èíô(€€€€€€€€€€€€€€€¥˜É½½µ}¥è(€€€€€€€€€€€€€€€€€€€É½½´€ôÍ•±˜¹}É…Ü (€€€€€€€€€€€€€€€€€€€€€€€€‰A=MPˆ°(€€€€€€€€€€€€€€€€€€€€€€€€ˆ½É•ÍÐ½ØÄ½ÉÁŒ½±¥±¥}É½½µ}‘…Í¡‰½…Éˆ°(€€€€€€€€€€€€€€€€€€€€€€€ì‰Á}É½½µ}¥ˆèÉ½½µ}¥‘ô°(€€€€€€€€€€€€€€€€€€€€€€€…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”°(€€€€€€€€€€€€€€€€€€€€¤½Èíô(€€€€€€€€€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡É½½´°‘¥Ð¤è(€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„¹ÕÁ‘…Ñ”¡É½½´¤(€€€€€€€€€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€€€€€€€€€É¥ÑÕ…±Ì€ôÍ•±˜¹}É…Ü (€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰A=MPˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ˆ½É•ÍÐ½ØÄ½ÉÁŒ½±¥±¥}É½½µ}É½½µ}É¥ÑÕ…±Ìˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€ì‰Á}É½½µ}¥ˆèÉ½½µ}¥‘ô°(€€€€€€€€€€€€€€€€€€€€€€€€€€€…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”°(€€€€€€€€€€€€€€€€€€€€€€€€¤½Èíô(€€€€€€€€€€€€€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡É¥ÑÕ…±Ì°‘¥Ð¤è(€€€€€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„¹ÕÁ‘…Ñ”¡É¥ÑÕ…±Ì¤(€€€€€€€€€€€€€€€€€€€•á•ÁÐM½¥…±ÉÉ½Èè(€€€€€€€€€€€€€€€€€€€€€€€€Œ=±‘•È‘•Á±½å•ÁÉ½©•ÑÌµ…ä¹½Ð¡…Ù”Ñ¡”½ÁÑ¥½¹…°É¥ÑÕ…°(€€€€€€€€€€€€€€€€€€€€€€€€Œµ¥É…Ñ¥½¸å•ÐìÑ¡”½É”É½½´‘…Í¡‰½…ÉÉ•µ…¥¹ÌÕÍ…‰±”¸(€€€€€€€€€€€€€€€€€€€€€€€Á…ÍÌ(€€€€€€€€€€€É•ÍÕ±Ð€ô‘¥Ð¡‘…Ñ„½Èíô¤(€€€€€€€€€€€Í•±˜¹}±…ÍÑ}•ÉÉ½È€ô€ˆˆ(€€€€€€€€€€€É•ÍÕ±Ñl‰}½¹¹•Ñ¥½¹}ÍÑ…Ñ”‰t€ô€‰=91%9ˆ(€€€€€€€€€€€É•ÍÕ±Ñl‰‘…Ñ…}Í½ÕÉ”‰t€ô€‰Í•ÉÙ•Èˆ(€€€€€€€€€€€É•ÍÕ±Ñl‰}‘…Ñ…}Í½ÕÉ”‰t€ô€‰Í•ÉÙ•Èˆ(€€€€€€€€€€€É•ÍÕ±Ñl‰}Í•ÉÙ•É}Ñ¥µ•ÍÑ…µÀ‰t€ô‘…Ñ•Ñ¥µ”¹¹½Ü ¤¹…ÍÑ¥µ•é½¹” ¤¹¥Í½™½Éµ…Ð ¤(€€€€€€€€€€€Í•±˜¹½¹¹•Ñ¥½¸¹Í•Ð (€€€€€€€€€€€€€€€€‰=91%9ˆ°(€€€€€€€€€€€€€€€‘…Ñ…}Í½ÕÉ”ô‰Í•ÉÙ•Èˆ°(€€€€€€€€€€€€€€€É•…±Ñ¥µ•}ÍÑ…Ñ”ô‰Á½±±¥¹œˆ°(€€€€€€€€€€€€€€€Í•ÉÙ•É}Ñ¥µ•ÍÑ…µÀõÉ•ÍÕ±Ñl‰}Í•ÉÙ•É}Ñ¥µ•ÍÑ…µÀ‰t°(€€€€€€€€€€€€¤(€€€€€€€€€€€Í•±˜¹}É•µ•µ‰•É}‘…Í¡‰½…É¡É½½µ}¥°É•ÍÕ±Ð¤(€€€€€€€€€€€É•ÑÕÉ¸É•ÍÕ±Ð(€€€€€€€•á•ÁÐM½¥…±ÉÉ½È…Ì•áŒè(€€€€€€€€€€€Í•±˜¹}±…ÍÑ}•ÉÉ½È€ôÍÑÈ¡•áŒ¤(€€€€€€€€€€€Í•±˜¹½¹¹•Ñ¥½¸¹Í•Ð ‰=1%9ˆ°‘…Ñ…}Í½ÕÉ”ô‰±½…±}…¡”ˆ°É•…±Ñ¥µ•}ÍÑ…Ñ”ô‰Õ¹…Ù…¥±…‰±”ˆ¤(€€€€€€€€€€€¥˜¹½Ð…±±½Ý}…¡”è(€€€€€€€€€€€€€€€É…¥Í”(€€€€€€€€€€€…¡•€ôÍ•±˜¹…¡•‘}‘…Í¡‰½…É¡É½½µ}¥¤(€€€€€€€€€€€¥˜…¡•¥Ì¹½Ð9½¹”è(€€€€€€€€€€€€€€€É•ÑÕÉ¸…¡•(€€€€€€€€€€€É…¥Í”((€€€‘•˜ÉÁŒ¡Í•±˜°¹…µ”èÍÑÈ°‰½‘äè‘¥ÑmÍÑÈ°¹åt¤€´ø¹äè(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸Í•±˜¹}¡ÑÑÁ}‰…­•¹¹ÉÁŒ¡¹…µ”°‰½‘ä¤(€€€€€€€É•ÑÕÉ¸Í•±˜¹}É…Ü ‰A=MPˆ°˜ˆ½É•ÍÐ½ØÄ½ÉÁŒ½í¹…µ•ôˆ°‰½‘ä°…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”¤((€€€‘•˜ÕÁ‘…Ñ•}ÁÉ½™¥±”¡Í•±˜°€¨°¹¥­¹…µ”èÍÑÈ°Ù¥Í¥‰¥±¥ÑäèÍÑÈ°Í¡½Ý}•á…Ñ}Ñ¥µ”è‰½½°°…±±½Ý}Ù¥Í¥ÑÌè‰½½°°½ÕÑ™¥Ñ}­•äèÍÑÈ€ô€ˆˆ¤€´ø9½¹”è(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸Í•±˜¹}¡ÑÑÁ}‰…­•¹¹ÕÁ‘…Ñ•}ÁÉ½™¥±”¡¹¥­¹…µ”õ¹¥­¹…µ”°Ù¥Í¥‰¥±¥ÑäõÙ¥Í¥‰¥±¥Ñä°Í¡½Ý}•á…Ñ}Ñ¥µ”õÍ¡½Ý}•á…Ñ}Ñ¥µ”°…±±½Ý}Ù¥Í¥ÑÌõ…±±½Ý}Ù¥Í¥ÑÌ°½ÕÑ™¥Ñ}­•äõ½ÕÑ™¥Ñ}­•ä¤(€€€€€€€¥˜¹½ÐÍ•±˜¹Í•ÍÍ¥½¸è(€€€€€€€€€€€É…¥Í”M½¥…±ÉÉ½È ‹¢¾ß–#žfï–öWŽˆ¤(€€€€€€€ÅÕ•Éä€ôÕÉ±±¥ˆ¹Á…ÉÍ”¹ÕÉ±•¹½‘”¡ì‰ÕÍ•É}¥ˆè˜‰•Ä¹íÍ•±˜¹Í•ÍÍ¥½¸¹ÕÍ•É}¥‘ô‰ô¤(€€€€€€€±•…¸€ô¹¥­¹…µ”¹ÍÑÉ¥À ¥lèÈÑt(€€€€€€€Í•±˜¹}É…Ü ‰AQ ˆ°˜ˆ½É•ÍÐ½ØÄ½±¥±¥}ÁÉ½™¥±•ÌýíÅÕ•Éåôˆ°ì‰¹¥­¹…µ”ˆè±•…¸½È€‹šB·–¶@ˆ°€‰½Ý¹•É}¹¥­¹…µ”ˆè±•…¸°€‰Ù¥Í¥‰¥±¥ÑäˆèÙ¥Í¥‰¥±¥Ñä°€‰Í¡½Ý}•á…Ñ}Ñ¥µ”ˆè‰½½°¡Í¡½Ý}•á…Ñ}Ñ¥µ”¤°€‰…±±½Ý}Ù¥Í¥ÑÌˆè‰½½°¡…±±½Ý}Ù¥Í¥ÑÌ¤°€‰½ÕÑ™¥Ñ}­•äˆè½ÕÑ™¥Ñ}­•ålèØÁt°€‰ÕÁ‘…Ñ•‘}…Ðˆè‘…Ñ•Ñ¥µ”¹¹½Ü ¤¹…ÍÑ¥µ•é½¹” ¤¹¥Í½™½Éµ…Ð ¥ô°…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”°•áÑÉ…}¡•…‘•ÉÌõì‰AÉ•™•Èˆè€‰É•ÑÕÉ¸õµ¥¹¥µ…°‰ô¤((€€€‘•˜¡•…ÉÑ‰•…Ð¡Í•±˜°€¨°Ý½É­¥¹œè‰½½°°Ñ½‘…å}Í•½¹‘Ìè¥¹Ð°Í•ÍÍ¥½¹}ÍÑ…ÉÑ•‘}…ÐèÍÑÈð9½¹”°½ÕÑ™¥Ñ}­•äèÍÑÈ°É½½µ}¥èÍÑÈð9½¹”€ô9½¹”°ÅÕ¥­}ÍÑ…ÑÕÌèÍÑÈ€ô€ˆˆ°ÅÕ¥­}ÍÑ…ÑÕÍ}•áÁ¥É•Í}…ÐèÍÑÈð9½¹”€ô9½¹”¤€´ø9½¹”è(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸Í•±˜¹}¡ÑÑÁ}‰…­•¹¹¡•…ÉÑ‰•…Ð¡Ý½É­¥¹œõÝ½É­¥¹œ°Ñ½‘…å}Í•½¹‘ÌõÑ½‘…å}Í•½¹‘Ì°Í•ÍÍ¥½¹}ÍÑ…ÉÑ•‘}…ÐõÍ•ÍÍ¥½¹}ÍÑ…ÉÑ•‘}…Ð°½ÕÑ™¥Ñ}­•äõ½ÕÑ™¥Ñ}­•ä°É½½µ}¥õÉ½½µ}¥°ÅÕ¥­}ÍÑ…ÑÕÌõÅÕ¥­}ÍÑ…ÑÕÌ°ÅÕ¥­}ÍÑ…ÑÕÍ}•áÁ¥É•Í}…ÐõÅÕ¥­}ÍÑ…ÑÕÍ}•áÁ¥É•Í}…Ð¤(€€€€€€€¥˜¹½ÐÍ•±˜¹Í•ÍÍ¥½¸è(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€‰½‘ä€ôì‰ÕÍ•É}¥ˆèÍ•±˜¹Í•ÍÍ¥½¸¹ÕÍ•É}¥°€‰Ý½É­¥¹œˆè‰½½°¡Ý½É­¥¹œ¤°€‰Í•ÍÍ¥½¹}ÍÑ…ÉÑ•‘}…ÐˆèÍ•ÍÍ¥½¹}ÍÑ…ÉÑ•‘}…Ð°€‰™½ÕÍ}‘…Ñ”ˆè‘…Ñ•Ñ¥µ”¹¹½Ü ¤¹‘…Ñ” ¤¹¥Í½™½Éµ…Ð ¤°€‰Ñ½‘…å}Í•½¹‘Ìˆèµ¥¸ àØÐÀÀ°µ…à À°¥¹Ð¡Ñ½‘…å}Í•½¹‘Ì¤¤¤°€‰½ÕÑ™¥Ñ}­•äˆè½ÕÑ™¥Ñ}­•ålèØÁt°€‰É½½µ}¥ˆèÉ½½µ}¥°€‰ÅÕ¥­}ÍÑ…ÑÕÌˆèÅÕ¥­}ÍÑ…ÑÕÍlèÐÁt°€‰ÅÕ¥­}ÍÑ…ÑÕÍ}•áÁ¥É•Í}…ÐˆèÅÕ¥­}ÍÑ…ÑÕÍ}•áÁ¥É•Í}…Ð°€‰±…ÍÑ}Í••¸ˆè‘…Ñ•Ñ¥µ”¹¹½Ü ¤¹…ÍÑ¥µ•é½¹” ¤¹¥Í½™½Éµ…Ð ¤°€‰ÕÁ‘…Ñ•‘}…Ðˆè‘…Ñ•Ñ¥µ”¹¹½Ü ¤¹…ÍÑ¥µ•é½¹” ¤¹¥Í½™½Éµ…Ð ¥ô(€€€€€€€Í•±˜¹}É…Ü ‰A=MPˆ°€ˆ½É•ÍÐ½ØÄ½±¥±¥}™½ÕÍ}ÁÉ•Í•¹”ý½¹}½¹™±¥ÐõÕÍ•É}¥ˆ°‰½‘ä°…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”°•áÑÉ…}¡•…‘•ÉÌõì‰AÉ•™•Èˆè€‰É•Í½±ÕÑ¥½¸õµ•É”µ‘ÕÁ±¥…Ñ•Ì±É•ÑÕÉ¸õµ¥¹¥µ…°‰ô¤((€€€‘•˜ÕÁ‘…Ñ•}½Ý¹•É}¹¥­¹…µ”¡Í•±˜°¹¥­¹…µ”èÍÑÈ¤€´ø9½¹”è(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸Í•±˜¹}¡ÑÑÁ}‰…­•¹¹ÕÁ‘…Ñ•}½Ý¹•É}¹¥­¹…µ”¡¹¥­¹…µ”¤(€€€€€€€¥˜¹½ÐÍ•±˜¹Í•ÍÍ¥½¸è(€€€€€€€€€€€É…¥Í”M½¥…±ÉÉ½È ‹¢¾ß–#žfï–öWŽˆ¤(€€€€€€€ÅÕ•Éä€ôÕÉ±±¥ˆ¹Á…ÉÍ”¹ÕÉ±•¹½‘”¡ì‰ÕÍ•É}¥ˆè˜‰•Ä¹íÍ•±˜¹Í•ÍÍ¥½¸¹ÕÍ•É}¥‘ô‰ô¤(€€€€€€€±•…¸€ô¹¥­¹…µ”¹ÍÑÉ¥À ¥lèÈÑt(€€€€€€€Í•±˜¹}É…Ü ‰AQ ˆ°˜ˆ½É•ÍÐ½ØÄ½±¥±¥}ÁÉ½™¥±•ÌýíÅÕ•Éåôˆ°ì‰¹¥­¹…µ”ˆè±•…¸½È€‹šB·–¶@ˆ°€‰½Ý¹•É}¹¥­¹…µ”ˆè±•…¸°€‰ÕÁ‘…Ñ•‘}…Ðˆè‘…Ñ•Ñ¥µ”¹¹½Ü ¤¹…ÍÑ¥µ•é½¹” ¤¹¥Í½™½Éµ…Ð ¥ô°…ÕÑ¡•¹Ñ¥…Ñ•õQÉÕ”°•áÑÉ…}¡•…‘•ÉÌõì‰AÉ•™•Èˆè€‰É•ÑÕÉ¸õµ¥¹¥µ…°‰ô¤((€€€‘•˜Í•¹‘}¥¹Ñ•É…Ñ¥½¸¡Í•±˜°€¨°Ñ…É•ÐèÍÑÈ°­¥¹èÍÑÈ°É½½µ}¥èÍÑÈð9½¹”€ô9½¹”¤€´ø9½¹”è(€€€€€€€¥˜Í•±˜¹}¡ÑÑÁ}‰…­•¹¥Ì¹½Ð9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸Í•±˜¹}¡ÑÑÁ}‰…­•¹¹Í•¹‘}¥¹Ñ•É…Ñ¥½¸¡Ñ…É•ÐõÑ…É•Ð°­¥¹õ­¥¹°É½½µ}¥õÉ½½µ}¥¤(€€€€€€€Í•±˜¹ÉÁŒ (€€€€€€€€€€€€‰±¥±¥}Í•¹‘}¥¹Ñ•É…Ñ¥½¸ˆ°(€€€€€€€€€€€ì‰Á}Ñ…É•ÐˆèÑ…É•Ð°€‰Á}­¥¹ˆè­¥¹°€‰Á}É½½µ}¥ˆèÉ½½µ}¥‘ô°(€€€€€€€€¤((€€€‘•˜Í•Ñ}É½½µ}½…°¡Í•±˜°€¨°É½½µ}¥èÍÑÈ°Ñ¥Ñ±”èÍÑÈ°Ñ…É•Ñ}Í•½¹‘Ìè¥¹Ð°‘Õ•}…ÐèÍÑÈð9½¹”€ô9½¹”¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÉÁŒ ‰±¥±¥}Í•Ñ}É½½µ}½…°ˆ°ì‰Á}É½½µ}¥ˆèÉ½½µ}¥°€‰Á}Ñ¥Ñ±”ˆèÑ¥Ñ±”°€‰Á}Ñ…É•Ñ}Í•½¹‘Ìˆè¥¹Ð¡Ñ…É•Ñ}Í•½¹‘Ì¤°€‰Á}‘Õ•}…Ðˆè‘Õ•}…Ñô¤((€€€‘•˜Í•Ñ}É½½µ}Í¡•‘Õ±”¡Í•±˜°€¨°É½½µ}¥èÍÑÈ°ÍÑ…ÉÑ}…ÐèÍÑÈ°•¹‘}…ÐèÍÑÈ°•¹…‰±•è‰½½°€ôQÉÕ”¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÉÁŒ ‰±¥±¥}Í•Ñ}É½½µ}Í¡•‘Õ±”ˆ°ì‰Á}É½½µ}¥ˆèÉ½½µ}¥°€‰Á}ÍÑ…ÉÑ}…ÐˆèÍÑ…ÉÑ}…Ð°€‰Á}•¹‘}…Ðˆè•¹‘}…Ð°€‰Á}•¹…‰±•ˆè‰½½°¡•¹…‰±•¥ô¤((€€€‘•˜Í•Ñ}É½½µ}¡…±±•¹”¡Í•±˜°€¨°É½½µ}¥èÍÑÈ°Ñ¥Ñ±”èÍÑÈ°Ñ…É•Ñ}Í•½¹‘Ìè¥¹Ð°Ñ…É•Ñ}É½Õ¹‘Ìè¥¹Ð¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÉÁŒ ‰±¥±¥}Í•Ñ}É½½µ}¡…±±•¹”ˆ°ì‰Á}É½½µ}¥ˆèÉ½½µ}¥°€‰Á}Ñ¥Ñ±”ˆèÑ¥Ñ±”°€‰Á}Ñ…É•Ñ}Í•½¹‘Ìˆè¥¹Ð¡Ñ…É•Ñ}Í•½¹‘Ì¤°€‰Á}Ñ…É•Ñ}É½Õ¹‘Ìˆè¥¹Ð¡Ñ…É•Ñ}É½Õ¹‘Ì¥ô¤((€€€‘•˜Í•Ñ}‰Õ‘‘å}ÍÕ‰ÍÉ¥ÁÑ¥½¸¡Í•±˜°€¨°‰Õ‘‘å}¥èÍÑÈ°½¹}™½ÕÍ}ÍÑ…ÉÐè‰½½°°½¹}™½ÕÍ}•¹è‰½½°°µÕÑ•è‰½½°€ô…±Í”¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÉÁŒ ‰±¥±¥}Í•Ñ}‰Õ‘‘å}ÍÕ‰ÍÉ¥ÁÑ¥½¸ˆ°ì‰Á}‰Õ‘‘å}¥ˆè‰Õ‘‘å}¥°€‰Á}½¹}™½ÕÍ}ÍÑ…ÉÐˆè‰½½°¡½¹}™½ÕÍ}ÍÑ…ÉÐ¤°€‰Á}½¹}™½ÕÍ}•¹ˆè‰½½°¡½¹}™½ÕÍ}•¹¤°€‰Á}µÕÑ•ˆè‰½½°¡µÕÑ•¥ô¤((€€€‘•˜±•…Ù•}É½½´¡Í•±˜°€¨°É½½µ}¥èÍÑÈ¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÉÁŒ ‰±¥±¥}±•…Ù•}É½½´ˆ°ì‰Á}É½½µ}¥ˆèÉ½½µ}¥‘ô¤((€€€‘•˜É•½É‘}É½½µ}•Ù•¹Ð¡Í•±˜°€¨°É½½µ}¥èÍÑÈ°­¥¹èÍÑÈ°Ñ…É•Ñ}¥èÍÑÈð9½¹”€ô9½¹”°µ•ÍÍ…”èÍÑÈ€ô€ˆˆ¤€´ø9½¹”è(€€€€€€€Í•±˜¹ÉÁŒ ‰±¥±¥}É•½É‘}É½½µ}•Ù•¹Ðˆ°ì‰Á}É½½µ}¥ˆèÉ½½µ}¥°€‰Á}­¥¹ˆè­¥¹°€‰Á}Ñ…É•Ñ}¥ˆèÑ…É•Ñ}¥°€‰Á}µ•ÍÍ…”ˆèµ•ÍÍ…•ô¤(
