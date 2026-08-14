@@ -1,0 +1,11 @@
+{
+  "name": "lili-social-relay-cloudbase",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "check": "node --check index.js",
+    "test": "node --test",
+    "check:server": "node --check server.js"
+  }
+}
