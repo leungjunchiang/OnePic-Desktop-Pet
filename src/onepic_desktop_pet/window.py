@@ -67,7 +67,17 @@ from PySide6.QtGui import (
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QInputDialog, QMenu, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QInputDialog,
+    QMenu,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 try:
     from PySide6.QtTextToSpeech import QTextToSpeech
@@ -146,6 +156,87 @@ SETTINGS_SOURCE_USER_ACTION = "user_action"
 DEFAULT_WALK_MOTION_FACTORS = (0.45, 0.7, 1.2, 1.65, 0.45, 0.7, 1.2, 1.65)
 
 
+class IdleRecoveryDialog(QDialog):
+    """Show one reusable, non-modal decision window for an idle episode.
+
+    A modal ``QMessageBox.exec()`` used to be created every time the system
+    idle counter dipped below the threshold.  The dialog now lives for the
+    whole pet window and emits one decision, so a single absence cannot spawn
+    a stack of windows or block the desktop event loop.
+    """
+
+    decision_requested = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("回来啦")
+        self.setModal(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setMinimumWidth(390)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(10)
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setStyleSheet("font-size: 15px;")
+        layout.addWidget(self.summary_label)
+        self.detail_label = QLabel(
+            "这里只根据键盘/鼠标的系统输入计时；电脑后台运行、播放音乐或下载文件不算键鼠操作。"
+        )
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setStyleSheet("color: #667784; font-size: 12px;")
+        layout.addWidget(self.detail_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.rest_button = QPushButton("算作休息")
+        self.rest_button.setAutoDefault(False)
+        self.rest_button.clicked.connect(lambda: self._request_decision("rest"))
+        buttons.addWidget(self.rest_button)
+        self.focus_button = QPushButton("计入专注")
+        self.focus_button.setAutoDefault(False)
+        self.focus_button.clicked.connect(lambda: self._request_decision("focus"))
+        buttons.addWidget(self.focus_button)
+        layout.addLayout(buttons)
+
+    def set_away_seconds(self, seconds: int) -> None:
+        """Update the elapsed absence shown by the reusable dialog."""
+
+        seconds = max(1, int(seconds))
+        minutes, remainder = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            duration = f"{hours} 小时 {minutes} 分钟"
+        elif minutes:
+            duration = f"{minutes} 分 {remainder:02d} 秒"
+        else:
+            duration = f"{remainder} 秒"
+        self.summary_label.setText(
+            f"检测到你刚刚离开了约 {duration}。\n这段时间要记作休息，还是计入专注？"
+        )
+
+    def _request_decision(self, decision: str) -> None:
+        """Hide first, then notify the owner so the window cannot duplicate."""
+
+        self.hide()
+        self.decision_requested.emit(decision)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Closing the window dismisses this episode without re-prompting."""
+
+        event.ignore()
+        self.hide()
+        self.decision_requested.emit("dismiss")
+
+
 class PetWindow(QWidget):
     """显示并控制单个桌面宠物的透明顶层窗口。"""
 
@@ -217,6 +308,9 @@ class PetWindow(QWidget):
         self._idle_pause_started_at: datetime | None = None
         self._pending_idle_seconds = 0
         self._idle_prompt_pending = False
+        self._idle_recovery_resolved = False
+        self._idle_above_threshold_samples = 0
+        self._idle_recovery_dialog: IdleRecoveryDialog | None = None
         self._sleep_after_sit = False
         self._room_quick_status = ""
         self._room_quick_status_expires_at: datetime | None = None
@@ -1073,6 +1167,20 @@ class PetWindow(QWidget):
         self._last_user_interaction = time.monotonic()
         self._sleep_after_sit = False
 
+    def _reset_idle_episode(self) -> None:
+        """Forget the current idle episode and close its reusable prompt."""
+
+        self._auto_paused_for_idle = False
+        self._idle_prompt_pending = False
+        self._idle_recovery_resolved = False
+        self._idle_above_threshold_samples = 0
+        self._pending_idle_seconds = 0
+        self._idle_pause_started_at = None
+        if hasattr(self, "idle_recovery_timer"):
+            self.idle_recovery_timer.stop()
+        if self._idle_recovery_dialog is not None:
+            self._idle_recovery_dialog.hide()
+
     def _check_input_idle(self) -> None:
         """Automatically pause focus after a sustained keyboard/mouse idle.
 
@@ -1083,41 +1191,66 @@ class PetWindow(QWidget):
         """
 
         if not getattr(self.settings, "auto_pause_on_idle", True):
+            self._idle_above_threshold_samples = 0
             return
         threshold = max(30, int(getattr(self.settings, "idle_pause_seconds", 300)))
-        idle_seconds = system_idle_seconds()
+        idle_seconds = max(0.0, float(system_idle_seconds()))
         if self._auto_paused_for_idle:
             # The OS idle counter drops as soon as the user returns.  Delay
             # the question to the event loop so the first input is not
-            # blocked by a modal dialog.
-            if idle_seconds < max(1, threshold - 1) and not self._idle_prompt_pending:
+            # blocked by a modal dialog.  Once this episode is resolved, do
+            # not ask again until the user explicitly starts a new session.
+            if (
+                not self._idle_recovery_resolved
+                and idle_seconds < max(1, threshold - 1)
+                and not self._idle_prompt_pending
+            ):
                 self._idle_prompt_pending = True
                 self.idle_recovery_timer.start(0)
             return
         if not self.work_timer.is_running:
+            self._idle_above_threshold_samples = 0
             return
         if idle_seconds < threshold:
+            self._idle_above_threshold_samples = 0
             return
+        # Require two consecutive OS samples.  This filters a single bad
+        # native reading without adding another setting or recording input.
+        self._idle_above_threshold_samples += 1
+        if self._idle_above_threshold_samples < 2:
+            return
+        self._idle_above_threshold_samples = 0
         self._auto_paused_for_idle = True
+        self._idle_recovery_resolved = False
         self._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=int(idle_seconds))
         self._pending_idle_seconds = max(1, int(idle_seconds))
         self._focus_quality_tracker.note_away()
         self.pause_work_timer(reason="idle")
 
     def _ask_idle_recovery(self) -> None:
-        """Ask whether an automatically detected absence should be rest."""
+        """Show one reusable decision window for the current absence."""
 
         self._idle_prompt_pending = False
+        if not self._auto_paused_for_idle or self._idle_recovery_resolved:
+            return
         seconds = max(1, int(self._pending_idle_seconds))
-        minutes = max(1, round(seconds / 60))
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle("回来啦")
-        box.setText(f"刚刚离开了约 {minutes} 分钟，要把这段时间算作休息吗？")
-        rest_button = box.addButton("算作休息", QMessageBox.ButtonRole.AcceptRole)
-        focus_button = box.addButton("继续计入专注", QMessageBox.ButtonRole.DestructiveRole)
-        box.exec()
-        if box.clickedButton() is focus_button:
+        if self._idle_recovery_dialog is None:
+            self._idle_recovery_dialog = IdleRecoveryDialog(self)
+            self._idle_recovery_dialog.decision_requested.connect(
+                self._resolve_idle_recovery
+            )
+        self._idle_recovery_dialog.set_away_seconds(seconds)
+        self._idle_recovery_dialog.show()
+        self._idle_recovery_dialog.raise_()
+        self._idle_recovery_dialog.activateWindow()
+
+    def _resolve_idle_recovery(self, decision: str) -> None:
+        """Resolve the episode once; later idle samples cannot reopen it."""
+
+        if not self._auto_paused_for_idle or self._idle_recovery_resolved:
+            return
+        seconds = max(1, int(self._pending_idle_seconds))
+        if decision == "focus":
             # The timer remains paused until the user explicitly starts the
             # next round, but the choice is reflected in local statistics.
             self.focus_analytics.record_session(
@@ -1127,9 +1260,13 @@ class PetWindow(QWidget):
                 away_count=1,
                 task=str((self.focus_analytics.current_task() or {}).get("title", "")),
             )
-            self.show_speech("好，这段离开时间先算在专注里。需要继续时点开始专注。", 5200)
-        elif box.clickedButton() is rest_button:
+            self.show_speech("好，这段离开时间已计入专注。需要继续时点开始专注。", 5200)
+        elif decision == "rest":
+            minutes = max(1, round(seconds / 60))
             self.show_speech(f"已把约 {minutes} 分钟记为休息，回来后再开一轮吧。", 4800)
+        # Dismissing the window is intentionally silent, but still resolves
+        # this episode so it cannot create another popup every few seconds.
+        self._idle_recovery_resolved = True
         self._pending_idle_seconds = 0
         self._idle_pause_started_at = None
 
@@ -1458,10 +1595,7 @@ class PetWindow(QWidget):
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
 
         self._record_user_interaction()
-        self._auto_paused_for_idle = False
-        self._idle_prompt_pending = False
-        self._pending_idle_seconds = 0
-        self._idle_pause_started_at = None
+        self._reset_idle_episode()
         self._focus_quality_tracker.start(active_application_category())
         started = self.focus_session.start()
         if started:
@@ -1480,6 +1614,8 @@ class PetWindow(QWidget):
         """暂停工作计时并显示当天累计与休息建议。"""
 
         self._record_user_interaction()
+        if reason != "idle":
+            self._reset_idle_episode()
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause()
         if was_running:
@@ -1499,7 +1635,7 @@ class PetWindow(QWidget):
         duration = format_work_duration(self.work_timer.today_seconds())
         if was_running and reason == "idle":
             reply = CompanionReply(
-                f"检测到 {max(1, int(getattr(self.settings, 'idle_pause_seconds', 300) // 60))} 分钟没有键鼠操作，六毛先帮你暂停计时。需要继续时点‘开始专注’。",
+                "检测到一段时间没有键鼠操作，六毛先帮你暂停计时。回来后会只询问一次这段时间如何归类。",
                 PetState.CURIOUS,
             )
         elif was_running:
@@ -1525,7 +1661,7 @@ class PetWindow(QWidget):
         """完成本次工作、保留今日累计并播放庆祝动作。"""
 
         self._record_user_interaction()
-        self._auto_paused_for_idle = False
+        self._reset_idle_episode()
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
@@ -1690,6 +1826,7 @@ class PetWindow(QWidget):
     def shutdown_work_timer(self) -> None:
         """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
 
+        self._reset_idle_episode()
         if hasattr(self, "work_timer"):
             if self.work_timer.is_running:
                 self.daily_stats.record_focus(self.work_timer.session_seconds())

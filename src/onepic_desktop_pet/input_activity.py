@@ -12,6 +12,12 @@ import sys
 import time
 
 
+def _windows_elapsed_ms(current_tick: int, last_input_tick: int) -> int:
+    """Calculate a 32-bit Windows input age, including tick-counter wrap."""
+
+    return (int(current_tick) - int(last_input_tick)) & 0xFFFFFFFF
+
+
 def system_idle_seconds() -> float:
     """Return seconds since the last keyboard/mouse input when available.
 
@@ -34,8 +40,8 @@ def system_idle_seconds() -> float:
             if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
                 # ``dwTime`` is a 32-bit tick count; compare it modulo 2^32
                 # with the 64-bit counter to handle the Windows tick wrap.
-                tick = int(ctypes.windll.kernel32.GetTickCount64()) & 0xFFFFFFFF
-                elapsed_ms = (tick - int(info.dwTime)) & 0xFFFFFFFF
+                tick = int(ctypes.windll.kernel32.GetTickCount64())
+                elapsed_ms = _windows_elapsed_ms(tick, int(info.dwTime))
                 return max(0.0, float(elapsed_ms) / 1000.0)
         except Exception:
             return 0.0
@@ -65,4 +71,3 @@ def system_idle_seconds() -> float:
                 return 0.0
 
     return 0.0
-
