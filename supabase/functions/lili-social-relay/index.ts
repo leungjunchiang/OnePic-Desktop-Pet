@@ -198,14 +198,25 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
   });
 }
 
+const FUNCTION_SLUGS = ["lili-social-relay-v2", "lili-social-relay"];
+
+function stripFunctionSlug(pathname: string): string {
+  for (const slug of FUNCTION_SLUGS) {
+    const prefix = `/${slug}`;
+    if (pathname === prefix) return "/";
+    if (pathname.startsWith(`${prefix}/`)) return pathname.slice(prefix.length) || "/";
+  }
+  return pathname;
+}
+
 function relativePath(url: URL): string {
-  const raw = url.pathname.replace(/\/+$/, "") || "/";
+  let pathname = url.pathname.replace(/\/+$/, "") || "/";
   const gatewayPrefix = "/functions/v1/";
-  const prefixIndex = raw.indexOf(gatewayPrefix);
-  if (prefixIndex < 0) return raw;
-  const functionPath = raw.slice(prefixIndex + gatewayPrefix.length);
-  const separator = functionPath.indexOf("/");
-  return separator < 0 ? "/" : functionPath.slice(separator) || "/";
+  const prefixIndex = pathname.indexOf(gatewayPrefix);
+  if (prefixIndex >= 0) {
+    pathname = `/${pathname.slice(prefixIndex + gatewayPrefix.length)}`;
+  }
+  return stripFunctionSlug(pathname);
 }
 
 async function handle(request: Request, env: Env): Promise<Response> {
@@ -264,6 +275,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (request.method === "POST" && ROUTE_TO_RPC.has(path)) return json(request, env, await rpc(request, env, ROUTE_TO_RPC.get(path)!, await parseBody(request)));
   const generic = path.match(/^\/rpc\/([a-z0-9_]+)$/i);
   if (generic && request.method === "POST") return json(request, env, await rpc(request, env, generic[1], await parseBody(request)));
+  console.warn(JSON.stringify({ event: "route_not_found", method: request.method, pathname: url.pathname, route: path }));
   throw new RelayError(404, "Study-room route not found");
 }
 
