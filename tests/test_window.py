@@ -424,9 +424,609 @@ def test_inactivity_progresses_from_sit_to_sleep() -> None:
 
 
 def test_pause_disables_running_but_keeps_ambient_state_timer() -> None:
-    """æš‚åœè·‘åŠ¨æ—¶åº”è¿›å…¥ç”Ÿæ´×İú¶‰ËkºwµçZ¦¦–»–N’â;*Ûš‰t¹µ•¹Ô ¤(€€€…ÍÍ•ÉĞ™½½‘}µ•¹Ô¥Ì¹½Ğ9½¹”(€€€™½½‘}…Ñ¥½¹Ì€ôm…Ñ¥½¸¹Ñ•áĞ ¤™½È…Ñ¥½¸¥¸™½½‘}µ•¹Ô¹…Ñ¥½¹Ì ¤¥˜¹½Ğ…Ñ¥½¸¹¥ÍM•Á…É…Ñ½È ¥t(€€€…ÍÍ•ÉĞ™½½‘}…Ñ¥½¹Ì€ôôl(€€€€€€€€‹¢.çšzpˆ°(€€€€€€€€‹–Â?¦–ó–æÈˆ°(€€€€€€€€‹·&o––Øˆ°(€€€€€€€€‹–J[–V„ˆ°(€€€€€€€€‹·¢2Øˆ°(€€€€€€€€‹š~—r/–·š¾o–şš’â;¢÷¦<ˆ°(€€€t(€€€…ÍÍ•ÉĞ¹½Ğ…¹ä ‹š&Oš.o–Fğˆ¥¸Ñ•áĞ™½ÈÑ•áĞ¥¸¡…Ñ}…Ñ¥½¹Ì¤(€€€…ÍÍ•ÉĞ€‹¢ş{î·¢Â¢*–ºƒ&§–’Ÿ–Â?Š˜ˆ¥¸ÍåÍÑ•µ}…Ñ¥½¹Ì(€€€İ½É­}…Ñ¥½¸€ô¹•áĞ¡…Ñ¥½¸™½ÈÑ•áĞ°…Ñ¥½¸¥¸™½ÕÍ}…Ñ¥½¹Ì¹¥Ñ•µÌ ¤¥˜Ñ•áĞ¹ÍÑ…ÉÑÍİ¥Ñ  ‹–Ş—’ös¢º‡š^Û¾òhˆ¤¤(€€€İ½É­}±…‰•±Ì€ôm…Ñ¥½¸¹Ñ•áĞ ¤™½È…Ñ¥½¸¥¸İ½É­}…Ñ¥½¸¹µ•¹Ô ¤¹…Ñ¥½¹Ì ¥t(€€€…ÍÍ•ÉĞ€‹š~—r/’î+š^”€ÃŠLàƒ–Â?š^Ûš"C¦Vÿêüˆ¥¸İ½É­}±…‰•±Ì(€€€…ÍÍ•ÉĞ€‹’î+–’§–·š¾o¦f«’öƒ–k’ê’î’æ ˆ¥¸İ½É­}±…‰•±Ì(€€€µ•¹Ô¹±½Í” ¤(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}½µÁ…¹¥½¹}…Ñ¥½¹}Í¡½İÍ}±½Ù¥¹}…¹¥µ…Ñ¥½¹}…¹‘}İ½É‘Ì ¤€´ø9½¹”è(€€€€ˆˆ‹’âï–*£¦'š.§š*Çš*Ç–êS–Š{–*ƒ’êË–¾–ê›¾ò3–æÛšbû’ë"Çš?–*£’ös’â;–º'šÃ¢¾w¢¾·ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€¥¹¥Ñ¥…±}…™™¥¹¥Ñä€ôİ¥¹‘½Ü¹µ½½¹…™™¥¹¥Ñä((€€€É•Á±ä€ôİ¥¹‘½Ü¹Á•É™½Éµ}½µÁ…¹¥½¹}…Ñ¥½¸ ‰±½Ù”ˆ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€…ÍÍ•ÉĞÉ•Á±ä¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M!d(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M!d(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹µ½½¹…™™¥¹¥Ñä€ôô¥¹¥Ñ¥…±}…™™¥¹¥Ñä€¬€Ô(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÁ••¡}‰Õ‰‰±”¹Ñ•áĞ ¤€ôôÉ•Á±ä¹Ñ•áĞ(€€€…ÍÍ•ÉĞ…¹ä¡İ½É¥¸É•Á±ä¹Ñ•áĞ™½Èİ½É¥¸€ ‹š*Çš*Äˆ°€‹¢ÒÓ¢ÒĞˆ¤¤(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}‘¥Ù•ÉÍ•}…Ñ¥½¹}Í•ÅÕ•¹•}…¹‘}‘É¥¹­Í}ÕÍ•}•á¥ÍÑ¥¹}™É…µ•Ì ¤€´ø9½¹”è(€€€€ˆˆ‹’òã–ÆW’â;–Zw¢2Û–êSî–B#–ŞË¦ª3šRÛ*Ûš¾ò3¢3’â7šb¿¦vgš¶‹–rÃ–>«š6‹’â–>—šZ–¶_ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€É•Á±ä€ôİ¥¹‘½Ü¹Á•É™½Éµ}½µÁ…¹¥½¹}…Ñ¥½¸ ‰ÍÑÉ•Ñ ˆ¤(€€€…ÍÍ•ÉĞÉ•Á±ä¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹]Y(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M%P(€€€Ñ•„€ôİ¥¹‘½Ü¹™••‘}Á•Ğ ‰Ñ•„ˆ¤(€€€…ÍÍ•ÉĞ€‹·¢2Øˆ¥¸Ñ•„¹Ñ•áĞ(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M%P(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}¡½ÕÉ±å}…¹¹½Õ¹•µ•¹Ñ}…¹}‰•}‘¥Í…‰±•‘}…¹‘}‘•‘ÕÁ±¥…Ñ•Ì ¤€´ø9½¹”è(€€€€ˆˆ‹šVÓ
-çš*—š^Û¦îc¢º“’â7¢›–>G¾ò3–ò–B¿–B;–B3’â–Â?š^Û–>«¢›–>G’âš²‡ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€¹½Ü€ô‘…Ñ•Ñ¥µ” ÈÀÈØ°€à°€ÄÀ°€ÄĞ°€À°€Ô¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}µ…å‰•}…¹¹½Õ¹•}¡½ÕÈ¡¹½Ü¤¥Ì…±Í”(€€€İ¥¹‘½Ü¹Í•ÑÑ¥¹Ì¹¡½ÕÉ±å}…¹¹½Õ¹•µ•¹Ğ€ôQÉÕ”(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}µ…å‰•}…¹¹½Õ¹•}¡½ÕÈ¡¹½Ü¤¥ÌQÉÕ”(€€€…ÍÍ•ÉĞ€ˆÄĞèÀÀˆ¥¸İ¥¹‘½Ü¹ÍÁ••¡}‰Õ‰‰±”¹Ñ•áĞ ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}µ…å‰•}…¹¹½Õ¹•}¡½ÕÈ¡¹½Ü¤¥Ì…±Í”(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤()‘•˜Ñ•ÍÑ}İ½É­}Ñ¥µ•É}ÍÑ…ÉÑ}ÍÑ…ÑÕÍ}É•µ¥¹‘•É}…¹‘}™¥¹¥Í ¡ÑµÁ}Á…Ñ ¤€´ø9½¹”è(€€€€ˆˆ‹–Ş—’ös¢º‡š^Û–êSšbû’ë’î+š^—Ò¿¢º‡¾ò3–æÛ–r£¢ş{î·–Ş—’ös¢ş’æš^Û–*wR£š"ß’òGš¿ˆˆˆ((€€€¹½Ü€ôm‘…Ñ•Ñ¥µ” ÈÀÈØ°€à°€ÄÀ°€ä°€À°€À¥t(€€€µ½¹½Ñ½¹¥Œ€ôlÄÀÀ¸Át(€€€Ñ¥µ•È€ô]½É­Q¥µ•É5½‘•° (€€€€€€€Á…Ñ õÑµÁ}Á…Ñ €¼€‰İ½É­}Ñ¥µ•È¹©Í½¸ˆ°(€€€€€€€¹½İ}ÁÉ½Ù¥‘•Èõ±…µ‰‘„è¹½İlÁt°(€€€€€€€µ½¹½Ñ½¹¥}ÁÉ½Ù¥‘•Èõ±…µ‰‘„èµ½¹½Ñ½¹¥lÁt°(€€€€¤(€€€…ÁÀ€ôEÁÁ±¥…Ñ¥½¸¹¥¹ÍÑ…¹” ¤½ÈEÁÁ±¥…Ñ¥½¸¡mt¤(€€€İ¥¹‘½Ü€ôA•Ñ]¥¹‘½Ü¡A•ÑM•ÑÑ¥¹Ì ¤°İ½É­}Ñ¥µ•ÈõÑ¥µ•È¤(€€€İ¥¹‘½Ü¹Í¡½Ü ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€ÍÑ…ÉÑ}É•Á±ä€ôİ¥¹‘½Ü¹ÍÑ…ÉÑ}İ½É­}Ñ¥µ•È ¤(€€€…ÍÍ•ÉĞÍÑ…ÉÑ}É•Á±ä¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M%P(€€€…ÍÍ•ÉĞÑ¥µ•È¹¥Í}ÉÕ¹¹¥¹œ(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹Á…ÕÍ•((€€€¹½İlÁt€¬ôÑ¥µ•‘•±Ñ„¡µ¥¹ÕÑ•ÌôÔÀ¤(€€€µ½¹½Ñ½¹¥lÁt€¬ô€ÔÀ€¨€ØÀ(€€€İ¥¹‘½Ü¹}İ½É­}Ñ¥µ•É}Ñ¥¬ ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M1Ad(€€€…ÍÍ•ÉĞ€‹šÒï–* ˆ¥¸İ¥¹‘½Ü¹ÍÁ••¡}‰Õ‰‰±”¹Ñ•áĞ ¤(€€€…ÍÍ•ÉĞ€ˆÔÃ–"¦J|ˆ¥¸Ñ¥µ•È¹ÍÑ…ÑÕÍ}Ñ•áĞ ¤((€€€™¥¹¥Í¡}É•Á±ä€ôİ¥¹‘½Ü¹™¥¹¥Í¡}İ½É­}Ñ¥µ•È ¤(€€€…ÍÍ•ÉĞ™¥¹¥Í¡}É•Á±ä¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹!AAd(€€€…ÍÍ•ÉĞ¹½ĞÑ¥µ•È¹¥Í}ÉÕ¹¹¥¹œ(€€€…ÍÍ•ÉĞ¹½Ğİ¥¹‘½Ü¹Á…ÕÍ•(€€€…ÍÍ•ÉĞ€ˆÔÃ–"¦J|ˆ¥¸™¥¹¥Í¡}É•Á±ä¹Ñ•áĞ(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}‘¥…±½Õ•}Á…¹•±}Á…ÍÍ•Í}Ñ•áÑ}Ñ½}±½…±}É•Á±ä ¤€´ø9½¹”è(€€€€ˆˆ‹šZÃ&#¢+–’§¦v‹švÿ–>G¦šZ–¶_–B;–êS’ê“îgšïêÿ¢–"g–æÛšbû’ë–n{–’7ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹ÁÉ½µÁÑ}‘¥…±½Õ” ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¥Ì¹½Ğ9½¹”(€€€Í•ÑÑ¥¹Í}ÍÁä€ôEM¥¹…±MÁä¡İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹Í•ÑÑ¥¹Í}É•ÅÕ•ÍÑ•¤(€€€İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹¥¹ÁÕĞ¹Í•ÑQ•áĞ ‹’î+–’§šr'
-çÒ¼ˆ¤(€€€İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹}ÍÕ‰µ¥Ğ ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M1Ad(€€€…ÍÍ•ÉĞ€‹–Zw–>šÂĞˆ¥¸İ¥¹‘½Ü¹ÍÁ••¡}‰Õ‰‰±”¹Ñ•áĞ ¤(€€€…ÍÍ•ÉĞ€‹šïêüˆ¥¸İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹ÍÑ…ÑÕÍ}±…‰•°¹Ñ•áĞ ¤(€€€…ÍÍ•ÉĞÍ•ÑÑ¥¹Í}ÍÁä¹½Õ¹Ğ ¤€ôô€À(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}…•¹Ñ}¡•­¥¹}¹•Ù•É}½Á•¹Í}Í•ÑÑ¥¹Í}…¹‘}½µÁ±•á}¡…Ñ}Í¡½İÍ}‰ÕÑÑ½¹Ì ¤€´ø9½¹”è(€€€€ˆˆ‰•¹Ğƒ–Âk–r£ššÖ/š^Û¢+–’§–êS®/–6Ïšïêÿ–n{–’7¾ò3–>«šbû’ëš&/–*£š2'¦J»¢3’â7–òç¢ºûö»ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹Í•ÑÑ¥¹Ì¹…¥}ÁÉ½Ù¥‘•È€ô€‰½‘•àˆ(€€€İ¥¹‘½Ü¹ÁÉ½µÁÑ}‘¥…±½Õ” ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¥Ì¹½Ğ9½¹”(€€€Í•ÑÑ¥¹Í}ÍÁä€ôEM¥¹…±MÁä¡İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹Í•ÑÑ¥¹Í}É•ÅÕ•ÍÑ•¤((€€€İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹¥¹ÁÕĞ¹Í•ÑQ•áĞ ‹–â»š"G–g’î‚–æÛ–"šzC¢şg’â«¦†çn¸ˆ¤(€€€İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹}ÍÕ‰µ¥Ğ ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€…ÍÍ•ÉĞÍ•ÑÑ¥¹Í}ÍÁä¹½Õ¹Ğ ¤€ôô€À(€€€…ÍÍ•ÉĞ€‹šïêÿš¢‡–ò<ˆ¥¸İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹ÑÉ…¹ÍÉ¥ÁĞ¹Ñ½A±…¥¹Q•áĞ ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹É•½Ù•Éå}…Ñ¥½¹Ì¹¥ÍY¥Í¥‰±” ¤(€€€…ÍÍ•ÉĞ€‹š¶–r£–B;–>ÃššÖ,ˆ¥¸İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹ÍÑ…ÑÕÍ}±…‰•°¹Ñ•áĞ ¤(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}Í•ÑÑ¥¹Í}½Á•¹}Á…Ñ¡}É•©•ÑÍ}•Ù•Éå}¹½¹}ÕÍ•É}Í½ÕÉ”¡µ½¹­•åÁ…Ñ ¤€´ø9½¹”è(€€€€ˆˆ‰•¹ĞƒššÖ/¦Rg¢¾¿¢Úš^Ûš"[–¦£¢ÂR£–v’â7¢÷–"o–îë¢ºûö»ª_–>ˆˆˆ((€€€É•…Ñ•€ômt((€€€±…ÍÌ…­•M•ÑÑ¥¹Í¥…±½œè(€€€€€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°€©}…ÉÌ°€¨©}­İ…ÉÌ¤€´ø9½¹”è(€€€€€€€€€€€É•…Ñ•¹…ÁÁ•¹¡QÉÕ”¤((€€€€€€€‘•˜•á•Œ¡Í•±˜¤è(€€€€€€€€€€€É•ÑÕÉ¸E¥…±½œ¹¥…±½½‘”¹I•©•Ñ•((€€€µ½¹­•åÁ…Ñ ¹Í•Ñ…ÑÑÈ (€€€€€€€€‰½¹•Á¥}‘•Í­Ñ½Á}Á•Ğ¹İ¥¹‘½Ü¹%M•ÑÑ¥¹Í¥…±½œˆ°(€€€€€€€…­•M•ÑÑ¥¹Í¥…±½œ°(€€€€¤(€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤((€€€™½ÈÍ½ÕÉ”¥¸€ (€€€€€€€€‰ÍÑ…ÉÑÕÁ}‘•Ñ•Ñ¥½¸ˆ°(€€€€€€€€‰¡•­¥¹œˆ°(€€€€€€€€‰…•¹Ñ}‘¥Í½¹¹•Ñ•ˆ°(€€€€€€€€‰…•¹Ñ}•ÉÉ½Èˆ°(€€€€€€€€‰…•¹Ñ}Ñ¥µ•½ÕĞˆ°(€€€€€€€€‰±¥}¹½Ñ}™½Õ¹ˆ°(€€€€€€€€‰…¥}…±±}™…¥±•ˆ°(€€€€€€€€‰¥¹Ñ•É¹…°ˆ°(€€€€€€€€ˆˆ°(€€€€¤è(€€€€€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹½Á•¹}Í•ÑÑ¥¹Ì¡Í½ÕÉ”¤¥Ì…±Í”(€€€…ÍÍ•ÉĞÉ•…Ñ•€ôômt((€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹½Á•¹}Í•ÑÑ¥¹Ì ‰ÕÍ•É}…Ñ¥½¸ˆ¤¥ÌQÉÕ”(€€€…ÍÍ•ÉĞÉ•…Ñ•€ôômQÉÕ•t(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()ÁåÑ•ÍĞ¹µ…É¬¹Á…É…µ•ÑÉ¥é” (€€€€‰Í•¹…É¥¼ˆ°(€€€€ ‰½¹¹•Ñ•ˆ°€‰¡•­¥¹œˆ°€‰‘¥Í½¹¹•Ñ•ˆ°€‰•ÉÉ½Èˆ°€‰Ñ¥µ•½ÕĞˆ¤°(¤)‘•˜Ñ•ÍÑ}Ñ•¹}µ•ÍÍ…•Í}¥¹}•Ù•Éå}…•¹Ñ}ÍÑ…Ñ•}¹•Ù•É}½Á•¹}Í•ÑÑ¥¹Ì (€€€µ½¹­•åÁ…Ñ °(€€€Í•¹…É¥¼èÍÑÈ°(¤€´ø9½¹”è(€€€€ˆˆ‹’êS4•¹Ğƒš–×–B¢ş{î·–>G¦–6šv‡šÚ#š¿¦÷’â7–ú_’êŸR¢ºûö»ª_–>–&¿’ösR£ˆˆˆ((€€€Í•ÑÑ¥¹Í}½Á•¹•€ômt((€€€±…ÍÌ½É‰¥‘‘•¹M•ÑÑ¥¹Í¥…±½œè(€€€€€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜°€©}…ÉÌ°€¨©}­İ…ÉÌ¤€´ø9½¹”è(€€€€€€€€€€€Í•ÑÑ¥¹Í}½Á•¹•¹…ÁÁ•¹¡QÉÕ”¤(€€€€€€€€€€€É…¥Í”ÍÍ•ÉÑ¥½¹ÉÉ½È ‹¢+–’§š"X•¹Ğƒ*Ûš’â7–ú_–"o–îë¢ºûö»ª_–>Œˆ¤((€€€µ½¹­•åÁ…Ñ ¹Í•Ñ…ÑÑÈ (€€€€€€€€‰½¹•Á¥}‘•Í­Ñ½Á}Á•Ğ¹İ¥¹‘½Ü¹%M•ÑÑ¥¹Í¥…±½œˆ°(€€€€€€€½É‰¥‘‘•¹M•ÑÑ¥¹Í¥…±½œ°(€€€€¤(€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹Í•ÑÑ¥¹Ì¹…¥}ÁÉ½Ù¥‘•È€ô€‰½‘•àˆ(€€€Í•ÉÙ¥•}…±±Ì€ômt((€€€‘•˜ÍÕ•ÍÍ™Õ±}É•Á±ä ©}…ÉÌ°€¨©}­İ…ÉÌ¤€´øÍÑÈè(€€€€€€€Í•ÉÙ¥•}…±±Ì¹…ÁÁ•¹ ‰ÍÕ•ÍÌˆ¤(€€€€€€€É•ÑÕÉ¸€‰$ƒ–·š¾o–r£¢şg¦3ˆ((€€€‘•˜Ñ¥µ•‘}½ÕÑ}É•Á±ä ©}…ÉÌ°€¨©}­İ…ÉÌ¤€´øÍÑÈè(€€€€€€€Í•ÉÙ¥•}…±±Ì¹…ÁÁ•¹ ‰Ñ¥µ•½ÕĞˆ¤(€€€€€€€É…¥Í”%½¹¹•Ñ¥½¹ÉÉ½È ‰½‘•àƒ¢¾ßšÆ¢Úš^Ûˆ¤((€€€¥˜Í•¹…É¥¼€ôô€‰½¹¹•Ñ•ˆè(€€€€€€€İ¥¹‘½Ü¹…•¹Ñ}µ…¹…•È¹µ…É­}ÉÕ¹Ñ¥µ•}ÍÕ•ÍÌ ‰½‘•àˆ¤(€€€€€€€µ½¹­•åÁ…Ñ ¹Í•Ñ…ÑÑÈ¡İ¥¹‘½Ü¹¡…Ñ}µ…¹…•È¹Í•ÉÙ¥”°€‰É•Á±äˆ°ÍÕ•ÍÍ™Õ±}É•Á±ä¤(€€€•±¥˜Í•¹…É¥¼€ôô€‰Ñ¥µ•½ÕĞˆè(€€€€€€€İ¥¹‘½Ü¹…•¹Ñ}µ…¹…•È¹µ…É­}ÉÕ¹Ñ¥µ•}ÍÕ•ÍÌ ‰½‘•àˆ¤(€€€€€€€µ½¹­•åÁ…Ñ ¹Í•Ñ…ÑÑÈ¡İ¥¹‘½Ü¹¡…Ñ}µ…¹…•È¹Í•ÉÙ¥”°€‰É•Á±äˆ°Ñ¥µ•‘}½ÕÑ}É•Á±ä¤(€€€•±Í”è(€€€€€€€ÍÑ…Ñ”€ô•¹Ñ½¹¹•Ñ¥½¹MÑ…Ñ”¡Í•¹…É¥¼¤(€€€€€€€İ¥¹‘½Ü¹…•¹Ñ}µ…¹…•È¹}Í•Ñ}ÍÑ…ÑÕÌ ‰½‘•àˆ°ÍÑ…Ñ”°˜‹šÖ/¢¾W*Ûš¾òiíÍ•¹…É¥½ôˆ¤((€€€İ¥¹‘½Ü¹ÁÉ½µÁÑ}‘¥…±½Õ” ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¥Ì¹½Ğ9½¹”(€€€Í•ÑÑ¥¹Í}Í¥¹…°€ôEM¥¹…±MÁä¡İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹Í•ÑÑ¥¹Í}É•ÅÕ•ÍÑ•¤((€€€™½È¥¹‘•à¥¸É…¹” ÄÀ¤è(€€€€€€€İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹¥¹ÁÕĞ¹Í•ÑQ•áĞ¡˜‹²°í¥¹‘•à€¬€Åôƒšv‡šÖ/¢¾WšÚ#š¼ˆ¤(€€€€€€€İ¥¹‘½Ü¹}¡…Ñ}‘¥…±½œ¹}ÍÕ‰µ¥Ğ ¤(€€€€€€€Ñ¡É•…€ôİ¥¹‘½Ü¹¡…Ñ}µ…¹…•È¹}Ñ¡É•…(€€€€€€€¥˜Ñ¡É•…¥Ì¹½Ğ9½¹”è(€€€€€€€€€€€…ÍÍ•ÉĞÑ¡É•…¹İ…¥Ğ ÈÀÀÀ¤(€€€€€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€…ÍÍ•ÉĞÍ•ÑÑ¥¹Í}½Á•¹•€ôômt(€€€…ÍÍ•ÉĞÍ•ÑÑ¥¹Í}Í¥¹…°¹½Õ¹Ğ ¤€ôô€À(€€€¥˜Í•¹…É¥¼€ôô€‰½¹¹•Ñ•ˆè(€€€€€€€…ÍÍ•ÉĞ±•¸¡Í•ÉÙ¥•}…±±Ì¤€ôô€ÄÀ(€€€•±¥˜Í•¹…É¥¼€ôô€‰Ñ¥µ•½ÕĞˆè(€€€€€€€…ÍÍ•ÉĞÍ•ÉÙ¥•}…±±Ì€ôôl‰Ñ¥µ•½ÕĞ‰t(€€€€€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹…•¹Ñ}µ…¹…•È¹ÍÑ…ÑÕÌ ‰½‘•àˆ¤¹ÍÑ…Ñ”¥Ì•¹Ñ½¹¹•Ñ¥½¹MÑ…Ñ”¹II=H(€€€•±Í”è(€€€€€€€…ÍÍ•ÉĞÍ•ÉÙ¥•}…±±Ì€ôômt(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}¥¹Ñ•É…Ñ¥½¹}é½¹•Í}µ…Á}¡•…‘}™…•}‰½‘å}…¹‘}…µ•É„ ¤€´ø9½¹”è(€€€€ˆˆ‹ª_–>nã–¾ç’ö7ö»–êS¢Ï–ºkšbƒ–Â’âë–no7
-ç–ï–2ë–~ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€•¹Ñ•É}à€ôİ¥¹‘½Ü¹±…‰•°¹à ¤€¬İ¥¹‘½Ü¹±…‰•°¹İ¥‘Ñ  ¤€¼¼€È(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}¥¹Ñ•É…Ñ¥½¹}é½¹”¡EA½¥¹Ğ¡•¹Ñ•É}à°€ÈÀ¤¤€ôô€‰¡•…ˆ(€€€…ÍÍ•ÉĞ€ (€€€€€€€İ¥¹‘½Ü¹}¥¹Ñ•É…Ñ¥½¹}é½¹” (€€€€€€€€€€€EA½¥¹Ğ¡•¹Ñ•É}à°É½Õ¹¡İ¥¹‘½Ü¹±…‰•°¹¡•¥¡Ğ ¤€¨€À¸ÌĞ¤¤(€€€€€€€€¤(€€€€€€€€ôô€‰™…”ˆ(€€€€¤(€€€…ÍÍ•ÉĞ€ (€€€€€€€İ¥¹‘½Ü¹}¥¹Ñ•É…Ñ¥½¹}é½¹” (€€€€€€€€€€€EA½¥¹Ğ (€€€€€€€€€€€€€€€İ¥¹‘½Ü¹±…‰•°¹à ¤€¬É½Õ¹¡İ¥¹‘½Ü¹±…‰•°¹İ¥‘Ñ  ¤€¨€À¸È¤°(€€€€€€€€€€€€€€€É½Õ¹¡İ¥¹‘½Ü¹±…‰•°¹¡•¥¡Ğ ¤€¨€À¸ØÈ¤°(€€€€€€€€€€€€¤(€€€€€€€€¤(€€€€€€€€ôô€‰…µ•É„ˆ(€€€€¤(€€€…ÍÍ•ÉĞ€ (€€€€€€€İ¥¹‘½Ü¹}¥¹Ñ•É…Ñ¥½¹}é½¹” (€€€€€€€€€€€EA½¥¹Ğ¡•¹Ñ•É}à°É½Õ¹¡İ¥¹‘½Ü¹±…‰•°¹¡•¥¡Ğ ¤€¨€À¸Ü¤¤(€€€€€€€€¤(€€€€€€€€ôô€‰‰½‘äˆ(€€€€¤(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}¡•…‘}±¥­}Ñ¥±ÑÍ}ÕÉ¥½ÕÍ±å}…¹‘}™¥Ù•}‰½‘å}Á½­•Í}…¹¹½ä ¤€´ø9½¹”è(€€€€ˆˆ‹
-ç–’Ó–êSš¶«–’Ó––÷––¾ò3~·š^Û¦^Ó¢ş{î·š"Ï’êSš²‡¢ê¯’öOš&7–"š6‹–"Ã¢öï–ú»RšÂSˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€¥¹¥Ñ¥…±}…™™¥¹¥Ñä€ôİ¥¹‘½Ü¹µ½½¹…™™¥¹¥Ñä(€€€¡•…€ôEA½¥¹Ğ¡İ¥¹‘½Ü¹İ¥‘Ñ  ¤€¼¼€È°€ÈÀ¤(€€€‰½‘ä€ôEA½¥¹Ğ¡İ¥¹‘½Ü¹İ¥‘Ñ  ¤€¼¼€È°É½Õ¹¡İ¥¹‘½Ü¹±…‰•°¹¡•¥¡Ğ ¤€¨€À¸Ü¤¤((€€€İ¥¹‘½Ü¹}¡…¹‘±•}±¥¬¡¡•…¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹µ½½¹…™™¥¹¥Ñä€ôô¥¹¥Ñ¥…±}…™™¥¹¥Ñä€¬€Ô(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹UI%=UL((€€€™½È|¥¸É…¹” Ğ¤è(€€€€€€€İ¥¹‘½Ü¹}¡…¹‘±•}±¥¬¡‰½‘ä¤(€€€€€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹M!d(€€€İ¥¹‘½Ü¹}¡…¹‘±•}±¥¬¡‰½‘ä¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹ÍÑ…Ñ”¥ÌA•ÑMÑ…Ñ”¹99=e(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹‘…¥±å}ÍÑ…ÑÌ¹Ñ½Õ¡•Ì€øô€Ø(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹µ½½¹…™™¥¹¥Ñä€ğ¥¹¥Ñ¥…±}…™™¥¹¥Ñä€¬€Ô(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}Í•±™¥•}½µÁ±•Ñ¥½¹}Í¡½İÍ}Á¡½Ñ½}‰Õ‰‰±” ¤€´ø9½¹”è(€€€€ˆˆ‹šÊ‡šr'R£š"ß–:–nûš^Û’â7–ú_R£Rš"C–*£Rïšr¯–âŸ–K–¢«š.7Ÿ&ˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹}Í•±™¥•}Á¡½Ñ¼€ôÑåÁ”¡İ¥¹‘½Ü¹}Í•±™¥•}Á¡½Ñ¼¤ ¤(€€€İ¥¹‘½Ü¹Í•Ñ}ÍÑ…Ñ”¡A•ÑMÑ…Ñ”¹M1%¤(€€€İ¥¹‘½Ü¹}™¥¹¥Í¡}¥¹Ñ•É…Ñ¥½¸ ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€…ÍÍ•ÉĞ¹½Ğİ¥¹‘½Ü¹Á¡½Ñ½}‰Õ‰‰±”¹¥ÍY¥Í¥‰±” ¤(€€€İ¥¹‘½Ü¹Á¡½Ñ½}‰Õ‰‰±”¹¡¥‘” ¤(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}Í•±™¥•}Á¡½Ñ½}ÕÍ•Í}¡¥¡}‘Á¥}‰…­¥¹}Á¥á•±Ì ¤€´ø9½¹”è(€€€€ˆˆˆÈÀÀ”ƒò§šRûš^Ûš¢«®[Ÿ&¦÷–êS’öÿR£¦®c–"¢ú£:–?Òƒ–æÛ¦fC–"Û¦ï¢úG–Âë–¾ãˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹}Í•±™¥•}Á¡½Ñ¼€ôİ¥¹‘½Ü¹}Á¥áµ…ÁÍmA•ÑMÑ…Ñ”¹M1%ul´Åt(€€€Á¡½Ñ¼€ôİ¥¹‘½Ü¹}Í…±•‘}Í•±™¥•}Á¡½Ñ¼ È¸À¤((€€€…ÍÍ•ÉĞÁ¡½Ñ¼¹‘•Ù¥•A¥á•±I…Ñ¥¼ ¤€ôô€È¸À(€€€…ÍÍ•ÉĞµ…à¡Á¡½Ñ¼¹İ¥‘Ñ  ¤°Á¡½Ñ¼¹¡•¥¡Ğ ¤¤€øô€ÌÀÀ(€€€…ÍÍ•ÉĞÉ½Õ¹¡Á¡½Ñ¼¹İ¥‘Ñ  ¤€¼Á¡½Ñ¼¹‘•Ù¥•A¥á•±I…Ñ¥¼ ¤¤€ğô€ÄÔÀ(€€€…ÍÍ•ÉĞÉ½Õ¹¡Á¡½Ñ¼¹¡•¥¡Ğ ¤€¼Á¡½Ñ¼¹‘•Ù¥•A¥á•±I…Ñ¥¼ ¤¤€ğô€ÈÄÀ(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}Í•±™¥•}Á¡½Ñ½}¥Í}Á½Í¥Ñ¥½¹•‘}¹•…É}Ù¥Í¥‰±•}¡…É…Ñ•È ¤€´ø9½¹”è(€€€€ˆˆ‹Ÿ&–êS¢ÒÓ¢şG’êë&§’â7¦?šb;¢ö»–îO¾ò3¢3’â7šb¿¢ÒÓv–B¯–’Ÿ–v_Vgf÷jª_–>¢úçòcˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹}Í•±™¥•}Á¡½Ñ¼€ôİ¥¹‘½Ü¹}Á¥áµ…ÁÍmA•ÑMÑ…Ñ”¹M1%ul´Åt(€€€İ¥¹‘½Ü¹µ½Ù” ÔÀÀ°€ÌÀÀ¤(€€€İ¥¹‘½Ü¹}ÍÉ••¹}•½µ•ÑÉä€ô±…µ‰‘„èEI•Ğ À°€À°€ÄÈÀÀ°€äÀÀ¤(€€€İ¥¹‘½Ü¹Í•Ñ}ÍÑ…Ñ”¡A•ÑMÑ…Ñ”¹M1%¤(€€€İ¥¹‘½Ü¹}Í¡½İ}Á¡½Ñ½}‰Õ‰‰±” ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤((€€€¡…É…Ñ•É}±•™Ğ€ôİ¥¹‘½Ü¹à ¤€¬İ¥¹‘½Ü¹µ…Í¬ ¤¹‰½Õ¹‘¥¹I•Ğ ¤¹±•™Ğ ¤(€€€Ù¥ÍÕ…±}…À€ô¡…É…Ñ•É}±•™Ğ€´€ (€€€€€€€İ¥¹‘½Ü¹Á¡½Ñ½}‰Õ‰‰±”¹à ¤€¬İ¥¹‘½Ü¹Á¡½Ñ½}‰Õ‰‰±”¹İ¥‘Ñ  ¤(€€€€¤(€€€…ÍÍ•ÉĞÙ¥ÍÕ…±}…À€ôô€à(€€€İ¥¹‘½Ü¹Á¡½Ñ½}‰Õ‰‰±”¹¡¥‘” ¤(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}Í½¹}¥¹ÍÁ¥É…Ñ¥½¹}ÕÍ•Í}¥¹‘•Á•¹‘•¹Ñ}Ñ¥µ•È ¤€´ø9½¹”è(€€€€ˆˆ‹–ò–B¿š¶3¢¾7šÂSšÎ‡–B;–êSšr'.³®/¢º‡š^Û–f£¾ò3’â7–7’úw¢Ö[¦j?šrë&‹¦ªk¢›–>Gˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤((€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹Í½¹}Ñ¥µ•È¹¥ÍÑ¥Ù” ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹Í½¹}Ñ¥µ•È¹É•µ…¥¹¥¹Q¥µ” ¤€ø€À(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}‰…‰Õ‘…}™…±±‰…­}¡…¹•Í}ÍåÍÑ•µ}Ù½¥•}Ñ½¹” ¤€´ø9½¹”è(€€€€ˆˆ‹šr«¦'š.§šr³–rÃ¦~Ï¦ŠGš^Û¾ò3¢ş{î·–>3–ï–>Ï¦R»’î7’òk¢:ß–ú_’â7–B3¢¾·šÂSjÎïî¢¾·¦~Ïˆˆˆ((€€€±…ÍÌMÁ••¡I•½É‘•Èè(€€€€€€€‘•˜}}¥¹¥Ñ}|¡Í•±˜¤€´ø9½¹”è(€€€€€€€€€€€Í•±˜¹É…Ñ•Ì€ômt(€€€€€€€€€€€Í•±˜¹Á¥Ñ¡•Ì€ômt(€€€€€€€€€€€Í•±˜¹İ½É‘Ì€ômt((€€€€€€€‘•˜Í•ÑI…Ñ”¡Í•±˜°Ù…±Õ”¤€´ø9½¹”è(€€€€€€€€€€€Í•±˜¹É…Ñ•Ì¹…ÁÁ•¹¡Ù…±Õ”¤((€€€€€€€‘•˜Í•ÑA¥Ñ ¡Í•±˜°Ù…±Õ”¤€´ø9½¹”è(€€€€€€€€€€€Í•±˜¹Á¥Ñ¡•Ì¹…ÁÁ•¹¡Ù…±Õ”¤((€€€€€€€‘•˜Í…ä¡Í•±˜°Ù…±Õ”¤€´ø9½¹”è(€€€€€€€€€€€Í•±˜¹İ½É‘Ì¹…ÁÁ•¹¡Ù…±Õ”¤((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€É•½É‘•È€ôMÁ••¡I•½É‘•È ¤(€€€İ¥¹‘½Ü¹}ÍÁ••¡}•¹¥¹”€ôÉ•½É‘•È(€€€İ¥¹‘½Ü¹Í•ÑÑ¥¹Ì¹‰…‰Õ‘…}…Õ‘¥½}Á…Ñ €ô€ˆˆ((€€€İ¥¹‘½Ü¹Á±…å}‰…‰Õ‘…}Ù½¥” ¤(€€€İ¥¹‘½Ü¹Á±…å}‰…‰Õ‘…}Ù½¥” ¤((€€€…ÍÍ•ÉĞÉ•½É‘•È¹İ½É‘Ì€ôôl‹–ŞÓ–â¢úøˆ°€‹–ŞÓ–â¢úø‰t(€€€…ÍÍ•ÉĞÉ•½É‘•È¹É…Ñ•ÍlÁt€„ôÉ•½É‘•È¹É…Ñ•ÍlÅt(€€€…ÍÍ•ÉĞÉ•½É‘•È¹Á¥Ñ¡•ÍlÁt€„ôÉ•½É‘•È¹Á¥Ñ¡•ÍlÅt(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}±½¹}ÁÉ•ÍÍ}ÁÕÑÍ}±¥±¥}Ñ½}Í±••Á}İ¥Ñ¡½ÕÑ}Á±…¥¹}±¥¬ ¤€´ø9½¹”è(€€€€ˆˆ‹¦Vÿš2'–êS–"š6‹v‡¢'–nû&–æÛ¢ºÃ–öW’âš²‡v‡¢'¾ò3’â7–7¢›–>Gšf»¦k
-ç–ïˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€İ¥¹‘½Ü¹}ÁÉ•ÍÍ}Á•¹‘¥¹œ€ôQÉÕ”(€€€İ¥¹‘½Ü¹‘É…¥¹œ€ô…±Í”((€€€İ¥¹‘½Ü¹}ÑÉ¥•É}±½¹}ÁÉ•ÍÌ ¤((€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}±½¹}ÁÉ•ÍÍ}ÑÉ¥•É•(€€€…ÍÍ•ÉĞ¹½Ğİ¥¹‘½Ü¹}ÁÉ•ÍÍ}Á•¹‘¥¹œ(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}…µ‰¥•¹Ñ}…Ñ¥Ù¥Ñä€ôô€‰Í±••Àˆ(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹‘…¥±å}ÍÑ…ÑÌ¹Í±••ÁÌ€ôô€Ä(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤(()‘•˜Ñ•ÍÑ}½µÁ±•Ñ•}Á¥ÑÕÉ•}…Ñ¥½¹Í}É½ÍÍ™…‘•}İ¥Ñ¡½ÕÑ}É•Í¥é¥¹}İ¥¹‘½Ü ¤€´ø9½¹”è(€€€€ˆˆ‹–º3šVÓ–*£’ös–"š6‹–êS~·šj’ê“–>'šŞ‡–2[¾ò3îOšv–B;’şwš2–B3’âª_–>–Âë–¾ãˆˆˆ((€€€…ÁÀ°İ¥¹‘½Ü€ô}É•…Ñ•}İ¥¹‘½Ü ¤(€€€½É¥¥¹…±}Í¥é”€ôİ¥¹‘½Ü¹Í¥é” ¤((€€€İ¥¹‘½Ü¹}Í•Ñ}Ñ•µÁ½É…Éå}…Ñ¥Ù¥Ñä ‰Õ¥Ñ…Èˆ°€ÔÀÀÀ¤((€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹…Ñ¥Ù¥Ñå}ÑÉ…¹Í¥Ñ¥½¹}Ñ¥µ•È¹¥ÍÑ¥Ù” ¤(€€€…ÍÍ•ÉĞ¹½Ğİ¥¹‘½Ü¹}…Ñ¥Ù¥Ñå}ÑÉ…¹Í¥Ñ¥½¹}™É½´¹¥Í9Õ±° ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹Í¥é” ¤€ôô½É¥¥¹…±}Í¥é”((€€€™½È|¥¸É…¹”¡İ¥¹‘½Ü¹}…Ñ¥Ù¥Ñå}ÑÉ…¹Í¥Ñ¥½¹}ÍÑ•ÁÌ¤è(€€€€€€€İ¥¹‘½Ü¹}…Ñ¥Ù¥Ñå}ÑÉ…¹Í¥Ñ¥½¹}Ñ¥¬ ¤((€€€…ÍÍ•ÉĞ¹½Ğİ¥¹‘½Ü¹…Ñ¥Ù¥Ñå}ÑÉ…¹Í¥Ñ¥½¹}Ñ¥µ•È¹¥ÍÑ¥Ù” ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}…Ñ¥Ù¥Ñå}ÑÉ…¹Í¥Ñ¥½¹}™É½´¹¥Í9Õ±° ¤(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹}…µ‰¥•¹Ñ}…Ñ¥Ù¥Ñä€ôô€‰Õ¥Ñ…Èˆ(€€€…ÍÍ•ÉĞİ¥¹‘½Ü¹Í¥é” ¤€ôô½É¥¥¹…±}Í¥é”(€€€İ¥¹‘½Ü¹±½Í” ¤(€€€İ¥¹‘½Ü¹‘•±•Ñ•1…Ñ•È ¤(€€€…ÁÀ¹ÁÉ½•ÍÍÙ•¹ÑÌ ¤
+    """æš‚åœè·‘åŠ¨æ—¶åº”è¿›å…¥ç”Ÿæ´»çŠ¶æ€å¹¶ç»§ç»­è®¡æ—¶ï¼Œè€Œä¸æ˜¯å†»ç»“åœ¨ç«™ç«‹å¸§ã€‚"""
+
+    app, window = _create_window()
+    window.set_state(PetState.WALK)
+    window.behavior.next_autonomous_state = (
+        lambda _current, allow_walk: StateDecision(PetState.SIT, 2000)
+    )
+
+    window.set_paused(True)
+
+    assert window.paused
+    assert window.state is PetState.SIT
+    assert window.state_timer.isActive()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_display_size_preset_updates_geometry_and_settings() -> None:
+    """å³é”®å°ºå¯¸é¢„è®¾åº”ç«‹å³æ”¹å˜çª—å£å’Œæ ‡ç­¾å°ºå¯¸ï¼Œå¹¶å†™å›è®¾ç½®å¯¹è±¡ã€‚"""
+
+    app, window = _create_window()
+    window.set_display_height(280)
+
+    assert window.settings.display_height == 280
+    assert window.height() == 294
+    assert window.label.height() == 288
+    assert not window.mask().isEmpty()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_default_workmate_size_is_smaller_than_previous_standard() -> None:
+    """å…­æ¯›å·¥ä½œæ­å­çš„é¦–æ¬¡å¯åŠ¨é«˜åº¦åº”ä»æ—§ç‰ˆè¿›ä¸€æ­¥ç¼©å°åˆ° 160ã€‚"""
+
+    app, window = _create_window()
+
+    assert window.settings.display_height == 160
+    assert window.height() == 174
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
+    """å¿«æ·å£è¢‹åªåœ¨ä¸»åŠ¨æ‰“å¼€æ—¶æ˜¾ç¤ºï¼Œå†æ¬¡è°ƒç”¨ä¼šç«‹å³æ”¶èµ·ã€‚"""
+
+    app, window = _create_window()
+    window.show_quick_panel()
+    app.processEvents()
+    assert window.quick_panel.isVisible()
+    assert window.quick_panel.hide_timer.isActive()
+    window.show_quick_panel()
+    assert not window.quick_panel.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_feeding_updates_fullness_and_shows_speech_bubble() -> None:
+    """ä»èœå•å–‚è‹¹æœåº”æ›´æ–°çŠ¶æ€ï¼Œå¹¶åœ¨äººç‰©é™„è¿‘æ˜¾ç¤ºæ–‡å­—åé¦ˆã€‚"""
+
+    app, window = _create_window()
+    initial_fullness = window.mood.fullness
+
+    reply = window.feed_pet("apple")
+    app.processEvents()
+
+    assert window.mood.fullness == initial_fullness + 18
+    assert reply.state is PetState.HAPPY
+    assert window.state is PetState.HAPPY
+    assert window.speech_bubble.isVisible()
+    assert "è‹¹æœ" in window.speech_bubble.text()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_dialogue_is_handled_locally_and_shows_reply() -> None:
+    """è¾“å…¥å·¥ä½œè¯é¢˜ååº”ç›´æ¥ç”Ÿæˆæœ¬åœ°å›å¤ï¼Œä¸ä¾èµ–å¤–éƒ¨æœåŠ¡ã€‚"""
+
+    app, window = _create_window()
+
+    reply = window.talk_to_pet("ä»Šå¤©å·¥ä½œå¾ˆå¤š")
+    app.processEvents()
+
+    assert reply.state is PetState.HAPPY
+    assert "ååˆ†é’Ÿ" in reply.text
+    assert window.speech_bubble.text() == reply.text
+    assert window.speech_bubble.isVisible()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_context_menu_uses_direct_high_frequency_entries() -> None:
+    """ä¸€çº§èœå•ç›´æ¥å‘ˆç°èŠå¤©ã€å·¥ä½œã€éŸ³ä¹ã€è‡ªä¹ å®¤ã€åŠ¨ä½œå’Œå–‚é£Ÿå…¥å£ã€‚"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels[:8] == [
+        "ç»™å…­æ¯›æ”¹åå­—â€¦",
+        "å’Œå…­æ¯›èŠèŠâ€¦",
+        "å·¥ä½œæ‰“å¡/å·¥ä½œè®¡æ—¶",
+        "éŸ³ä¹",
+        "æ­å­è‡ªä¹ å®¤â€¦",
+        "åŠ¨ä½œ",
+        "ç»™å…­æ¯›å–‚é£Ÿ",
+        "æ¢è£…ä¸å¤–è§‚",
+    ]
+    assert "éšè—" in labels
+    assert "é€€å‡º" in labels
+    assert "é™ªä¼´åŠ¨ä½œ" not in labels
+    assert "å®Œæ•´å›¾ç‰‡åŠ¨ä½œ" not in labels
+    assert not any("â€º" in label for label in labels)
+    music = next(action for action in menu.actions() if action.text() == "éŸ³ä¹")
+    music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
+    assert music_labels == ["éšæœºå¬ä¸€é¦–é™ˆæ¥šç”Ÿ", "æ’­æ”¾/æš‚åœ", "ä¸‹ä¸€é¦–", "ä¸Šä¸€é¦–", "éŸ³ä¹æ’­æ”¾å™¨è®¾ç½®"]
+    food = next(action for action in menu.actions() if action.text() == "ç»™å…­æ¯›å–‚é£Ÿ")
+    assert food.menu() is not None
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def _legacy_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
+    """å³é”®èœå•åªä¿ç•™äº”ä¸ªä¸€çº§åˆ†ç»„ï¼ŒåŠŸèƒ½æ”¾å…¥è¯­ä¹‰æ˜ç¡®çš„å­èœå•ã€‚"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    actions = {action.text(): action for action in menu.actions()}
+    assert list(actions) == ["èŠå¤©ä¸é™ªä¼´", "åŠ¨ä½œä¸å¤–è§‚", "éŸ³ä¹ä¸å¨±ä¹", "ä¸“æ³¨ä¸è‡ªä¹ ", "ç³»ç»Ÿä¸æ˜¾ç¤º"]
+
+    chat_actions = {action.text(): action for action in actions["èŠå¤©ä¸é™ªä¼´"].menu().actions()}
+    appearance_actions = {action.text(): action for action in actions["åŠ¨ä½œä¸å¤–è§‚"].menu().actions()}
+    music_actions = {action.text(): action for action in actions["éŸ³ä¹ä¸å¨±ä¹"].menu().actions()}
+    focus_actions = {action.text(): action for action in actions["ä¸“æ³¨ä¸è‡ªä¹ "].menu().actions()}
+    system_actions = {action.text(): action for action in actions["ç³»ç»Ÿä¸æ˜¾ç¤º"].menu().actions() if not action.isSeparator()}
+
+    assert "å’Œå…­æ¯›èŠèŠâ€¦" in chat_actions
+    assert "é™ªä¼´åŠ¨ä½œ" in chat_actions
+    assert "å–‚é£Ÿã€é¥®å“ä¸çŠ¶æ€" in chat_actions
+    assert "å…­æ¯›æ­å­è‡ªä¹ å®¤â€¦" in chat_actions
+    assert "å®Œæ•´å›¾ç‰‡åŠ¨ä½œ" in appearance_actions
+    assert "å·¥ä½œæ—¶é•¿å¨ƒè¡£" in appearance_actions
+    assert "æ§åˆ¶æ­£åœ¨è¿è¡Œçš„æ’­æ”¾å™¨" in music_actions
+    assert any(text.startswith("å·¥ä½œè®¡æ—¶ï¼š") for text in focus_actions)
+    assert "AI ä¸é™ªä¼´è®¾ç½®â€¦" in system_actions
+    assert system_actions["å¶å°”å‘ç‰¢éªš"].isChecked()
+    assert not system_actions["æ•´ç‚¹æŠ¥æ—¶"].isChecked()
+    food_menu = chat_actions["å–‚é£Ÿã€é¥®å“ä¸çŠ¶æ€"].menu()
+    assert food_menu is not None
+    food_actions = [action.text() for action in food_menu.actions() if not action.isSeparator()]
+    assert food_actions == [
+        "è‹¹æœ",
+        "å°é¥¼å¹²",
+        "çƒ­ç‰›å¥¶",
+        "å’–å•¡",
+        "çƒ­èŒ¶",
+        "æŸ¥çœ‹å…­æ¯›å¿ƒæƒ…ä¸èƒ½é‡",
+    ]
+    assert not any("æ‰“æ‹›å‘¼" in text for text in chat_actions)
+    assert "è¿ç»­è°ƒèŠ‚å® ç‰©å¤§å°â€¦" in system_actions
+    work_action = next(action for text, action in focus_actions.items() if text.startswith("å·¥ä½œè®¡æ—¶ï¼š"))
+    work_labels = [action.text() for action in work_action.menu().actions()]
+    assert "æŸ¥çœ‹ä»Šæ—¥ 0â€“8 å°æ—¶æˆé•¿çº¿" in work_labels
+    assert "ä»Šå¤©å…­æ¯›é™ªä½ åšäº†ä»€ä¹ˆ" in work_labels
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_companion_action_shows_loving_animation_and_words() -> None:
+    """ä¸»åŠ¨é€‰æ‹©æŠ±æŠ±åº”å¢åŠ äº²å¯†åº¦ï¼Œå¹¶æ˜¾ç¤ºçˆ±æ„åŠ¨ä½œä¸å®‰æ…°è¯è¯­ã€‚"""
+
+    app, window = _create_window()
+    initial_affinity = window.mood.affinity
+
+    reply = window.perform_companion_action("love")
+    app.processEvents()
+
+    assert reply.state is PetState.SHY
+    assert window.state is PetState.SHY
+    assert window.mood.affinity == initial_affinity + 5
+    assert window.speech_bubble.text() == reply.text
+    assert any(word in reply.text for word in ("æŠ±æŠ±", "è´´è´´"))
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_diverse_action_sequence_and_drinks_use_existing_frames() -> None:
+    """ä¼¸å±•ä¸å–èŒ¶åº”ç»„åˆå·²éªŒæ”¶çŠ¶æ€ï¼Œè€Œä¸æ˜¯é™æ­¢åœ°åªæ¢ä¸€å¥æ–‡å­—ã€‚"""
+
+    app, window = _create_window()
+    reply = window.perform_companion_action("stretch")
+    assert reply.state is PetState.WAVE
+    assert window.state is PetState.SIT
+    tea = window.feed_pet("tea")
+    assert "çƒ­èŒ¶" in tea.text
+    assert window.state is PetState.SIT
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_hourly_announcement_can_be_disabled_and_deduplicates() -> None:
+    """æ•´ç‚¹æŠ¥æ—¶é»˜è®¤ä¸è§¦å‘ï¼Œå¼€å¯ååŒä¸€å°æ—¶åªè§¦å‘ä¸€æ¬¡ã€‚"""
+
+    app, window = _create_window()
+    now = datetime(2026, 8, 10, 14, 0, 5)
+    assert window._maybe_announce_hour(now) is False
+    window.settings.hourly_announcement = True
+    assert window._maybe_announce_hour(now) is True
+    assert "14:00" in window.speech_bubble.text()
+    assert window._maybe_announce_hour(now) is False
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
+    """å·¥ä½œè®¡æ—¶åº”æ˜¾ç¤ºä»Šæ—¥ç´¯è®¡ï¼Œå¹¶åœ¨è¿ç»­å·¥ä½œè¿‡ä¹…æ—¶åŠç”¨æˆ·ä¼‘æ¯ã€‚"""
+
+    now = [datetime(2026, 8, 10, 9, 0, 0)]
+    monotonic = [100.0]
+    timer = WorkTimerModel(
+        path=tmp_path / "work_timer.json",
+        now_provider=lambda: now[0],
+        monotonic_provider=lambda: monotonic[0],
+    )
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(PetSettings(), work_timer=timer)
+    window.show()
+    app.processEvents()
+
+    start_reply = window.start_work_timer()
+    assert start_reply.state is PetState.SIT
+    assert timer.is_running
+    assert window.paused
+
+    now[0] += timedelta(minutes=50)
+    monotonic[0] += 50 * 60
+    window._work_timer_tick()
+    app.processEvents()
+    assert window.state is PetState.SLEEPY
+    assert "æ´»åŠ¨" in window.speech_bubble.text()
+    assert "50åˆ†é’Ÿ" in timer.status_text()
+
+    finish_reply = window.finish_work_timer()
+    assert finish_reply.state is PetState.HAPPY
+    assert not timer.is_running
+    assert not window.paused
+    assert "50åˆ†é’Ÿ" in finish_reply.text
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_dialogue_panel_passes_text_to_local_reply() -> None:
+    """æ–°ç‰ˆèŠå¤©é¢æ¿å‘é€æ–‡å­—ååº”äº¤ç»™ç¦»çº¿è§„åˆ™å¹¶æ˜¾ç¤ºå›å¤ã€‚"""
+
+    app, window = _create_window()
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    settings_spy = QSignalSpy(window._chat_dialog.settings_requested)
+    window._chat_dialog.input.setText("ä»Šå¤©æœ‰ç‚¹ç´¯")
+    window._chat_dialog._submit()
+    app.processEvents()
+
+    assert window.state is PetState.SLEEPY
+    assert "å–å£æ°´" in window.speech_bubble.text()
+    assert "ç¦»çº¿" in window._chat_dialog.status_label.text()
+    assert settings_spy.count() == 0
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_agent_checking_never_opens_settings_and_complex_chat_shows_buttons() -> None:
+    """Agent å°šåœ¨æ£€æµ‹æ—¶èŠå¤©åº”ç«‹å³ç¦»çº¿å›å¤ï¼Œåªæ˜¾ç¤ºæ‰‹åŠ¨æŒ‰é’®è€Œä¸å¼¹è®¾ç½®ã€‚"""
+
+    app, window = _create_window()
+    window.settings.ai_provider = "codex"
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    settings_spy = QSignalSpy(window._chat_dialog.settings_requested)
+
+    window._chat_dialog.input.setText("å¸®æˆ‘å†™ä»£ç å¹¶åˆ†æè¿™ä¸ªé¡¹ç›®")
+    window._chat_dialog._submit()
+    app.processEvents()
+
+    assert settings_spy.count() == 0
+    assert "ç¦»çº¿æ¨¡å¼" in window._chat_dialog.transcript.toPlainText()
+    assert window._chat_dialog.recovery_actions.isVisible()
+    assert "æ­£åœ¨åå°æ£€æµ‹" in window._chat_dialog.status_label.text()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_settings_open_path_rejects_every_non_user_source(monkeypatch) -> None:
+    """Agent æ£€æµ‹ã€é”™è¯¯ã€è¶…æ—¶æˆ–å†…éƒ¨è°ƒç”¨å‡ä¸èƒ½åˆ›å»ºè®¾ç½®çª—å£ã€‚"""
+
+    created = []
+
+    class FakeSettingsDialog:
+        def __init__(self, *_args, **_kwargs) -> None:
+            created.append(True)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.AISettingsDialog",
+        FakeSettingsDialog,
+    )
+    app, window = _create_window()
+
+    for source in (
+        "startup_detection",
+        "checking",
+        "agent_disconnected",
+        "agent_error",
+        "agent_timeout",
+        "cli_not_found",
+        "ai_call_failed",
+        "internal",
+        "",
+    ):
+        assert window.open_settings(source) is False
+    assert created == []
+
+    assert window.open_settings("user_action") is True
+    assert created == [True]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ("connected", "checking", "disconnected", "error", "timeout"),
+)
+def test_ten_messages_in_every_agent_state_never_open_settings(
+    monkeypatch,
+    scenario: str,
+) -> None:
+    """äº”ç§ Agent æƒ…å†µå„è¿ç»­å‘é€åæ¡æ¶ˆæ¯éƒ½ä¸å¾—äº§ç”Ÿè®¾ç½®çª—å£å‰¯ä½œç”¨ã€‚"""
+
+    settings_opened = []
+
+    class ForbiddenSettingsDialog:
+        def __init__(self, *_args, **_kwargs) -> None:
+            settings_opened.append(True)
+            raise AssertionError("èŠå¤©æˆ– Agent çŠ¶æ€ä¸å¾—åˆ›å»ºè®¾ç½®çª—å£")
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.AISettingsDialog",
+        ForbiddenSettingsDialog,
+    )
+    app, window = _create_window()
+    window.settings.ai_provider = "codex"
+    service_calls = []
+
+    def successful_reply(*_args, **_kwargs) -> str:
+        service_calls.append("success")
+        return "AI å…­æ¯›åœ¨è¿™é‡Œã€‚"
+
+    def timed_out_reply(*_args, **_kwargs) -> str:
+        service_calls.append("timeout")
+        raise AIConnectionError("Codex è¯·æ±‚è¶…æ—¶ã€‚")
+
+    if scenario == "connected":
+        window.agent_manager.mark_runtime_success("codex")
+        monkeypatch.setattr(window.chat_manager.service, "reply", successful_reply)
+    elif scenario == "timeout":
+        window.agent_manager.mark_runtime_success("codex")
+        monkeypatch.setattr(window.chat_manager.service, "reply", timed_out_reply)
+    else:
+        state = AgentConnectionState(scenario)
+        window.agent_manager._set_status("codex", state, f"æµ‹è¯•çŠ¶æ€ï¼š{scenario}")
+
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    settings_signal = QSignalSpy(window._chat_dialog.settings_requested)
+
+    for index in range(10):
+        window._chat_dialog.input.setText(f"ç¬¬ {index + 1} æ¡æµ‹è¯•æ¶ˆæ¯")
+        window._chat_dialog._submit()
+        thread = window.chat_manager._thread
+        if thread is not None:
+            assert thread.wait(2000)
+        app.processEvents()
+
+    assert settings_opened == []
+    assert settings_signal.count() == 0
+    if scenario == "connected":
+        assert len(service_calls) == 10
+    elif scenario == "timeout":
+        assert service_calls == ["timeout"]
+        assert window.agent_manager.status("codex").state is AgentConnectionState.ERROR
+    else:
+        assert service_calls == []
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_interaction_zones_map_head_face_body_and_camera() -> None:
+    """çª—å£ç›¸å¯¹ä½ç½®åº”ç¨³å®šæ˜ å°„ä¸ºå››ç§ç‚¹å‡»åŒºåŸŸã€‚"""
+
+    app, window = _create_window()
+    center_x = window.label.x() + window.label.width() // 2
+    assert window._interaction_zone(QPoint(center_x, 20)) == "head"
+    assert (
+        window._interaction_zone(
+            QPoint(center_x, round(window.label.height() * 0.34))
+        )
+        == "face"
+    )
+    assert (
+        window._interaction_zone(
+            QPoint(
+                window.label.x() + round(window.label.width() * 0.2),
+                round(window.label.height() * 0.62),
+            )
+        )
+        == "camera"
+    )
+    assert (
+        window._interaction_zone(
+            QPoint(center_x, round(window.label.height() * 0.7))
+        )
+        == "body"
+    )
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_head_click_tilts_curiously_and_five_body_pokes_annoy() -> None:
+    """ç‚¹å¤´åº”æ­ªå¤´å¥½å¥‡ï¼ŒçŸ­æ—¶é—´è¿ç»­æˆ³äº”æ¬¡èº«ä½“æ‰åˆ‡æ¢åˆ°è½»å¾®ç”Ÿæ°”ã€‚"""
+
+    app, window = _create_window()
+    initial_affinity = window.mood.affinity
+    head = QPoint(window.width() // 2, 20)
+    body = QPoint(window.width() // 2, round(window.label.height() * 0.7))
+
+    window._handle_click(head)
+    assert window.mood.affinity == initial_affinity + 5
+    assert window.state is PetState.CURIOUS
+
+    for _ in range(4):
+        window._handle_click(body)
+        assert window.state is PetState.SHY
+    window._handle_click(body)
+    assert window.state is PetState.ANNOYED
+    assert window.daily_stats.touches >= 6
+    assert window.mood.affinity < initial_affinity + 5
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_selfie_completion_shows_photo_bubble() -> None:
+    """æ²¡æœ‰ç”¨æˆ·åŸå›¾æ—¶ä¸å¾—ç”¨ç”ŸæˆåŠ¨ç”»æœ«å¸§å†’å……è‡ªæ‹ç…§ç‰‡ã€‚"""
+
+    app, window = _create_window()
+    window._selfie_photo = type(window._selfie_photo)()
+    window.set_state(PetState.SELFIE)
+    window._finish_interaction()
+    app.processEvents()
+
+    assert not window.photo_bubble.isVisible()
+    window.photo_bubble.hide()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_selfie_photo_uses_high_dpi_backing_pixels() -> None:
+    """200% ç¼©æ”¾æ—¶æ¨ªç«–ç…§ç‰‡éƒ½åº”ä½¿ç”¨é«˜åˆ†è¾¨ç‡åƒç´ å¹¶é™åˆ¶é€»è¾‘å°ºå¯¸ã€‚"""
+
+    app, window = _create_window()
+    window._selfie_photo = window._pixmaps[PetState.SELFIE][-1]
+    photo = window._scaled_selfie_photo(2.0)
+
+    assert photo.devicePixelRatio() == 2.0
+    assert max(photo.width(), photo.height()) >= 300
+    assert round(photo.width() / photo.devicePixelRatio()) <= 150
+    assert round(photo.height() / photo.devicePixelRatio()) <= 210
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_selfie_photo_is_positioned_near_visible_character() -> None:
+    """ç…§ç‰‡åº”è´´è¿‘äººç‰©ä¸é€æ˜è½®å»“ï¼Œè€Œä¸æ˜¯è´´ç€å«å¤§å—ç•™ç™½çš„çª—å£è¾¹ç¼˜ã€‚"""
+
+    app, window = _create_window()
+    window._selfie_photo = window._pixmaps[PetState.SELFIE][-1]
+    window.move(500, 300)
+    window._screen_geometry = lambda: QRect(0, 0, 1200, 900)
+    window.set_state(PetState.SELFIE)
+    window._show_photo_bubble()
+    app.processEvents()
+
+    character_left = window.x() + window.mask().boundingRect().left()
+    visual_gap = character_left - (
+        window.photo_bubble.x() + window.photo_bubble.width()
+    )
+    assert visual_gap == 8
+    window.photo_bubble.hide()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_song_inspiration_uses_independent_timer() -> None:
+    """å¼€å¯æ­Œè¯æ°”æ³¡ååº”æœ‰ç‹¬ç«‹è®¡æ—¶å™¨ï¼Œä¸å†ä¾èµ–éšæœºç‰¢éªšè§¦å‘ã€‚"""
+
+    app, window = _create_window()
+
+    assert window.song_timer.isActive()
+    assert window.song_timer.remainingTime() > 0
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_babuda_fallback_changes_system_voice_tone() -> None:
+    """æœªé€‰æ‹©æœ¬åœ°éŸ³é¢‘æ—¶ï¼Œè¿ç»­åŒå‡»å³é”®ä»ä¼šè·å¾—ä¸åŒè¯­æ°”çš„ç³»ç»Ÿè¯­éŸ³ã€‚"""
+
+    class SpeechRecorder:
+        def __init__(self) -> None:
+            self.rates = []
+            self.pitches = []
+            self.words = []
+
+        def setRate(self, value) -> None:
+            self.rates.append(value)
+
+        def setPitch(self, value) -> None:
+            self.pitches.append(value)
+
+        def say(self, value) -> None:
+            self.words.append(value)
+
+    app, window = _create_window()
+    recorder = SpeechRecorder()
+    window._speech_engine = recorder
+    window.settings.babuda_audio_path = ""
+
+    window.play_babuda_voice()
+    window.play_babuda_voice()
+
+    assert recorder.words == ["å·´å¸ƒè¾¾", "å·´å¸ƒè¾¾"]
+    assert recorder.rates[0] != recorder.rates[1]
+    assert recorder.pitches[0] != recorder.pitches[1]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_long_press_puts_lili_to_sleep_without_plain_click() -> None:
+    """é•¿æŒ‰åº”åˆ‡æ¢ç¡è§‰å›¾ç‰‡å¹¶è®°å½•ä¸€æ¬¡ç¡è§‰ï¼Œä¸å†è§¦å‘æ™®é€šç‚¹å‡»ã€‚"""
+
+    app, window = _create_window()
+    window._press_pending = True
+    window.dragging = False
+
+    window._trigger_long_press()
+
+    assert window._long_press_triggered
+    assert not window._press_pending
+    assert window._ambient_activity == "sleep"
+    assert window.daily_stats.sleeps == 1
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
+    """å®Œæ•´åŠ¨ä½œåˆ‡æ¢åº”çŸ­æš‚äº¤å‰æ·¡åŒ–ï¼Œç»“æŸåä¿æŒåŒä¸€çª—å£å°ºå¯¸ã€‚"""
+
+    app, window = _create_window()
+    original_size = window.size()
+
+    window._set_temporary_activity("guitar", 5000)
+
+    assert window.activity_transition_timer.isActive()
+    assert not window._activity_transition_from.isNull()
+    assert window.size() == original_size
+
+    for _ in range(window._activity_transition_steps):
+        window._activity_transition_tick()
+
+    assert not window.activity_transition_timer.isActive()
+    assert window._activity_transition_from.isNull()
+    assert window._ambient_activity == "guitar"
+    assert window.size() == original_size
+    window.close()
+    window.deleteLater()
+    app.processEvents()
