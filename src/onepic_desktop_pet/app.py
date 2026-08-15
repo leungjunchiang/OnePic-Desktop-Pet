@@ -23,6 +23,7 @@ Agent 快速定位：
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import Qt, QTimer
@@ -31,7 +32,13 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .config import PET_NAME, PetSettings, load_settings, save_settings
 from .companion import APP_DISPLAY_NAME
+from .content_updates import (
+    ContentUpdateManager,
+    ContentUpdateResult,
+    reload_runtime_content,
+)
 from .resources import resource_path
+from .update_worker import ContentUpdateWorker
 from .window import PetWindow
 
 
@@ -50,6 +57,8 @@ class DesktopPetApplication:
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
         self.window.quit_requested.connect(self.quit)
+        self._content_update_worker: ContentUpdateWorker | None = None
+        self._content_update_manual = False
         self.tray = self._create_tray()
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
@@ -86,6 +95,10 @@ class DesktopPetApplication:
         paper_action.triggered.connect(self.window.show_sticky_note)
         menu.addAction(paper_action)
 
+        update_action = QAction("检查补充内容更新", menu)
+        update_action.triggered.connect(self.check_content_updates)
+        menu.addAction(update_action)
+
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(
             lambda _checked=False: self.window.open_settings("user_action")
@@ -114,6 +127,7 @@ class DesktopPetApplication:
         self.panel_action = panel_action
         self.dialogue_action = dialogue_action
         self.rename_action = rename_action
+        self.update_action = update_action
         tray.activated.connect(self._tray_activated)
         return tray
 
@@ -154,6 +168,10 @@ class DesktopPetApplication:
             QTimer.singleShot(300, self.window.show_today_note)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
+        if not self._content_updates_disabled():
+            # The startup check is deliberately delayed and silent.  It only
+            # fetches the manifest; changed files are downloaded in a worker.
+            QTimer.singleShot(2500, lambda: self.check_content_updates(False))
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
         return self.qt_app.exec()
@@ -164,12 +182,68 @@ class DesktopPetApplication:
         self.settings.start_x = self.window.x()
         self.settings.start_y = self.window.y()
         try:
+            if self._content_update_worker is not None and self._content_update_worker.isRunning():
+                self._content_update_worker.requestInterruption()
+                self._content_update_worker.wait(6000)
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         finally:
             self.tray.hide()
             self.window.close()
             self.qt_app.quit()
+
+    def check_content_updates(self, manual: bool = True) -> None:
+        """Check only the signed-by-hash content manifest, never the EXE."""
+
+        if self._content_update_worker is not None and self._content_update_worker.isRunning():
+            return
+        if self._content_updates_disabled():
+            return
+        worker = ContentUpdateWorker(ContentUpdateManager(), self.qt_app)
+        self._content_update_worker = worker
+        self._content_update_manual = bool(manual)
+        worker.completed.connect(self._content_update_completed)
+        worker.failed.connect(self._content_update_failed)
+        worker.finished.connect(self._content_update_finished)
+        worker.start()
+
+    def _content_updates_disabled(self) -> bool:
+        return bool(getattr(self.settings, "disable_content_updates", False)) or os.environ.get(
+            "LILI_DISABLE_CONTENT_UPDATES", ""
+        ).strip() == "1"
+
+    def _content_update_finished(self) -> None:
+        worker = self._content_update_worker
+        self._content_update_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _content_update_completed(self, result: object) -> None:
+        manual = self._content_update_manual
+        if not isinstance(result, ContentUpdateResult):
+            if manual:
+                self.window.show_speech("现在没有新的补充内容。", 3000)
+            return
+        try:
+            reload_runtime_content()
+            self.window._pixmaps = self.window._load_pixmaps()
+            self.window._render_cache.clear()
+            self.window._mask_cache.clear()
+            self.window._refresh_pixmap()
+        except Exception:
+            # A content patch is still valid even if a currently displayed
+            # optional asset cannot be reloaded until the next restart.
+            pass
+        if manual:
+            self.window.show_speech(
+                f"补充了 {len(result.updated_files)} 个内容文件。", 3600
+            )
+
+    def _content_update_failed(self, message: str) -> None:
+        # Startup checks are intentionally quiet for offline users.  Manual
+        # checks provide a useful, non-technical status bubble.
+        if self._content_update_manual:
+            self.window.show_speech("补充内容暂时没连上，稍后再试。", 3600)
 
 
 def run(smoke_test_ms: int | None = None) -> int:

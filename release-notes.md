@@ -1,3 +1,16 @@
+# Lili v0.22.44
+
+## Content-only online updates
+
+- Added an optional manifest-based content updater. It downloads only changed files under `assets/`, `config/`, and `resources/`, verifies each SHA-256, stages a complete version, and atomically switches one active pointer.
+- Added a quiet startup check and a tray action for manual checks. Network failures are silent at startup and never block the pet or replace the running executable.
+- Successful content patches clear the local knowledge/song/story caches and refresh pet assets when possible; code/EXE updates remain a separate release operation.
+
+## Pet-attached Todo sizing
+
+- Compact Todo width now hugs the longest visible task while staying between 156px and 320px; labels ellipsize only when the bounded width is reached and keep the full task in a tooltip.
+- Repositioned the pet-attached Todo strip immediately after its width changes so it remains anchored to 六毛 rather than leaving a stale gap.
+
 # Lili v0.22.43
 
 ## Pet-attached Todo placement

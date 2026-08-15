@@ -1958,6 +1958,11 @@ class PetWindow(QWidget):
             self._today_note_window.refresh()
         if self._compact_todo_panel is not None:
             self._compact_todo_panel.refresh()
+            if self._compact_todo_panel.isVisible():
+                # A longer/shorter task changes the panel width, so its
+                # pet-relative position must be recalculated in the same UI
+                # turn rather than waiting for the next pet movement.
+                self._position_compact_todos()
 
     def _select_todo_from_note(self, task_id: str) -> None:
         item = self.time_memory.todos.get(task_id)

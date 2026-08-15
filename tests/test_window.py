@@ -282,6 +282,40 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     app.processEvents()
 
 
+def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("论文")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.move(400, 180)
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None
+    short_width = panel.width()
+    assert panel.MIN_WIDTH <= short_width <= panel.MAX_WIDTH
+
+    memory.todos.update(
+        task.id,
+        title="修改论文第三部分机制分析并整理稳健性回归结果",
+        time="22:00",
+    )
+    window._refresh_todo_surfaces()
+    app.processEvents()
+
+    assert short_width < panel.width() <= panel.MAX_WIDTH
+    assert panel.rows[task.id].label.toolTip() == "修改论文第三部分机制分析并整理稳健性回归结果 · 22:00"
+    assert panel.rows[task.id].label.text().endswith("…")
+    assert panel.x() != 0 or panel.y() != 0
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_hourly_unlocks_never_override_manual_outfit_selection(monkeypatch) -> None:
     """小时成长线只解锁娃衣，不能把用户选好的外观强行换掉。"""
     app, window = _create_window()
