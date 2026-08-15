@@ -207,7 +207,15 @@ class HttpSocialBackend:
             except Exception:
                 pass
 
-    def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False) -> Any:
+    def _raw(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        authenticated: bool = False,
+        extra_headers: dict[str, str] | None = None,
+    ) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.client_key:
@@ -217,6 +225,8 @@ class HttpSocialBackend:
             if not self.session:
                 raise SocialError("请先登录搭子自习室。")
             headers["Authorization"] = f"Bearer {self.session.access_token}"
+        if extra_headers:
+            headers.update({str(key): str(value) for key, value in extra_headers.items()})
         request = urllib.request.Request(f"{self.base_url}{path}", data=payload, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=_social_request_timeout()) as response:
@@ -359,7 +369,17 @@ class HttpSocialBackend:
         body = {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
         if self.transport == "direct":
             body["user_id"] = self.session.user_id
-            self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True)
+            # PostgREST only turns the on_conflict query into an upsert when
+            # merge-duplicates is explicitly requested. Without this header,
+            # every direct heartbeat after the first one fails with a primary
+            # key violation and peers keep seeing this user as offline.
+            self._raw(
+                "POST",
+                "/rest/v1/lili_focus_presence?on_conflict=user_id",
+                body,
+                authenticated=True,
+                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+            )
         else:
             self._raw("POST", "/presence/heartbeat", body, authenticated=True)
 

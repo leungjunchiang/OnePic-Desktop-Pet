@@ -183,8 +183,8 @@ def test_http_backend_uses_direct_supabase_paths():
             super().__init__("https://supabase.example.test", client_key="sb_publishable_test", persist_tokens=False, transport="direct")
             self.calls = []
 
-        def _raw(self, method, path, body=None, *, authenticated=False):
-            self.calls.append((method, path, body, authenticated))
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+            self.calls.append((method, path, body, authenticated, extra_headers))
             if path.startswith("/auth/v1/token"):
                 return {"access_token": "a", "refresh_token": "r", "expires_in": 3600, "user": {"id": "u"}}
             return {}
@@ -196,9 +196,27 @@ def test_http_backend_uses_direct_supabase_paths():
     backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
     paths = [call[1] for call in backend.calls]
     assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/lili_focus_presence?on_conflict=user_id"]
-    heartbeat_body = backend.calls[-1][2]
+    heartbeat_call = backend.calls[-1]
+    heartbeat_body = heartbeat_call[2]
     assert "last_seen" not in heartbeat_body
     assert "updated_at" not in heartbeat_body
+    assert heartbeat_call[4] == {"Prefer": "resolution=merge-duplicates,return=minimal"}
+
+
+def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__("https://supabase.example.test", client_key="sb_publishable_test", persist_tokens=False, transport="direct")
+            self.headers = None
+            self.session = SocialSession("a", "r", "u", 9_999_999_999)
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+            self.headers = extra_headers
+            return {}
+
+    backend = Recording()
+    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
+    assert backend.headers == {"Prefer": "resolution=merge-duplicates,return=minimal"}
 
 
 def test_presence_freshness_is_server_authoritative_in_all_relays():

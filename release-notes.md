@@ -1,3 +1,8 @@
+# Lili v0.22.23
+
+- Fixed Supabase Direct presence heartbeats by adding the required PostgREST merge-duplicates preference to `lili_focus_presence` upserts. Direct clients no longer hit the primary-key duplicate error after the first heartbeat, so active buddies correctly remain online and room focus counts update.
+- Added regression coverage for the direct heartbeat upsert header. CloudBase and Edge relay behavior remains unchanged.
+
 # Lili v0.22.22
 
 - Fixed false offline buddy status by making Supabase the authority for `last_seen` and room session timestamps. Desktop, CloudBase proxy, Edge relay, and Cloudflare relay no longer trust a skewed client clock.
