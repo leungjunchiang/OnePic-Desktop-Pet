@@ -1,3 +1,12 @@
+# Lili v0.22.25
+
+- Fixed idle recovery duration: the five-minute setting is only the automatic-pause threshold; the recovery dialog now reports the full elapsed absence.
+- Kept idle recovery as one reusable, one-shot decision window instead of repeatedly opening dialogs.
+- Added a local, block-indexed Chen Chusheng knowledge base with relationship and song catalogs.
+- Added high-confidence story triggers with cooldowns and calmer, slower Lili companion replies.
+- Injected the short Lili persona on every AI request and only retrieved relevant knowledge blocks.
+- Added regression tests for idle duration, selective retrieval, ten story conversations, and story cooldown behavior.
+
 # Lili v0.22.24
 
 - Room activity timestamps are now rendered consistently in Beijing time (UTC+8), regardless of the computer's local timezone.
