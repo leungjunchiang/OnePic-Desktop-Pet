@@ -35,6 +35,21 @@ class SignedInClient:
         }
 
 
+class OfflineCachedClient(SignedInClient):
+    def dashboard(self):
+        data = super().dashboard()
+        data.update(
+            {
+                "rooms": [],
+                "room_people": [],
+                "_connection_state": "OFFLINE",
+                "_sync_offline": True,
+                "_sync_age_minutes": 1,
+            }
+        )
+        return data
+
+
 class RoomClient(SignedInClient):
     def dashboard(self):
         data = super().dashboard()
@@ -138,4 +153,34 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     assert "正在工作" in dialog.room_members.itemWidget(dialog.room_members.item(1)).findChildren(QLabel)[0].text()
     assert dialog.room_activity.count() == 2
     assert "35分钟" in dialog.room_goal.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_offline_dashboard_does_not_mask_local_focus_when_no_room_is_selected() -> None:
+    """A room sync failure must not look like a local focus failure."""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(OfflineCachedClient())
+    dialog.set_focus_snapshot(
+        {"status": "focus", "session_seconds": 30, "today_seconds": 30}
+    )
+    data = dialog.client.dashboard()
+    dialog.apply_dashboard(data)
+    app.processEvents()
+
+    assert "当前无法连接自习室" not in dialog.status_label.text()
+    assert "本地专注已开始" in dialog.status_label.text()
+
+    # Once a room is explicitly selected, the same offline payload should keep
+    # the room-specific warning so a real room outage remains visible.
+    dialog.current_room_id = "room-1"
+    dialog._room_selection_explicit = True
+    room_data = dict(data)
+    room_data["rooms"] = [
+        {"id": "room-1", "name": "安静工作间", "members": 1, "invite_code": "ROOM1234"}
+    ]
+    dialog.apply_dashboard(room_data)
+    app.processEvents()
+    assert "当前无法连接自习室" in dialog.status_label.text()
+
     dialog.close(); dialog.deleteLater(); app.processEvents()

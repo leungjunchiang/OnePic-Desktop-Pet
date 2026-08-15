@@ -2267,10 +2267,19 @@ class PetWindow(QWidget):
         """Keep the pet quiet while making an unavailable room understandable."""
 
         if self._social_dialog is not None:
-            self._social_dialog._set_status(
-                f"自习室暂时离线：{message}"
-                "；六毛仍会本地计时，网络恢复后自动重试。"
-            )
+            if self._social_dialog.current_room_id:
+                self._social_dialog._set_status(
+                    f"自习室暂时离线：{message}"
+                    "；六毛仍会本地计时，网络恢复后自动重试。"
+                )
+            elif self.focus_session.snapshot().is_running:
+                self._social_dialog._set_status(
+                    "本地专注已开始；你还没有加入自习室，搭子状态会在网络恢复后自动同步。"
+                )
+            else:
+                self._social_dialog._set_status(
+                    "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
+                )
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""

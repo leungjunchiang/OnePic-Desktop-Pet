@@ -1448,6 +1448,7 @@ class SocialHubDialog(QDialog):
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
         rooms = list(self.data.get("rooms") or [])
         previous_room_id = self.current_room_id
+        room_was_selected = bool(previous_room_id)
         self._applying_dashboard = True
         # Rebuilding the list is an internal render operation.  Suppress the
         # transient "selection cleared" and "selection restored" signals;
@@ -1585,9 +1586,28 @@ class SocialHubDialog(QDialog):
         if self.data.get("_sync_offline") or state == "OFFLINE":
             age = int(self.data.get("_sync_age_minutes") or 0)
             age_text = f"约 {age} 分钟前" if age else "刚才"
-            self._set_status(
-                f"当前无法连接自习室，已显示{age_text}的本地状态；网络恢复后会自动同步。"
-            )
+            # Local focus is independent from room synchronization.  A focus
+            # click can legitimately happen while the user has not selected a
+            # room, so an unavailable dashboard must not make the local timer
+            # look broken or claim that a room connection is required.
+            if room_was_selected or self.current_room_id:
+                self._set_status(
+                    f"当前无法连接自习室，已显示{age_text}的本地状态；网络恢复后会自动同步。"
+                )
+            else:
+                local_status = self._focus_snapshot
+                if isinstance(local_status, dict):
+                    local_focus_active = str(local_status.get("status") or "") == "focus"
+                else:
+                    local_focus_active = bool(getattr(local_status, "is_running", False))
+                if local_focus_active:
+                    self._set_status(
+                        "本地专注已开始；你还没有加入自习室，搭子状态会在网络恢复后自动同步。"
+                    )
+                else:
+                    self._set_status(
+                        "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
+                    )
         elif state == "DEGRADED":
             self._set_status("自习室已连接，实时同步暂时不可用，继续重新连接。")
         elif state == "ONLINE":

@@ -1324,6 +1324,20 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return self._manager.signed_in
 
     @property
+    def session(self) -> SocialSession | None:
+        """Expose the active Supabase session to local profile sync helpers.
+
+        ``SupabaseFirstSocialClient`` owns the route manager, while the
+        session itself lives on the currently active HTTP transport.  The
+        desktop window needs the user id to persist ``owner_nickname`` after a
+        local rename; without this bridge that sync silently returned before
+        sending the profile update.
+        """
+
+        active = getattr(self._manager, "active", None)
+        return getattr(active, "session", None)
+
+    @property
     def connection_state(self) -> str:
         return self.connection.state
 
