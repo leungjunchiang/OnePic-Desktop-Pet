@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lili-desktop-pet"
 version = "0.22.23"
-description = "绂荤嚎浼樺厛銆佸彲杩炴帴 Codex銆丆laude Code銆丏eepSeek 涓?Kimi 鐨?Lili 鍏瘺妗岄潰宸ヤ綔鎼瓙銆?
+description = "离线优先、可连接 Codex、Claude Code、DeepSeek 与 Kimi 的 Lili 六毛桌面工作搭子。"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
@@ -28,4 +28,3 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
