@@ -209,9 +209,14 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
     assert memory.todos.get(task.id).completed is True
     assert panel.rows[task.id].checkbox.isChecked() is True
     panel.set_collapsed(True)
+    app.processEvents()
     assert panel.collapsed is True
-    assert panel.rows_scroll.isVisible() is False
+    assert panel.rows_scroll.isVisible() is True
+    assert set(panel.rows) == {task.id}
+    assert panel.rows[task.id].label.isVisible()
+    assert panel.expand_button.isVisible() is False
     panel.set_collapsed(False)
+    app.processEvents()
     assert panel.rows_scroll.isVisible() is True
     panel.close()
     panel.deleteLater()
@@ -237,7 +242,20 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     panel = window._compact_todo_panel
     assert panel is not None
     assert len(panel.rows) == 3
-    assert panel.rows_scroll.height() <= panel.MAX_COLLAPSED_ROWS * 35 + 2
+    assert panel.rows_scroll.height() <= panel.MAX_EXPANDED_ROWS * 35 + 2
+    panel.set_collapsed(True)
+    app.processEvents()
+    assert len(panel.rows) == 1
+    assert panel.expand_button.isVisible()
+    panel.set_collapsed(False)
+    app.processEvents()
+    assert len(panel.rows) == 3
+    row = next(iter(panel.rows.values()))
+    assert row.more_button.isEnabled()
+    assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    more_spy = QSignalSpy(row.more_requested)
+    row.more_button.click()
+    assert more_spy.count() == 1
     before = panel.pos()
     # Keep the second position inside the offscreen test monitor.  The
     # companion is clamped to the available geometry, so moving farther

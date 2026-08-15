@@ -961,8 +961,7 @@ class PetWindow(QWidget):
         if self._compact_todo_panel is not None:
             if self._restore_compact_todos_after_show:
                 self._compact_todo_panel.show()
-            if self._compact_todo_panel.isVisible():
-                self._position_compact_todos()
+        self._position_accessories()
         QTimer.singleShot(0, self._ensure_on_top)
 
     def _ensure_on_top(self) -> None:
@@ -1082,10 +1081,7 @@ class PetWindow(QWidget):
         """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
 
         super().moveEvent(event)
-        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
-            self._position_speech_bubble()
-        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
-            self._position_compact_todos()
+        self._position_accessories()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
@@ -1135,16 +1131,14 @@ class PetWindow(QWidget):
             screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
-        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
-            QTimer.singleShot(0, self._position_compact_todos)
+        QTimer.singleShot(0, self._position_accessories)
 
     def _on_dpi_changed(self, _dpi: float) -> None:
         """显示器缩放发生变化时刷新当前帧。"""
 
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
-        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
-            QTimer.singleShot(0, self._position_compact_todos)
+        QTimer.singleShot(0, self._position_accessories)
 
     def _schedule(self, decision: StateDecision) -> None:
         """应用状态决策并安排下一次状态切换。"""
@@ -1542,7 +1536,7 @@ class PetWindow(QWidget):
         )
         self.move(self._constrained_position(target))
         self._refresh_pixmap()
-        self._position_speech_bubble()
+        self._position_accessories()
 
     def return_to_primary_screen(self) -> None:
         """将宠物重新放到主屏幕右下角。"""
@@ -1821,6 +1815,7 @@ class PetWindow(QWidget):
             self._today_note_window.show()
         self._today_note_window.raise_()
         self._today_note_window.activateWindow()
+        self._position_sticky_note()
 
     def show_compact_todos(self) -> None:
         """Show the frameless Todo strip directly below the pet."""
@@ -1855,11 +1850,66 @@ class PetWindow(QWidget):
         if screen is None:
             return
         available = screen.availableGeometry()
-        x = self.x() + (self.width() - panel.width()) // 2
-        y = self.y() + self.height() + 8
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            left = self.x()
+            right = self.x() + self.width()
+            top = self.y()
+            bottom = self.y() + self.height()
+        else:
+            left = self.x() + visible_bounds.left()
+            right = self.x() + visible_bounds.right() + 1
+            top = self.y() + visible_bounds.top()
+            bottom = self.y() + visible_bounds.bottom() + 1
+        gap = 8
+        x = (left + right - panel.width()) // 2
+        y = bottom + gap
+        # Prefer the requested below-pet relationship.  If the pet is near
+        # the taskbar, place the accessory above it instead of overlapping
+        # the pet or leaving it at an unrelated screen coordinate.
+        if y + panel.height() > available.bottom() + 1:
+            above = top - panel.height() - gap
+            if above >= available.top():
+                y = above
         x = max(available.left(), min(x, available.right() - panel.width() + 1))
         y = max(available.top(), min(y, available.bottom() - panel.height() + 1))
         panel.move(x, y)
+
+    def _position_sticky_note(self) -> None:
+        """Place the detailed 便利贴 beside the pet, with screen-edge fallback."""
+
+        note = self._today_note_window
+        if note is None or not note.isVisible():
+            return
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            left = self.x()
+            right = self.x() + self.width()
+            top = self.y()
+        else:
+            left = self.x() + visible_bounds.left()
+            right = self.x() + visible_bounds.right() + 1
+            top = self.y() + visible_bounds.top()
+        gap = 10
+        x = right + gap
+        if x + note.width() > available.right() + 1:
+            x = left - note.width() - gap
+        x = max(available.left(), min(x, available.right() - note.width() + 1))
+        y = max(available.top(), min(top, available.bottom() - note.height() + 1))
+        note.move(x, y)
+
+    def _position_accessories(self) -> None:
+        """Reflow every pet accessory from the pet as its single anchor."""
+
+        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
+            self._position_speech_bubble()
+        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
+            self._position_compact_todos()
+        self._position_sticky_note()
 
     def hide_today_note(self) -> None:
         self._restore_compact_todos_after_show = False
