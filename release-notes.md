@@ -1,3 +1,12 @@
+# Lili v0.22.33
+
+- Added a local-first time-memory system for today's note, Todo items, reminders, work-session attribution, daily check-out records, weekly/monthly statistics, and rest days.
+- Added local Countdown, Anniversary, and curated Timeline modules with shared Beijing/local-time date calculations, restart-safe atomic JSON persistence, and idempotent milestone records.
+- Added a small 今日小纸条 window with show/hide/fold/task-start/task-complete/check-out/rest-day actions, plus a non-resident 我的时光 review window for countdowns, anniversaries, and timeline events.
+- Connected AI chat to real local time-memory context and explicit structured actions; the model can interpret task/countdown/anniversary/timeline requests, while local code performs all persistence, date math, reminders, and queries.
+- Connected focus sessions to selected tasks and daily records. Normal application exit now persists the final running segment before pausing the shared timer.
+- Added 19 pure-Python regression tests covering persistence, date boundaries, task attribution, reminders, check-in/check-out, statistics, countdowns, anniversaries, timeline idempotency, structured actions, and restart behavior.
+
 # Lili v0.22.25
 
 - Fixed idle recovery duration: the five-minute setting is only the automatic-pause threshold; the recovery dialog now reports the full elapsed absence.

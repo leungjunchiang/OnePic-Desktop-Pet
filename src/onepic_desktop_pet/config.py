@@ -100,6 +100,10 @@ class PetSettings:
     local_lyrics_path: str = ""
     lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
+    today_note_display_mode: str = "pending"
+    today_note_always_on_top: bool = False
+    today_note_autoshow: bool = False
+    today_note_folded: bool = False
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -225,6 +229,11 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.local_lyrics_path = str(settings.local_lyrics_path).replace("\x00", "").strip()[:1200]
     settings.lyric_interval_minutes = min(120, max(2, int(settings.lyric_interval_minutes)))
     settings.equipped_outfit = str(settings.equipped_outfit)[:60]
+    if settings.today_note_display_mode not in {"always", "pending", "hidden"}:
+        settings.today_note_display_mode = "pending"
+    settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
+    settings.today_note_autoshow = bool(settings.today_note_autoshow)
+    settings.today_note_folded = bool(settings.today_note_folded)
     return settings
 
 
@@ -281,6 +290,10 @@ def load_settings(
                 "local_lyrics_path",
                 "lyric_interval_minutes",
                 "equipped_outfit",
+                "today_note_display_mode",
+                "today_note_always_on_top",
+                "today_note_autoshow",
+                "today_note_folded",
             }
         }
     )
@@ -335,6 +348,10 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "local_lyrics_path": settings.local_lyrics_path,
         "lyric_interval_minutes": settings.lyric_interval_minutes,
         "equipped_outfit": settings.equipped_outfit,
+        "today_note_display_mode": settings.today_note_display_mode,
+        "today_note_always_on_top": settings.today_note_always_on_top,
+        "today_note_autoshow": settings.today_note_autoshow,
+        "today_note_folded": settings.today_note_folded,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

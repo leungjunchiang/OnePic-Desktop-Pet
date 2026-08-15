@@ -147,6 +147,8 @@ from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
+from .time_memory import TimeMemory
+from .today_note import TimeMemoryWindow, TodayNoteWindow
 
 
 LOGGER = logging.getLogger(__name__)
@@ -277,6 +279,11 @@ class PetWindow(QWidget):
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.time_memory = TimeMemory(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self._today_note_window: TodayNoteWindow | None = None
+        self._time_memory_window: TimeMemoryWindow | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -346,6 +353,7 @@ class PetWindow(QWidget):
             self.companion,
             self.work_timer.status_text,
             lambda: self.work_timer.today_seconds() // 3600,
+            local_context=self.time_memory.summary.context,
         )
         self.chat_manager = ChatManager(
             self.settings,
@@ -353,6 +361,8 @@ class PetWindow(QWidget):
             self.agent_manager,
             self.offline_dialogue_manager,
             self,
+            local_context_provider=self.time_memory.summary.context,
+            action_executor=self.time_memory.actions,
         )
         self.music_provider_manager = MusicProviderManager(self.settings)
         self.music_controller = MusicController(
@@ -1080,6 +1090,10 @@ class PetWindow(QWidget):
         self.photo_bubble.close()
         self.speech_bubble.close()
         self._buddy_visit_window.close()
+        if self._today_note_window is not None:
+            self._today_note_window.close()
+        if self._time_memory_window is not None:
+            self._time_memory_window.close()
         if self._social_thread is not None and self._social_thread.isRunning():
             self._social_thread.wait(2500)
         if self._media_player is not None:
@@ -1634,6 +1648,9 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         self._reset_idle_episode()
         self._focus_quality_tracker.start(active_application_category())
+        # The paper window selects a real Todo; keep the existing focus
+        # analytics task for compatibility, but attribute new seconds to the
+        # same local task record as soon as the session starts.
         started = self.focus_session.start()
         if started:
             self.set_paused(True)
@@ -1656,6 +1673,11 @@ class PetWindow(QWidget):
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause()
         if was_running:
+            self.time_memory.record_focus(
+                session_seconds,
+                completed_session=False,
+                started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
+            )
             self._last_focus_quality = self.focus_analytics.record_session(
                 session_seconds,
                 started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
@@ -1702,6 +1724,11 @@ class PetWindow(QWidget):
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
+        self.time_memory.record_focus(
+            session_seconds,
+            completed_session=True,
+            started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
+        )
         self._award_focus_rewards()
         self._last_focus_quality = self.focus_analytics.record_session(
             session_seconds,
@@ -1730,6 +1757,90 @@ class PetWindow(QWidget):
         if room_id:
             self._record_social_room_event(room_id, "focus_finish")
         return reply
+
+    def show_today_note(self) -> None:
+        """Open the single non-modal paper window and refresh its local facts."""
+
+        self._record_user_interaction()
+        if self._today_note_window is None:
+            self._today_note_window = TodayNoteWindow(
+                self.time_memory,
+                self,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            if getattr(self.settings, "today_note_always_on_top", False):
+                self._today_note_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            if getattr(self.settings, "today_note_folded", False):
+                self._today_note_window.toggle_fold()
+            self._today_note_window.start_requested.connect(self._start_todo_from_note)
+            self._today_note_window.select_requested.connect(self._select_todo_from_note)
+            self._today_note_window.complete_requested.connect(self._complete_todo_from_note)
+            self._today_note_window.checkout_requested.connect(self.checkout_today)
+            self._today_note_window.rest_requested.connect(self.rest_today)
+            self._today_note_window.memory_requested.connect(self.show_time_memory)
+        self._today_note_window.refresh()
+        if self._today_note_window.isMinimized():
+            self._today_note_window.showNormal()
+        else:
+            self._today_note_window.show()
+        self._today_note_window.raise_()
+        self._today_note_window.activateWindow()
+
+    def hide_today_note(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+
+    def _select_todo_from_note(self, task_id: str) -> None:
+        item = self.time_memory.todos.get(task_id)
+        if item is None:
+            return
+        self.time_memory.select_task(item.id)
+        self.focus_analytics.set_current_task(item.title)
+
+    def _start_todo_from_note(self, task_id: str) -> None:
+        self._select_todo_from_note(task_id)
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+
+    def _complete_todo_from_note(self, task_id: str) -> None:
+        self.time_memory.complete_task(task_id)
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+        self.show_speech("这项做完了，给你记上。", 4200)
+
+    def checkout_today(self) -> None:
+        """Persist a real end-of-day record without requiring network access."""
+
+        if self.work_timer.is_running:
+            self.pause_work_timer(reason="checkout")
+        summary = self.time_memory.finish_today()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 30_000)
+        self.show_speech(
+            f"今天收工：专注{summary['focus']}，完成{summary['completed_tasks']}/{summary['total_tasks']}项。",
+            6200,
+        )
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def rest_today(self) -> None:
+        self.time_memory.records.set_rest_day(True)
+        self._set_temporary_activity("tea", 20_000)
+        self.show_speech("行，那今天不算旷工。", 4200)
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def show_time_memory(self) -> None:
+        if self._time_memory_window is None:
+            self._time_memory_window = TimeMemoryWindow(self.time_memory, self)
+        self._time_memory_window.refresh()
+        if self._time_memory_window.isMinimized():
+            self._time_memory_window.showNormal()
+        else:
+            self._time_memory_window.show()
+        self._time_memory_window.raise_()
+        self._time_memory_window.activateWindow()
 
     def show_work_time(self) -> None:
         """显示今日累计工作时长和当前计时状态。"""
@@ -1793,6 +1904,7 @@ class PetWindow(QWidget):
     def _work_timer_tick(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
+        self._check_local_reminders()
         self.work_timer.checkpoint()
         self.focus_session.refresh()
         self._award_focus_rewards()
@@ -1818,6 +1930,16 @@ class PetWindow(QWidget):
         reply = self.companion.work_reminder(reminder_kind, duration)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 7200)
+
+    def _check_local_reminders(self) -> None:
+        """Run the local reminder queue once per existing one-second timer."""
+
+        if detect_quiet_mode().blocked:
+            return
+        for reminder in self.time_memory.reminders.due()[:3]:
+            self.time_memory.reminders.mark_notified(reminder.id)
+            self._set_temporary_activity("curious", 12_000)
+            self.show_speech(f"提醒：{reminder.title}", 5600)
 
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
@@ -1866,7 +1988,18 @@ class PetWindow(QWidget):
         self._reset_idle_episode()
         if hasattr(self, "work_timer"):
             if self.work_timer.is_running:
-                self.daily_stats.record_focus(self.work_timer.session_seconds())
+                session_seconds = self.work_timer.session_seconds()
+                started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
+                # Persist the same final running segment in the local time-memory
+                # store before the shared timer is paused.  Without this, a
+                # normal app close could update the legacy daily card while
+                # losing the Todo attribution and daily check-in record.
+                self.time_memory.record_focus(
+                    session_seconds,
+                    completed_session=False,
+                    started_at=started_at,
+                )
+                self.daily_stats.record_focus(session_seconds)
             self.focus_session.pause()
             if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
                 self._generate_daily_report(show_dialog=False)
@@ -2199,6 +2332,11 @@ class PetWindow(QWidget):
         self.show_speech(text, 5200)
 
     def _set_focus_task(self, title: str, minutes: int) -> None:
+        task = self.time_memory.todos.find(title)
+        if task is None and str(title).strip():
+            task = self.time_memory.todos.add(str(title).strip())
+        if task is not None:
+            self.time_memory.select_task(task.id)
         due_at = None
         if int(minutes) > 0:
             due_at = (datetime.now().astimezone() + timedelta(minutes=int(minutes))).isoformat()
@@ -2925,6 +3063,22 @@ class PetWindow(QWidget):
             pause_work = QAction("暂停/结束工作", self)
             pause_work.triggered.connect(self.show_work_controls)
             work_menu.addAction(pause_work)
+        paper_menu = work_menu.addMenu("今日小纸条")
+        show_paper = QAction("显示小纸条", self)
+        show_paper.triggered.connect(self.show_today_note)
+        paper_menu.addAction(show_paper)
+        hide_paper = QAction("隐藏小纸条", self)
+        hide_paper.triggered.connect(self.hide_today_note)
+        paper_menu.addAction(hide_paper)
+        add_paper = QAction("添加待办…", self)
+        add_paper.triggered.connect(self.show_today_note)
+        paper_menu.addAction(add_paper)
+        today_paper = QAction("查看今天", self)
+        today_paper.triggered.connect(self.show_today_note)
+        paper_menu.addAction(today_paper)
+        memory_action = QAction("我的时光…", self)
+        memory_action.triggered.connect(self.show_time_memory)
+        work_menu.addAction(memory_action)
         for label, callback in (("查看今日累计", self.show_work_time), ("查看今日成长", self.show_daily_growth), ("查看陪伴报告", self.show_daily_report), (f"打开{self._pet_name()}相册", self.open_daily_album)):
             action = QAction(label, self)
             action.triggered.connect(callback)
@@ -3142,6 +3296,16 @@ class PetWindow(QWidget):
         focus_social = QAction("打开搭子自习室…", self)
         focus_social.triggered.connect(self.open_social_hub)
         focus_group.addAction(focus_social)
+        paper_menu = focus_group.addMenu("今日小纸条")
+        paper_show = QAction("显示小纸条", self)
+        paper_show.triggered.connect(self.show_today_note)
+        paper_menu.addAction(paper_show)
+        paper_hide = QAction("隐藏小纸条", self)
+        paper_hide.triggered.connect(self.hide_today_note)
+        paper_menu.addAction(paper_hide)
+        timeline_action = QAction("我的时光…", self)
+        timeline_action.triggered.connect(self.show_time_memory)
+        focus_group.addAction(timeline_action)
 
         ai_action = QAction("AI 与陪伴设置…", self)
         ai_action.triggered.connect(
