@@ -117,7 +117,7 @@ jobs:
             gh release create "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "Lili $release_tag - Direct-first route and stable login" \
+              --title "Lili $release_tag - Pet-attached compact Todos" \
               --generate-notes \
-              --notes "Supabase Direct is probed at startup and before login. CloudBase is used only after network-level failures. Saved route state is telemetry only, authentication errors do not switch routes, and failed account switches do not retain an old session."
+              --notes "Compact Todos now render as a frameless strip directly below 六毛 and follow the pet. The standalone 便利贴 remains separate, while Todo completion and editing stay local and lightweight."
           fi

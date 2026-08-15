@@ -83,7 +83,7 @@ class DesktopPetApplication:
         menu.addAction(social_action)
 
         paper_action = QAction("便利贴…", menu)
-        paper_action.triggered.connect(self.window.show_today_note)
+        paper_action.triggered.connect(self.window.show_sticky_note)
         menu.addAction(paper_action)
 
         ai_settings_action = QAction("AI 与陪伴设置…", menu)

@@ -149,6 +149,7 @@ from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
 from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
+from .compact_todo import CompactTodoPanel
 
 
 LOGGER = logging.getLogger(__name__)
@@ -283,6 +284,8 @@ class PetWindow(QWidget):
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self._today_note_window: TodayNoteWindow | None = None
+        self._compact_todo_panel: CompactTodoPanel | None = None
+        self._restore_compact_todos_after_show = False
         self._time_memory_window: TimeMemoryWindow | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
@@ -954,6 +957,11 @@ class PetWindow(QWidget):
             handle.screenChanged.connect(self._on_screen_changed)
             self._screen_change_connected = True
         self._on_screen_changed(handle.screen() if handle else None)
+        if self._compact_todo_panel is not None:
+            if self._restore_compact_todos_after_show:
+                self._compact_todo_panel.show()
+            if self._compact_todo_panel.isVisible():
+                self._position_compact_todos()
         QTimer.singleShot(0, self._ensure_on_top)
 
     def _ensure_on_top(self) -> None:
@@ -1044,6 +1052,10 @@ class PetWindow(QWidget):
             bubble.move(bubble_position)
             if visible:
                 bubble.show()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.set_companion_topmost(enabled)
+            if self._compact_todo_panel.isVisible():
+                self._position_compact_todos()
         if was_visible:
             self.show()
             target_position = QPoint(position)
@@ -1071,12 +1083,8 @@ class PetWindow(QWidget):
         super().moveEvent(event)
         if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
             self._position_speech_bubble()
-        if (
-            getattr(self, "_today_note_window", None) is not None
-            and self._today_note_window.isVisible()
-            and getattr(self._today_note_window, "mode", "detailed") == "compact"
-        ):
-            self._place_today_note_below_pet()
+        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
+            self._position_compact_todos()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
@@ -1085,6 +1093,9 @@ class PetWindow(QWidget):
         self.speech_bubble.hide()
         self.work_controls.hide()
         self.quick_panel.hide()
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
+            self._compact_todo_panel.hide()
         super().hideEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -1098,6 +1109,8 @@ class PetWindow(QWidget):
         self._buddy_visit_window.close()
         if self._today_note_window is not None:
             self._today_note_window.close()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.close()
         if self._time_memory_window is not None:
             self._time_memory_window.close()
         if self._social_thread is not None and self._social_thread.isRunning():
@@ -1121,12 +1134,16 @@ class PetWindow(QWidget):
             screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
+        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
+            QTimer.singleShot(0, self._position_compact_todos)
 
     def _on_dpi_changed(self, _dpi: float) -> None:
         """显示器缩放发生变化时刷新当前帧。"""
 
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
+        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
+            QTimer.singleShot(0, self._position_compact_todos)
 
     def _schedule(self, decision: StateDecision) -> None:
         """应用状态决策并安排下一次状态切换。"""
@@ -1765,11 +1782,20 @@ class PetWindow(QWidget):
         return reply
 
     def show_today_note(self) -> None:
-        """Open the single non-modal paper window and refresh its local facts."""
+        """Open the configured surface: attached Todos or the standalone 便利贴."""
+
+        if str(getattr(self.settings, "today_note_mode", "detailed")) == "compact":
+            self.show_compact_todos()
+        else:
+            self.show_sticky_note()
+
+    def show_sticky_note(self) -> None:
+        """Open the independent free-form 便利贴 window in detailed mode."""
 
         self._record_user_interaction()
-        configured_mode = str(getattr(self.settings, "today_note_mode", "detailed"))
-        display_mode = configured_mode if configured_mode in {"detailed", "compact"} else "detailed"
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_show = False
+            self._compact_todo_panel.hide()
         if self._today_note_window is None:
             self._today_note_window = TodayNoteWindow(
                 self.time_memory,
@@ -1786,36 +1812,80 @@ class PetWindow(QWidget):
             self._today_note_window.checkout_requested.connect(self.checkout_today)
             self._today_note_window.rest_requested.connect(self.rest_today)
             self._today_note_window.memory_requested.connect(self.show_time_memory)
-        self._today_note_window.set_mode(display_mode, persist=False)
+        self._today_note_window.set_mode("detailed", persist=False)
         self._today_note_window.refresh()
         if self._today_note_window.isMinimized():
             self._today_note_window.showNormal()
         else:
             self._today_note_window.show()
-        if display_mode == "compact":
-            self._place_today_note_below_pet()
         self._today_note_window.raise_()
         self._today_note_window.activateWindow()
 
-    def _place_today_note_below_pet(self) -> None:
-        """Keep the compact note visually attached to the pet without covering it."""
+    def show_compact_todos(self) -> None:
+        """Show the frameless Todo strip directly below the pet."""
 
-        note = self._today_note_window
-        if note is None:
+        self._record_user_interaction()
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+        self._restore_compact_todos_after_show = True
+        if self._compact_todo_panel is None:
+            self._compact_todo_panel = CompactTodoPanel(
+                self.time_memory,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            self._compact_todo_panel.task_selected.connect(self._select_todo_from_note)
+            self._compact_todo_panel.task_checked.connect(self._set_todo_completion_from_panel)
+            self._compact_todo_panel.task_changed.connect(self._refresh_todo_surfaces)
+            self._compact_todo_panel.set_companion_topmost(
+                bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
+            )
+        self._compact_todo_panel.refresh()
+        self._compact_todo_panel.show()
+        self._position_compact_todos()
+
+    def _position_compact_todos(self) -> None:
+        """Keep the Todo strip attached below the visible pet bounds."""
+
+        panel = self._compact_todo_panel
+        if panel is None:
             return
         screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
         if screen is None:
             return
         available = screen.availableGeometry()
-        x = self.x() + (self.width() - note.width()) // 2
+        x = self.x() + (self.width() - panel.width()) // 2
         y = self.y() + self.height() + 8
-        x = max(available.left(), min(x, available.right() - note.width() + 1))
-        y = max(available.top(), min(y, available.bottom() - note.height() + 1))
-        note.move(x, y)
+        x = max(available.left(), min(x, available.right() - panel.width() + 1))
+        y = max(available.top(), min(y, available.bottom() - panel.height() + 1))
+        panel.move(x, y)
 
     def hide_today_note(self) -> None:
+        self._restore_compact_todos_after_show = False
         if self._today_note_window is not None:
             self._today_note_window.hide()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.hide()
+
+    def hide_compact_todos(self) -> None:
+        self._restore_compact_todos_after_show = False
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.hide()
+
+    def add_compact_todo(self) -> None:
+        self.show_compact_todos()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.add_task()
+
+    def hide_sticky_note(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+
+    def _refresh_todo_surfaces(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.refresh()
 
     def _select_todo_from_note(self, task_id: str) -> None:
         item = self.time_memory.todos.get(task_id)
@@ -1849,6 +1919,21 @@ class PetWindow(QWidget):
             self.time_memory.summary.refresh_tasks()
         if self._today_note_window is not None:
             self._today_note_window.refresh()
+
+    def _set_todo_completion_from_panel(self, task_id: str, completed: bool) -> None:
+        """Reflect a compact checkbox in the real local Todo store."""
+
+        task = self.time_memory.todos.get(task_id)
+        if task is None:
+            return
+        if completed:
+            self.time_memory.complete_task(task_id)
+            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+            self.show_speech("这项做完了，给你记上。", 4200)
+        else:
+            self.time_memory.todos.complete(task_id, False)
+            self.time_memory.summary.refresh_tasks()
+        self._refresh_todo_surfaces()
 
     def checkout_today(self) -> None:
         """Persist a real end-of-day record without requiring network access."""
@@ -3103,19 +3188,23 @@ class PetWindow(QWidget):
             pause_work = QAction("暂停/结束工作", self)
             pause_work.triggered.connect(self.show_work_controls)
             work_menu.addAction(pause_work)
+        todo_menu = work_menu.addMenu("待办")
+        show_todos = QAction("显示待办", self)
+        show_todos.triggered.connect(self.show_compact_todos)
+        todo_menu.addAction(show_todos)
+        hide_todos = QAction("隐藏待办", self)
+        hide_todos.triggered.connect(self.hide_compact_todos)
+        todo_menu.addAction(hide_todos)
+        add_paper = QAction("添加待办…", self)
+        add_paper.triggered.connect(self.add_compact_todo)
+        todo_menu.addAction(add_paper)
         paper_menu = work_menu.addMenu("便利贴")
-        show_paper = QAction("显示便利贴", self)
-        show_paper.triggered.connect(self.show_today_note)
+        show_paper = QAction("打开便利贴", self)
+        show_paper.triggered.connect(self.show_sticky_note)
         paper_menu.addAction(show_paper)
         hide_paper = QAction("隐藏便利贴", self)
-        hide_paper.triggered.connect(self.hide_today_note)
+        hide_paper.triggered.connect(self.hide_sticky_note)
         paper_menu.addAction(hide_paper)
-        add_paper = QAction("添加待办…", self)
-        add_paper.triggered.connect(self.show_today_note)
-        paper_menu.addAction(add_paper)
-        today_paper = QAction("查看今天的待办", self)
-        today_paper.triggered.connect(self.show_today_note)
-        paper_menu.addAction(today_paper)
         memory_action = QAction("我的时光…", self)
         memory_action.triggered.connect(self.show_time_memory)
         work_menu.addAction(memory_action)
@@ -3336,12 +3425,22 @@ class PetWindow(QWidget):
         focus_social = QAction("打开搭子自习室…", self)
         focus_social.triggered.connect(self.open_social_hub)
         focus_group.addAction(focus_social)
+        todo_menu = focus_group.addMenu("待办")
+        todo_show = QAction("显示待办", self)
+        todo_show.triggered.connect(self.show_compact_todos)
+        todo_menu.addAction(todo_show)
+        todo_hide = QAction("隐藏待办", self)
+        todo_hide.triggered.connect(self.hide_compact_todos)
+        todo_menu.addAction(todo_hide)
+        todo_add = QAction("添加待办…", self)
+        todo_add.triggered.connect(self.add_compact_todo)
+        todo_menu.addAction(todo_add)
         paper_menu = focus_group.addMenu("便利贴")
-        paper_show = QAction("显示便利贴", self)
-        paper_show.triggered.connect(self.show_today_note)
+        paper_show = QAction("打开便利贴", self)
+        paper_show.triggered.connect(self.show_sticky_note)
         paper_menu.addAction(paper_show)
         paper_hide = QAction("隐藏便利贴", self)
-        paper_hide.triggered.connect(self.hide_today_note)
+        paper_hide.triggered.connect(self.hide_sticky_note)
         paper_menu.addAction(paper_hide)
         timeline_action = QAction("我的时光…", self)
         timeline_action.triggered.connect(self.show_time_memory)

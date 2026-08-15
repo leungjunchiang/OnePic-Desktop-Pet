@@ -1,3 +1,10 @@
+# Lili v0.22.37
+
+- Replaced the compact Todo QDialog with a frameless `CompactTodoPanel` that sits directly below 六毛 and follows pet movement across screens and DPI changes.
+- Compact mode now shows only checkbox Todo rows, optional `· HH:MM`, a tiny `⋯` task menu, a small `＋` entry, and a bounded overflow control; no title bar, note text, focus totals, room state, or statistics are rendered.
+- Kept standalone 便利贴 as a separate detailed free-form window. Right-click menus now distinguish `待办` from `便利贴`, and switching display modes routes to the correct surface.
+- Added compact-panel regression coverage for one task, three tasks, collapse state, completion preview, frameless flags, and movement coupling to the pet.
+
 # Lili v0.22.36
 
 - Separated the compact window from the 便利贴 presentation: compact mode now renders only today's checkable Todo rows and a small `＋` add entry. It no longer shows note text, focus totals, task counts, room status, or other dashboard statistics.

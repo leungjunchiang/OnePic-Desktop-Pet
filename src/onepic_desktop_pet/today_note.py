@@ -47,7 +47,11 @@ QPlainTextEdit { background:#fffdf4; border:1px solid #e3d9b9; border-radius:9px
 
 
 class TodayNoteWindow(QDialog):
-    """The standalone 便利贴, or its task-only compact view."""
+    """The standalone free-form 便利贴 window.
+
+    Compact Todos are intentionally implemented by ``CompactTodoPanel``;
+    this window never renders the compact Todo surface.
+    """
 
     start_requested = Signal(str)
     complete_requested = Signal(str)
@@ -72,8 +76,7 @@ class TodayNoteWindow(QDialog):
         self.settings = settings
         self.save_settings_callback = save_settings_callback
         self.hide_completed = bool(getattr(settings, "today_note_hide_completed", False))
-        configured_mode = str(getattr(settings, "today_note_mode", "detailed"))
-        self.mode = configured_mode if configured_mode in {"detailed", "compact"} else "detailed"
+        self.mode = "detailed"
         self.selected_task_id = str(memory.current_task_id or "")
         self._refreshing_tasks = False
         self._loading_note = False
@@ -206,18 +209,17 @@ class TodayNoteWindow(QDialog):
         return menu
 
     def _set_width_for_mode(self) -> None:
-        self.setFixedWidth(280 if self.mode == "compact" else 360)
+        self.setFixedWidth(360)
 
     def _set_mode_visibility(self) -> None:
-        compact = self.mode == "compact"
-        self.title_label.setText("今天要做" if compact else "便利贴")
-        self.important_label.setVisible(not compact)
-        self.note_editor.setVisible(not compact)
+        self.title_label.setText("便利贴")
+        self.important_label.setVisible(True)
+        self.note_editor.setVisible(True)
         self.task_list.show()
-        self.start_button.setVisible(not compact)
-        self.complete_button.setVisible(not compact)
+        self.start_button.setVisible(True)
+        self.complete_button.setVisible(True)
         self.action_widget.show()
-        self.stats_label.setVisible(not compact)
+        self.stats_label.setVisible(True)
 
     def set_mode(self, mode: str, *, persist: bool = True) -> None:
         mode = self._normalise_mode(mode)
@@ -228,6 +230,8 @@ class TodayNoteWindow(QDialog):
                     self.save_settings_callback(self.settings)
             self.hide()
             return
+        if mode == "compact":
+            mode = "detailed"
         self.mode = mode
         self._set_width_for_mode()
         if persist and self.settings is not None:
@@ -310,14 +314,6 @@ class TodayNoteWindow(QDialog):
 
     def _resize_to_content(self, task_count: int) -> None:
         self._set_width_for_mode()
-        if self.mode == "compact":
-            self.setMinimumHeight(0)
-            self.setMaximumHeight(360)
-            rows = max(1, min(8, task_count))
-            self.task_list.setFixedHeight(34 + rows * 32)
-            self.adjustSize()
-            self.resize(self.width(), max(96, min(360, self.sizeHint().height())))
-            return
         self.setMinimumHeight(300)
         self.setMaximumHeight(420)
         rows = max(1, min(5, task_count))
@@ -362,11 +358,6 @@ class TodayNoteWindow(QDialog):
         self._save_sticky_note()
 
     def _selected_id(self) -> str:
-        if self.mode == "compact":
-            selected = self.selected_task_id or str(self.memory.current_task_id or "")
-            if selected:
-                return selected
-            return next((item.id for item in self.memory.todos.today() if not item.completed), "")
         item = self.task_list.currentItem()
         return str(item.data(Qt.ItemDataRole.UserRole) or "") if item is not None else ""
 
@@ -516,15 +507,24 @@ class TodayNoteWindow(QDialog):
         if self.save_settings_callback is not None:
             self.save_settings_callback(self.settings)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, topmost.isChecked())
-        if self.settings.today_note_mode == "hidden":
+        owner = self.parentWidget()
+        selected_mode = self.settings.today_note_mode
+        if selected_mode == "hidden":
             self.hide()
+            hide_all = getattr(owner, "hide_today_note", None)
+            if callable(hide_all):
+                hide_all()
             return
-        self.set_mode(self.settings.today_note_mode, persist=False)
-        if self.settings.today_note_mode == "compact":
-            owner = self.parentWidget()
-            place_note = getattr(owner, "_place_today_note_below_pet", None)
-            if callable(place_note):
-                place_note()
+        if selected_mode == "compact":
+            self.hide()
+            show_compact = getattr(owner, "show_compact_todos", None)
+            if callable(show_compact):
+                show_compact()
+            return
+        hide_compact = getattr(owner, "hide_compact_todos", None)
+        if callable(hide_compact):
+            hide_compact()
+        self.set_mode("detailed", persist=False)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         event.ignore()

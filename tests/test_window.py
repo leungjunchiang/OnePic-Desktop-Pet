@@ -20,7 +20,7 @@ os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QDialog, QScrollArea
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QScrollArea
 
 from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
 from onepic_desktop_pet.behavior import PetState, StateDecision
@@ -30,7 +30,7 @@ from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
-from onepic_desktop_pet.today_note import TodayNoteWindow
+from onepic_desktop_pet.compact_todo import CompactTodoPanel
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -190,32 +190,59 @@ def test_chat_connected_status_is_not_rendered_twice() -> None:
     dialog.deleteLater()
 
 
-def test_compact_note_only_shows_checkable_todos_and_uses_normal_minimize(tmp_path) -> None:
+def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)
     task = memory.todos.add("整理回归结果")
-    settings = PetSettings(today_note_mode="compact")
-    note = TodayNoteWindow(memory, settings=settings)
-    note.task_checked.connect(lambda task_id, done: memory.todos.complete(task_id, done))
-    note.show()
+    panel = CompactTodoPanel(memory, settings=PetSettings(today_note_mode="compact"))
+    panel.show()
     app.processEvents()
 
-    assert note.windowTitle() == "便利贴 · 六毛"
-    assert note.title_label.text() == "今天要做"
-    assert not note.note_editor.isVisible()
-    assert not note.stats_label.isVisible()
-    assert note.task_list.count() == 1
-    assert note.task_list.item(0).checkState() == Qt.CheckState.Unchecked
-    assert note.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
+    assert panel.windowTitle() == ""
+    assert panel.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert not panel.findChildren(QLabel, "todayNoteTitle")
+    assert set(panel.rows) == {task.id}
+    assert panel.rows[task.id].checkbox.isChecked() is False
 
-    note.task_list.item(0).setCheckState(Qt.CheckState.Checked)
+    panel.rows[task.id].checkbox.setChecked(True)
     app.processEvents()
     assert memory.todos.get(task.id).completed is True
-    note.showMinimized()
+    assert panel.rows[task.id].checkbox.isChecked() is True
+    panel.set_collapsed(True)
+    assert panel.collapsed is True
+    assert panel.rows_scroll.isVisible() is False
+    panel.set_collapsed(False)
+    assert panel.rows_scroll.isVisible() is True
+    panel.close()
+    panel.deleteLater()
     app.processEvents()
-    assert note.isMinimized()
-    note.close()
-    note.deleteLater()
+
+
+def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("修改论文", time="20:00")
+    memory.todos.add("整理回归结果")
+    memory.todos.add("发材料", time="22:30")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.move(120, 120)
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None
+    assert len(panel.rows) == 3
+    assert panel.rows_scroll.height() <= panel.MAX_COLLAPSED_ROWS * 35 + 2
+    before = panel.pos()
+    window.move(260, 180)
+    app.processEvents()
+    assert panel.pos() != before
+    assert panel.y() >= window.y() + window.height()
+    window.close()
+    window.deleteLater()
     app.processEvents()
 
 
