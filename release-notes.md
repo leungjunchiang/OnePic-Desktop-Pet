@@ -1,8 +1,9 @@
-# Lili v0.22.41
+# Lili v0.22.42
 
 ## Test harness correction
 
 - Kept the compact Todo interaction regression test non-blocking while still exercising the real `⋯` button click and request-signal path.
+- Updated the pet-following regression assertion to use the visible character mask, matching the accessory layout's 8px gap instead of the transparent window rectangle.
 
 ## Compact Todo attachment and accessory layout
 

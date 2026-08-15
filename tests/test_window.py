@@ -267,7 +267,8 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     window.move(10, 20)
     app.processEvents()
     assert panel.pos() != before
-    assert panel.y() >= window.y() + window.height()
+    visible_bottom = window.y() + window.mask().boundingRect().bottom() + 1
+    assert panel.y() >= visible_bottom + 8
     window.close()
     window.deleteLater()
     app.processEvents()
