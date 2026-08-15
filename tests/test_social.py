@@ -166,6 +166,17 @@ def test_sign_in_does_not_submit_credentials_twice_before_proxy_fallback():
     assert manager.current_route == BackendRouteManager.CLOUDBASE_PROXY
 
 
+def test_production_client_exposes_active_session_for_owner_nickname_sync():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+
+    assert client.signed_in is True
+    assert client.session is direct.session
+    assert client.session.user_id == "user-1"
+
+
 def test_http_backend_uses_direct_supabase_paths():
     class Recording(HttpSocialBackend):
         def __init__(self):

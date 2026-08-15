@@ -1,3 +1,9 @@
+# Lili v0.22.21
+
+- Fixed owner nickname synchronization by exposing the active authenticated Supabase session through the route-aware social client. Existing local owner nicknames now reach the single Supabase profile source of truth, so buddies can see the intended `{owner_nickname}家的六毛` label instead of the neutral fallback.
+- Fixed offline dashboard messaging: local focus started without selecting a study room no longer appears as a failed study-room connection. A selected room still reports a real room outage and keeps the cached state visible.
+- Added regression coverage for the active-session bridge and the no-room local-focus state.
+
 # Lili v0.22.20
 
 - Startup and sign-in now probe Supabase Direct first instead of trusting a stale saved CloudBase route.
