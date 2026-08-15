@@ -109,7 +109,7 @@ def test_background_detection_updates_cache_once_without_chat_recheck(monkeypatc
     manager = ChatManager(settings, service, agents, _offline_manager())
     replies = []
     manager.reply_ready.connect(replies.append)
-    assert manager.submit("你好", [])
+    assert manager.submit("请帮我分析论文结构", [])
     assert manager._thread is not None
     assert manager._thread.wait(2000)
     app.processEvents()
@@ -152,7 +152,7 @@ def test_connected_agent_failure_marks_error_and_next_message_skips_ai() -> None
     replies = []
     manager.reply_ready.connect(replies.append)
 
-    assert manager.submit("你好", []) is True
+    assert manager.submit("请帮我分析论文结构", []) is True
     assert manager._thread is not None
     assert manager._thread.wait(2000)
     app.processEvents()
@@ -297,4 +297,3 @@ def test_pressing_enter_ten_times_only_submits_messages() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
-
