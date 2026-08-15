@@ -1,6 +1,8 @@
-"""Lili 鎼瓙鑷範瀹ょ殑鏈€灏忕ぞ浜ゅ鎴风涓庡彲鏇挎崲缃戠粶鍚庣銆?
-鍙彂閫佽处鍙疯璇併€佹樀绉般€佸叚姣涘瑙傘€佸伐浣滅姸鎬併€佺疮璁＄鏁般€佹埧闂翠笌涓查棬浜嬩欢銆傚瘑鐮佷粠涓嶄繚瀛橈紱
-鍒锋柊浠ょ墝淇濆瓨鍦ㄧ郴缁熷嚟鎹簱銆傜綉缁滃け璐ヤ笉浼氬奖鍝嶇绾挎瀹犮€佽鏃躲€丄I 鎴栨湰鍦扮礌鏉愩€?"""
+"""Lili 搭子自习室的最小社交客户端与可替换网络后端。
+
+只发送账号认证、昵称、六毛外观、工作状态、累计秒数、房间与串门事件。密码从不保存；
+刷新令牌保存在系统凭据库。网络失败不会影响离线桌宠、计时、AI 或本地素材。
+"""
 
 from __future__ import annotations
 
@@ -67,7 +69,7 @@ class ConnectionStateStore:
 
 
 class SocialError(RuntimeError):
-    """闈㈠悜鐢ㄦ埛鐨勭ぞ浜ょ綉缁滈敊璇紝骞朵繚鐣欏彲璁板綍鐨勮瘖鏂垎绫汇€?""
+    """面向用户的社交网络错误，并保留可记录的诊断分类。"""
 
     def __init__(
         self,
@@ -87,23 +89,23 @@ class SocialError(RuntimeError):
 
 def _endpoint_host(base_url: str) -> str:
     parsed = urllib.parse.urlparse(str(base_url or ""))
-    return parsed.netloc or "鏈厤缃?
+    return parsed.netloc or "未配置"
 
 
 def _network_error(exc: BaseException, base_url: str) -> SocialError:
-    """鎶?urllib/Windows 閿欒杞垚鐢ㄦ埛鑳介噰鍙栬鍔ㄧ殑鍒嗙被銆?""
+    """把 urllib/Windows 错误转成用户能采取行动的分类。"""
 
     reason = getattr(exc, "reason", exc)
     host = _endpoint_host(base_url)
     if isinstance(reason, socket.gaierror) or "getaddrinfo" in str(reason).lower():
-        return SocialError(f"DNS 瑙ｆ瀽澶辫触锛氭壘涓嶅埌鑷範瀹ゆ湇鍔″櫒锛坽host}锛夈€?, kind="dns", endpoint=host, retryable=True)
+        return SocialError(f"DNS 解析失败：找不到自习室服务器（{host}）。", kind="dns", endpoint=host, retryable=True)
     if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason).lower():
-        return SocialError(f"杩炴帴瓒呮椂锛氳嚜涔犲鏈嶅姟鍣紙{host}锛夋病鏈夊強鏃跺洖搴斻€?, kind="timeout", endpoint=host, retryable=True)
+        return SocialError(f"连接超时：自习室服务器（{host}）没有及时回应。", kind="timeout", endpoint=host, retryable=True)
     if isinstance(reason, ConnectionRefusedError) or "refused" in str(reason).lower():
-        return SocialError(f"鏈嶅姟鍣ㄦ嫆缁濊繛鎺ワ細璇锋鏌ヨ嚜涔犲涓浆鏈嶅姟锛坽host}锛夋槸鍚﹀湪绾裤€?, kind="refused", endpoint=host, retryable=True)
+        return SocialError(f"服务器拒绝连接：请检查自习室中转服务（{host}）是否在线。", kind="refused", endpoint=host, retryable=True)
     if isinstance(reason, ssl.SSLError) or "ssl" in str(reason).lower() or "certificate" in str(reason).lower():
-        return SocialError(f"TLS/璇佷功杩炴帴澶辫触锛氭棤娉曞畨鍏ㄨ繛鎺ヨ嚜涔犲鏈嶅姟鍣紙{host}锛夈€?, kind="tls", endpoint=host)
-    return SocialError(f"缃戠粶涓嶅彲杈撅細鏃犳硶杩炴帴鑷範瀹ゆ湇鍔″櫒锛坽host}锛夈€?, kind="network", endpoint=host, retryable=True)
+        return SocialError(f"TLS/证书连接失败：无法安全连接自习室服务器（{host}）。", kind="tls", endpoint=host)
+    return SocialError(f"网络不可达：无法连接自习室服务器（{host}）。", kind="network", endpoint=host, retryable=True)
 
 
 def _social_request_timeout() -> float:
@@ -221,7 +223,7 @@ class HttpSocialBackend:
         if authenticated:
             self._ensure_fresh()
             if not self.session:
-                raise SocialError("璇峰厛鐧诲綍鎼瓙鑷範瀹ゃ€?)
+                raise SocialError("请先登录搭子自习室。")
             headers["Authorization"] = f"Bearer {self.session.access_token}"
         if extra_headers:
             headers.update({str(key): str(value) for key, value in extra_headers.items()})
@@ -279,7 +281,7 @@ class HttpSocialBackend:
             self._clear_session()
 
     def sign_up(self, email: str, password: str, nickname: str) -> bool:
-        body = {"email": email.strip(), "password": password, "nickname": nickname.strip()[:24] or "鎼瓙", "data": {"nickname": nickname.strip()[:24] or "鎼瓙"}}
+        body = {"email": email.strip(), "password": password, "nickname": nickname.strip()[:24] or "搭子", "data": {"nickname": nickname.strip()[:24] or "搭子"}}
         if self.email_redirect_url:
             body["redirect_to"] = self.email_redirect_url
         if self.transport == "direct":
@@ -292,7 +294,7 @@ class HttpSocialBackend:
         path = "/auth/v1/token?grant_type=password" if self.transport == "direct" else "/auth/signin"
         data = self._raw("POST", path, {"email": email.strip(), "password": password})
         if not self._accept_auth(data):
-            raise SocialError("鐧诲綍娌℃湁鎴愬姛锛岃妫€鏌ラ偖绠辩‘璁ゆ垨瀵嗙爜銆?)
+            raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
     def sign_out(self) -> None:
         self._clear_session()
@@ -342,7 +344,7 @@ class HttpSocialBackend:
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None:
-        body = {"nickname": nickname.strip()[:24] or "鎼瓙", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60]}
+        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60]}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
@@ -350,7 +352,7 @@ class HttpSocialBackend:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
     def update_owner_nickname(self, nickname: str) -> None:
-        body = {"nickname": nickname.strip()[:24] or "鎼瓙", "owner_nickname": nickname.strip()[:24]}
+        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24]}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
@@ -465,7 +467,7 @@ class LegacyDirectSocialClient:
             checker = getattr(self._http_backend, "health", None)
             if callable(checker):
                 return dict(checker() or {})
-            raise SocialError("褰撳墠鑷範瀹や腑杞湇鍔℃湭鎻愪緵鍋ュ悍妫€鏌ャ€?, kind="config")
+            raise SocialError("当前自习室中转服务未提供健康检查。", kind="config")
         return dict(self._raw("GET", "/auth/v1/health") or {})
 
     @property
@@ -685,7 +687,7 @@ class LegacyDirectSocialClient:
             data["_server_timestamp"] = datetime.fromtimestamp(saved_at).astimezone().isoformat() if saved_at else ""
         except (OSError, OverflowError, ValueError):
             data["_server_timestamp"] = ""
-        data["_sync_error"] = self._last_error or "褰撳墠缃戠粶鏃犳硶璁块棶鑷範瀹ゆ湇鍔?
+        data["_sync_error"] = self._last_error or "当前网络无法访问自习室服务"
         return data
 
     @staticmethod
@@ -724,7 +726,7 @@ class LegacyDirectSocialClient:
         if authenticated:
             self._ensure_fresh()
             if not self.session:
-                raise SocialError("璇峰厛鐧诲綍鎼瓙鑷範瀹ゃ€?)
+                raise SocialError("请先登录搭子自习室。")
             headers["Authorization"] = f"Bearer {self.session.access_token}"
         if extra_headers:
             headers.update(extra_headers)
@@ -776,7 +778,7 @@ class LegacyDirectSocialClient:
         data = self._raw(
             "POST",
             f"/auth/v1/signup?{redirect}",
-            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "鎼瓙"}},
+            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "搭子"}},
         )
         return self._accept_auth(data)
 
@@ -785,7 +787,7 @@ class LegacyDirectSocialClient:
             return self._http_backend.sign_in(email, password)
         data = self._raw("POST", "/auth/v1/token?grant_type=password", {"email": email.strip(), "password": password})
         if not self._accept_auth(data):
-            raise SocialError("鐧诲綍娌℃湁鎴愬姛锛岃妫€鏌ラ偖绠辩‘璁ゆ垨瀵嗙爜銆?)
+            raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
     def sign_out(self) -> None:
         if self._http_backend is not None:
@@ -855,10 +857,10 @@ class LegacyDirectSocialClient:
         if self._http_backend is not None:
             return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key)
         if not self.session:
-            raise SocialError("璇峰厛鐧诲綍銆?)
+            raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "鎼瓙", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if self._http_backend is not None:
@@ -874,10 +876,10 @@ class LegacyDirectSocialClient:
         if self._http_backend is not None:
             return self._http_backend.update_owner_nickname(nickname)
         if not self.session:
-            raise SocialError("璇峰厛鐧诲綍銆?)
+            raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "鎼瓙", "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self._http_backend is not None:
@@ -938,7 +940,7 @@ class DashboardCacheClientBase:
 
     def _require_backend(self) -> SocialBackend:
         if self._http_backend is None:
-            raise SocialError("鑷範瀹ゆ湇鍔″皻鏈厤缃€?, kind="config")
+            raise SocialError("自习室服务尚未配置。", kind="config")
         return self._http_backend
 
     def health(self) -> dict[str, Any]:
@@ -1008,7 +1010,7 @@ class DashboardCacheClientBase:
         key = str(room_id or ""); entry = self._dashboard_cache.get(key) or (self._dashboard_cache.get("") if key else None)
         if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict): return None
         data = json.loads(json.dumps(entry["data"], ensure_ascii=False)); saved_at = float(entry.get("saved_at") or 0)
-        self._mark_remote_presence_stale(data); data.update({"_sync_offline": True, "_connection_state": "OFFLINE", "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int((time.time() - saved_at) / 60)) if saved_at else 0, "_sync_error": self._last_error or "褰撳墠缃戠粶鏃犳硶璁块棶鑷範瀹ゆ湇鍔?})
+        self._mark_remote_presence_stale(data); data.update({"_sync_offline": True, "_connection_state": "OFFLINE", "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int((time.time() - saved_at) / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
         return data
 
     def diagnose_connection(self, room_id: str | None = None) -> dict[str, Any]:
@@ -1426,4 +1428,3 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
-
