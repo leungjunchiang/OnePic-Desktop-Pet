@@ -158,7 +158,7 @@ def test_connected_agent_failure_marks_error_and_next_message_skips_ai() -> None
     app.processEvents()
     first = replies[0]
     assert first.mode == "offline"
-    assert "在呢" in first.text
+    assert "离线模式" in first.text
     assert agents.status("codex").state is AgentConnectionState.ERROR
 
     assert manager.submit("今天工作很多", []) is True
