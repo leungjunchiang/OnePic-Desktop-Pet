@@ -1,17 +1,12 @@
 """
-本模块统一管理六毛的 Agent 连接缓存、异步 AI 请求与本地离线对话降级。
-
-职责范围：
-- 用 checking、connected、disconnected、error 四态缓存各 AI Agent 的连接结果；
-- 在应用启动后后台检测 Codex、Claude Code、DeepSeek、Kimi 与兼容 API；
-- 仅在显式刷新或低频重连时执行完整检测，不在每条聊天消息前重复探测；
-- 把 AI 请求放入 QThread，失败、异常或超时后静默回到本地陪伴回复；
-- 根据关键词、当前时间、工作时长和宠物状态生成不依赖网络的回复；
-- 识别离线下无法可靠完成的复杂问题，并让界面显示手动重连和设置入口。
-
-聊天内容和连接状态只保存在当前进程内存中，不写入磁盘。API 令牌仍由
-CredentialStore 放入系统安全凭据库；本模块不会主动打开任何设置窗口。
-"""
+鏈ā鍧楃粺涓€绠＄悊鍏瘺鐨?Agent 杩炴帴缂撳瓨銆佸紓姝?AI 璇锋眰涓庢湰鍦扮绾垮璇濋檷绾с€?
+鑱岃矗鑼冨洿锛?- 鐢?checking銆乧onnected銆乨isconnected銆乪rror 鍥涙€佺紦瀛樺悇 AI Agent 鐨勮繛鎺ョ粨鏋滐紱
+- 鍦ㄥ簲鐢ㄥ惎鍔ㄥ悗鍚庡彴妫€娴?Codex銆丆laude Code銆丏eepSeek銆並imi 涓庡吋瀹?API锛?- 浠呭湪鏄惧紡鍒锋柊鎴栦綆棰戦噸杩炴椂鎵ц瀹屾暣妫€娴嬶紝涓嶅湪姣忔潯鑱婂ぉ娑堟伅鍓嶉噸澶嶆帰娴嬶紱
+- 鎶?AI 璇锋眰鏀惧叆 QThread锛屽け璐ャ€佸紓甯告垨瓒呮椂鍚庨潤榛樺洖鍒版湰鍦伴櫔浼村洖澶嶏紱
+- 鏍规嵁鍏抽敭璇嶃€佸綋鍓嶆椂闂淬€佸伐浣滄椂闀垮拰瀹犵墿鐘舵€佺敓鎴愪笉渚濊禆缃戠粶鐨勫洖澶嶏紱
+- 璇嗗埆绂荤嚎涓嬫棤娉曞彲闈犲畬鎴愮殑澶嶆潅闂锛屽苟璁╃晫闈㈡樉绀烘墜鍔ㄩ噸杩炲拰璁剧疆鍏ュ彛銆?
+鑱婂ぉ鍐呭鍜岃繛鎺ョ姸鎬佸彧淇濆瓨鍦ㄥ綋鍓嶈繘绋嬪唴瀛樹腑锛屼笉鍐欏叆纾佺洏銆侫PI 浠ょ墝浠嶇敱
+CredentialStore 鏀惧叆绯荤粺瀹夊叏鍑嵁搴擄紱鏈ā鍧椾笉浼氫富鍔ㄦ墦寮€浠讳綍璁剧疆绐楀彛銆?"""
 
 from __future__ import annotations
 
@@ -34,10 +29,11 @@ from .ai import (
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
+from .liumao_worldview import story_response, worldview_response
 
 
 class AgentConnectionState(str, Enum):
-    """一个 Agent 在当前进程中的连接状态。"""
+    """涓€涓?Agent 鍦ㄥ綋鍓嶈繘绋嬩腑鐨勮繛鎺ョ姸鎬併€?""
 
     CHECKING = "checking"
     CONNECTED = "connected"
@@ -47,7 +43,7 @@ class AgentConnectionState(str, Enum):
 
 @dataclass(frozen=True)
 class AgentStatus:
-    """供聊天面板和设置页读取的单个 Agent 缓存快照。"""
+    """渚涜亰澶╅潰鏉垮拰璁剧疆椤佃鍙栫殑鍗曚釜 Agent 缂撳瓨蹇収銆?""
 
     provider: str
     state: AgentConnectionState
@@ -57,7 +53,7 @@ class AgentStatus:
 
 @dataclass(frozen=True)
 class ManagedChatReply:
-    """ChatManager 返回给窗口的统一回复结果。"""
+    """ChatManager 杩斿洖缁欑獥鍙ｇ殑缁熶竴鍥炲缁撴灉銆?""
 
     text: str
     state: PetState
@@ -66,7 +62,7 @@ class ManagedChatReply:
 
 
 class AgentDetectionThread(QThread):
-    """依次检测一组提供方，并把每项结果发回主线程缓存。"""
+    """渚濇妫€娴嬩竴缁勬彁渚涙柟锛屽苟鎶婃瘡椤圭粨鏋滃彂鍥炰富绾跨▼缂撳瓨銆?""
 
     provider_checked = Signal(str, str, str)
 
@@ -84,16 +80,16 @@ class AgentDetectionThread(QThread):
 
     @staticmethod
     def _failure_state(message: str) -> AgentConnectionState:
-        """把缺失/未登录归为断开，把网络和未知异常归为错误。"""
+        """鎶婄己澶?鏈櫥褰曞綊涓烘柇寮€锛屾妸缃戠粶鍜屾湭鐭ュ紓甯稿綊涓洪敊璇€?""
 
         disconnected_markers = (
-            "未检测到",
-            "没有找到",
-            "没有填写",
-            "没有保存",
-            "尚未登录",
-            "没有登录",
-            "令牌无效",
+            "鏈娴嬪埌",
+            "娌℃湁鎵惧埌",
+            "娌℃湁濉啓",
+            "娌℃湁淇濆瓨",
+            "灏氭湭鐧诲綍",
+            "娌℃湁鐧诲綍",
+            "浠ょ墝鏃犳晥",
         )
         if any(marker in message for marker in disconnected_markers):
             return AgentConnectionState.DISCONNECTED
@@ -113,19 +109,19 @@ class AgentDetectionThread(QThread):
                 detail = str(exc)
                 state = self._failure_state(detail)
             except Exception:
-                detail = "后台检测遇到意外问题，稍后会自动重试。"
+                detail = "鍚庡彴妫€娴嬮亣鍒版剰澶栭棶棰橈紝绋嶅悗浼氳嚜鍔ㄩ噸璇曘€?
                 state = AgentConnectionState.ERROR
             else:
                 state = (
                     AgentConnectionState.DISCONNECTED
-                    if "未检测到 Codex CLI" in detail
+                    if "鏈娴嬪埌 Codex CLI" in detail
                     else AgentConnectionState.CONNECTED
                 )
             self.provider_checked.emit(provider, state.value, detail)
 
 
 class AgentManager(QObject):
-    """后台检测、缓存并低频刷新所有 Agent 的状态。"""
+    """鍚庡彴妫€娴嬨€佺紦瀛樺苟浣庨鍒锋柊鎵€鏈?Agent 鐨勭姸鎬併€?""
 
     status_changed = Signal(str, str, str)
     detection_finished = Signal()
@@ -146,7 +142,7 @@ class AgentManager(QObject):
             provider: AgentStatus(
                 provider,
                 AgentConnectionState.CONNECTED if provider == "offline" else AgentConnectionState.CHECKING,
-                "纯离线模式随时可用。" if provider == "offline" else "正在后台检测…",
+                "绾绾挎ā寮忛殢鏃跺彲鐢ㄣ€? if provider == "offline" else "姝ｅ湪鍚庡彴妫€娴嬧€?,
             )
             for provider in PROVIDER_PRESETS
         }
@@ -157,16 +153,16 @@ class AgentManager(QObject):
 
     @property
     def checking(self) -> bool:
-        """返回当前是否已有完整检测线程运行。"""
+        """杩斿洖褰撳墠鏄惁宸叉湁瀹屾暣妫€娴嬬嚎绋嬭繍琛屻€?""
 
         return self._thread is not None and self._thread.isRunning()
 
     def status(self, provider: str) -> AgentStatus:
-        """读取缓存，不执行任何命令或网络请求。"""
+        """璇诲彇缂撳瓨锛屼笉鎵ц浠讳綍鍛戒护鎴栫綉缁滆姹傘€?""
 
         return self._statuses.get(
             provider,
-            AgentStatus(provider, AgentConnectionState.DISCONNECTED, "未知的 AI 连接方式。"),
+            AgentStatus(provider, AgentConnectionState.DISCONNECTED, "鏈煡鐨?AI 杩炴帴鏂瑰紡銆?),
         )
 
     def start_background_check(
@@ -175,7 +171,7 @@ class AgentManager(QObject):
         *,
         force: bool = False,
     ) -> bool:
-        """异步检测指定提供方；运行中不会为聊天重复启动完整检测。"""
+        """寮傛妫€娴嬫寚瀹氭彁渚涙柟锛涜繍琛屼腑涓嶄細涓鸿亰澶╅噸澶嶅惎鍔ㄥ畬鏁存娴嬨€?""
 
         if self.checking:
             return False
@@ -191,7 +187,7 @@ class AgentManager(QObject):
             cached = self.status(provider)
             if not force and cached.state == AgentConnectionState.CONNECTED:
                 continue
-            self._set_status(provider, AgentConnectionState.CHECKING, "正在后台检测…", now)
+            self._set_status(provider, AgentConnectionState.CHECKING, "姝ｅ湪鍚庡彴妫€娴嬧€?, now)
         pending = tuple(
             provider for provider in selected if self.status(provider).state == AgentConnectionState.CHECKING
         )
@@ -204,7 +200,7 @@ class AgentManager(QObject):
         return True
 
     def reconnect_selected(self) -> bool:
-        """响应用户按钮，只重查当前选择的 AI。"""
+        """鍝嶅簲鐢ㄦ埛鎸夐挳锛屽彧閲嶆煡褰撳墠閫夋嫨鐨?AI銆?""
 
         provider = self.settings.ai_provider
         if provider == "offline":
@@ -212,7 +208,7 @@ class AgentManager(QObject):
         return self.start_background_check((provider,), force=True)
 
     def retry_inactive(self) -> None:
-        """低频重连断开或出错的提供方，不影响已连接缓存。"""
+        """浣庨閲嶈繛鏂紑鎴栧嚭閿欑殑鎻愪緵鏂癸紝涓嶅奖鍝嶅凡杩炴帴缂撳瓨銆?""
 
         candidates = [
             provider
@@ -224,22 +220,22 @@ class AgentManager(QObject):
             self.start_background_check(candidates)
 
     def mark_runtime_success(self, provider: str) -> None:
-        """AI 调用成功后保持 connected，供下一条消息继续使用。"""
+        """AI 璋冪敤鎴愬姛鍚庝繚鎸?connected锛屼緵涓嬩竴鏉℃秷鎭户缁娇鐢ㄣ€?""
 
         label = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["offline"]).label
-        self._set_status(provider, AgentConnectionState.CONNECTED, f"{label} 已连接。")
+        self._set_status(provider, AgentConnectionState.CONNECTED, f"{label} 宸茶繛鎺ャ€?)
 
     def mark_runtime_error(self, provider: str, detail: str) -> None:
-        """AI 调用失败后缓存 error；只影响后续路由，不弹设置页。"""
+        """AI 璋冪敤澶辫触鍚庣紦瀛?error锛涘彧褰卞搷鍚庣画璺敱锛屼笉寮硅缃〉銆?""
 
         self._set_status(
             provider,
             AgentConnectionState.ERROR,
-            detail or "AI 暂时不可用，已自动切回离线陪伴。",
+            detail or "AI 鏆傛椂涓嶅彲鐢紝宸茶嚜鍔ㄥ垏鍥炵绾块櫔浼淬€?,
         )
 
     def mark_disconnected(self, provider: str, detail: str) -> None:
-        """保存明确的缺失或未登录状态，不把中性检测文案误报为已连接。"""
+        """淇濆瓨鏄庣‘鐨勭己澶辨垨鏈櫥褰曠姸鎬侊紝涓嶆妸涓€ф娴嬫枃妗堣鎶ヤ负宸茶繛鎺ャ€?""
 
         self._set_status(provider, AgentConnectionState.DISCONNECTED, detail)
 
@@ -265,7 +261,7 @@ class AgentManager(QObject):
         self.detection_finished.emit()
 
     def shutdown(self) -> None:
-        """退出时停止自动重连，并请求检测线程尽快结束。"""
+        """閫€鍑烘椂鍋滄鑷姩閲嶈繛锛屽苟璇锋眰妫€娴嬬嚎绋嬪敖蹇粨鏉熴€?""
 
         self._reconnect_timer.stop()
         if self._thread is not None and self._thread.isRunning():
@@ -273,27 +269,27 @@ class AgentManager(QObject):
 
 
 class OfflineDialogueManager:
-    """生成不依赖 AI 的完整陪伴对话，并识别复杂离线请求。"""
+    """鐢熸垚涓嶄緷璧?AI 鐨勫畬鏁撮櫔浼村璇濓紝骞惰瘑鍒鏉傜绾胯姹傘€?""
 
     COMPLEX_MARKERS = (
-        "帮我写",
-        "帮我做",
-        "分析",
-        "总结",
-        "翻译",
-        "写代码",
-        "代码报错",
-        "搜索",
-        "查一下",
-        "联网",
-        "新闻",
-        "天气",
-        "股票",
-        "法律",
-        "诊断",
-        "医疗",
-        "方案",
-        "论文",
+        "甯垜鍐?,
+        "甯垜鍋?,
+        "鍒嗘瀽",
+        "鎬荤粨",
+        "缈昏瘧",
+        "鍐欎唬鐮?,
+        "浠ｇ爜鎶ラ敊",
+        "鎼滅储",
+        "鏌ヤ竴涓?,
+        "鑱旂綉",
+        "鏂伴椈",
+        "澶╂皵",
+        "鑲＄エ",
+        "娉曞緥",
+        "璇婃柇",
+        "鍖荤枟",
+        "鏂规",
+        "璁烘枃",
     )
 
     def __init__(
@@ -315,12 +311,12 @@ class OfflineDialogueManager:
         message: str,
         history: Iterable[tuple[str, str]] = (),
     ) -> ManagedChatReply:
-        """优先处理本地上下文，再回退到现有陪伴关键词库。"""
+        """浼樺厛澶勭悊鏈湴涓婁笅鏂囷紝鍐嶅洖閫€鍒扮幇鏈夐櫔浼村叧閿瘝搴撱€?""
 
         text = " ".join(message.split())[:1200]
         if self._is_complex(text):
             return ManagedChatReply(
-                "现在是离线模式，等 AI 恢复后再帮你处理。你也可以先告诉我最着急的那一小步，六毛会继续陪你。",
+                "鐜板湪鏄绾挎ā寮忥紝绛?AI 鎭㈠鍚庡啀甯綘澶勭悊銆備綘涔熷彲浠ュ厛鍛婅瘔鎴戞渶鐫€鎬ョ殑閭ｄ竴灏忔锛屽叚姣涗細缁х画闄綘銆?,
                 PetState.CURIOUS,
                 "offline",
                 True,
@@ -331,26 +327,26 @@ class OfflineDialogueManager:
         story = story_response(text, self.random, history)
         if story is not None:
             return ManagedChatReply(story.text, story.state, "offline")
-        if any(marker in text for marker in ("几点", "现在时间", "当前时间", "星期几", "几号")):
+        if any(marker in text for marker in ("鍑犵偣", "鐜板湪鏃堕棿", "褰撳墠鏃堕棿", "鏄熸湡鍑?, "鍑犲彿")):
             current = self.now()
             return ManagedChatReply(
-                f"现在是 {current:%Y年%m月%d日 %H:%M}。先看看这一刻最值得完成的小事吧。",
+                f"鐜板湪鏄?{current:%Y骞?m鏈?d鏃?%H:%M}銆傚厛鐪嬬湅杩欎竴鍒绘渶鍊煎緱瀹屾垚鐨勫皬浜嬪惂銆?,
                 PetState.WAVE,
                 "offline",
             )
-        if any(marker in text for marker in ("工作多久", "专注多久", "计时多久", "今天工作")):
+        if any(marker in text for marker in ("宸ヤ綔澶氫箙", "涓撴敞澶氫箙", "璁℃椂澶氫箙", "浠婂ぉ宸ヤ綔")):
             return ManagedChatReply(self.work_status(), PetState.SIT, "offline")
-        if any(marker in text for marker in ("你的状态", "你怎么样", "精力", "饱食度", "心情怎么样")):
+        if any(marker in text for marker in ("浣犵殑鐘舵€?, "浣犳€庝箞鏍?, "绮惧姏", "楗遍搴?, "蹇冩儏鎬庝箞鏍?)):
             return ManagedChatReply(
                 self.companion.status_text(self.focus_stars()),
                 PetState.CURIOUS,
                 "offline",
             )
-        if any(marker in text for marker in ("陪我聊", "在干嘛", "无聊", "说点什么")):
+        if any(marker in text for marker in ("闄垜鑱?, "鍦ㄥ共鍢?, "鏃犺亰", "璇寸偣浠€涔?)):
             choices = (
-                "六毛在桌面陪你呀。要不要说说今天最费劲的那一小段？",
-                "我在认真待命。开心的、烦人的，或者没头没尾的小事都可以讲。",
-                "巴布达！现在不用组织得很完整，想到什么就说什么。",
+                "鍏瘺鍦ㄦ闈㈤櫔浣犲憖銆傝涓嶈璇磋浠婂ぉ鏈€璐瑰姴鐨勯偅涓€灏忔锛?,
+                "鎴戝湪璁ょ湡寰呭懡銆傚紑蹇冪殑銆佺儲浜虹殑锛屾垨鑰呮病澶存病灏剧殑灏忎簨閮藉彲浠ヨ銆?,
+                "宸村竷杈撅紒鐜板湪涓嶇敤缁勭粐寰楀緢瀹屾暣锛屾兂鍒颁粈涔堝氨璇翠粈涔堛€?,
             )
             return ManagedChatReply(self.random.choice(choices), PetState.CURIOUS, "offline")
         reply = self.companion.reply_to(text)
@@ -369,22 +365,22 @@ class OfflineDialogueManager:
         if not text:
             return True
         markers = (
-            "爱你", "很爱你", "喜欢你", "想你", "抱抱", "亲亲",
-            "谢谢", "感谢", "你好", "嗨", "早上好", "早安",
-            "晚安", "再见", "拜拜", "有没有人告诉你", "有没有人告诉我",
+            "鐖变綘", "寰堢埍浣?, "鍠滄浣?, "鎯充綘", "鎶辨姳", "浜蹭翰",
+            "璋㈣阿", "鎰熻阿", "浣犲ソ", "鍡?, "鏃╀笂濂?, "鏃╁畨",
+            "鏅氬畨", "鍐嶈", "鎷滄嫓", "鏈夋病鏈変汉鍛婅瘔浣?, "鏈夋病鏈変汉鍛婅瘔鎴?,
         )
         return any(marker in text for marker in markers)
 
     def _is_complex(self, text: str) -> bool:
-        """保守识别需要外部知识、长推理或代码执行的请求。"""
+        """淇濆畧璇嗗埆闇€瑕佸閮ㄧ煡璇嗐€侀暱鎺ㄧ悊鎴栦唬鐮佹墽琛岀殑璇锋眰銆?""
 
         if any(marker in text for marker in self.COMPLEX_MARKERS):
             return True
-        return len(text) > 220 and any(mark in text for mark in ("？", "?", "怎么", "为什么"))
+        return len(text) > 220 and any(mark in text for mark in ("锛?, "?", "鎬庝箞", "涓轰粈涔?))
 
 
 class AIReplyThread(QThread):
-    """在后台执行一次可能较慢的 AI 请求。"""
+    """鍦ㄥ悗鍙版墽琛屼竴娆″彲鑳借緝鎱㈢殑 AI 璇锋眰銆?""
 
     succeeded = Signal(str)
     failed = Signal(str)
@@ -419,13 +415,13 @@ class AIReplyThread(QThread):
         except AIConnectionError as exc:
             self.failed.emit(str(exc))
         except Exception:
-            self.failed.emit("AI 连接遇到意外问题，已自动切回离线陪伴。")
+            self.failed.emit("AI 杩炴帴閬囧埌鎰忓闂锛屽凡鑷姩鍒囧洖绂荤嚎闄即銆?)
         else:
             self.succeeded.emit(answer)
 
 
 class ChatManager(QObject):
-    """统一决定走缓存已连接的 AI，还是立即返回本地离线回复。"""
+    """缁熶竴鍐冲畾璧扮紦瀛樺凡杩炴帴鐨?AI锛岃繕鏄珛鍗宠繑鍥炴湰鍦扮绾垮洖澶嶃€?""
 
     reply_ready = Signal(object)
     busy_changed = Signal(bool)
@@ -463,7 +459,7 @@ class ChatManager(QObject):
         """
 
         if self.busy:
-            self.notice.emit("上一句话还在路上，稍等我一下。")
+            self.notice.emit("涓婁竴鍙ヨ瘽杩樺湪璺笂锛岀◢绛夋垜涓€涓嬨€?)
             return False
         # Do not intercept online chat with keyword, worldview, story, or
         # short-social shortcuts.  The model receives the recent conversation,
@@ -494,13 +490,13 @@ class ChatManager(QObject):
         return True
 
     def reconnect_now(self) -> bool:
-        """只响应用户主动点击，不打开设置页。"""
+        """鍙搷搴旂敤鎴蜂富鍔ㄧ偣鍑伙紝涓嶆墦寮€璁剧疆椤点€?""
 
         return self.agents.reconnect_selected()
 
     def _ai_succeeded(self, answer: str) -> None:
         self.agents.mark_runtime_success(self._pending_provider)
-        state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
+        state = PetState.SHY if any(word in answer for word in ("鎶辨姳", "鐖?, "闄綘")) else PetState.CURIOUS
         self.reply_ready.emit(ManagedChatReply(answer, state, "ai"))
 
     def _ai_failed(self, error: str) -> None:
@@ -515,7 +511,7 @@ class ChatManager(QObject):
             thread.deleteLater()
 
     def shutdown(self) -> None:
-        """退出时停止重连，并让正在运行的请求自然结束。"""
+        """閫€鍑烘椂鍋滄閲嶈繛锛屽苟璁╂鍦ㄨ繍琛岀殑璇锋眰鑷劧缁撴潫銆?""
 
         self.agents.shutdown()
         if self._thread is not None and self._thread.isRunning():
@@ -523,6 +519,7 @@ class ChatManager(QObject):
 
 
 def should_start_startup_detection() -> bool:
-    """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
+    """鑷姩娴嬭瘯浣跨敤婕旂ず绱犳潗鏃惰烦杩囩湡瀹?Agent/缃戠粶鎺㈡祴銆?""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+
