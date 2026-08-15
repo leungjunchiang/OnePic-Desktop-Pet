@@ -54,6 +54,27 @@ QLabel#todoTitle { color: #183c4c; padding: 0 2px; }
 QToolButton { color: #557681; background: transparent; border: 0; padding: 1px 4px; }
 QToolButton:hover { color: #0c807b; background: rgba(185, 228, 220, 130); border-radius: 7px; }
 QToolButton#addButton, QToolButton#expandButton { font-size: 15px; }
+QToolButton#moreButton {
+    min-width: 26px; max-width: 26px;
+    min-height: 26px; max-height: 26px;
+    color: #315765;
+    background: rgba(214, 238, 233, 210);
+    border: 1px solid rgba(73, 137, 141, 125);
+    border-radius: 8px;
+    padding: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+QToolButton#moreButton:hover {
+    color: #0b625f;
+    background: rgba(182, 227, 217, 235);
+    border-color: rgba(36, 128, 128, 180);
+}
+QToolButton#moreButton:pressed {
+    color: #ffffff;
+    background: #4c9a9b;
+    border-color: #3d8084;
+}
 """
 
 
@@ -70,8 +91,8 @@ class TodoRow(QWidget):
         self.setFixedHeight(34)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(3, 0, 2, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(4, 0, 3, 0)
+        layout.setSpacing(3)
         self.checkbox = QCheckBox(self)
         self.checkbox.setChecked(bool(task.completed))
         self.checkbox.setToolTip("标记完成")
@@ -89,8 +110,9 @@ class TodoRow(QWidget):
         self.set_task(task)
         layout.addWidget(self.label, 1, Qt.AlignmentFlag.AlignVCenter)
         self.more_button = QToolButton(self)
+        self.more_button.setObjectName("moreButton")
         self.more_button.setText("⋯")
-        self.more_button.setFixedWidth(23)
+        self.more_button.setFixedSize(26, 26)
         self.more_button.setToolTip("任务操作")
         # This is intentionally a real button, not a decorative label.  The
         # panel is a separate native window, so keeping mouse events enabled
@@ -174,7 +196,7 @@ class CompactTodoPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(COMPACT_TODO_STYLE)
-        self.setFixedWidth(260)
+        self.setFixedWidth(250)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(5, 4, 5, 4)
@@ -311,13 +333,13 @@ class CompactTodoPanel(QWidget):
             self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS,
         )
         if visible_rows:
-            self.rows_scroll.setFixedHeight(visible_rows * 35)
+            self.rows_scroll.setFixedHeight(visible_rows * 34)
         else:
             self.rows_scroll.setFixedHeight(0)
         # No fixed empty canvas: an empty panel is just the tiny add affordance.
         self.adjustSize()
         footer_height = 27
-        content_height = visible_rows * 35 + footer_height + 8
+        content_height = visible_rows * 34 + footer_height + 8
         self.setFixedHeight(max(38, content_height))
 
     def _select_task(self, task_id: str) -> None:

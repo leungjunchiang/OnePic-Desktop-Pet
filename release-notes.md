@@ -1,4 +1,11 @@
-# Lili v0.22.42
+# Lili v0.22.43
+
+## Pet-attached Todo placement
+
+- Repositioned the compact Todo strip with the pet as its anchor: left side first, right side when needed, and below only as a fallback, with an 8px horizontal gap and screen-edge clamping.
+- Tightened the row and panel dimensions so a single task remains a small accessory instead of a detached mini application.
+- Made each `⋯` action a clear 26×26 button with a visible background, hover/pressed feedback, and the existing real task menu hit area.
+- Updated regression coverage for left/right/below placement decisions and the compact action button.
 
 ## Test harness correction
 

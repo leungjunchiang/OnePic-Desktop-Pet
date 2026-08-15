@@ -242,7 +242,7 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     panel = window._compact_todo_panel
     assert panel is not None
     assert len(panel.rows) == 3
-    assert panel.rows_scroll.height() <= panel.MAX_EXPANDED_ROWS * 35 + 2
+    assert panel.rows_scroll.height() <= panel.MAX_EXPANDED_ROWS * 34 + 2
     panel.set_collapsed(True)
     app.processEvents()
     assert len(panel.rows) == 1
@@ -267,8 +267,16 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     window.move(10, 20)
     app.processEvents()
     assert panel.pos() != before
-    visible_bottom = window.y() + window.mask().boundingRect().bottom() + 1
-    assert panel.y() >= visible_bottom + 8
+    visible_bounds = window.mask().boundingRect()
+    pet_left = window.x() + visible_bounds.left()
+    pet_right = window.x() + visible_bounds.right() + 1
+    available = (QApplication.screenAt(window.geometry().center()) or QApplication.primaryScreen()).availableGeometry()
+    if pet_left - panel.width() - 8 >= available.left():
+        assert panel.x() + panel.width() + 8 <= pet_left
+    elif pet_right + 8 + panel.width() <= available.right() + 1:
+        assert panel.x() >= pet_right + 8
+    else:
+        assert panel.y() >= window.y() + visible_bounds.bottom() + 1 + 6 or panel.y() <= window.y() + visible_bounds.top() - panel.height() - 6
     window.close()
     window.deleteLater()
     app.processEvents()

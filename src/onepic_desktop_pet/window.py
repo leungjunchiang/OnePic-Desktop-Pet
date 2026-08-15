@@ -1841,7 +1841,13 @@ class PetWindow(QWidget):
         self._position_compact_todos()
 
     def _position_compact_todos(self) -> None:
-        """Keep the Todo strip attached below the visible pet bounds."""
+        """Keep the Todo strip close to the pet, preferring its left side.
+
+        The compact Todo panel is a pet accessory rather than an independent
+        dashboard.  It therefore uses the visible pet mask as its anchor and
+        chooses a side in a deterministic order: left, right, then below.  A
+        final clamp keeps the companion inside the active monitor's work area.
+        """
 
         panel = self._compact_todo_panel
         if panel is None:
@@ -1861,18 +1867,33 @@ class PetWindow(QWidget):
             right = self.x() + visible_bounds.right() + 1
             top = self.y() + visible_bounds.top()
             bottom = self.y() + visible_bounds.bottom() + 1
-        gap = 8
-        x = (left + right - panel.width()) // 2
-        y = bottom + gap
-        # Prefer the requested below-pet relationship.  If the pet is near
-        # the taskbar, place the accessory above it instead of overlapping
-        # the pet or leaving it at an unrelated screen coordinate.
-        if y + panel.height() > available.bottom() + 1:
-            above = top - panel.height() - gap
-            if above >= available.top():
-                y = above
-        x = max(available.left(), min(x, available.right() - panel.width() + 1))
-        y = max(available.top(), min(y, available.bottom() - panel.height() + 1))
+        gap_x = 8
+        gap_y = 6
+        panel_width = panel.width()
+        panel_height = panel.height()
+        center_y = (top + bottom - panel_height) // 2
+        left_x = left - panel_width - gap_x
+        right_x = right + gap_x
+        can_place_left = left_x >= available.left()
+        can_place_right = right_x + panel_width <= available.right() + 1
+
+        if can_place_left:
+            x = left_x
+            y = center_y
+        elif can_place_right:
+            x = right_x
+            y = center_y
+        else:
+            # Both sides are occupied or too narrow.  Only then use the
+            # familiar below-pet fallback, keeping the gap small.
+            x = (left + right - panel_width) // 2
+            y = bottom + gap_y
+            if y + panel_height > available.bottom() + 1:
+                above = top - panel_height - gap_y
+                if above >= available.top():
+                    y = above
+        x = max(available.left(), min(x, available.right() - panel_width + 1))
+        y = max(available.top(), min(y, available.bottom() - panel_height + 1))
         panel.move(x, y)
 
     def _position_sticky_note(self) -> None:
