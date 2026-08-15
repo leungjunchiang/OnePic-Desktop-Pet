@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lili-desktop-pet"
-version = "0.22.26"
-description = "绂荤嚎浼樺厛銆佸彲杩炴帴 Codex銆丆laude Code銆丏eepSeek 涓?Kimi 鐨?Lili 鍏瘺妗岄潰宸ヤ綔鎼瓙銆?
+version = "0.22.27"
+description = "Lili desktop work companion"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
