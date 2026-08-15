@@ -192,43 +192,70 @@ def test_connected_agent_uses_async_ai_and_keeps_connected_cache() -> None:
     manager.shutdown()
 
 
-def test_connected_agent_keeps_father_identity_local() -> None:
-    """即使 AI 已连接，陈楚生身份也必须优先走六毛世界观短回复。"""
+def test_connected_agent_uses_ai_for_father_question() -> None:
+    """在线时人物问题交给 AI，知识和角色设定由 AI 上下文共同处理。"""
 
     app = _app()
     settings = PetSettings(ai_provider="deepseek")
     agents = AgentManager(settings, FakeCredentials())
     agents.mark_runtime_success("deepseek")
-    service = FakeService(answer="陈楚生是一位歌手。")
+    service = FakeService(answer="陈楚生，中国内地唱作人。按六毛的说法嘛——我爹。")
     manager = ChatManager(settings, service, agents, _offline_manager())
     replies = []
     manager.reply_ready.connect(replies.append)
 
     assert manager.submit("你认识陈楚生吗", []) is True
+    assert manager._thread is not None
+    assert manager._thread.wait(2000)
     app.processEvents()
 
-    assert replies[0].mode == "offline"
-    assert replies[0].text == "我爹。"
-    assert service.calls == 0
+    assert replies[0].mode == "ai"
+    assert replies[0].text == "陈楚生，中国内地唱作人。按六毛的说法嘛——我爹。"
+    assert service.calls == 1
     manager.shutdown()
 
 
-def test_connected_agent_keeps_short_affection_reply_local() -> None:
+def test_connected_agent_uses_ai_for_short_affection_message() -> None:
     app = _app()
     settings = PetSettings(ai_provider="deepseek")
     agents = AgentManager(settings, FakeCredentials())
     agents.mark_runtime_success("deepseek")
-    service = FakeService(answer="客服式的长回复")
+    service = FakeService(answer="嗯，六毛也喜欢你。")
     manager = ChatManager(settings, service, agents, _offline_manager())
     replies = []
     manager.reply_ready.connect(replies.append)
 
     assert manager.submit("我很爱你", []) is True
+    assert manager._thread is not None
+    assert manager._thread.wait(2000)
     app.processEvents()
 
-    assert replies[0].mode == "offline"
-    assert "六毛也很爱你" in replies[0].text
-    assert service.calls == 0
+    assert replies[0].mode == "ai"
+    assert replies[0].text == "嗯，六毛也喜欢你。"
+    assert service.calls == 1
+    manager.shutdown()
+
+
+def test_connected_agent_uses_ai_for_ambiguous_short_phrase() -> None:
+    """裸的歌名/半句话不能被本地关键词规则改写成“我爹”。"""
+
+    app = _app()
+    settings = PetSettings(ai_provider="deepseek")
+    agents = AgentManager(settings, FakeCredentials())
+    agents.mark_runtime_success("deepseek")
+    service = FakeService(answer="告诉我什么？")
+    manager = ChatManager(settings, service, agents, _offline_manager())
+    replies = []
+    manager.reply_ready.connect(replies.append)
+
+    assert manager.submit("有没有人告诉你", []) is True
+    assert manager._thread is not None
+    assert manager._thread.wait(2000)
+    app.processEvents()
+
+    assert replies[0].mode == "ai"
+    assert replies[0].text == "告诉我什么？"
+    assert service.calls == 1
     manager.shutdown()
 
 

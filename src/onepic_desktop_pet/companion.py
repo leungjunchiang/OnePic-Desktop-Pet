@@ -436,4 +436,3 @@ class CompanionModel:
             "想念可以轻轻放在桌角，等忙完了再好好抱一抱。",
         )
         return CompanionReply(self.random.choice(choices), PetState.SIT)
-

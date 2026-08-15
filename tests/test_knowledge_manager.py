@@ -38,4 +38,3 @@ def test_relations_and_song_catalog_are_local_data() -> None:
     assert "我爹" in relation_text
     assert "有没有人告诉你" in song_titles
     assert "荒野国王" in song_titles
-

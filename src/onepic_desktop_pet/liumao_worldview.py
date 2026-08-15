@@ -251,4 +251,3 @@ def worldview_response(
         return WorldviewResponse("陈楚生唱的。嗯，我爹。", PetState.SIT, key)
     state = PetState.SIT if key in {"family_song", "family_song_lyrics", "effort", "hainan", "father_history"} else PetState.CURIOUS
     return WorldviewResponse(randomizer.choice(replies[key]), state, key)
-

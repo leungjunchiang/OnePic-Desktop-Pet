@@ -89,4 +89,3 @@ def test_family_music_mode_only_uses_public_track_metadata() -> None:
     assert family_music_mode("陈楚生", "任意歌名")
     assert family_music_mode("", "有没有人告诉你")
     assert not family_music_mode("其他歌手", "其他歌名")
-

@@ -38,4 +38,3 @@ def test_work_companion_does_not_request_father_knowledge() -> None:
     assert intent.primary_intent == WORK_COMPANION
     assert intent.need_knowledge is False
     assert intent.story_allowed is True
-

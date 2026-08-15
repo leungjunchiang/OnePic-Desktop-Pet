@@ -57,4 +57,3 @@ def test_story_cooldown_is_measured_in_normal_conversation_turns() -> None:
     # The global three-turn quiet period has elapsed, but the same story's
     # longer per-story cooldown still protects it.
     assert engine.match("这个项目还是一直没结果") is None
-

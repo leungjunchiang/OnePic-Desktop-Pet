@@ -193,4 +193,3 @@ def get_story_trigger_engine() -> StoryTriggerEngine:
     if _DEFAULT_ENGINE is None:
         _DEFAULT_ENGINE = StoryTriggerEngine.from_resources()
     return _DEFAULT_ENGINE
-

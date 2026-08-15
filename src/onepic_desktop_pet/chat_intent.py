@@ -142,9 +142,8 @@ def intent_prompt_context(intent: ChatIntent) -> str:
     elif intent.primary_intent in {EMOTIONAL_SUPPORT, WORK_COMPANION}:
         style = "六毛首先是工作搭子；先处理用户眼前的一小步，除非故事引擎明确命中，不要提陈楚生。"
     else:
-        style = "这是普通聊天，优先自然接话，不要主动调用陈楚生知识。"
+        style = "这是普通聊天；结合最近上下文自然接话。关键词只能作为候选线索，不要把它直接当成歌曲、事实或固定回复。"
     return (
         f"本轮意图：{intent.primary_intent}；置信度 {intent.confidence:.2f}。{style}"
         "事实优先，‘我爹’最多自然出现一次。"
     )
-

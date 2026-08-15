@@ -34,8 +34,6 @@ from .ai import (
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
-from .chat_intent import CHEN_PROFILE, classify_intent
-from .liumao_worldview import story_response, worldview_response
 
 
 class AgentConnectionState(str, Enum):
@@ -360,11 +358,11 @@ class OfflineDialogueManager:
 
     @staticmethod
     def should_handle_locally(message: str) -> bool:
-        """Return whether a short social exchange should avoid an AI rewrite.
+        """Return whether the offline fallback has a concise local match.
 
-        Greetings, affection, thanks and goodbyes are stable character moments.
-        Sending them to an online model made the reply unexpectedly formal or
-        over-explained, even though no outside knowledge was needed.
+        This helper is retained for callers that explicitly request local
+        handling.  ``ChatManager`` deliberately does not use it to bypass an
+        available online model.
         """
 
         text = " ".join(str(message or "").split())[:80]
@@ -456,30 +454,21 @@ class ChatManager(QObject):
         return self._thread is not None and self._thread.isRunning()
 
     def submit(self, message: str, history: list[tuple[str, str]]) -> bool:
-        """使用缓存状态路由消息；这里不会执行完整连接检测。"""
+        """Submit natural language to AI when available.
+
+        Short messages are not treated as deterministic commands.  They may
+        depend on context, may be ambiguous, and should be understood by the
+        same language layer as longer messages.  Local worldview/story rules
+        remain available inside ``OfflineDialogueManager`` as the fallback.
+        """
 
         if self.busy:
             self.notice.emit("上一句话还在路上，稍等我一下。")
             return False
-        # 角色身份和隐私边界不能交给在线模型自由改写；明确的世界观短问句
-        # 直接本地回答，确保“你认识陈楚生吗”不会退化成百科人物介绍。
-        intent = classify_intent(message, history)
-        worldview = worldview_response(message, history=history)
-        # A broad profile question should reach the online composer so it can
-        # use the 6-10 retrieved timeline blocks.  The same worldview reply
-        # remains the offline fallback inside OfflineDialogueManager.
-        if worldview is not None and not (
-            intent.primary_intent == CHEN_PROFILE and worldview.key == "father_history"
-        ):
-            self.reply_ready.emit(ManagedChatReply(worldview.text, worldview.state, "offline"))
-            return True
-        story = story_response(message, history=history)
-        if story is not None:
-            self.reply_ready.emit(ManagedChatReply(story.text, story.state, "offline"))
-            return True
-        if self.offline.should_handle_locally(message):
-            self.reply_ready.emit(self.offline.reply(message, history))
-            return True
+        # Do not intercept online chat with keyword, worldview, story, or
+        # short-social shortcuts.  The model receives the recent conversation,
+        # current work state, and only the small knowledge snippets selected by
+        # the AI context builder.
         provider = self.settings.ai_provider
         status = self.agents.status(provider)
         if provider == "offline" or status.state != AgentConnectionState.CONNECTED:
@@ -537,4 +526,3 @@ def should_start_startup_detection() -> bool:
     """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-
