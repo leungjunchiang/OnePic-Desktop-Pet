@@ -1,3491 +1,1050 @@
-"""
-æœ¬æ¨¡å—å®žçŽ°æ¡Œé¢å® ç‰©çš„é€æ˜Žçª—å£ã€è¿žç»­åŠ¨ç”»ã€é¼ æ ‡äº¤äº’ã€å¿«æ·æŽ§åˆ¶å’Œæƒ…å¢ƒé™ªä¼´ã€‚
-
-èŒè´£èŒƒå›´ï¼š
-- åˆ›å»ºæ— è¾¹æ¡†ã€é€æ˜Žã€å¯é€‰å§‹ç»ˆç½®é¡¶çš„ QWidgetï¼›
-- ä½¿ç”¨ Windows/macOS åŽŸç”Ÿçª—å£å±‚çº§è¡¥å¼ºç½®é¡¶ï¼ŒåŒæ—¶ä¿æŒä¸æ¿€æ´»ã€ä¸å ä»»åŠ¡æ å’Œè½®å»“å¤–ç‚¹å‡»ç©¿é€ï¼›
-- æä¾›â€œå§‹ç»ˆç½®é¡¶/æ¡Œé¢æ¨¡å¼â€å³æ—¶åˆ‡æ¢å¹¶æŒä¹…åŒ–ï¼Œåˆ‡æ¢æ—¶ä¸ç ´ååŠ¨ç”»ã€æ‹–åŠ¨å’Œäº’åŠ¨çŠ¶æ€ï¼›
-- æ’­æ”¾å¾ªçŽ¯æˆ–å•æ¬¡ PNG åºåˆ—ï¼Œå¹¶æ”¯æŒæ‹–æ‹½ã€åä¸‹ã€åå§¿å…¥ç¡å’Œåå‘èµ·èº«ï¼›
-- å¤„ç†å·¦å³ç¿»è½¬ã€è¾¹ç¼˜è½¬èº«åœé¡¿ã€äºšåƒç´ æ—¶é—´é©±åŠ¨ç§»åŠ¨å’ŒåŒæ­¥èº«ä½“èµ·ä¼ï¼›
-- ç”¨çª—å£é®ç½©è®©äººç‰©å¤–é€æ˜ŽåŒºåŸŸç©¿é€é¼ æ ‡ç‚¹å‡»ï¼›
-- ç¼“å­˜ä¸åŒ DPI ä¸‹çš„ç¼©æ”¾å¸§ï¼Œå¹¶åœ¨çª—å£è·¨æ˜¾ç¤ºå™¨åŽæŒ‰æ–°æ¯”ä¾‹é‡æ–°æ …æ ¼åŒ–ï¼›
-- æ”¯æŒå·¦é”®æ‹–åŠ¨ã€å•å‡»è°ƒæˆã€åŒå‡»å¿«æ·å£è¢‹ã€æ— äº’åŠ¨åˆ†çº§ä¼‘æ¯å’Œè¿žç»­å°ºå¯¸æ»‘å—ï¼›
-- æ”¯æŒç»™å…­æ¯›å–‚é£Ÿæˆ–é¥®å“ï¼Œå¹¶ç”¨ç‹¬ç«‹åŠé€æ˜Žæ–‡å­—æ°”æ³¡åé¦ˆçŠ¶æ€ï¼›
-- æ”¯æŒ Agent çŠ¶æ€ç¼“å­˜ã€å¼‚æ­¥ AIã€æ— ç¼ç¦»çº¿é™çº§ä»¥åŠå·¥ä½œã€çˆ±æ„ã€é¼“åŠ±å’Œå®‰æ…°åŠ¨ä½œï¼›
-- åœ¨å†…å­˜ä¸­ä¿ç•™æœ€è¿‘ä¸‰åè½®å®Œæ•´èŠå¤©ï¼Œå¹¶æŠŠæ›´æ—©å†…å®¹æ»šåŠ¨åŽ‹ç¼©ä¸ºé•¿æœŸæ‘˜è¦ï¼›
-- å°†è¿žæŽ¥ä¸Žé™ªä¼´è®¾ç½®æ”¶å£åˆ°å”¯ä¸€å…¥å£ï¼Œåªæœ‰æ˜¾å¼ ``user_action`` æ¥æºæ‰å…è®¸åˆ›å»ºè®¾ç½®çª—å£ï¼›
-- è‡ªåŠ¨è¯„åˆ†å¹¶ä¾æ¬¡å°è¯•æœ¬æœºéŸ³ä¹ Providerï¼ŒæˆåŠŸåŽæŠŠåŸºç¡€æŽ§åˆ¶é”å®šåˆ°å®žé™…æ’­æ”¾çš„å¹³å°ï¼›
-- æ”¯æŒç”µè„‘å›¾å±‚ã€æ‘¸å¤´å·¥ä½œæ°”æ³¡ã€ä»Šæ—¥/ç»ˆèº«è®¡æ—¶ã€æ¯å°æ—¶å¨ƒè¡£è§£é”åŠå¥åº·æé†’ï¼›
-- æ ¹æ®å‰å°åº”ç”¨ç²—ç²’åº¦ç±»åˆ«æ˜¾ç¤ºç”µè„‘ã€è€³æœºã€å‰ä»–ã€é¼“ã€é˜…è¯»æˆ–å†™å­—å›¾å±‚ï¼›
-- æ”¯æŒå¤´éƒ¨æ‘¸åŠ¨ã€è„¸éƒ¨/èº«ä½“/ç›¸æœºåˆ†åŒºç‚¹å‡»ã€è¿žç»­æˆ³å‡»ã€æ‚¬åœæ³¨è§†å’Œæ‹–æ‹½åŽè¡¨æƒ…ï¼›
-- é€šè¿‡ä¸Žè§’è‰²ç´ æè§£è€¦çš„çŸ¢é‡å›¾å±‚å¢žå¼ºå¼€å¿ƒã€å®³ç¾žã€æƒŠè®¶ã€ç”Ÿæ°”ã€å›°å€¦ã€ç–‘æƒ‘ã€è‡ªæ‹å’Œæ‹–æ‹½åé¦ˆï¼›
-- ä¼˜å…ˆä»Žç”¨æˆ·ç§æœ‰ç´ æç›®å½•æ˜¾ç¤ºè‡ªæ‹æˆç‰‡æ°”æ³¡ï¼ŒæŒ‰å½“å‰å±å¹• DPI ä¿æŒæ¸…æ™°åº¦ï¼Œå¹¶è´´è¿‘äººç‰©çœŸå®žè½®å»“å®šä½ï¼›
-- æ ‡å‡†è§’è‰²ç¡®è®¤åŽåŠ è½½æœ¬åœ°å® ç‰©ä¾›çŽ°åœºéªŒæ”¶ï¼›èµ°è·¯ç¡®è®¤ä»ä½œä¸ºæ‰“åŒ…é—¨ç¦ï¼›
-- ç»´æŠ¤äº²å¯†åº¦ã€ç²¾åŠ›ã€æ— èŠåº¦ä¸Žé¥±é£Ÿåº¦çš„ä¼šè¯å†…çŠ¶æ€ï¼›
-- ä½¿ç”¨ QTimer é©±åŠ¨çŠ¶æ€åˆ‡æ¢åŠæ°´å¹³ç§»åŠ¨ï¼Œå¹¶é™åˆ¶çª—å£ä¸è„±ç¦»å½“å‰å±å¹•ã€‚
-
-Agent å¿«é€Ÿå®šä½ï¼š
-- çª—å£åˆå§‹åŒ–å’Œè®¡æ—¶å™¨è®¾ç½®ä½äºŽ PetWindow.__init__()ï¼›
-- çŠ¶æ€æ˜¾ç¤ºå…¥å£ä½äºŽ set_state()ï¼Œé«˜ DPI é‡ç»˜ä½äºŽ _refresh_pixmap()ï¼›
-- è‡ªåŠ¨ç§»åŠ¨ä½äºŽ _movement_tick()ï¼›
-- é¼ æ ‡äº‹ä»¶ä½äºŽ mousePressEvent() ç­‰ Qt äº‹ä»¶æ–¹æ³•ï¼›
-- é€€å‡ºç”± quit_requested ä¿¡å·äº¤ç»™åº”ç”¨ç”Ÿå‘½å‘¨æœŸæ¨¡å—å¤„ç†ã€‚
-
-è¾“å…¥ä¸º PetSettingsã€ç´ ææ¸…å•å’Œå¯é€‰çš„ç”¨æˆ·è‡ªæ‹ç…§ç‰‡èµ„æºï¼Œè¾“å‡ºä¸ºå¯äº¤äº’çš„ Qt çª—å£ã€‚
-æœ¬æ¨¡å—å¯åŠ¨åŽåªåœ¨åŽå°ä½Žé¢‘æ£€æµ‹ Agentï¼›æ¯æ¡èŠå¤©ä¸é‡å¤å®Œæ•´æ£€æµ‹ï¼Œæ™®é€šåŠ¨ç”»ã€ç‰¢éªšå’ŒæŠ¥æ—¶å‡ä¸è®¿é—®ç½‘ç»œã€‚
-API ä»¤ç‰Œç”±ç³»ç»Ÿå‡­æ®åº“ç®¡ç†ï¼ŒèŠå¤©æ–‡æœ¬ä¸è½ç›˜ï¼›ä½ç½®æŒä¹…åŒ–ç”± app.py åœ¨é€€å‡ºæ—¶å®Œæˆã€‚
-`user_assets/` é»˜è®¤ä¸è¿›å…¥ Gitï¼›åªæœ‰ç”¨æˆ·ä¸»åŠ¨æ”¾å…¥çš„è‡ªæ‹å›¾ç‰‡æ‰ä¼šåœ¨æœ¬æœºæ˜¾ç¤ºã€‚
-"""
-
-from __future__ import annotations
-
-import json
-import logging
-import os
-import random
-import sys
-import time
-from collections import OrderedDict, deque
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Callable
-
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import (
-    QAction,
-    QCloseEvent,
-    QContextMenuEvent,
-    QDesktopServices,
-    QFont,
-    QHideEvent,
-    QMouseEvent,
-    QMoveEvent,
-    QPainter,
-    QPixmap,
-    QRegion,
-    QScreen,
-    QShowEvent,
-    QTransform,
-)
-from PySide6.QtWidgets import (
-    QApplication,
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QInputDialog,
-    QMenu,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
-
-try:
-    from PySide6.QtTextToSpeech import QTextToSpeech
-except ImportError:
-    QTextToSpeech = None
-
-try:
-    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-except ImportError:
-    QAudioOutput = QMediaPlayer = None
-
-from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
-from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
-from .activity import active_application_category
-from .behavior import (
-    BehaviorModel,
-    CompanionBehaviorController,
-    PetMood,
-    PetState,
-    StateDecision,
-)
-from .chat import AISettingsDialog, ChatDialog
-from .chat_manager import (
-    AgentManager,
-    ChatManager,
-    ManagedChatReply,
-    OfflineDialogueManager,
-    should_start_startup_detection,
-)
-from .chat_memory import ConversationMemory, conversation_memory_path
-from .companion import (
-    ACTION_BY_KEY,
-    APP_DISPLAY_NAME,
-    COMPANION_ACTIONS,
-    FOOD_OPTIONS,
-    CompanionModel,
-    CompanionReply,
-)
-from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
-from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
-from .input_activity import system_idle_seconds
-from .emotion_effects import draw_emotion_effect, emotion_effect_name
-from .daily_report import render_daily_report
-from .diary import DailyCompanionStats, album_directory
-from .focus_analytics import FocusAnalyticsStore, FocusQualityTracker
-from .focus_session import FocusSessionManager
-from .growth import (
-    ACTION_GROUPS,
-    ACTION_SPRITES,
-    COMPLETE_ACTIONS,
-    FOCUS_ACTIONS,
-    RANDOM_ACTIONS,
-    REST_ACTIONS,
-    growth_progress_text,
-    positive_mood,
-    stage_for_seconds,
-    time_of_day_activity,
-)
-from .local_content import find_audio_variants, load_local_lines
-from .liumao_worldview import family_music_mode
-from .resources import resource_path
-from .quiet_mode import detect_quiet_mode
-from .social import SocialClient
-from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialProfileThread, SocialSyncThread
-from .music_control import MusicControlResult, MusicController, MusicProviderManager
-from .music_playback import SongPlaybackResult
-from .wellness import WellnessReminderModel
-from .work_timer import WorkTimerModel, format_work_duration
-from .workflow import WorkflowError, character_is_approved, load_workflow
-from .time_memory import TimeMemory
-from .today_note import TimeMemoryWindow, TodayNoteWindow
-
-
-LOGGER = logging.getLogger(__name__)
-SETTINGS_SOURCE_USER_ACTION = "user_action"
-
-
-DEFAULT_WALK_MOTION_FACTORS = (0.45, 0.7, 1.2, 1.65, 0.45, 0.7, 1.2, 1.65)
-
-
-class IdleRecoveryDialog(QDialog):
-    """Show one reusable, non-modal decision window for an idle episode.
-
-    A modal ``QMessageBox.exec()`` used to be created every time the system
-    idle counter dipped below the threshold.  The dialog now lives for the
-    whole pet window and emits one decision, so a single absence cannot spawn
-    a stack of windows or block the desktop event loop.
-    """
-
-    decision_requested = Signal(str)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("å›žæ¥å•¦")
-        self.setModal(False)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setMinimumWidth(390)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(10)
-        self.summary_label = QLabel()
-        self.summary_label.setWordWrap(True)
-        self.summary_label.setStyleSheet("font-size: 15px;")
-        layout.addWidget(self.summary_label)
-        self.detail_label = QLabel(
-            "è¿™é‡Œåªæ ¹æ®é”®ç›˜/é¼ æ ‡çš„ç³»ç»Ÿè¾“å…¥è®¡æ—¶ï¼›ç”µè„‘åŽå°è¿è¡Œã€æ’­æ”¾éŸ³ä¹æˆ–ä¸‹è½½æ–‡ä»¶ä¸ç®—é”®é¼ æ“ä½œã€‚"
-        )
-        self.detail_label.setWordWrap(True)
-        self.detail_label.setStyleSheet("color: #667784; font-size: 12px;")
-        layout.addWidget(self.detail_label)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        self.rest_button = QPushButton("ç®—ä½œä¼‘æ¯")
-        self.rest_button.setAutoDefault(False)
-        self.rest_button.clicked.connect(lambda: self._request_decision("rest"))
-        buttons.addWidget(self.rest_button)
-        self.focus_button = QPushButton("è®¡å…¥ä¸“æ³¨")
-        self.focus_button.setAutoDefault(False)
-        self.focus_button.clicked.connect(lambda: self._request_decision("focus"))
-        buttons.addWidget(self.focus_button)
-        layout.addLayout(buttons)
-
-    def set_away_seconds(self, seconds: int) -> None:
-        """Update the elapsed absence shown by the reusable dialog."""
-
-        seconds = max(1, int(seconds))
-        minutes, remainder = divmod(seconds, 60)
-        hours, minutes = divmod(minutes, 60)
-        if hours:
-            duration = f"{hours} å°æ—¶ {minutes} åˆ†é’Ÿ"
-        elif minutes:
-            duration = f"{minutes} åˆ† {remainder:02d} ç§’"
-        else:
-            duration = f"{remainder} ç§’"
-        self.summary_label.setText(
-            f"æ£€æµ‹åˆ°ä½ åˆšåˆšç¦»å¼€äº†çº¦ {duration}ã€‚\nè¿™æ®µæ—¶é—´è¦è®°ä½œä¼‘æ¯ï¼Œè¿˜æ˜¯è®¡å…¥ä¸“æ³¨ï¼Ÿ"
-        )
-
-    def _request_decision(self, decision: str) -> None:
-        """Hide first, then notify the owner so the window cannot duplicate."""
-
-        self.hide()
-        self.decision_requested.emit(decision)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """Closing the window dismisses this episode without re-prompting."""
-
-        event.ignore()
-        self.hide()
-        self.decision_requested.emit("dismiss")
-
-
-class PetWindow(QWidget):
-    """æ˜¾ç¤ºå¹¶æŽ§åˆ¶å•ä¸ªæ¡Œé¢å® ç‰©çš„é€æ˜Žé¡¶å±‚çª—å£ã€‚"""
-
-    quit_requested = Signal()
-    pause_changed = Signal(bool)
-    work_timer_changed = Signal(bool)
-    always_on_top_changed = Signal(bool)
-    pet_name_changed = Signal(str)
-    owner_nickname_changed = Signal(str)
-
-    def _pet_name(self) -> str:
-        """Return the immutable character identity used by every local UI."""
-
-        return PET_NAME
-
-    def _owner_nickname(self) -> str:
-        return clean_owner_nickname(getattr(self.settings, "owner_nickname", ""))
-
-    def _walk_allowed(self) -> bool:
-        """è¿”å›žå½“å‰æ˜¯å¦å…è®¸å…­æ¯›è‡ªä¸»æ¨ªå‘è·‘åŠ¨ã€‚"""
-
-        return bool(getattr(self.settings, "allow_autonomous_walk", False)) and not self.paused
-
-    def __init__(
-        self,
-        settings: PetSettings,
-        work_timer: WorkTimerModel | None = None,
-    ) -> None:
-        super().__init__()
-        self.settings = settings
-        self.behavior = BehaviorModel(settings)
-        self.companion_behavior = CompanionBehaviorController()
-        self.mood = PetMood()
-        self.companion = CompanionModel(self.mood)
-        self.work_timer = work_timer or WorkTimerModel()
-        self.focus_session = FocusSessionManager(self.work_timer, self)
-        self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
-        self.daily_stats = DailyCompanionStats(
-            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-        )
-        self.time_memory = TimeMemory(
-            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-        )
-        self._today_note_window: TodayNoteWindow | None = None
-        self._time_memory_window: TimeMemoryWindow | None = None
-        self.focus_analytics = FocusAnalyticsStore(
-            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-        )
-        self._focus_quality_tracker = FocusQualityTracker()
-        self._last_focus_quality = None
-        self.wellness = WellnessReminderModel()
-        self.state = PetState.IDLE
-        self.direction = -1
-        self._movement_x = float(self.x())
-        self._last_movement_at = time.monotonic()
-        self.paused = False
-        self.dragging = False
-        self._press_pending = False
-        self._press_local = QPoint()
-        self._press_global = QPoint()
-        self._drag_offset = QPoint()
-        self._hover_zone = ""
-        self._stroke_points: deque[tuple[float, QPoint]] = deque()
-        self._last_stroke_reaction = 0.0
-        self._poke_times: deque[float] = deque()
-        self._bob_phase = False
-        self._effect_phase = 0
-        self._frame_index = 0
-        self._animation_direction = 1
-        self._animation_finished: Callable[[], None] | None = None
-        self._turn_paused = False
-        self._last_user_interaction = time.monotonic()
-        self._auto_paused_for_idle = False
-        self._idle_pause_started_at: datetime | None = None
-        self._pending_idle_seconds = 0
-        self._idle_prompt_pending = False
-        self._idle_recovery_resolved = False
-        self._idle_above_threshold_samples = 0
-        self._idle_recovery_dialog: IdleRecoveryDialog | None = None
-        self._sleep_after_sit = False
-        self._room_quick_status = ""
-        self._room_quick_status_expires_at: datetime | None = None
-        self._screen_change_connected = False
-        self._connected_screen: QScreen | None = None
-        self._pixmaps = self._load_pixmaps()
-        self._selfie_photo = self._load_selfie_photo()
-        self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
-        self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
-        self.credentials = CredentialStore()
-        self.ai_service = AIChatService(self.credentials)
-        self.social_client = SocialClient(
-            persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-        )
-        self._social_dialog: SocialHubDialog | None = None
-        self._social_thread: SocialSyncThread | None = None
-        self._social_event_threads: list[SocialEventThread] = []
-        self._social_profile_threads: list[SocialProfileThread] = []
-        self._owner_nickname_sync_key: tuple[str, str] | None = None
-        self._owner_nickname_sync_inflight = False
-        self._buddy_visit_window = BuddyVisitWindow()
-        self._seen_visit_ids: set[str] = set()
-        self._shown_active_visit_ids: set[str] = set()
-        self._chat_dialog: ChatDialog | None = None
-        self._chat_memory = ConversationMemory(
-            max_recent_rounds=30,
-            persist_path=conversation_memory_path()
-            if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-            else None,
-        )
-        self.agent_manager = AgentManager(self.settings, self.credentials, self)
-        self.offline_dialogue_manager = OfflineDialogueManager(
-            self.companion,
-            self.work_timer.status_text,
-            lambda: self.work_timer.today_seconds() // 3600,
-            local_context=self.time_memory.summary.context,
-        )
-        self.chat_manager = ChatManager(
-            self.settings,
-            self.ai_service,
-            self.agent_manager,
-            self.offline_dialogue_manager,
-            self,
-            local_context_provider=self.time_memory.summary.context,
-            action_executor=self.time_memory.actions,
-        )
-        self.music_provider_manager = MusicProviderManager(self.settings)
-        self.music_controller = MusicController(
-            self.settings,
-            self.music_provider_manager,
-            self,
-        )
-        self.agent_manager.status_changed.connect(self._agent_status_changed)
-        self.chat_manager.reply_ready.connect(self._managed_chat_reply)
-        self.chat_manager.busy_changed.connect(self._chat_busy_changed)
-        self.chat_manager.notice.connect(self._chat_notice)
-        self.music_controller.result_ready.connect(self._music_control_result)
-        self.focus_session.changed.connect(self._focus_snapshot_changed)
-        self._action_sequence_id = 0
-        self._last_announced_hour = ""
-        self._ambient_activity = "none"
-        self._activity_transition_from = QPixmap()
-        self._activity_transition_step = 0
-        self._activity_transition_steps = 8
-        self._manual_activity_until = 0.0
-        self._last_app_category = "other"
-        self._late_wakeup_shown = False
-        self._last_growth_hour = stage_for_seconds(self.work_timer.today_seconds()).hour
-        self._long_press_triggered = False
-        self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
-        self._babuda_variant_index = 0
-        self._pending_context_global = QPoint()
-        self._suppress_context_until = 0.0
-        self._audio_output = QAudioOutput(self) if QAudioOutput is not None else None
-        self._media_player = QMediaPlayer(self) if QMediaPlayer is not None else None
-        if self._audio_output is not None and self._media_player is not None:
-            self._audio_output.setVolume(0.9)
-            self._media_player.setAudioOutput(self._audio_output)
-
-        self.setWindowFlags(self._pet_window_flags())
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setWindowTitle(f"{APP_DISPLAY_NAME} Â· {self._pet_name()}")
-        self.setMouseTracking(True)
-
-        source = self._pixmaps[PetState.IDLE][0]
-        width = round(settings.display_height * source.width() / source.height())
-        self.setFixedSize(width + 12, settings.display_height + 14)
-        self.label = QLabel(self)
-        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setGeometry(6, 0, width, settings.display_height + 8)
-
-        self.photo_bubble = QLabel()
-        self.photo_bubble.setWindowFlags(self._ambient_window_flags())
-        self.photo_bubble.setAttribute(
-            Qt.WidgetAttribute.WA_ShowWithoutActivating,
-            True,
-        )
-        self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.photo_bubble.setStyleSheet("background: transparent;")
-
-        self.speech_bubble = QLabel()
-        self.speech_bubble.setWindowFlags(self._ambient_window_flags())
-        self.speech_bubble.setAttribute(
-            Qt.WidgetAttribute.WA_ShowWithoutActivating,
-            True,
-        )
-        self.speech_bubble.setWordWrap(True)
-        bubble_font = QFont()
-        bubble_font.setFamilies(
-            ["PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", "Arial"]
-        )
-        bubble_font.setPointSize(10)
-        self.speech_bubble.setFont(bubble_font)
-        self.speech_bubble.setMinimumWidth(180)
-        self.speech_bubble.setMaximumWidth(280)
-        self.speech_bubble.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.speech_bubble.setStyleSheet(
-            "QLabel { background: rgba(239, 245, 248, 175); "
-            "color: #27313d; border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px; "
-            "padding: 10px 13px; font-size: 14px; }"
-        )
-
-        self.work_controls = WorkControlBubble()
-        self.work_controls.pause_requested.connect(self.pause_work_timer)
-        self.work_controls.finish_requested.connect(self.finish_work_timer)
-        self.quick_panel = QuickControlPanel(self._pet_name())
-        self.quick_panel.chat_requested.connect(self.prompt_dialogue)
-        self.quick_panel.work_requested.connect(self._quick_work_action)
-        self.quick_panel.music_control_requested.connect(self.control_music)
-        self.quick_panel.music_requested.connect(self.play_random_song)
-        self.quick_panel.size_requested.connect(self.open_size_control)
-        self.quick_panel.settings_requested.connect(self.open_settings)
-
-        self.movement_timer = QTimer(self)
-        self.movement_timer.setInterval(settings.movement_interval_ms)
-        self.movement_timer.timeout.connect(self._movement_tick)
-        self.movement_timer.start()
-
-        self.state_timer = QTimer(self)
-        self.state_timer.setSingleShot(True)
-        self.state_timer.timeout.connect(self._state_timeout)
-
-        self.animation_timer = QTimer(self)
-        self.animation_timer.timeout.connect(self._animation_tick)
-
-        self.turn_timer = QTimer(self)
-        self.turn_timer.setSingleShot(True)
-        self.turn_timer.timeout.connect(self._finish_turn)
-
-        self.interaction_timer = QTimer(self)
-        self.interaction_timer.setSingleShot(True)
-        self.interaction_timer.timeout.connect(self._finish_interaction)
-
-        self.long_press_timer = QTimer(self)
-        self.long_press_timer.setSingleShot(True)
-        self.long_press_timer.timeout.connect(self._trigger_long_press)
-
-        self.hover_timer = QTimer(self)
-        self.hover_timer.setSingleShot(True)
-        self.hover_timer.timeout.connect(self._trigger_hover_curiosity)
-
-        self.photo_timer = QTimer(self)
-        self.photo_timer.setSingleShot(True)
-        self.photo_timer.timeout.connect(self.photo_bubble.hide)
-
-        self.speech_timer = QTimer(self)
-        self.speech_timer.setSingleShot(True)
-        self.speech_timer.timeout.connect(self.speech_bubble.hide)
-
-        self.effect_timer = QTimer(self)
-        self.effect_timer.setInterval(90)
-        self.effect_timer.timeout.connect(self._effect_tick)
-
-        self.bob_timer = QTimer(self)
-        self.bob_timer.setInterval(280)
-        self.bob_timer.timeout.connect(self._bob_tick)
-        self.bob_timer.start()
-
-        self.work_clock_timer = QTimer(self)
-        self.work_clock_timer.setInterval(1000)
-        self.work_clock_timer.timeout.connect(self._work_timer_tick)
-        self.work_clock_timer.start()
-
-        self.ambient_timer = QTimer(self)
-        self.ambient_timer.setSingleShot(True)
-        self.ambient_timer.timeout.connect(self._ambient_tick)
-        self._schedule_ambient()
-
-        self.song_timer = QTimer(self)
-        self.song_timer.setSingleShot(True)
-        self.song_timer.timeout.connect(self._song_inspiration_tick)
-        self._schedule_song_inspiration()
-
-        self.context_menu_timer = QTimer(self)
-        self.context_menu_timer.setSingleShot(True)
-        self.context_menu_timer.timeout.connect(self._show_deferred_context_menu)
-
-        self.activity_timer = QTimer(self)
-        self.activity_timer.setSingleShot(True)
-        self.activity_timer.timeout.connect(self._activity_timeout)
-
-        self.activity_transition_timer = QTimer(self)
-        self.activity_transition_timer.setInterval(35)
-        self.activity_transition_timer.timeout.connect(self._activity_transition_tick)
-
-        self.work_activity_timer = QTimer(self)
-        self.work_activity_timer.setSingleShot(True)
-        self.work_activity_timer.timeout.connect(self._work_activity_tick)
-
-        self.hourly_timer = QTimer(self)
-        self.hourly_timer.setInterval(15000)
-        self.hourly_timer.timeout.connect(self._hourly_tick)
-        self.hourly_timer.start()
-
-        self.app_timer = QTimer(self)
-        self.app_timer.setInterval(5000)
-        self.app_timer.timeout.connect(self._app_awareness_tick)
-        self.app_timer.start()
-
-        self.topmost_timer = QTimer(self)
-        self.topmost_timer.setInterval(4000)
-        self.topmost_timer.timeout.connect(self._ensure_on_top)
-        self.topmost_timer.start()
-
-        self._last_social_heartbeat_at = 0.0
-        self._social_heartbeat_due = True
-        self.social_timer = QTimer(self)
-        # Refresh visible room state every 30 seconds, but write presence only
-        # every 90 seconds or immediately after an explicit state transition.
-        self.social_timer.setInterval(30_000)
-        self.social_timer.timeout.connect(self._social_tick)
-        self.social_timer.start()
-        self.social_sync_timer = QTimer(self)
-        self.social_sync_timer.setSingleShot(True)
-        self.social_sync_timer.timeout.connect(self._social_tick)
-        if self.social_client.signed_in:
-            QTimer.singleShot(2500, self._social_tick)
-
-        # The focus timer follows real keyboard/mouse activity instead of
-        # continuing forever while the user has stepped away.  This timer
-        # only reads the OS-level idle duration; it never records input data.
-        self.input_idle_timer = QTimer(self)
-        self.input_idle_timer.setInterval(5_000)
-        self.input_idle_timer.timeout.connect(self._check_input_idle)
-        self.input_idle_timer.start()
-        self.idle_recovery_timer = QTimer(self)
-        self.idle_recovery_timer.setSingleShot(True)
-        self.idle_recovery_timer.timeout.connect(self._ask_idle_recovery)
-
-        self._sync_hourly_outfit(announce=False)
-        self.set_state(PetState.IDLE)
-        self._schedule(self.behavior.initial_idle())
-        if should_start_startup_detection():
-            QTimer.singleShot(0, self.agent_manager.start_background_check)
-
-    def _pet_window_flags(self) -> Qt.WindowType:
-        """è¿”å›žä¸å ä»»åŠ¡æ ã€ä¸æŽ¥æ”¶é”®ç›˜ç„¦ç‚¹çš„å® ç‰©çª—å£æ ‡å¿—ã€‚"""
-
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        if self.settings.always_on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        return flags
-
-    def _ambient_window_flags(self) -> Qt.WindowType:
-        """è®©è‡ªåŠ¨æ°”æ³¡è·Ÿéšå® ç‰©æ¨¡å¼ï¼Œå¹¶ä¿è¯æ˜¾ç¤ºæ—¶ä¸æ¿€æ´»å½“å‰åº”ç”¨ã€‚"""
-
-        flags = (
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        if self.settings.always_on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        return flags
-
-    def _load_pixmaps(self) -> dict[PetState, list[QPixmap]]:
-        """æ ¹æ®ç´ ææ¸…å•åŠ è½½å„çŠ¶æ€å¸§åºåˆ—å¹¶éªŒè¯å®Œæ•´æ€§ã€‚"""
-
-        manifest_path = resource_path("assets/pet/manifest.json")
-        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1":
-            return self._load_manifest_pixmaps(manifest_path)
-        try:
-            custom_manifest = resource_path("user_assets/pet/manifest.json")
-        except FileNotFoundError:
-            pass
-        else:
-            if not character_is_approved(load_workflow()):
-                raise WorkflowError(
-                    "æ£€æµ‹åˆ°ç§æœ‰å® ç‰©ç´ æï¼Œä½†æ ‡å‡†äººç‰©å°šæœªç¡®è®¤ï¼›æ‹’ç»é™é»˜å›žé€€åˆ°æ¼”ç¤ºè§’è‰²ã€‚"
-                )
-            manifest_path = custom_manifest
-        return self._load_manifest_pixmaps(manifest_path)
-
-    def _load_manifest_pixmaps(
-        self,
-        manifest_path: Path,
-    ) -> dict[PetState, list[QPixmap]]:
-        """ä»ŽæŒ‡å®šæ¸…å•åŠ è½½å¸§ï¼›æµ‹è¯•å¯å€Ÿæ­¤å›ºå®šä½¿ç”¨å…¬å¼€æ¼”ç¤ºç´ æã€‚"""
-
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        animations: dict[str, list[str]] = manifest["animations"]
-        motion_factors = manifest.get(
-            "walk_motion_factors",
-            DEFAULT_WALK_MOTION_FACTORS,
-        )
-        if len(motion_factors) != len(animations["walk"]):
-            raise ValueError("èµ°è·¯ä½ç§»æ›²çº¿å¿…é¡»ä¸Žèµ°è·¯åŠ¨ç”»å¸§æ•°ä¸€è‡´")
-        self._walk_motion_factors = tuple(float(value) for value in motion_factors)
-        mapping = {
-            PetState.IDLE: animations["idle"],
-            PetState.WALK: animations["walk"],
-            PetState.SIT: animations["sit"],
-            PetState.SLEEP: animations["sleep"],
-            PetState.WAVE: animations["wave"],
-            PetState.HAPPY: animations["happy"],
-            PetState.SHY: animations["shy"],
-            PetState.SURPRISED: animations["surprised"],
-            PetState.ANNOYED: animations["annoyed"],
-            PetState.SLEEPY: animations["sleepy"],
-            PetState.CURIOUS: animations["curious"],
-            PetState.SELFIE: animations["selfie"],
-            PetState.DRAG: animations["drag"],
-        }
-        pixmaps: dict[PetState, list[QPixmap]] = {}
-        for state, relative_paths in mapping.items():
-            state_frames = []
-            for relative in relative_paths:
-                path = manifest_path.parent / relative
-                if not path.is_file():
-                    raise FileNotFoundError(f"ç¼ºå°‘å® ç‰©ç´ æï¼š{path}")
-                pixmap = QPixmap(str(path))
-                if pixmap.isNull():
-                    raise ValueError(f"æ— æ³•åŠ è½½å® ç‰©ç´ æï¼š{path}")
-                state_frames.append(pixmap)
-            if not state_frames:
-                raise ValueError(f"çŠ¶æ€ {state.value} æ²¡æœ‰å¯ç”¨ç´ æå¸§")
-            pixmaps[state] = state_frames
-        return pixmaps
-
-    def _load_selfie_photo(self) -> QPixmap:
-        """åªåŠ è½½ç”¨æˆ·æä¾›çš„åŽŸå§‹è‡ªæ‹ç…§ç‰‡ï¼Œä¸ç”¨ç”Ÿæˆå¸§å†’å……åŽŸå›¾ã€‚"""
-
-        for relative in (
-            "user_assets/selfie.png",
-            "user_assets/selfie.jpg",
-            "user_assets/selfie.jpeg",
-            "user_assets/image.png",
-        ):
-            try:
-                path = resource_path(relative)
-            except FileNotFoundError:
-                continue
-            photo = QPixmap(str(path))
-            if not photo.isNull():
-                return photo
-        return QPixmap()
-
-    def place_at_start(self) -> None:
-        """æŒ‰å·²ä¿å­˜ä½ç½®æˆ–ä¸»å±å¹•å³ä¸‹è§’æ”¾ç½®çª—å£ã€‚"""
-
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return
-        area = screen.availableGeometry()
-        if self.settings.start_x is None or self.settings.start_y is None:
-            x = area.right() - self.width() - 24
-            y = area.bottom() - self.height() - 12
-        else:
-            x = self.settings.start_x
-            y = self.settings.start_y
-        self.move(self._constrained_position(QPoint(x, y)))
-
-    def set_state(self, state: PetState) -> None:
-        """åˆ‡æ¢è¡Œä¸ºçŠ¶æ€ã€é‡ç½®å¸§åºå·å¹¶åˆ·æ–°å½“å‰å›¾ç‰‡ã€‚"""
-
-        self.state = state
-        self._frame_index = 0
-        self._animation_direction = 1
-        self._animation_finished = None
-        self._turn_paused = False
-        self._movement_x = float(self.x())
-        self._last_movement_at = time.monotonic()
-        self.turn_timer.stop()
-        display_state = state
-        frame_count = len(self._pixmaps[display_state])
-        if frame_count > 1:
-            self.animation_timer.start(self._frame_interval(display_state, 0))
-        else:
-            self.animation_timer.stop()
-        if display_state is PetState.WALK:
-            self._apply_frame_offset(display_state)
-        else:
-            self.label.move(6, 0)
-        self._effect_phase = 0
-        if emotion_effect_name(display_state) is None:
-            self.effect_timer.stop()
-        else:
-            self.effect_timer.start()
-        self._refresh_pixmap()
-
-    def _frame_interval(self, state: PetState, frame_index: int) -> int:
-        """è¿”å›žæŒ‡å®šåŠ¨ç”»å¸§çš„åœç•™æ—¶é—´ï¼Œä½¿çœ¨çœ¼ã€è¿‡æ¸¡ä¸Žè¡Œèµ°èŠ‚å¥å½¼æ­¤ç‹¬ç«‹ã€‚"""
-
-        if state is PetState.IDLE:
-            durations = (820, 360, 100, 120, 140, 720)
-            return durations[frame_index % len(durations)]
-        if state is PetState.WALK:
-            return self.settings.walk_frame_interval_ms
-        if state is PetState.SIT:
-            return 160
-        if state is PetState.SLEEP:
-            return 180
-        if state is PetState.DRAG:
-            return 180
-        return 380
-
-    @staticmethod
-    def _remember_cache_item(cache, key, value) -> None:
-        """å†™å…¥å°åž‹æœ€è¿‘ä½¿ç”¨ç¼“å­˜ï¼Œå¹¶é™åˆ¶é•¿æœŸè¿è¡Œæ—¶çš„å†…å­˜å ç”¨ã€‚"""
-
-        cache[key] = value
-        cache.move_to_end(key)
-        while len(cache) > 96:
-            cache.popitem(last=False)
-
-    def _current_source(self) -> tuple[PetState, QPixmap]:
-        """è¿”å›žå½“å‰æ˜¾ç¤ºçŠ¶æ€åŠæ–¹å‘å¤„ç†åŽçš„åŽŸå§‹å¸§ã€‚"""
-
-        display_state = self.state
-        frames = self._pixmaps[display_state]
-        pixmap = frames[min(self._frame_index, len(frames) - 1)]
-        if self.direction < 0 and display_state is PetState.WALK:
-            pixmap = pixmap.transformed(QTransform().scale(-1, 1))
-        return display_state, pixmap
-
-    def _refresh_pixmap(self) -> None:
-        """ä»Žç¼“å­˜å–å¾—æˆ–æŒ‰å½“å‰å±å¹•è®¾å¤‡åƒç´ æ¯”æ …æ ¼åŒ–å½“å‰åŠ¨ç”»å¸§ã€‚"""
-
-        display_state, pixmap = self._current_source()
-        ratio = max(1.0, self.devicePixelRatioF())
-        direction_key = self.direction if display_state is PetState.WALK else 0
-        cache_key = (
-            display_state,
-            self._frame_index,
-            direction_key,
-            round(ratio, 3),
-            self.label.width(),
-            self.label.height(),
-        )
-        scaled = self._render_cache.get(cache_key)
-        if scaled is None:
-            target = QSize(
-                max(1, round(self.label.width() * ratio)),
-                max(1, round(self.label.height() * ratio)),
-            )
-            scaled = pixmap.scaled(
-                target,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            scaled.setDevicePixelRatio(ratio)
-            self._remember_cache_item(self._render_cache, cache_key, scaled)
-        composed = draw_emotion_effect(
-            scaled,
-            display_state,
-            self._effect_phase,
-        )
-        activity = self._ambient_activity
-        if self.work_timer.is_running and activity in {"", "none"}:
-            activity = "computer"
-        composed = draw_activity_overlay(
-            composed,
-            activity,
-            self.settings.equipped_outfit,
-            self._effect_phase,
-        )
-        visible = self._blend_activity_transition(composed)
-        self.label.setPixmap(visible)
-        effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
-        overlay_key = hash((activity, self.settings.equipped_outfit, self._effect_phase % 2))
-        self._refresh_window_mask(display_state, visible, direction_key, effect_key ^ overlay_key)
-
-    def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
-        """æŠŠä¸Šä¸€ä¸ªå®Œæ•´åŠ¨ä½œä¸Žç›®æ ‡åŠ¨ä½œçŸ­æš‚äº¤å‰æ·¡åŒ–ï¼Œé¿å…é™æ€å›¾ç¡¬åˆ‡ã€‚"""
-
-        previous = self._activity_transition_from
-        if previous.isNull() or self._activity_transition_step >= self._activity_transition_steps:
-            return target
-        if previous.size() != target.size():
-            previous = previous.scaled(
-                target.size(),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            previous.setDevicePixelRatio(target.devicePixelRatio())
-        progress = self._activity_transition_step / self._activity_transition_steps
-        result = QPixmap(target.size())
-        result.fill(Qt.GlobalColor.transparent)
-        result.setDevicePixelRatio(target.devicePixelRatio())
-        painter = QPainter(result)
-        painter.setOpacity(1.0 - progress)
-        painter.drawPixmap(0, 0, previous)
-        painter.setOpacity(progress)
-        painter.drawPixmap(0, 0, target)
-        painter.end()
-        return result
-
-    def _activity_transition_tick(self) -> None:
-        """æŽ¨è¿›çº¦ 280 æ¯«ç§’çš„åŠ¨ä½œäº¤å‰æ·¡åŒ–ï¼›åŽŸæœ‰é€å¸§èµ°è·¯åŠ¨ç”»ä¸ç»è¿‡è¿™é‡Œã€‚"""
-
-        self._activity_transition_step += 1
-        if self._activity_transition_step >= self._activity_transition_steps:
-            self.activity_transition_timer.stop()
-            self._activity_transition_from = QPixmap()
-            self._mask_cache.clear()
-        self._refresh_pixmap()
-
-    def _change_ambient_activity(self, activity: str) -> None:
-        """ç»Ÿä¸€åˆ‡æ¢å®Œæ•´åŠ¨ä½œï¼Œå¹¶ä»Žå½“å‰å®žé™…ç”»é¢å¹³æ»‘è¿‡æ¸¡åˆ°ç›®æ ‡å›¾ã€‚"""
-
-        next_activity = activity if activity in ACTION_SPRITES else "none"
-        if next_activity == self._ambient_activity:
-            self._refresh_pixmap()
-            return
-        current = self.label.pixmap() if hasattr(self, "label") else QPixmap()
-        self._activity_transition_from = QPixmap(current) if not current.isNull() else QPixmap()
-        self._activity_transition_step = 0
-        self._ambient_activity = next_activity
-        self._mask_cache.clear()
-        if not self._activity_transition_from.isNull():
-            self.activity_transition_timer.start()
-        self._refresh_pixmap()
-
-    def _refresh_window_mask(
-        self,
-        display_state: PetState,
-        pixmap: QPixmap,
-        direction_key: int,
-        effect_key: int,
-    ) -> None:
-        """æŒ‰å½“å‰äººç‰©è½®å»“è®¾ç½®çª—å£é®ç½©ï¼Œä½¿é€æ˜Žç•™ç™½ä¸æ‹¦æˆªæ¡Œé¢ç‚¹å‡»ã€‚"""
-
-        cache_key = (
-            display_state,
-            self._frame_index,
-            direction_key,
-            effect_key,
-            self.label.width(),
-            self.label.height(),
-        )
-        region = self._mask_cache.get(cache_key)
-        if region is None:
-            logical = pixmap.scaled(
-                self.label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            offset_x = (self.label.width() - logical.width()) // 2
-            offset_y = (self.label.height() - logical.height()) // 2
-            region = QRegion(logical.mask()).translated(offset_x, offset_y)
-            self._remember_cache_item(self._mask_cache, cache_key, region)
-        self.setMask(region.translated(self.label.x(), self.label.y()))
-
-    def _effect_tick(self) -> None:
-        """æŽ¨è¿›è¡¨æƒ…ç¬¦å·çš„è½»å¾®æ¼‚æµ®åŠ¨ç”»å¹¶åˆ·æ–°åˆæˆå¸§ã€‚"""
-
-        if emotion_effect_name(self.state) is None:
-            self.effect_timer.stop()
-            return
-        self._effect_phase = (self._effect_phase + 1) % 12
-        self._refresh_pixmap()
-
-    def _animation_tick(self) -> None:
-        """æŽ¨è¿›å¾ªçŽ¯æˆ–å•æ¬¡è¿žç»­å¸§ï¼Œå¹¶åœ¨åå‘è¿‡æ¸¡ç»“æŸåŽæ‰§è¡Œå›žè°ƒã€‚"""
-
-        display_state = self.state
-        frames = self._pixmaps[display_state]
-        if len(frames) <= 1:
-            return
-        if self._animation_direction < 0:
-            self._frame_index = max(0, self._frame_index - 1)
-            if self._frame_index == 0:
-                self.animation_timer.stop()
-                callback = self._animation_finished
-                self._animation_finished = None
-                if callback is not None:
-                    QTimer.singleShot(0, callback)
-        elif display_state in (PetState.SIT, PetState.SLEEP, PetState.SELFIE):
-            self._frame_index = min(self._frame_index + 1, len(frames) - 1)
-            if self._frame_index == len(frames) - 1:
-                self.animation_timer.stop()
-        else:
-            self._frame_index = (self._frame_index + 1) % len(frames)
-        self._apply_frame_offset(display_state)
-        self._refresh_pixmap()
-        if self.animation_timer.isActive():
-            self.animation_timer.setInterval(
-                self._frame_interval(display_state, self._frame_index)
-            )
-
-    def _apply_frame_offset(self, display_state: PetState) -> None:
-        """æŒ‰è·‘æ­¥è½è„šã€åŽ‹ç¼©å’Œè…¾ç©ºé˜¶æ®µåŒæ­¥æ°´å¹³å›žå¼¹ä¸Žèº«ä½“èµ·ä¼ã€‚"""
-
-        if display_state is PetState.WALK:
-            x_offsets = (6, 6, 6, 6, 6, 6, 6, 6)
-            y_offsets = (3, 5, 2, 0, 3, 5, 2, 0)
-            phase = self._frame_index % len(y_offsets)
-            self.label.move(x_offsets[phase], y_offsets[phase])
-
-    def _movement_speed_pixels_per_second(self) -> float:
-        """æŒ‰æ—§é…ç½®çš„å¹³å‡é€Ÿåº¦è®¡ç®—æ’å®šæ°´å¹³é€Ÿåº¦ã€‚"""
-
-        return (
-            self.settings.movement_step
-            * 1000.0
-            / self.settings.movement_interval_ms
-        )
-
-    def showEvent(self, event: QShowEvent) -> None:
-        """çª—å£é¦–æ¬¡æ˜¾ç¤ºæ—¶è¿žæŽ¥è·¨å±ä¿¡å·å¹¶æŒ‰å½“å‰ DPI ç»˜åˆ¶ã€‚"""
-
-        super().showEvent(event)
-        handle = self.windowHandle()
-        if handle is not None and not self._screen_change_connected:
-            handle.screenChanged.connect(self._on_screen_changed)
-            self._screen_change_connected = True
-        self._on_screen_changed(handle.screen() if handle else None)
-        QTimer.singleShot(0, self._ensure_on_top)
-
-    def _ensure_on_top(self) -> None:
-        """æ¢å¤åŽŸç”Ÿçª—å£å±‚çº§ï¼Œä½†ç»ä¸æ¿€æ´»çª—å£æˆ–å¤ºèµ°å½“å‰è¾“å…¥ç„¦ç‚¹ã€‚"""
-
-        if not self.isVisible():
-            return
-        if os.name == "nt":
-            try:
-                import ctypes
-
-                user32 = ctypes.windll.user32
-                hwnd = int(self.winId())
-                get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-                set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-                extended = int(get_style(hwnd, -20))
-                extended |= 0x00000080 | 0x08000000  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-                set_style(hwnd, -20, extended)
-                insert_after = -1 if self.settings.always_on_top else -2
-                user32.SetWindowPos(
-                    hwnd,
-                    insert_after,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0x0001 | 0x0002 | 0x0010 | 0x0040,
-                )
-                return
-            except (AttributeError, OSError, ValueError):
-                pass
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior()
-        # å…¶ä»–å¹³å°ç”± WindowStaysOnTopHint è´Ÿè´£ã€‚è¿™é‡Œä¸èƒ½è°ƒç”¨ raise_()ï¼Œ
-        # å¦åˆ™ macOS/éƒ¨åˆ† Linux æ¡Œé¢ä¼šåœ¨ç”¨æˆ·æ‰“å­—æ—¶åˆ‡æ¢å½“å‰åº”ç”¨ã€‚
-
-    def _apply_macos_window_behavior(self) -> None:
-        """ä»¥ NSWindow æµ®åŠ¨å±‚çº§è·¨ç©ºé—´æ˜¾ç¤ºï¼›ä¿ç•™äººç‰©çª—å£é¼ æ ‡äº’åŠ¨ä¸”ä¸æ¿€æ´»ã€‚"""
-
-        if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
-            return
-        try:
-            import ctypes
-
-            objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.A.dylib")
-            objc.sel_registerName.restype = ctypes.c_void_p
-            objc.sel_registerName.argtypes = [ctypes.c_char_p]
-            objc.objc_msgSend.restype = ctypes.c_void_p
-            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            view = ctypes.c_void_p(int(self.winId()))
-            window = objc.objc_msgSend(view, objc.sel_registerName(b"window"))
-            if not window:
-                return
-            send_integer = objc.objc_msgSend
-            send_integer.restype = None
-            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_longlong]
-            level = 3 if self.settings.always_on_top else 0  # NSFloatingWindowLevel / normal
-            send_integer(window, objc.sel_registerName(b"setLevel:"), level)
-            behavior = (1 << 0) | (1 << 8) if self.settings.always_on_top else 0
-            send_integer(
-                window,
-                objc.sel_registerName(b"setCollectionBehavior:"),
-                behavior,
-            )
-            send_bool = objc.objc_msgSend
-            send_bool.restype = None
-            send_bool.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
-            send_bool(window, objc.sel_registerName(b"setHidesOnDeactivate:"), False)
-            send_bool(window, objc.sel_registerName(b"setIgnoresMouseEvents:"), False)
-        except (AttributeError, OSError, TypeError, ValueError):
-            return
-
-    def set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
-        """åœ¨ QQ å® ç‰©å¼ç½®é¡¶ä¸Žæ™®é€šæ¡Œé¢æ¨¡å¼é—´åˆ‡æ¢ï¼Œæ˜¾ç¤ºæ—¶ä¸æŠ¢ç„¦ç‚¹ã€‚"""
-
-        enabled = bool(enabled)
-        position = self.pos()
-        was_visible = self.isVisible()
-        bubble_states = (
-            (self.photo_bubble, self.photo_bubble.isVisible(), self.photo_bubble.pos()),
-            (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
-        )
-        self.settings.always_on_top = enabled
-        self.setWindowFlags(self._pet_window_flags())
-        self.move(position)
-        for bubble, visible, bubble_position in bubble_states:
-            bubble.setWindowFlags(self._ambient_window_flags())
-            bubble.move(bubble_position)
-            if visible:
-                bubble.show()
-        if was_visible:
-            self.show()
-            target_position = QPoint(position)
-
-            def restore_position_after_show() -> None:
-                # macOS may round a frameless window by one pixel while recreating
-                # its native handle. Restore the user-visible position afterwards.
-                self.move(target_position)
-                self._ensure_on_top()
-
-            QTimer.singleShot(0, restore_position_after_show)
-        if persist:
-            save_settings(self.settings)
-            self.show_speech(
-                "å§‹ç»ˆç½®é¡¶å·²å¼€å¯ï¼Œå…­æ¯›ä¼šç»§ç»­å¾…åœ¨å…¶ä»–çª—å£ä¸Šæ–¹ã€‚"
-                if enabled
-                else "å·²åˆ‡æ¢ä¸ºæ¡Œé¢æ¨¡å¼ï¼Œå…­æ¯›ä¼šç•™åœ¨æ™®é€šçª—å£å±‚çº§ã€‚",
-                3600,
-            )
-        self.always_on_top_changed.emit(enabled)
-
-    def moveEvent(self, event: QMoveEvent) -> None:
-        """äººç‰©ç§»åŠ¨æ—¶è®©ä»åœ¨æ˜¾ç¤ºçš„æ–‡å­—æ°”æ³¡è·Ÿéšå¯è§è½®å»“ã€‚"""
-
-        super().moveEvent(event)
-        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
-            self._position_speech_bubble()
-        if (
-            getattr(self, "_today_note_window", None) is not None
-            and self._today_note_window.isVisible()
-            and getattr(self._today_note_window, "mode", "detailed") == "compact"
-        ):
-            self._place_today_note_below_pet()
-
-    def hideEvent(self, event: QHideEvent) -> None:
-        """éšè—å® ç‰©æ—¶åŒæ­¥éšè—ç…§ç‰‡å’Œæ–‡å­—æ°”æ³¡ã€‚"""
-
-        self.photo_bubble.hide()
-        self.speech_bubble.hide()
-        self.work_controls.hide()
-        self.quick_panel.hide()
-        super().hideEvent(event)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """å…³é—­å® ç‰©æ—¶ä¿å­˜è®¡æ—¶å¹¶åœæ­¢ Agentã€éŸ³ä¹æŽ§åˆ¶åŠç‹¬ç«‹æ°”æ³¡çª—å£ã€‚"""
-
-        self.shutdown_work_timer()
-        self.chat_manager.shutdown()
-        self.music_controller.shutdown()
-        self.photo_bubble.close()
-        self.speech_bubble.close()
-        self._buddy_visit_window.close()
-        if self._today_note_window is not None:
-            self._today_note_window.close()
-        if self._time_memory_window is not None:
-            self._time_memory_window.close()
-        if self._social_thread is not None and self._social_thread.isRunning():
-            self._social_thread.wait(2500)
-        if self._media_player is not None:
-            self._media_player.stop()
-        super().closeEvent(event)
-
-    def _on_screen_changed(self, screen: QScreen | None) -> None:
-        """åˆ‡æ¢ç›®æ ‡å±å¹•åŽé‡è¿ž DPI ä¿¡å·å¹¶å»¶è¿Ÿåˆ·æ–°ç´ æã€‚"""
-
-        if self._connected_screen is not None:
-            try:
-                self._connected_screen.logicalDotsPerInchChanged.disconnect(
-                    self._on_dpi_changed
-                )
-            except (RuntimeError, TypeError):
-                pass
-        self._connected_screen = screen
-        if screen is not None:
-            screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
-        self._render_cache.clear()
-        QTimer.singleShot(0, self._refresh_pixmap)
-
-    def _on_dpi_changed(self, _dpi: float) -> None:
-        """æ˜¾ç¤ºå™¨ç¼©æ”¾å‘ç”Ÿå˜åŒ–æ—¶åˆ·æ–°å½“å‰å¸§ã€‚"""
-
-        self._render_cache.clear()
-        QTimer.singleShot(0, self._refresh_pixmap)
-
-    def _schedule(self, decision: StateDecision) -> None:
-        """åº”ç”¨çŠ¶æ€å†³ç­–å¹¶å®‰æŽ’ä¸‹ä¸€æ¬¡çŠ¶æ€åˆ‡æ¢ã€‚"""
-
-        self.set_state(decision.state)
-        if not self.dragging:
-            self.state_timer.start(decision.duration_ms)
-
-    def _state_timeout(self) -> None:
-        """å¤„ç†è‡ªä¸»çŠ¶æ€åˆ°æœŸï¼Œå¹¶æŒ‰æ— äº’åŠ¨æ—¶é•¿é€çº§è¿›å…¥åä¸‹ä¸Žç¡çœ ã€‚"""
-
-        if self.dragging:
-            return
-        self.mood.pass_time(self.state)
-        inactive_ms = self._inactive_ms()
-        if self._sleep_after_sit and self.state is PetState.SIT:
-            self._sleep_after_sit = False
-            self._schedule(self._decision(PetState.SLEEP, 8000))
-            return
-        if inactive_ms >= self.settings.inactive_sleep_ms:
-            if self.state is PetState.SLEEP:
-                self.state_timer.start(10000)
-                return
-            if self.state is PetState.SIT:
-                self._schedule(self._decision(PetState.SLEEP, 10000))
-                return
-            self._schedule_sleep_via_sit()
-            return
-        if inactive_ms >= self.settings.inactive_sit_ms:
-            if self.state is PetState.SIT:
-                remaining = self.settings.inactive_sleep_ms - inactive_ms
-                self.state_timer.start(max(500, min(5000, remaining)))
-                return
-            self._schedule(
-                self._decision(
-                    PetState.SIT,
-                    min(5000, self.settings.inactive_sleep_ms - inactive_ms),
-                )
-            )
-            return
-        if self.state in (PetState.SIT, PetState.SLEEP):
-            self._reverse_transition_to_idle()
-            return
-        decision = self.behavior.next_autonomous_state(
-            self.state,
-            allow_walk=self._walk_allowed(),
-        )
-        if decision.state is PetState.SLEEP:
-            self._schedule_sleep_via_sit()
-        else:
-            self._schedule(decision)
-
-    @staticmethod
-    def _decision(state: PetState, duration_ms: int) -> StateDecision:
-        """åˆ›å»ºçª—å£å†…éƒ¨è¿‡æ¸¡ä½¿ç”¨çš„ç¡®å®šæ—¶é•¿çŠ¶æ€å†³ç­–ã€‚"""
-
-        return StateDecision(state, max(500, duration_ms))
-
-    def _inactive_ms(self) -> int:
-        """è¿”å›žè·ç¦»æœ€è¿‘ä¸€æ¬¡é¼ æ ‡æˆ–èœå•äº’åŠ¨çš„æ¯«ç§’æ•°ã€‚"""
-
-        return max(0, round((time.monotonic() - self._last_user_interaction) * 1000))
-
-    def _record_user_interaction(self) -> None:
-        """é‡ç½®æ— äº’åŠ¨è®¡æ—¶ï¼Œå¹¶å–æ¶ˆå°šæœªå¼€å§‹çš„è‡ªåŠ¨å…¥ç¡æ„å›¾ã€‚"""
-
-        self._last_user_interaction = time.monotonic()
-        self._sleep_after_sit = False
-
-    def _reset_idle_episode(self) -> None:
-        """Forget the current idle episode and close its reusable prompt."""
-
-        self._auto_paused_for_idle = False
-        self._idle_prompt_pending = False
-        self._idle_recovery_resolved = False
-        self._idle_above_threshold_samples = 0
-        self._pending_idle_seconds = 0
-        self._idle_pause_started_at = None
-        if hasattr(self, "idle_recovery_timer"):
-            self.idle_recovery_timer.stop()
-        if self._idle_recovery_dialog is not None:
-            self._idle_recovery_dialog.hide()
-
-    def _check_input_idle(self) -> None:
-        """Automatically pause focus after a sustained keyboard/mouse idle.
-
-        A pause is deliberately not auto-resumed: a user may have switched to
-        reading, a meeting, or another task.  They can resume explicitly from
-        the pet bubble or the study-room page, while the room receives the
-        normal presence update on the next social heartbeat.
-        """
-
-        if not getattr(self.settings, "auto_pause_on_idle", True):
-            self._idle_above_threshold_samples = 0
-            return
-        threshold = max(30, int(getattr(self.settings, "idle_pause_seconds", 300)))
-        idle_seconds = max(0.0, float(system_idle_seconds()))
-        if self._auto_paused_for_idle:
-            # `idle_seconds` is only the OS counter at this sample.  The
-            # previous implementation copied the threshold crossing (usually
-            # 300 seconds) into `_pending_idle_seconds` and never advanced it,
-            # so a user who was away for 40 minutes was still asked about
-            # "5 minutes".  Keep the episode start time as the source of truth
-            # and refresh the displayed duration on every 5-second sample.
-            if self._idle_pause_started_at is not None:
-                elapsed_seconds = max(
-                    0,
-                    int(
-                        (
-                            datetime.now().astimezone()
-                            - self._idle_pause_started_at
-                        ).total_seconds()
-                    ),
-                )
-                self._pending_idle_seconds = max(
-                    self._pending_idle_seconds,
-                    elapsed_seconds,
-                )
-            # While the OS still reports idle, retain the larger of the native
-            # reading and the wall-clock episode duration.  This also handles
-            # platforms whose idle counter has a wraparound or coarse sample.
-            if idle_seconds >= threshold:
-                self._pending_idle_seconds = max(
-                    self._pending_idle_seconds,
-                    int(idle_seconds),
-                )
-            # The OS idle counter drops as soon as the user returns.  Delay
-            # the question to the event loop so the first input is not
-            # blocked by a modal dialog.  Once this episode is resolved, do
-            # not ask again until the user explicitly starts a new session.
-            if (
-                not self._idle_recovery_resolved
-                and idle_seconds < max(1, threshold - 1)
-                and not self._idle_prompt_pending
-            ):
-                self._idle_prompt_pending = True
-                self.idle_recovery_timer.start(0)
-            return
-        if not self.work_timer.is_running:
-            self._idle_above_threshold_samples = 0
-            return
-        if idle_seconds < threshold:
-            self._idle_above_threshold_samples = 0
-            return
-        # Require two consecutive OS samples.  This filters a single bad
-        # native reading without adding another setting or recording input.
-        self._idle_above_threshold_samples += 1
-        if self._idle_above_threshold_samples < 2:
-            return
-        self._idle_above_threshold_samples = 0
-        self._auto_paused_for_idle = True
-        self._idle_recovery_resolved = False
-        self._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=int(idle_seconds))
-        self._pending_idle_seconds = max(1, int(idle_seconds))
-        self._focus_quality_tracker.note_away()
-        self.pause_work_timer(reason="idle")
-
-    def _ask_idle_recovery(self) -> None:
-        """Show one reusable decision window for the current absence."""
-
-        self._idle_prompt_pending = False
-        if not self._auto_paused_for_idle or self._idle_recovery_resolved:
-            return
-        seconds = max(1, int(self._pending_idle_seconds))
-        if self._idle_recovery_dialog is None:
-            self._idle_recovery_dialog = IdleRecoveryDialog(self)
-            self._idle_recovery_dialog.decision_requested.connect(
-                self._resolve_idle_recovery
-            )
-        self._idle_recovery_dialog.set_away_seconds(seconds)
-        self._idle_recovery_dialog.show()
-        self._idle_recovery_dialog.raise_()
-        self._idle_recovery_dialog.activateWindow()
-
-    def _resolve_idle_recovery(self, decision: str) -> None:
-        """Resolve the episode once; later idle samples cannot reopen it."""
-
-        if not self._auto_paused_for_idle or self._idle_recovery_resolved:
-            return
-        seconds = max(1, int(self._pending_idle_seconds))
-        if decision == "focus":
-            # The timer remains paused until the user explicitly starts the
-            # next round, but the choice is reflected in local statistics.
-            self.focus_analytics.record_session(
-                seconds,
-                started_at=self._idle_pause_started_at or datetime.now().astimezone(),
-                completed=False,
-                away_count=1,
-                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
-            )
-            self.show_speech("å¥½ï¼Œè¿™æ®µç¦»å¼€æ—¶é—´å·²è®¡å…¥ä¸“æ³¨ã€‚éœ€è¦ç»§ç»­æ—¶ç‚¹å¼€å§‹ä¸“æ³¨ã€‚", 5200)
-        elif decision == "rest":
-            minutes = max(1, round(seconds / 60))
-            self.show_speech(f"å·²æŠŠçº¦ {minutes} åˆ†é’Ÿè®°ä¸ºä¼‘æ¯ï¼Œå›žæ¥åŽå†å¼€ä¸€è½®å§ã€‚", 4800)
-        # Dismissing the window is intentionally silent, but still resolves
-        # this episode so it cannot create another popup every few seconds.
-        self._idle_recovery_resolved = True
-        self._pending_idle_seconds = 0
-        self._idle_pause_started_at = None
-
-    def _schedule_sleep_via_sit(self) -> None:
-        """å…ˆå®Œæ•´åä¸‹ï¼Œå†ä»Žåå§¿æ’­æ”¾å…¥ç¡åºåˆ—ã€‚"""
-
-        self._sleep_after_sit = True
-        self._schedule(self._decision(PetState.SIT, 1400))
-
-    def _reverse_transition_to_idle(self) -> None:
-        """å€’æ”¾åä¸‹æˆ–ç¡çœ åºåˆ—ï¼Œå®Œæˆè‡ªç„¶èµ·èº«åŽå†è¿›å…¥å¾…æœºã€‚"""
-
-        frames = self._pixmaps[self.state]
-        self._frame_index = len(frames) - 1
-        self._animation_direction = -1
-        self._animation_finished = self._finish_reverse_transition
-        self._refresh_pixmap()
-        self.animation_timer.start(self._frame_interval(self.state, self._frame_index))
-
-    def _finish_reverse_transition(self) -> None:
-        """ç¡é†’åŽå…ˆå›žåˆ°åå§¿ï¼Œå†å€’æ”¾åä¸‹åºåˆ—æ¢å¤ç«™ç«‹å¾…æœºã€‚"""
-
-        if self.dragging:
-            return
-        if self.state is PetState.SLEEP:
-            self.state = PetState.SIT
-            self._frame_index = len(self._pixmaps[PetState.SIT]) - 1
-            self._animation_direction = -1
-            self._animation_finished = self._finish_reverse_transition
-            self._refresh_pixmap()
-            self.animation_timer.start(
-                self._frame_interval(PetState.SIT, self._frame_index)
-            )
-            return
-        self._schedule(self.behavior.initial_idle())
-
-    def _screen_geometry(self):
-        """è¿”å›žçª—å£ä¸­å¿ƒæ‰€åœ¨å±å¹•çš„å¯ç”¨åŒºåŸŸã€‚"""
-
-        center = self.frameGeometry().center()
-        screen = QApplication.screenAt(center) or QApplication.primaryScreen()
-        return screen.availableGeometry() if screen else None
-
-    def _constrained_position(self, position: QPoint) -> QPoint:
-        """å°†ç›®æ ‡ä½ç½®é™åˆ¶åœ¨å½“å‰æˆ–ä¸»å±å¹•å¯ç”¨åŒºåŸŸå†…ã€‚"""
-
-        screen = QApplication.screenAt(position) or QApplication.primaryScreen()
-        if screen is None:
-            return position
-        area = screen.availableGeometry()
-        x = min(max(position.x(), area.left()), area.right() - self.width() + 1)
-        y = min(max(position.y(), area.top()), area.bottom() - self.height() + 1)
-        return QPoint(x, y)
-
-    def _movement_tick(self) -> None:
-        """æŒ‰å®žé™…ç»è¿‡æ—¶é—´äºšåƒç´ ç´¯è®¡ç§»åŠ¨ï¼Œå¹¶åœ¨å±å¹•è¾¹ç¼˜è½¬å‘ã€‚"""
-
-        now = time.monotonic()
-        elapsed = min(0.1, max(0.0, now - self._last_movement_at))
-        self._last_movement_at = now
-        if (
-            self.paused
-            or self.dragging
-            or self._turn_paused
-            or self.state is not PetState.WALK
-        ):
-            self._movement_x = float(self.x())
-            return
-        area = self._screen_geometry()
-        if area is None:
-            return
-        if abs(self._movement_x - self.x()) > 1.5:
-            self._movement_x = float(self.x())
-        maximum = area.right() - self.width() + 1
-        direction = 1 if self.direction >= 0 else -1
-        phase_factor = self._walk_motion_factors[
-            self._frame_index % len(self._walk_motion_factors)
-        ]
-        self._movement_x += direction * (
-            self._movement_speed_pixels_per_second()
-            * phase_factor
-            * elapsed
-        )
-        if self._movement_x <= area.left():
-            self._movement_x = float(area.left())
-            direction = 1
-        elif self._movement_x >= maximum:
-            self._movement_x = float(maximum)
-            direction = -1
-        if direction != self.direction:
-            self.direction = direction
-            self._frame_index = 0
-            self._turn_paused = True
-            self.animation_timer.stop()
-            self._refresh_pixmap()
-            self.turn_timer.start(self.settings.turn_pause_ms)
-        self.move(round(self._movement_x), self.y())
-
-    def _finish_turn(self) -> None:
-        """ç»“æŸå±å¹•è¾¹ç¼˜çš„çŸ­æš‚åœé¡¿ï¼Œå¹¶ä»Žç¬¬ä¸€å¸§æ¢å¤è¡Œèµ°ã€‚"""
-
-        self._turn_paused = False
-        self._movement_x = float(self.x())
-        self._last_movement_at = time.monotonic()
-        # A manually requested walk animation should still finish its turn;
-        # the setting only controls whether autonomous state selection can
-        # enter WALK in the first place.
-        if self.state is PetState.WALK and not self.paused and not self.dragging:
-            self.animation_timer.start(
-                self._frame_interval(PetState.WALK, self._frame_index)
-            )
-
-    def _bob_tick(self) -> None:
-        """é€šè¿‡æ ‡ç­¾è½»å¾®ä¸Šä¸‹ç§»åŠ¨è¥é€ å‘¼å¸å’Œè¡Œèµ°èµ·ä¼ã€‚"""
-
-        if self.state is PetState.WALK:
-            return
-        if self.state not in (
-            PetState.IDLE,
-            PetState.HAPPY,
-            PetState.SHY,
-            PetState.SURPRISED,
-            PetState.ANNOYED,
-            PetState.SLEEPY,
-            PetState.CURIOUS,
-        ):
-            self.label.move(6, 0)
-            self._refresh_pixmap()
-            return
-        self._bob_phase = not self._bob_phase
-        self.label.move(6, 2 if self._bob_phase else 0)
-        self._refresh_pixmap()
-
-    def set_paused(self, paused: bool) -> None:
-        """æš‚åœæˆ–æ¢å¤è·‘åŠ¨ï¼›æš‚åœæœŸé—´ä»ç»§ç»­åä¸‹ã€ç¡çœ å’Œè‡ªæ‹ç­‰ç”Ÿæ´»çŠ¶æ€ã€‚"""
-
-        self._record_user_interaction()
-        self.paused = paused
-        self.pause_changed.emit(paused)
-        if paused and self.state is PetState.WALK:
-            self.state_timer.stop()
-            decision = self.behavior.next_autonomous_state(
-                PetState.IDLE,
-                allow_walk=False,
-            )
-            if decision.state is PetState.SLEEP:
-                self._schedule_sleep_via_sit()
-            else:
-                self._schedule(decision)
-        elif not paused and not self.dragging and not self.state_timer.isActive():
-            self._schedule(self.behavior.initial_idle())
-        if paused:
-            message = "å…­æ¯›å…ˆåœ¨è¿™é‡Œå®‰é™å¾…ç€ã€‚"
-        elif getattr(self.settings, "allow_autonomous_walk", False):
-            message = "å…­æ¯›æ¢å¤è·‘åŠ¨å•¦ã€‚"
-        else:
-            message = "è‡ªåŠ¨è·‘åŠ¨è¿˜æ²¡å¼€å¯ï¼›åŽ»è®¾ç½®é‡Œæ‰“å¼€åŽï¼Œæˆ‘å°±èƒ½åœ¨æ¡Œé¢ä¸Šè·‘å•¦ã€‚"
-        self.show_speech(message, 3200)
-
-    def set_allow_autonomous_walk(self, enabled: bool, *, persist: bool = True) -> None:
-        """åˆ‡æ¢è‡ªä¸»è·‘åŠ¨æ€»å¼€å…³ï¼›ä¸å½±å“çœ¨çœ¼ã€åä¸‹å’Œäº’åŠ¨åŠ¨ç”»ã€‚"""
-
-        enabled = bool(enabled)
-        self.settings.allow_autonomous_walk = enabled
-        if not enabled and self.state is PetState.WALK:
-            self.state_timer.stop()
-            decision = self.behavior.next_autonomous_state(PetState.IDLE, allow_walk=False)
-            self._schedule_sleep_via_sit() if decision.state is PetState.SLEEP else self._schedule(decision)
-        elif enabled and not self.paused and not self.dragging and not self.state_timer.isActive():
-            self._schedule(self.behavior.initial_idle())
-        if persist:
-            save_settings(self.settings)
-        self.show_speech(
-            "å·²å¼€å¯è‡ªåŠ¨è·‘åŠ¨ï¼›å…­æ¯›ä¹‹åŽä¼šåœ¨æ¡Œé¢ä¸Šæ¥å›žç§»åŠ¨ã€‚"
-            if enabled
-            else "å·²å…³é—­è‡ªåŠ¨è·‘åŠ¨ï¼›å…­æ¯›ä¼šå®‰é™å¾…åœ¨åŽŸåœ°ï¼Œä½†å…¶ä»–åŠ¨ç”»ä»ç„¶æ­£å¸¸ã€‚",
-            3600,
-        )
-
-    def set_display_height(self, display_height: int) -> None:
-        """åº”ç”¨å³é”®èœå•å°ºå¯¸é¢„è®¾ï¼Œä¿æŒçª—å£åº•éƒ¨ä¸­å¿ƒä½ç½®å¹¶ç«‹å³é‡ç»˜ã€‚"""
-
-        self._record_user_interaction()
-        old_center_x = self.x() + self.width() // 2
-        old_bottom = self.y() + self.height()
-        self.settings.display_height = max(100, min(360, int(display_height)))
-        source = self._pixmaps[PetState.IDLE][0]
-        width = round(
-            self.settings.display_height * source.width() / source.height()
-        )
-        self.setFixedSize(width + 12, self.settings.display_height + 14)
-        self.label.setGeometry(6, 0, width, self.settings.display_height + 8)
-        self._render_cache.clear()
-        self._mask_cache.clear()
-        target = QPoint(
-            old_center_x - self.width() // 2,
-            old_bottom - self.height(),
-        )
-        self.move(self._constrained_position(target))
-        self._refresh_pixmap()
-        self._position_speech_bubble()
-
-    def return_to_primary_screen(self) -> None:
-        """å°†å® ç‰©é‡æ–°æ”¾åˆ°ä¸»å±å¹•å³ä¸‹è§’ã€‚"""
-
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return
-        area = screen.availableGeometry()
-        self.move(area.right() - self.width() - 24, area.bottom() - self.height() - 12)
-
-    def _position_speech_bubble(self) -> None:
-        """æŠŠå¯¹è¯æ°”æ³¡æ”¾åœ¨äººç‰©ä¸Šæ–¹ï¼Œç©ºé—´ä¸è¶³æ—¶è‡ªåŠ¨ç§»åˆ°ä¾§é¢ã€‚"""
-
-        if not self.speech_bubble.isVisible():
-            return
-        area = self._screen_geometry()
-        visible_bounds = self.mask().boundingRect()
-        if visible_bounds.isEmpty():
-            character_left = self.x()
-            character_right = self.x() + self.width()
-            character_top = self.y()
-        else:
-            character_left = self.x() + visible_bounds.left()
-            character_right = self.x() + visible_bounds.right() + 1
-            character_top = self.y() + visible_bounds.top()
-        gap = 9
-        x = (character_left + character_right - self.speech_bubble.width()) // 2
-        y = character_top - self.speech_bubble.height() - gap
-        if area is not None:
-            x = min(max(x, area.left()), area.right() - self.speech_bubble.width() + 1)
-            if y < area.top():
-                x = character_right + gap
-                if x + self.speech_bubble.width() > area.right() + 1:
-                    x = character_left - self.speech_bubble.width() - gap
-                x = min(
-                    max(x, area.left()),
-                    area.right() - self.speech_bubble.width() + 1,
-                )
-                y = max(area.top(), self.y())
-        self.speech_bubble.move(x, y)
-
-    def show_speech(self, text: str, duration_ms: int = 4800) -> None:
-        """æ˜¾ç¤ºä¸ä¼šæŠ¢èµ°é”®ç›˜ç„¦ç‚¹çš„æ¡Œé¢å¯¹è¯æ°”æ³¡ã€‚"""
-
-        self.speech_bubble.setText(text)
-        self.speech_bubble.adjustSize()
-        self.speech_bubble.show()
-        self._position_speech_bubble()
-        self.speech_timer.start(max(1200, duration_ms))
-
-    def feed_pet(self, food_key: str) -> CompanionReply:
-        """å–‚ç»™ Lili ä¸€ç§èœå•é£Ÿç‰©ï¼Œå¹¶æ’­æ”¾å¯¹åº”è¡¨æƒ…ä¸Žæ–‡å­—åé¦ˆã€‚"""
-
-        self._record_user_interaction()
-        reply = self.companion.feed(food_key)
-        if food_key in {"coffee", "tea"}:
-            self._set_temporary_activity("tea", 28_000)
-            self._play_action_sequence(
-                (PetState.SIT, PetState.HAPPY, PetState.SIT),
-                3000,
-            )
-        else:
-            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "milk-tea"}.get(food_key)
-            if food_activity:
-                self._set_temporary_activity(food_activity, 28_000)
-            self._show_emotion(reply.state, 2200)
-        self.show_speech(
-            f"{reply.text}\nç²¾åŠ› {self.mood.energy} Â· é¥±é£Ÿ {self.mood.fullness}",
-            5200,
-        )
-        return reply
-
-    def talk_to_pet(self, message: str) -> CompanionReply:
-        """åœ¨æœ¬åœ°å¤„ç†ä¸€æ¡å¯¹è¯ï¼Œå¹¶æ˜¾ç¤º Lili çš„å›žå¤ã€‚"""
-
-        self._record_user_interaction()
-        reply = self.companion.reply_to(message)
-        self._show_emotion(reply.state, 2600)
-        self.show_speech(reply.text, 5600)
-        return reply
-
-    def perform_companion_action(self, action_key: str) -> CompanionReply:
-        """æ’­æ”¾ç”¨æˆ·é€‰æ‹©çš„å·¥ä½œã€çˆ±æ„ã€é¼“åŠ±ã€åº†ç¥æˆ–å®‰æ…°åŠ¨ä½œã€‚"""
-
-        self._record_user_interaction()
-        reply = self.companion.perform_action(action_key)
-        option = ACTION_BY_KEY[action_key]
-        duration_ms = option.duration_ms
-        self._play_action_sequence(option.sequence or (reply.state,), duration_ms)
-        self.show_speech(reply.text, max(5200, duration_ms + 1800))
-        return reply
-
-    def _play_action_sequence(
-        self,
-        states: tuple[PetState, ...],
-        duration_ms: int,
-    ) -> None:
-        """ç”¨çŽ°æœ‰ä¸”å·²éªŒæ”¶çš„åŠ¨ä½œå¸§ç»„æˆå¤šæ®µé™ªä¼´åŠ¨ä½œã€‚"""
-
-        if not states:
-            return
-        self._action_sequence_id += 1
-        sequence_id = self._action_sequence_id
-        step_ms = max(450, duration_ms // len(states))
-        self.state_timer.stop()
-        self.interaction_timer.stop()
-        self.set_state(states[0])
-        for index, state in enumerate(states[1:], start=1):
-            QTimer.singleShot(
-                index * step_ms,
-                lambda value=state, marker=sequence_id: self._continue_action_sequence(
-                    marker,
-                    value,
-                ),
-            )
-        self.interaction_timer.start(max(800, duration_ms))
-
-    def _continue_action_sequence(self, sequence_id: int, state: PetState) -> None:
-        """ä»…åœ¨åŠ¨ä½œåºåˆ—ä»æœ‰æ•ˆæ—¶æ’­æ”¾ä¸‹ä¸€æ®µï¼Œé¿å…æ—§è®¡æ—¶å™¨æŠ¢çŠ¶æ€ã€‚"""
-
-        if sequence_id == self._action_sequence_id and not self.dragging:
-            self.set_state(state)
-
-    def start_work_timer(self) -> CompanionReply:
-        """å¼€å§‹ä»Šæ—¥å·¥ä½œè®¡æ—¶ï¼Œå¹¶è®©å…­æ¯›è¿›å…¥å®‰é™é™ªä¼´åŠ¨ä½œã€‚"""
-
-        self._record_user_interaction()
-        self._reset_idle_episode()
-        self._focus_quality_tracker.start(active_application_category())
-        # The paper window selects a real Todo; keep the existing focus
-        # analytics task for compatibility, but attribute new seconds to the
-        # same local task record as soon as the session starts.
-        started = self.focus_session.start()
-        if started:
-            self.set_paused(True)
-        self._change_ambient_activity("computer")
-        self._schedule_work_activity(25_000)
-        reply = self.companion.work_started(resumed=not started)
-        self._show_emotion(reply.state, 3600)
-        self.show_speech(reply.text, 5600)
-        self.work_timer_changed.emit(self.work_timer.is_running)
-        self._schedule_social_tick()
-        self._refresh_pixmap()
-        return reply
-
-    def pause_work_timer(self, reason: str = "") -> CompanionReply:
-        """æš‚åœå·¥ä½œè®¡æ—¶å¹¶æ˜¾ç¤ºå½“å¤©ç´¯è®¡ä¸Žä¼‘æ¯å»ºè®®ã€‚"""
-
-        self._record_user_interaction()
-        if reason != "idle":
-            self._reset_idle_episode()
-        session_seconds = self.work_timer.session_seconds()
-        was_running = self.focus_session.pause()
-        if was_running:
-            self.time_memory.record_focus(
-                session_seconds,
-                completed_session=False,
-                started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
-            )
-            self._last_focus_quality = self.focus_analytics.record_session(
-                session_seconds,
-                started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
-                completed=False,
-                application_switches=self._focus_quality_tracker.application_switches,
-                away_count=self._focus_quality_tracker.away_count,
-                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
-            )
-            self.focus_analytics.update_current_task_progress(session_seconds)
-            self.daily_stats.record_focus(session_seconds)
-        self._award_focus_rewards()
-        self.work_activity_timer.stop()
-        self._set_temporary_activity("tea", 25_000)
-        duration = format_work_duration(self.work_timer.today_seconds())
-        if was_running and reason == "idle":
-            reply = CompanionReply(
-                "æ£€æµ‹åˆ°ä¸€æ®µæ—¶é—´æ²¡æœ‰é”®é¼ æ“ä½œï¼Œå…­æ¯›å…ˆå¸®ä½ æš‚åœè®¡æ—¶ã€‚å›žæ¥åŽä¼šåªè¯¢é—®ä¸€æ¬¡è¿™æ®µæ—¶é—´å¦‚ä½•å½’ç±»ã€‚",
-                PetState.CURIOUS,
-            )
-        elif was_running:
-            reply = self.companion.work_paused(duration)
-        else:
-            reply = CompanionReply(
-                f"è®¡æ—¶çŽ°åœ¨æ˜¯æš‚åœçŠ¶æ€ï¼Œä»Šå¤©ç´¯è®¡å·¥ä½œ {duration}ã€‚",
-                PetState.CURIOUS,
-            )
-        self._show_emotion(reply.state, 3200)
-        quality_text = (
-            f"\næœ¬è½®è´¨é‡ï¼š{self._last_focus_quality.label}ï¼ˆ{self._last_focus_quality.score}åˆ†ï¼‰"
-            if self._last_focus_quality else ""
-        )
-        self.show_speech(reply.text + quality_text, 5600)
-        self.work_timer_changed.emit(False)
-        self._schedule_social_tick()
-        self.work_controls.hide()
-        self._refresh_pixmap()
-        return reply
-
-    def finish_work_timer(self) -> CompanionReply:
-        """å®Œæˆæœ¬æ¬¡å·¥ä½œã€ä¿ç•™ä»Šæ—¥ç´¯è®¡å¹¶æ’­æ”¾åº†ç¥åŠ¨ä½œã€‚"""
-
-        self._record_user_interaction()
-        self._reset_idle_episode()
-        room_id = self.focus_session.room_id
-        session_seconds = self.work_timer.session_seconds()
-        total = self.focus_session.finish()
-        self.time_memory.record_focus(
-            session_seconds,
-            completed_session=True,
-            started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
-        )
-        self._award_focus_rewards()
-        self._last_focus_quality = self.focus_analytics.record_session(
-            session_seconds,
-            started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
-            completed=True,
-            application_switches=self._focus_quality_tracker.application_switches,
-            away_count=self._focus_quality_tracker.away_count,
-            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
-        )
-        self.focus_analytics.update_current_task_progress(session_seconds)
-        self.daily_stats.record_focus(session_seconds, completed=True)
-        self.set_paused(False)
-        reply = self.companion.work_finished(format_work_duration(total))
-        self._show_emotion(reply.state, 3400)
-        self.show_speech(
-            f"{reply.text}\næœ¬è½®è´¨é‡ï¼š{self._last_focus_quality.label}ï¼ˆ{self._last_focus_quality.score}åˆ†ï¼‰",
-            6200,
-        )
-        self.work_timer_changed.emit(False)
-        self._schedule_social_tick()
-        self.work_controls.hide()
-        self.work_activity_timer.stop()
-        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
-        self._show_new_outfit_unlock()
-        self._generate_daily_report(show_dialog=False)
-        if room_id:
-            self._record_social_room_event(room_id, "focus_finish")
-        return reply
-
-    def show_today_note(self) -> None:
-        """Open the single non-modal paper window and refresh its local facts."""
-
-        self._record_user_interaction()
-        configured_mode = str(getattr(self.settings, "today_note_mode", "detailed"))
-        display_mode = configured_mode if configured_mode in {"detailed", "compact"} else "detailed"
-        if self._today_note_window is None:
-            self._today_note_window = TodayNoteWindow(
-                self.time_memory,
-                self,
-                settings=self.settings,
-                save_settings_callback=save_settings,
-            )
-            if getattr(self.settings, "today_note_always_on_top", False):
-                self._today_note_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            self._today_note_window.start_requested.connect(self._start_todo_from_note)
-            self._today_note_window.select_requested.connect(self._select_todo_from_note)
-            self._today_note_window.complete_requested.connect(self._complete_todo_from_note)
-            self._today_note_window.task_checked.connect(self._set_todo_completion_from_note)
-            self._today_note_window.checkout_requested.connect(self.checkout_today)
-            self._today_note_window.rest_requested.connect(self.rest_today)
-            self._today_note_window.memory_requested.connect(self.show_time_memory)
-        self._today_note_window.set_mode(display_mode, persist=False)
-        self._today_note_window.refresh()
-        if self._today_note_window.isMinimized():
-            self._today_note_window.showNormal()
-        else:
-            self._today_note_window.show()
-        if display_mode == "compact":
-            self._place_today_note_below_pet()
-        self._today_note_window.raise_()
-        self._today_note_window.activateWindow()
-
-    def _place_today_note_below_pet(self) -> None:
-        """Keep the compact note visually attached to the pet without covering it."""
-
-        note = self._today_note_window
-        if note is None:
-            return
-        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
-        if screen is None:
-            return
-        available = screen.availableGeometry()
-        x = self.x() + (self.width() - note.width()) // 2
-        y = self.y() + self.height() + 8
-        x = max(available.left(), min(x, available.right() - note.width() + 1))
-        y = max(available.top(), min(y, available.bottom() - note.height() + 1))
-        note.move(x, y)
-
-    def hide_today_note(self) -> None:
-        if self._today_note_window is not None:
-            self._today_note_window.hide()
-
-    def _select_todo_from_note(self, task_id: str) -> None:
-        item = self.time_memory.todos.get(task_id)
-        if item is None:
-            return
-        self.time_memory.select_task(item.id)
-        self.focus_analytics.set_current_task(item.title)
-
-    def _start_todo_from_note(self, task_id: str) -> None:
-        self._select_todo_from_note(task_id)
-        if not self.work_timer.is_running:
-            self.start_work_timer()
-
-    def _complete_todo_from_note(self, task_id: str) -> None:
-        self.time_memory.complete_task(task_id)
-        if self._today_note_window is not None:
-            self._today_note_window.refresh()
-        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
-        self.show_speech("è¿™é¡¹åšå®Œäº†ï¼Œç»™ä½ è®°ä¸Šã€‚", 4200)
-
-    def _set_todo_completion_from_note(self, task_id: str, completed: bool) -> None:
-        task = self.time_memory.todos.get(task_id)
-        if task is None:
-            return
-        if completed:
-            self.time_memory.complete_task(task_id)
-            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
-            self.show_speech("è¿™é¡¹åšå®Œäº†ï¼Œç»™ä½ è®°ä¸Šã€‚", 4200)
-        else:
-            self.time_memory.todos.complete(task_id, False)
-            self.time_memory.summary.refresh_tasks()
-        if self._today_note_window is not None:
-            self._today_note_window.refresh()
-
-    def checkout_today(self) -> None:
-        """Persist a real end-of-day record without requiring network access."""
-
-        if self.work_timer.is_running:
-            self.pause_work_timer(reason="checkout")
-        summary = self.time_memory.finish_today()
-        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 30_000)
-        self.show_speech(
-            f"ä»Šå¤©æ”¶å·¥ï¼šä¸“æ³¨{summary['focus']}ï¼Œå®Œæˆ{summary['completed_tasks']}/{summary['total_tasks']}é¡¹ã€‚",
-            6200,
-        )
-        if self._today_note_window is not None:
-            self._today_note_window.refresh()
-
-    def rest_today(self) -> None:
-        self.time_memory.records.set_rest_day(True)
-        self._set_temporary_activity("tea", 20_000)
-        self.show_speech("è¡Œï¼Œé‚£ä»Šå¤©ä¸ç®—æ—·å·¥ã€‚", 4200)
-        if self._today_note_window is not None:
-            self._today_note_window.refresh()
-
-    def show_time_memory(self) -> None:
-        if self._time_memory_window is None:
-            self._time_memory_window = TimeMemoryWindow(self.time_memory, self)
-        self._time_memory_window.refresh()
-        if self._time_memory_window.isMinimized():
-            self._time_memory_window.showNormal()
-        else:
-            self._time_memory_window.show()
-        self._time_memory_window.raise_()
-        self._time_memory_window.activateWindow()
-
-    def show_work_time(self) -> None:
-        """æ˜¾ç¤ºä»Šæ—¥ç´¯è®¡å·¥ä½œæ—¶é•¿å’Œå½“å‰è®¡æ—¶çŠ¶æ€ã€‚"""
-
-        self._record_user_interaction()
-        state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
-        self._show_emotion(state, 2600)
-        text = (
-            f"{self.work_timer.status_text()}\n"
-            f"{growth_progress_text(self.work_timer.today_seconds())}\n"
-            f"å…­æ¯›å¿ƒæƒ…ï¼š{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
-        )
-        self.show_speech(text, 6800)
-
-    def show_daily_growth(self) -> None:
-        """æ˜¾ç¤ºä»Šå¤© 0â€“8 å°æ—¶æˆé•¿èŠ‚ç‚¹å’Œä¸‹ä¸€ä¸ªå¯è§å¥–åŠ±ã€‚"""
-
-        seconds = self.work_timer.today_seconds()
-        stage = stage_for_seconds(seconds)
-        self._set_temporary_activity(stage.activity, 35_000)
-        self.show_speech(
-            f"ä»Šæ—¥æˆé•¿ {stage.hour}/8ï¼š{stage.title}\n"
-            f"å½“å‰å¥–åŠ±ï¼š{stage.reward}\n{growth_progress_text(seconds)}",
-            7600,
-        )
-
-    def _schedule_work_activity(self, delay_ms: int | None = None) -> None:
-        """è®¡æ—¶æœŸé—´å®‰æŽ’ä¸‹ä¸€æ¬¡é™ªä¼´å·¥ä½œåŠ¨ä½œã€‚"""
-
-        self.work_activity_timer.stop()
-        if self.work_timer.is_running:
-            self.work_activity_timer.start(delay_ms or random.randint(150_000, 300_000))
-
-    def _work_activity_tick(self) -> None:
-        """åœ¨ä¸“æ³¨åŠ¨ä½œé—´è½®æ¢ï¼Œè®©ç”¨æˆ·å·¥ä½œæ—¶å…­æ¯›ä¹ŸæŒç»­å·¥ä½œã€‚"""
-
-        if not self.work_timer.is_running:
-            return
-        session = self.work_timer.session_seconds()
-        choices = FOCUS_ACTIONS
-        if session >= 45 * 60 and random.random() < 0.35:
-            choices = ("thermos", "tea", "sleep")
-        self._change_ambient_activity(random.choice(choices))
-        self._manual_activity_until = time.monotonic() + 120
-        self._schedule_work_activity()
-
-    def _set_temporary_activity(self, activity: str, duration_ms: int = 30_000) -> None:
-        """æ˜¾ç¤ºä¸€å¼ å®Œæ•´åŠ¨ä½œå›¾ï¼Œç»“æŸåŽå›žåˆ°å·¥ä½œæˆ–æ™®é€šå¾…æœºã€‚"""
-
-        self._change_ambient_activity(activity)
-        self._manual_activity_until = time.monotonic() + duration_ms / 1000
-        self.activity_timer.start(max(1500, duration_ms))
-
-    def _activity_timeout(self) -> None:
-        """ç»“æŸä¸´æ—¶åŠ¨ä½œï¼›å·¥ä½œä¸­ç»§ç»­è½®æ¢ä¸“æ³¨åŠ¨ä½œï¼Œå¦åˆ™æ¢å¤æ™®é€šå…­æ¯›ã€‚"""
-
-        self._change_ambient_activity(
-            random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
-        )
-
-    def _work_timer_tick(self) -> None:
-        """å®šæœŸä¿å­˜å·¥ä½œè¿›åº¦ï¼Œå¹¶æ˜¾ç¤ºä¸€æ¬¡åˆ°æœŸçš„é¼“åŠ±æˆ–ä¼‘æ¯æé†’ã€‚"""
-
-        self._check_local_reminders()
-        self.work_timer.checkpoint()
-        self.focus_session.refresh()
-        self._award_focus_rewards()
-        self._sync_hourly_outfit(announce=True)
-        self._show_new_outfit_unlock()
-        quiet = detect_quiet_mode()
-        wellness_kind = None if quiet.blocked else self.wellness.take_due(
-            self.settings.water_reminder_enabled,
-            self.settings.stand_reminder_enabled,
-            self.settings.water_interval_minutes,
-            self.settings.stand_interval_minutes,
-        )
-        if wellness_kind == "water":
-            self._set_temporary_activity("thermos", 35_000)
-            self.show_speech("å–å£æ°´å§ã€‚å…­æ¯›æ›¿ä½ æŠŠè¿™ä¸€å°ä¼šå„¿å®ˆä½ã€‚", 6200)
-        elif wellness_kind == "stand":
-            self._set_temporary_activity("football", 35_000)
-            self.show_speech("ç«™èµ·æ¥èµ°ä¸¤æ­¥ã€æ¾æ¾è‚©è†€å§ã€‚èº«ä½“ä¹Ÿåœ¨é™ªä½ å®Œæˆä»Šå¤©ã€‚", 6500)
-        reminder_kind = None if quiet.blocked else self.work_timer.take_due_reminder()
-        if reminder_kind is None:
-            return
-        duration = format_work_duration(self.work_timer.session_seconds())
-        reply = self.companion.work_reminder(reminder_kind, duration)
-        self._show_emotion(reply.state, 3600)
-        self.show_speech(reply.text, 7200)
-
-    def _check_local_reminders(self) -> None:
-        """Run the local reminder queue once per existing one-second timer."""
-
-        if detect_quiet_mode().blocked:
-            return
-        for reminder in self.time_memory.reminders.due()[:3]:
-            self.time_memory.reminders.mark_notified(reminder.id)
-            self._set_temporary_activity("curious", 12_000)
-            self.show_speech(f"æé†’ï¼š{reminder.title}", 5600)
-
-    def _show_new_outfit_unlock(self) -> None:
-        """è·¨è¿‡å½“å¤© 1â€“8 å°æ—¶èŠ‚ç‚¹æ—¶æ˜¾ç¤ºæˆé•¿çŠ¶æ€ï¼Œè€Œéžæœºæ¢°æ›´æ¢è¡£æœã€‚"""
-
-        stage = stage_for_seconds(self.work_timer.today_seconds())
-        if stage.hour <= self._last_growth_hour:
-            return
-        self._last_growth_hour = stage.hour
-        self._set_temporary_activity(stage.activity, 60_000)
-        self.show_speech(f"ä»Šæ—¥æˆé•¿ï¼š{stage.title}\nè§£é”ï¼š{stage.reward}\n{stage.message}", 8200)
-        if stage.hour >= 8:
-            self._generate_daily_report(show_dialog=True)
-
-    def _sync_hourly_outfit(self, *, announce: bool) -> None:
-        """åŒæ­¥å°æ—¶å¨ƒè¡£è§£é”ï¼Œä¸è¦†ç›–ç”¨æˆ·ä¸»åŠ¨é€‰æ‹©çš„å½“å‰è£…å¤‡ã€‚
-
-        å·¥ä½œæ—¶é•¿åªå†³å®šå“ªäº›å¥—è£…å¯ç”¨ï¼›è£…å¤‡æœ¬èº«æ˜¯ç”¨æˆ·åå¥½ï¼Œå¿…é¡»ä¸€ç›´ä¿ç•™ã€‚
-        è¿™æ ·ç´¯è®¡åˆ° 10 å°æ—¶ä¼šè§£é”è’é‡Žç›¸å…³å¥—è£…ï¼Œä½†ä¸ä¼šæŠŠç”¨æˆ·æ­£åœ¨ç©¿çš„
-        ä¸€å°æ—¶å…”å…”è£…ã€ç»å…¸å¤–è§‚æˆ–å…¶ä»–å·²è§£é”å¥—è£…å¼ºè¡Œæ›¿æ¢æŽ‰ã€‚
-        """
-
-        count = self.work_timer.unlocked_outfit_count()
-        latest = OUTFITS[count - 1] if count else None
-        newly_unlocked = self.work_timer.take_new_outfit_unlock()
-        if not announce or newly_unlocked is None or latest is None:
-            return
-        self._change_ambient_activity("none")
-        self.show_speech(
-            f"ç´¯è®¡ä¸“æ³¨ {newly_unlocked} å°æ—¶ï¼Œå·²è§£é”ã€Œ{latest.name}ã€ï¼\n"
-            f"ä½ å¯ä»¥åœ¨â€œæ¢è£…ä¸Žå¤–è§‚â€é‡Œé€‰æ‹©ï¼Œå½“å‰è£…å¤‡ä¿æŒä¸å˜ã€‚",
-            8200,
-        )
-
-    def _award_focus_rewards(self) -> None:
-        """æŠŠä»Šæ—¥ä¸“æ³¨æ—¶é—´æ¢æˆæ­£å‘çš„é»˜å¥‘å¥–åŠ±ï¼Œä¸åˆ¶é€ é¥¥é¥¿æƒ©ç½šã€‚"""
-
-        completed_blocks = self.work_timer.today_seconds() // 600
-        new_blocks = max(0, completed_blocks - self._rewarded_focus_blocks)
-        if new_blocks:
-            self.mood.receive_focus_reward(new_blocks)
-            self._rewarded_focus_blocks = completed_blocks
-
-    def shutdown_work_timer(self) -> None:
-        """è‡ªç„¶é€€å‡ºå‰æš‚åœè®¡æ—¶å¹¶æ›´æ–°å½“å¤©å·¥ä½œå¡ï¼Œä¸æŠŠå…³æœºæ—¶é—´è®¡å…¥å·¥ä½œã€‚"""
-
-        self._reset_idle_episode()
-        if hasattr(self, "work_timer"):
-            if self.work_timer.is_running:
-                session_seconds = self.work_timer.session_seconds()
-                started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
-                # Persist the same final running segment in the local time-memory
-                # store before the shared timer is paused.  Without this, a
-                # normal app close could update the legacy daily card while
-                # losing the Todo attribution and daily check-in record.
-                self.time_memory.record_focus(
-                    session_seconds,
-                    completed_session=False,
-                    started_at=started_at,
-                )
-                self.daily_stats.record_focus(session_seconds)
-            self.focus_session.pause()
-            if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
-                self._generate_daily_report(show_dialog=False)
-
-    def _generate_daily_report(self, *, show_dialog: bool) -> Path | None:
-        """ç”Ÿæˆåªä¿å­˜åœ¨æœ¬æœºçš„å·¥ä½œæ—¥æŠ¥ï¼›å¯é€‰å±•ç¤ºé¢„è§ˆçª—å£ã€‚"""
-
-        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1" and not show_dialog:
-            return None
-        photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
-        try:
-            path = render_daily_report(
-                self.work_timer.today_seconds(),
-                self.daily_stats.snapshot(),
-                photo,
-            )
-        except OSError as exc:
-            if show_dialog:
-                self.show_speech(f"å·¥ä½œæ—¥æŠ¥æš‚æ—¶æ²¡ä¿å­˜æˆåŠŸï¼š{exc}", 6200)
-            return None
-        if show_dialog:
-            self._show_daily_report_dialog(path)
-        return path
-
-    def show_daily_report(self) -> None:
-        """ç”±èœå•ç”Ÿæˆå¹¶æ‰“å¼€ä»Šå¤©çš„å…­æ¯›å·¥ä½œæ—¥æŠ¥ã€‚"""
-
-        self._record_user_interaction()
-        self._generate_daily_report(show_dialog=True)
-
-    def _show_daily_report_dialog(self, path: Path) -> None:
-        """åœ¨åº”ç”¨å†…é¢„è§ˆå·¥ä½œå¡ï¼Œå¹¶æä¾›æ‰“å¼€æœ¬æœºç›¸å†Œçš„æŒ‰é’®ã€‚"""
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"ä»Šå¤©{self._pet_name()}é™ªä½ åšäº†ä»€ä¹ˆ")
-        layout = QVBoxLayout(dialog)
-        preview = QLabel(dialog); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card = QPixmap(str(path)).scaled(430, 570, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        preview.setPixmap(card); layout.addWidget(preview)
-        open_button = QPushButton(f"æ‰“å¼€{self._pet_name()}ç›¸å†Œ", dialog)
-        open_button.clicked.connect(self.open_daily_album)
-        layout.addWidget(open_button)
-        dialog.exec()
-
-    def open_daily_album(self) -> None:
-        """æ‰“å¼€æœ¬æœºå…­æ¯›ç›¸å†Œæ–‡ä»¶å¤¹ï¼Œä¸è®¿é—®ç½‘ç»œã€‚"""
-
-        directory = album_directory(); directory.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
-
-    def prompt_dialogue(self) -> None:
-        """æ‰“å¼€æ–°ç‰ˆèŠå¤©é¢æ¿ï¼›ç¦»çº¿å’Œåœ¨çº¿æ¨¡å¼å…±ç”¨åŒä¸€ä¸ªå…¥å£ã€‚"""
-
-        self._record_user_interaction()
-        if self._chat_dialog is None:
-            # Keep chat as an independent utility window so it has a normal
-            # taskbar/Dock entry and can be minimized without affecting pet.
-            self._chat_dialog = ChatDialog(None, self._pet_name())
-            self._chat_dialog.message_submitted.connect(self._submit_chat_message)
-            self._chat_dialog.settings_requested.connect(self.open_settings)
-            self._chat_dialog.rename_requested.connect(self.rename_pet)
-            self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
-            self._chat_dialog.append_message(
-                self._pet_name(),
-                f"å·´å¸ƒè¾¾ï¼æ²¡ç½‘ä¹Ÿå¯ä»¥èŠå¤©ï¼›ä¹Ÿèƒ½åœ¨è®¾ç½®é‡Œè¿žæŽ¥ Codexã€Claude Codeã€DeepSeek æˆ– Kimiã€‚",
-            )
-        status = self.agent_manager.status(self.settings.ai_provider)
-        self._chat_dialog.set_provider(
-            self.settings.ai_provider,
-            status.state.value,
-            status.detail,
-        )
-        if self._chat_dialog.isMinimized():
-            self._chat_dialog.showNormal()
-        else:
-            self._chat_dialog.show()
-        self._chat_dialog.raise_()
-        self._chat_dialog.activateWindow()
-
-    def rename_pet(self) -> None:
-        """Edit the owner's social nickname; the pet remains å…­æ¯› forever."""
-
-        self._record_user_interaction()
-        name, accepted = QInputDialog.getText(
-            self,
-            "ä¿®æ”¹ä¸»äººç§°å‘¼",
-            "ä¸»äººç§°å‘¼\nç”¨äºŽè‡ªä¹ å®¤ã€ä¸²é—¨å’Œæ­å­äº’åŠ¨æ—¶åŒºåˆ†ä¸åŒå…­æ¯›ã€‚\nä¾‹å¦‚å¡«å†™â€œå°æ¢â€ï¼Œå…¶ä»–æ­å­å°†çœ‹åˆ°â€œå°æ¢å®¶çš„å…­æ¯›â€ã€‚",
-            text=self._owner_nickname(),
-        )
-        if not accepted:
-            return
-        name = clean_owner_nickname(name)
-        previous_name = self._owner_nickname()
-        self.settings.owner_nickname = name
-        self.settings.pet_name = PET_NAME
-        save_settings(self.settings)
-        if name != previous_name:
-            self.owner_nickname_changed.emit(name)
-            self._sync_owner_nickname(name)
-            if self._social_dialog is not None:
-                self._social_dialog.set_owner_nickname(name)
-        label = social_pet_label(name)
-        self.show_speech(f"å¥½ï¼Œç¤¾äº¤åœºæ™¯é‡Œå°±å«{label}ã€‚æˆ‘è¿˜æ˜¯å…­æ¯›ã€‚", 4200)
-
-    def _sync_owner_nickname(self, nickname: str) -> None:
-        """Persist the social-only nickname without blocking the desktop pet."""
-
-        if not self.social_client.signed_in:
-            return
-        session = getattr(self.social_client, "session", None)
-        user_id = str(getattr(session, "user_id", "") or "")
-        if not user_id or self._owner_nickname_sync_inflight:
-            return
-        clean = clean_owner_nickname(nickname)
-        key = (user_id, clean)
-        if self._owner_nickname_sync_key == key:
-            return
-        updater = getattr(self.social_client, "update_owner_nickname", None)
-        if not callable(updater):
-            return
-        self._owner_nickname_sync_inflight = True
-        thread = SocialProfileThread(self.social_client, clean, self)
-        self._social_profile_threads.append(thread)
-        thread.completed.connect(lambda sync_key=key: self._owner_nickname_sync_succeeded(sync_key))
-        thread.failed.connect(self._owner_nickname_sync_failed)
-        thread.finished.connect(
-            lambda: self._social_profile_thread_finished(thread)
-        )
-        thread.start()
-
-    def _maybe_sync_owner_nickname(self) -> None:
-        """Sync a locally configured owner nickname after every account login."""
-
-        if self.social_client.signed_in:
-            self._sync_owner_nickname(self._owner_nickname())
-
-    def _owner_nickname_sync_succeeded(self, key: tuple[str, str]) -> None:
-        self._owner_nickname_sync_inflight = False
-        self._owner_nickname_sync_key = key
-        self._schedule_social_tick()
-
-    def _owner_nickname_sync_failed(self, _message: str) -> None:
-        self._owner_nickname_sync_inflight = False
-        if self._social_dialog is not None:
-            self._social_dialog._set_status("ä¸»äººç§°å‘¼å·²ä¿å­˜åœ¨æœ¬æœºï¼Œä½†äº‘ç«¯åŒæ­¥å¤±è´¥ï¼Œè¯·ç¨åŽé‡è¯•ã€‚", error=True)
-
-    def _social_profile_thread_finished(self, thread: SocialProfileThread) -> None:
-        if thread in self._social_profile_threads:
-            self._social_profile_threads.remove(thread)
-        thread.deleteLater()
-
-    def _submit_chat_message(self, message: str) -> None:
-        """æŠŠæ¶ˆæ¯äº¤ç»™ ChatManagerï¼›è·¯ç”±åªè¯»å–ç¼“å­˜ï¼Œä¸åšåŒæ­¥æ£€æµ‹ã€‚"""
-
-        if self._chat_dialog is None:
-            return
-        self._record_user_interaction()
-        if self.chat_manager.busy:
-            self._chat_dialog.append_message(self._pet_name(), "ä¸Šä¸€å¥è¯è¿˜åœ¨è·¯ä¸Šï¼Œç¨ç­‰æˆ‘ä¸€ä¸‹ã€‚")
-            return
-        self._chat_dialog.append_message("ä½ ", message)
-        history_before = self._chat_memory.snapshot().as_history()
-        self._chat_memory.add("user", message)
-        self._chat_dialog.show_recovery_actions(False)
-        self.chat_manager.submit(message, history_before)
-
-    def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
-        """ç»Ÿä¸€å±•ç¤º AI æˆ–ç¦»çº¿å›žå¤ï¼›é™çº§æ—¶ä¸é™„åŠ è¿žæŽ¥é”™è¯¯æ­£æ–‡ã€‚"""
-
-        self._chat_memory.add("assistant", reply.text)
-        if self._chat_dialog is not None:
-            self._chat_dialog.append_message(self._pet_name(), reply.text)
-            self._chat_dialog.show_recovery_actions(reply.show_recovery_actions)
-        self._show_emotion(reply.state, 3000)
-        self.show_speech(reply.text, 6500)
-
-    def _chat_busy_changed(self, busy: bool) -> None:
-        """åªç¦ç”¨èŠå¤©è¾“å…¥ï¼Œå® ç‰©åŠ¨ç”»ã€è®¡æ—¶å’ŒéŸ³ä¹ç»§ç»­è¿è¡Œã€‚"""
-
-        if self._chat_dialog is not None:
-            self._chat_dialog.set_busy(busy)
-
-    def _chat_notice(self, message: str) -> None:
-        """æ˜¾ç¤ºéžé˜»å¡žæç¤ºï¼Œä¸è·³è½¬è®¾ç½®é¡µã€‚"""
-
-        if self._chat_dialog is not None:
-            self._chat_dialog.append_message(self._pet_name(), message)
-
-    def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
-        """åŽå°æ£€æµ‹å®ŒæˆåŽåˆ·æ–°ç¼“å­˜çŠ¶æ€æ–‡æ¡ˆï¼Œæ¢å¤åŽä¸‹ä¸€æ¡è‡ªç„¶èµ° AIã€‚"""
-
-        if self._chat_dialog is not None and provider == self.settings.ai_provider:
-            self._chat_dialog.set_provider(provider, state, detail)
-            if state == "connected":
-                self._chat_dialog.show_recovery_actions(False)
-
-    def _reconnect_ai(self) -> None:
-        """ç”¨æˆ·ä¸»åŠ¨è¦æ±‚é‡è¿žï¼›ä¸ä¼šè‡ªåŠ¨æ‰“å¼€è®¾ç½®çª—å£ã€‚"""
-
-        if self.settings.ai_provider == "offline":
-            self._chat_notice("å½“å‰é€‰æ‹©çš„æ˜¯çº¯ç¦»çº¿æ¨¡å¼ï¼›éœ€è¦ AI æ—¶å¯ä»¥ç‚¹â€œåŽ»è®¾ç½®â€ã€‚")
-            return
-        if not self.chat_manager.reconnect_now():
-            self._chat_notice("AI å·²åœ¨åŽå°æ£€æµ‹ä¸­ï¼Œè¯·ç¨ç­‰ä¸€ä¸‹ã€‚")
-
-    def open_settings(self, source: str) -> bool:
-        """åªå…è®¸æ˜Žç¡®ç”¨æˆ·åŠ¨ä½œæ‰“å¼€è®¾ç½®ï¼›æ‰€æœ‰è‡ªåŠ¨æˆ–æœªçŸ¥æ¥æºå‡æ‹’ç»å¹¶è®°å½•ã€‚"""
-
-        if source != SETTINGS_SOURCE_USER_ACTION:
-            LOGGER.debug("æ‹’ç»éžç”¨æˆ·æ¥æºæ‰“å¼€è¿žæŽ¥ä¸Žé™ªä¼´è®¾ç½®ï¼šsource=%r", source)
-            return False
-
-        dialog = AISettingsDialog(
-            self.settings,
-            self.credentials,
-            self,
-            agent_manager=self.agent_manager,
-            music_manager=self.music_provider_manager,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return True
-        previous_always_on_top = self.settings.always_on_top
-        previous_allow_autonomous_walk = bool(
-            getattr(self.settings, "allow_autonomous_walk", False)
-        )
-        previous_pet_name = self._pet_name()
-        previous_owner_nickname = self._owner_nickname()
-        try:
-            dialog.apply()
-        except Exception as exc:
-            self.show_speech(f"è®¾ç½®æ²¡æœ‰ä¿å­˜ï¼š{exc}", 6000)
-            return True
-        current_pet_name = self._pet_name()
-        self.setWindowTitle(f"{APP_DISPLAY_NAME} Â· {current_pet_name}")
-        if self._chat_dialog is not None:
-            self._chat_dialog.set_pet_name(current_pet_name)
-        self.quick_panel.set_pet_name(current_pet_name)
-        if current_pet_name != previous_pet_name:
-            self.pet_name_changed.emit(current_pet_name)
-        current_owner_nickname = self._owner_nickname()
-        if current_owner_nickname != previous_owner_nickname:
-            self.owner_nickname_changed.emit(current_owner_nickname)
-            self._sync_owner_nickname(current_owner_nickname)
-            if self._social_dialog is not None:
-                self._social_dialog.set_owner_nickname(current_owner_nickname)
-        if self.settings.always_on_top != previous_always_on_top:
-            self.set_always_on_top(self.settings.always_on_top, persist=False)
-        if bool(self.settings.allow_autonomous_walk) != previous_allow_autonomous_walk:
-            self.set_allow_autonomous_walk(
-                self.settings.allow_autonomous_walk,
-                persist=False,
-            )
-        save_settings(self.settings)
-        self._schedule_ambient()
-        self._schedule_song_inspiration()
-        if self._chat_dialog is not None:
-            status = self.agent_manager.status(self.settings.ai_provider)
-            self._chat_dialog.set_provider(
-                self.settings.ai_provider,
-                status.state.value,
-                status.detail,
-            )
-        if self.settings.ai_provider != "offline":
-            self.agent_manager.start_background_check(
-                (self.settings.ai_provider,),
-                force=True,
-            )
-        preset = PROVIDER_PRESETS[self.settings.ai_provider]
-        self.show_speech(f"å·²åˆ‡æ¢ä¸ºï¼š{preset.label}", 4200)
-        return True
-
-    def open_social_hub(self) -> None:
-        """æ‰“å¼€è”ç½‘æ­å­ä¸Žç§äººè‡ªä¹ å®¤ï¼›ç¦»çº¿åŠŸèƒ½ä¸ä¾èµ–æ­¤çª—å£ã€‚"""
-
-        self._record_user_interaction()
-        if self._social_dialog is None:
-            # Keep the study room as an independent top-level application
-            # window so Windows gives it a normal taskbar button.  The pet
-            # retains ownership through the Python reference and can restore
-            # the same instance on a later menu click.
-            self._social_dialog = SocialHubDialog(
-                self.social_client,
-                self.settings.equipped_outfit,
-                self._owner_nickname(),
-                None,
-            )
-            self._social_dialog.active_visit.connect(self._show_buddy_visit)
-            self._social_dialog.room_event_received.connect(self._room_event_received)
-            self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
-            self._social_dialog.finished.connect(self._social_dialog_finished)
-            self._social_dialog.focus_start_requested.connect(self.start_work_timer)
-            self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
-            self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
-            self._social_dialog.focus_task_requested.connect(self._set_focus_task)
-            self._social_dialog.tomorrow_review_requested.connect(self._set_tomorrow_review)
-            self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
-            self._social_dialog.room_changed.connect(self._social_room_changed)
-            self._social_dialog.quick_action_requested.connect(self._room_quick_action)
-            self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
-            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
-        # A second click on the menu must restore a minimized study-room
-        # window instead of leaving it hidden in the taskbar/Dock.
-        if self._social_dialog.isMinimized():
-            self._social_dialog.showNormal()
-        else:
-            self._social_dialog.show()
-        self._social_dialog.raise_(); self._social_dialog.activateWindow()
-
-    def _focus_snapshot_changed(self, snapshot: object) -> None:
-        if self._social_dialog is not None:
-            self._social_dialog.set_focus_snapshot(snapshot)
-            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
-
-    def _room_event_received(self, event: dict) -> None:
-        """Play a received room interaction on this desktop pet."""
-
-        if detect_quiet_mode().blocked:
-            return
-        kind = str(event.get("kind") or "")
-        actor = social_pet_label(event.get("nickname"))
-        message = str(event.get("message") or "")
-        labels = {"poke": "æˆ³äº†æˆ³ä½ ", "cheer": "ç»™ä½ åŠ æ²¹", "drink": "é€’ç»™ä½ ä¸€æ¯å¥¶èŒ¶"}
-        if kind == "phrase":
-            text = f"{actor}ï¼š{message[:100]}"
-            activity = "happy"
-        else:
-            text = f"{actor}{labels.get(kind, 'ç»™ä½ å‘æ¥ä¸€æ¡æˆ¿é—´åŠ¨æ€')}"
-            activity = {"poke": "surprised", "cheer": "pointing", "drink": "tea"}.get(kind, "happy")
-        self._set_temporary_activity(activity, 20_000)
-        self.show_speech(text, 5200)
-
-    def _set_focus_task(self, title: str, minutes: int) -> None:
-        task = self.time_memory.todos.find(title)
-        if task is None and str(title).strip():
-            task = self.time_memory.todos.add(str(title).strip())
-        if task is not None:
-            self.time_memory.select_task(task.id)
-        due_at = None
-        if int(minutes) > 0:
-            due_at = (datetime.now().astimezone() + timedelta(minutes=int(minutes))).isoformat()
-        self.focus_analytics.set_current_task(title, due_at=due_at, target_seconds=max(0, int(minutes)) * 60)
-        if self._social_dialog is not None:
-            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
-        self.show_speech(f"è¿™è½®åªç›¯ä¸€ä»¶äº‹ï¼š{title[:80]}", 4200)
-
-    def _set_tomorrow_review(self, title: str) -> None:
-        self.focus_analytics.set_tomorrow_task(title)
-        if title:
-            self.show_speech(f"æ˜Žå¤©ç¬¬ä¸€ä»¶äº‹è®°å¥½äº†ï¼š{title[:80]}", 4200)
-        else:
-            self.show_speech("æ˜Žå¤©ç¬¬ä¸€ä»¶äº‹å·²æ¸…ç©ºã€‚", 3200)
-
-    def _room_ritual_due(self, label: str) -> None:
-        if detect_quiet_mode().blocked:
-            return
-        self.show_speech(f"æˆ¿é—´æé†’ï¼š{label}ï¼å¤§å®¶ä¸€èµ·åŠ¨èµ·æ¥ã€‚", 5000)
-
-    def _buddy_subscription_notice(self, message: str) -> None:
-        if detect_quiet_mode().blocked:
-            return
-        self.show_speech(message, 4200)
-
-    def _social_dialog_finished(self) -> None:
-        if self._social_dialog is not None:
-            self._social_dialog.deleteLater(); self._social_dialog = None
-
-    def _social_tick(self) -> None:
-        """æ¯ 30 ç§’åˆ·æ–°æˆ¿é—´çŠ¶æ€ï¼›å¿ƒè·³æŒ‰éœ€å‘é€ï¼Œå¤±è´¥æ—¶ä¿ç•™ç¦»çº¿æ¡Œå® ã€‚"""
-
-        if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
-            return
-        self._maybe_sync_owner_nickname()
-        selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
-        # A persisted local room ID is not an invitation to re-enter a room.
-        # Only the room explicitly selected in the study-room window is sent.
-        room_id = selected_room
-        if room_id != self.focus_session.room_id:
-            self.focus_session.set_room_id(room_id)
-        snapshot = self.focus_session.snapshot()
-        presence = {
-            "working": snapshot.is_running,
-            "today_seconds": snapshot.today_seconds,
-            "session_started_at": snapshot.session_started_at,
-            "outfit_key": self.settings.equipped_outfit,
-            "room_id": room_id,
-            "quick_status": self._active_room_quick_status(),
-            "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
-            if self._room_quick_status_expires_at is not None else None,
-        }
-        send_heartbeat = self._social_heartbeat_due or time.monotonic() - self._last_social_heartbeat_at >= 90.0
-        if send_heartbeat:
-            self._last_social_heartbeat_at = time.monotonic()
-            self._social_heartbeat_due = False
-        thread = SocialSyncThread(self.social_client, presence, self, send_heartbeat=send_heartbeat)
-        self._social_thread = thread
-        thread.completed.connect(self._social_dashboard_received)
-        thread.failed.connect(self._social_sync_failed)
-        thread.finished.connect(self._social_thread_finished)
-        thread.start()
-
-    def _social_dashboard_received(self, data: dict) -> None:
-        """æ˜¾ç¤ºæ–°ä¸²é—¨æé†’ï¼Œå¹¶åœ¨åŒæ–¹æœ¬åœ°æ‰“å¼€åŒå…­æ¯›ç”»é¢ã€‚"""
-
-        # The sync thread already fetched this dashboard.  Render that exact
-        # payload instead of issuing a second blocking request from the UI
-        # thread; this is what makes a peer's fresh focus state visible within
-        # the same heartbeat.
-        if self._social_dialog is not None:
-            self._social_dialog.apply_dashboard(data)
-
-        # A cached snapshot is useful for explaining the last known state,
-        # but it is not permission to reopen a visit window or emit a new
-        # interaction.  Only a server-confirmed payload may trigger social
-        # side effects.
-        if data.get("_sync_offline") or data.get("data_source") == "local_cache":
-            return
-
-        if detect_quiet_mode().blocked:
-            return
-        for visit in data.get("visits") or []:
-            visit_id = str(visit.get("id", ""))
-            if visit_id and visit_id not in self._seen_visit_ids:
-                self._seen_visit_ids.add(visit_id)
-                self._set_temporary_activity("pointing", 20_000)
-                self.show_speech(f"{social_pet_label(visit.get('owner_nickname') or visit.get('nickname'))}æ¥ä¸²é—¨å•¦ï¼\næ‰“å¼€â€œæ­å­è‡ªä¹ å®¤â€å¯ä»¥æŽ¥å—ã€‚", 7600)
-        active = data.get("active_visits") or []
-        if active:
-            self._show_buddy_visit(active[0])
-
-    def _social_sync_failed(self, message: str) -> None:
-        """Keep the pet quiet while making an unavailable room understandable."""
-
-        if self._social_dialog is not None:
-            if self._social_dialog.current_room_id:
-                self._social_dialog._set_status(
-                    f"è‡ªä¹ å®¤æš‚æ—¶ç¦»çº¿ï¼š{message}"
-                    "ï¼›å…­æ¯›ä»ä¼šæœ¬åœ°è®¡æ—¶ï¼Œç½‘ç»œæ¢å¤åŽè‡ªåŠ¨é‡è¯•ã€‚"
-                )
-            elif self.focus_session.snapshot().is_running:
-                self._social_dialog._set_status(
-                    "æœ¬åœ°ä¸“æ³¨å·²å¼€å§‹ï¼›ä½ è¿˜æ²¡æœ‰åŠ å…¥è‡ªä¹ å®¤ï¼Œæ­å­çŠ¶æ€ä¼šåœ¨ç½‘ç»œæ¢å¤åŽè‡ªåŠ¨åŒæ­¥ã€‚"
-                )
-            else:
-                self._social_dialog._set_status(
-                    "ä½ è¿˜æ²¡æœ‰åŠ å…¥è‡ªä¹ å®¤ï¼›æœ¬åœ°åŠŸèƒ½ä¸å—å½±å“ï¼Œè”ç½‘åŽæ­å­çŠ¶æ€ä¼šè‡ªåŠ¨åŒæ­¥ã€‚"
-                )
-
-    def _record_social_room_event(self, room_id: str, kind: str) -> None:
-        """Record a lifecycle event without blocking the desktop pet."""
-
-        if not self.social_client.signed_in:
-            return
-        thread = SocialEventThread(
-            self.social_client,
-            {"room_id": room_id, "kind": kind, "target_id": None, "message": ""},
-            self,
-        )
-        self._social_event_threads.append(thread)
-        thread.finished.connect(lambda: self._social_event_finished(thread))
-        thread.start()
-
-    def _social_event_finished(self, thread: SocialEventThread) -> None:
-        if thread in self._social_event_threads:
-            self._social_event_threads.remove(thread)
-        thread.deleteLater()
-
-    def _social_room_changed(self, room_id: object) -> None:
-        """Bind room selection to the single local focus session."""
-
-        self.focus_session.set_room_id(str(room_id) if room_id else None)
-        if not room_id:
-            self._room_quick_status = ""
-            self._room_quick_status_expires_at = None
-        self._schedule_social_tick()
-
-    def _active_room_quick_status(self) -> str:
-        if self._room_quick_status_expires_at is not None and datetime.now().astimezone() >= self._room_quick_status_expires_at:
-            self._room_quick_status = ""
-            self._room_quick_status_expires_at = None
-        return self._room_quick_status
-
-    def _room_quick_action(self, action: str) -> None:
-        """Turn room action phrases into real local focus state changes."""
-
-        action = str(action).strip()
-        if action == "æˆ‘ä¹Ÿå¼€å·¥äº†":
-            self._room_quick_status = ""
-            self._room_quick_status_expires_at = None
-            self.start_work_timer()
-        elif action == "å†å· 30 åˆ†é’Ÿ":
-            self._room_quick_status = "å†å·30åˆ†é’Ÿ"
-            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=30)
-            if not self.work_timer.is_running:
-                self.start_work_timer()
-            elif self._social_dialog is not None:
-                self._social_dialog.set_room_quick_status(self._room_quick_status, self._room_quick_status_expires_at)
-        elif action == "åŽ»å–æ°´":
-            self._room_quick_status = "åŽ»å–æ°´"
-            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=10)
-            self.pause_work_timer()
-        else:
-            return
-        if self._social_dialog is not None:
-            self._social_dialog.set_room_quick_status(
-                self._active_room_quick_status(), self._room_quick_status_expires_at
-            )
-        self._schedule_social_tick()
-
-    def _schedule_social_tick(self) -> None:
-        """Push work/room transitions promptly instead of waiting 30 seconds."""
-
-        if not self.social_client.signed_in:
-            return
-        timer = getattr(self, "social_sync_timer", None)
-        if timer is not None:
-            self._social_heartbeat_due = True
-            timer.start(250)
-
-    def _show_buddy_visit(self, peer: dict) -> None:
-        if detect_quiet_mode().blocked:
-            return
-        # Active visits normally carry a database id.  Keep a deterministic
-        # fallback for older backend responses so a 30-second heartbeat does
-        # not repeatedly reopen a minimized visit window.
-        visit_id = str(
-            peer.get("id")
-            or peer.get("visit_id")
-            or f"{peer.get('user_id', '')}:{peer.get('visit_started_at', '')}:{peer.get('nickname', '')}"
-        )
-        if visit_id and visit_id in self._shown_active_visit_ids:
-            return
-        if visit_id:
-            self._shown_active_visit_ids.add(visit_id)
-        self._buddy_visit_window.show_peer(
-            peer,
-            self.settings.equipped_outfit,
-            self.work_timer.today_seconds(),
-        )
-
-    def _social_thread_finished(self) -> None:
-        if self._social_thread is not None:
-            self._social_thread.deleteLater(); self._social_thread = None
-
-    def set_automatic_grumbling(self, enabled: bool) -> None:
-        """å¯ç”¨æˆ–åœç”¨åªåœ¨æœ¬æœºç”Ÿæˆçš„é—´æ­‡ç‰¢éªšã€‚"""
-
-        self.settings.automatic_grumbling = bool(enabled)
-        save_settings(self.settings)
-        self._schedule_ambient()
-        self.show_speech("å¶å°”å‘ç‰¢éªšå·²å¼€å¯ã€‚" if enabled else "å¶å°”å‘ç‰¢éªšå·²å…³é—­ã€‚", 3000)
-
-    def set_hourly_announcement(self, enabled: bool) -> None:
-        """å¯ç”¨æˆ–åœç”¨æ•´ç‚¹æŠ¥æ—¶ã€‚"""
-
-        self.settings.hourly_announcement = bool(enabled)
-        self._last_announced_hour = ""
-        save_settings(self.settings)
-        self.show_speech("æ•´ç‚¹æŠ¥æ—¶å·²å¼€å¯ã€‚" if enabled else "æ•´ç‚¹æŠ¥æ—¶å·²å…³é—­ã€‚", 3200)
-
-    def _app_awareness_tick(self) -> None:
-        """åªæ ¹æ®å‰å°åº”ç”¨ç±»åˆ«åˆ‡æ¢é…é¥°åŠ¨ä½œï¼Œä¸è¯»å–æ ‡é¢˜æˆ–æ–‡æ¡£å†…å®¹ã€‚"""
-
-        category = active_application_category()
-        if self.work_timer.is_running:
-            self._focus_quality_tracker.note_application_switch(category)
-
-        if (
-            not self.settings.app_awareness
-            or self.work_timer.is_running
-            or time.monotonic() < self._manual_activity_until
-        ):
-            return
-        if category == self._last_app_category:
-            return
-        self._last_app_category = category
-        mapping = {"music": "headphones", "office": "work-study", "coding": "deep-focus", "reading": "night-reading"}
-        self._change_ambient_activity(mapping.get(category, "none"))
-
-    def play_random_song(self) -> str:
-        """è‡ªåŠ¨å¯»æ‰¾æœ€å¯ç”¨çš„æœ¬æœºæ’­æ”¾å™¨å¹¶éšæœºå¼€å§‹æ’­æ”¾é™ˆæ¥šç”Ÿã€‚"""
-
-        if self.music_controller.play_song("", "é™ˆæ¥šç”Ÿ", random_artist=True):
-            self.show_speech("æ­£åœ¨è‡ªåŠ¨å¯»æ‰¾å¯ç”¨æ’­æ”¾å™¨ï¼Œå¹¶éšæœºæ’­æ”¾ä¸€é¦–é™ˆæ¥šç”Ÿâ€¦", 4200)
-        else:
-            self.show_speech("éŸ³ä¹æ“ä½œæ­£åœ¨å¤„ç†ä¸­ï¼Œè¯·ç¨ç­‰ä¸€ä¸‹ã€‚", 3200)
-        return "é™ˆæ¥šç”Ÿéšæœºæ­Œæ›²"
-
-    def _play_random_song_legacy(self) -> str:
-        """ä»Žæœç´¢ç»“æžœä¸­çš„é™ˆæ¥šç”Ÿæ­Œæ›²è¡Œéšæœºé€‰æ‹©ï¼Œå†æ‰§è¡Œæ’­æ”¾ä¸Žåª’ä½“æ ¡éªŒã€‚"""
-
-        if self.music_controller.play_song("", "é™ˆæ¥šç”Ÿ", random_artist=True):
-            self.show_speech("æ­£åœ¨ä»Žé™ˆæ¥šç”Ÿçš„æ­Œæ›²ç»“æžœä¸­éšæœºé€‰æ‹©ï¼Œå¹¶æ ¸å¯¹å®žé™…æ’­æ”¾æ­Œæ›²â€¦â€¦", 4200)
-        else:
-            self.show_speech("ä¸Šä¸€é¡¹éŸ³ä¹æ“ä½œè¿˜åœ¨å¤„ç†ä¸­ï¼Œè¯·ç¨ç­‰ä¸€ä¸‹ã€‚", 3200)
-        return "é™ˆæ¥šç”Ÿéšæœºæ­Œæ›²"
-
-    def control_music(self, action: str) -> bool:
-        """å¼‚æ­¥æŽ§åˆ¶åˆšæ‰çœŸæ­£å¼€å§‹æ’­æ”¾çš„ Providerï¼Œä¸é‡æ–°é€‰æ‹©å…¶ä»–æ’­æ”¾å™¨ã€‚"""
-
-        if self.music_controller.perform(action):
-            self.show_speech("æ­£åœ¨è¿žæŽ¥ç³»ç»Ÿæ’­æ”¾å™¨â€¦", 2200)
-            return True
-        self.show_speech("éŸ³ä¹æŽ§åˆ¶è¿˜åœ¨å¤„ç†ä¸­ï¼Œè¯·ç¨ç­‰ä¸€ä¸‹ã€‚", 3200)
-        return False
-
-    def _music_control_result(self, result: MusicControlResult | SongPlaybackResult) -> None:
-        """åªå±•ç¤ºç³»ç»ŸæŽ§åˆ¶å±‚è¿”å›žçš„çœŸå®žç»“æžœå’Œèƒ½åŠ›ç­‰çº§ã€‚"""
-
-        is_status = isinstance(result, MusicControlResult) and result.action == "status"
-        if isinstance(result, MusicControlResult):
-            track_artist = result.status.track.artist if result.status.track else ""
-            track_title = result.status.track.title if result.status.track else ""
-        else:
-            track_artist = result.current_artist
-            track_title = result.current_title
-        family_music = family_music_mode(track_artist, track_title)
-        if family_music:
-            # å¬åˆ°çˆ¹çš„æ­Œæ—¶è®©å…­æ¯›å…ˆå¬æ­Œï¼Œæš‚æ—¶å‡å°‘æ™®é€šä¸»åŠ¨æ‰“æ‰°ã€‚
-            self._show_emotion(PetState.SIT, 2400)
-            self._set_temporary_activity("headphones", 120_000)
-            self._manual_activity_until = time.monotonic() + 120
-        if result.success and not is_status and not family_music:
-            self._change_ambient_activity("headphones")
-            self._manual_activity_until = time.monotonic() + 45
-        if isinstance(result, SongPlaybackResult):
-            save_settings(self.settings)
-        self.show_speech(result.message, 6200)
-
-    def set_activity(self, activity: str) -> None:
-        """æ‰‹åŠ¨é€‰æ‹©ä¿®æ­£ç‰ˆåŠ¨ä½œè¡¨ä¸­çš„ä»»æ„å®Œæ•´åŠ¨ä½œã€‚"""
-
-        self._set_temporary_activity(activity, 120_000)
-        self.show_speech("åŠ¨ä½œå·²åˆ‡æ¢ï¼Œå…­æ¯›å¼€å§‹è¡¨æ¼”å•¦ã€‚", 2800)
-
-    def equip_outfit(self, outfit_key: str) -> None:
-        """è£…å¤‡å·²è§£é”å¨ƒè¡£ï¼›ç©ºå­—ç¬¦ä¸²æ¢å¤ç»å…¸å¤–è§‚ã€‚"""
-
-        allowed = {item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())}
-        if outfit_key and outfit_key not in allowed:
-            self.show_speech("è¿™å¥—å¨ƒè¡£è¿˜åœ¨ç§˜å¯†çŽ‹å›½é‡Œï¼Œå†ç´¯è®¡å·¥ä½œä¸€å°æ—¶å°±æ›´è¿‘ä¸€ç‚¹ã€‚", 5200)
-            return
-        self.settings.equipped_outfit = outfit_key
-        save_settings(self.settings)
-        self._mask_cache.clear(); self._refresh_pixmap()
-        label = next((item.name for item in OUTFITS if item.key == outfit_key), "ç»å…¸å…­æ¯›")
-        self.show_speech(f"å·²æ¢ä¸Šï¼š{label}ã€‚", 3200)
-
-    def open_size_control(self) -> None:
-        """æ‰“å¼€è¿žç»­å°ºå¯¸æ»‘å—å¹¶å®žæ—¶åº”ç”¨ï¼Œä¸æ”¹å˜ä¸åŒåŠ¨ä½œä¹‹é—´çš„æ¯”ä¾‹ã€‚"""
-
-        dialog = SizeControlDialog(self.settings.display_height, self, self._pet_name())
-        dialog.value_changed.connect(self.set_display_height)
-        dialog.exec()
-        save_settings(self.settings)
-
-    def _position_floating_panel(self, panel: QWidget) -> None:
-        """æŠŠå¿«æ·é¢æ¿æ”¾åœ¨å® ç‰©æ—è¾¹å¹¶é™åˆ¶åœ¨å½“å‰å±å¹•å¯è§åŒºåŸŸã€‚"""
-
-        panel.adjustSize()
-        area = self._screen_geometry()
-        x = self.x() - panel.width() - 10
-        y = self.y() + max(0, self.height() // 3)
-        if area is not None:
-            if x < area.left():
-                x = self.x() + self.width() + 10
-            x = min(max(x, area.left()), area.right() - panel.width() + 1)
-            y = min(max(y, area.top()), area.bottom() - panel.height() + 1)
-        panel.move(x, y)
-
-    def show_quick_panel(self) -> None:
-        """åŒå‡»åˆ‡æ¢å¿«æ·å£è¢‹ï¼›å†æ¬¡åŒå‡»ç«‹å³æ”¶èµ·ã€‚"""
-
-        if self.quick_panel.isVisible():
-            self.quick_panel.hide()
-            return
-        self._position_floating_panel(self.quick_panel)
-        self.quick_panel.show(); self.quick_panel.raise_()
-
-    def show_work_controls(self) -> None:
-        """åœ¨è®¡æ—¶è¿è¡Œæ—¶æ˜¾ç¤ºæš‚åœå’Œç»“æŸä¸¤ä¸ªæ“ä½œæ°”æ³¡ã€‚"""
-
-        if not self.work_timer.is_running:
-            self.start_work_timer()
-            return
-        self._position_floating_panel(self.work_controls)
-        self.work_controls.show(); self.work_controls.raise_()
-
-    def _quick_work_action(self) -> None:
-        """å¿«æ·é¢æ¿çš„å·¥ä½œå…¥å£ï¼šæœªè¿è¡Œæ—¶å¼€å§‹ï¼Œè¿è¡Œæ—¶å±•ç¤ºæŽ§åˆ¶ã€‚"""
-
-        if self.work_timer.is_running:
-            self.show_work_controls()
-        else:
-            self.start_work_timer()
-
-    def _schedule_ambient(self) -> None:
-        """ç”¨éšæœºé—´éš”å®‰æŽ’å…­æ¯›ä¸»åŠ¨å‡ºçŽ°ï¼Œä¿æŒå­˜åœ¨æ„Ÿä½†é¿å…é¢‘ç¹æ‰“æ‰°ã€‚"""
-
-        if not hasattr(self, "ambient_timer"):
-            return
-        self.ambient_timer.stop()
-        if self.settings.automatic_grumbling:
-            self.ambient_timer.start(random.randint(8 * 60_000, 18 * 60_000))
-
-    def _ambient_tick(self) -> None:
-        """æŒ‰æ—¶æ®µã€ä¸“æ³¨é•¿åº¦ä¸Žä½Žæ¦‚çŽ‡å½©è›‹è®©å…­æ¯›ä¸»åŠ¨æ‰¾ç”¨æˆ·ã€‚"""
-
-        try:
-            busy = self.chat_manager.busy
-            if self.isVisible() and not self.dragging and not busy:
-                idle_seconds = time.monotonic() - self._last_user_interaction
-                if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
-                    activity, text = "thermos", "è¿žç»­å·¥ä½œä¸¤å°æ—¶å•¦ã€‚å…­æ¯›æŠŠæ°´æ¯ç«¯æ¥äº†ï¼šå…ˆä¼‘æ¯ä¸€ä¸‹ï¼Ÿ"
-                elif idle_seconds >= 30 * 60:
-                    activity, text = "pointing", "ä½ å¾ˆä¹…æ²¡åŠ¨å•¦ï¼Œå…­æ¯›å·å·æŽ¢å¤´çœ‹çœ‹ä½ è¿˜åœ¨ä¸åœ¨ã€‚"
-                elif self.work_timer.today_seconds() >= 3 * 3600 and random.random() < 0.06:
-                    activity, text = "wild-king", "æžä½Žæ¦‚çŽ‡å½©è›‹ï¼šè’é‡Žå›½çŽ‹è·¯è¿‡ä½ çš„æ¡Œé¢ã€‚"
-                elif random.random() < 0.55:
-                    decision = self.companion_behavior.decide(
-                        now_hour=datetime.now().hour,
-                        working=self.work_timer.is_running,
-                        session_seconds=self.work_timer.session_seconds(),
-                        today_seconds=self.work_timer.today_seconds(),
-                        idle_seconds=int(idle_seconds),
-                        music_playing=self._manual_activity_until > time.monotonic(),
-                    )
-                    activity = decision.activity
-                    if activity == "idle":
-                        activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
-                    elif activity == "night-reading":
-                        text = "æˆ‘é™ªä½ è¯»ä¸€ä¼šå„¿ï¼Œæ…¢æ…¢æ¥ã€‚"
-                    elif activity == "sleepy":
-                        text = "å…­æ¯›æœ‰ç‚¹ç´¯å•¦ï¼Œè®°å¾—ç»™è‡ªå·±ç•™ä¸€ç‚¹ä¼‘æ¯æ—¶é—´ã€‚"
-                    elif activity == "sit":
-                        text = "æˆ‘ååœ¨è¿™é‡Œé™ªä½ ï¼ŒæŠŠè¿™ä¸€å°æ®µå®Œæˆå°±å¥½ã€‚"
-                    elif activity == "headphones":
-                        text = "éŸ³ä¹å“èµ·æ¥å•¦ï¼Œå’Œä½ ä¸€èµ·ä¸“æ³¨ã€‚"
-                    else:
-                        text = self.companion.ambient_grumble(self.work_timer.is_running).text
-                else:
-                    activity = random.choice(RANDOM_ACTIONS)
-                    text = self.companion.ambient_grumble(self.work_timer.is_running).text
-                self.daily_stats.record_event(activity)
-                if activity == "sleep":
-                    self.daily_stats.record_sleep()
-                self._set_temporary_activity(activity, 42_000)
-                self.show_speech(text, 6800)
-        finally:
-            self._schedule_ambient()
-
-    def _schedule_song_inspiration(self) -> None:
-        """æŒ‰ç”¨æˆ·è®¾ç½®å•ç‹¬å®‰æŽ’æ­Œè¯æ°”æ³¡ï¼Œä¸å†ä¸Žä½Žæ¦‚çŽ‡ç‰¢éªšå…±ç”¨è®¡æ—¶å™¨ã€‚"""
-
-        if not hasattr(self, "song_timer"):
-            return
-        self.song_timer.stop()
-        if self.settings.lyric_inspiration_enabled:
-            base = self.settings.lyric_interval_minutes * 60_000
-            self.song_timer.start(max(60_000, round(base * random.uniform(0.85, 1.15))))
-
-    def _song_inspiration_tick(self) -> None:
-        """æ˜¾ç¤ºæœ¬æœºæ­Œè¯çŸ­è¡Œï¼›æœªé€‰æ‹©æ–‡ä»¶æ—¶æ˜¾ç¤ºåŽŸåˆ›æ­Œåæ„è±¡çŸ­å¥ã€‚"""
-
-        try:
-            busy = self.chat_manager.busy
-            if self.isVisible() and not self.dragging and not busy:
-                local_lines = load_local_lines(self.settings.local_lyrics_path)
-                if local_lines:
-                    self._show_emotion(PetState.SIT, 2400)
-                    self.show_speech(f"â™ª {random.choice(local_lines)}", 6800)
-                else:
-                    reply = self.companion.song_inspiration()
-                    self._show_emotion(reply.state, 2400)
-                    self.show_speech(f"â™ª {reply.text}", 6800)
-        finally:
-            self._schedule_song_inspiration()
-
-    def _hourly_tick(self) -> None:
-        """å‘¨æœŸæ£€æŸ¥æ•´ç‚¹æŠ¥æ—¶ï¼Œå…³é—­æ—¶ä¸äº§ç”Ÿä»»ä½•æ°”æ³¡ã€‚"""
-
-        self._maybe_announce_hour(datetime.now())
-
-    def _maybe_announce_hour(self, now: datetime) -> bool:
-        """åœ¨æ¯ä¸ªæ•´ç‚¹çª—å£å†…åªæ’­æŠ¥ä¸€æ¬¡ï¼Œè¿”å›žæ˜¯å¦å®žé™…æ’­æŠ¥ã€‚"""
-
-        if not self.settings.hourly_announcement or now.minute != 0:
-            return False
-        key = now.strftime("%Y-%m-%d-%H")
-        if key == self._last_announced_hour:
-            return False
-        self._last_announced_hour = key
-        reply = self.companion.hourly_announcement(now.hour)
-        self._show_emotion(reply.state, 2800)
-        self.show_speech(reply.text, 6200)
-        return True
-
-    def show_companion_status(self) -> None:
-        """ç”¨æ°”æ³¡æ˜¾ç¤ºå½“å‰ä¼šè¯å†…äº²å¯†ã€ç²¾åŠ›å’Œé¥±é£ŸçŠ¶æ€ã€‚"""
-
-        self._record_user_interaction()
-        count = self.work_timer.unlocked_outfit_count()
-        next_text = "12 å¥—å°æ—¶å¨ƒè¡£å·²å…¨éƒ¨è§£é”"
-        if count < len(OUTFITS):
-            remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
-            next_text = f"è·ä¸‹ä¸€å¥—å¨ƒè¡£çº¦ {format_work_duration(remaining)}"
-        self.show_speech(
-            f"{self.companion.status_text(self.work_timer.today_seconds() // 600)}\n{next_text}",
-            6200,
-        )
-
-    def trigger_interaction(self) -> None:
-        """ç»“åˆå½“å‰æƒ…ç»ªæ•°å€¼è§¦å‘å‹å¥½è¡¨æƒ…æˆ–æŒ¥æ‰‹åé¦ˆã€‚"""
-
-        if self.dragging:
-            return
-        self._record_user_interaction()
-        if self.mood.energy < 30:
-            state = PetState.SLEEPY
-        elif self.mood.boredom > 70:
-            state = PetState.CURIOUS
-        else:
-            state = random.choice((PetState.WAVE, PetState.HAPPY, PetState.SHY))
-        self._show_emotion(state, 1800)
-        now = datetime.now()
-        if (
-            not self._late_wakeup_shown
-            and self.settings.lyric_inspiration_enabled
-            and 10 <= now.hour < 13
-            and self.work_timer.today_seconds() == 0
-        ):
-            self._late_wakeup_shown = True
-            reply = self.companion.song_inspiration(late_wakeup=True)
-            self.show_speech(reply.text, 6500)
-        else:
-            self.show_speech("å·´å¸ƒè¾¾ï¼å…­æ¯›å¬è§ä½ å•¦ã€‚", 3000)
-
-    def _show_emotion(self, state: PetState, duration_ms: int = 1600) -> None:
-        """æ˜¾ç¤ºä¸€æ¬¡çŸ­æš‚äº’åŠ¨è¡¨æƒ…ï¼Œå¹¶åœ¨è®¡æ—¶ç»“æŸåŽæ¢å¤è‡ªä¸»ç”Ÿæ´»ã€‚"""
-
-        self.state_timer.stop()
-        self.set_state(state)
-        self.interaction_timer.start(max(500, duration_ms))
-
-    def trigger_selfie(self) -> None:
-        """æ˜¾å¼æ’­æ”¾ä¸€æ¬¡ä¸¾èµ·ç›¸æœºã€é—ªå…‰å’ŒæŸ¥çœ‹ç…§ç‰‡çš„è‡ªæ‹åºåˆ—ã€‚"""
-
-        if self.dragging:
-            return
-        self._record_user_interaction()
-        self._show_emotion(PetState.SELFIE, 2600)
-
-    def _interaction_zone(self, point: QPoint) -> str:
-        """æŒ‰çª—å£å†…ç›¸å¯¹ä½ç½®åˆ’åˆ†å¤´é¡¶ã€è„¸éƒ¨ã€èº«ä½“å’Œç›¸æœºäº’åŠ¨åŒºåŸŸã€‚"""
-
-        x = (point.x() - self.label.x()) / max(1, self.label.width())
-        y = (point.y() - self.label.y()) / max(1, self.label.height())
-        if self.work_timer.is_running and 0.52 <= y <= 0.88 and 0.18 <= x <= 0.84:
-            return "work_device"
-        if y < 0.24:
-            return "head"
-        if y < 0.46:
-            return "face"
-        if 0.42 <= y <= 0.82 and x < 0.43:
-            return "camera"
-        return "body"
-
-    def _handle_click(self, point: QPoint) -> None:
-        """æ ¹æ®ç‚¹å‡»åŒºåŸŸæ›´æ–°æƒ…ç»ªå¹¶é€‰æ‹©å¯¹åº”åé¦ˆã€‚"""
-
-        zone = self._interaction_zone(point)
-        self._record_user_interaction()
-        self.daily_stats.record_touch()
-        if zone == "work_device" or (zone == "head" and self.work_timer.is_running):
-            self.show_work_controls()
-            return
-        if zone == "camera":
-            self.trigger_selfie()
-            return
-        if zone == "head":
-            self.mood.receive_affection()
-            self._show_emotion(PetState.CURIOUS, 1700)
-            self.show_speech("å…­æ¯›æ­ªç€å¤´çœ‹ä½ ï¼šæ˜¯åœ¨å«æˆ‘å—ï¼Ÿ", 3200)
-            return
-        if zone == "face":
-            self.mood.receive_poke(False)
-            self._show_emotion(PetState.SURPRISED, 1300)
-            return
-
-        now = time.monotonic()
-        self._poke_times.append(now)
-        while self._poke_times and now - self._poke_times[0] > 2.5:
-            self._poke_times.popleft()
-        repeated = len(self._poke_times) >= 5
-        self.mood.receive_poke(repeated)
-        self._show_emotion(
-            PetState.ANNOYED if repeated else PetState.SHY,
-            1800 if repeated else 1200,
-        )
-        self.show_speech(
-            "æˆ³å¤Ÿäº”ä¸‹å•¦ï¼Œå…­æ¯›çœŸçš„è¦ç”Ÿæ°”ä¸€ç‚¹ç‚¹ã€‚" if repeated else "å…­æ¯›èµ¶ç´§æŠ¤ä½è‚šå­ï¼šè¿™é‡Œä¸è®¸ä¹±æˆ³ã€‚",
-            3600,
-        )
-
-    def play_babuda_voice(self) -> None:
-        """åŒå‡»å³é”®æ—¶è½®æ¢æ’­æ”¾ç”¨æˆ·æœ¬åœ°éŸ³é¢‘ï¼›ç¼ºå°‘æ–‡ä»¶åˆ™ç”¨ç³»ç»Ÿè¯­éŸ³è½»å¾®å˜è°ƒã€‚"""
-
-        if not self.settings.voice_enabled:
-            self.show_speech("å·´å¸ƒè¾¾ï¼", 2600)
-            return
-        variants = find_audio_variants(self.settings.babuda_audio_path)
-        index = self._babuda_variant_index
-        self._babuda_variant_index += 1
-        if variants and self._media_player is not None:
-            path = variants[index % len(variants)]
-            self._media_player.stop()
-            self._media_player.setPlaybackRate((0.96, 1.0, 1.05)[index % 3])
-            self._media_player.setSource(QUrl.fromLocalFile(str(path.resolve())))
-            self._media_player.play()
-        elif self._speech_engine is not None:
-            self._speech_engine.setRate((-0.08, 0.0, 0.08)[index % 3])
-            self._speech_engine.setPitch((-0.05, 0.0, 0.08)[index % 3])
-            self._speech_engine.say("å·´å¸ƒè¾¾")
-        self._show_emotion(random.choice((PetState.HAPPY, PetState.SHY, PetState.SURPRISED)), 1500)
-        self.show_speech(random.choice(("å·´å¸ƒè¾¾ï¼", "å·´â€”â€”å¸ƒè¾¾ã€‚", "å·´å¸ƒè¾¾ï¼Ÿå…­æ¯›åœ¨å‘¢ã€‚")), 2800)
-
-    def _trigger_long_press(self) -> None:
-        """é•¿æŒ‰å…­æ¯›è®©ä»–åŽŸåœ°ç¡è§‰ï¼Œé‡Šæ”¾é¼ æ ‡æ—¶ä¸å†è§¦å‘æ™®é€šç‚¹å‡»ã€‚"""
-
-        if not self._press_pending or self.dragging:
-            return
-        self._press_pending = False
-        self._long_press_triggered = True
-        self.daily_stats.record_sleep()
-        self._set_temporary_activity("sleep", 60_000)
-        self.show_speech("é•¿æŒ‰æˆåŠŸã€‚å…­æ¯›å†³å®šå°±åœ°ç¡ä¸€å°ä¼šå„¿ã€‚", 4200)
-
-    def _track_passive_motion(self, point: QPoint) -> None:
-        """è·Ÿè¸ªæ— æŒ‰é”®æ‚¬åœï¼›åœç•™è§¦å‘å¥½å¥‡ï¼Œå¤´éƒ¨å¾€è¿”ç§»åŠ¨åˆ¤å®šä¸ºæ‘¸å¤´ã€‚"""
-
-        zone = self._interaction_zone(point)
-        self._hover_zone = zone
-        if self.state is PetState.IDLE and not self.interaction_timer.isActive():
-            self.hover_timer.start(700)
-        if zone != "head":
-            self._stroke_points.clear()
-            return
-
-        now = time.monotonic()
-        self._stroke_points.append((now, point))
-        while self._stroke_points and now - self._stroke_points[0][0] > 1.2:
-            self._stroke_points.popleft()
-        distance = sum(
-            (current[1] - previous[1]).manhattanLength()
-            for previous, current in zip(
-                self._stroke_points,
-                list(self._stroke_points)[1:],
-            )
-        )
-        if distance >= 70 and now - self._last_stroke_reaction >= 2.0:
-            self._last_stroke_reaction = now
-            self._stroke_points.clear()
-            self.mood.receive_affection()
-            self._record_user_interaction()
-            self.daily_stats.record_touch()
-            state = PetState.SHY if self.mood.affinity >= 70 else PetState.HAPPY
-            self._show_emotion(state, 1600)
-            self.show_speech("æ‘¸æ‘¸æ”¶åˆ°ã€‚å…­æ¯›çš„çº¢æ¯›éƒ½å¼€å¿ƒå¾—ç¿˜èµ·æ¥å•¦ã€‚", 3400)
-
-    def _trigger_hover_curiosity(self) -> None:
-        """é¼ æ ‡åœ¨å® ç‰©é™„è¿‘ç¨³å®šåœç•™æ—¶æ˜¾ç¤ºå¥½å¥‡æ³¨è§†ã€‚"""
-
-        if (
-            self._hover_zone
-            and self.state is PetState.IDLE
-            and not self.dragging
-            and not self._press_pending
-            and not self.interaction_timer.isActive()
-        ):
-            self._record_user_interaction()
-            self._show_emotion(PetState.CURIOUS, 1300)
-            if time.monotonic() >= self._manual_activity_until:
-                self._set_temporary_activity("pointing", 5000)
-
-    def _show_photo_bubble(self) -> None:
-        """åœ¨å® ç‰©æ—æ˜¾ç¤ºç‹¬ç«‹è‡ªæ‹æˆç‰‡ï¼Œå¹¶åœ¨æ•°ç§’åŽè‡ªåŠ¨éšè—ã€‚"""
-
-        if self._selfie_photo.isNull():
-            return
-        ratio = max(1.0, self.devicePixelRatioF())
-        photo = self._scaled_selfie_photo(ratio)
-        logical_size = QSize(
-            max(1, round(photo.width() / ratio)),
-            max(1, round(photo.height() / ratio)),
-        )
-        self.photo_bubble.setPixmap(photo)
-        self.photo_bubble.setFixedSize(logical_size)
-        area = self._screen_geometry()
-        visible_bounds = self.mask().boundingRect()
-        if visible_bounds.isEmpty():
-            character_left = self.x()
-            character_right = self.x() + self.width()
-        else:
-            character_left = self.x() + visible_bounds.left()
-            character_right = self.x() + visible_bounds.right() + 1
-        gap = 8
-        x = character_left - self.photo_bubble.width() - gap
-        if area is not None and x < area.left():
-            x = character_right + gap
-        y = self.y() + max(0, (self.height() - self.photo_bubble.height()) // 2)
-        self.photo_bubble.move(x, y)
-        self.photo_bubble.show()
-        self.photo_timer.start(3800)
-
-    def _scaled_selfie_photo(self, ratio: float) -> QPixmap:
-        """æŒ‰è®¾å¤‡åƒç´ æ¯”ç”Ÿæˆç…§ç‰‡ç¼©ç•¥å›¾ï¼Œé¿å…é«˜ DPI å±å¹•äºŒæ¬¡æ”¾å¤§å¯¼è‡´æ¨¡ç³Šã€‚"""
-
-        if self._selfie_photo.isNull():
-            return QPixmap()
-        ratio = max(1.0, ratio)
-        photo = self._selfie_photo.scaled(
-            max(1, round(150 * ratio)),
-            max(1, round(210 * ratio)),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        photo.setDevicePixelRatio(ratio)
-        return photo
-
-    def _finish_interaction(self) -> None:
-        """ç»“æŸäº’åŠ¨å¹¶æ¢å¤è‡ªä¸»å¾…æœºã€‚"""
-
-        if not self.dragging:
-            if self.state is PetState.SELFIE:
-                self._show_photo_bubble()
-            self._schedule(self.behavior.initial_idle())
-
-    def _toggle_walk_from_menu(self) -> None:
-        """è®©å³é”®èœå•åŒæ—¶è¦†ç›–é¦–æ¬¡å¼€å¯å’Œæ—¥å¸¸æš‚åœä¸¤ç§è·‘åŠ¨æ“ä½œã€‚"""
-
-        if not getattr(self.settings, "allow_autonomous_walk", False):
-            self.set_allow_autonomous_walk(True)
-            return
-        self.set_paused(not self.paused)
-
-    def _build_context_menu(self) -> QMenu:
-        """æž„å»ºé«˜é¢‘å…¥å£ç›´è¾¾ã€ä½Žé¢‘é€‰é¡¹æ”¶çº³åˆ°äºŒçº§èœå•çš„å³é”®èœå•ã€‚"""
-
-        menu = QMenu(self)
-        rename_action = QAction("ä¿®æ”¹ä¸»äººç§°å‘¼â€¦", self)
-        rename_action.triggered.connect(self.rename_pet)
-        menu.addAction(rename_action)
-        dialogue_action = QAction(f"å’Œ{self._pet_name()}èŠèŠâ€¦", self)
-        dialogue_action.triggered.connect(self.prompt_dialogue)
-        menu.addAction(dialogue_action)
-        work_menu = menu.addMenu("å·¥ä½œæ‰“å¡/å·¥ä½œè®¡æ—¶")
-        start_work = QAction("å¼€å§‹å·¥ä½œè®¡æ—¶" if not self.work_timer.is_running else "å·¥ä½œè®¡æ—¶è¿›è¡Œä¸­", self)
-        start_work.setEnabled(not self.work_timer.is_running)
-        start_work.triggered.connect(self.start_work_timer)
-        work_menu.addAction(start_work)
-        if self.work_timer.is_running:
-            pause_work = QAction("æš‚åœ/ç»“æŸå·¥ä½œ", self)
-            pause_work.triggered.connect(self.show_work_controls)
-            work_menu.addAction(pause_work)
-        paper_menu = work_menu.addMenu("ä¾¿åˆ©è´´")
-        show_paper = QAction("æ˜¾ç¤ºä¾¿åˆ©è´´", self)
-        show_paper.triggered.connect(self.show_today_note)
-        paper_menu.addAction(show_paper)
-        hide_paper = QAction("éšè—ä¾¿åˆ©è´´", self)
-        hide_paper.triggered.connect(self.hide_today_note)
-        paper_menu.addAction(hide_paper)
-        add_paper = QAction("æ·»åŠ å¾…åŠžâ€¦", self)
-        add_paper.triggered.connect(self.show_today_note)
-        paper_menu.addAction(add_paper)
-        today_paper = QAction("æŸ¥çœ‹ä»Šå¤©çš„å¾…åŠž", self)
-        today_paper.triggered.connect(self.show_today_note)
-        paper_menu.addAction(today_paper)
-        memory_action = QAction("æˆ‘çš„æ—¶å…‰â€¦", self)
-        memory_action.triggered.connect(self.show_time_memory)
-        work_menu.addAction(memory_action)
-        for label, callback in (("æŸ¥çœ‹ä»Šæ—¥ç´¯è®¡", self.show_work_time), ("æŸ¥çœ‹ä»Šæ—¥æˆé•¿", self.show_daily_growth), ("æŸ¥çœ‹é™ªä¼´æŠ¥å‘Š", self.show_daily_report), (f"æ‰“å¼€{self._pet_name()}ç›¸å†Œ", self.open_daily_album)):
-            action = QAction(label, self)
-            action.triggered.connect(callback)
-            work_menu.addAction(action)
-        music_menu = menu.addMenu("éŸ³ä¹")
-        random_song = QAction("éšæœºå¬ä¸€é¦–é™ˆæ¥šç”Ÿ", self)
-        random_song.triggered.connect(self.play_random_song)
-        music_menu.addAction(random_song)
-        for label, command in (("æ’­æ”¾/æš‚åœ", "toggle"), ("ä¸‹ä¸€é¦–", "next"), ("ä¸Šä¸€é¦–", "previous")):
-            action = QAction(label, self)
-            action.triggered.connect(lambda _checked=False, value=command: self.control_music(value))
-            music_menu.addAction(action)
-        music_settings = QAction("éŸ³ä¹æ’­æ”¾å™¨è®¾ç½®", self)
-        music_settings.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
-        music_menu.addAction(music_settings)
-        study_action = QAction("æ­å­è‡ªä¹ å®¤â€¦", self)
-        study_action.triggered.connect(self.open_social_hub)
-        menu.addAction(study_action)
-        action_menu = menu.addMenu("åŠ¨ä½œ")
-        for group_name, entries in ACTION_GROUPS:
-            group_menu = action_menu.addMenu(group_name)
-            for label, key in entries:
-                action = QAction(label, self)
-                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
-                group_menu.addAction(action)
-        selfie = QAction("è‡ªæ‹", self)
-        selfie.triggered.connect(self.trigger_selfie)
-        action_menu.addAction(selfie)
-        pause_label = (
-            "å¼€å¯è‡ªåŠ¨è·‘åŠ¨"
-            if not getattr(self.settings, "allow_autonomous_walk", False)
-            else ("æ¢å¤è·‘åŠ¨" if self.paused else "æš‚åœè·‘åŠ¨")
-        )
-        pause = QAction(pause_label, self)
-        pause.setCheckable(True)
-        pause.setChecked(bool(getattr(self.settings, "allow_autonomous_walk", False)) and not self.paused)
-        pause.triggered.connect(self._toggle_walk_from_menu)
-        action_menu.addAction(pause)
-        food_menu = menu.addMenu(f"ç»™{self._pet_name()}å–‚é£Ÿ")
-        for food in FOOD_OPTIONS:
-            action = QAction(food.label, self)
-            action.triggered.connect(lambda _checked=False, key=food.key: self.feed_pet(key))
-            food_menu.addAction(action)
-        food_menu.addSeparator()
-        mood = QAction("æŸ¥çœ‹å¿ƒæƒ…ä¸Žèƒ½é‡", self)
-        mood.triggered.connect(self.show_companion_status)
-        food_menu.addAction(mood)
-        outfit_menu = menu.addMenu("æ¢è£…ä¸Žå¤–è§‚")
-        classic = QAction(f"ç»å…¸{self._pet_name()}", self)
-        classic.setCheckable(True)
-        classic.setChecked(not self.settings.equipped_outfit)
-        classic.triggered.connect(lambda: self.equip_outfit(""))
-        outfit_menu.addAction(classic)
-        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
-        for outfit in OUTFITS:
-            action = QAction(outfit.name, self)
-            available = outfit in unlocked
-            action.setEnabled(available)
-            action.setCheckable(True)
-            action.setChecked(outfit.key == self.settings.equipped_outfit)
-            if available:
-                action.triggered.connect(lambda _checked=False, key=outfit.key: self.equip_outfit(key))
-            outfit_menu.addAction(action)
-        menu.addSeparator()
-        for label, callback, checked in (("å¶å°”å‘ç‰¢éªš", self.set_automatic_grumbling, self.settings.automatic_grumbling), ("æ•´ç‚¹æŠ¥æ—¶", self.set_hourly_announcement, self.settings.hourly_announcement), ("å§‹ç»ˆç½®é¡¶", self.set_always_on_top, self.settings.always_on_top)):
-            action = QAction(label, self)
-            action.setCheckable(True)
-            action.setChecked(checked)
-            action.toggled.connect(callback)
-            menu.addAction(action)
-        system_menu = menu.addMenu("ç³»ç»Ÿä¸Žè®¾ç½®")
-        ai_action = QAction("AI ä¸Žé™ªä¼´è®¾ç½®", self)
-        ai_action.triggered.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
-        system_menu.addAction(ai_action)
-        size_action = QAction("è°ƒæ•´æ¡Œå® å¤§å°", self)
-        size_action.triggered.connect(self.open_size_control)
-        system_menu.addAction(size_action)
-        return_action = QAction("å›žåˆ°ä¸»å±å¹•", self)
-        return_action.triggered.connect(self.return_to_primary_screen)
-        system_menu.addAction(return_action)
-        hide_action = QAction("éšè—", self)
-        hide_action.triggered.connect(self.hide)
-        menu.addAction(hide_action)
-        quit_action = QAction("é€€å‡º", self)
-        quit_action.triggered.connect(self.quit_requested.emit)
-        menu.addAction(quit_action)
-        return menu
-
-    def _build_context_menu_legacy(self) -> QMenu:
-        """æŒ‰äº”ä¸ªç¨³å®šåˆ†ç»„æž„å»ºå³é”®èœå•ï¼Œé¿å…åŠŸèƒ½å¹³é“ºå’Œå…¥å£å±‚çº§æ··ä¹±ã€‚"""
-
-        menu = QMenu(self)
-        chat_group = menu.addMenu("èŠå¤©ä¸Žé™ªä¼´")
-        action_group = menu.addMenu("åŠ¨ä½œä¸Žå¤–è§‚")
-        music_group = menu.addMenu("éŸ³ä¹ä¸Žå¨±ä¹")
-        focus_group = menu.addMenu("ä¸“æ³¨ä¸Žè‡ªä¹ ")
-        system_group = menu.addMenu("ç³»ç»Ÿä¸Žæ˜¾ç¤º")
-
-        dialogue_action = QAction(f"å’Œ{self._pet_name()}èŠèŠâ€¦", self)
-        dialogue_action.triggered.connect(self.prompt_dialogue)
-        chat_group.addAction(dialogue_action)
-        rename_action = QAction("ä¿®æ”¹ä¸»äººç§°å‘¼â€¦", self)
-        rename_action.triggered.connect(self.rename_pet)
-        chat_group.addAction(rename_action)
-        social_action = QAction(f"{self._pet_name()}æ­å­è‡ªä¹ å®¤â€¦", self)
-        social_action.triggered.connect(self.open_social_hub)
-        chat_group.addAction(social_action)
-        action_menu = chat_group.addMenu("é™ªä¼´åŠ¨ä½œ")
-        for option in COMPANION_ACTIONS:
-            action = QAction(option.label, self)
-            action.triggered.connect(
-                lambda _checked=False, key=option.key: self.perform_companion_action(
-                    key
-                )
-            )
-            action_menu.addAction(action)
-        food_menu = chat_group.addMenu("å–‚é£Ÿã€é¥®å“ä¸ŽçŠ¶æ€")
-        for food in FOOD_OPTIONS:
-            food_action = QAction(food.label, self)
-            food_action.triggered.connect(
-                lambda _checked=False, key=food.key: self.feed_pet(key)
-            )
-            food_menu.addAction(food_action)
-        food_menu.addSeparator()
-        mood_action = QAction(f"æŸ¥çœ‹{self._pet_name()}å¿ƒæƒ…ä¸Žèƒ½é‡", self)
-        mood_action.triggered.connect(self.show_companion_status)
-        food_menu.addAction(mood_action)
-
-        pause_action = QAction(
-            "å¼€å¯è‡ªåŠ¨è·‘åŠ¨"
-            if not getattr(self.settings, "allow_autonomous_walk", False)
-            else ("æ¢å¤è·‘åŠ¨" if self.paused else "æš‚åœè·‘åŠ¨"),
-            self,
-        )
-        pause_action.triggered.connect(self._toggle_walk_from_menu)
-        action_group.addAction(pause_action)
-        picture_actions = action_group.addMenu("å®Œæ•´å›¾ç‰‡åŠ¨ä½œ")
-        for group_name, entries in ACTION_GROUPS:
-            group_menu = picture_actions.addMenu(group_name)
-            for label, key in entries:
-                action = QAction(label, self)
-                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
-                group_menu.addAction(action)
-        selfie_action = QAction("è‡ªæ‹ä¸€ä¸‹", self)
-        selfie_action.triggered.connect(self.trigger_selfie)
-        action_group.addAction(selfie_action)
-        outfit_menu = action_group.addMenu("å·¥ä½œæ—¶é•¿å¨ƒè¡£")
-        classic = QAction(f"ç»å…¸{self._pet_name()}", self)
-        classic.setCheckable(True)
-        classic.setChecked(not self.settings.equipped_outfit)
-        classic.triggered.connect(lambda: self.equip_outfit(""))
-        outfit_menu.addAction(classic)
-        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
-        for hour, outfit in enumerate(OUTFITS, start=1):
-            available = outfit in unlocked
-            label = (
-                f"{hour} å°æ—¶ Â· {outfit.name}"
-                if available
-                else f"ðŸ”’ {hour} å°æ—¶ Â· {outfit.name}"
-            )
-            action = QAction(label, self)
-            action.setCheckable(available)
-            action.setChecked(outfit.key == self.settings.equipped_outfit)
-            action.setEnabled(available)
-            if available:
-                action.triggered.connect(
-                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
-                )
-            outfit_menu.addAction(action)
-
-        music_control_menu = music_group.addMenu("æŽ§åˆ¶æ­£åœ¨è¿è¡Œçš„æ’­æ”¾å™¨")
-        for label, command in (
-            ("æ’­æ”¾ / æš‚åœ", "toggle"),
-            ("ä¸Šä¸€é¦–", "previous"),
-            ("ä¸‹ä¸€é¦–", "next"),
-            ("æŸ¥çœ‹æ­£åœ¨æ’­æ”¾", "status"),
-        ):
-            control_action = QAction(label, self)
-            control_action.triggered.connect(
-                lambda _checked=False, value=command: self.control_music(value)
-            )
-            music_control_menu.addAction(control_action)
-        music_search_action = QAction("æœç´¢ä¸€é¦–é™ˆæ¥šç”Ÿ", self)
-        music_search_action.triggered.connect(self.play_random_song)
-        music_group.addAction(music_search_action)
-        music_move = music_group.addMenu("éŸ³ä¹åŠ¨ä½œ")
-        for label, key in (("æˆ´è€³æœº", "headphones"), ("å¼¹å‰ä»–", "guitar"), ("æ‰“é¼“", "drums")):
-            action = QAction(label, self)
-            action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
-            music_move.addAction(action)
-
-        work_menu = focus_group.addMenu(
-            f"å·¥ä½œè®¡æ—¶ï¼š{format_work_duration(self.work_timer.today_seconds())}"
-        )
-        start_work_action = QAction("å¼€å§‹/ç»§ç»­å·¥ä½œ", self)
-        start_work_action.setEnabled(not self.work_timer.is_running)
-        start_work_action.triggered.connect(self.start_work_timer)
-        work_menu.addAction(start_work_action)
-        if self.work_timer.is_running:
-            controls_action = QAction("æ‘¸å¤´æˆ–ç‚¹ç”µè„‘è¿›è¡Œæš‚åœ/ç»“æŸ", self)
-            controls_action.triggered.connect(self.show_work_controls)
-            work_menu.addAction(controls_action)
-        show_work_action = QAction("æŸ¥çœ‹ä»Šæ—¥ç´¯è®¡", self)
-        show_work_action.triggered.connect(self.show_work_time)
-        work_menu.addAction(show_work_action)
-        growth_action = QAction("æŸ¥çœ‹ä»Šæ—¥ 0â€“8 å°æ—¶æˆé•¿çº¿", self)
-        growth_action.triggered.connect(self.show_daily_growth)
-        work_menu.addAction(growth_action)
-        report_action = QAction(f"ä»Šå¤©{self._pet_name()}é™ªä½ åšäº†ä»€ä¹ˆ", self)
-        report_action.triggered.connect(self.show_daily_report)
-        work_menu.addAction(report_action)
-        album_action = QAction(f"æ‰“å¼€{self._pet_name()}ç›¸å†Œ", self)
-        album_action.triggered.connect(self.open_daily_album)
-        work_menu.addAction(album_action)
-        focus_social = QAction("æ‰“å¼€æ­å­è‡ªä¹ å®¤â€¦", self)
-        focus_social.triggered.connect(self.open_social_hub)
-        focus_group.addAction(focus_social)
-        paper_menu = focus_group.addMenu("ä¾¿åˆ©è´´")
-        paper_show = QAction("æ˜¾ç¤ºä¾¿åˆ©è´´", self)
-        paper_show.triggered.connect(self.show_today_note)
-        paper_menu.addAction(paper_show)
-        paper_hide = QAction("éšè—ä¾¿åˆ©è´´", self)
-        paper_hide.triggered.connect(self.hide_today_note)
-        paper_menu.addAction(paper_hide)
-        timeline_action = QAction("æˆ‘çš„æ—¶å…‰â€¦", self)
-        timeline_action.triggered.connect(self.show_time_memory)
-        focus_group.addAction(timeline_action)
-
-        ai_action = QAction("AI ä¸Žé™ªä¼´è®¾ç½®â€¦", self)
-        ai_action.triggered.connect(
-            lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION)
-        )
-        system_group.addAction(ai_action)
-        grumble_action = QAction("å¶å°”å‘ç‰¢éªš", self)
-        grumble_action.setCheckable(True)
-        grumble_action.setChecked(self.settings.automatic_grumbling)
-        grumble_action.toggled.connect(self.set_automatic_grumbling)
-        system_group.addAction(grumble_action)
-        hourly_action = QAction("æ•´ç‚¹æŠ¥æ—¶", self)
-        hourly_action.setCheckable(True)
-        hourly_action.setChecked(self.settings.hourly_announcement)
-        hourly_action.toggled.connect(self.set_hourly_announcement)
-        system_group.addAction(hourly_action)
-        topmost_action = QAction("å§‹ç»ˆç½®é¡¶ï¼ˆå…³é—­å³æ¡Œé¢æ¨¡å¼ï¼‰", self)
-        topmost_action.setCheckable(True)
-        topmost_action.setChecked(self.settings.always_on_top)
-        topmost_action.toggled.connect(self.set_always_on_top)
-        system_group.addAction(topmost_action)
-        size_action = QAction("è¿žç»­è°ƒèŠ‚å® ç‰©å¤§å°â€¦", self)
-        size_action.triggered.connect(self.open_size_control)
-        system_group.addAction(size_action)
-        system_group.addSeparator()
-        return_action = QAction("å›žåˆ°ä¸»å±å¹•", self)
-        return_action.triggered.connect(self.return_to_primary_screen)
-        system_group.addAction(return_action)
-        hide_action = QAction("éšè—", self)
-        hide_action.triggered.connect(self.hide)
-        system_group.addAction(hide_action)
-        system_group.addSeparator()
-        quit_action = QAction("é€€å‡º", self)
-        quit_action.triggered.connect(self.quit_requested.emit)
-        system_group.addAction(quit_action)
-        return menu
-
-    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """ç¨å€™æ˜¾ç¤ºå•æ¬¡å³é”®èœå•ï¼Œä¸ºåŒå‡»å³é”®çš„å·´å¸ƒè¾¾è¯­éŸ³ç•™å‡ºåˆ¤å®šæ—¶é—´ã€‚"""
-
-        self._record_user_interaction()
-        if time.monotonic() < self._suppress_context_until:
-            event.accept()
-            return
-        self._pending_context_global = event.globalPos()
-        self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
-        event.accept()
-
-    def _show_deferred_context_menu(self) -> None:
-        """ç¡®è®¤ä¸æ˜¯åŒå‡»åŽï¼Œåœ¨åŽŸé¼ æ ‡ä½ç½®æ‰“å¼€æ™®é€šå³é”®èœå•ã€‚"""
-
-        if time.monotonic() >= self._suppress_context_until:
-            self._build_context_menu().exec(self._pending_context_global)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        """è®°å½•å·¦é”®æŒ‰ä¸‹ï¼›åªæœ‰ç§»åŠ¨è¶…è¿‡ç³»ç»Ÿé˜ˆå€¼åŽæ‰çœŸæ­£è¿›å…¥æ‹–æ‹½ã€‚"""
-
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._record_user_interaction()
-            self._press_pending = True
-            self._long_press_triggered = False
-            self.long_press_timer.start(850)
-            self.dragging = False
-            self.state_timer.stop()
-            self.interaction_timer.stop()
-            self.hover_timer.stop()
-            self._press_local = event.position().toPoint()
-            self._press_global = event.globalPosition().toPoint()
-            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """æ‹–åŠ¨æœŸé—´æ ¹æ®å…¨å±€é¼ æ ‡ä½ç½®ç§»åŠ¨å¹¶é™åˆ¶çª—å£ã€‚"""
-
-        if event.buttons() & Qt.MouseButton.LeftButton:
-            current_global = event.globalPosition().toPoint()
-            if (
-                self._press_pending
-                and (current_global - self._press_global).manhattanLength()
-                >= QApplication.startDragDistance()
-            ):
-                self.long_press_timer.stop()
-                self._press_pending = False
-                self.dragging = True
-                self.mood.receive_drag()
-                self.set_state(PetState.DRAG)
-            if not self.dragging:
-                event.accept()
-                return
-            target = event.globalPosition().toPoint() - self._drag_offset
-            self.move(self._constrained_position(target))
-            event.accept()
-            return
-        self._track_passive_motion(event.position().toPoint())
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """å·¦é”®é‡Šæ”¾æ—¶ç»“æŸæ‹–åŠ¨å¹¶æ¢å¤å¾…æœºã€‚"""
-
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.long_press_timer.stop()
-            if self.dragging:
-                self.dragging = False
-                self._press_pending = False
-                self._show_emotion(PetState.SURPRISED, 1100)
-            elif self._long_press_triggered:
-                self._long_press_triggered = False
-            elif self._press_pending:
-                self._press_pending = False
-                self._handle_click(self._press_local)
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        """é¼ æ ‡ç¦»å¼€å® ç‰©æ—¶å–æ¶ˆå°šæœªè§¦å‘çš„æ‚¬åœå’Œæ‘¸å¤´è½¨è¿¹ã€‚"""
-
-        self._hover_zone = ""
-        self._stroke_points.clear()
-        self.hover_timer.stop()
-        self.long_press_timer.stop()
-        super().leaveEvent(event)
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """åŒå‡»å·¦é”®æ‰“å¼€å¿«æ·å£è¢‹ï¼›åŒå‡»å³é”®æ’­æ”¾ä¸€å£°ä¸åŒè¯­æ°”çš„å·´å¸ƒè¾¾ã€‚"""
-
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = False
-            self._press_pending = False
-            self._record_user_interaction()
-            self.show_quick_panel()
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.RightButton:
-            self.context_menu_timer.stop()
-            self._suppress_context_until = time.monotonic() + 0.8
-            self._record_user_interaction()
-            self.play_babuda_voice()
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíç~:í:-jZ.¶›­–)Þ³R"" ®iÊÎjŠYÙ~ZéîxëjÎ™Ú.Zêxšžy¨N˜þiˆîz©~Xú>8‹ùî{ºÞXªŽyK¾8›Êj~KªNK©.8[ú¾hÛ~hê~X‹nY(Îh8^Z(>™š®KËN8  ®ˆÎ‹J>ˆÈ>Y»NûÉ ¢ÒX‰¾[»®iz‹ëžjn8˜þiˆî8Xúþ˜žZx¾{¸Ž{Úîšny¨Bv–FvWNûÉ°¢ÒKÛþyJ‚v–æF÷w2öÖ4õ2XéþyIþz©~Xú>[.{ª~Š^[Ë®{ÚîšnûÈÎYÎi{nKùÞhÈKˆÞkøkK¾8KˆÞXÚK»¾XªjþY(Î‹Úî[¹>ZInx+žX{¾z›þ˜þûÉ°¢ÒhùKé¾(	ÎZx¾{¸Ž{ÚîšbþjÎ™Ú.jŠ[Èþ(	ÞXÛ>i{nXˆ~hÚ.[›nhÈK˜^XÉnûÈÎXˆ~hÚ.i{nKˆÞzNYØþXªŽyK¾8h¹nXªŽY(ÎK©.XªŽx«nhûÉ°¢Òi*ÞiKî[ê®xêþh‰nXÙ^jÊär[¨þX‰~ûÈÎ[›niJþhÈh¹nh»Þ8YÙKˆ¾8YÙZ{þXZ^yÚY(ÎXøÞY	‹[~‹ª¾ûÉ°¢ÒZHNyn[znXû>{û¾‹ÚÎ8‹ëž{ÉŽ‹ÚÎ‹ª¾XÎšþ8K©®X8þ{Ji{n™{Nš›XªŽz{¾XªŽY(ÎYÎjÚ^‹ª¾KÙ>‹[~KÈþûÉ°¢ÒyJŽz©~Xú>˜î{ÚžŠêžK«®xšžZIn˜þiˆîXË®Yùþz›þ˜þ›Êj~x+žX{¾ûÉ°¢Ò{É>ZÙŽKˆÞYÂE’Kˆ¾y¨N{ÊžiKî[Š~ûÈÎ[›nYÊŽz©~Xú>‹zŽi‹îzK®YšŽYîhÈžikjùNKè¾˜xÞikj^jÎXÉnûÉ°¢ÒiJþhÈ[zn™Jîh¹nXªŽ8XÙ^X{¾‹>hˆþ8XøÎX{¾[ú¾hÛ~Xú>Š(¾8izK©.XªŽXˆn{ª~KÉhþY(Î‹ùî{ºÞ[®ZûŽk¹YÙ~ûÉ°¢ÒiJþhÈ{¹žXZÞjù¾Yh.š9þh‰nšZîY8ûÈÎ[›nyJŽxºÎz¸¾XØ®˜þiˆîih~ZÙ~k	Nk:XøÞšhŽx«nhûÉ°¢ÒiJþhÈvVçBx«nh{É>ZÙŽ8[È.jÚRž8iz{ÉÞzk¾{«þ™˜Þ{ª~Kº^Xø®[z^KÙÎ8x‹hHþ8›É>X«Y(ÎZèžh[XªŽKÙÎûÉ°¢ÒYÊŽXh^ZÙŽKŠÞKùÞyYžiÈ‹ùKˆžXØ‹ÚîZèÎi[Nˆ®ZJžûÈÎ[›nh¨®i»NizžXh^Zëžk¹®XªŽXè¾{ÊžK‹®™[þiÉþiŽŠhûÉ°¢Ò[n‹ùîhê^Kˆî™š®KËNŠëî{ÚîiKnXú>X‹YJþKˆXZ^Xú>ûÈÎXú®iÈži‹î[ÈòW6W%ö7F–öæiÚ^k©h˜ÞXXŠëŽX‰¾[»®Šëî{Úîz©~Xú>ûÉ°¢Òˆz®XªŽŠøNXˆn[›nKéÞjÊ[	ÞŠù^iÊÎiË®™û>K™&÷f–FW.ûÈÎh‰X©þYîh¨®Yû®zhê~X‹n™HZé®X‹Zéî™˜^i*ÞiKîy¨N[›>XûûÉ°¢ÒiJþhÈyK^ˆIY»î[.8iŽZKN[z^KÙÎk	Nk:8K¸®izRþ{¸Ž‹ª¾Šêi{n8jøþ[þi{nZˆ>Š>Šz>™HXø®X^[«~hù˜i.ûÉ°¢ÒjžhÚîX˜ÞXû[©NyJŽ{)~{).[ªn{¾XŠ¾i‹îzK®yK^ˆI8ˆ>iË®8YžK¹n8›É>8™ˆ^Šû¾h‰nXižZÙ~Y»î[.ûÉ°¢ÒiJþhÈZKN˜:ŽiŽXªŽ8ˆKŽ˜:‚þ‹ª¾KÙ2þy»ŽiË®XˆnXË®x+žX{¾8‹ùî{ºÞh‹>X{¾8h*ÎXÎk:ŽŠxnY(Îh¹nh»ÞYîŠŽh8^ûÉ°¢Ò˜	®‹ø~KˆîŠy.ˆ›.{JiÙŠz>ˆ
+ny¨Nyú.˜xþY»î[.Z)î[Ë®[È[ø>8Zë>{éî8h8®Šën8yIþk	N8Y»X
+n8yih98ˆz®h¸ÞY(Îh¹nh»ÞXøÞšhŽûÉ°¢ÒKÉŽXXŽK¸îyJŽh‹~zxiÈž{JiÙyºî[Ù^i‹îzK®ˆz®h¸Þh‰x˜~k	Nk:ûÈÎhÈž[Ù>X˜Þ[þ[™RE’KùÞhÈkˆ^i›[ªnûÈÎ[›n‹KN‹ùK«®xšžyÉþZéî‹Úî[¹>Zé®KØÞûÉ°¢Òj~XxnŠy.ˆ›.zîŠêNYîXª‹ÛÞiÊÎYËZêxšžKé¾xëYË®š¨ÎiKnûÉ¾‹[‹zþzîŠêNK¸ÞKÙÎK‹®h™>XÈ^™zŽzhûÉ°¢Ò{»NhªNK«.Zøn[ªn8{+îX©¾8izˆ®[ªnKˆîš[š9þ[ªny¨NKÉ®ŠùÞXh^x«nhûÉ°¢ÒKÛþyJ‚F–ÖW"š›XªŽx«nhXˆ~hÚ.Xø®kN[›>z{¾XªŽûÈÎ[›n™™X‹nz©~Xú>KˆÞˆKzk¾[Ù>X˜Þ[þ[™^8  ¤vVçB[ú¾˜	þZé®KØÞûÉ ¢Òz©~Xú>X‰ÞZx¾XÉnY(ÎŠêi{nYšŽŠëî{ÚîKØÞK¨âWEv–æF÷råõö–æ—Eõò‚žûÉ°¢Òx«nhi‹îzK®XZ^Xú>KØÞK¨â6WE÷7FFR‚žûÈÎš¹‚E’˜xÞ{¹ŽKØÞK¨â÷&Vg&W6…÷—†Ö‚žûÉ°¢Òˆz®XªŽz{¾XªŽKØÞK¨âöÖ÷fVÖVçE÷F–6²‚žûÉ°¢Ò›Êj~K¨¾K»nKØÞK¨âÖ÷W6U&W74WfVçB‚’zØ’BK¨¾K»nikžk9^ûÉ°¢Ò˜X{®yKV—E÷&WVW7FVBKúXû~KªN{¹ž[©NyJŽyIþYÞYŽiÉþjŠYÙ~ZHNyn8  ®‹é>XZ^K‹¢WE6WGF–æw>8{JiÙkˆ^XÙ^Y(ÎXúþ˜žy¨NyJŽh‹~ˆz®h¸ÞxZ~x˜~‹XNk©ûÈÎ‹é>X{®K‹®XúþKªNK©.y¨BBz©~Xú>8 ®iÊÎjŠYÙ~Y
+þXªŽYîXú®YÊŽYîXûKØîš)j8kX²vVçNûÉ¾jøþiÚˆ®ZJžKˆÞ˜xÞZHÞZèÎi[Nj8kX¾ûÈÎišî˜	®XªŽyK¾8xš.š©®Y(Îhª^i{nYØ~KˆÞŠëþ™zî{Ù{¹Î8 ¤’KºNx˜ÎyK{;¾{¹þXzÞhÚî[©>zêynûÈÎˆ®ZJžih~iÊÎKˆÞ‰Þy¹ŽûÉ¾KØÞ{ÚîhÈK˜^XÉnyKç’YÊŽ˜X{®i{nZèÎh‰8 ¦W6W%ö76WG2ö›¹ŽŠêNKˆÞ‹ù¾XZRv—NûÉ¾Xú®iÈžyJŽh‹~K‹¾XªŽiKîXZ^y¨Nˆz®h¸ÞY»îx˜~h˜ÞKÉ®YÊŽiÊÎiË®i‹îzK®8 ¢""  ¦g&öÒõögWGW&Uõò–×÷'Bææ÷FF–öç0 ¦–×÷'B§6öà¦–×÷'BÆövv–æp¦–×÷'B÷0¦–×÷'B&æFöÐ¦–×÷'B7—0¦–×÷'BF–ÖP¦g&öÒ6öÆÆV7F–öç2–×÷'B÷&FW&VDF–7BÂFWVP¦g&öÒFFWF–ÖR–×÷'BFFWF–ÖRÂF–ÖVFVÇF¦g&öÒF†Æ–"–×÷'BF€¦g&öÒG—–ær–×÷'B6ÆÆ&ÆP ¦g&öÒ•6–FSbåD6÷&R–×÷'Bö–çBÂ6—¦RÂBÂF–ÖW"ÂW&ÂÂ6–væÀ¦g&öÒ•6–FSbåDwV’–×÷'B€¢7F–öâÀ¢6Æ÷6TWfVçBÀ¢6öçFW‡DÖVçTWfVçBÀ¢FW6·F÷6W'f–6W2À¢föçBÀ¢†–FTWfVçBÀ¢Ö÷W6TWfVçBÀ¢Ö÷fTWfVçBÀ¢–çFW"À¢—†ÖÀ¢&Vv–öâÀ¢67&VVâÀ¢6†÷tWfVçBÀ¢G&ç6f÷&ÒÀ¢¦g&öÒ•6–FSbåEv–FvWG2–×÷'B€¢Æ–6F–öâÀ¢F–ÆörÀ¢„&÷„Æ–÷WBÀ¢Æ&VÂÀ¢–çWDF–ÆörÀ¢ÖVçRÀ¢W6„'WGFöâÀ¢d&÷„Æ–÷WBÀ¢v–FvWBÀ¢ §G'“ ¢g&öÒ•6–FSbåEFW‡EFõ7VV6‚–×÷'BFW‡EFõ7VV6€¦W†6WB–×÷'DW'&÷# ¢FW‡EFõ7VV6‚ÒæöæP §G'“ ¢g&öÒ•6–FSbåD×VÇF–ÖVF––×÷'BVF–ô÷WGWBÂÖVF–Æ–W ¦W†6WB–×÷'DW'&÷# ¢VF–ô÷WGWBÒÖVF–Æ–W"ÒæöæP ¦g&öÒæ’–×÷'B”6†E6W'f–6RÂ7&VFVçF–Å7F÷&RÂ$õd”DU%õ$U4UE0¦g&öÒæ66W76÷&–W2–×÷'BõUDd•E2ÂG&uö7F—f—G•ö÷fW&Æ’ÂVæÆö6¶VEö÷WFf—G0¦g&öÒæ7F—f—G’–×÷'B7F—fUöÆ–6F–öåö6FVv÷'¦g&öÒæ&V†f–÷"–×÷'B€¢&V†f–÷$ÖöFVÂÀ¢6ö×æ–öä&V†f–÷$6öçG&öÆÆW"À¢WDÖööBÀ¢WE7FFRÀ¢7FFTFV6—6–öâÀ¢¦g&öÒæ6†B–×÷'B•6WGF–æw4F–ÆörÂ6†DF–Æöp¦g&öÒæ6†EöÖævW"–×÷'B€¢vVçDÖævW"À¢6†DÖævW"À¢ÖævVD6†E&WÇ’À¢öffÆ–æTF–ÆöwVTÖævW"À¢6†÷VÆE÷7F'E÷7F'GWöFWFV7F–öâÀ¢¦g&öÒæ6†EöÖVÖ÷'’–×÷'B6öçfW'6F–öäÖVÖ÷'’Â6öçfW'6F–öåöÖVÖ÷'•÷F€¦g&öÒæ6ö×æ–öâ–×÷'B€¢5D”ôåô%•ô´U’À¢ôD•5Ä•ôäÔRÀ¢4ôÕä”ôåô5D”ôå2À¢dôôEôõD”ôå2À¢6ö×æ–öäÖöFVÂÀ¢6ö×æ–öå&WÇ’À¢¦g&öÒæ6öæf–r–×÷'BUEôäÔRÂWE6WGF–æw2Â6ÆVåö÷væW%öæ–6¶æÖRÂ6fU÷6WGF–æw2Â6ö6–Å÷WEöÆ&VÀ¦g&öÒæ6öçG&öÇ2–×÷'BV–6´6öçG&öÅæVÂÂ6—¦T6öçG&öÄF–ÆörÂv÷&´6öçG&öÄ'V&&ÆP¦g&öÒæ–çWEö7F—f—G’–×÷'B7—7FVÕö–FÆU÷6V6öæG0¦g&öÒæVÖ÷F–öåöVffV7G2–×÷'BG&uöVÖ÷F–öåöVffV7BÂVÖ÷F–öåöVffV7EöæÖP¦g&öÒæF–Ç•÷&W÷'B–×÷'B&VæFW%öF–Ç•÷&W÷'@¦g&öÒæF–'’–×÷'BF–Ç”6ö×æ–öå7FG2ÂÆ'VÕöF—&V7F÷'¦g&öÒæfö7W5öæÇ—F–72–×÷'Bfö7W4æÇ—F–757F÷&RÂfö7W5VÆ—G•G&6¶W ¦g&öÒæfö7W5÷6W76–öâ–×÷'Bfö7W56W76–öäÖævW ¦g&öÒæw&÷wF‚–×÷'B€¢5D”ôåôu$õU2À¢5D”ôåõ5$•DU2À¢4ôÕÄUDUô5D”ôå2À¢dô5U5ô5D”ôå2À¢$äDôÕô5D”ôå2À¢$U5Eô5D”ôå2À¢w&÷wF…÷&öw&W75÷FW‡BÀ¢÷6—F—fUöÖööBÀ¢7FvUöf÷%÷6V6öæG2À¢F–ÖUööeöF•ö7F—f—G’À¢¦g&öÒæÆö6Åö6öçFVçB–×÷'Bf–æEöVF–õ÷f&–çG2ÂÆöEöÆö6ÅöÆ–æW0¦g&öÒæÆ—VÖõ÷v÷&ÆGf–Wr–×÷'BfÖ–Ç•ö×W6–5öÖöFP¦g&öÒç&W6÷W&6W2–×÷'B&W6÷W&6U÷F€¦g&öÒçV–WEöÖöFR–×÷'BFWFV7E÷V–WEöÖöFP¦g&öÒç6ö6–Â–×÷'B6ö6–Ä6Æ–Vç@¦g&öÒç6ö6–Å÷V’–×÷'B'VFG•f—6—Ev–æF÷rÂ6ö6–ÄWfVçEF‡&VBÂ6ö6–Ä‡V$F–ÆörÂ6ö6–Å&öf–ÆUF‡&VBÂ6ö6–Å7–æ5F‡&V@¦g&öÒæ×W6–5ö6öçG&öÂ–×÷'B×W6–46öçG&öÅ&W7VÇBÂ×W6–46öçG&öÆÆW"Â×W6–5&÷f–FW$ÖævW ¦g&öÒæ×W6–5÷Æ–&6²–×÷'B6öæuÆ–&6µ&W7VÇ@¦g&öÒçvVÆÆæW72–×÷'BvVÆÆæW75&VÖ–æFW$ÖöFVÀ¦g&öÒçv÷&µ÷F–ÖW"–×÷'Bv÷&µF–ÖW$ÖöFVÂÂf÷&ÖE÷v÷&µöGW&F–öà¦g&öÒçv÷&¶fÆ÷r–×÷'Bv÷&¶fÆ÷tW'&÷"Â6†&7FW%ö—5ö&÷fVBÂÆöE÷v÷&¶fÆ÷p¦g&öÒçF–ÖUöÖVÖ÷'’–×÷'BF–ÖTÖVÖ÷'¦g&öÒçFöF•öæ÷FR–×÷'BF–ÖTÖVÖ÷'•v–æF÷rÂFöF”æ÷FUv–æF÷p¦g&öÒæ6ö×7E÷FöFò–×÷'B6ö×7EFöFõæVÀ  ¤ÄôttU"ÒÆövv–ærævWDÆövvW"…õöæÖUõò¥4UED”äu5õ4õU$4UõU4U%ô5D”ôâÒ'W6W%ö7F–öâ   ¤DTdTÅEõtÄµôÔõD”ôåôd5Dõ%2ÒƒãCRÂãrÂã"ÂãcRÂãCRÂãrÂã"ÂãcR  ¦6Æ72–FÆU&V6÷fW'”F–Æör…F–Æör“ ¢""%6†÷röæR&WW6&ÆRÂæöâÖÖöFÂFV6—6–öâv–æF÷rf÷"â–FÆRW—6öFRà ¢ÖöFÂÖW76vT&÷‚æW†V2‚–W6VBFò&R7&VFVBWfW'’F–ÖRF†R7—7FVÐ¢–FÆR6÷VçFW"F—VB&VÆ÷rF†RF‡&W6†öÆBâF†RF–Æöræ÷rÆ—fW2f÷"F†P¢v†öÆRWBv–æF÷ræBVÖ—G2öæRFV6—6–öâÂ6ò6–ævÆR'6Væ6R6ææ÷B7và¢7F6²öbv–æF÷w2÷"&Æö6²F†RFW6·F÷WfVçBÆö÷à¢""  ¢FV6—6–öå÷&WVW7FVBÒ6–væÂ‡7G" ¢FVbõö–æ—Eõò‡6VÆbÂ&VçC¢v–FvWBÂæöæRÒæöæR’ÓâæöæS ¢7WW"‚’åõö–æ—Eõò‡&VçB¢6VÆbç6WEv–æF÷uF—FÆR‚.Y¹îiÚ^YZb"¢6VÆbç6WDÖöFÂ„fÇ6R¢6VÆbç6WDGG&–'WFR…Båv–FvWDGG&–'WFRåtôFVÆWFTöä6Æ÷6RÂfÇ6R¢6VÆbç6WDÖ–æ–×VÕv–GF‚ƒ3“¢6VÆbç6WEv–æF÷tfÆw2€¢Båv–æF÷uG—RäF–Æöp¢ÂBåv–æF÷uG—Råv–æF÷uF—FÆT†–ç@¢ÂBåv–æF÷uG—Råv–æF÷u7—7FVÔÖVçT†–ç@¢ÂBåv–æF÷uG—Råv–æF÷t6Æ÷6T'WGFöä†–ç@¢ÂBåv–æF÷uG—Råv–æF÷u7F—4öåF÷†–ç@¢ ¢Æ–÷WBÒd&÷„Æ–÷WB‡6VÆb¢Æ–÷WBç6WD6öçFVçG4Ö&v–ç2ƒ#"Â‚Â#"Â‚¢Æ–÷WBç6WE76–ærƒ¢6VÆbç7VÖÖ'•öÆ&VÂÒÆ&VÂ‚¢6VÆbç7VÖÖ'•öÆ&VÂç6WEv÷&Ew&…G'VR¢6VÆbç7VÖÖ'•öÆ&VÂç6WE7G–ÆU6†VWB‚&föçB×6—¦S¢Wƒ²"¢Æ–÷WBæFEv–FvWB‡6VÆbç7VÖÖ'•öÆ&VÂ¢6VÆbæFWF–ÅöÆ&VÂÒÆ&VÂ€¢.‹ùž˜xÎXú®jžhÚî™Jîy¹‚þ›Êj~y¨N{;¾{¹þ‹é>XZ^Šêi{nûÉ¾yK^ˆIYîXû‹ùŠÎ8i*ÞiKî™û>K™h‰nKˆ¾‹ÛÞih~K»nKˆÞzé~™Jî›Êi8ÞKÙÎ8" ¢¢6VÆbæFWF–ÅöÆ&VÂç6WEv÷&Ew&…G'VR¢6VÆbæFWF–ÅöÆ&VÂç6WE7G–ÆU6†VWB‚&6öÆ÷#¢3ccssƒC²föçB×6—¦S¢'ƒ²"¢Æ–÷WBæFEv–FvWB‡6VÆbæFWF–ÅöÆ&VÂ ¢'WGFöç2Ò„&÷„Æ–÷WB‚¢'WGFöç2æFE7G&WF6‚ƒ¢6VÆbç&W7Eö'WGFöâÒW6„'WGFöâ‚.zé~KÙÎKÉhò"¢6VÆbç&W7Eö'WGFöâç6WDWFôFVfVÇB„fÇ6R¢6VÆbç&W7Eö'WGFöâæ6Æ–6¶VBæ6öææV7B†ÆÖ&F¢6VÆbå÷&WVW7EöFV6—6–öâ‚'&W7B"’¢'WGFöç2æFEv–FvWB‡6VÆbç&W7Eö'WGFöâ¢6VÆbæfö7W5ö'WGFöâÒW6„'WGFöâ‚.ŠêXZ^K‰>k:‚"¢6VÆbæfö7W5ö'WGFöâç6WDWFôFVfVÇB„fÇ6R¢6VÆbæfö7W5ö'WGFöâæ6Æ–6¶VBæ6öææV7B†ÆÖ&F¢6VÆbå÷&WVW7EöFV6—6–öâ‚&fö7W2"’¢'WGFöç2æFEv–FvWB‡6VÆbæfö7W5ö'WGFöâ¢Æ–÷WBæFDÆ–÷WB†'WGFöç2 ¢FVb6WEöv•÷6V6öæG2‡6VÆbÂ6V6öæG3¢–çB’ÓâæöæS ¢""%WFFRF†RVÆ6VB'6Væ6R6†÷vâ'’F†R&WW6&ÆRF–Æörâ""  ¢6V6öæG2ÒÖ‚ƒÂ–çB‡6V6öæG2’¢Ö–çWFW2Â&VÖ–æFW"ÒF—fÖöB‡6V6öæG2Âc¢†÷W'2ÂÖ–çWFW2ÒF—fÖöB†Ö–çWFW2Âc¢–b†÷W'3 ¢GW&F–öâÒb'¶†÷W'7Ò[þi{b¶Ö–çWFW7ÒXˆn™)ò ¢VÆ–bÖ–çWFW3 ¢GW&F–öâÒb'¶Ö–çWFW7ÒXˆb·&VÖ–æFW#£&GÒzy" ¢VÇ6S ¢GW&F–öâÒb'·&VÖ–æFW'Òzy" ¢6VÆbç7VÖÖ'•öÆ&VÂç6WEFW‡B€¢b.j8kX¾X‹KÚX‰®X‰®zk¾[ÈK¨n{ªb¶GW&F–öçÞ8%Æî‹ùžjë^i{n™{NŠhŠëKÙÎKÉhþûÈÎ‹ùŽiŠþŠêXZ^K‰>k:ŽûÉò ¢ ¢FVb÷&WVW7EöFV6—6–öâ‡6VÆbÂFV6—6–öã¢7G"’ÓâæöæS ¢""$†–FRf—'7BÂF†Vâæ÷F–g’F†R÷væW"6òF†Rv–æF÷r6ææ÷BGWÆ–6FRâ""  ¢6VÆbæ†–FR‚¢6VÆbæFV6—6–öå÷&WVW7FVBæVÖ—B†FV6—6–öâ ¢FVb6Æ÷6TWfVçB‡6VÆbÂWfVçC¢6Æ÷6TWfVçB’ÓâæöæS ¢""$6Æ÷6–ærF†Rv–æF÷rF—6Ö—76W2F†—2W—6öFRv—F†÷WB&R×&ö×F–ærâ""  ¢WfVçBæ–væ÷&R‚¢6VÆbæ†–FR‚¢6VÆbæFV6—6–öå÷&WVW7FVBæVÖ—B‚&F—6Ö—72"  ¦6Æ72WEv–æF÷r…v–FvWB“ ¢"".i‹îzK®[›nhê~X‹nXÙ^KŠ®jÎ™Ú.Zêxšžy¨N˜þiˆîšn[.z©~Xú>8"""  ¢V—E÷&WVW7FVBÒ6–væÂ‚¢W6Uö6†ævVBÒ6–væÂ†&ööÂ¢v÷&µ÷F–ÖW%ö6†ævVBÒ6–væÂ†&ööÂ¢Çv—5ööå÷F÷ö6†ævVBÒ6–væÂ†&ööÂ¢WEöæÖUö6†ævVBÒ6–væÂ‡7G"¢÷væW%öæ–6¶æÖUö6†ævVBÒ6–væÂ‡7G" ¢FVb÷WEöæÖR‡6VÆb’Óâ7G# ¢""%&WGW&âF†R–Ö×WF&ÆR6†&7FW"–FVçF—G’W6VB'’WfW'’Æö6ÂT’â""  ¢&WGW&âUEôäÔP ¢FVbö÷væW%öæ–6¶æÖR‡6VÆb’Óâ7G# ¢&WGW&â6ÆVåö÷væW%öæ–6¶æÖR†vWFGG"‡6VÆbç6WGF–æw2Â&÷væW%öæ–6¶æÖR"Â""’ ¢FVb÷vÆµöÆÆ÷vVB‡6VÆb’Óâ&ööÃ ¢"".‹ùNY¹î[Ù>X˜ÞiŠþY
+nXXŠëŽXZÞjù¾ˆz®K‹¾jŠ®Y	‹yXªŽ8"""  ¢&WGW&â&ööÂ†vWFGG"‡6VÆbç6WGF–æw2Â&ÆÆ÷uöWFöæöÖ÷W5÷vÆ²"ÂfÇ6R’’æBæ÷B6VÆbçW6V@ ¢FVbõö–æ—Eõò€¢6VÆbÀ¢6WGF–æw3¢WE6WGF–æw2À¢v÷&µ÷F–ÖW#¢v÷&µF–ÖW$ÖöFVÂÂæöæRÒæöæRÀ¢’ÓâæöæS ¢7WW"‚’åõö–æ—Eõò‚¢6VÆbç6WGF–æw2Ò6WGF–æw0¢6VÆbæ&V†f–÷"Ò&V†f–÷$ÖöFVÂ‡6WGF–æw2¢6VÆbæ6ö×æ–öåö&V†f–÷"Ò6ö×æ–öä&V†f–÷$6öçG&öÆÆW"‚¢6VÆbæÖööBÒWDÖööB‚¢6VÆbæ6ö×æ–öâÒ6ö×æ–öäÖöFVÂ‡6VÆbæÖööB¢6VÆbçv÷&µ÷F–ÖW"Òv÷&µ÷F–ÖW"÷"v÷&µF–ÖW$ÖöFVÂ‚¢6VÆbæfö7W5÷6W76–öâÒfö7W56W76–öäÖævW"‡6VÆbçv÷&µ÷F–ÖW"Â6VÆb¢6VÆbå÷&Wv&FVEöfö7W5ö&Æö6·2Ò6VÆbçv÷&µ÷F–ÖW"çFöF•÷6V6öæG2‚’òòc ¢6VÆbæF–Ç•÷7FG2ÒF–Ç”6ö×æ–öå7FG2€¢W'6—7CÖ÷2æVçf—&öâævWB‚$ôäU”5õU4UôDTÔõô54UE2"’Ò# ¢¢6VÆbçF–ÖUöÖVÖ÷'’ÒF–ÖTÖVÖ÷'’€¢W'6—7CÖ÷2æVçf—&öâævWB‚$ôäU”5õU4UôDTÔõô54UE2"’Ò# ¢¢6VÆbå÷FöF•öæ÷FU÷v–æF÷s¢FöF”æ÷FUv–æF÷rÂæöæRÒæöæP¢6VÆbåö6ö×7E÷FöFõ÷æVÃ¢6ö×7EFöFõæVÂÂæöæRÒæöæP¢6VÆbå÷&W7F÷&Uö6ö×7E÷FöF÷5ögFW%÷6†÷rÒfÇ6P¢6VÆbå÷F–ÖUöÖVÖ÷'•÷v–æF÷s¢F–ÖTÖVÖ÷'•v–æF÷rÂæöæRÒæöæP¢6VÆbæfö7W5öæÇ—F–72Òfö7W4æÇ—F–757F÷&R€¢W'6—7CÖ÷2æVçf—&öâævWB‚$ôäU”5õU4UôDTÔõô54UE2"’Ò# ¢¢6VÆbåöfö7W5÷VÆ—G•÷G&6¶W"Òfö7W5VÆ—G•G&6¶W"‚¢6VÆbåöÆ7Eöfö7W5÷VÆ—G’ÒæöæP¢6VÆbçvVÆÆæW72ÒvVÆÆæW75&VÖ–æFW$ÖöFVÂ‚¢6VÆbç7FFRÒWE7FFRä”DÄP¢6VÆbæF—&V7F–öâÒÓ¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB‡6VÆbç‚‚’¢6VÆbåöÆ7EöÖ÷fVÖVçEöBÒF–ÖRæÖöæ÷Föæ–2‚¢6VÆbçW6VBÒfÇ6P¢6VÆbæG&vv–ærÒfÇ6P¢6VÆbå÷&W75÷VæF–ærÒfÇ6P¢6VÆbå÷&W75öÆö6ÂÒö–çB‚¢6VÆbå÷&W75övÆö&ÂÒö–çB‚¢6VÆbåöG&uööfg6WBÒö–çB‚¢6VÆbåö†÷fW%÷¦öæRÒ" ¢6VÆbå÷7G&ö¶U÷ö–çG3¢FWVU·GWÆU¶fÆöBÂö–çEÕÒÒFWVR‚¢6VÆbåöÆ7E÷7G&ö¶U÷&V7F–öâÒã ¢6VÆbå÷ö¶U÷F–ÖW3¢FWVU¶fÆöEÒÒFWVR‚¢6VÆbåö&ö%÷†6RÒfÇ6P¢6VÆbåöVffV7E÷†6RÒ ¢6VÆbåög&ÖUö–æFW‚Ò ¢6VÆbåöæ–ÖF–öåöF—&V7F–öâÒ¢6VÆbåöæ–ÖF–öåöf–æ—6†VC¢6ÆÆ&ÆUµµÒÂæöæUÒÂæöæRÒæöæP¢6VÆbå÷GW&å÷W6VBÒfÇ6P¢6VÆbåöÆ7E÷W6W%ö–çFW&7F–öâÒF–ÖRæÖöæ÷Föæ–2‚¢6VÆbåöWFõ÷W6VEöf÷%ö–FÆRÒfÇ6P¢6VÆbåö–FÆU÷W6U÷7F'FVEöC¢FFWF–ÖRÂæöæRÒæöæP¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2Ò ¢6VÆbåö–FÆU÷&ö×E÷VæF–ærÒfÇ6P¢6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfVBÒfÇ6P¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Ò ¢6VÆbåö–FÆU÷&V6÷fW'•öF–Æös¢–FÆU&V6÷fW'”F–ÆörÂæöæRÒæöæP¢6VÆbå÷6ÆVWögFW%÷6—BÒfÇ6P¢6VÆbå÷&ööÕ÷V–6µ÷7FGW2Ò" ¢6VÆbå÷&ööÕ÷V–6µ÷7FGW5öW‡—&W5öC¢FFWF–ÖRÂæöæRÒæöæP¢6VÆbå÷67&VVåö6†ævUö6öææV7FVBÒfÇ6P¢6VÆbåö6öææV7FVE÷67&VVã¢67&VVâÂæöæRÒæöæP¢6VÆbå÷—†Ö2Ò6VÆbåöÆöE÷—†Ö2‚¢6VÆbå÷6VÆf–U÷†÷FòÒ6VÆbåöÆöE÷6VÆf–U÷†÷Fò‚¢6VÆbå÷&VæFW%ö66†S¢÷&FW&VDF–7E·GWÆU¶ö&¦V7BÂââåÒÂ—†ÖÒÒ÷&FW&VDF–7B‚¢6VÆbåöÖ6µö66†S¢÷&FW&VDF–7E·GWÆU¶ö&¦V7BÂââåÒÂ&Vv–öåÒÒ÷&FW&VDF–7B‚¢6VÆbæ7&VFVçF–Ç2Ò7&VFVçF–Å7F÷&R‚¢6VÆbæ•÷6W'f–6RÒ”6†E6W'f–6R‡6VÆbæ7&VFVçF–Ç2¢6VÆbç6ö6–Åö6Æ–VçBÒ6ö6–Ä6Æ–VçB€¢W'6—7E÷Fö¶Vç3Ö÷2æVçf—&öâævWB‚$ôäU”5õU4UôDTÔõô54UE2"’Ò# ¢¢6VÆbå÷6ö6–ÅöF–Æös¢6ö6–Ä‡V$F–ÆörÂæöæRÒæöæP¢6VÆbå÷6ö6–Å÷F‡&VC¢6ö6–Å7–æ5F‡&VBÂæöæRÒæöæP¢6VÆbå÷6ö6–ÅöWfVçE÷F‡&VG3¢Æ—7Eµ6ö6–ÄWfVçEF‡&VEÒÒµÐ¢6VÆbå÷6ö6–Å÷&öf–ÆU÷F‡&VG3¢Æ—7Eµ6ö6–Å&öf–ÆUF‡&VEÒÒµÐ¢6VÆbåö÷væW%öæ–6¶æÖU÷7–æ5ö¶W“¢GWÆU·7G"Â7G%ÒÂæöæRÒæöæP¢6VÆbåö÷væW%öæ–6¶æÖU÷7–æ5ö–æfÆ–v‡BÒfÇ6P¢6VÆbåö'VFG•÷f—6—E÷v–æF÷rÒ'VFG•f—6—Ev–æF÷r‚¢6VÆbå÷6VVå÷f—6—Eö–G3¢6WE·7G%ÒÒ6WB‚¢6VÆbå÷6†÷våö7F—fU÷f—6—Eö–G3¢6WE·7G%ÒÒ6WB‚¢6VÆbåö6†EöF–Æös¢6†DF–ÆörÂæöæRÒæöæP¢6VÆbåö6†EöÖVÖ÷'’Ò6öçfW'6F–öäÖVÖ÷'’€¢Ö…÷&V6VçE÷&÷VæG3Ó3À¢W'6—7E÷FƒÖ6öçfW'6F–öåöÖVÖ÷'•÷F‚‚¢–b÷2æVçf—&öâævWB‚$ôäU”5õU4UôDTÔõô54UE2"’Ò# ¢VÇ6RæöæRÀ¢¢6VÆbævVçEöÖævW"ÒvVçDÖævW"‡6VÆbç6WGF–æw2Â6VÆbæ7&VFVçF–Ç2Â6VÆb¢6VÆbæöffÆ–æUöF–ÆöwVUöÖævW"ÒöffÆ–æTF–ÆöwVTÖævW"€¢6VÆbæ6ö×æ–öâÀ¢6VÆbçv÷&µ÷F–ÖW"ç7FGW5÷FW‡BÀ¢ÆÖ&F¢6VÆbçv÷&µ÷F–ÖW"çFöF•÷6V6öæG2‚’òò3cÀ¢Æö6Åö6öçFW‡C×6VÆbçF–ÖUöÖVÖ÷'’ç7VÖÖ'’æ6öçFW‡BÀ¢¢6VÆbæ6†EöÖævW"Ò6†DÖævW"€¢6VÆbç6WGF–æw2À¢6VÆbæ•÷6W'f–6RÀ¢6VÆbævVçEöÖævW"À¢6VÆbæöffÆ–æUöF–ÆöwVUöÖævW"À¢6VÆbÀ¢Æö6Åö6öçFW‡E÷&÷f–FW#×6VÆbçF–ÖUöÖVÖ÷'’ç7VÖÖ'’æ6öçFW‡BÀ¢7F–öåöW†V7WF÷#×6VÆbçF–ÖUöÖVÖ÷'’æ7F–öç2À¢¢6VÆbæ×W6–5÷&÷f–FW%öÖævW"Ò×W6–5&÷f–FW$ÖævW"‡6VÆbç6WGF–æw2¢6VÆbæ×W6–5ö6öçG&öÆÆW"Ò×W6–46öçG&öÆÆW"€¢6VÆbç6WGF–æw2À¢6VÆbæ×W6–5÷&÷f–FW%öÖævW"À¢6VÆbÀ¢¢6VÆbævVçEöÖævW"ç7FGW5ö6†ævVBæ6öææV7B‡6VÆbåövVçE÷7FGW5ö6†ævVB¢6VÆbæ6†EöÖævW"ç&WÇ•÷&VG’æ6öææV7B‡6VÆbåöÖævVEö6†E÷&WÇ’¢6VÆbæ6†EöÖævW"æ'W7•ö6†ævVBæ6öææV7B‡6VÆbåö6†Eö'W7•ö6†ævVB¢6VÆbæ6†EöÖævW"ææ÷F–6Ræ6öææV7B‡6VÆbåö6†Eöæ÷F–6R¢6VÆbæ×W6–5ö6öçG&öÆÆW"ç&W7VÇE÷&VG’æ6öææV7B‡6VÆbåö×W6–5ö6öçG&öÅ÷&W7VÇB¢6VÆbæfö7W5÷6W76–öâæ6†ævVBæ6öææV7B‡6VÆbåöfö7W5÷6æ6†÷Eö6†ævVB¢6VÆbåö7F–öå÷6WVVæ6Uö–BÒ ¢6VÆbåöÆ7Eöææ÷Væ6VEö†÷W"Ò" ¢6VÆbåöÖ&–VçEö7F—f—G’Ò&æöæR ¢6VÆbåö7F—f—G•÷G&ç6—F–öåög&öÒÒ—†Ö‚¢6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FWÒ ¢6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FW2Ò€¢6VÆbåöÖçVÅö7F—f—G•÷VçF–ÂÒã ¢6VÆbåöÆ7Eöö6FVv÷'’Ò&÷F†W" ¢6VÆbåöÆFU÷v¶WW÷6†÷vâÒfÇ6P¢6VÆbåöÆ7Eöw&÷wF…ö†÷W"Ò7FvUöf÷%÷6V6öæG2‡6VÆbçv÷&µ÷F–ÖW"çFöF•÷6V6öæG2‚’’æ†÷W ¢6VÆbåöÆöæu÷&W75÷G&–vvW&VBÒfÇ6P¢6VÆbå÷7VV6…öVæv–æRÒFW‡EFõ7VV6‚‡6VÆb’–bFW‡EFõ7VV6‚—2æ÷BæöæRVÇ6RæöæP¢6VÆbåö&'VF÷f&–çEö–æFW‚Ò ¢6VÆbå÷VæF–æuö6öçFW‡EövÆö&ÂÒö–çB‚¢6VÆbå÷7W&W75ö6öçFW‡E÷VçF–ÂÒã ¢6VÆbåöVF–õö÷WGWBÒVF–ô÷WGWB‡6VÆb’–bVF–ô÷WGWB—2æ÷BæöæRVÇ6RæöæP¢6VÆbåöÖVF–÷Æ–W"ÒÖVF–Æ–W"‡6VÆb’–bÖVF–Æ–W"—2æ÷BæöæRVÇ6RæöæP¢–b6VÆbåöVF–õö÷WGWB—2æ÷BæöæRæB6VÆbåöÖVF–÷Æ–W"—2æ÷BæöæS ¢6VÆbåöVF–õö÷WGWBç6WEföÇVÖRƒã’¢6VÆbåöÖVF–÷Æ–W"ç6WDVF–ô÷WGWB‡6VÆbåöVF–õö÷WGWB ¢6VÆbç6WEv–æF÷tfÆw2‡6VÆbå÷WE÷v–æF÷uöfÆw2‚’¢6VÆbç6WDGG&–'WFR…Båv–FvWDGG&–'WFRåtõG&ç6ÇV6VçD&6¶w&÷VæBÂG'VR¢6VÆbç6WDGG&–'WFR…Båv–FvWDGG&–'WFRåtôFVÆWFTöä6Æ÷6RÂfÇ6R¢6VÆbç6WDGG&–'WFR…Båv–FvWDGG&–'WFRåtõ6†÷uv—F†÷WD7F—fF–ærÂG'VR¢6VÆbç6WEv–æF÷uF—FÆR†b'´ôD•5Ä•ôäÔWÒ+r·6VÆbå÷WEöæÖR‚—Ò"¢6VÆbç6WDÖ÷W6UG&6¶–ær…G'VR ¢6÷W&6RÒ6VÆbå÷—†Ö5µWE7FFRä”DÄUÕ³Ð¢v–GF‚Ò&÷VæB‡6WGF–æw2æF—7Æ•ö†V–v‡B¢6÷W&6Rçv–GF‚‚’ò6÷W&6Ræ†V–v‡B‚’¢6VÆbç6WDf—†VE6—¦R‡v–GF‚²"Â6WGF–æw2æF—7Æ•ö†V–v‡B²B¢6VÆbæÆ&VÂÒÆ&VÂ‡6VÆb¢6VÆbæÆ&VÂç6WDGG&–'WFR…Båv–FvWDGG&–'WFRåtõG&ç7&VçDf÷$Ö÷W6TWfVçG2ÂG'VR¢6VÆbæÆ&VÂç6WDÆ–væÖVçB…BäÆ–væÖVçDfÆräÆ–vä6VçFW"¢6VÆbæÆ&VÂç6WDvVöÖWG'’ƒbÂÂv–GF‚Â6WGF–æw2æF—7Æ•ö†V–v‡B²‚ ¢6VÆbç†÷Fõö'V&&ÆRÒÆ&VÂ‚¢6VÆbç†÷Fõö'V&&ÆRç6WEv–æF÷tfÆw2‡6VÆbåöÖ&–VçE÷v–æF÷uöfÆw2‚’¢6VÆbç†÷Fõö'V&&ÆRç6WDGG&–'WFR€¢Båv–FvWDGG&–'WFRåtõ6†÷uv—F†÷WD7F—fF–ærÀ¢G'VRÀ¢¢6VÆbç†÷Fõö'V&&ÆRç6WDÆ–væÖVçB…BäÆ–væÖVçDfÆräÆ–vä6VçFW"¢6VÆbç†÷Fõö'V&&ÆRç6WE7G–ÆU6†VWB‚&&6¶w&÷VæC¢G&ç7&VçC²" ¢6VÆbç7VV6…ö'V&&ÆRÒÆ&VÂ‚¢6VÆbç7VV6…ö'V&&ÆRç6WEv–æF÷tfÆw2‡6VÆbåöÖ&–VçE÷v–æF÷uöfÆw2‚’¢6VÆbç7VV6…ö'V&&ÆRç6WDGG&–'WFR€¢Båv–FvWDGG&–'WFRåtõ6†÷uv—F†÷WD7F—fF–ærÀ¢G'VRÀ¢¢6VÆbç7VV6…ö'V&&ÆRç6WEv÷&Ew&…G'VR¢'V&&ÆUöföçBÒföçB‚¢'V&&ÆUöföçBç6WDfÖ–Æ–W2€¢²%–ætfær42"Â$Ö–7&÷6ögB–†V’T’"Â$æ÷Fò6ç24¤²42"Â$&–Â%Ð¢¢'V&&ÆUöföçBç6WEö–çE6—¦Rƒ¢6VÆbç7VV6…ö'V&&ÆRç6WDföçB†'V&&ÆUöföçB¢6VÆbç7VV6…ö'V&&ÆRç6WDÖ–æ–×VÕv–GF‚ƒƒ¢6VÆbç7VV6…ö'V&&ÆRç6WDÖ†–×VÕv–GF‚ƒ#ƒ¢6VÆbç7VV6…ö'V&&ÆRç6WDÆ–væÖVçB€¢BäÆ–væÖVçDfÆräÆ–väÆVgBÂBäÆ–væÖVçDfÆräÆ–våd6VçFW ¢¢6VÆbç7VV6…ö'V&&ÆRç6WE7G–ÆU6†VWB€¢%Æ&VÂ²&6¶w&÷VæC¢&v&ƒ#3’Â#CRÂ#C‚ÂsR“² ¢&6öÆ÷#¢3#s36C²&÷&FW#¢‚6öÆ–B&v&ƒsRÂ“bÂ"Â#“²&÷&FW"×&F—W3¢Wƒ² ¢'FF–æs¢‚7ƒ²föçB×6—¦S¢Gƒ²Ò ¢ ¢6VÆbçv÷&µö6öçG&öÇ2Òv÷&´6öçG&öÄ'V&&ÆR‚¢6VÆbçv÷&µö6öçG&öÇ2çW6U÷&WVW7FVBæ6öææV7B‡6VÆbçW6U÷v÷&µ÷F–ÖW"¢6VÆbçv÷&µö6öçG&öÇ2æf–æ—6…÷&WVW7FVBæ6öææV7B‡6VÆbæf–æ—6…÷v÷&µ÷F–ÖW"¢6VÆbçV–6µ÷æVÂÒV–6´6öçG&öÅæVÂ‡6VÆbå÷WEöæÖR‚’¢6VÆbçV–6µ÷æVÂæ6†E÷&WVW7FVBæ6öææV7B‡6VÆbç&ö×EöF–ÆöwVR¢6VÆbçV–6µ÷æVÂçv÷&µ÷&WVW7FVBæ6öææV7B‡6VÆbå÷V–6µ÷v÷&µö7F–öâ¢6VÆbçV–6µ÷æVÂæ×W6–5ö6öçG&öÅ÷&WVW7FVBæ6öææV7B‡6VÆbæ6öçG&öÅö×W6–2¢6VÆbçV–6µ÷æVÂæ×W6–5÷&WVW7FVBæ6öææV7B‡6VÆbçÆ•÷&æFöÕ÷6öær¢6VÆbçV–6µ÷æVÂç6—¦U÷&WVW7FVBæ6öææV7B‡6VÆbæ÷Vå÷6—¦Uö6öçG&öÂ¢6VÆbçV–6µ÷æVÂç6WGF–æw5÷&WVW7FVBæ6öææV7B‡6VÆbæ÷Vå÷6WGF–æw2 ¢6VÆbæÖ÷fVÖVçE÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæÖ÷fVÖVçE÷F–ÖW"ç6WD–çFW'fÂ‡6WGF–æw2æÖ÷fVÖVçEö–çFW'fÅö×2¢6VÆbæÖ÷fVÖVçE÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöÖ÷fVÖVçE÷F–6²¢6VÆbæÖ÷fVÖVçE÷F–ÖW"ç7F'B‚ ¢6VÆbç7FFU÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbç7FFU÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbç7FFU÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷7FFU÷F–ÖV÷WB ¢6VÆbææ–ÖF–öå÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbææ–ÖF–öå÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöæ–ÖF–öå÷F–6² ¢6VÆbçGW&å÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbçGW&å÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbçGW&å÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöf–æ—6…÷GW&â ¢6VÆbæ–çFW&7F–öå÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ–çFW&7F–öå÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæ–çFW&7F–öå÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöf–æ—6…ö–çFW&7F–öâ ¢6VÆbæÆöæu÷&W75÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæÆöæu÷&W75÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæÆöæu÷&W75÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷G&–vvW%öÆöæu÷&W72 ¢6VÆbæ†÷fW%÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ†÷fW%÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæ†÷fW%÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷G&–vvW%ö†÷fW%ö7W&–÷6—G’ ¢6VÆbç†÷Fõ÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbç†÷Fõ÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbç†÷Fõ÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbç†÷Fõö'V&&ÆRæ†–FR ¢6VÆbç7VV6…÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbç7VV6…÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbç7VV6…÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbç7VV6…ö'V&&ÆRæ†–FR ¢6VÆbæVffV7E÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæVffV7E÷F–ÖW"ç6WD–çFW'fÂƒ“¢6VÆbæVffV7E÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöVffV7E÷F–6² ¢6VÆbæ&ö%÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ&ö%÷F–ÖW"ç6WD–çFW'fÂƒ#ƒ¢6VÆbæ&ö%÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåö&ö%÷F–6²¢6VÆbæ&ö%÷F–ÖW"ç7F'B‚ ¢6VÆbçv÷&µö6Æö6µ÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbçv÷&µö6Æö6µ÷F–ÖW"ç6WD–çFW'fÂƒ¢6VÆbçv÷&µö6Æö6µ÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷v÷&µ÷F–ÖW%÷F–6²¢6VÆbçv÷&µö6Æö6µ÷F–ÖW"ç7F'B‚ ¢6VÆbæÖ&–VçE÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæÖ&–VçE÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæÖ&–VçE÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöÖ&–VçE÷F–6²¢6VÆbå÷66†VGVÆUöÖ&–VçB‚ ¢6VÆbç6öæu÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbç6öæu÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbç6öæu÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷6öæuö–ç7—&F–öå÷F–6²¢6VÆbå÷66†VGVÆU÷6öæuö–ç7—&F–öâ‚ ¢6VÆbæ6öçFW‡EöÖVçU÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ6öçFW‡EöÖVçU÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæ6öçFW‡EöÖVçU÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷6†÷uöFVfW'&VEö6öçFW‡EöÖVçR ¢6VÆbæ7F—f—G•÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ7F—f—G•÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæ7F—f—G•÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåö7F—f—G•÷F–ÖV÷WB ¢6VÆbæ7F—f—G•÷G&ç6—F–öå÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ7F—f—G•÷G&ç6—F–öå÷F–ÖW"ç6WD–çFW'fÂƒ3R¢6VÆbæ7F—f—G•÷G&ç6—F–öå÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåö7F—f—G•÷G&ç6—F–öå÷F–6² ¢6VÆbçv÷&µö7F—f—G•÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbçv÷&µö7F—f—G•÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbçv÷&µö7F—f—G•÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷v÷&µö7F—f—G•÷F–6² ¢6VÆbæ†÷W&Ç•÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ†÷W&Ç•÷F–ÖW"ç6WD–çFW'fÂƒS¢6VÆbæ†÷W&Ç•÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåö†÷W&Ç•÷F–6²¢6VÆbæ†÷W&Ç•÷F–ÖW"ç7F'B‚ ¢6VÆbæ÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ÷F–ÖW"ç6WD–çFW'fÂƒS¢6VÆbæ÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåööv&VæW75÷F–6²¢6VÆbæ÷F–ÖW"ç7F'B‚ ¢6VÆbçF÷Ö÷7E÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbçF÷Ö÷7E÷F–ÖW"ç6WD–çFW'fÂƒC¢6VÆbçF÷Ö÷7E÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåöVç7W&Uööå÷F÷¢6VÆbçF÷Ö÷7E÷F–ÖW"ç7F'B‚ ¢6VÆbåöÆ7E÷6ö6–Åö†V'F&VEöBÒã ¢6VÆbå÷6ö6–Åö†V'F&VEöGVRÒG'VP¢6VÆbç6ö6–Å÷F–ÖW"ÒF–ÖW"‡6VÆb¢2&Vg&W6‚f—6–&ÆR&ööÒ7FFRWfW'’36V6öæG2Â'WBw&—FR&W6Væ6RöæÇ¢2WfW'’“6V6öæG2÷"–ÖÖVF–FVÇ’gFW"âW‡Æ–6—B7FFRG&ç6—F–öâà¢6VÆbç6ö6–Å÷F–ÖW"ç6WD–çFW'fÂƒ3ó¢6VÆbç6ö6–Å÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷6ö6–Å÷F–6²¢6VÆbç6ö6–Å÷F–ÖW"ç7F'B‚¢6VÆbç6ö6–Å÷7–æ5÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbç6ö6–Å÷7–æ5÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbç6ö6–Å÷7–æ5÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbå÷6ö6–Å÷F–6²¢–b6VÆbç6ö6–Åö6Æ–VçBç6–væVEö–ã ¢F–ÖW"ç6–ævÆU6†÷Bƒ#SÂ6VÆbå÷6ö6–Å÷F–6² ¢2F†Rfö7W2F–ÖW"föÆÆ÷w2&VÂ¶W–&ö&BöÖ÷W6R7F—f—G’–ç7FVBö`¢26öçF–çV–ærf÷&WfW"v†–ÆRF†RW6W"†27FWVBv’âF†—2F–ÖW ¢2öæÇ’&VG2F†Rõ2ÖÆWfVÂ–FÆRGW&F–öã²—BæWfW"&V6÷&G2–çWBFFà¢6VÆbæ–çWEö–FÆU÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ–çWEö–FÆU÷F–ÖW"ç6WD–çFW'fÂƒUó¢6VÆbæ–çWEö–FÆU÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåö6†V6µö–çWEö–FÆR¢6VÆbæ–çWEö–FÆU÷F–ÖW"ç7F'B‚¢6VÆbæ–FÆU÷&V6÷fW'•÷F–ÖW"ÒF–ÖW"‡6VÆb¢6VÆbæ–FÆU÷&V6÷fW'•÷F–ÖW"ç6WE6–ævÆU6†÷B…G'VR¢6VÆbæ–FÆU÷&V6÷fW'•÷F–ÖW"çF–ÖV÷WBæ6öææV7B‡6VÆbåö6µö–FÆU÷&V6÷fW'’ ¢6VÆbå÷7–æ5ö†÷W&Ç•ö÷WFf—B†ææ÷Væ6SÔfÇ6R¢6VÆbç6WE÷7FFR…WE7FFRä”DÄR¢6VÆbå÷66†VGVÆR‡6VÆbæ&V†f–÷"æ–æ—F–Åö–FÆR‚’¢–b6†÷VÆE÷7F'E÷7F'GWöFWFV7F–öâ‚“ ¢F–ÖW"ç6–ævÆU6†÷BƒÂ6VÆbævVçEöÖævW"ç7F'Eö&6¶w&÷VæEö6†V6² ¢FVb÷WE÷v–æF÷uöfÆw2‡6VÆb’ÓâBåv–æF÷uG—S ¢"".‹ùNY¹îKˆÞXÚK»¾Xªjþ8KˆÞhê^iKn™Jîy¹ŽxJnx+žy¨NZêxšžz©~Xú>j~[ù~8"""  ¢fÆw2Ò€¢Båv–æF÷uG—Räg&ÖVÆW75v–æF÷t†–ç@¢ÂBåv–æF÷uG—RåFööÀ¢ÂBåv–æF÷uG—Råv–æF÷tFöW4æ÷D66WDfö7W0¢¢–b6VÆbç6WGF–æw2æÇv—5ööå÷F÷ ¢fÆw2ÃÒBåv–æF÷uG—Råv–æF÷u7F—4öåF÷†–ç@¢&WGW&âfÆw0 ¢FVböÖ&–VçE÷v–æF÷uöfÆw2‡6VÆb’ÓâBåv–æF÷uG—S ¢"".Šêžˆz®XªŽk	Nk:‹yþ™¨þZêxšžjŠ[ÈþûÈÎ[›nKùÞŠøi‹îzK®i{nKˆÞkøkK¾[Ù>X˜Þ[©NyJŽ8"""  ¢fÆw2Ò€¢Båv–æF÷uG—RåFööÀ¢ÂBåv–æF÷uG—Räg&ÖVÆW75v–æF÷t†–ç@¢ÂBåv–æF÷uG—Råv–æF÷tFöW4æ÷D66WDfö7W0¢¢–b6VÆbç6WGF–æw2æÇv—5ööå÷F÷ ¢fÆw2ÃÒBåv–æF÷uG—Råv–æF÷u7F—4öåF÷†–ç@¢&WGW&âfÆw0 ¢FVböÆöE÷—†Ö2‡6VÆb’ÓâF–7EµWE7FFRÂÆ—7Eµ—†ÖÕÓ ¢"".jžhÚî{JiÙkˆ^XÙ^Xª‹ÛÞYNx«nh[Š~[¨þX‰~[›nš¨ÎŠøZèÎi[Nh
+~8"""  ¢Öæ–fW7E÷F‚Ò&W6÷W&6U÷F‚‚&76WG2÷WBöÖæ–fW7Bæ§6öâ"¢–b÷2æVçf—&öâævWB‚$ôäU”5õU4UôDTÔõô54UE2"’ÓÒ## ¢&WGW&â6VÆbåöÆöEöÖæ–fW7E÷—†Ö2†Öæ–fW7E÷F‚¢G'“ ¢7W7FöÕöÖæ–fW7BÒ&W6÷W&6U÷F‚‚'W6W%ö76WG2÷WBöÖæ–fW7Bæ§6öâ"¢W†6WBf–ÆTæ÷Df÷VæDW'&÷# ¢70¢VÇ6S ¢–bæ÷B6†&7FW%ö—5ö&÷fVB†ÆöE÷v÷&¶fÆ÷r‚’“ ¢&—6Rv÷&¶fÆ÷tW'&÷"€¢.j8kX¾X‹zxiÈžZêxšž{JiÙûÈÎKØnj~XxnK«®xšž[	®iÊ®zîŠêNûÉ¾h¹.{¹Þ™Ùž›¹ŽY¹î˜X‹kÉNzK®Šy.ˆ›.8" ¢¢Öæ–fW7E÷F‚Ò7W7FöÕöÖæ–fW7@¢&WGW&â6VÆbåöÆöEöÖæ–fW7E÷—†Ö2†Öæ–fW7E÷F‚ ¢FVböÆöEöÖæ–fW7E÷—†Ö2€¢6VÆbÀ¢Öæ–fW7E÷Fƒ¢F‚À¢’ÓâF–7EµWE7FFRÂÆ—7Eµ—†ÖÕÓ ¢"".K¸îhÈ~Zé®kˆ^XÙ^Xª‹ÛÞ[Š~ûÉ¾kX¾Šù^XúþX	þjÚNY»®Zé®KÛþyJŽXZÎ[ÈkÉNzK®{JiÙ8"""  ¢Öæ–fW7BÒ§6öâæÆöG2†Öæ–fW7E÷F‚ç&VE÷FW‡B†Væ6öF–æsÒ'WFbÓ‚"’¢æ–ÖF–öç3¢F–7E·7G"ÂÆ—7E·7G%ÕÒÒÖæ–fW7E²&æ–ÖF–öç2%Ð¢Ö÷F–öåöf7F÷'2ÒÖæ–fW7BævWB€¢'vÆµöÖ÷F–öåöf7F÷'2"À¢DTdTÅEõtÄµôÔõD”ôåôd5Dõ%2À¢¢–bÆVâ†Ö÷F–öåöf7F÷'2’ÒÆVâ†æ–ÖF–öç5²'vÆ²%Ò“ ¢&—6RfÇVTW'&÷"‚.‹[‹zþKØÞz{¾i».{«þ[ø^š¾Kˆî‹[‹zþXªŽyK¾[Š~i[Kˆˆ{B"¢6VÆbå÷vÆµöÖ÷F–öåöf7F÷'2ÒGWÆR†fÆöB‡fÇVR’f÷"fÇVR–âÖ÷F–öåöf7F÷'2¢Ö–ærÒ°¢WE7FFRä”DÄS¢æ–ÖF–öç5²&–FÆR%ÒÀ¢WE7FFRåtÄ³¢æ–ÖF–öç5²'vÆ²%ÒÀ¢WE7FFRå4•C¢æ–ÖF–öç5²'6—B%ÒÀ¢WE7FFRå4ÄTU¢æ–ÖF–öç5²'6ÆVW%ÒÀ¢WE7FFRåtdS¢æ–ÖF–öç5²'vfR%ÒÀ¢WE7FFRä„“¢æ–ÖF–öç5²&†’%ÒÀ¢WE7FFRå4…“¢æ–ÖF–öç5²'6‡’%ÒÀ¢WE7FFRå5U%$•4TC¢æ–ÖF–öç5²'7W'&—6VB%ÒÀ¢WE7FFRäääõ”TC¢æ–ÖF–öç5²&ææ÷–VB%ÒÀ¢WE7FFRå4ÄTU“¢æ–ÖF–öç5²'6ÆVW’%ÒÀ¢WE7FFRä5U$”õU3¢æ–ÖF–öç5²&7W&–÷W2%ÒÀ¢WE7FFRå4TÄd”S¢æ–ÖF–öç5²'6VÆf–R%ÒÀ¢WE7FFRäE$s¢æ–ÖF–öç5²&G&r%ÒÀ¢Ð¢—†Ö3¢F–7EµWE7FFRÂÆ—7Eµ—†ÖÕÒÒ·Ð¢f÷"7FFRÂ&VÆF—fU÷F‡2–âÖ–æræ—FV×2‚“ ¢7FFUög&ÖW2ÒµÐ¢f÷"&VÆF—fR–â&VÆF—fU÷F‡3 ¢F‚ÒÖæ–fW7E÷F‚ç&VçBò&VÆF—fP¢–bæ÷BF‚æ—5öf–ÆR‚“ ¢&—6Rf–ÆTæ÷Df÷VæDW'&÷"†b.{Ë®[	Zêxšž{JiÙûÉ§·F‡Ò"¢—†ÖÒ—†Ö‡7G"‡F‚’¢–b—†Öæ—4çVÆÂ‚“ ¢&—6RfÇVTW'&÷"†b.izk9^Xª‹ÛÞZêxšž{JiÙûÉ§·F‡Ò"¢7FFUög&ÖW2æVæB‡—†Ö¢–bæ÷B7FFUög&ÖW3 ¢&—6RfÇVTW'&÷"†b.x«nh·7FFRçfÇVWÒk*iÈžXúþyJŽ{JiÙ[Šr"¢—†Ö5·7FFUÒÒ7FFUög&ÖW0¢&WGW&â—†Ö0 ¢FVböÆöE÷6VÆf–U÷†÷Fò‡6VÆb’Óâ—†Ö ¢"".Xú®Xª‹ÛÞyJŽh‹~hùKé¾y¨NXéþZx¾ˆz®h¸ÞxZ~x˜~ûÈÎKˆÞyJŽyIþh‰[Š~Xi.XX^XéþY»î8"""  ¢f÷"&VÆF—fR–â€¢'W6W%ö76WG2÷6VÆf–Rçær"À¢'W6W%ö76WG2÷6VÆf–Ræ§r"À¢'W6W%ö76WG2÷6VÆf–Ræ§Vr"À¢'W6W%ö76WG2ö–ÖvRçær"À¢“ ¢G'“ ¢F‚Ò&W6÷W&6U÷F‚‡&VÆF—fR¢W†6WBf–ÆTæ÷Df÷VæDW'&÷# ¢6öçF–çVP¢†÷FòÒ—†Ö‡7G"‡F‚’¢–bæ÷B†÷Fòæ—4çVÆÂ‚“ ¢&WGW&â†÷Fð¢&WGW&â—†Ö‚ ¢FVbÆ6UöE÷7F'B‡6VÆb’ÓâæöæS ¢"".hÈž[{.KùÞZÙŽKØÞ{Úîh‰nK‹¾[þ[™^Xû>Kˆ¾Šy.iKî{Úîz©~Xú>8"""  ¢67&VVâÒÆ–6F–öâç&–Ö'•67&VVâ‚¢–b67&VVâ—2æöæS ¢&WGW&à¢&VÒ67&VVâæf–Æ&ÆTvVöÖWG'’‚¢–b6VÆbç6WGF–æw2ç7F'E÷‚—2æöæR÷"6VÆbç6WGF–æw2ç7F'E÷’—2æöæS ¢‚Ò&Vç&–v‡B‚’Ò6VÆbçv–GF‚‚’Ò#@¢’Ò&Væ&÷GFöÒ‚’Ò6VÆbæ†V–v‡B‚’Ò ¢VÇ6S ¢‚Ò6VÆbç6WGF–æw2ç7F'E÷€¢’Ò6VÆbç6WGF–æw2ç7F'E÷¢6VÆbæÖ÷fR‡6VÆbåö6öç7G&–æVE÷÷6—F–öâ…ö–çB‡‚Â’’’ ¢FVb6WE÷7FFR‡6VÆbÂ7FFS¢WE7FFR’ÓâæöæS ¢"".Xˆ~hÚ.ŠÎK‹®x«nh8˜xÞ{Úî[Š~[¨þXû~[›nX‹~ik[Ù>X˜ÞY»îx˜~8"""  ¢6VÆbç7FFRÒ7FFP¢6VÆbåög&ÖUö–æFW‚Ò ¢6VÆbåöæ–ÖF–öåöF—&V7F–öâÒ¢6VÆbåöæ–ÖF–öåöf–æ—6†VBÒæöæP¢6VÆbå÷GW&å÷W6VBÒfÇ6P¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB‡6VÆbç‚‚’¢6VÆbåöÆ7EöÖ÷fVÖVçEöBÒF–ÖRæÖöæ÷Föæ–2‚¢6VÆbçGW&å÷F–ÖW"ç7F÷‚¢F—7Æ•÷7FFRÒ7FFP¢g&ÖUö6÷VçBÒÆVâ‡6VÆbå÷—†Ö5¶F—7Æ•÷7FFUÒ¢–bg&ÖUö6÷VçBâ ¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F'B‡6VÆbåög&ÖUö–çFW'fÂ†F—7Æ•÷7FFRÂ’¢VÇ6S ¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F÷‚¢–bF—7Æ•÷7FFR—2WE7FFRåtÄ³ ¢6VÆbåöÇ•ög&ÖUööfg6WB†F—7Æ•÷7FFR¢VÇ6S ¢6VÆbæÆ&VÂæÖ÷fRƒbÂ¢6VÆbåöVffV7E÷†6RÒ ¢–bVÖ÷F–öåöVffV7EöæÖR†F—7Æ•÷7FFR’—2æöæS ¢6VÆbæVffV7E÷F–ÖW"ç7F÷‚¢VÇ6S ¢6VÆbæVffV7E÷F–ÖW"ç7F'B‚¢6VÆbå÷&Vg&W6…÷—†Ö‚ ¢FVbög&ÖUö–çFW'fÂ‡6VÆbÂ7FFS¢WE7FFRÂg&ÖUö–æFWƒ¢–çB’Óâ–çC ¢"".‹ùNY¹îhÈ~Zé®XªŽyK¾[Š~y¨NXÎyYži{n™{NûÈÎKÛþyÊŽyËÎ8‹ø~kŠKˆîŠÎ‹[ˆ¨.ZXþ[ÛÎjÚNxºÎz¸¾8"""  ¢–b7FFR—2WE7FFRä”DÄS ¢GW&F–öç2Òƒƒ#Â3cÂÂ#ÂCÂs#¢&WGW&âGW&F–öç5¶g&ÖUö–æFW‚RÆVâ†GW&F–öç2•Ð¢–b7FFR—2WE7FFRåtÄ³ ¢&WGW&â6VÆbç6WGF–æw2çvÆµög&ÖUö–çFW'fÅö×0¢–b7FFR—2WE7FFRå4•C ¢&WGW&âc ¢–b7FFR—2WE7FFRå4ÄTU ¢&WGW&âƒ ¢–b7FFR—2WE7FFRäE$s ¢&WGW&âƒ ¢&WGW&â3ƒ  ¢7FF–6ÖWF†ö@¢FVb÷&VÖVÖ&W%ö66†Uö—FVÒ†66†RÂ¶W’ÂfÇVR’ÓâæöæS ¢"".XižXZ^[þYè¾iÈ‹ùKÛþyJŽ{É>ZÙŽûÈÎ[›n™™X‹n™[þiÉþ‹ùŠÎi{ny¨NXh^ZÙŽXÚyJŽ8"""  ¢66†U¶¶W•ÒÒfÇVP¢66†RæÖ÷fU÷FõöVæB†¶W’¢v†–ÆRÆVâ†66†R’â“c ¢66†Rç÷—FVÒ†Æ7CÔfÇ6R ¢FVbö7W'&VçE÷6÷W&6R‡6VÆb’ÓâGWÆUµWE7FFRÂ—†ÖÓ ¢"".‹ùNY¹î[Ù>X˜Þi‹îzK®x«nhXø®ikžY	ZHNynYîy¨NXéþZx¾[Š~8"""  ¢F—7Æ•÷7FFRÒ6VÆbç7FFP¢g&ÖW2Ò6VÆbå÷—†Ö5¶F—7Æ•÷7FFUÐ¢—†ÖÒg&ÖW5¶Ö–â‡6VÆbåög&ÖUö–æFW‚ÂÆVâ†g&ÖW2’Ò•Ð¢–b6VÆbæF—&V7F–öâÂæBF—7Æ•÷7FFR—2WE7FFRåtÄ³ ¢—†ÖÒ—†ÖçG&ç6f÷&ÖVB…G&ç6f÷&Ò‚’ç66ÆR‚ÓÂ’¢&WGW&âF—7Æ•÷7FFRÂ—†Ö  ¢FVb÷&Vg&W6…÷—†Ö‡6VÆb’ÓâæöæS ¢"".K¸î{É>ZÙŽXùn[é~h‰nhÈž[Ù>X˜Þ[þ[™^ŠëîZH~X8þ{JjùNj^jÎXÉn[Ù>X˜ÞXªŽyK¾[Š~8"""  ¢F—7Æ•÷7FFRÂ—†ÖÒ6VÆbåö7W'&VçE÷6÷W&6R‚¢&F–òÒÖ‚ƒãÂ6VÆbæFWf–6U—†VÅ&F–ôb‚’¢F—&V7F–öåö¶W’Ò6VÆbæF—&V7F–öâ–bF—7Æ•÷7FFR—2WE7FFRåtÄ²VÇ6R ¢66†Uö¶W’Ò€¢F—7Æ•÷7FFRÀ¢6VÆbåög&ÖUö–æFW‚À¢F—&V7F–öåö¶W’À¢&÷VæB‡&F–òÂ2’À¢6VÆbæÆ&VÂçv–GF‚‚’À¢6VÆbæÆ&VÂæ†V–v‡B‚’À¢¢66ÆVBÒ6VÆbå÷&VæFW%ö66†RævWB†66†Uö¶W’¢–b66ÆVB—2æöæS ¢F&vWBÒ6—¦R€¢Ö‚ƒÂ&÷VæB‡6VÆbæÆ&VÂçv–GF‚‚’¢&F–ò’’À¢Ö‚ƒÂ&÷VæB‡6VÆbæÆ&VÂæ†V–v‡B‚’¢&F–ò’’À¢¢66ÆVBÒ—†Öç66ÆVB€¢F&vWBÀ¢Bä7V7E&F–ôÖöFRä¶VW7V7E&F–òÀ¢BåG&ç6f÷&ÖF–öäÖöFRå6Öö÷F…G&ç6f÷&ÖF–öâÀ¢¢66ÆVBç6WDFWf–6U—†VÅ&F–ò‡&F–ò¢6VÆbå÷&VÖVÖ&W%ö66†Uö—FVÒ‡6VÆbå÷&VæFW%ö66†RÂ66†Uö¶W’Â66ÆVB¢6ö×÷6VBÒG&uöVÖ÷F–öåöVffV7B€¢66ÆVBÀ¢F—7Æ•÷7FFRÀ¢6VÆbåöVffV7E÷†6RÀ¢¢7F—f—G’Ò6VÆbåöÖ&–VçEö7F—f—G¢–b6VÆbçv÷&µ÷F–ÖW"æ—5÷'Vææ–æræB7F—f—G’–â²""Â&æöæR'Ó ¢7F—f—G’Ò&6ö×WFW" ¢6ö×÷6VBÒG&uö7F—f—G•ö÷fW&Æ’€¢6ö×÷6VBÀ¢7F—f—G’À¢6VÆbç6WGF–æw2æWV—VEö÷WFf—BÀ¢6VÆbåöVffV7E÷†6RÀ¢¢f—6–&ÆRÒ6VÆbåö&ÆVæEö7F—f—G•÷G&ç6—F–öâ†6ö×÷6VB¢6VÆbæÆ&VÂç6WE—†Ö‡f—6–&ÆR¢VffV7Eö¶W’Ò6VÆbåöVffV7E÷†6R–bVÖ÷F–öåöVffV7EöæÖR†F—7Æ•÷7FFR’VÇ6RÓ¢÷fW&Æ•ö¶W’Ò†6‚‚†7F—f—G’Â6VÆbç6WGF–æw2æWV—VEö÷WFf—BÂ6VÆbåöVffV7E÷†6RR"’¢6VÆbå÷&Vg&W6…÷v–æF÷uöÖ6²†F—7Æ•÷7FFRÂf—6–&ÆRÂF—&V7F–öåö¶W’ÂVffV7Eö¶W’â÷fW&Æ•ö¶W’ ¢FVbö&ÆVæEö7F—f—G•÷G&ç6—F–öâ‡6VÆbÂF&vWC¢—†Ö’Óâ—†Ö ¢"".h¨®Kˆ®KˆKŠ®ZèÎi[NXªŽKÙÎKˆîyºîj~XªŽKÙÎyúÞi¨.KªNXøžkzXÉnûÈÎ˜þXXÞ™ÙžhY»îzÎXˆ~8"""  ¢&Wf–÷W2Ò6VÆbåö7F—f—G•÷G&ç6—F–öåög&öÐ¢–b&Wf–÷W2æ—4çVÆÂ‚’÷"6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FWãÒ6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FW3 ¢&WGW&âF&vW@¢–b&Wf–÷W2ç6—¦R‚’ÒF&vWBç6—¦R‚“ ¢&Wf–÷W2Ò&Wf–÷W2ç66ÆVB€¢F&vWBç6—¦R‚’À¢Bä7V7E&F–ôÖöFRä–væ÷&T7V7E&F–òÀ¢BåG&ç6f÷&ÖF–öäÖöFRå6Öö÷F…G&ç6f÷&ÖF–öâÀ¢¢&Wf–÷W2ç6WDFWf–6U—†VÅ&F–ò‡F&vWBæFWf–6U—†VÅ&F–ò‚’¢&öw&W72Ò6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FWò6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FW0¢&W7VÇBÒ—†Ö‡F&vWBç6—¦R‚’¢&W7VÇBæf–ÆÂ…BävÆö&Ä6öÆ÷"çG&ç7&VçB¢&W7VÇBç6WDFWf–6U—†VÅ&F–ò‡F&vWBæFWf–6U—†VÅ&F–ò‚’¢–çFW"Ò–çFW"‡&W7VÇB¢–çFW"ç6WD÷6—G’ƒãÒ&öw&W72¢–çFW"æG&u—†ÖƒÂÂ&Wf–÷W2¢–çFW"ç6WD÷6—G’‡&öw&W72¢–çFW"æG&u—†ÖƒÂÂF&vWB¢–çFW"æVæB‚¢&WGW&â&W7VÇ@ ¢FVbö7F—f—G•÷G&ç6—F–öå÷F–6²‡6VÆb’ÓâæöæS ¢"".hêŽ‹ù¾{ªb#ƒjú¾zy.y¨NXªŽKÙÎKªNXøžkzXÉnûÉ¾XéþiÈž˜	[Š~‹[‹zþXªŽyK¾KˆÞ{¸þ‹ø~‹ùž˜xÎ8"""  ¢6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FW³Ò¢–b6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FWãÒ6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FW3 ¢6VÆbæ7F—f—G•÷G&ç6—F–öå÷F–ÖW"ç7F÷‚¢6VÆbåö7F—f—G•÷G&ç6—F–öåög&öÒÒ—†Ö‚¢6VÆbåöÖ6µö66†Ræ6ÆV"‚¢6VÆbå÷&Vg&W6…÷—†Ö‚ ¢FVbö6†ævUöÖ&–VçEö7F—f—G’‡6VÆbÂ7F—f—G“¢7G"’ÓâæöæS ¢"".{¹þKˆXˆ~hÚ.ZèÎi[NXªŽKÙÎûÈÎ[›nK¸î[Ù>X˜ÞZéî™˜^yK¾™Ú.[›>k¹‹ø~kŠX‹yºîj~Y»î8"""  ¢æW‡Eö7F—f—G’Ò7F—f—G’–b7F—f—G’–â5D”ôåõ5$•DU2VÇ6R&æöæR ¢–bæW‡Eö7F—f—G’ÓÒ6VÆbåöÖ&–VçEö7F—f—G“ ¢6VÆbå÷&Vg&W6…÷—†Ö‚¢&WGW&à¢7W'&VçBÒ6VÆbæÆ&VÂç—†Ö‚’–b†6GG"‡6VÆbÂ&Æ&VÂ"’VÇ6R—†Ö‚¢6VÆbåö7F—f—G•÷G&ç6—F–öåög&öÒÒ—†Ö†7W'&VçB’–bæ÷B7W'&VçBæ—4çVÆÂ‚’VÇ6R—†Ö‚¢6VÆbåö7F—f—G•÷G&ç6—F–öå÷7FWÒ ¢6VÆbåöÖ&–VçEö7F—f—G’ÒæW‡Eö7F—f—G¢6VÆbåöÖ6µö66†Ræ6ÆV"‚¢–bæ÷B6VÆbåö7F—f—G•÷G&ç6—F–öåög&öÒæ—4çVÆÂ‚“ ¢6VÆbæ7F—f—G•÷G&ç6—F–öå÷F–ÖW"ç7F'B‚¢6VÆbå÷&Vg&W6…÷—†Ö‚ ¢FVb÷&Vg&W6…÷v–æF÷uöÖ6²€¢6VÆbÀ¢F—7Æ•÷7FFS¢WE7FFRÀ¢—†Ö¢—†ÖÀ¢F—&V7F–öåö¶W“¢–çBÀ¢VffV7Eö¶W“¢–çBÀ¢’ÓâæöæS ¢"".hÈž[Ù>X˜ÞK«®xšž‹Úî[¹>Šëî{Úîz©~Xú>˜î{ÚžûÈÎKÛþ˜þiˆîyYžy›ÞKˆÞhºnhŠ®jÎ™Ú.x+žX{¾8"""  ¢66†Uö¶W’Ò€¢F—7Æ•÷7FFRÀ¢6VÆbåög&ÖUö–æFW‚À¢F—&V7F–öåö¶W’À¢VffV7Eö¶W’À¢6VÆbæÆ&VÂçv–GF‚‚’À¢6VÆbæÆ&VÂæ†V–v‡B‚’À¢¢&Vv–öâÒ6VÆbåöÖ6µö66†RævWB†66†Uö¶W’¢–b&Vv–öâ—2æöæS ¢Æöv–6ÂÒ—†Öç66ÆVB€¢6VÆbæÆ&VÂç6—¦R‚’À¢Bä7V7E&F–ôÖöFRä¶VW7V7E&F–òÀ¢BåG&ç6f÷&ÖF–öäÖöFRå6Öö÷F…G&ç6f÷&ÖF–öâÀ¢¢öfg6WE÷‚Ò‡6VÆbæÆ&VÂçv–GF‚‚’ÒÆöv–6Âçv–GF‚‚’’òò ¢öfg6WE÷’Ò‡6VÆbæÆ&VÂæ†V–v‡B‚’ÒÆöv–6Âæ†V–v‡B‚’’òò ¢&Vv–öâÒ&Vv–öâ†Æöv–6ÂæÖ6²‚’’çG&ç6ÆFVB†öfg6WE÷‚Âöfg6WE÷’¢6VÆbå÷&VÖVÖ&W%ö66†Uö—FVÒ‡6VÆbåöÖ6µö66†RÂ66†Uö¶W’Â&Vv–öâ¢6VÆbç6WDÖ6²‡&Vv–öâçG&ç6ÆFVB‡6VÆbæÆ&VÂç‚‚’Â6VÆbæÆ&VÂç’‚’’ ¢FVböVffV7E÷F–6²‡6VÆb’ÓâæöæS ¢"".hêŽ‹ù¾ŠŽh8^zÊnXû~y¨N‹Û¾[êîkÈ.kZîXªŽyK¾[›nX‹~ikYŽh‰[Š~8"""  ¢–bVÖ÷F–öåöVffV7EöæÖR‡6VÆbç7FFR’—2æöæS ¢6VÆbæVffV7E÷F–ÖW"ç7F÷‚¢&WGW&à¢6VÆbåöVffV7E÷†6RÒ‡6VÆbåöVffV7E÷†6R²’R ¢6VÆbå÷&Vg&W6…÷—†Ö‚ ¢FVböæ–ÖF–öå÷F–6²‡6VÆb’ÓâæöæS ¢"".hêŽ‹ù¾[ê®xêþh‰nXÙ^jÊ‹ùî{ºÞ[Š~ûÈÎ[›nYÊŽXøÞY	‹ø~kŠ{¹>iÙþYîhš~ŠÎY¹î‹>8"""  ¢F—7Æ•÷7FFRÒ6VÆbç7FFP¢g&ÖW2Ò6VÆbå÷—†Ö5¶F—7Æ•÷7FFUÐ¢–bÆVâ†g&ÖW2’ÃÒ ¢&WGW&à¢–b6VÆbåöæ–ÖF–öåöF—&V7F–öâÂ ¢6VÆbåög&ÖUö–æFW‚ÒÖ‚ƒÂ6VÆbåög&ÖUö–æFW‚Ò¢–b6VÆbåög&ÖUö–æFW‚ÓÒ ¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F÷‚¢6ÆÆ&6²Ò6VÆbåöæ–ÖF–öåöf–æ—6†V@¢6VÆbåöæ–ÖF–öåöf–æ—6†VBÒæöæP¢–b6ÆÆ&6²—2æ÷BæöæS ¢F–ÖW"ç6–ævÆU6†÷BƒÂ6ÆÆ&6²¢VÆ–bF—7Æ•÷7FFR–â…WE7FFRå4•BÂWE7FFRå4ÄTUÂWE7FFRå4TÄd”R“ ¢6VÆbåög&ÖUö–æFW‚ÒÖ–â‡6VÆbåög&ÖUö–æFW‚²ÂÆVâ†g&ÖW2’Ò¢–b6VÆbåög&ÖUö–æFW‚ÓÒÆVâ†g&ÖW2’Ò ¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F÷‚¢VÇ6S ¢6VÆbåög&ÖUö–æFW‚Ò‡6VÆbåög&ÖUö–æFW‚²’RÆVâ†g&ÖW2¢6VÆbåöÇ•ög&ÖUööfg6WB†F—7Æ•÷7FFR¢6VÆbå÷&Vg&W6…÷—†Ö‚¢–b6VÆbææ–ÖF–öå÷F–ÖW"æ—47F—fR‚“ ¢6VÆbææ–ÖF–öå÷F–ÖW"ç6WD–çFW'fÂ€¢6VÆbåög&ÖUö–çFW'fÂ†F—7Æ•÷7FFRÂ6VÆbåög&ÖUö–æFW‚¢ ¢FVböÇ•ög&ÖUööfg6WB‡6VÆbÂF—7Æ•÷7FFS¢WE7FFR’ÓâæöæS ¢"".hÈž‹yjÚ^‰ÞˆI®8Xè¾{ÊžY(Îˆ[îz›®™‹një^YÎjÚ^kN[›>Y¹î[ËžKˆî‹ª¾KÙ>‹[~KÈþ8"""  ¢–bF—7Æ•÷7FFR—2WE7FFRåtÄ³ ¢…ööfg6WG2ÒƒbÂbÂbÂbÂbÂbÂbÂb¢•ööfg6WG2Òƒ2ÂRÂ"ÂÂ2ÂRÂ"Â¢†6RÒ6VÆbåög&ÖUö–æFW‚RÆVâ‡•ööfg6WG2¢6VÆbæÆ&VÂæÖ÷fR‡…ööfg6WG5·†6UÒÂ•ööfg6WG5·†6UÒ ¢FVböÖ÷fVÖVçE÷7VVE÷—†VÇ5÷W%÷6V6öæB‡6VÆb’ÓâfÆöC ¢"".hÈžiz~˜XÞ{Úîy¨N[›>YØ~˜	þ[ªnŠêzé~h.Zé®kN[›>˜	þ[ªn8"""  ¢&WGW&â€¢6VÆbç6WGF–æw2æÖ÷fVÖVçE÷7FW ¢¢ã ¢ò6VÆbç6WGF–æw2æÖ÷fVÖVçEö–çFW'fÅö×0¢ ¢FVb6†÷tWfVçB‡6VÆbÂWfVçC¢6†÷tWfVçB’ÓâæöæS ¢"".z©~Xú>šinjÊi‹îzK®i{n‹ùîhê^‹zŽ[þKúXû~[›nhÈž[Ù>X˜ÒE’{¹ŽX‹n8"""  ¢7WW"‚’ç6†÷tWfVçB†WfVçB¢†æFÆRÒ6VÆbçv–æF÷t†æFÆR‚¢–b†æFÆR—2æ÷BæöæRæBæ÷B6VÆbå÷67&VVåö6†ævUö6öææV7FVC ¢†æFÆRç67&VVä6†ævVBæ6öææV7B‡6VÆbåööå÷67&VVåö6†ævVB¢6VÆbå÷67&VVåö6†ævUö6öææV7FVBÒG'VP¢6VÆbåööå÷67&VVåö6†ævVB††æFÆRç67&VVâ‚’–b†æFÆRVÇ6RæöæR¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæS ¢–b6VÆbå÷&W7F÷&Uö6ö×7E÷FöF÷5ögFW%÷6†÷s ¢6VÆbåö6ö×7E÷FöFõ÷æVÂç6†÷r‚¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂæ—5f—6–&ÆR‚“ ¢6VÆbå÷÷6—F–öåö6ö×7E÷FöF÷2‚¢F–ÖW"ç6–ævÆU6†÷BƒÂ6VÆbåöVç7W&Uööå÷F÷ ¢FVböVç7W&Uööå÷F÷‡6VÆb’ÓâæöæS ¢"".h.ZHÞXéþyIþz©~Xú>[.{ª~ûÈÎKØn{¹ÞKˆÞkøkK¾z©~Xú>h‰nZK®‹[[Ù>X˜Þ‹é>XZ^xJnx+ž8"""  ¢–bæ÷B6VÆbæ—5f—6–&ÆR‚“ ¢&WGW&à¢–b÷2ææÖRÓÒ&çB# ¢G'“ ¢–×÷'B7G—W0 ¢W6W#3"Ò7G—W2çv–æFÆÂçW6W#3 ¢‡væBÒ–çB‡6VÆbçv–ä–B‚’¢vWE÷7G–ÆRÒvWFGG"‡W6W#3"Â$vWEv–æF÷tÆöæuG%r"ÂW6W#3"ävWEv–æF÷tÆöæur¢6WE÷7G–ÆRÒvWFGG"‡W6W#3"Â%6WEv–æF÷tÆöæuG%r"ÂW6W#3"å6WEv–æF÷tÆöæur¢W‡FVæFVBÒ–çB†vWE÷7G–ÆR†‡væBÂÓ#’¢W‡FVæFVBÃÒƒƒÂƒƒ2u5ôU…õDôôÅt”äDõrÂu5ôU…ôäô5D•dDP¢6WE÷7G–ÆR†‡væBÂÓ#ÂW‡FVæFVB¢–ç6W'EögFW"ÒÓ–b6VÆbç6WGF–æw2æÇv—5ööå÷F÷VÇ6RÓ ¢W6W#3"å6WEv–æF÷u÷2€¢‡væBÀ¢–ç6W'EögFW"À¢À¢À¢À¢À¢ƒÂƒ"ÂƒÂƒCÀ¢¢&WGW&à¢W†6WB„GG&–'WFTW'&÷"Âõ4W'&÷"ÂfÇVTW'&÷"“ ¢70¢–b7—2çÆFf÷&ÒÓÒ&F'v–â# ¢6VÆbåöÇ•öÖ6÷5÷v–æF÷uö&V†f–÷"‚¢2X[nK¹n[›>XûyKv–æF÷u7F—4öåF÷†–çB‹Iþ‹J>8.‹ùž˜xÎKˆÞˆ;Þ‹>yJ‚&—6Uò‚žûÈÀ¢2Y
+nX‰’Ö4õ2þ˜:ŽXˆbÆ–çW‚jÎ™Ú.KÉ®YÊŽyJŽh‹~h™>ZÙ~i{nXˆ~hÚ.[Ù>X˜Þ[©NyJŽ8  ¢FVböÇ•öÖ6÷5÷v–æF÷uö&V†f–÷"‡6VÆb’ÓâæöæS ¢"".KºRå5v–æF÷rkZîXªŽ[.{ª~‹zŽz›®™{Ni‹îzK®ûÉ¾KùÞyYžK«®xšžz©~Xú>›Êj~K©.XªŽK‰NKˆÞkøkK¾8"""  ¢–bÆ–6F–öâçÆFf÷&ÔæÖR‚’æ66VföÆB‚’–â²&öfg67&VVâ"Â&Ö–æ–ÖÂ'Ó ¢&WGW&à¢G'“ ¢–×÷'B7G—W0 ¢ö&¦2Ò7G—W2æ6FÆÂäÆöDÆ–'&'’‚"÷W7"öÆ–"öÆ–&ö&¦2äæG–Æ–""¢ö&¦2ç6VÅ÷&Vv—7FW$æÖRç&W7G—RÒ7G—W2æ5÷fö–E÷ ¢ö&¦2ç6VÅ÷&Vv—7FW$æÖRæ&wG—W2Ò¶7G—W2æ5ö6†%÷Ð¢ö&¦2æö&¦5ö×6u6VæBç&W7G—RÒ7G—W2æ5÷fö–E÷ ¢ö&¦2æö&¦5ö×6u6VæBæ&wG—W2Ò¶7G—W2æ5÷fö–E÷Â7G—W2æ5÷fö–E÷Ð¢f–WrÒ7G—W2æ5÷fö–E÷†–çB‡6VÆbçv–ä–B‚’’¢v–æF÷rÒö&¦2æö&¦5ö×6u6VæB‡f–WrÂö&¦2ç6VÅ÷&Vv—7FW$æÖR†"'v–æF÷r"’¢–bæ÷Bv–æF÷s ¢&WGW&à¢6VæEö–çFVvW"Òö&¦2æö&¦5ö×6u6Væ@¢6VæEö–çFVvW"ç&W7G—RÒæöæP¢6VæEö–çFVvW"æ&wG—W2Ò¶7G—W2æ5÷fö–E÷Â7G—W2æ5÷fö–E÷Â7G—W2æ5öÆöævÆöæuÐ¢ÆWfVÂÒ2–b6VÆbç6WGF–æw2æÇv—5ööå÷F÷VÇ6R2å4fÆöF–æuv–æF÷tÆWfVÂòæ÷&ÖÀ¢6VæEö–çFVvW"‡v–æF÷rÂö&¦2ç6VÅ÷&Vv—7FW$æÖR†"'6WDÆWfVÃ¢"’ÂÆWfVÂ¢&V†f–÷"ÒƒÃÂ’ÂƒÃÂ‚’–b6VÆbç6WGF–æw2æÇv—5ööå÷F÷VÇ6R ¢6VæEö–çFVvW"€¢v–æF÷rÀ¢ö&¦2ç6VÅ÷&Vv—7FW$æÖR†"'6WD6öÆÆV7F–öä&V†f–÷#¢"’À¢&V†f–÷"À¢¢6VæEö&ööÂÒö&¦2æö&¦5ö×6u6Væ@¢6VæEö&ööÂç&W7G—RÒæöæP¢6VæEö&ööÂæ&wG—W2Ò¶7G—W2æ5÷fö–E÷Â7G—W2æ5÷fö–E÷Â7G—W2æ5ö&ööÅÐ¢6VæEö&ööÂ‡v–æF÷rÂö&¦2ç6VÅ÷&Vv—7FW$æÖR†"'6WD†–FW4öäFV7F—fFS¢"’ÂfÇ6R¢6VæEö&ööÂ‡v–æF÷rÂö&¦2ç6VÅ÷&Vv—7FW$æÖR†"'6WD–væ÷&W4Ö÷W6TWfVçG3¢"’ÂfÇ6R¢W†6WB„GG&–'WFTW'&÷"Âõ4W'&÷"ÂG—TW'&÷"ÂfÇVTW'&÷"“ ¢&WGW&à ¢FVb6WEöÇv—5ööå÷F÷‡6VÆbÂVæ&ÆVC¢&ööÂÂ¢ÂW'6—7C¢&ööÂÒG'VR’ÓâæöæS ¢"".YÊ‚Zêxšž[Èþ{ÚîšnKˆîišî˜	®jÎ™Ú.jŠ[Èþ™{NXˆ~hÚ.ûÈÎi‹îzK®i{nKˆÞhª.xJnx+ž8"""  ¢Væ&ÆVBÒ&ööÂ†Væ&ÆVB¢÷6—F–öâÒ6VÆbç÷2‚¢v5÷f—6–&ÆRÒ6VÆbæ—5f—6–&ÆR‚¢'V&&ÆU÷7FFW2Ò€¢‡6VÆbç†÷Fõö'V&&ÆRÂ6VÆbç†÷Fõö'V&&ÆRæ—5f—6–&ÆR‚’Â6VÆbç†÷Fõö'V&&ÆRç÷2‚’’À¢‡6VÆbç7VV6…ö'V&&ÆRÂ6VÆbç7VV6…ö'V&&ÆRæ—5f—6–&ÆR‚’Â6VÆbç7VV6…ö'V&&ÆRç÷2‚’’À¢¢6VÆbç6WGF–æw2æÇv—5ööå÷F÷ÒVæ&ÆV@¢6VÆbç6WEv–æF÷tfÆw2‡6VÆbå÷WE÷v–æF÷uöfÆw2‚’¢6VÆbæÖ÷fR‡÷6—F–öâ¢f÷"'V&&ÆRÂf—6–&ÆRÂ'V&&ÆU÷÷6—F–öâ–â'V&&ÆU÷7FFW3 ¢'V&&ÆRç6WEv–æF÷tfÆw2‡6VÆbåöÖ&–VçE÷v–æF÷uöfÆw2‚’¢'V&&ÆRæÖ÷fR†'V&&ÆU÷÷6—F–öâ¢–bf—6–&ÆS ¢'V&&ÆRç6†÷r‚¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæS ¢6VÆbåö6ö×7E÷FöFõ÷æVÂç6WEö6ö×æ–öå÷F÷Ö÷7B†Væ&ÆVB¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂæ—5f—6–&ÆR‚“ ¢6VÆbå÷÷6—F–öåö6ö×7E÷FöF÷2‚¢–bv5÷f—6–&ÆS ¢6VÆbç6†÷r‚¢F&vWE÷÷6—F–öâÒö–çB‡÷6—F–öâ ¢FVb&W7F÷&U÷÷6—F–öåögFW%÷6†÷r‚’ÓâæöæS ¢2Ö4õ2Ö’&÷VæBg&ÖVÆW72v–æF÷r'’öæR—†VÂv†–ÆR&V7&VF–æp¢2—G2æF—fR†æFÆRâ&W7F÷&RF†RW6W"×f—6–&ÆR÷6—F–öâgFW'v&G2à¢6VÆbæÖ÷fR‡F&vWE÷÷6—F–öâ¢6VÆbåöVç7W&Uööå÷F÷‚ ¢F–ÖW"ç6–ævÆU6†÷BƒÂ&W7F÷&U÷÷6—F–öåögFW%÷6†÷r¢–bW'6—7C ¢6fU÷6WGF–æw2‡6VÆbç6WGF–æw2¢6VÆbç6†÷u÷7VV6‚€¢.Zx¾{¸Ž{Úîšn[{.[ÈY
+þûÈÎXZÞjù¾KÉ®{º~{ºÞ[è^YÊŽX[nK¹nz©~Xú>Kˆ®ikž8" ¢–bVæ&ÆV@¢VÇ6R.[{.Xˆ~hÚ.K‹®jÎ™Ú.jŠ[ÈþûÈÎXZÞjù¾KÉ®yYžYÊŽišî˜	®z©~Xú>[.{ª~8""À¢3cÀ¢¢6VÆbæÇv—5ööå÷F÷ö6†ævVBæVÖ—B†Væ&ÆVB ¢FVbÖ÷fTWfVçB‡6VÆbÂWfVçC¢Ö÷fTWfVçB’ÓâæöæS ¢"".K«®xšžz{¾XªŽi{nŠêžK¸ÞYÊŽi‹îzK®y¨Nih~ZÙ~k	Nk:‹yþ™¨þXúþŠx‹Úî[¹>8"""  ¢7WW"‚’æÖ÷fTWfVçB†WfVçB¢–b†6GG"‡6VÆbÂ'7VV6…ö'V&&ÆR"’æB6VÆbç7VV6…ö'V&&ÆRæ—5f—6–&ÆR‚“ ¢6VÆbå÷÷6—F–öå÷7VV6…ö'V&&ÆR‚¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæRæB6VÆbåö6ö×7E÷FöFõ÷æVÂæ—5f—6–&ÆR‚“ ¢6VÆbå÷÷6—F–öåö6ö×7E÷FöF÷2‚ ¢FVb†–FTWfVçB‡6VÆbÂWfVçC¢†–FTWfVçB’ÓâæöæS ¢"".™©‰xþZêxšži{nYÎjÚ^™©‰xþxZ~x˜~Y(Îih~ZÙ~k	Nk:8"""  ¢6VÆbç†÷Fõö'V&&ÆRæ†–FR‚¢6VÆbç7VV6…ö'V&&ÆRæ†–FR‚¢6VÆbçv÷&µö6öçG&öÇ2æ†–FR‚¢6VÆbçV–6µ÷æVÂæ†–FR‚¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæS ¢6VÆbå÷&W7F÷&Uö6ö×7E÷FöF÷5ögFW%÷6†÷rÒ6VÆbåö6ö×7E÷FöFõ÷æVÂæ—5f—6–&ÆR‚¢6VÆbåö6ö×7E÷FöFõ÷æVÂæ†–FR‚¢7WW"‚’æ†–FTWfVçB†WfVçB ¢FVb6Æ÷6TWfVçB‡6VÆbÂWfVçC¢6Æ÷6TWfVçB’ÓâæöæS ¢"".X[>™zÞZêxšži{nKùÞZÙŽŠêi{n[›nXÎjÚ"vVçN8™û>K™hê~X‹nXø®xºÎz¸¾k	Nk:z©~Xú>8"""  ¢6VÆbç6‡WFF÷vå÷v÷&µ÷F–ÖW"‚¢6VÆbæ6†EöÖævW"ç6‡WFF÷vâ‚¢6VÆbæ×W6–5ö6öçG&öÆÆW"ç6‡WFF÷vâ‚¢6VÆbç†÷Fõö'V&&ÆRæ6Æ÷6R‚¢6VÆbç7VV6…ö'V&&ÆRæ6Æ÷6R‚¢6VÆbåö'VFG•÷f—6—E÷v–æF÷ræ6Æ÷6R‚¢–b6VÆbå÷FöF•öæ÷FU÷v–æF÷r—2æ÷BæöæS ¢6VÆbå÷FöF•öæ÷FU÷v–æF÷ræ6Æ÷6R‚¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæS ¢6VÆbåö6ö×7E÷FöFõ÷æVÂæ6Æ÷6R‚¢–b6VÆbå÷F–ÖUöÖVÖ÷'•÷v–æF÷r—2æ÷BæöæS ¢6VÆbå÷F–ÖUöÖVÖ÷'•÷v–æF÷ræ6Æ÷6R‚¢–b6VÆbå÷6ö6–Å÷F‡&VB—2æ÷BæöæRæB6VÆbå÷6ö6–Å÷F‡&VBæ—5'Vææ–ær‚“ ¢6VÆbå÷6ö6–Å÷F‡&VBçv—Bƒ#S¢–b6VÆbåöÖVF–÷Æ–W"—2æ÷BæöæS ¢6VÆbåöÖVF–÷Æ–W"ç7F÷‚¢7WW"‚’æ6Æ÷6TWfVçB†WfVçB ¢FVbööå÷67&VVåö6†ævVB‡6VÆbÂ67&VVã¢67&VVâÂæöæR’ÓâæöæS ¢"".Xˆ~hÚ.yºîj~[þ[™^Yî˜xÞ‹ùâE’KúXû~[›n[»n‹ùþX‹~ik{JiÙ8"""  ¢–b6VÆbåö6öææV7FVE÷67&VVâ—2æ÷BæöæS ¢G'“ ¢6VÆbåö6öææV7FVE÷67&VVâæÆöv–6ÄF÷G5W$–æ6„6†ævVBæF—66öææV7B€¢6VÆbåööåöG•ö6†ævV@¢¢W†6WB…'VçF–ÖTW'&÷"ÂG—TW'&÷"“ ¢70¢6VÆbåö6öææV7FVE÷67&VVâÒ67&VVà¢–b67&VVâ—2æ÷BæöæS ¢67&VVâæÆöv–6ÄF÷G5W$–æ6„6†ævVBæ6öææV7B‡6VÆbåööåöG•ö6†ævVB¢6VÆbå÷&VæFW%ö66†Ræ6ÆV"‚¢F–ÖW"ç6–ævÆU6†÷BƒÂ6VÆbå÷&Vg&W6…÷—†Ö¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæRæB6VÆbåö6ö×7E÷FöFõ÷æVÂæ—5f—6–&ÆR‚“ ¢F–ÖW"ç6–ævÆU6†÷BƒÂ6VÆbå÷÷6—F–öåö6ö×7E÷FöF÷2 ¢FVbööåöG•ö6†ævVB‡6VÆbÂöG“¢fÆöB’ÓâæöæS ¢"".i‹îzK®YšŽ{ÊžiKîXùyIþXùŽXÉni{nX‹~ik[Ù>X˜Þ[Š~8"""  ¢6VÆbå÷&VæFW%ö66†Ræ6ÆV"‚¢F–ÖW"ç6–ævÆU6†÷BƒÂ6VÆbå÷&Vg&W6…÷—†Ö¢–b6VÆbåö6ö×7E÷FöFõ÷æVÂ—2æ÷BæöæRæB6VÆbåö6ö×7E÷FöFõ÷æVÂæ—5f—6–&ÆR‚“ ¢F–ÖW"ç6–ævÆU6†÷BƒÂ6VÆbå÷÷6—F–öåö6ö×7E÷FöF÷2 ¢FVb÷66†VGVÆR‡6VÆbÂFV6—6–öã¢7FFTFV6—6–öâ’ÓâæöæS ¢"".[©NyJŽx«nhXk>zÙn[›nZèžhé.Kˆ¾KˆjÊx«nhXˆ~hÚ.8"""  ¢6VÆbç6WE÷7FFR†FV6—6–öâç7FFR¢–bæ÷B6VÆbæG&vv–æs ¢6VÆbç7FFU÷F–ÖW"ç7F'B†FV6—6–öâæGW&F–öåö×2 ¢FVb÷7FFU÷F–ÖV÷WB‡6VÆb’ÓâæöæS ¢"".ZHNynˆz®K‹¾x«nhX‹iÉþûÈÎ[›nhÈžizK©.XªŽi{n™[þ˜	{ª~‹ù¾XZ^YÙKˆ¾KˆîyÚyÊ8"""  ¢–b6VÆbæG&vv–æs ¢&WGW&à¢6VÆbæÖööBç75÷F–ÖR‡6VÆbç7FFR¢–æ7F—fUö×2Ò6VÆbåö–æ7F—fUö×2‚¢–b6VÆbå÷6ÆVWögFW%÷6—BæB6VÆbç7FFR—2WE7FFRå4•C ¢6VÆbå÷6ÆVWögFW%÷6—BÒfÇ6P¢6VÆbå÷66†VGVÆR‡6VÆbåöFV6—6–öâ…WE7FFRå4ÄTUÂƒ’¢&WGW&à¢–b–æ7F—fUö×2ãÒ6VÆbç6WGF–æw2æ–æ7F—fU÷6ÆVWö×3 ¢–b6VÆbç7FFR—2WE7FFRå4ÄTU ¢6VÆbç7FFU÷F–ÖW"ç7F'Bƒ¢&WGW&à¢–b6VÆbç7FFR—2WE7FFRå4•C ¢6VÆbå÷66†VGVÆR‡6VÆbåöFV6—6–öâ…WE7FFRå4ÄTUÂ’¢&WGW&à¢6VÆbå÷66†VGVÆU÷6ÆVW÷f–÷6—B‚¢&WGW&à¢–b–æ7F—fUö×2ãÒ6VÆbç6WGF–æw2æ–æ7F—fU÷6—Eö×3 ¢–b6VÆbç7FFR—2WE7FFRå4•C ¢&VÖ–æ–ærÒ6VÆbç6WGF–æw2æ–æ7F—fU÷6ÆVWö×2Ò–æ7F—fUö×0¢6VÆbç7FFU÷F–ÖW"ç7F'B†Ö‚ƒSÂÖ–âƒSÂ&VÖ–æ–ær’’¢&WGW&à¢6VÆbå÷66†VGVÆR€¢6VÆbåöFV6—6–öâ€¢WE7FFRå4•BÀ¢Ö–âƒSÂ6VÆbç6WGF–æw2æ–æ7F—fU÷6ÆVWö×2Ò–æ7F—fUö×2’À¢¢¢&WGW&à¢–b6VÆbç7FFR–â…WE7FFRå4•BÂWE7FFRå4ÄTU“ ¢6VÆbå÷&WfW'6U÷G&ç6—F–öå÷Fõö–FÆR‚¢&WGW&à¢FV6—6–öâÒ6VÆbæ&V†f–÷"ææW‡EöWFöæöÖ÷W5÷7FFR€¢6VÆbç7FFRÀ¢ÆÆ÷u÷vÆ³×6VÆbå÷vÆµöÆÆ÷vVB‚’À¢¢–bFV6—6–öâç7FFR—2WE7FFRå4ÄTU ¢6VÆbå÷66†VGVÆU÷6ÆVW÷f–÷6—B‚¢VÇ6S ¢6VÆbå÷66†VGVÆR†FV6—6–öâ ¢7FF–6ÖWF†ö@¢FVböFV6—6–öâ‡7FFS¢WE7FFRÂGW&F–öåö×3¢–çB’Óâ7FFTFV6—6–öã ¢"".X‰¾[»®z©~Xú>Xh^˜:Ž‹ø~kŠKÛþyJŽy¨NzîZé®i{n™[þx«nhXk>zÙn8"""  ¢&WGW&â7FFTFV6—6–öâ‡7FFRÂÖ‚ƒSÂGW&F–öåö×2’ ¢FVbö–æ7F—fUö×2‡6VÆb’Óâ–çC ¢"".‹ùNY¹î‹yÞzk¾iÈ‹ùKˆjÊ›Êj~h‰nˆùÎXÙ^K©.XªŽy¨Njú¾zy.i[8"""  ¢&WGW&âÖ‚ƒÂ&÷VæB‚‡F–ÖRæÖöæ÷Föæ–2‚’Ò6VÆbåöÆ7E÷W6W%ö–çFW&7F–öâ’¢’ ¢FVb÷&V6÷&E÷W6W%ö–çFW&7F–öâ‡6VÆb’ÓâæöæS ¢"".˜xÞ{ÚîizK©.XªŽŠêi{nûÈÎ[›nXùnkhŽ[	®iÊ®[ÈZx¾y¨Nˆz®XªŽXZ^yÚhHþY»î8"""  ¢6VÆbåöÆ7E÷W6W%ö–çFW&7F–öâÒF–ÖRæÖöæ÷Föæ–2‚¢6VÆbå÷6ÆVWögFW%÷6—BÒfÇ6P ¢FVb÷&W6WEö–FÆUöW—6öFR‡6VÆb’ÓâæöæS ¢""$f÷&vWBF†R7W'&VçB–FÆRW—6öFRæB6Æ÷6R—G2&WW6&ÆR&ö×Bâ""  ¢6VÆbåöWFõ÷W6VEöf÷%ö–FÆRÒfÇ6P¢6VÆbåö–FÆU÷&ö×E÷VæF–ærÒfÇ6P¢6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfVBÒfÇ6P¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Ò ¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2Ò ¢6VÆbåö–FÆU÷W6U÷7F'FVEöBÒæöæP¢–b†6GG"‡6VÆbÂ&–FÆU÷&V6÷fW'•÷F–ÖW""“ ¢6VÆbæ–FÆU÷&V6÷fW'•÷F–ÖW"ç7F÷‚¢–b6VÆbåö–FÆU÷&V6÷fW'•öF–Æör—2æ÷BæöæS ¢6VÆbåö–FÆU÷&V6÷fW'•öF–Æöræ†–FR‚ ¢FVbö6†V6µö–çWEö–FÆR‡6VÆb’ÓâæöæS ¢""$WFöÖF–6ÆÇ’W6Rfö7W2gFW"7W7F–æVB¶W–&ö&BöÖ÷W6R–FÆRà ¢W6R—2FVÆ–&W&FVÇ’æ÷BWFò×&W7VÖVC¢W6W"Ö’†fR7v—F6†VBFð¢&VF–ærÂÖVWF–ærÂ÷"æ÷F†W"F6²âF†W’6â&W7VÖRW‡Æ–6—FÇ’g&öÐ¢F†RWB'V&&ÆR÷"F†R7GVG’×&ööÒvRÂv†–ÆRF†R&ööÒ&V6V—fW2F†P¢æ÷&ÖÂ&W6Væ6RWFFRöâF†RæW‡B6ö6–Â†V'F&VBà¢""  ¢–bæ÷BvWFGG"‡6VÆbç6WGF–æw2Â&WFõ÷W6Uööåö–FÆR"ÂG'VR“ ¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Ò ¢&WGW&à¢F‡&W6†öÆBÒÖ‚ƒ3Â–çB†vWFGG"‡6VÆbç6WGF–æw2Â&–FÆU÷W6U÷6V6öæG2"Â3’’¢–FÆU÷6V6öæG2ÒÖ‚ƒãÂfÆöB‡7—7FVÕö–FÆU÷6V6öæG2‚’’¢–b6VÆbåöWFõ÷W6VEöf÷%ö–FÆS ¢2–FÆU÷6V6öæG6—2öæÇ’F†Rõ26÷VçFW"BF†—26×ÆRâF†P¢2&Wf–÷W2–×ÆVÖVçFF–öâ6÷–VBF†RF‡&W6†öÆB7&÷76–ær‡W7VÆÇ¢236V6öæG2’–çFò÷VæF–æuö–FÆU÷6V6öæG6æBæWfW"Gfæ6VB—BÀ¢26òW6W"v†òv2v’f÷"CÖ–çWFW2v27F–ÆÂ6¶VB&÷W@¢2#RÖ–çWFW2"â¶VWF†RW—6öFR7F'BF–ÖR2F†R6÷W&6RöbG'WF€¢2æB&Vg&W6‚F†RF—7Æ–VBGW&F–öâöâWfW'’R×6V6öæB6×ÆRà¢–b6VÆbåö–FÆU÷W6U÷7F'FVEöB—2æ÷BæöæS ¢VÆ6VE÷6V6öæG2ÒÖ‚€¢À¢–çB€¢€¢FFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚¢Ò6VÆbåö–FÆU÷W6U÷7F'FVEö@¢’çF÷FÅ÷6V6öæG2‚¢’À¢¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2ÒÖ‚€¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2À¢VÆ6VE÷6V6öæG2À¢¢2v†–ÆRF†Rõ27F–ÆÂ&W÷'G2–FÆRÂ&WF–âF†RÆ&vW"öbF†RæF—fP¢2&VF–æræBF†RvÆÂÖ6Æö6²W—6öFRGW&F–öââF†—2Ç6ò†æFÆW0¢2ÆFf÷&×2v†÷6R–FÆR6÷VçFW"†2w&&÷VæB÷"6ö'6R6×ÆRà¢–b–FÆU÷6V6öæG2ãÒF‡&W6†öÆC ¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2ÒÖ‚€¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2À¢–çB†–FÆU÷6V6öæG2’À¢¢2F†Rõ2–FÆR6÷VçFW"G&÷226ööâ2F†RW6W"&WGW&ç2âFVÆ¢2F†RVW7F–öâFòF†RWfVçBÆö÷6òF†Rf—'7B–çWB—2æ÷@¢2&Æö6¶VB'’ÖöFÂF–Æörâöæ6RF†—2W—6öFR—2&W6öÇfVBÂFð¢2æ÷B6²v–âVçF–ÂF†RW6W"W‡Æ–6—FÇ’7F'G2æWr6W76–öâà¢–b€¢æ÷B6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfV@¢æB–FÆU÷6V6öæG2ÂÖ‚ƒÂF‡&W6†öÆBÒ¢æBæ÷B6VÆbåö–FÆU÷&ö×E÷VæF–æp¢“ ¢6VÆbåö–FÆU÷&ö×E÷VæF–ærÒG'VP¢6VÆbæ–FÆU÷&V6÷fW'•÷F–ÖW"ç7F'Bƒ¢&WGW&à¢–bæ÷B6VÆbçv÷&µ÷F–ÖW"æ—5÷'Vææ–æs ¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Ò ¢&WGW&à¢–b–FÆU÷6V6öæG2ÂF‡&W6†öÆC ¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Ò ¢&WGW&à¢2&WV—&RGvò6öç6V7WF—fRõ26×ÆW2âF†—2f–ÇFW'26–ævÆR&@¢2æF—fR&VF–ærv—F†÷WBFF–æræ÷F†W"6WGF–ær÷"&V6÷&F–ær–çWBà¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2³Ò¢–b6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Â# ¢&WGW&à¢6VÆbåö–FÆUö&÷fU÷F‡&W6†öÆE÷6×ÆW2Ò ¢6VÆbåöWFõ÷W6VEöf÷%ö–FÆRÒG'VP¢6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfVBÒfÇ6P¢6VÆbåö–FÆU÷W6U÷7F'FVEöBÒFFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚’ÒF–ÖVFVÇF‡6V6öæG3Ö–çB†–FÆU÷6V6öæG2’¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2ÒÖ‚ƒÂ–çB†–FÆU÷6V6öæG2’¢6VÆbåöfö7W5÷VÆ—G•÷G&6¶W"ææ÷FUöv’‚¢6VÆbçW6U÷v÷&µ÷F–ÖW"‡&V6öãÒ&–FÆR" ¢FVbö6µö–FÆU÷&V6÷fW'’‡6VÆb’ÓâæöæS ¢""%6†÷röæR&WW6&ÆRFV6—6–öâv–æF÷rf÷"F†R7W'&VçB'6Væ6Râ""  ¢6VÆbåö–FÆU÷&ö×E÷VæF–ærÒfÇ6P¢–bæ÷B6VÆbåöWFõ÷W6VEöf÷%ö–FÆR÷"6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfVC ¢&WGW&à¢6V6öæG2ÒÖ‚ƒÂ–çB‡6VÆbå÷VæF–æuö–FÆU÷6V6öæG2’¢–b6VÆbåö–FÆU÷&V6÷fW'•öF–Æör—2æöæS ¢6VÆbåö–FÆU÷&V6÷fW'•öF–ÆörÒ–FÆU&V6÷fW'”F–Æör‡6VÆb¢6VÆbåö–FÆU÷&V6÷fW'•öF–ÆöræFV6—6–öå÷&WVW7FVBæ6öææV7B€¢6VÆbå÷&W6öÇfUö–FÆU÷&V6÷fW'¢¢6VÆbåö–FÆU÷&V6÷fW'•öF–Æörç6WEöv•÷6V6öæG2‡6V6öæG2¢6VÆbåö–FÆU÷&V6÷fW'•öF–Æörç6†÷r‚¢6VÆbåö–FÆU÷&V6÷fW'•öF–Æörç&—6Uò‚¢6VÆbåö–FÆU÷&V6÷fW'•öF–Æöræ7F—fFUv–æF÷r‚ ¢FVb÷&W6öÇfUö–FÆU÷&V6÷fW'’‡6VÆbÂFV6—6–öã¢7G"’ÓâæöæS ¢""%&W6öÇfRF†RW—6öFRöæ6S²ÆFW"–FÆR6×ÆW26ææ÷B&V÷Vâ—Bâ""  ¢–bæ÷B6VÆbåöWFõ÷W6VEöf÷%ö–FÆR÷"6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfVC ¢&WGW&à¢6V6öæG2ÒÖ‚ƒÂ–çB‡6VÆbå÷VæF–æuö–FÆU÷6V6öæG2’¢–bFV6—6–öâÓÒ&fö7W2# ¢2F†RF–ÖW"&VÖ–ç2W6VBVçF–ÂF†RW6W"W‡Æ–6—FÇ’7F'G2F†P¢2æW‡B&÷VæBÂ'WBF†R6†ö–6R—2&VfÆV7FVB–âÆö6Â7FF—7F–72à¢6VÆbæfö7W5öæÇ—F–72ç&V6÷&E÷6W76–öâ€¢6V6öæG2À¢7F'FVEöC×6VÆbåö–FÆU÷W6U÷7F'FVEöB÷"FFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚’À¢6ö×ÆWFVCÔfÇ6RÀ¢v•ö6÷VçCÓÀ¢F6³×7G"‚‡6VÆbæfö7W5öæÇ—F–72æ7W'&VçE÷F6²‚’÷"·Ò’ævWB‚'F—FÆR"Â""’’À¢¢6VÆbç6†÷u÷7VV6‚‚.Z[ÞûÈÎ‹ùžjë^zk¾[Èi{n™{N[{.ŠêXZ^K‰>k:Ž8.™ÈŠh{º~{ºÞi{nx+ž[ÈZx¾K‰>k:Ž8""ÂS#¢VÆ–bFV6—6–öâÓÒ'&W7B# ¢Ö–çWFW2ÒÖ‚ƒÂ&÷VæB‡6V6öæG2òc’¢6VÆbç6†÷u÷7VV6‚†b.[{.h¨®{ªb¶Ö–çWFW7ÒXˆn™)þŠëK‹®KÉhþûÈÎY¹îiÚ^YîXhÞ[ÈKˆ‹ÚîY
+~8""ÂCƒ¢2F—6Ö—76–ærF†Rv–æF÷r—2–çFVçF–öæÆÇ’6–ÆVçBÂ'WB7F–ÆÂ&W6öÇfW0¢2F†—2W—6öFR6ò—B6ææ÷B7&VFRæ÷F†W"÷WWfW'’fWr6V6öæG2à¢6VÆbåö–FÆU÷&V6÷fW'•÷&W6öÇfVBÒG'VP¢6VÆbå÷VæF–æuö–FÆU÷6V6öæG2Ò ¢6VÆbåö–FÆU÷W6U÷7F'FVEöBÒæöæP ¢FVb÷66†VGVÆU÷6ÆVW÷f–÷6—B‡6VÆb’ÓâæöæS ¢"".XXŽZèÎi[NYÙKˆ¾ûÈÎXhÞK¸îYÙZ{þi*ÞiKîXZ^yÚ[¨þX‰~8"""  ¢6VÆbå÷6ÆVWögFW%÷6—BÒG'VP¢6VÆbå÷66†VGVÆR‡6VÆbåöFV6—6–öâ…WE7FFRå4•BÂC’ ¢FVb÷&WfW'6U÷G&ç6—F–öå÷Fõö–FÆR‡6VÆb’ÓâæöæS ¢"".X	.iKîYÙKˆ¾h‰nyÚyÊ[¨þX‰~ûÈÎZèÎh‰ˆz®xKn‹[~‹ª¾YîXhÞ‹ù¾XZ^[è^iË®8"""  ¢g&ÖW2Ò6VÆbå÷—†Ö5·6VÆbç7FFUÐ¢6VÆbåög&ÖUö–æFW‚ÒÆVâ†g&ÖW2’Ò¢6VÆbåöæ–ÖF–öåöF—&V7F–öâÒÓ¢6VÆbåöæ–ÖF–öåöf–æ—6†VBÒ6VÆbåöf–æ—6…÷&WfW'6U÷G&ç6—F–öà¢6VÆbå÷&Vg&W6…÷—†Ö‚¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F'B‡6VÆbåög&ÖUö–çFW'fÂ‡6VÆbç7FFRÂ6VÆbåög&ÖUö–æFW‚’ ¢FVböf–æ—6…÷&WfW'6U÷G&ç6—F–öâ‡6VÆb’ÓâæöæS ¢"".yÚ˜i.YîXXŽY¹îX‹YÙZ{þûÈÎXhÞX	.iKîYÙKˆ¾[¨þX‰~h.ZHÞz¹žz¸¾[è^iË®8"""  ¢–b6VÆbæG&vv–æs ¢&WGW&à¢–b6VÆbç7FFR—2WE7FFRå4ÄTU ¢6VÆbç7FFRÒWE7FFRå4•@¢6VÆbåög&ÖUö–æFW‚ÒÆVâ‡6VÆbå÷—†Ö5µWE7FFRå4•EÒ’Ò¢6VÆbåöæ–ÖF–öåöF—&V7F–öâÒÓ¢6VÆbåöæ–ÖF–öåöf–æ—6†VBÒ6VÆbåöf–æ—6…÷&WfW'6U÷G&ç6—F–öà¢6VÆbå÷&Vg&W6…÷—†Ö‚¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F'B€¢6VÆbåög&ÖUö–çFW'fÂ…WE7FFRå4•BÂ6VÆbåög&ÖUö–æFW‚¢¢&WGW&à¢6VÆbå÷66†VGVÆR‡6VÆbæ&V†f–÷"æ–æ—F–Åö–FÆR‚’ ¢FVb÷67&VVåövVöÖWG'’‡6VÆb“ ¢"".‹ùNY¹îz©~Xú>KŠÞ[ø>h˜YÊŽ[þ[™^y¨NXúþyJŽXË®Yùþ8"""  ¢6VçFW"Ò6VÆbæg&ÖTvVöÖWG'’‚’æ6VçFW"‚¢67&VVâÒÆ–6F–öâç67&VVäB†6VçFW"’÷"Æ–6F–öâç&–Ö'•67&VVâ‚¢&WGW&â67&VVâæf–Æ&ÆTvVöÖWG'’‚’–b67&VVâVÇ6RæöæP ¢FVbö6öç7G&–æVE÷÷6—F–öâ‡6VÆbÂ÷6—F–öã¢ö–çB’Óâö–çC ¢"".[nyºîj~KØÞ{Úî™™X‹nYÊŽ[Ù>X˜Þh‰nK‹¾[þ[™^XúþyJŽXË®YùþXh^8"""  ¢67&VVâÒÆ–6F–öâç67&VVäB‡÷6—F–öâ’÷"Æ–6F–öâç&–Ö'•67&VVâ‚¢–b67&VVâ—2æöæS ¢&WGW&â÷6—F–öà¢&VÒ67&VVâæf–Æ&ÆTvVöÖWG'’‚¢‚ÒÖ–â†Ö‚‡÷6—F–öâç‚‚’Â&VæÆVgB‚’’Â&Vç&–v‡B‚’Ò6VÆbçv–GF‚‚’²¢’ÒÖ–â†Ö‚‡÷6—F–öâç’‚’Â&VçF÷‚’’Â&Væ&÷GFöÒ‚’Ò6VÆbæ†V–v‡B‚’²¢&WGW&âö–çB‡‚Â’ ¢FVböÖ÷fVÖVçE÷F–6²‡6VÆb’ÓâæöæS ¢"".hÈžZéî™˜^{¸þ‹ø~i{n™{NK©®X8þ{J{JþŠêz{¾XªŽûÈÎ[›nYÊŽ[þ[™^‹ëž{ÉŽ‹ÚÎY	8"""  ¢æ÷rÒF–ÖRæÖöæ÷Föæ–2‚¢VÆ6VBÒÖ–âƒãÂÖ‚ƒãÂæ÷rÒ6VÆbåöÆ7EöÖ÷fVÖVçEöB’¢6VÆbåöÆ7EöÖ÷fVÖVçEöBÒæ÷p¢–b€¢6VÆbçW6V@¢÷"6VÆbæG&vv–æp¢÷"6VÆbå÷GW&å÷W6V@¢÷"6VÆbç7FFR—2æ÷BWE7FFRåtÄ°¢“ ¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB‡6VÆbç‚‚’¢&WGW&à¢&VÒ6VÆbå÷67&VVåövVöÖWG'’‚¢–b&V—2æöæS ¢&WGW&à¢–b'2‡6VÆbåöÖ÷fVÖVçE÷‚Ò6VÆbç‚‚’’âãS ¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB‡6VÆbç‚‚’¢Ö†–×VÒÒ&Vç&–v‡B‚’Ò6VÆbçv–GF‚‚’²¢F—&V7F–öâÒ–b6VÆbæF—&V7F–öâãÒVÇ6RÓ¢†6Uöf7F÷"Ò6VÆbå÷vÆµöÖ÷F–öåöf7F÷'5°¢6VÆbåög&ÖUö–æFW‚RÆVâ‡6VÆbå÷vÆµöÖ÷F–öåöf7F÷'2¢Ð¢6VÆbåöÖ÷fVÖVçE÷‚³ÒF—&V7F–öâ¢€¢6VÆbåöÖ÷fVÖVçE÷7VVE÷—†VÇ5÷W%÷6V6öæB‚¢¢†6Uöf7F÷ ¢¢VÆ6V@¢¢–b6VÆbåöÖ÷fVÖVçE÷‚ÃÒ&VæÆVgB‚“ ¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB†&VæÆVgB‚’¢F—&V7F–öâÒ¢VÆ–b6VÆbåöÖ÷fVÖVçE÷‚ãÒÖ†–×VÓ ¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB†Ö†–×VÒ¢F—&V7F–öâÒÓ¢–bF—&V7F–öâÒ6VÆbæF—&V7F–öã ¢6VÆbæF—&V7F–öâÒF—&V7F–öà¢6VÆbåög&ÖUö–æFW‚Ò ¢6VÆbå÷GW&å÷W6VBÒG'VP¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F÷‚¢6VÆbå÷&Vg&W6…÷—†Ö‚¢6VÆbçGW&å÷F–ÖW"ç7F'B‡6VÆbç6WGF–æw2çGW&å÷W6Uö×2¢6VÆbæÖ÷fR‡&÷VæB‡6VÆbåöÖ÷fVÖVçE÷‚’Â6VÆbç’‚’ ¢FVböf–æ—6…÷GW&â‡6VÆb’ÓâæöæS ¢"".{¹>iÙþ[þ[™^‹ëž{ÉŽy¨NyúÞi¨.XÎšþûÈÎ[›nK¸îzÊÎKˆ[Š~h.ZHÞŠÎ‹[8"""  ¢6VÆbå÷GW&å÷W6VBÒfÇ6P¢6VÆbåöÖ÷fVÖVçE÷‚ÒfÆöB‡6VÆbç‚‚’¢6VÆbåöÆ7EöÖ÷fVÖVçEöBÒF–ÖRæÖöæ÷Föæ–2‚¢2ÖçVÆÇ’&WVW7FVBvÆ²æ–ÖF–öâ6†÷VÆB7F–ÆÂf–æ—6‚—G2GW&ã°¢2F†R6WGF–æröæÇ’6öçG&öÇ2v†WF†W"WFöæöÖ÷W27FFR6VÆV7F–öâ6à¢2VçFW"tÄ²–âF†Rf—'7BÆ6Rà¢–b6VÆbç7FFR—2WE7FFRåtÄ²æBæ÷B6VÆbçW6VBæBæ÷B6VÆbæG&vv–æs ¢6VÆbææ–ÖF–öå÷F–ÖW"ç7F'B€¢6VÆbåög&ÖUö–çFW'fÂ…WE7FFRåtÄ²Â6VÆbåög&ÖUö–æFW‚¢ ¢FVbö&ö%÷F–6²‡6VÆb’ÓâæöæS ¢"".˜	®‹ø~j~zÛî‹Û¾[êîKˆ®Kˆ¾z{¾XªŽ‰
+^˜
+YÎYŽY(ÎŠÎ‹[‹[~KÈþ8"""  ¢–b6VÆbç7FFR—2WE7FFRåtÄ³ ¢&WGW&à¢–b6VÆbç7FFRæ÷B–â€¢WE7FFRä”DÄRÀ¢WE7FFRä„’À¢WE7FFRå4…’À¢WE7FFRå5U%$•4TBÀ¢WE7FFRäääõ”TBÀ¢WE7FFRå4ÄTU’À¢WE7FFRä5U$”õU2À¢“ ¢6VÆbæÆ&VÂæÖ÷fRƒbÂ¢6VÆbå÷&Vg&W6…÷—†Ö‚¢&WGW&à¢6VÆbåö&ö%÷†6RÒæ÷B6VÆbåö&ö%÷†6P¢6VÆbæÆ&VÂæÖ÷fRƒbÂ"–b6VÆbåö&ö%÷†6RVÇ6R¢6VÆbå÷&Vg&W6…÷—†Ö‚ ¢FVb6WE÷W6VB‡6VÆbÂW6VC¢&ööÂ’ÓâæöæS ¢"".i¨.XÎh‰nh.ZHÞ‹yXªŽûÉ¾i¨.XÎiÉþ™{NK¸Þ{º~{ºÞYÙKˆ¾8yÚyÊY(Îˆz®h¸ÞzØžyIþkK¾x«nh8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢6VÆbçW6VBÒW6V@¢6VÆbçW6Uö6†ævVBæVÖ—B‡W6VB¢–bW6VBæB6VÆbç7FFR—2WE7FFRåtÄ³ ¢6VÆbç7FFU÷F–ÖW"ç7F÷‚¢FV6—6–öâÒ6VÆbæ&V†f–÷"ææW‡EöWFöæöÖ÷W5÷7FFR€¢WE7FFRä”DÄRÀ¢ÆÆ÷u÷vÆ³ÔfÇ6RÀ¢¢–bFV6—6–öâç7FFR—2WE7FFRå4ÄTU ¢6VÆbå÷66†VGVÆU÷6ÆVW÷f–÷6—B‚¢VÇ6S ¢6VÆbå÷66†VGVÆR†FV6—6–öâ¢VÆ–bæ÷BW6VBæBæ÷B6VÆbæG&vv–æræBæ÷B6VÆbç7FFU÷F–ÖW"æ—47F—fR‚“ ¢6VÆbå÷66†VGVÆR‡6VÆbæ&V†f–÷"æ–æ—F–Åö–FÆR‚’¢–bW6VC ¢ÖW76vRÒ.XZÞjù¾XXŽYÊŽ‹ùž˜xÎZèž™Ùž[è^yØ8" ¢VÆ–bvWFGG"‡6VÆbç6WGF–æw2Â&ÆÆ÷uöWFöæöÖ÷W5÷vÆ²"ÂfÇ6R“ ¢ÖW76vRÒ.XZÞjù¾h.ZHÞ‹yXªŽYZn8" ¢VÇ6S ¢ÖW76vRÒ.ˆz®XªŽ‹yXªŽ‹ùŽk*[ÈY
+þûÉ¾Xë¾Šëî{Úî˜xÎh™>[ÈYîûÈÎh‰[ˆ;ÞYÊŽjÎ™Ú.Kˆ®‹yYZn8" ¢6VÆbç6†÷u÷7VV6‚†ÖW76vRÂ3# ¢FVb6WEöÆÆ÷uöWFöæöÖ÷W5÷vÆ²‡6VÆbÂVæ&ÆVC¢&ööÂÂ¢ÂW'6—7C¢&ööÂÒG'VR’ÓâæöæS ¢"".Xˆ~hÚ.ˆz®K‹¾‹yXªŽh¾[ÈX[>ûÉ¾KˆÞ[ÛY8ÞyÊŽyËÎ8YÙKˆ¾Y(ÎK©.XªŽXªŽyK¾8"""  ¢Væ&ÆVBÒ&ööÂ†Væ&ÆVB¢6VÆbç6WGF–æw2æÆÆ÷uöWFöæöÖ÷W5÷vÆ²ÒVæ&ÆV@¢–bæ÷BVæ&ÆVBæB6VÆbç7FFR—2WE7FFRåtÄ³ ¢6VÆbç7FFU÷F–ÖW"ç7F÷‚¢FV6—6–öâÒ6VÆbæ&V†f–÷"ææW‡EöWFöæöÖ÷W5÷7FFR…WE7FFRä”DÄRÂÆÆ÷u÷vÆ³ÔfÇ6R¢6VÆbå÷66†VGVÆU÷6ÆVW÷f–÷6—B‚’–bFV6—6–öâç7FFR—2WE7FFRå4ÄTUVÇ6R6VÆbå÷66†VGVÆR†FV6—6–öâ¢VÆ–bVæ&ÆVBæBæ÷B6VÆbçW6VBæBæ÷B6VÆbæG&vv–æræBæ÷B6VÆbç7FFU÷F–ÖW"æ—47F—fR‚“ ¢6VÆbå÷66†VGVÆR‡6VÆbæ&V†f–÷"æ–æ—F–Åö–FÆR‚’¢–bW'6—7C ¢6fU÷6WGF–æw2‡6VÆbç6WGF–æw2¢6VÆbç6†÷u÷7VV6‚€¢.[{.[ÈY
+þˆz®XªŽ‹yXªŽûÉ¾XZÞjù¾K˜¾YîKÉ®YÊŽjÎ™Ú.Kˆ®iÚ^Y¹îz{¾XªŽ8" ¢–bVæ&ÆV@¢VÇ6R.[{.X[>™zÞˆz®XªŽ‹yXªŽûÉ¾XZÞjù¾KÉ®Zèž™Ùž[è^YÊŽXéþYËûÈÎKØnX[nK¹nXªŽyK¾K¸ÞxKnjÚ>[‹Ž8""À¢3cÀ¢ ¢FVb6WEöF—7Æ•ö†V–v‡B‡6VÆbÂF—7Æ•ö†V–v‡C¢–çB’ÓâæöæS ¢"".[©NyJŽXû>™JîˆùÎXÙ^[®ZûŽš(NŠëîûÈÎKùÞhÈz©~Xú>[©^˜:ŽKŠÞ[ø>KØÞ{Úî[›nz¸¾XÛ>˜xÞ{¹Ž8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢öÆEö6VçFW%÷‚Ò6VÆbç‚‚’²6VÆbçv–GF‚‚’òò ¢öÆEö&÷GFöÒÒ6VÆbç’‚’²6VÆbæ†V–v‡B‚¢6VÆbç6WGF–æw2æF—7Æ•ö†V–v‡BÒÖ‚ƒÂÖ–âƒ3cÂ–çB†F—7Æ•ö†V–v‡B’’¢6÷W&6RÒ6VÆbå÷—†Ö5µWE7FFRä”DÄUÕ³Ð¢v–GF‚Ò&÷VæB€¢6VÆbç6WGF–æw2æF—7Æ•ö†V–v‡B¢6÷W&6Rçv–GF‚‚’ò6÷W&6Ræ†V–v‡B‚¢¢6VÆbç6WDf—†VE6—¦R‡v–GF‚²"Â6VÆbç6WGF–æw2æF—7Æ•ö†V–v‡B²B¢6VÆbæÆ&VÂç6WDvVöÖWG'’ƒbÂÂv–GF‚Â6VÆbç6WGF–æw2æF—7Æ•ö†V–v‡B²‚¢6VÆbå÷&VæFW%ö66†Ræ6ÆV"‚¢6VÆbåöÖ6µö66†Ræ6ÆV"‚¢F&vWBÒö–çB€¢öÆEö6VçFW%÷‚Ò6VÆbçv–GF‚‚’òò"À¢öÆEö&÷GFöÒÒ6VÆbæ†V–v‡B‚’À¢¢6VÆbæÖ÷fR‡6VÆbåö6öç7G&–æVE÷÷6—F–öâ‡F&vWB’¢6VÆbå÷&Vg&W6…÷—†Ö‚¢6VÆbå÷÷6—F–öå÷7VV6…ö'V&&ÆR‚ ¢FVb&WGW&å÷Fõ÷&–Ö'•÷67&VVâ‡6VÆb’ÓâæöæS ¢"".[nZêxšž˜xÞikiKîX‹K‹¾[þ[™^Xû>Kˆ¾Šy.8"""  ¢67&VVâÒÆ–6F–öâç&–Ö'•67&VVâ‚¢–b67&VVâ—2æöæS ¢&WGW&à¢&VÒ67&VVâæf–Æ&ÆTvVöÖWG'’‚¢6VÆbæÖ÷fR†&Vç&–v‡B‚’Ò6VÆbçv–GF‚‚’Ò#BÂ&Væ&÷GFöÒ‚’Ò6VÆbæ†V–v‡B‚’Ò" ¢FVb÷÷6—F–öå÷7VV6…ö'V&&ÆR‡6VÆb’ÓâæöæS ¢"".h¨®ZûžŠùÞk	Nk:iKîYÊŽK«®xšžKˆ®ikžûÈÎz›®™{NKˆÞ‹k>i{nˆz®XªŽz{¾X‹Kê~™Ú.8"""  ¢–bæ÷B6VÆbç7VV6…ö'V&&ÆRæ—5f—6–&ÆR‚“ ¢&WGW&à¢&VÒ6VÆbå÷67&VVåövVöÖWG'’‚¢f—6–&ÆUö&÷VæG2Ò6VÆbæÖ6²‚’æ&÷VæF–æu&V7B‚¢–bf—6–&ÆUö&÷VæG2æ—4V×G’‚“ ¢6†&7FW%öÆVgBÒ6VÆbç‚‚¢6†&7FW%÷&–v‡BÒ6VÆbç‚‚’²6VÆbçv–GF‚‚¢6†&7FW%÷F÷Ò6VÆbç’‚¢VÇ6S ¢6†&7FW%öÆVgBÒ6VÆbç‚‚’²f—6–&ÆUö&÷VæG2æÆVgB‚¢6†&7FW%÷&–v‡BÒ6VÆbç‚‚’²f—6–&ÆUö&÷VæG2ç&–v‡B‚’²¢6†&7FW%÷F÷Ò6VÆbç’‚’²f—6–&ÆUö&÷VæG2çF÷‚¢vÒ¢‚Ò†6†&7FW%öÆVgB²6†&7FW%÷&–v‡BÒ6VÆbç7VV6…ö'V&&ÆRçv–GF‚‚’’òò ¢’Ò6†&7FW%÷F÷Ò6VÆbç7VV6…ö'V&&ÆRæ†V–v‡B‚’Òv ¢–b&V—2æ÷BæöæS ¢‚ÒÖ–â†Ö‚‡‚Â&VæÆVgB‚’’Â&Vç&–v‡B‚’Ò6VÆbç7VV6…ö'V&&ÆRçv–GF‚‚’²¢–b’Â&VçF÷‚“ ¢‚Ò6†&7FW%÷&–v‡B²v ¢–b‚²6VÆbç7VV6…ö'V&&ÆRçv–GF‚‚’â&Vç&–v‡B‚’² ¢‚Ò6†&7FW%öÆVgBÒ6VÆbç7VV6…ö'V&&ÆRçv–GF‚‚’Òv ¢‚ÒÖ–â€¢Ö‚‡‚Â&VæÆVgB‚’’À¢&Vç&–v‡B‚’Ò6VÆbç7VV6…ö'V&&ÆRçv–GF‚‚’²À¢¢’ÒÖ‚†&VçF÷‚’Â6VÆbç’‚’¢6VÆbç7VV6…ö'V&&ÆRæÖ÷fR‡‚Â’ ¢FVb6†÷u÷7VV6‚‡6VÆbÂFW‡C¢7G"ÂGW&F–öåö×3¢–çBÒCƒ’ÓâæöæS ¢"".i‹îzK®KˆÞKÉ®hª.‹[™Jîy¹ŽxJnx+žy¨NjÎ™Ú.ZûžŠùÞk	Nk:8"""  ¢6VÆbç7VV6…ö'V&&ÆRç6WEFW‡B‡FW‡B¢6VÆbç7VV6…ö'V&&ÆRæF§W7E6—¦R‚¢6VÆbç7VV6…ö'V&&ÆRç6†÷r‚¢6VÆbå÷÷6—F–öå÷7VV6…ö'V&&ÆR‚¢6VÆbç7VV6…÷F–ÖW"ç7F'B†Ö‚ƒ#ÂGW&F–öåö×2’ ¢FVbfVVE÷WB‡6VÆbÂfööEö¶W“¢7G"’Óâ6ö×æ–öå&WÇ“ ¢"".Yh.{¹’Æ–Æ’KˆzxÞˆùÎXÙ^š9þxšžûÈÎ[›ni*ÞiKîZûž[©NŠŽh8^Kˆîih~ZÙ~XøÞšhŽ8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢&WÇ’Ò6VÆbæ6ö×æ–öâæfVVB†fööEö¶W’¢–bfööEö¶W’–â²&6öffVR"Â'FV'Ó ¢6VÆbå÷6WE÷FV×÷&'•ö7F—f—G’‚'FV"Â#…ó¢6VÆbå÷Æ•ö7F–öå÷6WVVæ6R€¢…WE7FFRå4•BÂWE7FFRä„’ÂWE7FFRå4•B’À¢3À¢¢VÇ6S ¢fööEö7F—f—G’Ò²&ÆR#¢&'Væç’Ö6'&÷B"Â&6öö¶–R#¢&fV7B"Â&Ö–Æ²#¢&Ö–Æ²×FV'ÒævWB†fööEö¶W’¢–bfööEö7F—f—G“ ¢6VÆbå÷6WE÷FV×÷&'•ö7F—f—G’†fööEö7F—f—G’Â#…ó¢6VÆbå÷6†÷uöVÖ÷F–öâ‡&WÇ’ç7FFRÂ##¢6VÆbç6†÷u÷7VV6‚€¢b'·&WÇ’çFW‡GÕÆî{+îX©²·6VÆbæÖööBæVæW&w—Ò+rš[š9ò·6VÆbæÖööBægVÆÆæW77Ò"À¢S#À¢¢&WGW&â&WÇ ¢FVbFÆµ÷Fõ÷WB‡6VÆbÂÖW76vS¢7G"’Óâ6ö×æ–öå&WÇ“ ¢"".YÊŽiÊÎYËZHNynKˆiÚZûžŠùÞûÈÎ[›ni‹îzK¢Æ–Æ’y¨NY¹îZHÞ8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢&WÇ’Ò6VÆbæ6ö×æ–öâç&WÇ•÷Fò†ÖW76vR¢6VÆbå÷6†÷uöVÖ÷F–öâ‡&WÇ’ç7FFRÂ#c¢6VÆbç6†÷u÷7VV6‚‡&WÇ’çFW‡BÂSc¢&WGW&â&WÇ ¢FVbW&f÷&Õö6ö×æ–öåö7F–öâ‡6VÆbÂ7F–öåö¶W“¢7G"’Óâ6ö×æ–öå&WÇ“ ¢"".i*ÞiKîyJŽh‹~˜žhºžy¨N[z^KÙÎ8x‹hHþ8›É>X«8[¨nzYÞh‰nZèžh[XªŽKÙÎ8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢&WÇ’Ò6VÆbæ6ö×æ–öâçW&f÷&Õö7F–öâ†7F–öåö¶W’¢÷F–öâÒ5D”ôåô%•ô´U•¶7F–öåö¶W•Ð¢GW&F–öåö×2Ò÷F–öâæGW&F–öåö×0¢6VÆbå÷Æ•ö7F–öå÷6WVVæ6R†÷F–öâç6WVVæ6R÷"‡&WÇ’ç7FFRÂ’ÂGW&F–öåö×2¢6VÆbç6†÷u÷7VV6‚‡&WÇ’çFW‡BÂÖ‚ƒS#ÂGW&F–öåö×2²ƒ’¢&WGW&â&WÇ ¢FVb÷Æ•ö7F–öå÷6WVVæ6R€¢6VÆbÀ¢7FFW3¢GWÆUµWE7FFRÂââåÒÀ¢GW&F–öåö×3¢–çBÀ¢’ÓâæöæS ¢"".yJŽxëiÈžK‰N[{.š¨ÎiKny¨NXªŽKÙÎ[Š~{¸Nh‰ZI®jë^™š®KËNXªŽKÙÎ8"""  ¢–bæ÷B7FFW3 ¢&WGW&à¢6VÆbåö7F–öå÷6WVVæ6Uö–B³Ò¢6WVVæ6Uö–BÒ6VÆbåö7F–öå÷6WVVæ6Uö–@¢7FWö×2ÒÖ‚ƒCSÂGW&F–öåö×2òòÆVâ‡7FFW2’¢6VÆbç7FFU÷F–ÖW"ç7F÷‚¢6VÆbæ–çFW&7F–öå÷F–ÖW"ç7F÷‚¢6VÆbç6WE÷7FFR‡7FFW5³Ò¢f÷"–æFW‚Â7FFR–âVçVÖW&FR‡7FFW5³¥ÒÂ7F'CÓ“ ¢F–ÖW"ç6–ævÆU6†÷B€¢–æFW‚¢7FWö×2À¢ÆÖ&FfÇVS×7FFRÂÖ&¶W#×6WVVæ6Uö–C¢6VÆbåö6öçF–çVUö7F–öå÷6WVVæ6R€¢Ö&¶W"À¢fÇVRÀ¢’À¢¢6VÆbæ–çFW&7F–öå÷F–ÖW"ç7F'B†Ö‚ƒƒÂGW&F–öåö×2’ ¢FVbö6öçF–çVUö7F–öå÷6WVVæ6R‡6VÆbÂ6WVVæ6Uö–C¢–çBÂ7FFS¢WE7FFR’ÓâæöæS ¢"".K¸^YÊŽXªŽKÙÎ[¨þX‰~K¸ÞiÈžiXŽi{ni*ÞiKîKˆ¾Kˆjë^ûÈÎ˜þXXÞiz~Šêi{nYšŽhª.x«nh8"""  ¢–b6WVVæ6Uö–BÓÒ6VÆbåö7F–öå÷6WVVæ6Uö–BæBæ÷B6VÆbæG&vv–æs ¢6VÆbç6WE÷7FFR‡7FFR ¢FVb7F'E÷v÷&µ÷F–ÖW"‡6VÆb’Óâ6ö×æ–öå&WÇ“ ¢"".[ÈZx¾K¸®iz^[z^KÙÎŠêi{nûÈÎ[›nŠêžXZÞjù¾‹ù¾XZ^Zèž™Ùž™š®KËNXªŽKÙÎ8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢6VÆbå÷&W6WEö–FÆUöW—6öFR‚¢6VÆbåöfö7W5÷VÆ—G•÷G&6¶W"ç7F'B†7F—fUöÆ–6F–öåö6FVv÷'’‚’¢2F†RW"v–æF÷r6VÆV7G2&VÂFöFó²¶VWF†RW†—7F–ærfö7W0¢2æÇ—F–72F6²f÷"6ö×F–&–Æ—G’Â'WBGG&–'WFRæWr6V6öæG2FòF†P¢26ÖRÆö6ÂF6²&V6÷&B26ööâ2F†R6W76–öâ7F'G2à¢7F'FVBÒ6VÆbæfö7W5÷6W76–öâç7F'B‚¢–b7F'FVC ¢6VÆbç6WE÷W6VB…G'VR¢6VÆbåö6†ævUöÖ&–VçEö7F—f—G’‚&6ö×WFW""¢6VÆbå÷66†VGVÆU÷v÷&µö7F—f—G’ƒ#Uó¢&WÇ’Ò6VÆbæ6ö×æ–öâçv÷&µ÷7F'FVB‡&W7VÖVCÖæ÷B7F'FVB¢6VÆbå÷6†÷uöVÖ÷F–öâ‡&WÇ’ç7FFRÂ3c¢6VÆbç6†÷u÷7VV6‚‡&WÇ’çFW‡BÂSc¢6VÆbçv÷&µ÷F–ÖW%ö6†ævVBæVÖ—B‡6VÆbçv÷&µ÷F–ÖW"æ—5÷'Vææ–ær¢6VÆbå÷66†VGVÆU÷6ö6–Å÷F–6²‚¢6VÆbå÷&Vg&W6…÷—†Ö‚¢&WGW&â&WÇ ¢FVbW6U÷v÷&µ÷F–ÖW"‡6VÆbÂ&V6öã¢7G"Ò""’Óâ6ö×æ–öå&WÇ“ ¢"".i¨.XÎ[z^KÙÎŠêi{n[›ni‹îzK®[Ù>ZJž{JþŠêKˆîKÉhþ[»®Šêî8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢–b&V6öâÒ&–FÆR# ¢6VÆbå÷&W6WEö–FÆUöW—6öFR‚¢6W76–öå÷6V6öæG2Ò6VÆbçv÷&µ÷F–ÖW"ç6W76–öå÷6V6öæG2‚¢v5÷'Vææ–ærÒ6VÆbæfö7W5÷6W76–öâçW6R‚¢–bv5÷'Vææ–æs ¢6VÆbçF–ÖUöÖVÖ÷'’ç&V6÷&Eöfö7W2€¢6W76–öå÷6V6öæG2À¢6ö×ÆWFVE÷6W76–öãÔfÇ6RÀ¢7F'FVEöCÖFFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚’ÒF–ÖVFVÇF‡6V6öæG3×6W76–öå÷6V6öæG2’À¢¢6VÆbåöÆ7Eöfö7W5÷VÆ—G’Ò6VÆbæfö7W5öæÇ—F–72ç&V6÷&E÷6W76–öâ€¢6W76–öå÷6V6öæG2À¢7F'FVEöCÖFFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚’ÒF–ÖVFVÇF‡6V6öæG3×6W76–öå÷6V6öæG2’À¢6ö×ÆWFVCÔfÇ6RÀ¢Æ–6F–öå÷7v—F6†W3×6VÆbåöfö7W5÷VÆ—G•÷G&6¶W"æÆ–6F–öå÷7v—F6†W2À¢v•ö6÷VçC×6VÆbåöfö7W5÷VÆ—G•÷G&6¶W"æv•ö6÷VçBÀ¢F6³×7G"‚‡6VÆbæfö7W5öæÇ—F–72æ7W'&VçE÷F6²‚’÷"·Ò’ævWB‚'F—FÆR"Â""’’À¢¢6VÆbæfö7W5öæÇ—F–72çWFFUö7W'&VçE÷F6µ÷&öw&W72‡6W76–öå÷6V6öæG2¢6VÆbæF–Ç•÷7FG2ç&V6÷&Eöfö7W2‡6W76–öå÷6V6öæG2¢6VÆbåöv&Eöfö7W5÷&Wv&G2‚¢6VÆbçv÷&µö7F—f—G•÷F–ÖW"ç7F÷‚¢6VÆbå÷6WE÷FV×÷&'•ö7F—f—G’‚'FV"Â#Uó¢GW&F–öâÒf÷&ÖE÷v÷&µöGW&F–öâ‡6VÆbçv÷&µ÷F–ÖW"çFöF•÷6V6öæG2‚’¢–bv5÷'Vææ–æræB&V6öâÓÒ&–FÆR# ¢&WÇ’Ò6ö×æ–öå&WÇ’€¢.j8kX¾X‹Kˆjë^i{n™{Nk*iÈž™Jî›Êi8ÞKÙÎûÈÎXZÞjù¾XXŽ[ŠîKÚi¨.XÎŠêi{n8.Y¹îiÚ^YîKÉ®Xú®Šú.™zîKˆjÊ‹ùžjë^i{n™{NZh.KÙ^[Ù.{¾8""À¢WE7FFRä5U$”õU2À¢¢VÆ–bv5÷'Vææ–æs ¢&WÇ’Ò6VÆbæ6ö×æ–öâçv÷&µ÷W6VB†GW&F–öâ¢VÇ6S ¢&WÇ’Ò6ö×æ–öå&WÇ’€¢b.Šêi{nxëYÊŽiŠþi¨.XÎx«nhûÈÎK¸®ZJž{JþŠê[z^KÙÂ¶GW&F–öçÞ8""À¢WE7FFRä5U$”õU2À¢¢6VÆbå÷6†÷uöVÖ÷F–öâ‡&WÇ’ç7FFRÂ3#¢VÆ—G•÷FW‡BÒ€¢b%ÆîiÊÎ‹Úî‹JŽ˜xþûÉ§·6VÆbåöÆ7Eöfö7W5÷VÆ—G’æÆ&VÇÞûÈ‡·6VÆbåöÆ7Eöfö7W5÷VÆ—G’ç66÷&WÞXˆnûÈ’ ¢–b6VÆbåöÆ7Eöfö7W5÷VÆ—G’VÇ6R" ¢¢6VÆbç6†÷u÷7VV6‚‡&WÇ’çFW‡B²VÆ—G•÷FW‡BÂSc¢6VÆbçv÷&µ÷F–ÖW%ö6†ævVBæVÖ—B„fÇ6R¢6VÆbå÷66†VGVÆU÷6ö6–Å÷F–6²‚¢6VÆbçv÷&µö6öçG&öÇ2æ†–FR‚¢6VÆbå÷&Vg&W6…÷—†Ö‚¢&WGW&â&WÇ ¢FVbf–æ—6…÷v÷&µ÷F–ÖW"‡6VÆb’Óâ6ö×æ–öå&WÇ“ ¢"".ZèÎh‰iÊÎjÊ[z^KÙÎ8KùÞyYžK¸®iz^{JþŠê[›ni*ÞiKî[¨nzYÞXªŽKÙÎ8"""  ¢6VÆbå÷&V6÷&E÷W6W%ö–çFW&7F–öâ‚¢6VÆbå÷&W6WEö–FÆUöW—6öFR‚¢&ööÕö–BÒ6VÆbæfö7W5÷6W76–öâç&ööÕö–@¢6W76–öå÷6V6öæG2Ò6VÆbçv÷&µ÷F–ÖW"ç6W76–öå÷6V6öæG2‚¢F÷FÂÒ6VÆbæfö7W5÷6W76–öâæf–æ—6‚‚¢6VÆbçF–ÖUöÖVÖ÷'’ç&V6÷&Eöfö7W2€¢6W76–öå÷6V6öæG2À¢6ö×ÆWFVE÷6W76–öãÕG'VRÀ¢7F'FVEöCÖFFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚’ÒF–ÖVFVÇF‡6V6öæG3×6W76–öå÷6V6öæG2’À¢¢6VÆbåöv&Eöfö7W5÷&Wv&G2‚¢6VÆbåöÆ7Eöfö7W5÷VÆ—G’Ò6VÆbæfö7W5öæÇ—F–72ç&V6÷&E÷6W76–öâ€¢6W76–öå÷6V6öæG2À¢7F'FVEöCÖFFWF–ÖRææ÷r‚’æ7F–ÖW¦öæR‚’ÒF–ÖVFVÇF‡6V6öæG3×6W7=øë»h‘éì¶»§q«^tˆ¹odùbcyie¹b¬{ï&žÜÝYÙKœ™]Ø\™WžÙÜ›ÝÝÜ›ÙÜ™\Ü×Ý^
+ÙXÛÛ™Ê_H‹ˆÍŒˆ
+B‚ˆYˆÜØÚY[WÝÛÜš×ØXÝ]š]JÙ[‹[^WÛ\Îˆ[›Û™HH›Û™JHOˆ›Û™N‚ˆˆˆº+¨y¥í¹§'úeí9k¢y£¤¹."ù. 9«(zfj¹/-9méy/g9bª9/g8à ˆˆˆ‚‚ˆÙ[‹ÛÜš×ØXÝ]š]WÝ[Y\‹œÝÜ
+
+BˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÙ[‹ÛÜš×ØXÝ]š]WÝ[Y\‹œÝ\
+[^WÛ\ÈÜˆ˜[™ÛKœ˜[™[
+MLÌÌÌ
+JB‚ˆYˆÝÛÜš×ØXÝ]š]WÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹g*9.$ù¬ê9bª9/g:eí:/k¹£h»ï#:+ªyå*9¢-ùméy/g9¥í¹aky«æù.gù£ yîëyméy/g8à ˆˆˆ‚‚ˆYˆ›ÝÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆ™]\›‚ˆÙ\ÜÚ[ÛˆHÙ[‹ÛÜš×Ý[Y\‹œÙ\ÜÚ[Û—ÜÙXÛÛ™Ê
+BˆÚÚXÙ\ÈH“ÐÕT×ÐPÕSÓ”ÂˆYˆÙ\ÜÚ[ÛˆHH
+ˆŒ[™˜[™ÛKœ˜[™ÛJ
+HŒÍN‚ˆÚÚXÙ\ÈH
+\›[ÜÈ‹XH‹œÛY\ŠBˆÙ[‹—ØÚ[™ÙWØ[XšY[ØXÝ]š]J˜[™ÛK˜ÚÚXÙJÚÚXÙ\ÊJBˆÙ[‹—ÛX[X[ØXÝ]š]WÝ[[H[YK›[Û›ÝÛšXÊ
+H
+ÈLŒˆÙ[‹—ÜØÚY[WÝÛÜš×ØXÝ]š]J
+B‚ˆYˆÜÙ]Ý[\Ü˜\žWØXÝ]š]JÙ[‹XÝ]š]NˆÝ‹\˜][Û—Û\Îˆ[HÌÌ
+HOˆ›Û™N‚ˆˆˆ¹¦/¹é.¹. 9o(9k£9¥m9bª9/g9fï»ï#9îäù§gùd#¹fç¹b,9méy/g9¢%¹¦kº`&¹o¡y§.¸à ˆˆˆ‚‚ˆÙ[‹—ØÚ[™ÙWØ[XšY[ØXÝ]š]JXÝ]š]JBˆÙ[‹—ÛX[X[ØXÝ]š]WÝ[[H[YK›[Û›ÝÛšXÊ
+H
+È\˜][Û—Û\ÈÈLˆÙ[‹˜XÝ]š]WÝ[Y\‹œÝ\
+X^
+ML\˜][Û—Û\ÊJB‚ˆYˆØXÝ]š]WÝ[Y[Ý]
+Ù[ŠHOˆ›Û™N‚ˆˆˆ¹îäù§gù.-9¥í¹bª9/g;ï&ùméy/g9.+yîéùîëz/k¹£h¹.$ù¬ê9bª9/g;ï#9d)¹b&y h¹i#y¦kº`&¹aky«æøà ˆˆˆ‚‚ˆÙ[‹—ØÚ[™ÙWØ[XšY[ØXÝ]š]Jˆ˜[™ÛK˜ÚÚXÙJ“ÐÕT×ÐPÕSÓ”ÊHYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™È[ÙH››Û™H‚ˆ
+B‚ˆYˆÝÛÜš×Ý[Y\—ÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹k¦¹§'ù/çykf9méy/g:/æùn©»ï#9nm¹¦/¹é.¹. 9«(yb,9§'ùæ¡:o$ùb¬y¢%¹/$y kù£ä:a¤¸à ˆˆˆ‚‚ˆÙ[‹—ØÚXÚ×ÛØØ[Ü™[Z[™\œÊ
+BˆÙ[‹ÛÜš×Ý[Y\‹˜ÚXÚÜÚ[
+
+BˆÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œ™Yœ™\Ú
+
+BˆÙ[‹—Ø]Ø\™Ù›ØÝ\×Ü™]Ø\™Ê
+BˆÙ[‹—ÜÞ[˜×ÚÝ\›WÛÝ]š]
+[››Ý[˜ÙOUYJBˆÙ[‹—ÜÚÝ×Û™]×ÛÝ]š]Ý[›ØÚÊ
+Bˆ]ZY]H]XÝÜ]ZY]Û[ÙJ
+BˆÙ[™\Ü×ÚÚ[™H›Û™HYˆ]ZY]˜›ØÚÙY[ÙHÙ[‹Ù[™\ÜËZÙWÙYJˆÙ[‹œÙ][™ÜËØ]\—Ü™[Z[™\—Ù[˜X›YˆÙ[‹œÙ][™ÜËœÝ[™Ü™[Z[™\—Ù[˜X›YˆÙ[‹œÙ][™ÜËØ]\—Ú[\˜[ÛZ[]\ËˆÙ[‹œÙ][™ÜËœÝ[™Ú[\˜[ÛZ[]\Ëˆ
+BˆYˆÙ[™\Ü×ÚÚ[™OHØ]\ˆŽ‚ˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]J\›[ÜÈ‹ÍWÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+¹e§ycèù¬-9d)øà ¹aky«æù¦ïù/h9¢¢º/æy. 9l#ù/&¹a/ùk¢9/cøà ˆ‹ŒŒ
+Bˆ[YˆÙ[™\Ü×ÚÚ[™OHœÝ[™Ž‚ˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]J™›ÛÝ˜[‹ÍWÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+¹êæz-mù§iz-l9.)9«ixà y§o¹§oº ªz! 9d)øà º.ªù/dù.gùg*:fj¹/h9k£9¢$9.â¹i*xà ˆ‹L
+Bˆ™[Z[™\—ÚÚ[™H›Û™HYˆ]ZY]˜›ØÚÙY[ÙHÙ[‹ÛÜš×Ý[Y\‹ZÙWÙYWÜ™[Z[™\Š
+BˆYˆ™[Z[™\—ÚÚ[™\È›Û™N‚ˆ™]\›‚ˆ\˜][ÛˆH›Ü›X]ÝÛÜš×Ù\˜][ÛŠÙ[‹ÛÜš×Ý[Y\‹œÙ\ÜÚ[Û—ÜÙXÛÛ™Ê
+JBˆ™\HHÙ[‹˜ÛÛ\[š[Û‹ÛÜš×Ü™[Z[™\Š™[Z[™\—ÚÚ[™\˜][ÛŠBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ™\KœÝ]KÍŒ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+™\K^ÌŒ
+B‚ˆYˆØÚXÚ×ÛØØ[Ü™[Z[™\œÊÙ[ŠHOˆ›Û™N‚ˆˆˆ”[ˆHØØ[™[Z[™\ˆ]Y]YHÛ˜ÙH\ˆ^\Ý[™ÈÛ™K\ÙXÛÛ™[Y\‹ˆˆˆ‚‚ˆYˆ]XÝÜ]ZY]Û[ÙJ
+K˜›ØÚÙY‚ˆ™]\›‚ˆ›Üˆ™[Z[™\ˆ[ˆÙ[‹[YWÛY[[ÜžKœ™[Z[™\œË™YJ
+VÎŒ×N‚ˆÙ[‹[YWÛY[[ÜžKœ™[Z[™\œË›X\š×Û›ÝYšYY
+™[Z[™\‹šY
+BˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]J˜Ý\š[Ý\È‹L—Ì
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹£ä:a¤»ï&žÜ™[Z[™\‹]_H‹MŒ
+B‚ˆYˆÜÚÝ×Û™]×ÛÝ]š]Ý[›ØÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆº-ê:/áùodùi*Hx $Î9l#ù¥íº" ¹à®y¥í¹¦/¹é.¹¢$:eoùâ­¹  {ï#: #:gg¹§.¹¨¬9¦í9£hº(hù§#xà ˆˆˆ‚‚ˆÝYÙHHÝYÙWÙ›Ü—ÜÙXÛÛ™ÊÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+JBˆYˆÝYÙKšÝ\ˆHÙ[‹—Û\ÝÙÜ›ÝÝÚÝ\Ž‚ˆ™]\›‚ˆÙ[‹—Û\ÝÙÜ›ÝÝÚÝ\ˆHÝYÙKšÝ\‚ˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JÝYÙK˜XÝ]š]KŒÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹.â¹¥éy¢$:eoûï&žÜÝYÙK]_Wº)èúe {ï&žÜÝYÙKœ™]Ø\™WžÜÝYÙK›Y\ÜØYÙ_H‹Œ
+BˆYˆÝYÙKšÝ\ˆH‚ˆÙ[‹—ÙÙ[™\˜]WÙZ[WÜ™\Ü
+ÚÝ×ÙX[ÙÏUYJB‚ˆYˆÜÞ[˜×ÚÝ\›WÛÝ]š]
+Ù[‹
+‹[››Ý[˜ÙNˆ›ÛÛ
+HOˆ›Û™N‚ˆˆˆ¹d#9«iyl#ù¥í¹j ú(hú)èúe {ï#9.#z)¡¹æå¹å*9¢-ù..ùbª:`"y¢êyæ¡9odùbcz(áyi!øà ‚‚ˆ9méy/g9¥íºeoùcê¹a¬ùk¦¹dê¹.¦ùieú(áycëùå*;ï&ú(áyi!ù§+:.ªù¦+ùå*9¢-ù`cùio{ï#9oázhnù. 9æí9/çyåfxà ‚ˆ:/æy¨-ùí+ú+¨yb,L9l#ù¥í¹/&º)èúe z#dºaã¹æî9alùieú(á{ï#9/a¹.#y/&¹¢¢¹å*9¢-ù«hùg*9êoùæ¡ˆ9. 9l#ù¥í¹ae9ae:(áxà yîãùan9i%º)à¹¢%¹am¹.å¹mìº)èúe yieú(áyo.º(c9¦ïù£h¹£¢xà ‚ˆˆˆ‚‚ˆÛÝ[HÙ[‹ÛÜš×Ý[Y\‹[›ØÚÙYÛÝ]š]ØÛÝ[
+
+Bˆ]\ÝHÕU’UÖØÛÝ[HWHYˆÛÝ[[ÙH›Û™Bˆ™]ÛWÝ[›ØÚÙYHÙ[‹ÛÜš×Ý[Y\‹ZÙWÛ™]×ÛÝ]š]Ý[›ØÚÊ
+BˆYˆ›Ý[››Ý[˜ÙHÜˆ™]ÛWÝ[›ØÚÙY\È›Û™HÜˆ]\Ý\È›Û™N‚ˆ™]\›‚ˆÙ[‹—ØÚ[™ÙWØ[XšY[ØXÝ]š]J››Û™HŠBˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆˆ¹í+ú+¨y.$ù¬êÛ™]ÛWÝ[›ØÚÙYH9l#ù¥í»ï#9mìº)èúe xà#Û]\Ý›˜[Y_xà#{ï Wˆ‚ˆˆ¹/h9cëù.éyg*8 '9£hº(áy.#¹i%º)à¸ 'zaã:`"y¢ê{ï#9odùbcz(áyi!ù/çy£ y.#ycæ8à ˆ‹ˆŒˆ
+B‚ˆYˆØ]Ø\™Ù›ØÝ\×Ü™]Ø\™ÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹¢¢¹.â¹¥éy.$ù¬ê9¥íºeí9£h¹¢$9«hùd$yæ¡:næ9idyie¹b¬{ï#9.#yb-º`(:iizioù êyïf¸à ˆˆˆ‚‚ˆÛÛ\]YØ›ØÚÜÈHÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+HËÈŒˆ™]×Ø›ØÚÜÈHX^
+ÛÛ\]YØ›ØÚÜÈHÙ[‹—Ü™]Ø\™YÙ›ØÝ\×Ø›ØÚÜÊBˆYˆ™]×Ø›ØÚÜÎ‚ˆÙ[‹›[ÛÙœ™XÙZ]™WÙ›ØÝ\×Ü™]Ø\™
+™]×Ø›ØÚÜÊBˆÙ[‹—Ü™]Ø\™YÙ›ØÝ\×Ø›ØÚÜÈHÛÛ\]YØ›ØÚÜÂ‚ˆYˆÚ]ÝÛ—ÝÛÜš×Ý[Y\ŠÙ[ŠHOˆ›Û™N‚ˆˆˆº!ê¹á-º` 9aî¹bcy¦ ¹`g:+¨y¥í¹nm¹¦í9¥¬9odùi*yméy/g9ch{ï#9.#y¢¢¹alù§.¹¥íºeí:+¨yaiyméy/g8à ˆˆˆ‚‚ˆÙ[‹—Ü™\Ù]ÚYWÙ\\ÛÙJ
+BˆYˆ\Ø]ŠÙ[‹ÛÜš×Ý[Y\ˆŠN‚ˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÙ\ÜÚ[Û—ÜÙXÛÛ™ÈHÙ[‹ÛÜš×Ý[Y\‹œÙ\ÜÚ[Û—ÜÙXÛÛ™Ê
+BˆÝ\YØ]H]][YK››ÝÊ
+K˜\Ý[Y^›Û™J
+HH[YY[JÙXÛÛ™Ï\Ù\ÜÚ[Û—ÜÙXÛÛ™ÊBˆÈ\œÚ\ÝHØ[YHš[˜[[›š[™ÈÙYÛY[[ˆHØØ[[YK[Y[[ÜžBˆÈÝÜ™H™Y›Ü™HHÚ\™Y[Y\ˆ\È]\ÙYˆÚ]Ý]\ËBˆÈ›Ü›X[\ÛÜÙHÛÝ[\]HHYØXÞHZ[HØ\™Ú[BˆÈÜÚ[™ÈHÙÈ]šX][Ûˆ[™Z[HÚXÚËZ[ˆ™XÛÜ™‚ˆÙ[‹[YWÛY[[ÜžKœ™XÛÜ™Ù›ØÝ\ÊˆÙ\ÜÚ[Û—ÜÙXÛÛ™ËˆÛÛ\]YÜÙ\ÜÚ[ÛQ˜[ÙKˆÝ\YØ]\Ý\YØ]ˆ
+BˆÙ[‹™Z[WÜÝ]Ëœ™XÛÜ™Ù›ØÝ\ÊÙ\ÜÚ[Û—ÜÙXÛÛ™ÊBˆÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œ]\ÙJ
+BˆYˆÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+Hˆ[™\Ø]ŠÙ[‹›X™[ŠN‚ˆÙ[‹—ÙÙ[™\˜]WÙZ[WÜ™\Ü
+ÚÝ×ÙX[ÙÏQ˜[ÙJB‚ˆYˆÙÙ[™\˜]WÙZ[WÜ™\Ü
+Ù[‹
+‹ÚÝ×ÙX[ÙÎˆ›ÛÛ
+HOˆ]›Û™N‚ˆˆˆ¹å'ù¢$9cê¹/çykf9g*9§+9§.¹æ¡9méy/g9¥éy¢©{ï&ùcëú`"yleyé.ºh¡:)â9ê¥ùcèøà ˆˆˆ‚‚ˆYˆÜË™[š\›Û‹™Ù]
+“Ó‘TP×ÕTÑWÑSS×ÐTÔÑUÈŠHOHŒHˆ[™›ÝÚÝ×ÙX[ÙÎ‚ˆ™]\›ˆ›Û™BˆÝÈHÙ[‹›X™[œ^X\
+
+HYˆ\Ø]ŠÙ[‹›X™[ŠH[ÙHT^X\
+
+BˆžN‚ˆ]H™[™\—ÙZ[WÜ™\Ü
+ˆÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+KˆÙ[‹™Z[WÜÝ]ËœÛ˜\ÚÝ
+
+KˆÝËˆ
+Bˆ^Ù\ÔÑ\œ›Üˆ\È^Î‚ˆYˆÚÝ×ÙX[ÙÎ‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹méy/g9¥éy¢©y¦ ¹¥í¹¬¨y/çykf9¢$9b§ûï&žÙ^ßH‹ŒŒ
+Bˆ™]\›ˆ›Û™BˆYˆÚÝ×ÙX[ÙÎ‚ˆÙ[‹—ÜÚÝ×ÙZ[WÜ™\ÜÙX[ÙÊ]
+Bˆ™]\›ˆ]‚ˆYˆÚÝ×ÙZ[WÜ™\Ü
+Ù[ŠHOˆ›Û™N‚ˆˆˆ¹å,z#ç9ceyå'ù¢$9nm¹¢dùo 9.â¹i*yæ¡9aky«æùméy/g9¥éy¢©xà ˆˆˆ‚‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹—ÙÙ[™\˜]WÙZ[WÜ™\Ü
+ÚÝ×ÙX[ÙÏUYJB‚ˆYˆÜÚÝ×ÙZ[WÜ™\ÜÙX[ÙÊÙ[‹]ˆ]
+HOˆ›Û™N‚ˆˆˆ¹g*9n¥9å*9a¡zh¡:)â9méy/g9ch{ï#9nm¹£ä9/¦ù¢dùo 9§+9§.¹æî9a£9æ¡9£"zd«¸à ˆˆˆ‚‚ˆX[ÙÈHQX[ÙÊÙ[ŠBˆX[ÙËœÙ]Ú[™ÝÕ]Jˆ¹.â¹i*^ÜÙ[‹—Ü]Û˜[YJ
+_zfj¹/h9`f¹.¡¹.à9.bŠBˆ^[Ý]HU›Þ^[Ý]
+X[ÙÊBˆ™]šY]ÈHSX™[
+X[ÙÊNÈ™]šY]ËœÙ][YÛ›Y[
+][YÛ›Y[›YË[YÛÙ[\ŠBˆØ\™HT^X\
+ÝŠ]
+JKœØØ[Y
+ÌMÌ]\ÜXÝ˜][Ó[ÙK’ÙY\\ÜXÝ˜][Ë]•˜[œÙ›Ü›X][Û“[ÙK”Û[ÛÝ˜[œÙ›Ü›X][ÛŠBˆ™]šY]ËœÙ]^X\
+Ø\™
+NÈ^[Ý]˜YÚYÙ]
+™]šY]ÊBˆÜ[—Ø]ÛˆHT\Ú]ÛŠˆ¹¢dùo ÜÙ[‹—Ü]Û˜[YJ
+_yæî9a£‹X[ÙÊBˆÜ[—Ø]Û‹˜ÛXÚÙY˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÙZ[WØ[[JBˆ^[Ý]˜YÚYÙ]
+Ü[—Ø]ÛŠBˆX[ÙË™^XÊ
+B‚ˆYˆÜ[—ÙZ[WØ[[JÙ[ŠHOˆ›Û™N‚ˆˆˆ¹¢dùo 9§+9§.¹aky«æùæî9a£9¥¡ù.í¹i.{ï#9.#z+¯úeë¹ïdyîç8à ˆˆˆ‚‚ˆ\™XÝÜžHH[[WÙ\™XÝÜžJ
+NÈ\™XÝÜžK›ZÙ\Š\™[ÏUYK^\ÝÛÚÏUYJBˆQ\ÚÝÜÙ\šXÙ\Ë›Ü[•\›
+U\›™œ›ÛSØØ[š[JÝŠ\™XÝÜžKœ™\ÛÛ™J
+JJJB‚ˆYˆ›Û\ÙX[ÙÝYJÙ[ŠHOˆ›Û™N‚ˆˆˆ¹¢dùo 9¥¬9âb: b¹i*zgh¹§oûï&ùé®ùî¯ùd£9g*9î¯ùª(yo#ùalyå*9d#9. 9.*¹aiycèøà ˆˆˆ‚‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Û™N‚ˆÈÙY\Ú]\È[ˆ[™\[™[][]HÚ[™ÝÈÛÈ]\ÈH›Ü›X[ˆÈ\ÚØ˜\‹ÑØÚÈ[žH[™Ø[ˆ™HZ[š[Z^™YÚ]Ý]Y™™XÝ[™È]‚ˆÙ[‹—ØÚ]ÙX[ÙÈHÚ]X[ÙÊ›Û™KÙ[‹—Ü]Û˜[YJ
+JBˆÙ[‹—ØÚ]ÙX[ÙË›Y\ÜØYÙWÜÝX›Z]Y˜ÛÛ›™XÝ
+Ù[‹—ÜÝX›Z]ØÚ]ÛY\ÜØYÙJBˆÙ[‹—ØÚ]ÙX[ÙËœÙ][™Ü×Ü™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÜÙ][™ÜÊBˆÙ[‹—ØÚ]ÙX[ÙËœ™[˜[YWÜ™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹œ™[˜[YWÜ]
+BˆÙ[‹—ØÚ]ÙX[ÙËœ™XÛÛ›™XÝÜ™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹—Ü™XÛÛ›™XÝØZJBˆÙ[‹—ØÚ]ÙX[ÙË˜\[™ÛY\ÜØYÙJˆÙ[‹—Ü]Û˜[YJ
+Kˆˆ¹mí9n ú/¯»ï y¬¨yïdy.gùcëù.éz b¹i*{ï&ù.gú ïyg*:+¯¹ïkºaã:/ç¹£©HÛÙ^8à PÛ]YHÛÙxà QY\ÙYZÈ9¢%ˆÚ[Zxà ˆ‹ˆ
+BˆÝ]\ÈHÙ[‹˜YÙ[ÛX[˜YÙ\‹œÝ]\ÊÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\ŠBˆÙ[‹—ØÚ]ÙX[ÙËœÙ]Ü›ÝšY\ŠˆÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\‹ˆÝ]\ËœÝ]K˜[YKˆÝ]\Ë™]Z[ˆ
+BˆYˆÙ[‹—ØÚ]ÙX[ÙËš\ÓZ[š[Z^™Y
+
+N‚ˆÙ[‹—ØÚ]ÙX[ÙËœÚÝÓ›Ü›X[
+
+Bˆ[ÙN‚ˆÙ[‹—ØÚ]ÙX[ÙËœÚÝÊ
+BˆÙ[‹—ØÚ]ÙX[ÙËœ˜Z\ÙWÊ
+BˆÙ[‹—ØÚ]ÙX[ÙË˜XÝ]˜]UÚ[™ÝÊ
+B‚ˆYˆ™[˜[YWÜ]
+Ù[ŠHOˆ›Û™N‚ˆˆˆ‘Y]HÝÛ™\‰ÜÈÛØÚX[šXÚÛ˜[YNÈH]™[XZ[œÈ9aky«æÈ›Ü™]™\‹ˆˆˆ‚‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+Bˆ˜[YKXØÙ\YHR[œ]X[ÙË™Ù]^
+ˆÙ[‹ˆ¹/ë¹¥.y..ù.®¹éì9do‹ˆ¹..ù.®¹éì9do¹å*9.£º!ê¹.h9k©8à y.,ºeê9d£9¤+ykd9.¤¹bª9¥í¹c.¹b!¹.#yd#9aky«æøà —¹/¢ùi ¹hjùa¦x '9l#ù¨ x '{ï#9am¹.å¹¤+ykd9l!¹ç"ùb,8 '9l#ù¨ yk­¹æ¡9aky«æø 'xà ˆ‹ˆ^\Ù[‹—ÛÝÛ™\—ÛšXÚÛ˜[YJ
+Kˆ
+BˆYˆ›ÝXØÙ\Y‚ˆ™]\›‚ˆ˜[YHHÛX[—ÛÝÛ™\—ÛšXÚÛ˜[YJ˜[YJBˆ™]š[Ý\×Û˜[YHHÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YJ
+BˆÙ[‹œÙ][™ÜË›ÝÛ™\—ÛšXÚÛ˜[YHH˜[YBˆÙ[‹œÙ][™ÜËœ]Û˜[YHHUÓSQBˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊBˆYˆ˜[YHOH™]š[Ý\×Û˜[YN‚ˆÙ[‹›ÝÛ™\—ÛšXÚÛ˜[YWØÚ[™ÙY™[Z]
+˜[YJBˆÙ[‹—ÜÞ[˜×ÛÝÛ™\—ÛšXÚÛ˜[YJ˜[YJBˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]ÛÝÛ™\—ÛšXÚÛ˜[YJ˜[YJBˆX™[HÛØÚX[Ü]ÛX™[
+˜[YJBˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹io{ï#9é/¹.©9g.¹¦kúaã9l,ycêÞÛX™[xà ¹¢$z/æ9¦+ùaky«æøà ˆ‹Œ
+B‚ˆYˆÜÞ[˜×ÛÝÛ™\—ÛšXÚÛ˜[YJÙ[‹šXÚÛ˜[YNˆÝŠHOˆ›Û™N‚ˆˆˆ”\œÚ\ÝHÛØÚX[[Û›HšXÚÛ˜[YHÚ]Ý]›ØÚÚ[™ÈH\ÚÝÜ]ˆˆˆ‚‚ˆYˆ›ÝÙ[‹œÛØÚX[ØÛY[œÚYÛ™YÚ[Ž‚ˆ™]\›‚ˆÙ\ÜÚ[ÛˆHÙ]]ŠÙ[‹œÛØÚX[ØÛY[œÙ\ÜÚ[Ûˆ‹›Û™JBˆ\Ù\—ÚYHÝŠÙ]]ŠÙ\ÜÚ[Û‹\Ù\—ÚY‹ˆŠHÜˆˆŠBˆYˆ›Ý\Ù\—ÚYÜˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×Ú[™›YÚ‚ˆ™]\›‚ˆÛX[ˆHÛX[—ÛÝÛ™\—ÛšXÚÛ˜[YJšXÚÛ˜[YJBˆÙ^HH
+\Ù\—ÚYÛX[ŠBˆYˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×ÚÙ^HOHÙ^N‚ˆ™]\›‚ˆ\]\ˆHÙ]]ŠÙ[‹œÛØÚX[ØÛY[\]WÛÝÛ™\—ÛšXÚÛ˜[YH‹›Û™JBˆYˆ›ÝØ[X›J\]\ŠN‚ˆ™]\›‚ˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×Ú[™›YÚHYBˆ™XYHÛØÚX[›Ùš[U™XY
+Ù[‹œÛØÚX[ØÛY[ÛX[‹Ù[ŠBˆÙ[‹—ÜÛØÚX[Ü›Ùš[WÝ™XYË˜\[™
+™XY
+Bˆ™XY˜ÛÛ\]Y˜ÛÛ›™XÝ
+[X™HÞ[˜×ÚÙ^OZÙ^NˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×ÜÝXØÙYYY
+Þ[˜×ÚÙ^JJBˆ™XY™˜Z[Y˜ÛÛ›™XÝ
+Ù[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×Ù˜Z[Y
+Bˆ™XY™š[š\ÚY˜ÛÛ›™XÝ
+ˆ[X™NˆÙ[‹—ÜÛØÚX[Ü›Ùš[WÝ™XYÙš[š\ÚY
+™XY
+Bˆ
+Bˆ™XYœÝ\
+
+B‚ˆYˆÛX^X™WÜÞ[˜×ÛÝÛ™\—ÛšXÚÛ˜[YJÙ[ŠHOˆ›Û™N‚ˆˆˆ”Þ[˜ÈHØØ[HÛÛ™šYÝ\™YÝÛ™\ˆšXÚÛ˜[YHY\ˆ]™\žHXØÛÝ[ÙÚ[‹ˆˆˆ‚‚ˆYˆÙ[‹œÛØÚX[ØÛY[œÚYÛ™YÚ[Ž‚ˆÙ[‹—ÜÞ[˜×ÛÝÛ™\—ÛšXÚÛ˜[YJÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YJ
+JB‚ˆYˆÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×ÜÝXØÙYYY
+Ù[‹Ù^Nˆ\VÜÝ‹Ý—JHOˆ›Û™N‚ˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×Ú[™›YÚH˜[ÙBˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×ÚÙ^HHÙ^BˆÙ[‹—ÜØÚY[WÜÛØÚX[ÝXÚÊ
+B‚ˆYˆÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×Ù˜Z[Y
+Ù[‹ÛY\ÜØYÙNˆÝŠHOˆ›Û™N‚ˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YWÜÞ[˜×Ú[™›YÚH˜[ÙBˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙË—ÜÙ]ÜÝ]\Ê¹..ù.®¹éì9do9mì¹/çykf9g*9§+9§.»ï#9/a¹.¤yêëùd#9«iyi,z-){ï#:+íùê#yd#ºaãz+åxà ˆ‹\œ›ÜUYJB‚ˆYˆÜÛØÚX[Ü›Ùš[WÝ™XYÙš[š\ÚY
+Ù[‹™XYˆÛØÚX[›Ùš[U™XY
+HOˆ›Û™N‚ˆYˆ™XY[ˆÙ[‹—ÜÛØÚX[Ü›Ùš[WÝ™XYÎ‚ˆÙ[‹—ÜÛØÚX[Ü›Ùš[WÝ™XYËœ™[[Ý™J™XY
+Bˆ™XY™[]S]\Š
+B‚ˆYˆÜÝX›Z]ØÚ]ÛY\ÜØYÙJÙ[‹Y\ÜØYÙNˆÝŠHOˆ›Û™N‚ˆˆˆ¹¢¢¹­¢9 kù.©9îæHÚ]X[˜YÙ\»ï&ú-ëùå,ycêº+îùcå¹ï$ùkf;ï#9.#y`f¹d#9«iy¨à9­bøà ˆˆˆ‚‚ˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Û™N‚ˆ™]\›‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆYˆÙ[‹˜Ú]ÛX[˜YÙ\‹˜\ÞN‚ˆÙ[‹—ØÚ]ÙX[ÙË˜\[™ÛY\ÜØYÙJÙ[‹—Ü]Û˜[YJ
+K¹."¹. 9céz+çz/æ9g*:-ëù."»ï#9ê#yëby¢$y. 9."øà ˆŠBˆ™]\›‚ˆÙ[‹—ØÚ]ÙX[ÙË˜\[™ÛY\ÜØYÙJ¹/h‹Y\ÜØYÙJBˆ\ÝÜžWØ™Y›Ü™HHÙ[‹—ØÚ]ÛY[[ÜžKœÛ˜\ÚÝ
+
+K˜\×Ú\ÝÜžJ
+BˆÙ[‹—ØÚ]ÛY[[ÜžK˜Y
+\Ù\ˆ‹Y\ÜØYÙJBˆÙ[‹—ØÚ]ÙX[ÙËœÚÝ×Ü™XÛÝ™\žWØXÝ[ÛœÊ˜[ÙJBˆÙ[‹˜Ú]ÛX[˜YÙ\‹œÝX›Z]
+Y\ÜØYÙK\ÝÜžWØ™Y›Ü™JB‚ˆYˆÛX[˜YÙYØÚ]Ü™\JÙ[‹™\NˆX[˜YÙYÚ]™\JHOˆ›Û™N‚ˆˆˆ¹îçù. 9leyé.ˆRH9¢%¹é®ùî¯ùfç¹i#{ï&úfcyî©ù¥í¹.#zfa9b¨:/ç¹£©ze&z+ëù«hù¥¡øà ˆˆˆ‚‚ˆÙ[‹—ØÚ]ÛY[[ÜžK˜Y
+˜\ÜÚ\Ý[‹™\K^
+BˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ØÚ]ÙX[ÙË˜\[™ÛY\ÜØYÙJÙ[‹—Ü]Û˜[YJ
+K™\K^
+BˆÙ[‹—ØÚ]ÙX[ÙËœÚÝ×Ü™XÛÝ™\žWØXÝ[ÛœÊ™\KœÚÝ×Ü™XÛÝ™\žWØXÝ[ÛœÊBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ™\KœÝ]KÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+™\K^L
+B‚ˆYˆØÚ]Ø\ÞWØÚ[™ÙY
+Ù[‹\ÞNˆ›ÛÛ
+HOˆ›Û™N‚ˆˆˆ¹cê¹é yå*: b¹i*z/¤ùai{ï#9k¨9âjybª9å.øà z+¨y¥í¹d£:gìù.d9îéùîëz/ä:(c8à ˆˆˆ‚‚ˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ØÚ]ÙX[ÙËœÙ]Ø\ÞJ\ÞJB‚ˆYˆØÚ]Û›ÝXÙJÙ[‹Y\ÜØYÙNˆÝŠHOˆ›Û™N‚ˆˆˆ¹¦/¹é.ºggºf.ùhg¹£ä9é.»ï#9.#z-ìú/k:+¯¹ïkºhmxà ˆˆˆ‚‚ˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ØÚ]ÙX[ÙË˜\[™ÛY\ÜØYÙJÙ[‹—Ü]Û˜[YJ
+KY\ÜØYÙJB‚ˆYˆØYÙ[ÜÝ]\×ØÚ[™ÙY
+Ù[‹›ÝšY\ŽˆÝ‹Ý]NˆÝ‹]Z[ˆÝŠHOˆ›Û™N‚ˆˆˆ¹d#¹cì9¨à9­bùk£9¢$9d#¹b-ù¥¬9ï$ùkf9â­¹  y¥¡ù¨b;ï#9 h¹i#yd#¹."ù. 9§hz!ê¹á-º-lRxà ˆˆˆ‚‚ˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Ý›Û™H[™›ÝšY\ˆOHÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\Ž‚ˆÙ[‹—ØÚ]ÙX[ÙËœÙ]Ü›ÝšY\Š›ÝšY\‹Ý]K]Z[
+BˆYˆÝ]HOH˜ÛÛ›™XÝYŽ‚ˆÙ[‹—ØÚ]ÙX[ÙËœÚÝ×Ü™XÛÝ™\žWØXÝ[ÛœÊ˜[ÙJB‚ˆYˆÜ™XÛÛ›™XÝØZJÙ[ŠHOˆ›Û™N‚ˆˆˆ¹å*9¢-ù..ùbª:) y¬`ºaãz/ç»ï&ù.#y/&º!ê¹bª9¢dùo :+¯¹ïk¹ê¥ùcèøà ˆˆˆ‚‚ˆYˆÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\ˆOH›Ù™›[™HŽ‚ˆÙ[‹—ØÚ]Û›ÝXÙJ¹odùbcz`"y¢êyæ¡9¦+ùî«ùé®ùî¯ùª(yo#ûï&úg :) HRH9¥í¹cëù.éyà®x '9c®ú+¯¹ïk¸ 'xà ˆŠBˆ™]\›‚ˆYˆ›ÝÙ[‹˜Ú]ÛX[˜YÙ\‹œ™XÛÛ›™XÝÛ›ÝÊ
+N‚ˆÙ[‹—ØÚ]Û›ÝXÙJRH9mì¹g*9d#¹cì9¨à9­bù.+{ï#:+íùê#yëby. 9."øà ˆŠB‚ˆYˆÜ[—ÜÙ][™ÜÊÙ[‹ÛÝ\˜ÙNˆÝŠHOˆ›ÛÛ‚ˆˆˆ¹cê¹a`z+®9¦#¹èk¹å*9¢-ùbª9/g9¢dùo :+¯¹ïk»ï&ù¢`9§"z!ê¹bª9¢%¹§*¹çéy§iy®¤9gaù¢ä¹îçynmº+¬9oexà ˆˆˆ‚‚ˆYˆÛÝ\˜ÙHOHÑUS‘Ô×ÔÓÕTÑWÕTÑT—ÐPÕSÓŽ‚ˆÑÑÑT‹™XYÊ¹¢ä¹îçzgg¹å*9¢-ù§iy®¤9¢dùo :/ç¹£©y.#ºfj¹/-:+¯¹ïk»ï&œÛÝ\˜ÙOI\ˆ‹ÛÝ\˜ÙJBˆ™]\›ˆ˜[ÙB‚ˆX[ÙÈHRTÙ][™ÜÑX[ÙÊˆÙ[‹œÙ][™ÜËˆÙ[‹˜Ü™Y[X[ËˆÙ[‹ˆYÙ[ÛX[˜YÙ\\Ù[‹˜YÙ[ÛX[˜YÙ\‹ˆ]\ÚX×ÛX[˜YÙ\\Ù[‹›]\ÚX×Ü›ÝšY\—ÛX[˜YÙ\‹ˆ
+BˆYˆX[ÙË™^XÊ
+HOHQX[ÙË‘X[ÙÐÛÙKXØÙ\Y‚ˆ™]\›ˆYBˆ™]š[Ý\×Ø[Ø^\×ÛÛ—ÝÜHÙ[‹œÙ][™ÜË˜[Ø^\×ÛÛ—ÝÜˆ™]š[Ý\×Ø[Ý×Ø]]Û›Û[Ý\×ÝØ[ÈH›ÛÛ
+ˆÙ]]ŠÙ[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[È‹˜[ÙJBˆ
+Bˆ™]š[Ý\×Ü]Û˜[YHHÙ[‹—Ü]Û˜[YJ
+Bˆ™]š[Ý\×ÛÝÛ™\—ÛšXÚÛ˜[YHHÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YJ
+BˆžN‚ˆX[ÙË˜\J
+Bˆ^Ù\^Ù\[Ûˆ\È^Î‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆº+¯¹ïk¹¬¨y§"y/çykf;ï&žÙ^ßH‹Œ
+Bˆ™]\›ˆYBˆÝ\œ™[Ü]Û˜[YHHÙ[‹—Ü]Û˜[YJ
+BˆÙ[‹œÙ]Ú[™ÝÕ]JˆžÐTÑTÔVWÓSQ_H0­ÈØÝ\œ™[Ü]Û˜[Y_HŠBˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ØÚ]ÙX[ÙËœÙ]Ü]Û˜[YJÝ\œ™[Ü]Û˜[YJBˆÙ[‹œ]ZXÚ×Ü[™[œÙ]Ü]Û˜[YJÝ\œ™[Ü]Û˜[YJBˆYˆÝ\œ™[Ü]Û˜[YHOH™]š[Ý\×Ü]Û˜[YN‚ˆÙ[‹œ]Û˜[YWØÚ[™ÙY™[Z]
+Ý\œ™[Ü]Û˜[YJBˆÝ\œ™[ÛÝÛ™\—ÛšXÚÛ˜[YHHÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YJ
+BˆYˆÝ\œ™[ÛÝÛ™\—ÛšXÚÛ˜[YHOH™]š[Ý\×ÛÝÛ™\—ÛšXÚÛ˜[YN‚ˆÙ[‹›ÝÛ™\—ÛšXÚÛ˜[YWØÚ[™ÙY™[Z]
+Ý\œ™[ÛÝÛ™\—ÛšXÚÛ˜[YJBˆÙ[‹—ÜÞ[˜×ÛÝÛ™\—ÛšXÚÛ˜[YJÝ\œ™[ÛÝÛ™\—ÛšXÚÛ˜[YJBˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]ÛÝÛ™\—ÛšXÚÛ˜[YJÝ\œ™[ÛÝÛ™\—ÛšXÚÛ˜[YJBˆYˆÙ[‹œÙ][™ÜË˜[Ø^\×ÛÛ—ÝÜOH™]š[Ý\×Ø[Ø^\×ÛÛ—ÝÜ‚ˆÙ[‹œÙ]Ø[Ø^\×ÛÛ—ÝÜ
+Ù[‹œÙ][™ÜË˜[Ø^\×ÛÛ—ÝÜ\œÚ\ÝQ˜[ÙJBˆYˆ›ÛÛ
+Ù[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[ÊHOH™]š[Ý\×Ø[Ý×Ø]]Û›Û[Ý\×ÝØ[Î‚ˆÙ[‹œÙ]Ø[Ý×Ø]]Û›Û[Ý\×ÝØ[ÊˆÙ[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[Ëˆ\œÚ\ÝQ˜[ÙKˆ
+BˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊBˆÙ[‹—ÜØÚY[WØ[XšY[
+
+BˆÙ[‹—ÜØÚY[WÜÛÛ™×Ú[œÜ\˜][ÛŠ
+BˆYˆÙ[‹—ØÚ]ÙX[ÙÈ\È›Ý›Û™N‚ˆÝ]\ÈHÙ[‹˜YÙ[ÛX[˜YÙ\‹œÝ]\ÊÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\ŠBˆÙ[‹—ØÚ]ÙX[ÙËœÙ]Ü›ÝšY\ŠˆÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\‹ˆÝ]\ËœÝ]K˜[YKˆÝ]\Ë™]Z[ˆ
+BˆYˆÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\ˆOH›Ù™›[™HŽ‚ˆÙ[‹˜YÙ[ÛX[˜YÙ\‹œÝ\Ø˜XÚÙÜ›Ý[™ØÚXÚÊˆ
+Ù[‹œÙ][™ÜË˜ZWÜ›ÝšY\‹
+Kˆ›Ü˜ÙOUYKˆ
+Bˆ™\Ù]H“Õ’QT—Ô‘TÑUÖÜÙ[‹œÙ][™ÜË˜ZWÜ›ÝšY\—BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹mì¹b!ù£h¹..»ï&žÜ™\Ù]›X™[H‹Œ
+Bˆ™]\›ˆYB‚ˆYˆÜ[—ÜÛØÚX[ÚXŠÙ[ŠHOˆ›Û™N‚ˆˆˆ¹¢dùo : e9ïdy¤+ykd9.#¹éày.®º!ê¹.h9k©;ï&ùé®ùî¯ùb§ú ïy.#y/§z-e¹«i9ê¥ùcèøà ˆˆˆ‚‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Û™N‚ˆÈÙY\HÝYH›ÛÛH\È[ˆ[™\[™[Ü[]™[\XØ][Û‚ˆÈÚ[™ÝÈÛÈÚ[™ÝÜÈÚ]™\È]H›Ü›X[\ÚØ˜\ˆ]Û‹ˆH]ˆÈ™]Z[œÈÝÛ™\œÚ\›ÝYÚH]Ûˆ™Y™\™[˜ÙH[™Ø[ˆ™\ÝÜ™BˆÈHØ[YH[œÝ[˜ÙHÛˆH]\ˆY[HÛXÚË‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙÈHÛØÚX[X‘X[ÙÊˆÙ[‹œÛØÚX[ØÛY[ˆÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]ˆÙ[‹—ÛÝÛ™\—ÛšXÚÛ˜[YJ
+Kˆ›Û™Kˆ
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙË˜XÝ]™WÝš\Ú]˜ÛÛ›™XÝ
+Ù[‹—ÜÚÝ×ØYWÝš\Ú]
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙËœ›ÛÛWÙ]™[Ü™XÙZ]™Y˜ÛÛ›™XÝ
+Ù[‹—Ü›ÛÛWÙ]™[Ü™XÙZ]™Y
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙË˜YWÜÝXœØÜš\[Û—Û›ÝXÙK˜ÛÛ›™XÝ
+Ù[‹—ØYWÜÝXœØÜš\[Û—Û›ÝXÙJBˆÙ[‹—ÜÛØÚX[ÙX[ÙË™š[š\ÚY˜ÛÛ›™XÝ
+Ù[‹—ÜÛØÚX[ÙX[Ù×Ùš[š\ÚY
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙË™›ØÝ\×ÜÝ\Ü™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹œÝ\ÝÛÜš×Ý[Y\ŠBˆÙ[‹—ÜÛØÚX[ÙX[ÙË™›ØÝ\×Ü]\ÙWÜ™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹œ]\ÙWÝÛÜš×Ý[Y\ŠBˆÙ[‹—ÜÛØÚX[ÙX[ÙË™›ØÝ\×Ùš[š\ÚÜ™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹™š[š\ÚÝÛÜš×Ý[Y\ŠBˆÙ[‹—ÜÛØÚX[ÙX[ÙË™›ØÝ\×Ý\Ú×Ü™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹—ÜÙ]Ù›ØÝ\×Ý\ÚÊBˆÙ[‹—ÜÛØÚX[ÙX[ÙËÛ[Üœ›Ý×Ü™]šY]×Ü™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹—ÜÙ]ÝÛ[Üœ›Ý×Ü™]šY]ÊBˆÙ[‹—ÜÛØÚX[ÙX[ÙËœ›ÛÛWÜš]X[ÙYK˜ÛÛ›™XÝ
+Ù[‹—Ü›ÛÛWÜš]X[ÙYJBˆÙ[‹—ÜÛØÚX[ÙX[ÙËœ›ÛÛWØÚ[™ÙY˜ÛÛ›™XÝ
+Ù[‹—ÜÛØÚX[Ü›ÛÛWØÚ[™ÙY
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙËœ]ZXÚ×ØXÝ[Û—Ü™\]Y\ÝY˜ÛÛ›™XÝ
+Ù[‹—Ü›ÛÛWÜ]ZXÚ×ØXÝ[ÛŠBˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ù›ØÝ\×ÜÛ˜\ÚÝ
+Ù[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œÛ˜\ÚÝ
+
+JBˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ù›ØÝ\×Ø[˜[]XÜÊÙ[‹™›ØÝ\×Ø[˜[]XÜËœÛ˜\ÚÝ
+
+JBˆÈHÙXÛÛ™ÛXÚÈÛˆHY[H]\Ý™\ÝÜ™HHZ[š[Z^™YÝYK\›ÛÛBˆÈÚ[™ÝÈ[œÝXYÙˆX]š[™È]Y[ˆ[ˆH\ÚØ˜\‹ÑØÚË‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙËš\ÓZ[š[Z^™Y
+
+N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÚÝÓ›Ü›X[
+
+Bˆ[ÙN‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÚÝÊ
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙËœ˜Z\ÙWÊ
+NÈÙ[‹—ÜÛØÚX[ÙX[ÙË˜XÝ]˜]UÚ[™ÝÊ
+B‚ˆYˆÙ›ØÝ\×ÜÛ˜\ÚÝØÚ[™ÙY
+Ù[‹Û˜\ÚÝˆØš™XÝ
+HOˆ›Û™N‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ù›ØÝ\×ÜÛ˜\ÚÝ
+Û˜\ÚÝ
+BˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ù›ØÝ\×Ø[˜[]XÜÊÙ[‹™›ØÝ\×Ø[˜[]XÜËœÛ˜\ÚÝ
+
+JB‚ˆYˆÜ›ÛÛWÙ]™[Ü™XÙZ]™Y
+Ù[‹]™[ˆXÝ
+HOˆ›Û™N‚ˆˆˆ”^HH™XÙZ]™Y›ÛÛH[\˜XÝ[ÛˆÛˆ\È\ÚÝÜ]ˆˆˆ‚‚ˆYˆ]XÝÜ]ZY]Û[ÙJ
+K˜›ØÚÙY‚ˆ™]\›‚ˆÚ[™HÝŠ]™[™Ù]
+šÚ[™ŠHÜˆˆŠBˆXÝÜˆHÛØÚX[Ü]ÛX™[
+]™[™Ù]
+›šXÚÛ˜[YHŠJBˆY\ÜØYÙHHÝŠ]™[™Ù]
+›Y\ÜØYÙHŠHÜˆˆŠBˆX™[ÈHÈœÚÙHŽˆ¹¢,ù.¡¹¢,ù/h‹˜ÚY\ˆŽˆ¹îæy/h9b¨9¬®H‹™š[šÈŽˆº`$¹îæy/h9. 9§kùimº#-ˆŸBˆYˆÚ[™OHœ˜\ÙHŽ‚ˆ^HˆžØXÝÜŸ{ï&žÛY\ÜØYÙVÎŒL_H‚ˆXÝ]š]HHš\H‚ˆ[ÙN‚ˆ^HˆžØXÝÜŸ^ÛX™[Ë™Ù]
+Ú[™	ùîæy/h9cäy§iy. 9§hy¢/úeí9bª9  IÊ_H‚ˆXÝ]š]HHÈœÚÙHŽˆœÝ\œš\ÙY‹˜ÚY\ˆŽˆœÚ[[™È‹™š[šÈŽˆXHŸK™Ù]
+Ú[™š\HŠBˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JXÝ]š]KŒÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+^LŒ
+B‚ˆYˆÜÙ]Ù›ØÝ\×Ý\ÚÊÙ[‹]NˆÝ‹Z[]\Îˆ[
+HOˆ›Û™N‚ˆ\ÚÈHÙ[‹[YWÛY[[ÜžKÙÜË™š[™
+]JBˆYˆ\ÚÈ\È›Û™H[™ÝŠ]JKœÝš\
+
+N‚ˆ\ÚÈHÙ[‹[YWÛY[[ÜžKÙÜË˜Y
+ÝŠ]JKœÝš\
+
+JBˆYˆ\ÚÈ\È›Ý›Û™N‚ˆÙ[‹[YWÛY[[ÜžKœÙ[XÝÝ\ÚÊ\ÚËšY
+BˆYWØ]H›Û™BˆYˆ[
+Z[]\ÊHˆ‚ˆYWØ]H
+]][YK››ÝÊ
+K˜\Ý[Y^›Û™J
+H
+È[YY[JZ[]\ÏZ[
+Z[]\ÊJJKš\ÛÙ›Ü›X]
+
+BˆÙ[‹™›ØÝ\×Ø[˜[]XÜËœÙ]ØÝ\œ™[Ý\ÚÊ]KYWØ]YYWØ]\™Ù]ÜÙXÛÛ™Ï[X^
+[
+Z[]\ÊJH
+ˆŒ
+BˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ù›ØÝ\×Ø[˜[]XÜÊÙ[‹™›ØÝ\×Ø[˜[]XÜËœÛ˜\ÚÝ
+
+JBˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆº/æz/k¹cê¹æëù. 9.í¹.¢ûï&žÝ]VÎŽ_H‹Œ
+B‚ˆYˆÜÙ]ÝÛ[Üœ›Ý×Ü™]šY]ÊÙ[‹]NˆÝŠHOˆ›Û™N‚ˆÙ[‹™›ØÝ\×Ø[˜[]XÜËœÙ]ÝÛ[Üœ›Ý×Ý\ÚÊ]JBˆYˆ]N‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹¦#¹i*yë+9. 9.í¹.¢ú+¬9ioy.¡»ï&žÝ]VÎŽ_H‹Œ
+Bˆ[ÙN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹¦#¹i*yë+9. 9.í¹.¢ùmì¹®!yên¸à ˆ‹ÌŒ
+B‚ˆYˆÜ›ÛÛWÜš]X[ÙYJÙ[‹X™[ˆÝŠHOˆ›Û™N‚ˆYˆ]XÝÜ]ZY]Û[ÙJ
+K˜›ØÚÙY‚ˆ™]\›‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹¢/úeí9£ä:a¤»ï&žÛX™[{ï yi)ùk­¹. :-mùbª:-mù§ixà ˆ‹L
+B‚ˆYˆØYWÜÝXœØÜš\[Û—Û›ÝXÙJÙ[‹Y\ÜØYÙNˆÝŠHOˆ›Û™N‚ˆYˆ]XÝÜ]ZY]Û[ÙJ
+K˜›ØÚÙY‚ˆ™]\›‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+Y\ÜØYÙKŒ
+B‚ˆYˆÜÛØÚX[ÙX[Ù×Ùš[š\ÚY
+Ù[ŠHOˆ›Û™N‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙË™[]S]\Š
+NÈÙ[‹—ÜÛØÚX[ÙX[ÙÈH›Û™B‚ˆYˆÜÛØÚX[ÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹«ãÈÌ9éä¹b-ù¥¬9¢/úeí9â­¹  {ï&ùoàú-ìù£"zg 9cäz` {ï#9i,z-)y¥í¹/çyåfyé®ùî¯ù¨c9k¨8à ˆˆˆ‚‚ˆYˆ›ÝÙ[‹œÛØÚX[ØÛY[œÚYÛ™YÚ[ˆÜˆ
+Ù[‹—ÜÛØÚX[Ý™XY\È›Ý›Û™H[™Ù[‹—ÜÛØÚX[Ý™XYš\Ô[›š[™Ê
+JN‚ˆ™]\›‚ˆÙ[‹—ÛX^X™WÜÞ[˜×ÛÝÛ™\—ÛšXÚÛ˜[YJ
+BˆÙ[XÝYÜ›ÛÛHHÙ[‹—ÜÛØÚX[ÙX[ÙË˜Ý\œ™[Ü›ÛÛWÚYYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™H[ÙH›Û™BˆÈH\œÚ\ÝYØØ[›ÛÛHQ\È›Ý[ˆ[š]][ÛˆÈ™KY[\ˆH›ÛÛK‚ˆÈÛ›HH›ÛÛH^XÚ]HÙ[XÝY[ˆHÝYK\›ÛÛHÚ[™ÝÈ\ÈÙ[‚ˆ›ÛÛWÚYHÙ[XÝYÜ›ÛÛBˆYˆ›ÛÛWÚYOHÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œ›ÛÛWÚY‚ˆÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œÙ]Ü›ÛÛWÚY
+›ÛÛWÚY
+BˆÛ˜\ÚÝHÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œÛ˜\ÚÝ
+
+Bˆ™\Ù[˜ÙHHÂˆÛÜšÚ[™ÈŽˆÛ˜\ÚÝš\×Ü[›š[™ËˆÙ^WÜÙXÛÛ™ÈŽˆÛ˜\ÚÝÙ^WÜÙXÛÛ™ËˆœÙ\ÜÚ[Û—ÜÝ\YØ]ŽˆÛ˜\ÚÝœÙ\ÜÚ[Û—ÜÝ\YØ]ˆ›Ý]š]ÚÙ^HŽˆÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]ˆœ›ÛÛWÚYŽˆ›ÛÛWÚYˆœ]ZXÚ×ÜÝ]\ÈŽˆÙ[‹—ØXÝ]™WÜ›ÛÛWÜ]ZXÚ×ÜÝ]\Ê
+Kˆœ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]ŽˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]š\ÛÙ›Ü›X]
+
+BˆYˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]\È›Ý›Û™H[ÙH›Û™KˆBˆÙ[™ÚX\™X]HÙ[‹—ÜÛØÚX[ÚX\™X]ÙYHÜˆ[YK›[Û›ÝÛšXÊ
+HHÙ[‹—Û\ÝÜÛØÚX[ÚX\™X]Ø]HLŒˆYˆÙ[™ÚX\™X]‚ˆÙ[‹—Û\ÝÜÛØÚX[ÚX\™X]Ø]H[YK›[Û›ÝÛšXÊ
+BˆÙ[‹—ÜÛØÚX[ÚX\™X]ÙYHH˜[ÙBˆ™XYHÛØÚX[Þ[˜Õ™XY
+Ù[‹œÛØÚX[ØÛY[™\Ù[˜ÙKÙ[‹Ù[™ÚX\™X]\Ù[™ÚX\™X]
+BˆÙ[‹—ÜÛØÚX[Ý™XYH™XYˆ™XY˜ÛÛ\]Y˜ÛÛ›™XÝ
+Ù[‹—ÜÛØÚX[Ù\Ú›Ø\™Ü™XÙZ]™Y
+Bˆ™XY™˜Z[Y˜ÛÛ›™XÝ
+Ù[‹—ÜÛØÚX[ÜÞ[˜×Ù˜Z[Y
+Bˆ™XY™š[š\ÚY˜ÛÛ›™XÝ
+Ù[‹—ÜÛØÚX[Ý™XYÙš[š\ÚY
+Bˆ™XYœÝ\
+
+B‚ˆYˆÜÛØÚX[Ù\Ú›Ø\™Ü™XÙZ]™Y
+Ù[‹]NˆXÝ
+HOˆ›Û™N‚ˆˆˆ¹¦/¹é.¹¥¬9.,ºeê9£ä:a¤»ï#9nm¹g*9cã9¥®y§+9g,9¢dùo 9cã9aky«æùå.úgh¸à ˆˆˆ‚‚ˆÈHÞ[˜È™XY[™XYH™]ÚY\È\Ú›Ø\™ˆ™[™\ˆ]^XÝˆÈ^[ØY[œÝXYÙˆ\ÜÝZ[™ÈHÙXÛÛ™›ØÚÚ[™È™\]Y\Ýœ›ÛHHRBˆÈ™XYÈ\È\ÈÚ]XZÙ\ÈHY\‰ÜÈœ™\Ú›ØÝ\ÈÝ]Hš\ÚX›HÚ][‚ˆÈHØ[YHX\™X]‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙË˜\WÙ\Ú›Ø\™
+]JB‚ˆÈHØXÚYÛ˜\ÚÝ\È\ÙY[›Üˆ^Z[š[™ÈH\ÝÛ›ÝÛˆÝ]KˆÈ]]\È›Ý\›Z\ÜÚ[ÛˆÈ™[Ü[ˆHš\Ú]Ú[™ÝÈÜˆ[Z]H™]ÂˆÈ[\˜XÝ[Û‹ˆÛ›HHÙ\™\‹XÛÛ™š\›YY^[ØYX^HšYÙÙ\ˆÛØÚX[ˆÈÚYHY™™XÝË‚ˆYˆ]K™Ù]
+—ÜÞ[˜×ÛÙ™›[™HŠHÜˆ]K™Ù]
+™]WÜÛÝ\˜ÙHŠHOH›ØØ[ØØXÚHŽ‚ˆ™]\›‚‚ˆYˆ]XÝÜ]ZY]Û[ÙJ
+K˜›ØÚÙY‚ˆ™]\›‚ˆ›Üˆš\Ú][ˆ]K™Ù]
+š\Ú]ÈŠHÜˆ×N‚ˆš\Ú]ÚYHÝŠš\Ú]™Ù]
+šY‹ˆŠJBˆYˆš\Ú]ÚY[™š\Ú]ÚY›Ý[ˆÙ[‹—ÜÙY[—Ýš\Ú]ÚYÎ‚ˆÙ[‹—ÜÙY[—Ýš\Ú]ÚYË˜Y
+š\Ú]ÚY
+BˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JœÚ[[™È‹ŒÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆžÜÛØÚX[Ü]ÛX™[
+š\Ú]™Ù]
+	ÛÝÛ™\—ÛšXÚÛ˜[YIÊHÜˆš\Ú]™Ù]
+	ÛšXÚÛ˜[YIÊJ_y§iy.,ºeê9ei»ï W¹¢dùo 8 '9¤+ykd:!ê¹.h9k©8 'ycëù.éy£©ycåøà ˆ‹ÍŒ
+BˆXÝ]™HH]K™Ù]
+˜XÝ]™WÝš\Ú]ÈŠHÜˆ×BˆYˆXÝ]™N‚ˆÙ[‹—ÜÚÝ×ØYWÝš\Ú]
+XÝ]™VÌJB‚ˆYˆÜÛØÚX[ÜÞ[˜×Ù˜Z[Y
+Ù[‹Y\ÜØYÙNˆÝŠHOˆ›Û™N‚ˆˆˆ’ÙY\H]]ZY]Ú[HXZÚ[™È[ˆ[˜]˜Z[X›H›ÛÛH[™\œÝ[™X›Kˆˆˆ‚‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙË˜Ý\œ™[Ü›ÛÛWÚY‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙË—ÜÙ]ÜÝ]\Êˆˆº!ê¹.h9k©9¦ ¹¥í¹é®ùî¯ûï&žÛY\ÜØYÙ_H‚ˆ»ï&ùaky«æù.ãy/&¹§+9g,:+¨y¥í»ï#9ïdyîç9 h¹i#yd#º!ê¹bª:aãz+åxà ˆ‚ˆ
+Bˆ[YˆÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œÛ˜\ÚÝ
+
+Kš\×Ü[›š[™Î‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙË—ÜÙ]ÜÝ]\Êˆ¹§+9g,9.$ù¬ê9mì¹o 9iâûï&ù/h:/æ9¬¨y§"yb¨9aiz!ê¹.h9k©;ï#9¤+ykd9â­¹  y/&¹g*9ïdyîç9 h¹i#yd#º!ê¹bª9d#9«ixà ˆ‚ˆ
+Bˆ[ÙN‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙË—ÜÙ]ÜÝ]\Êˆ¹/h:/æ9¬¨y§"yb¨9aiz!ê¹.h9k©;ï&ù§+9g,9b§ú ïy.#ycåùolydã{ï#: e9ïdyd#¹¤+ykd9â­¹  y/&º!ê¹bª9d#9«ixà ˆ‚ˆ
+B‚ˆYˆÜ™XÛÜ™ÜÛØÚX[Ü›ÛÛWÙ]™[
+Ù[‹›ÛÛWÚYˆÝ‹Ú[™ˆÝŠHOˆ›Û™N‚ˆˆˆ”™XÛÜ™HY™XÞXÛH]™[Ú]Ý]›ØÚÚ[™ÈH\ÚÝÜ]ˆˆˆ‚‚ˆYˆ›ÝÙ[‹œÛØÚX[ØÛY[œÚYÛ™YÚ[Ž‚ˆ™]\›‚ˆ™XYHÛØÚX[]™[™XY
+ˆÙ[‹œÛØÚX[ØÛY[ˆÈœ›ÛÛWÚYŽˆ›ÛÛWÚYšÚ[™ŽˆÚ[™\™Ù]ÚYŽˆ›Û™K›Y\ÜØYÙHŽˆˆŸKˆÙ[‹ˆ
+BˆÙ[‹—ÜÛØÚX[Ù]™[Ý™XYË˜\[™
+™XY
+Bˆ™XY™š[š\ÚY˜ÛÛ›™XÝ
+[X™NˆÙ[‹—ÜÛØÚX[Ù]™[Ùš[š\ÚY
+™XY
+JBˆ™XYœÝ\
+
+B‚ˆYˆÜÛØÚX[Ù]™[Ùš[š\ÚY
+Ù[‹™XYˆÛØÚX[]™[™XY
+HOˆ›Û™N‚ˆYˆ™XY[ˆÙ[‹—ÜÛØÚX[Ù]™[Ý™XYÎ‚ˆÙ[‹—ÜÛØÚX[Ù]™[Ý™XYËœ™[[Ý™J™XY
+Bˆ™XY™[]S]\Š
+B‚ˆYˆÜÛØÚX[Ü›ÛÛWØÚ[™ÙY
+Ù[‹›ÛÛWÚYˆØš™XÝ
+HOˆ›Û™N‚ˆˆˆš[™›ÛÛHÙ[XÝ[ÛˆÈHÚ[™ÛHØØ[›ØÝ\ÈÙ\ÜÚ[Û‹ˆˆˆ‚‚ˆÙ[‹™›ØÝ\×ÜÙ\ÜÚ[Û‹œÙ]Ü›ÛÛWÚY
+ÝŠ›ÛÛWÚY
+HYˆ›ÛÛWÚY[ÙH›Û™JBˆYˆ›Ý›ÛÛWÚY‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÈHˆ‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]H›Û™BˆÙ[‹—ÜØÚY[WÜÛØÚX[ÝXÚÊ
+B‚ˆYˆØXÝ]™WÜ›ÛÛWÜ]ZXÚ×ÜÝ]\ÊÙ[ŠHOˆÝŽ‚ˆYˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]\È›Ý›Û™H[™]][YK››ÝÊ
+K˜\Ý[Y^›Û™J
+HHÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÈHˆ‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]H›Û™Bˆ™]\›ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\Â‚ˆYˆÜ›ÛÛWÜ]ZXÚ×ØXÝ[ÛŠÙ[‹XÝ[ÛŽˆÝŠHOˆ›Û™N‚ˆˆˆ•\›ˆ›ÛÛHXÝ[Ûˆ˜\Ù\È[È™X[ØØ[›ØÝ\ÈÝ]HÚ[™Ù\Ëˆˆˆ‚‚ˆXÝ[ÛˆHÝŠXÝ[ÛŠKœÝš\
+
+BˆYˆXÝ[ÛˆOH¹¢$y.gùo 9méy.¡ˆŽ‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÈHˆ‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]H›Û™BˆÙ[‹œÝ\ÝÛÜš×Ý[Y\Š
+Bˆ[YˆXÝ[ÛˆOH¹a£ycmÈÌ9b!ºd§ÈŽ‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÈH¹a£ycmÌÌ9b!ºd§È‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]H]][YK››ÝÊ
+K˜\Ý[Y^›Û™J
+H
+È[YY[JZ[]\ÏLÌ
+BˆYˆ›ÝÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÙ[‹œÝ\ÝÛÜš×Ý[Y\Š
+Bˆ[YˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÊÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ËÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]
+Bˆ[YˆXÝ[ÛˆOH¹c®ùe§y¬-Ž‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÈH¹c®ùe§y¬-‚ˆÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]H]][YK››ÝÊ
+K˜\Ý[Y^›Û™J
+H
+È[YY[JZ[]\ÏLL
+BˆÙ[‹œ]\ÙWÝÛÜš×Ý[Y\Š
+Bˆ[ÙN‚ˆ™]\›‚ˆYˆÙ[‹—ÜÛØÚX[ÙX[ÙÈ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÙX[ÙËœÙ]Ü›ÛÛWÜ]ZXÚ×ÜÝ]\ÊˆÙ[‹—ØXÝ]™WÜ›ÛÛWÜ]ZXÚ×ÜÝ]\Ê
+KÙ[‹—Ü›ÛÛWÜ]ZXÚ×ÜÝ]\×Ù^\™\×Ø]ˆ
+BˆÙ[‹—ÜØÚY[WÜÛØÚX[ÝXÚÊ
+B‚ˆYˆÜØÚY[WÜÛØÚX[ÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ”\ÚÛÜšËÜ›ÛÛH˜[œÚ][ÛœÈ›Û\H[œÝXYÙˆØZ][™ÈÌÙXÛÛ™Ëˆˆˆ‚‚ˆYˆ›ÝÙ[‹œÛØÚX[ØÛY[œÚYÛ™YÚ[Ž‚ˆ™]\›‚ˆ[Y\ˆHÙ]]ŠÙ[‹œÛØÚX[ÜÞ[˜×Ý[Y\ˆ‹›Û™JBˆYˆ[Y\ˆ\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[ÚX\™X]ÙYHHYBˆ[Y\‹œÝ\
+L
+B‚ˆYˆÜÚÝ×ØYWÝš\Ú]
+Ù[‹Y\ŽˆXÝ
+HOˆ›Û™N‚ˆYˆ]XÝÜ]ZY]Û[ÙJ
+K˜›ØÚÙY‚ˆ™]\›‚ˆÈXÝ]™Hš\Ú]È›Ü›X[HØ\œžHH]X˜\ÙHYˆÙY\H]\›Z[š\ÝXÂˆÈ˜[˜XÚÈ›ÜˆÛ\ˆ˜XÚÙ[™™\ÜÛœÙ\ÈÛÈHÌ\ÙXÛÛ™X\™X]Ù\ÂˆÈ›Ý™\X]YH™[Ü[ˆHZ[š[Z^™Yš\Ú]Ú[™ÝË‚ˆš\Ú]ÚYHÝŠˆY\‹™Ù]
+šYŠBˆÜˆY\‹™Ù]
+š\Ú]ÚYŠBˆÜˆˆžÜY\‹™Ù]
+	Ý\Ù\—ÚY	Ë	ÉÊ_NžÜY\‹™Ù]
+	Ýš\Ú]ÜÝ\YØ]	Ë	ÉÊ_NžÜY\‹™Ù]
+	ÛšXÚÛ˜[YIË	ÉÊ_H‚ˆ
+BˆYˆš\Ú]ÚY[™š\Ú]ÚY[ˆÙ[‹—ÜÚÝÛ—ØXÝ]™WÝš\Ú]ÚYÎ‚ˆ™]\›‚ˆYˆš\Ú]ÚY‚ˆÙ[‹—ÜÚÝÛ—ØXÝ]™WÝš\Ú]ÚYË˜Y
+š\Ú]ÚY
+BˆÙ[‹—ØYWÝš\Ú]ÝÚ[™ÝËœÚÝ×ÜY\ŠˆY\‹ˆÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]ˆÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+Kˆ
+B‚ˆYˆÜÛØÚX[Ý™XYÙš[š\ÚY
+Ù[ŠHOˆ›Û™N‚ˆYˆÙ[‹—ÜÛØÚX[Ý™XY\È›Ý›Û™N‚ˆÙ[‹—ÜÛØÚX[Ý™XY™[]S]\Š
+NÈÙ[‹—ÜÛØÚX[Ý™XYH›Û™B‚ˆYˆÙ]Ø]]ÛX]X×ÙÜ[X›[™ÊÙ[‹[˜X›Yˆ›ÛÛ
+HOˆ›Û™N‚ˆˆˆ¹d+ùå*9¢%¹`g9å*9cê¹g*9§+9§.¹å'ù¢$9æ¡:eí9«aùâhºj¦¸à ˆˆˆ‚‚ˆÙ[‹œÙ][™ÜË˜]]ÛX]X×ÙÜ[X›[™ÈH›ÛÛ
+[˜X›Y
+BˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊBˆÙ[‹—ÜØÚY[WØ[XšY[
+
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+¹`m¹l%9cäyâhºj¦¹mì¹o 9d+øà ˆˆYˆ[˜X›Y[ÙH¹`m¹l%9cäyâhºj¦¹mì¹alúeëxà ˆ‹Ì
+B‚ˆYˆÙ]ÚÝ\›WØ[››Ý[˜Ù[Y[
+Ù[‹[˜X›Yˆ›ÛÛ
+HOˆ›Û™N‚ˆˆˆ¹d+ùå*9¢%¹`g9å*9¥m9à®y¢©y¥í¸à ˆˆˆ‚‚ˆÙ[‹œÙ][™ÜËšÝ\›WØ[››Ý[˜Ù[Y[H›ÛÛ
+[˜X›Y
+BˆÙ[‹—Û\ÝØ[››Ý[˜ÙYÚÝ\ˆHˆ‚ˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊBˆÙ[‹œÚÝ×ÜÜYXÚ
+¹¥m9à®y¢©y¥í¹mì¹o 9d+øà ˆˆYˆ[˜X›Y[ÙH¹¥m9à®y¢©y¥í¹mì¹alúeëxà ˆ‹ÌŒ
+B‚ˆYˆØ\Ø]Ø\™[™\Ü×ÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹cê¹¨.y£k¹bcycì9n¥9å*9ìnùb*ùb!ù£hºaczil9bª9/g;ï#9.#z+îùcå¹¨!úh¦9¢%¹¥¡ù¨hùa¡yk®xà ˆˆˆ‚‚ˆØ]YÛÜžHHXÝ]™WØ\XØ][Û—ØØ]YÛÜžJ
+BˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÙ[‹—Ù›ØÝ\×Ü]X[]WÝ˜XÚÙ\‹››ÝWØ\XØ][Û—ÜÝÚ]Ú
+Ø]YÛÜžJB‚ˆYˆ
+ˆ›ÝÙ[‹œÙ][™ÜË˜\Ø]Ø\™[™\ÜÂˆÜˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÂˆÜˆ[YK›[Û›ÝÛšXÊ
+HÙ[‹—ÛX[X[ØXÝ]š]WÝ[[ˆ
+N‚ˆ™]\›‚ˆYˆØ]YÛÜžHOHÙ[‹—Û\ÝØ\ØØ]YÛÜžN‚ˆ™]\›‚ˆÙ[‹—Û\ÝØ\ØØ]YÛÜžHHØ]YÛÜžBˆX\[™ÈHÈ›]\ÚXÈŽˆšXYÛ™\È‹›Ù™šXÙHŽˆÛÜšË\ÝYH‹˜ÛÙ[™ÈŽˆ™Y\Y›ØÝ\È‹œ™XY[™ÈŽˆ›šYÚ\™XY[™ÈŸBˆÙ[‹—ØÚ[™ÙWØ[XšY[ØXÝ]š]JX\[™Ë™Ù]
+Ø]YÛÜžK››Û™HŠJB‚ˆYˆ^WÜ˜[™ÛWÜÛÛ™ÊÙ[ŠHOˆÝŽ‚ˆˆˆº!ê¹bª9kîù¢o¹§ 9cëùå*9æ¡9§+9§.¹¤«y¥/¹fj9nmºf£ù§.¹o 9iâù¤«y¥/ºfb9©f¹å'øà ˆˆˆ‚‚ˆYˆÙ[‹›]\ÚX×ØÛÛ›Û\‹œ^WÜÛÛ™Êˆ‹ºfb9©f¹å'È‹˜[™ÛWØ\\ÝUYJN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹«hùg*:!ê¹bª9kîù¢o¹cëùå*9¤«y¥/¹fj;ï#9nmºf£ù§.¹¤«y¥/¹. :i¥ºfb9©f¹å'ø )ˆ‹Œ
+Bˆ[ÙN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+ºgìù.d9¤ãy/g9«hùg*9i!9ä!¹.+{ï#:+íùê#yëby. 9."øà ˆ‹ÌŒ
+Bˆ™]\›ˆºfb9©f¹å'úf£ù§.¹«c9¦ìˆ‚‚ˆYˆÜ^WÜ˜[™ÛWÜÛÛ™×ÛYØXÞJÙ[ŠHOˆÝŽ‚ˆˆˆ¹.ã¹¤'9í(¹îäù§§9.+yæ¡:fb9©f¹å'ù«c9¦ìº(c:f£ù§.º`"y¢ê{ï#9a£y¢iú(c9¤«y¥/¹.#¹j¤¹/dù¨(zj£8à ˆˆˆ‚‚ˆYˆÙ[‹›]\ÚX×ØÛÛ›Û\‹œ^WÜÛÛ™Êˆ‹ºfb9©f¹å'È‹˜[™ÛWØ\\ÝUYJN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹«hùg*9.ãºfb9©f¹å'ùæ¡9«c9¦ì¹îäù§§9.+zf£ù§.º`"y¢ê{ï#9nm¹¨.9kîyk§ºfay¤«y¥/¹«c9¦ì¸ )¸ )ˆ‹Œ
+Bˆ[ÙN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹."¹. :hnzgìù.d9¤ãy/g:/æ9g*9i!9ä!¹.+{ï#:+íùê#yëby. 9."øà ˆ‹ÌŒ
+Bˆ™]\›ˆºfb9©f¹å'úf£ù§.¹«c9¦ìˆ‚‚ˆYˆÛÛ›ÛÛ]\ÚXÊÙ[‹XÝ[ÛŽˆÝŠHOˆ›ÛÛ‚ˆˆˆ¹o ¹«iy£©ùb-¹b&¹¢cyç'ù«hùo 9iâù¤«y¥/¹æ¡›ÝšY\»ï#9.#zaãy¥¬:`"y¢êyam¹.å¹¤«y¥/¹fj8à ˆˆˆ‚‚ˆYˆÙ[‹›]\ÚX×ØÛÛ›Û\‹œ\™›Ü›JXÝ[ÛŠN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹«hùg*:/ç¹£©yìîùîçù¤«y¥/¹fj8 )ˆ‹ŒŒ
+Bˆ™]\›ˆYBˆÙ[‹œÚÝ×ÜÜYXÚ
+ºgìù.d9£©ùb-º/æ9g*9i!9ä!¹.+{ï#:+íùê#yëby. 9."øà ˆ‹ÌŒ
+Bˆ™]\›ˆ˜[ÙB‚ˆYˆÛ]\ÚX×ØÛÛ›ÛÜ™\Ý[
+Ù[‹™\Ý[ˆ]\ÚXÐÛÛ›Û™\Ý[ÛÛ™Ô^X˜XÚÔ™\Ý[
+HOˆ›Û™N‚ˆˆˆ¹cê¹leyé.¹ìîùîçù£©ùb-¹l`º/å9fç¹æ¡9ç'ùk§¹îäù§§9d£: ïyb¦ùëbyî©øà ˆˆˆ‚‚ˆ\×ÜÝ]\ÈH\Ú[œÝ[˜ÙJ™\Ý[]\ÚXÐÛÛ›Û™\Ý[
+H[™™\Ý[˜XÝ[ÛˆOHœÝ]\È‚ˆYˆ\Ú[œÝ[˜ÙJ™\Ý[]\ÚXÐÛÛ›Û™\Ý[
+N‚ˆ˜XÚ×Ø\\ÝH™\Ý[œÝ]\Ë˜XÚË˜\\ÝYˆ™\Ý[œÝ]\Ë˜XÚÈ[ÙHˆ‚ˆ˜XÚ×Ý]HH™\Ý[œÝ]\Ë˜XÚË]HYˆ™\Ý[œÝ]\Ë˜XÚÈ[ÙHˆ‚ˆ[ÙN‚ˆ˜XÚ×Ø\\ÝH™\Ý[˜Ý\œ™[Ø\\Ýˆ˜XÚ×Ý]HH™\Ý[˜Ý\œ™[Ý]Bˆ˜[Z[WÛ]\ÚXÈH˜[Z[WÛ]\ÚX×Û[ÙJ˜XÚ×Ø\\Ý˜XÚ×Ý]JBˆYˆ˜[Z[WÛ]\ÚXÎ‚ˆÈ9d+9b,9â.yæ¡9«c9¥íº+ªyaky«æùab9d+9«c;ï#9¦ ¹¥í¹aãùl$y¦kº`&¹..ùbª9¢dù¢l8à ‚ˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]K”ÒU
+BˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JšXYÛ™\È‹LŒÌ
+BˆÙ[‹—ÛX[X[ØXÝ]š]WÝ[[H[YK›[Û›ÝÛšXÊ
+H
+ÈLŒˆYˆ™\Ý[œÝXØÙ\ÜÈ[™›Ý\×ÜÝ]\È[™›Ý˜[Z[WÛ]\ÚXÎ‚ˆÙ[‹—ØÚ[™ÙWØ[XšY[ØXÝ]š]JšXYÛ™\ÈŠBˆÙ[‹—ÛX[X[ØXÝ]š]WÝ[[H[YK›[Û›ÝÛšXÊ
+H
+ÈBˆYˆ\Ú[œÝ[˜ÙJ™\Ý[ÛÛ™Ô^X˜XÚÔ™\Ý[
+N‚ˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊBˆÙ[‹œÚÝ×ÜÜYXÚ
+™\Ý[›Y\ÜØYÙKŒŒ
+B‚ˆYˆÙ]ØXÝ]š]JÙ[‹XÝ]š]NˆÝŠHOˆ›Û™N‚ˆˆˆ¹¢bùbª:`"y¢êy/ë¹«hùâb9bª9/g:(j9.+yæ¡9.îù¡#ùk£9¥m9bª9/g8à ˆˆˆ‚‚ˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JXÝ]š]KLŒÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+¹bª9/g9mì¹b!ù£h»ï#9aky«æùo 9iâú(j9¯%9ei¸à ˆ‹Ž
+B‚ˆYˆ\]Z\ÛÝ]š]
+Ù[‹Ý]š]ÚÙ^NˆÝŠHOˆ›Û™N‚ˆˆˆº(áyi!ùmìº)èúe yj ú(hûï&ùên¹keùë)¹.,¹ h¹i#yîãùan9i%º)à¸à ˆˆˆ‚‚ˆ[ÝÙYHÚ][KšÙ^H›Üˆ][H[ˆ[›ØÚÙYÛÝ]š]ÊÙ[‹ÛÜš×Ý[Y\‹[›ØÚÙYÛÝ]š]ØÛÝ[
+
+J_BˆYˆÝ]š]ÚÙ^H[™Ý]š]ÚÙ^H›Ý[ˆ[ÝÙY‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+º/æyieùj ú(hú/æ9g*9éæ9ká¹ã¢ùfïzaã;ï#9a£yí+ú+¨yméy/g9. 9l#ù¥í¹l,y¦í:/äy. 9à®xà ˆ‹LŒ
+Bˆ™]\›‚ˆÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]HÝ]š]ÚÙ^BˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊBˆÙ[‹—ÛX\Ú×ØØXÚK˜ÛX\Š
+NÈÙ[‹—Ü™Yœ™\ÚÜ^X\
+
+BˆX™[H™^
+
+][K›˜[YH›Üˆ][H[ˆÕU’UÈYˆ][KšÙ^HOHÝ]š]ÚÙ^JK¹îãùan9aky«æÈŠBˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹mì¹£h¹."»ï&žÛX™[xà ˆ‹ÌŒ
+B‚ˆYˆÜ[—ÜÚ^™WØÛÛ›Û
+Ù[ŠHOˆ›Û™N‚ˆˆˆ¹¢dùo :/ç¹îëyl.¹kî9®äygeùnm¹k§¹¥í¹n¥9å*;ï#9.#y¥.ycæ9.#yd#9bª9/g9.búeí9æ¡9«å9/¢øà ˆˆˆ‚‚ˆX[ÙÈHÚ^™PÛÛ›ÛX[ÙÊÙ[‹œÙ][™ÜË™\Ü^WÚZYÚÙ[‹Ù[‹—Ü]Û˜[YJ
+JBˆX[ÙË˜[YWØÚ[™ÙY˜ÛÛ›™XÝ
+Ù[‹œÙ]Ù\Ü^WÚZYÚ
+BˆX[ÙË™^XÊ
+BˆØ]™WÜÙ][™ÜÊÙ[‹œÙ][™ÜÊB‚ˆYˆÜÜÚ][Û—Ù›Ø][™×Ü[™[
+Ù[‹[™[ˆUÚYÙ]
+HOˆ›Û™N‚ˆˆˆ¹¢¢¹oêù£múgh¹§où¥/¹g*9k¨9âjy¥àz/®ynmºfd9b-¹g*9odùbcylcùneycëú)àyc.¹gçøà ˆˆˆ‚‚ˆ[™[˜Y\ÝÚ^™J
+Bˆ\™XHHÙ[‹—ÜØÜ™Y[—ÙÙ[ÛY]žJ
+BˆHÙ[‹ž
+
+HH[™[ÚY
+
+HHLˆHHÙ[‹žJ
+H
+ÈX^
+Ù[‹šZYÚ
+
+HËÈÊBˆYˆ\™XH\È›Ý›Û™N‚ˆYˆ\™XK›Y
+
+N‚ˆHÙ[‹ž
+
+H
+ÈÙ[‹ÚY
+
+H
+ÈLˆHZ[ŠX^
+\™XK›Y
+
+JK\™XKœšYÚ
+
+HH[™[ÚY
+
+H
+ÈJBˆHHZ[ŠX^
+K\™XKÜ
+
+JK\™XK˜›ÝÛJ
+HH[™[šZYÚ
+
+H
+ÈJBˆ[™[›[Ý™JJB‚ˆYˆÚÝ×Ü]ZXÚ×Ü[™[
+Ù[ŠHOˆ›Û™N‚ˆˆˆ¹cã9aîùb!ù£h¹oêù£mùcèú(¢ûï&ùa£y«(ycã9aîùêâùclù¥-º-møà ˆˆˆ‚‚ˆYˆÙ[‹œ]ZXÚ×Ü[™[š\Õš\ÚX›J
+N‚ˆÙ[‹œ]ZXÚ×Ü[™[šYJ
+Bˆ™]\›‚ˆÙ[‹—ÜÜÚ][Û—Ù›Ø][™×Ü[™[
+Ù[‹œ]ZXÚ×Ü[™[
+BˆÙ[‹œ]ZXÚ×Ü[™[œÚÝÊ
+NÈÙ[‹œ]ZXÚ×Ü[™[œ˜Z\ÙWÊ
+B‚ˆYˆÚÝ×ÝÛÜš×ØÛÛ›ÛÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹g*:+¨y¥íº/ä:(c9¥í¹¦/¹é.¹¦ ¹`g9d£9îäù§gù.)9.*¹¤ãy/g9¬%9¬èxà ˆˆˆ‚‚ˆYˆ›ÝÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÙ[‹œÝ\ÝÛÜš×Ý[Y\Š
+Bˆ™]\›‚ˆÙ[‹—ÜÜÚ][Û—Ù›Ø][™×Ü[™[
+Ù[‹ÛÜš×ØÛÛ›ÛÊBˆÙ[‹ÛÜš×ØÛÛ›ÛËœÚÝÊ
+NÈÙ[‹ÛÜš×ØÛÛ›ÛËœ˜Z\ÙWÊ
+B‚ˆYˆÜ]ZXÚ×ÝÛÜš×ØXÝ[ÛŠÙ[ŠHOˆ›Û™N‚ˆˆˆ¹oêù£múgh¹§oùæ¡9méy/g9aiycèûï&¹§*º/ä:(c9¥í¹o 9iâûï#:/ä:(c9¥í¹leyé.¹£©ùb-¸à ˆˆˆ‚‚ˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÙ[‹œÚÝ×ÝÛÜš×ØÛÛ›ÛÊ
+Bˆ[ÙN‚ˆÙ[‹œÝ\ÝÛÜš×Ý[Y\Š
+B‚ˆYˆÜØÚY[WØ[XšY[
+Ù[ŠHOˆ›Û™N‚ˆˆˆ¹å*:f£ù§.ºeí:f¥9k¢y£¤¹aky«æù..ùbª9aî¹ã¬;ï#9/çy£ ykf9g*9¡'ù/aº`oùaczh¤yî`y¢dù¢l8à ˆˆˆ‚‚ˆYˆ›Ý\Ø]ŠÙ[‹˜[XšY[Ý[Y\ˆŠN‚ˆ™]\›‚ˆÙ[‹˜[XšY[Ý[Y\‹œÝÜ
+
+BˆYˆÙ[‹œÙ][™ÜË˜]]ÛX]X×ÙÜ[X›[™Î‚ˆÙ[‹˜[XšY[Ý[Y\‹œÝ\
+˜[™ÛKœ˜[™[
+
+ˆŒÌN
+ˆŒÌ
+JB‚ˆYˆØ[XšY[ÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹£"y¥í¹«­xà y.$ù¬ê:eoùn©¹.#¹/c¹© ¹ã¡ùojz&âú+ªyaky«æù..ùbª9¢o¹å*9¢-øà ˆˆˆ‚‚ˆžN‚ˆ\ÞHHÙ[‹˜Ú]ÛX[˜YÙ\‹˜\ÞBˆYˆÙ[‹š\Õš\ÚX›J
+H[™›ÝÙ[‹™˜YÙÚ[™È[™›Ý\ÞN‚ˆYWÜÙXÛÛ™ÈH[YK›[Û›ÝÛšXÊ
+HHÙ[‹—Û\ÝÝ\Ù\—Ú[\˜XÝ[Û‚ˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™È[™Ù[‹ÛÜš×Ý[Y\‹œÙ\ÜÚ[Û—ÜÙXÛÛ™Ê
+HHˆ
+ˆÍŒ‚ˆXÝ]š]K^H\›[ÜÈ‹º/ç¹îëyméy/g9.)9l#ù¥í¹ei¸à ¹aky«æù¢¢¹¬-9§kùêëù§iy.¡»ï&¹ab9/$y kù. 9."ûï'È‚ˆ[YˆYWÜÙXÛÛ™ÈHÌ
+ˆŒ‚ˆXÝ]š]K^HœÚ[[™È‹¹/h9o¢9.ay¬¨ybª9ei»ï#9aky«æù`mù`mù£¨¹i-9ç"ùç"ù/h:/æ9g*9.#yg*8à ˆ‚ˆ[YˆÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+HHÈ
+ˆÍŒ[™˜[™ÛKœ˜[™ÛJ
+HŒŽ‚ˆXÝ]š]K^HÚ[ZÚ[™È‹¹§ y/c¹© ¹ã¡ùojz&âûï&º#dºaã¹fïyã¢ú-ëú/áù/h9æ¡9¨c:gh¸à ˆ‚ˆ[Yˆ˜[™ÛKœ˜[™ÛJ
+HMN‚ˆXÚ\Ú[ÛˆHÙ[‹˜ÛÛ\[š[Û—Ø™Z]š[Ü‹™XÚYJˆ›Ý×ÚÝ\Y]][YK››ÝÊ
+KšÝ\‹ˆÛÜšÚ[™Ï\Ù[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ËˆÙ\ÜÚ[Û—ÜÙXÛÛ™Ï\Ù[‹ÛÜš×Ý[Y\‹œÙ\ÜÚ[Û—ÜÙXÛÛ™Ê
+KˆÙ^WÜÙXÛÛ™Ï\Ù[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+KˆYWÜÙXÛÛ™ÏZ[
+YWÜÙXÛÛ™ÊKˆ]\ÚX×Ü^Z[™Ï\Ù[‹—ÛX[X[ØXÝ]š]WÝ[[ˆ[YK›[Û›ÝÛšXÊ
+Kˆ
+BˆXÝ]š]HHXÚ\Ú[Û‹˜XÝ]š]BˆYˆXÝ]š]HOHšYHŽ‚ˆXÝ]š]K^H[YWÛÙ—Ù^WØXÝ]š]J]][YK››ÝÊ
+KÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÊBˆ[YˆXÝ]š]HOH›šYÚ\™XY[™ÈŽ‚ˆ^H¹¢$zfj¹/h:+îù. 9/&¹a/ûï#9¡h¹¡h¹§ixà ˆ‚ˆ[YˆXÝ]š]HOHœÛY\HŽ‚ˆ^H¹aky«æù§"yà®yí+ùei»ï#:+¬9o¥ùîæz!ê¹mìyåfy. 9à®y/$y kù¥íºeí8à ˆ‚ˆ[YˆXÝ]š]HOHœÚ]Ž‚ˆ^H¹¢$ygd9g*:/æzaã:fj¹/h;ï#9¢¢º/æy. 9l#ù«­yk£9¢$9l,yioxà ˆ‚ˆ[YˆXÝ]š]HOHšXYÛ™\ÈŽ‚ˆ^Hºgìù.d9dãz-mù§iyei»ï#9d£9/h9. :-mù.$ù¬ê8à ˆ‚ˆ[ÙN‚ˆ^HÙ[‹˜ÛÛ\[š[Û‹˜[XšY[ÙÜ[X›JÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÊK^ˆ[ÙN‚ˆXÝ]š]HH˜[™ÛK˜ÚÚXÙJS‘ÓWÐPÕSÓ”ÊBˆ^HÙ[‹˜ÛÛ\[š[Û‹˜[XšY[ÙÜ[X›JÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÊK^ˆÙ[‹™Z[WÜÝ]Ëœ™XÛÜ™Ù]™[
+XÝ]š]JBˆYˆXÝ]š]HOHœÛY\Ž‚ˆÙ[‹™Z[WÜÝ]Ëœ™XÛÜ™ÜÛY\
+
+BˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JXÝ]š]K—Ì
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+^Ž
+Bˆš[˜[N‚ˆÙ[‹—ÜØÚY[WØ[XšY[
+
+B‚ˆYˆÜØÚY[WÜÛÛ™×Ú[œÜ\˜][ÛŠÙ[ŠHOˆ›Û™N‚ˆˆˆ¹£"yå*9¢-ú+¯¹ïk¹ceyâë9k¢y£¤¹«c:+ãy¬%9¬è{ï#9.#ya£y.#¹/c¹© ¹ã¡ùâhºj¦¹alyå*:+¨y¥í¹fj8à ˆˆˆ‚‚ˆYˆ›Ý\Ø]ŠÙ[‹œÛÛ™×Ý[Y\ˆŠN‚ˆ™]\›‚ˆÙ[‹œÛÛ™×Ý[Y\‹œÝÜ
+
+BˆYˆÙ[‹œÙ][™ÜË›\šX×Ú[œÜ\˜][Û—Ù[˜X›Y‚ˆ˜\ÙHHÙ[‹œÙ][™ÜË›\šX×Ú[\˜[ÛZ[]\È
+ˆŒÌˆÙ[‹œÛÛ™×Ý[Y\‹œÝ\
+X^
+ŒÌ›Ý[™
+˜\ÙH
+ˆ˜[™ÛK[šY›Ü›JŽKKŒMJJJJB‚ˆYˆÜÛÛ™×Ú[œÜ\˜][Û—ÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹¦/¹é.¹§+9§.¹«c:+ãyçëz(c;ï&ù§*º`"y¢êy¥¡ù.í¹¥í¹¦/¹é.¹c§ùb&ù«c9d#y¡#ú,hyçëycéxà ˆˆˆ‚‚ˆžN‚ˆ\ÞHHÙ[‹˜Ú]ÛX[˜YÙ\‹˜\ÞBˆYˆÙ[‹š\Õš\ÚX›J
+H[™›ÝÙ[‹™˜YÙÚ[™È[™›Ý\ÞN‚ˆØØ[Û[™\ÈHØYÛØØ[Û[™\ÊÙ[‹œÙ][™ÜË›ØØ[Û\šXÜ×Ü]
+BˆYˆØØ[Û[™\Î‚ˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]K”ÒU
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¸¦jˆÜ˜[™ÛK˜ÚÚXÙJØØ[Û[™\Ê_H‹Ž
+Bˆ[ÙN‚ˆ™\HHÙ[‹˜ÛÛ\[š[Û‹œÛÛ™×Ú[œÜ\˜][ÛŠ
+BˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ™\KœÝ]K
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¸¦jˆÜ™\K^H‹Ž
+Bˆš[˜[N‚ˆÙ[‹—ÜØÚY[WÜÛÛ™×Ú[œÜ\˜][ÛŠ
+B‚ˆYˆÚÝ\›WÝXÚÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹dj9§'ù¨à9§éy¥m9à®y¢©y¥í»ï#9alúeëy¥í¹.#y.©ùå'ù.îù/ey¬%9¬èxà ˆˆˆ‚‚ˆÙ[‹—ÛX^X™WØ[››Ý[˜ÙWÚÝ\Š]][YK››ÝÊ
+JB‚ˆYˆÛX^X™WØ[››Ý[˜ÙWÚÝ\ŠÙ[‹›ÝÎˆ]][YJHOˆ›ÛÛ‚ˆˆˆ¹g*9«ãù.*¹¥m9à®yê¥ùcèùa¡ycê¹¤«y¢©y. 9«({ï#:/å9fç¹¦+ùd)¹k§ºfay¤«y¢©xà ˆˆˆ‚‚ˆYˆ›ÝÙ[‹œÙ][™ÜËšÝ\›WØ[››Ý[˜Ù[Y[Üˆ›ÝË›Z[]HOH‚ˆ™]\›ˆ˜[ÙBˆÙ^HH›ÝËœÝ™[YJ‰VKI[KIYIRŠBˆYˆÙ^HOHÙ[‹—Û\ÝØ[››Ý[˜ÙYÚÝ\Ž‚ˆ™]\›ˆ˜[ÙBˆÙ[‹—Û\ÝØ[››Ý[˜ÙYÚÝ\ˆHÙ^Bˆ™\HHÙ[‹˜ÛÛ\[š[Û‹šÝ\›WØ[››Ý[˜Ù[Y[
+›ÝËšÝ\ŠBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ™\KœÝ]KŽ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+™\K^ŒŒ
+Bˆ™]\›ˆYB‚ˆYˆÚÝ×ØÛÛ\[š[Û—ÜÝ]\ÊÙ[ŠHOˆ›Û™N‚ˆˆˆ¹å*9¬%9¬èy¦/¹é.¹odùbcy/&º+çya¡y.¬¹ká¸à yì¯¹b¦ùd£:ilzhçùâ­¹  xà ˆˆˆ‚‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÛÝ[HÙ[‹ÛÜš×Ý[Y\‹[›ØÚÙYÛÝ]š]ØÛÝ[
+
+Bˆ™^Ý^HŒLˆ9ieùl#ù¥í¹j ú(hùmì¹aj:`ê:)èúe H‚ˆYˆÛÝ[[ŠÕU’UÊN‚ˆ™[XZ[š[™ÈHX^
+
+ÛÝ[
+ÈJH
+ˆÍŒHÙ[‹ÛÜš×Ý[Y\‹›Y™][YWÜÙXÛÛ™Ê
+JBˆ™^Ý^Hˆº-çy."ù. 9ieùj ú(hùî©ˆÙ›Ü›X]ÝÛÜš×Ù\˜][ÛŠ™[XZ[š[™Ê_H‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆˆžÜÙ[‹˜ÛÛ\[š[Û‹œÝ]\×Ý^
+Ù[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+HËÈŒ
+_WžÛ™^Ý^H‹ˆŒŒˆ
+B‚ˆYˆšYÙÙ\—Ú[\˜XÝ[ÛŠÙ[ŠHOˆ›Û™N‚ˆˆˆ¹îäùd"9odùbcy áyîê¹¥l9`/:)é¹cäycâùioz(j9 áy¢%¹£)y¢bùcãzi¢8à ˆˆˆ‚‚ˆYˆÙ[‹™˜YÙÚ[™Î‚ˆ™]\›‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆYˆÙ[‹›[ÛÙ™[™\™ÞHÌ‚ˆÝ]HH]Ý]K”ÓQTBˆ[YˆÙ[‹›[ÛÙ˜›Ü™YÛHˆÌ‚ˆÝ]HH]Ý]KÕT’SÕTÂˆ[ÙN‚ˆÝ]HH˜[™ÛK˜ÚÚXÙJ
+]Ý]K•ÐU‘K]Ý]K’TK]Ý]K”ÒJJBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠÝ]KN
+Bˆ›ÝÈH]][YK››ÝÊ
+BˆYˆ
+ˆ›ÝÙ[‹—Û]WÝØZÙ]\ÜÚÝÛ‚ˆ[™Ù[‹œÙ][™ÜË›\šX×Ú[œÜ\˜][Û—Ù[˜X›Yˆ[™LH›ÝËšÝ\ˆLÂˆ[™Ù[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+HOHˆ
+N‚ˆÙ[‹—Û]WÝØZÙ]\ÜÚÝÛˆHYBˆ™\HHÙ[‹˜ÛÛ\[š[Û‹œÛÛ™×Ú[œÜ\˜][ÛŠ]WÝØZÙ]\UYJBˆÙ[‹œÚÝ×ÜÜYXÚ
+™\K^L
+Bˆ[ÙN‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹mí9n ú/¯»ï yaky«æùd+:)ày/h9ei¸à ˆ‹Ì
+B‚ˆYˆÜÚÝ×Ù[[Ý[ÛŠÙ[‹Ý]Nˆ]Ý]K\˜][Û—Û\Îˆ[HMŒ
+HOˆ›Û™N‚ˆˆˆ¹¦/¹é.¹. 9«(yçëy¦ ¹.¤¹bª:(j9 á{ï#9nm¹g*:+¨y¥í¹îäù§gùd#¹ h¹i#z!ê¹..ùå'ù­.øà ˆˆˆ‚‚ˆÙ[‹œÝ]WÝ[Y\‹œÝÜ
+
+BˆÙ[‹œÙ]ÜÝ]JÝ]JBˆÙ[‹š[\˜XÝ[Û—Ý[Y\‹œÝ\
+X^
+L\˜][Û—Û\ÊJB‚ˆYˆšYÙÙ\—ÜÙ[šYJÙ[ŠHOˆ›Û™N‚ˆˆˆ¹¦/¹o#ù¤«y¥/¹. 9«(y./º-mùæî9§.¸à zeê¹abyd£9§éyç"ùáiùâaùæ¡:!ê¹¢ãyn£ùb%øà ˆˆˆ‚‚ˆYˆÙ[‹™˜YÙÚ[™Î‚ˆ™]\›‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]K”ÑS’QKŒ
+B‚ˆYˆÚ[\˜XÝ[Û—Þ›Û™JÙ[‹Ú[ˆTÚ[
+HOˆÝŽ‚ˆˆˆ¹£"yê¥ùcèùa¡yæî9kîy/cyïk¹b$¹b!¹i-:hm¸à z!.:`ê8à z.ªù/dùd£9æî9§.¹.¤¹bª9c.¹gçøà ˆˆˆ‚‚ˆH
+Ú[ž
+
+HHÙ[‹›X™[ž
+
+JHÈX^
+KÙ[‹›X™[ÚY
+
+JBˆHH
+Ú[žJ
+HHÙ[‹›X™[žJ
+JHÈX^
+KÙ[‹›X™[šZYÚ
+
+JBˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™È[™LˆHHHŽ[™ŒNHHŽ‚ˆ™]\›ˆÛÜš×Ù]šXÙH‚ˆYˆHŒ‚ˆ™]\›ˆšXY‚ˆYˆHŽ‚ˆ™]\›ˆ™˜XÙH‚ˆYˆˆHHHŽˆ[™Î‚ˆ™]\›ˆ˜Ø[Y\˜H‚ˆ™]\›ˆ˜›ÙH‚‚ˆYˆÚ[™WØÛXÚÊÙ[‹Ú[ˆTÚ[
+HOˆ›Û™N‚ˆˆˆ¹¨.y£k¹à®yaîùc.¹gçù¦í9¥¬9 áyîê¹nmº`"y¢êykîyn¥9cãzi¢8à ˆˆˆ‚‚ˆ›Û™HHÙ[‹—Ú[\˜XÝ[Û—Þ›Û™JÚ[
+BˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹™Z[WÜÝ]Ëœ™XÛÜ™ÝÝXÚ
+
+BˆYˆ›Û™HOHÛÜš×Ù]šXÙHˆÜˆ
+›Û™HOHšXYˆ[™Ù[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÊN‚ˆÙ[‹œÚÝ×ÝÛÜš×ØÛÛ›ÛÊ
+Bˆ™]\›‚ˆYˆ›Û™HOH˜Ø[Y\˜HŽ‚ˆÙ[‹šYÙÙ\—ÜÙ[šYJ
+Bˆ™]\›‚ˆYˆ›Û™HOHšXYŽ‚ˆÙ[‹›[ÛÙœ™XÙZ]™WØY™™XÝ[ÛŠ
+BˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]KÕT’SÕTËMÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+¹aky«æù«j¹ç`9i-9ç"ù/h;ï&¹¦+ùg*9cêù¢$yd%ûï'È‹ÌŒ
+Bˆ™]\›‚ˆYˆ›Û™HOH™˜XÙHŽ‚ˆÙ[‹›[ÛÙœ™XÙZ]™WÜÚÙJ˜[ÙJBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]K”ÕT”’TÑQLÌ
+Bˆ™]\›‚‚ˆ›ÝÈH[YK›[Û›ÝÛšXÊ
+BˆÙ[‹—ÜÚÙWÝ[Y\Ë˜\[™
+›ÝÊBˆÚ[HÙ[‹—ÜÚÙWÝ[Y\È[™›ÝÈHÙ[‹—ÜÚÙWÝ[Y\ÖÌHˆ‹N‚ˆÙ[‹—ÜÚÙWÝ[Y\ËœÜY
+
+Bˆ™\X]YH[ŠÙ[‹—ÜÚÙWÝ[Y\ÊHHBˆÙ[‹›[ÛÙœ™XÙZ]™WÜÚÙJ™\X]Y
+BˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠˆ]Ý]KS““ÖQQYˆ™\X]Y[ÙH]Ý]K”ÒKˆNYˆ™\X]Y[ÙHLŒˆ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ˆ¹¢,ùi'ù.¥9."ùei»ï#9aky«æùç'ùæ¡:) yå'ù¬%9. 9à®yà®xà ˆˆYˆ™\X]Y[ÙH¹aky«æú-m¹í)ù¢©9/cú ¦¹kd;ï&º/æzaã9.#z+®9.ly¢,øà ˆ‹ˆÍŒˆ
+B‚ˆYˆ^WØ˜XYWÝ›ÚXÙJÙ[ŠHOˆ›Û™N‚ˆˆˆ¹cã9aîùcìúe+¹¥íº/k¹£h¹¤«y¥/¹å*9¢-ù§+9g,:gìúh¤{ï&ùï.¹l$y¥¡ù.í¹b&yå*9ìîùîçú+ëzgìú/nùo«¹cæ:, øà ˆˆˆ‚‚ˆYˆ›ÝÙ[‹œÙ][™ÜË›ÚXÙWÙ[˜X›Y‚ˆÙ[‹œÚÝ×ÜÜYXÚ
+¹mí9n ú/¯»ï H‹Œ
+Bˆ™]\›‚ˆ˜\šX[ÈHš[™Ø]Y[×Ý˜\šX[ÊÙ[‹œÙ][™ÜË˜˜XYWØ]Y[×Ü]
+Bˆ[™^HÙ[‹—Ø˜XYWÝ˜\šX[Ú[™^ˆÙ[‹—Ø˜XYWÝ˜\šX[Ú[™^
+ÏHBˆYˆ˜\šX[È[™Ù[‹—ÛYYXWÜ^Y\ˆ\È›Ý›Û™N‚ˆ]H˜\šX[ÖÚ[™^	H[Š˜\šX[ÊWBˆÙ[‹—ÛYYXWÜ^Y\‹œÝÜ
+
+BˆÙ[‹—ÛYYXWÜ^Y\‹œÙ]^X˜XÚÔ˜]J
+ŽM‹KŒKŒJVÚ[™^	H×JBˆÙ[‹—ÛYYXWÜ^Y\‹œÙ]ÛÝ\˜ÙJU\›™œ›ÛSØØ[š[JÝŠ]œ™\ÛÛ™J
+JJJBˆÙ[‹—ÛYYXWÜ^Y\‹œ^J
+Bˆ[YˆÙ[‹—ÜÜYXÚÙ[™Ú[™H\È›Ý›Û™N‚ˆÙ[‹—ÜÜYXÚÙ[™Ú[™KœÙ]˜]J
+LŒŒŒ
+VÚ[™^	H×JBˆÙ[‹—ÜÜYXÚÙ[™Ú[™KœÙ]]Ú
+
+LŒKŒŒ
+VÚ[™^	H×JBˆÙ[‹—ÜÜYXÚÙ[™Ú[™KœØ^J¹mí9n ú/¯ˆŠBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ˜[™ÛK˜ÚÚXÙJ
+]Ý]K’TK]Ý]K”ÒK]Ý]K”ÕT”’TÑQ
+JKML
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+˜[™ÛK˜ÚÚXÙJ
+¹mí9n ú/¯»ï H‹¹mí8 %8 %9n ú/¯¸à ˆ‹¹mí9n ú/¯»ï'ùaky«æùg*9dh¸à ˆŠJKŽ
+B‚ˆYˆÝšYÙÙ\—ÛÛ™×Ü™\ÜÊÙ[ŠHOˆ›Û™N‚ˆˆˆºeoù£"yaky«æú+ªy.å¹c§ùg,9çhz)â{ï#:aâ¹¥/ºo(9¨!ù¥í¹.#ya£z)é¹cäy¦kº`&¹à®yaîøà ˆˆˆ‚‚ˆYˆ›ÝÙ[‹—Ü™\Ü×Ü[™[™ÈÜˆÙ[‹™˜YÙÚ[™Î‚ˆ™]\›‚ˆÙ[‹—Ü™\Ü×Ü[™[™ÈH˜[ÙBˆÙ[‹—ÛÛ™×Ü™\Ü×ÝšYÙÙ\™YHYBˆÙ[‹™Z[WÜÝ]Ëœ™XÛÜ™ÜÛY\
+
+BˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JœÛY\‹ŒÌ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+ºeoù£"y¢$9b§øà ¹aky«æùa¬ùk¦¹l,yg,9çhy. 9l#ù/&¹a/øà ˆ‹Œ
+B‚ˆYˆÝ˜XÚ×Ü\ÜÚ]™WÛ[Ý[ÛŠÙ[‹Ú[ˆTÚ[
+HOˆ›Û™N‚ˆˆˆº-çú.*¹¥è9£"ze+¹ «9`g;ï&ù`g9åfz)é¹cäyioyiaûï#9i-:`ê9o :/å9éîùbª9b)9k¦¹..¹¤n9i-8à ˆˆˆ‚‚ˆ›Û™HHÙ[‹—Ú[\˜XÝ[Û—Þ›Û™JÚ[
+BˆÙ[‹—ÚÝ™\—Þ›Û™HH›Û™BˆYˆÙ[‹œÝ]H\È]Ý]K’QH[™›ÝÙ[‹š[\˜XÝ[Û—Ý[Y\‹š\ÐXÝ]™J
+N‚ˆÙ[‹šÝ™\—Ý[Y\‹œÝ\
+Ì
+BˆYˆ›Û™HOHšXYŽ‚ˆÙ[‹—ÜÝ›ÚÙWÜÚ[Ë˜ÛX\Š
+Bˆ™]\›‚‚ˆ›ÝÈH[YK›[Û›ÝÛšXÊ
+BˆÙ[‹—ÜÝ›ÚÙWÜÚ[Ë˜\[™
+
+›ÝËÚ[
+JBˆÚ[HÙ[‹—ÜÝ›ÚÙWÜÚ[È[™›ÝÈHÙ[‹—ÜÝ›ÚÙWÜÚ[ÖÌVÌHˆKŒŽ‚ˆÙ[‹—ÜÝ›ÚÙWÜÚ[ËœÜY
+
+Bˆ\Ý[˜ÙHHÝ[Jˆ
+Ý\œ™[ÌWHH™]š[Ý\ÖÌWJK›X[š][“[™Ý
+
+Bˆ›Üˆ™]š[Ý\ËÝ\œ™[[ˆš\
+ˆÙ[‹—ÜÝ›ÚÙWÜÚ[Ëˆ\Ý
+Ù[‹—ÜÝ›ÚÙWÜÚ[ÊVÌN—Kˆ
+Bˆ
+BˆYˆ\Ý[˜ÙHHÌ[™›ÝÈHÙ[‹—Û\ÝÜÝ›ÚÙWÜ™XXÝ[ÛˆH‹Œ‚ˆÙ[‹—Û\ÝÜÝ›ÚÙWÜ™XXÝ[ÛˆH›ÝÂˆÙ[‹—ÜÝ›ÚÙWÜÚ[Ë˜ÛX\Š
+BˆÙ[‹›[ÛÙœ™XÙZ]™WØY™™XÝ[ÛŠ
+BˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹™Z[WÜÝ]Ëœ™XÛÜ™ÝÝXÚ
+
+BˆÝ]HH]Ý]K”ÒHYˆÙ[‹›[ÛÙ˜Y™š[š]HHÌ[ÙH]Ý]K’TBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠÝ]KMŒ
+BˆÙ[‹œÚÝ×ÜÜYXÚ
+¹¤n9¤n9¥-¹b,8à ¹aky«æùæ¡9î¨¹«æú`ïyo 9oàùo¥ùïæ:-mù§iyei¸à ˆ‹Í
+B‚ˆYˆÝšYÙÙ\—ÚÝ™\—ØÝ\š[ÜÚ]JÙ[ŠHOˆ›Û™N‚ˆˆˆºo(9¨!ùg*9k¨9âjzfa:/äyê,ùk¦¹`g9åfy¥í¹¦/¹é.¹ioyiaù¬ê:)á¸à ˆˆˆ‚‚ˆYˆ
+ˆÙ[‹—ÚÝ™\—Þ›Û™Bˆ[™Ù[‹œÝ]H\È]Ý]K’QBˆ[™›ÝÙ[‹™˜YÙÚ[™Âˆ[™›ÝÙ[‹—Ü™\Ü×Ü[™[™Âˆ[™›ÝÙ[‹š[\˜XÝ[Û—Ý[Y\‹š\ÐXÝ]™J
+Bˆ
+N‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]KÕT’SÕTËLÌ
+BˆYˆ[YK›[Û›ÝÛšXÊ
+HHÙ[‹—ÛX[X[ØXÝ]š]WÝ[[‚ˆÙ[‹—ÜÙ]Ý[\Ü˜\žWØXÝ]š]JœÚ[[™È‹L
+B‚ˆYˆÜÚÝ×ÜÝ×ØX˜›JÙ[ŠHOˆ›Û™N‚ˆˆˆ¹g*9k¨9âjy¥ày¦/¹é.¹âë9êâú!ê¹¢ãy¢$9âaûï#9nm¹g*9¥l9éä¹d#º!ê¹bª:f¤:%ãøà ˆˆˆ‚‚ˆYˆÙ[‹—ÜÙ[šYWÜÝËš\Ó[
+
+N‚ˆ™]\›‚ˆ˜][ÈHX^
+KŒÙ[‹™]šXÙT^[˜][ÑŠ
+JBˆÝÈHÙ[‹—ÜØØ[YÜÙ[šYWÜÝÊ˜][ÊBˆÙÚXØ[ÜÚ^™HHTÚ^™JˆX^
+K›Ý[™
+ÝËÚY
+
+HÈ˜][ÊJKˆX^
+K›Ý[™
+ÝËšZYÚ
+
+HÈ˜][ÊJKˆ
+BˆÙ[‹œÝ×ØX˜›KœÙ]^X\
+ÝÊBˆÙ[‹œÝ×ØX˜›KœÙ]š^YÚ^™JÙÚXØ[ÜÚ^™JBˆ\™XHHÙ[‹—ÜØÜ™Y[—ÙÙ[ÛY]žJ
+Bˆš\ÚX›WØ›Ý[™ÈHÙ[‹›X\ÚÊ
+K˜›Ý[™[™Ô™XÝ
+
+BˆYˆš\ÚX›WØ›Ý[™Ëš\Ñ[\J
+N‚ˆÚ\˜XÝ\—ÛYHÙ[‹ž
+
+BˆÚ\˜XÝ\—ÜšYÚHÙ[‹ž
+
+H
+ÈÙ[‹ÚY
+
+Bˆ[ÙN‚ˆÚ\˜XÝ\—ÛYHÙ[‹ž
+
+H
+Èš\ÚX›WØ›Ý[™Ë›Y
+
+BˆÚ\˜XÝ\—ÜšYÚHÙ[‹ž
+
+H
+Èš\ÚX›WØ›Ý[™ËœšYÚ
+
+H
+ÈBˆØ\HˆHÚ\˜XÝ\—ÛYHÙ[‹œÝ×ØX˜›KÚY
+
+HHØ\ˆYˆ\™XH\È›Ý›Û™H[™\™XK›Y
+
+N‚ˆHÚ\˜XÝ\—ÜšYÚ
+ÈØ\ˆHHÙ[‹žJ
+H
+ÈX^
+
+Ù[‹šZYÚ
+
+HHÙ[‹œÝ×ØX˜›KšZYÚ
+
+JHËÈŠBˆÙ[‹œÝ×ØX˜›K›[Ý™JJBˆÙ[‹œÝ×ØX˜›KœÚÝÊ
+BˆÙ[‹œÝ×Ý[Y\‹œÝ\
+Î
+B‚ˆYˆÜØØ[YÜÙ[šYWÜÝÊÙ[‹˜][Îˆ›Ø]
+HOˆT^X\‚ˆˆˆ¹£"z+¯¹i!ù`ãùí(9«å9å'ù¢$9áiùâaùï*yåiyfï»ï#:`oùaczjæH9lcùney.£9«(y¥/¹i)ùkï:!í9ª(yìâ¸à ˆˆˆ‚‚ˆYˆÙ[‹—ÜÙ[šYWÜÝËš\Ó[
+
+N‚ˆ™]\›ˆT^X\
+
+Bˆ˜][ÈHX^
+KŒ˜][ÊBˆÝÈHÙ[‹—ÜÙ[šYWÜÝËœØØ[Y
+ˆX^
+K›Ý[™
+ML
+ˆ˜][ÊJKˆX^
+K›Ý[™
+ŒL
+ˆ˜][ÊJKˆ]\ÜXÝ˜][Ó[ÙK’ÙY\\ÜXÝ˜][Ëˆ]•˜[œÙ›Ü›X][Û“[ÙK”Û[ÛÝ˜[œÙ›Ü›X][Û‹ˆ
+BˆÝËœÙ]]šXÙT^[˜][Ê˜][ÊBˆ™]\›ˆÝÂ‚ˆYˆÙš[š\ÚÚ[\˜XÝ[ÛŠÙ[ŠHOˆ›Û™N‚ˆˆˆ¹îäù§gù.¤¹bª9nm¹ h¹i#z!ê¹..ùo¡y§.¸à ˆˆˆ‚‚ˆYˆ›ÝÙ[‹™˜YÙÚ[™Î‚ˆYˆÙ[‹œÝ]H\È]Ý]K”ÑS’QN‚ˆÙ[‹—ÜÚÝ×ÜÝ×ØX˜›J
+BˆÙ[‹—ÜØÚY[JÙ[‹˜™Z]š[Ü‹š[š]X[ÚYJ
+JB‚ˆYˆÝÙÙÛWÝØ[×Ùœ›ÛWÛY[JÙ[ŠHOˆ›Û™N‚ˆˆˆº+ªycìúe+º#ç9ceyd#9¥íº)¡¹æåºi¥¹«(yo 9d+ùd£9¥éyn.9¦ ¹`g9.)9éãz-äybª9¤ãy/g8à ˆˆˆ‚‚ˆYˆ›ÝÙ]]ŠÙ[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[È‹˜[ÙJN‚ˆÙ[‹œÙ]Ø[Ý×Ø]]Û›Û[Ý\×ÝØ[ÊYJBˆ™]\›‚ˆÙ[‹œÙ]Ü]\ÙY
+›ÝÙ[‹œ]\ÙY
+B‚ˆYˆØZ[ØÛÛ^ÛY[JÙ[ŠHOˆSY[N‚ˆˆˆ¹§¡9nîºjæ:h¤yaiycèùæí:/¯¸à y/cºh¤z`"zhny¥-¹î¬ùb,9.£9î©ú#ç9ceyæ¡9cìúe+º#ç9cexà ˆˆˆ‚‚ˆY[HHSY[JÙ[ŠBˆ™[˜[YWØXÝ[ÛˆHPXÝ[ÛŠ¹/ë¹¥.y..ù.®¹éì9do8 )ˆ‹Ù[ŠBˆ™[˜[YWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ™[˜[YWÜ]
+BˆY[K˜YXÝ[ÛŠ™[˜[YWØXÝ[ÛŠBˆX[ÙÝYWØXÝ[ÛˆHPXÝ[ÛŠˆ¹d£ÜÙ[‹—Ü]Û˜[YJ
+_z bº b¸ )ˆ‹Ù[ŠBˆX[ÙÝYWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ›Û\ÙX[ÙÝYJBˆY[K˜YXÝ[ÛŠX[ÙÝYWØXÝ[ÛŠBˆÛÜš×ÛY[HHY[K˜YY[J¹méy/g9¢dùchKùméy/g:+¨y¥íˆŠBˆÝ\ÝÛÜšÈHPXÝ[ÛŠ¹o 9iâùméy/g:+¨y¥íˆˆYˆ›ÝÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™È[ÙH¹méy/g:+¨y¥íº/æú(c9.+H‹Ù[ŠBˆÝ\ÝÛÜšËœÙ][˜X›Y
+›ÝÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÊBˆÝ\ÝÛÜšËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÝ\ÝÛÜš×Ý[Y\ŠBˆÛÜš×ÛY[K˜YXÝ[ÛŠÝ\ÝÛÜšÊBˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆ]\ÙWÝÛÜšÈHPXÝ[ÛŠ¹¦ ¹`gùîäù§gùméy/g‹Ù[ŠBˆ]\ÙWÝÛÜšËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÝÛÜš×ØÛÛ›ÛÊBˆÛÜš×ÛY[K˜YXÝ[ÛŠ]\ÙWÝÛÜšÊBˆÙ×ÛY[HHÛÜš×ÛY[K˜YY[J¹o¡yb§ˆŠBˆÚÝ×ÝÙÜÈHPXÝ[ÛŠ¹¦/¹é.¹o¡yb§ˆ‹Ù[ŠBˆÚÝ×ÝÙÜËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ØÛÛ\XÝÝÙÜÊBˆÙ×ÛY[K˜YXÝ[ÛŠÚÝ×ÝÙÜÊBˆYWÝÙÜÈHPXÝ[ÛŠºf¤:%ãùo¡yb§ˆ‹Ù[ŠBˆYWÝÙÜËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYWØÛÛ\XÝÝÙÜÊBˆÙ×ÛY[K˜YXÝ[ÛŠYWÝÙÜÊBˆYÜ\\ˆHPXÝ[ÛŠ¹­îùb¨9o¡yb§¸ )ˆ‹Ù[ŠBˆYÜ\\‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹˜YØÛÛ\XÝÝÙÊBˆÙ×ÛY[K˜YXÝ[ÛŠYÜ\\ŠBˆ\\—ÛY[HHÛÜš×ÛY[K˜YY[J¹/¯ùb*z--ŠBˆÚÝ×Ü\\ˆHPXÝ[ÛŠ¹¢dùo 9/¯ùb*z--‹Ù[ŠBˆÚÝ×Ü\\‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÜÝXÚÞWÛ›ÝJBˆ\\—ÛY[K˜YXÝ[ÛŠÚÝ×Ü\\ŠBˆYWÜ\\ˆHPXÝ[ÛŠºf¤:%ãù/¯ùb*z--‹Ù[ŠBˆYWÜ\\‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYWÜÝXÚÞWÛ›ÝJBˆ\\—ÛY[K˜YXÝ[ÛŠYWÜ\\ŠBˆY[[ÜžWØXÝ[ÛˆHPXÝ[ÛŠ¹¢$yæ¡9¥í¹abx )ˆ‹Ù[ŠBˆY[[ÜžWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×Ý[YWÛY[[ÜžJBˆÛÜš×ÛY[K˜YXÝ[ÛŠY[[ÜžWØXÝ[ÛŠBˆ›ÜˆX™[Ø[˜XÚÈ[ˆ
+
+¹§éyç"ù.â¹¥éyí+ú+¨H‹Ù[‹œÚÝ×ÝÛÜš×Ý[YJK
+¹§éyç"ù.â¹¥éy¢$:eoÈ‹Ù[‹œÚÝ×ÙZ[WÙÜ›ÝÝ
+K
+¹§éyç"úfj¹/-9¢©ydbˆ‹Ù[‹œÚÝ×ÙZ[WÜ™\Ü
+K
+ˆ¹¢dùo ÜÙ[‹—Ü]Û˜[YJ
+_yæî9a£‹Ù[‹›Ü[—ÙZ[WØ[[JJN‚ˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ø[˜XÚÊBˆÛÜš×ÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆ]\ÚX×ÛY[HHY[K˜YY[Jºgìù.dŠBˆ˜[™ÛWÜÛÛ™ÈHPXÝ[ÛŠºf£ù§.¹d+9. :i¥ºfb9©f¹å'È‹Ù[ŠBˆ˜[™ÛWÜÛÛ™ËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ^WÜ˜[™ÛWÜÛÛ™ÊBˆ]\ÚX×ÛY[K˜YXÝ[ÛŠ˜[™ÛWÜÛÛ™ÊBˆ›ÜˆX™[ÛÛ[X[™[ˆ
+
+¹¤«y¥/‹ù¦ ¹`g‹ÙÙÛHŠK
+¹."ù. :i¥ˆ‹›™^ŠK
+¹."¹. :i¥ˆ‹œ™]š[Ý\ÈŠJN‚ˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™HØÚXÚÙYQ˜[ÙK˜[YOXÛÛ[X[™ˆÙ[‹˜ÛÛ›ÛÛ]\ÚXÊ˜[YJJBˆ]\ÚX×ÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆ]\ÚX×ÜÙ][™ÜÈHPXÝ[ÛŠºgìù.d9¤«y¥/¹fj:+¯¹ïkˆ‹Ù[ŠBˆ]\ÚX×ÜÙ][™ÜËšYÙÙ\™Y˜ÛÛ›™XÝ
+[X™NˆÙ[‹›Ü[—ÜÙ][™ÜÊÑUS‘Ô×ÔÓÕTÑWÕTÑT—ÐPÕSÓŠJBˆ]\ÚX×ÛY[K˜YXÝ[ÛŠ]\ÚX×ÜÙ][™ÜÊBˆÝYWØXÝ[ÛˆHPXÝ[ÛŠ¹¤+ykd:!ê¹.h9k©8 )ˆ‹Ù[ŠBˆÝYWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÜÛØÚX[ÚXŠBˆY[K˜YXÝ[ÛŠÝYWØXÝ[ÛŠBˆXÝ[Û—ÛY[HHY[K˜YY[J¹bª9/gŠBˆ›ÜˆÜ›Ý\Û˜[YK[šY\È[ˆPÕSÓ—ÑÔ“ÕTÎ‚ˆÜ›Ý\ÛY[HHXÝ[Û—ÛY[K˜YY[JÜ›Ý\Û˜[YJBˆ›ÜˆX™[Ù^H[ˆ[šY\Î‚ˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™HØÚXÚÙYQ˜[ÙK˜[YOZÙ^NˆÙ[‹œÙ]ØXÝ]š]J˜[YJJBˆÜ›Ý\ÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆÙ[šYHHPXÝ[ÛŠº!ê¹¢ãH‹Ù[ŠBˆÙ[šYKšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYÙÙ\—ÜÙ[šYJBˆXÝ[Û—ÛY[K˜YXÝ[ÛŠÙ[šYJBˆ]\ÙWÛX™[H
+ˆ¹o 9d+ú!ê¹bª:-äybª‚ˆYˆ›ÝÙ]]ŠÙ[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[È‹˜[ÙJBˆ[ÙH
+¹ h¹i#z-äybªˆYˆÙ[‹œ]\ÙY[ÙH¹¦ ¹`g:-äybªŠBˆ
+Bˆ]\ÙHHPXÝ[ÛŠ]\ÙWÛX™[Ù[ŠBˆ]\ÙKœÙ]ÚXÚØX›JYJBˆ]\ÙKœÙ]ÚXÚÙY
+›ÛÛ
+Ù]]ŠÙ[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[È‹˜[ÙJJH[™›ÝÙ[‹œ]\ÙY
+Bˆ]\ÙKšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹—ÝÙÙÛWÝØ[×Ùœ›ÛWÛY[JBˆXÝ[Û—ÛY[K˜YXÝ[ÛŠ]\ÙJBˆ›ÛÙÛY[HHY[K˜YY[Jˆ¹îæ^ÜÙ[‹—Ü]Û˜[YJ
+_ye ºhçÈŠBˆ›Üˆ›ÛÙ[ˆ“ÓÑÓÔSÓ”Î‚ˆXÝ[ÛˆHPXÝ[ÛŠ›ÛÙ›X™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™HØÚXÚÙYQ˜[ÙKÙ^OY›ÛÙšÙ^NˆÙ[‹™™YYÜ]
+Ù^JJBˆ›ÛÙÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆ›ÛÙÛY[K˜YÙ\\˜]ÜŠ
+Bˆ[ÛÙHPXÝ[ÛŠ¹§éyç"ùoàù áy.#º ïzaãÈ‹Ù[ŠBˆ[ÛÙšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ØÛÛ\[š[Û—ÜÝ]\ÊBˆ›ÛÙÛY[K˜YXÝ[ÛŠ[ÛÙ
+BˆÝ]š]ÛY[HHY[K˜YY[J¹£hº(áy.#¹i%º)àˆŠBˆÛ\ÜÚXÈHPXÝ[ÛŠˆ¹îãùanÜÙ[‹—Ü]Û˜[YJ
+_H‹Ù[ŠBˆÛ\ÜÚXËœÙ]ÚXÚØX›JYJBˆÛ\ÜÚXËœÙ]ÚXÚÙY
+›ÝÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]
+BˆÛ\ÜÚXËšYÙÙ\™Y˜ÛÛ›™XÝ
+[X™NˆÙ[‹™\]Z\ÛÝ]š]
+ˆŠJBˆÝ]š]ÛY[K˜YXÝ[ÛŠÛ\ÜÚXÊBˆ[›ØÚÙYH[›ØÚÙYÛÝ]š]ÊÙ[‹ÛÜš×Ý[Y\‹[›ØÚÙYÛÝ]š]ØÛÝ[
+
+JBˆ›ÜˆÝ]š][ˆÕU’UÎ‚ˆXÝ[ÛˆHPXÝ[ÛŠÝ]š]›˜[YKÙ[ŠBˆ]˜Z[X›HHÝ]š][ˆ[›ØÚÙYˆXÝ[Û‹œÙ][˜X›Y
+]˜Z[X›JBˆXÝ[Û‹œÙ]ÚXÚØX›JYJBˆXÝ[Û‹œÙ]ÚXÚÙY
+Ý]š]šÙ^HOHÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]
+BˆYˆ]˜Z[X›N‚ˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™HØÚXÚÙYQ˜[ÙKÙ^O[Ý]š]šÙ^NˆÙ[‹™\]Z\ÛÝ]š]
+Ù^JJBˆÝ]š]ÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆY[K˜YÙ\\˜]ÜŠ
+Bˆ›ÜˆX™[Ø[˜XÚËÚXÚÙY[ˆ
+
+¹`m¹l%9cäyâhºj¦ˆ‹Ù[‹œÙ]Ø]]ÛX]X×ÙÜ[X›[™ËÙ[‹œÙ][™ÜË˜]]ÛX]X×ÙÜ[X›[™ÊK
+¹¥m9à®y¢©y¥íˆ‹Ù[‹œÙ]ÚÝ\›WØ[››Ý[˜Ù[Y[Ù[‹œÙ][™ÜËšÝ\›WØ[››Ý[˜Ù[Y[
+K
+¹iâùîâ9ïkºhmˆ‹Ù[‹œÙ]Ø[Ø^\×ÛÛ—ÝÜÙ[‹œÙ][™ÜË˜[Ø^\×ÛÛ—ÝÜ
+JN‚ˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹œÙ]ÚXÚØX›JYJBˆXÝ[Û‹œÙ]ÚXÚÙY
+ÚXÚÙY
+BˆXÝ[Û‹ÙÙÛY˜ÛÛ›™XÝ
+Ø[˜XÚÊBˆY[K˜YXÝ[ÛŠXÝ[ÛŠBˆÞ\Ý[WÛY[HHY[K˜YY[J¹ìîùîçù.#º+¯¹ïkˆŠBˆZWØXÝ[ÛˆHPXÝ[ÛŠRH9.#ºfj¹/-:+¯¹ïkˆ‹Ù[ŠBˆZWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™NˆÙ[‹›Ü[—ÜÙ][™ÜÊÑUS‘Ô×ÔÓÕTÑWÕTÑT—ÐPÕSÓŠJBˆÞ\Ý[WÛY[K˜YXÝ[ÛŠZWØXÝ[ÛŠBˆÚ^™WØXÝ[ÛˆHPXÝ[ÛŠº, ù¥m9¨c9k¨9i)ùl#È‹Ù[ŠBˆÚ^™WØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÜÚ^™WØÛÛ›Û
+BˆÞ\Ý[WÛY[K˜YXÝ[ÛŠÚ^™WØXÝ[ÛŠBˆ™]\›—ØXÝ[ÛˆHPXÝ[ÛŠ¹fç¹b,9..ùlcùneH‹Ù[ŠBˆ™]\›—ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ™]\›—Ý×Üš[X\žWÜØÜ™Y[ŠBˆÞ\Ý[WÛY[K˜YXÝ[ÛŠ™]\›—ØXÝ[ÛŠBˆYWØXÝ[ÛˆHPXÝ[ÛŠºf¤:%ãÈ‹Ù[ŠBˆYWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYJBˆY[K˜YXÝ[ÛŠYWØXÝ[ÛŠBˆ]Z]ØXÝ[ÛˆHPXÝ[ÛŠº` 9aîˆ‹Ù[ŠBˆ]Z]ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ]Z]Ü™\]Y\ÝY™[Z]
+BˆY[K˜YXÝ[ÛŠ]Z]ØXÝ[ÛŠBˆ™]\›ˆY[B‚ˆYˆØZ[ØÛÛ^ÛY[WÛYØXÞJÙ[ŠHOˆSY[N‚ˆˆˆ¹£"y.¥9.*¹ê,ùk¦¹b!¹îá9§¡9nî¹cìúe+º#ç9ce{ï#:`oùacyb§ú ïynlúdî¹d£9aiycèùl`¹î©ù­íù.lxà ˆˆˆ‚‚ˆY[HHSY[JÙ[ŠBˆÚ]ÙÜ›Ý\HY[K˜YY[Jº b¹i*y.#ºfj¹/-ŠBˆXÝ[Û—ÙÜ›Ý\HY[K˜YY[J¹bª9/g9.#¹i%º)àˆŠBˆ]\ÚX×ÙÜ›Ý\HY[K˜YY[Jºgìù.d9.#¹j,y.dŠBˆ›ØÝ\×ÙÜ›Ý\HY[K˜YY[J¹.$ù¬ê9.#º!ê¹.hŠBˆÞ\Ý[WÙÜ›Ý\HY[K˜YY[J¹ìîùîçù.#¹¦/¹é.ˆŠB‚ˆX[ÙÝYWØXÝ[ÛˆHPXÝ[ÛŠˆ¹d£ÜÙ[‹—Ü]Û˜[YJ
+_z bº b¸ )ˆ‹Ù[ŠBˆX[ÙÝYWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ›Û\ÙX[ÙÝYJBˆÚ]ÙÜ›Ý\˜YXÝ[ÛŠX[ÙÝYWØXÝ[ÛŠBˆ™[˜[YWØXÝ[ÛˆHPXÝ[ÛŠ¹/ë¹¥.y..ù.®¹éì9do8 )ˆ‹Ù[ŠBˆ™[˜[YWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ™[˜[YWÜ]
+BˆÚ]ÙÜ›Ý\˜YXÝ[ÛŠ™[˜[YWØXÝ[ÛŠBˆÛØÚX[ØXÝ[ÛˆHPXÝ[ÛŠˆžÜÙ[‹—Ü]Û˜[YJ
+_y¤+ykd:!ê¹.h9k©8 )ˆ‹Ù[ŠBˆÛØÚX[ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÜÛØÚX[ÚXŠBˆÚ]ÙÜ›Ý\˜YXÝ[ÛŠÛØÚX[ØXÝ[ÛŠBˆXÝ[Û—ÛY[HHÚ]ÙÜ›Ý\˜YY[Jºfj¹/-9bª9/gŠBˆ›ÜˆÜ[Ûˆ[ˆÓÓTS’SÓ—ÐPÕSÓ”Î‚ˆXÝ[ÛˆHPXÝ[ÛŠÜ[Û‹›X™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+ˆ[X™HØÚXÚÙYQ˜[ÙKÙ^O[Ü[Û‹šÙ^NˆÙ[‹œ\™›Ü›WØÛÛ\[š[Û—ØXÝ[ÛŠˆÙ^Bˆ
+Bˆ
+BˆXÝ[Û—ÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆ›ÛÙÛY[HHÚ]ÙÜ›Ý\˜YY[J¹e ºhçøà zik¹dày.#¹â­¹  HŠBˆ›Üˆ›ÛÙ[ˆ“ÓÑÓÔSÓ”Î‚ˆ›ÛÙØXÝ[ÛˆHPXÝ[ÛŠ›ÛÙ›X™[Ù[ŠBˆ›ÛÙØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+ˆ[X™HØÚXÚÙYQ˜[ÙKÙ^OY›ÛÙšÙ^NˆÙ[‹™™YYÜ]
+Ù^JBˆ
+Bˆ›ÛÙÛY[K˜YXÝ[ÛŠ›ÛÙØXÝ[ÛŠBˆ›ÛÙÛY[K˜YÙ\\˜]ÜŠ
+Bˆ[ÛÙØXÝ[ÛˆHPXÝ[ÛŠˆ¹§éyç"ÞÜÙ[‹—Ü]Û˜[YJ
+_yoàù áy.#º ïzaãÈ‹Ù[ŠBˆ[ÛÙØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ØÛÛ\[š[Û—ÜÝ]\ÊBˆ›ÛÙÛY[K˜YXÝ[ÛŠ[ÛÙØXÝ[ÛŠB‚ˆ]\ÙWØXÝ[ÛˆHPXÝ[ÛŠˆ¹o 9d+ú!ê¹bª:-äybª‚ˆYˆ›ÝÙ]]ŠÙ[‹œÙ][™ÜË˜[Ý×Ø]]Û›Û[Ý\×ÝØ[È‹˜[ÙJBˆ[ÙH
+¹ h¹i#z-äybªˆYˆÙ[‹œ]\ÙY[ÙH¹¦ ¹`g:-äybªŠKˆÙ[‹ˆ
+Bˆ]\ÙWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹—ÝÙÙÛWÝØ[×Ùœ›ÛWÛY[JBˆXÝ[Û—ÙÜ›Ý\˜YXÝ[ÛŠ]\ÙWØXÝ[ÛŠBˆXÝ\™WØXÝ[ÛœÈHXÝ[Û—ÙÜ›Ý\˜YY[J¹k£9¥m9fï¹âaùbª9/gŠBˆ›ÜˆÜ›Ý\Û˜[YK[šY\È[ˆPÕSÓ—ÑÔ“ÕTÎ‚ˆÜ›Ý\ÛY[HHXÝ\™WØXÝ[ÛœË˜YY[JÜ›Ý\Û˜[YJBˆ›ÜˆX™[Ù^H[ˆ[šY\Î‚ˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™HØÚXÚÙYQ˜[ÙK˜[YOZÙ^NˆÙ[‹œÙ]ØXÝ]š]J˜[YJJBˆÜ›Ý\ÛY[K˜YXÝ[ÛŠXÝ[ÛŠBˆÙ[šYWØXÝ[ÛˆHPXÝ[ÛŠº!ê¹¢ãy. 9."È‹Ù[ŠBˆÙ[šYWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYÙÙ\—ÜÙ[šYJBˆXÝ[Û—ÙÜ›Ý\˜YXÝ[ÛŠÙ[šYWØXÝ[ÛŠBˆÝ]š]ÛY[HHXÝ[Û—ÙÜ›Ý\˜YY[J¹méy/g9¥íºeoùj ú(hÈŠBˆÛ\ÜÚXÈHPXÝ[ÛŠˆ¹îãùanÜÙ[‹—Ü]Û˜[YJ
+_H‹Ù[ŠBˆÛ\ÜÚXËœÙ]ÚXÚØX›JYJBˆÛ\ÜÚXËœÙ]ÚXÚÙY
+›ÝÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]
+BˆÛ\ÜÚXËšYÙÙ\™Y˜ÛÛ›™XÝ
+[X™NˆÙ[‹™\]Z\ÛÝ]š]
+ˆŠJBˆÝ]š]ÛY[K˜YXÝ[ÛŠÛ\ÜÚXÊBˆ[›ØÚÙYH[›ØÚÙYÛÝ]š]ÊÙ[‹ÛÜš×Ý[Y\‹[›ØÚÙYÛÝ]š]ØÛÝ[
+
+JBˆ›ÜˆÝ\‹Ý]š][ˆ[[Y\˜]JÕU’UËÝ\LJN‚ˆ]˜Z[X›HHÝ]š][ˆ[›ØÚÙYˆX™[H
+ˆˆžÚÝ\ŸH9l#ù¥íˆ0­ÈÛÝ]š]›˜[Y_H‚ˆYˆ]˜Z[X›Bˆ[ÙHˆ¼'å$ˆÚÝ\ŸH9l#ù¥íˆ0­ÈÛÝ]š]›˜[Y_H‚ˆ
+BˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹œÙ]ÚXÚØX›J]˜Z[X›JBˆXÝ[Û‹œÙ]ÚXÚÙY
+Ý]š]šÙ^HOHÙ[‹œÙ][™ÜË™\]Z\YÛÝ]š]
+BˆXÝ[Û‹œÙ][˜X›Y
+]˜Z[X›JBˆYˆ]˜Z[X›N‚ˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+ˆ[X™HØÚXÚÙYQ˜[ÙKÙ^O[Ý]š]šÙ^NˆÙ[‹™\]Z\ÛÝ]š]
+Ù^JBˆ
+BˆÝ]š]ÛY[K˜YXÝ[ÛŠXÝ[ÛŠB‚ˆ]\ÚX×ØÛÛ›ÛÛY[HH]\ÚX×ÙÜ›Ý\˜YY[J¹£©ùb-¹«hùg*:/ä:(c9æ¡9¤«y¥/¹fjŠBˆ›ÜˆX™[ÛÛ[X[™[ˆ
+ˆ
+¹¤«y¥/ˆÈ9¦ ¹`g‹ÙÙÛHŠKˆ
+¹."¹. :i¥ˆ‹œ™]š[Ý\ÈŠKˆ
+¹."ù. :i¥ˆ‹›™^ŠKˆ
+¹§éyç"ù«hùg*9¤«y¥/ˆ‹œÝ]\ÈŠKˆ
+N‚ˆÛÛ›ÛØXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆÛÛ›ÛØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+ˆ[X™HØÚXÚÙYQ˜[ÙK˜[YOXÛÛ[X[™ˆÙ[‹˜ÛÛ›ÛÛ]\ÚXÊ˜[YJBˆ
+Bˆ]\ÚX×ØÛÛ›ÛÛY[K˜YXÝ[ÛŠÛÛ›ÛØXÝ[ÛŠBˆ]\ÚX×ÜÙX\˜ÚØXÝ[ÛˆHPXÝ[ÛŠ¹¤'9í(¹. :i¥ºfb9©f¹å'È‹Ù[ŠBˆ]\ÚX×ÜÙX\˜ÚØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ^WÜ˜[™ÛWÜÛÛ™ÊBˆ]\ÚX×ÙÜ›Ý\˜YXÝ[ÛŠ]\ÚX×ÜÙX\˜ÚØXÝ[ÛŠBˆ]\ÚX×Û[Ý™HH]\ÚX×ÙÜ›Ý\˜YY[Jºgìù.d9bª9/gŠBˆ›ÜˆX™[Ù^H[ˆ
+
+¹¢-: ,ù§.ˆ‹šXYÛ™\ÈŠK
+¹o.yd"y.åˆ‹™ÝZ]\ˆŠK
+¹¢dúo$È‹™[\ÈŠJN‚ˆXÝ[ÛˆHPXÝ[ÛŠX™[Ù[ŠBˆXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+[X™HØÚXÚÙYQ˜[ÙK˜[YOZÙ^NˆÙ[‹œÙ]ØXÝ]š]J˜[YJJBˆ]\ÚX×Û[Ý™K˜YXÝ[ÛŠXÝ[ÛŠB‚ˆÛÜš×ÛY[HH›ØÝ\×ÙÜ›Ý\˜YY[Jˆˆ¹méy/g:+¨y¥í»ï&žÙ›Ü›X]ÝÛÜš×Ù\˜][ÛŠÙ[‹ÛÜš×Ý[Y\‹Ù^WÜÙXÛÛ™Ê
+J_H‚ˆ
+BˆÝ\ÝÛÜš×ØXÝ[ÛˆHPXÝ[ÛŠ¹o 9iâËùîéùîëyméy/g‹Ù[ŠBˆÝ\ÝÛÜš×ØXÝ[Û‹œÙ][˜X›Y
+›ÝÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™ÊBˆÝ\ÝÛÜš×ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÝ\ÝÛÜš×Ý[Y\ŠBˆÛÜš×ÛY[K˜YXÝ[ÛŠÝ\ÝÛÜš×ØXÝ[ÛŠBˆYˆÙ[‹ÛÜš×Ý[Y\‹š\×Ü[›š[™Î‚ˆÛÛ›Û×ØXÝ[ÛˆHPXÝ[ÛŠ¹¤n9i-9¢%¹à®yå-z!$z/æú(c9¦ ¹`gùîäù§gÈ‹Ù[ŠBˆÛÛ›Û×ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÝÛÜš×ØÛÛ›ÛÊBˆÛÜš×ÛY[K˜YXÝ[ÛŠÛÛ›Û×ØXÝ[ÛŠBˆÚÝ×ÝÛÜš×ØXÝ[ÛˆHPXÝ[ÛŠ¹§éyç"ù.â¹¥éyí+ú+¨H‹Ù[ŠBˆÚÝ×ÝÛÜš×ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÝÛÜš×Ý[YJBˆÛÜš×ÛY[K˜YXÝ[ÛŠÚÝ×ÝÛÜš×ØXÝ[ÛŠBˆÜ›ÝÝØXÝ[ÛˆHPXÝ[ÛŠ¹§éyç"ù.â¹¥éH8 $Î9l#ù¥í¹¢$:eoùî¯È‹Ù[ŠBˆÜ›ÝÝØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÙZ[WÙÜ›ÝÝ
+BˆÛÜš×ÛY[K˜YXÝ[ÛŠÜ›ÝÝØXÝ[ÛŠBˆ™\ÜØXÝ[ÛˆHPXÝ[ÛŠˆ¹.â¹i*^ÜÙ[‹—Ü]Û˜[YJ
+_zfj¹/h9`f¹.¡¹.à9.b‹Ù[ŠBˆ™\ÜØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÙZ[WÜ™\Ü
+BˆÛÜš×ÛY[K˜YXÝ[ÛŠ™\ÜØXÝ[ÛŠBˆ[[WØXÝ[ÛˆHPXÝ[ÛŠˆ¹¢dùo ÜÙ[‹—Ü]Û˜[YJ
+_yæî9a£‹Ù[ŠBˆ[[WØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÙZ[WØ[[JBˆÛÜš×ÛY[K˜YXÝ[ÛŠ[[WØXÝ[ÛŠBˆ›ØÝ\×ÜÛØÚX[HPXÝ[ÛŠ¹¢dùo 9¤+ykd:!ê¹.h9k©8 )ˆ‹Ù[ŠBˆ›ØÝ\×ÜÛØÚX[šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÜÛØÚX[ÚXŠBˆ›ØÝ\×ÙÜ›Ý\˜YXÝ[ÛŠ›ØÝ\×ÜÛØÚX[
+BˆÙ×ÛY[HH›ØÝ\×ÙÜ›Ý\˜YY[J¹o¡yb§ˆŠBˆÙ×ÜÚÝÈHPXÝ[ÛŠ¹¦/¹é.¹o¡yb§ˆ‹Ù[ŠBˆÙ×ÜÚÝËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ØÛÛ\XÝÝÙÜÊBˆÙ×ÛY[K˜YXÝ[ÛŠÙ×ÜÚÝÊBˆÙ×ÚYHHPXÝ[ÛŠºf¤:%ãùo¡yb§ˆ‹Ù[ŠBˆÙ×ÚYKšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYWØÛÛ\XÝÝÙÜÊBˆÙ×ÛY[K˜YXÝ[ÛŠÙ×ÚYJBˆÙ×ØYHPXÝ[ÛŠ¹­îùb¨9o¡yb§¸ )ˆ‹Ù[ŠBˆÙ×ØYšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹˜YØÛÛ\XÝÝÙÊBˆÙ×ÛY[K˜YXÝ[ÛŠÙ×ØY
+Bˆ\\—ÛY[HH›ØÝ\×ÙÜ›Ý\˜YY[J¹/¯ùb*z--ŠBˆ\\—ÜÚÝÈHPXÝ[ÛŠ¹¢dùo 9/¯ùb*z--‹Ù[ŠBˆ\\—ÜÚÝËšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×ÜÝXÚÞWÛ›ÝJBˆ\\—ÛY[K˜YXÝ[ÛŠ\\—ÜÚÝÊBˆ\\—ÚYHHPXÝ[ÛŠºf¤:%ãù/¯ùb*z--‹Ù[ŠBˆ\\—ÚYKšYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYWÜÝXÚÞWÛ›ÝJBˆ\\—ÛY[K˜YXÝ[ÛŠ\\—ÚYJBˆ[Y[[™WØXÝ[ÛˆHPXÝ[ÛŠ¹¢$yæ¡9¥í¹abx )ˆ‹Ù[ŠBˆ[Y[[™WØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œÚÝ×Ý[YWÛY[[ÜžJBˆ›ØÝ\×ÙÜ›Ý\˜YXÝ[ÛŠ[Y[[™WØXÝ[ÛŠB‚ˆZWØXÝ[ÛˆHPXÝ[ÛŠRH9.#ºfj¹/-:+¯¹ïk¸ )ˆ‹Ù[ŠBˆZWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+ˆ[X™HØÚXÚÙYQ˜[ÙNˆÙ[‹›Ü[—ÜÙ][™ÜÊÑUS‘Ô×ÔÓÕTÑWÕTÑT—ÐPÕSÓŠBˆ
+BˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠZWØXÝ[ÛŠBˆÜ[X›WØXÝ[ÛˆHPXÝ[ÛŠ¹`m¹l%9cäyâhºj¦ˆ‹Ù[ŠBˆÜ[X›WØXÝ[Û‹œÙ]ÚXÚØX›JYJBˆÜ[X›WØXÝ[Û‹œÙ]ÚXÚÙY
+Ù[‹œÙ][™ÜË˜]]ÛX]X×ÙÜ[X›[™ÊBˆÜ[X›WØXÝ[Û‹ÙÙÛY˜ÛÛ›™XÝ
+Ù[‹œÙ]Ø]]ÛX]X×ÙÜ[X›[™ÊBˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠÜ[X›WØXÝ[ÛŠBˆÝ\›WØXÝ[ÛˆHPXÝ[ÛŠ¹¥m9à®y¢©y¥íˆ‹Ù[ŠBˆÝ\›WØXÝ[Û‹œÙ]ÚXÚØX›JYJBˆÝ\›WØXÝ[Û‹œÙ]ÚXÚÙY
+Ù[‹œÙ][™ÜËšÝ\›WØ[››Ý[˜Ù[Y[
+BˆÝ\›WØXÝ[Û‹ÙÙÛY˜ÛÛ›™XÝ
+Ù[‹œÙ]ÚÝ\›WØ[››Ý[˜Ù[Y[
+BˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠÝ\›WØXÝ[ÛŠBˆÜ[ÜÝØXÝ[ÛˆHPXÝ[ÛŠ¹iâùîâ9ïkºhm»ï"9alúeëyclù¨c:gh¹ª(yo#ûï"H‹Ù[ŠBˆÜ[ÜÝØXÝ[Û‹œÙ]ÚXÚØX›JYJBˆÜ[ÜÝØXÝ[Û‹œÙ]ÚXÚÙY
+Ù[‹œÙ][™ÜË˜[Ø^\×ÛÛ—ÝÜ
+BˆÜ[ÜÝØXÝ[Û‹ÙÙÛY˜ÛÛ›™XÝ
+Ù[‹œÙ]Ø[Ø^\×ÛÛ—ÝÜ
+BˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠÜ[ÜÝØXÝ[ÛŠBˆÚ^™WØXÝ[ÛˆHPXÝ[ÛŠº/ç¹îëz, ú" ¹k¨9âjyi)ùl#ø )ˆ‹Ù[ŠBˆÚ^™WØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹›Ü[—ÜÚ^™WØÛÛ›Û
+BˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠÚ^™WØXÝ[ÛŠBˆÞ\Ý[WÙÜ›Ý\˜YÙ\\˜]ÜŠ
+Bˆ™]\›—ØXÝ[ÛˆHPXÝ[ÛŠ¹fç¹b,9..ùlcùneH‹Ù[ŠBˆ™]\›—ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ™]\›—Ý×Üš[X\žWÜØÜ™Y[ŠBˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠ™]\›—ØXÝ[ÛŠBˆYWØXÝ[ÛˆHPXÝ[ÛŠºf¤:%ãÈ‹Ù[ŠBˆYWØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹šYJBˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠYWØXÝ[ÛŠBˆÞ\Ý[WÙÜ›Ý\˜YÙ\\˜]ÜŠ
+Bˆ]Z]ØXÝ[ÛˆHPXÝ[ÛŠº` 9aîˆ‹Ù[ŠBˆ]Z]ØXÝ[Û‹šYÙÙ\™Y˜ÛÛ›™XÝ
+Ù[‹œ]Z]Ü™\]Y\ÝY™[Z]
+BˆÞ\Ý[WÙÜ›Ý\˜YXÝ[ÛŠ]Z]ØXÝ[ÛŠBˆ™]\›ˆY[B‚ˆYˆÛÛ^Y[Q]™[
+Ù[‹]™[ˆPÛÛ^Y[Q]™[
+HOˆ›Û™N‚ˆˆˆ¹ê#y`&y¦/¹é.¹cey«(ycìúe+º#ç9ce{ï#9..¹cã9aîùcìúe+¹æ¡9mí9n ú/¯º+ëzgìùåfyaî¹b)9k¦¹¥íºeí8à ˆˆˆ‚‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆYˆ[YK›[Û›ÝÛšXÊ
+HÙ[‹—ÜÝ\™\Ü×ØÛÛ^Ý[[‚ˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆÙ[‹—Ü[™[™×ØÛÛ^ÙÛØ˜[H]™[™ÛØ˜[ÜÊ
+BˆÙ[‹˜ÛÛ^ÛY[WÝ[Y\‹œÝ\
+P\XØ][Û‹™ÝX›PÛXÚÒ[\˜[
+
+H
+ÈŒ
+Bˆ]™[˜XØÙ\
+
+B‚ˆYˆÜÚÝ×ÙY™\œ™YØÛÛ^ÛY[JÙ[ŠHOˆ›Û™N‚ˆˆˆ¹èkº+©9.#y¦+ùcã9aîùd#»ï#9g*9c§úo(9¨!ù/cyïk¹¢dùo 9¦kº`&¹cìúe+º#ç9cexà ˆˆˆ‚‚ˆYˆ[YK›[Û›ÝÛšXÊ
+HHÙ[‹—ÜÝ\™\Ü×ØÛÛ^Ý[[‚ˆÙ[‹—ØZ[ØÛÛ^ÛY[J
+K™^XÊÙ[‹—Ü[™[™×ØÛÛ^ÙÛØ˜[
+B‚ˆYˆ[Ý\ÙT™\ÜÑ]™[
+Ù[‹]™[ˆS[Ý\ÙQ]™[
+HOˆ›Û™N‚ˆˆˆº+¬9oeyméºe+¹£"y."ûï&ùcê¹§"yéîùbª:-¡z/áùìîùîçúf"9`/9d#¹¢cyç'ù«hú/æùaiy¢å¹¢ïxà ˆˆˆ‚‚ˆYˆ]™[˜]ÛŠ
+HOH]“[Ý\ÙP]Û‹“Y]ÛŽ‚ˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹—Ü™\Ü×Ü[™[™ÈHYBˆÙ[‹—ÛÛ™×Ü™\Ü×ÝšYÙÙ\™YH˜[ÙBˆÙ[‹›Û™×Ü™\Ü×Ý[Y\‹œÝ\
+L
+BˆÙ[‹™˜YÙÚ[™ÈH˜[ÙBˆÙ[‹œÝ]WÝ[Y\‹œÝÜ
+
+BˆÙ[‹š[\˜XÝ[Û—Ý[Y\‹œÝÜ
+
+BˆÙ[‹šÝ™\—Ý[Y\‹œÝÜ
+
+BˆÙ[‹—Ü™\Ü×ÛØØ[H]™[œÜÚ][ÛŠ
+KÔÚ[
+
+BˆÙ[‹—Ü™\Ü×ÙÛØ˜[H]™[™ÛØ˜[ÜÚ][ÛŠ
+KÔÚ[
+
+BˆÙ[‹—Ù˜Y×ÛÙ™œÙ]H]™[™ÛØ˜[ÜÚ][ÛŠ
+KÔÚ[
+
+HHÙ[‹™œ˜[YQÙ[ÛY]žJ
+KÜY
+
+Bˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆÝ\\Š
+K›[Ý\ÙT™\ÜÑ]™[
+]™[
+B‚ˆYˆ[Ý\ÙS[Ý™Q]™[
+Ù[‹]™[ˆS[Ý\ÙQ]™[
+HOˆ›Û™N‚ˆˆˆ¹¢å¹bª9§'úeí9¨.y£k¹aj9l`:o(9¨!ù/cyïk¹éîùbª9nmºfd9b-¹ê¥ùcèøà ˆˆˆ‚‚ˆYˆ]™[˜]ÛœÊ
+H	ˆ]“[Ý\ÙP]Û‹“Y]ÛŽ‚ˆÝ\œ™[ÙÛØ˜[H]™[™ÛØ˜[ÜÚ][ÛŠ
+KÔÚ[
+
+BˆYˆ
+ˆÙ[‹—Ü™\Ü×Ü[™[™Âˆ[™
+Ý\œ™[ÙÛØ˜[HÙ[‹—Ü™\Ü×ÙÛØ˜[
+K›X[š][“[™Ý
+
+BˆHP\XØ][Û‹œÝ\˜YÑ\Ý[˜ÙJ
+Bˆ
+N‚ˆÙ[‹›Û™×Ü™\Ü×Ý[Y\‹œÝÜ
+
+BˆÙ[‹—Ü™\Ü×Ü[™[™ÈH˜[ÙBˆÙ[‹™˜YÙÚ[™ÈHYBˆÙ[‹›[ÛÙœ™XÙZ]™WÙ˜YÊ
+BˆÙ[‹œÙ]ÜÝ]J]Ý]K‘QÊBˆYˆ›ÝÙ[‹™˜YÙÚ[™Î‚ˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆ\™Ù]H]™[™ÛØ˜[ÜÚ][ÛŠ
+KÔÚ[
+
+HHÙ[‹—Ù˜Y×ÛÙ™œÙ]ˆÙ[‹›[Ý™JÙ[‹—ØÛÛœÝ˜Z[™YÜÜÚ][ÛŠ\™Ù]
+JBˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆÙ[‹—Ý˜XÚ×Ü\ÜÚ]™WÛ[Ý[ÛŠ]™[œÜÚ][ÛŠ
+KÔÚ[
+
+JBˆÝ\\Š
+K›[Ý\ÙS[Ý™Q]™[
+]™[
+B‚ˆYˆ[Ý\ÙT™[X\ÙQ]™[
+Ù[‹]™[ˆS[Ý\ÙQ]™[
+HOˆ›Û™N‚ˆˆˆ¹méºe+ºaâ¹¥/¹¥í¹îäù§gù¢å¹bª9nm¹ h¹i#yo¡y§.¸à ˆˆˆ‚‚ˆYˆ]™[˜]ÛŠ
+HOH]“[Ý\ÙP]Û‹“Y]ÛŽ‚ˆÙ[‹›Û™×Ü™\Ü×Ý[Y\‹œÝÜ
+
+BˆYˆÙ[‹™˜YÙÚ[™Î‚ˆÙ[‹™˜YÙÚ[™ÈH˜[ÙBˆÙ[‹—Ü™\Ü×Ü[™[™ÈH˜[ÙBˆÙ[‹—ÜÚÝ×Ù[[Ý[ÛŠ]Ý]K”ÕT”’TÑQLL
+Bˆ[YˆÙ[‹—ÛÛ™×Ü™\Ü×ÝšYÙÙ\™Y‚ˆÙ[‹—ÛÛ™×Ü™\Ü×ÝšYÙÙ\™YH˜[ÙBˆ[YˆÙ[‹—Ü™\Ü×Ü[™[™Î‚ˆÙ[‹—Ü™\Ü×Ü[™[™ÈH˜[ÙBˆÙ[‹—Ú[™WØÛXÚÊÙ[‹—Ü™\Ü×ÛØØ[
+Bˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆÝ\\Š
+K›[Ý\ÙT™[X\ÙQ]™[
+]™[
+B‚ˆYˆX]™Q]™[
+Ù[‹]™[
+HOˆ›Û™N‚ˆˆˆºo(9¨!ùé®ùo 9k¨9âjy¥í¹cå¹­¢9l&¹§*º)é¹cäyæ¡9 «9`g9d£9¤n9i-:/j:/îxà ˆˆˆ‚‚ˆÙ[‹—ÚÝ™\—Þ›Û™HHˆ‚ˆÙ[‹—ÜÝ›ÚÙWÜÚ[Ë˜ÛX\Š
+BˆÙ[‹šÝ™\—Ý[Y\‹œÝÜ
+
+BˆÙ[‹›Û™×Ü™\Ü×Ý[Y\‹œÝÜ
+
+BˆÝ\\Š
+K›X]™Q]™[
+]™[
+B‚ˆYˆ[Ý\ÙQÝX›PÛXÚÑ]™[
+Ù[‹]™[ˆS[Ý\ÙQ]™[
+HOˆ›Û™N‚ˆˆˆ¹cã9aîùméºe+¹¢dùo 9oêù£mùcèú(¢ûï&ùcã9aîùcìúe+¹¤«y¥/¹. 9hì9.#yd#:+ëy¬%9æ¡9mí9n ú/¯¸à ˆˆˆ‚‚ˆYˆ]™[˜]ÛŠ
+HOH]“[Ý\ÙP]Û‹“Y]ÛŽ‚ˆÙ[‹™˜YÙÚ[™ÈH˜[ÙBˆÙ[‹—Ü™\Ü×Ü[™[™ÈH˜[ÙBˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹œÚÝ×Ü]ZXÚ×Ü[™[
+
+Bˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆYˆ]™[˜]ÛŠ
+HOH]“[Ý\ÙP]Û‹”šYÚ]ÛŽ‚ˆÙ[‹˜ÛÛ^ÛY[WÝ[Y\‹œÝÜ
+
+BˆÙ[‹—ÜÝ\™\Ü×ØÛÛ^Ý[[H[YK›[Û›ÝÛšXÊ
+H
+ÈŽˆÙ[‹—Ü™XÛÜ™Ý\Ù\—Ú[\˜XÝ[ÛŠ
+BˆÙ[‹œ^WØ˜XYWÝ›ÚXÙJ
+Bˆ]™[˜XØÙ\
+
+Bˆ™]\›‚ˆÝ\\Š
+K›[Ý\ÙQÝX›PÛXÚÑ]™[
+]™[
+B
