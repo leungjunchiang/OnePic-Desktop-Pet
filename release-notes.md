@@ -1,3 +1,8 @@
+# Lili v0.22.23
+
+- Fixed Supabase Direct presence heartbeats by adding the required PostgREST merge-duplicates preference to `lili_focus_presence` upserts. Direct clients no longer hit the primary-key duplicate error after the first heartbeat, so active buddies correctly remain online and room focus counts update.
+- Added regression coverage for the direct heartbeat upsert header. CloudBase and Edge relay behavior remains unchanged.
+
 # Lili v0.22.22
 
 - Fixed false offline buddy status by making Supabase the authority for `last_seen` and room session timestamps. Desktop, CloudBase proxy, Edge relay, and Cloudflare relay no longer trust a skewed client clock.
@@ -6,7 +11,7 @@
 
 # Lili v0.22.21
 
-- Fixed owner nickname synchronization by exposing the active authenticated Supabase session through the route-aware social client. Existing local owner nicknames now reach the single Supabase profile source of truth, so buddies can see the intended `{owner_nickname}家的六毛` label instead of the neutral fallback.
+- Fixed owner nickname synchronization by exposing the active authenticated Supabase session through the route-aware social client. Existing local owner nicknames now reach the single Supabase profile source of truth, so buddies can see the intended `{owner_nickname}瀹剁殑鍏瘺` label instead of the neutral fallback.
 - Fixed offline dashboard messaging: local focus started without selecting a study room no longer appears as a failed study-room connection. A selected room still reports a real room outage and keeps the cached state visible.
 - Added regression coverage for the active-session bridge and the no-room local-focus state.
 
@@ -48,25 +53,10 @@
 
 # Lili v0.22.7
 
-本次版本把六毛对话和搭子自习室的两条链路重新接稳：
-
-- 六毛对话使用固定角色知识、按需话题检索和最近上下文，连续追问“他”“这首”“后面一句”不再脱离陈楚生世界观；明确歌词续写会改为安全提示，不随机接话。
-- 对话保留本机有界摘要和最近 30 轮，在线请求只发送角色设定、命中的相关知识和有限上下文；聊天设置中的隐私说明与实际行为一致。
-- 修复在线聊天状态重复显示“已连接”的问题。
-- 自习室首页显示实际后端（Supabase 或配置的 HTTP 中转），新增健康检查。
-- 自习室网络错误区分 DNS、连接超时、拒绝连接、TLS/证书、认证、HTTP 和服务器错误；网络失败仍保留最近房间状态，不阻塞桌宠与计时。
-- Cloudflare Worker `/health` 返回后端类型与短轮询能力；仓库不内置未经中国大陆目标网络实测的公网中转地址。
-
+鏈鐗堟湰鎶婂叚姣涘璇濆拰鎼瓙鑷範瀹ょ殑涓ゆ潯閾捐矾閲嶆柊鎺ョǔ锛?
+- 鍏瘺瀵硅瘽浣跨敤鍥哄畾瑙掕壊鐭ヨ瘑銆佹寜闇€璇濋妫€绱㈠拰鏈€杩戜笂涓嬫枃锛岃繛缁拷闂€滀粬鈥濃€滆繖棣栤€濃€滃悗闈竴鍙モ€濅笉鍐嶈劚绂婚檲妤氱敓涓栫晫瑙傦紱鏄庣‘姝岃瘝缁啓浼氭敼涓哄畨鍏ㄦ彁绀猴紝涓嶉殢鏈烘帴璇濄€?- 瀵硅瘽淇濈暀鏈満鏈夌晫鎽樿鍜屾渶杩?30 杞紝鍦ㄧ嚎璇锋眰鍙彂閫佽鑹茶瀹氥€佸懡涓殑鐩稿叧鐭ヨ瘑鍜屾湁闄愪笂涓嬫枃锛涜亰澶╄缃腑鐨勯殣绉佽鏄庝笌瀹為檯琛屼负涓€鑷淬€?- 淇鍦ㄧ嚎鑱婂ぉ鐘舵€侀噸澶嶆樉绀衡€滃凡杩炴帴鈥濈殑闂銆?- 鑷範瀹ら椤垫樉绀哄疄闄呭悗绔紙Supabase 鎴栭厤缃殑 HTTP 涓浆锛夛紝鏂板鍋ュ悍妫€鏌ャ€?- 鑷範瀹ょ綉缁滈敊璇尯鍒?DNS銆佽繛鎺ヨ秴鏃躲€佹嫆缁濊繛鎺ャ€乀LS/璇佷功銆佽璇併€丠TTP 鍜屾湇鍔″櫒閿欒锛涚綉缁滃け璐ヤ粛淇濈暀鏈€杩戞埧闂寸姸鎬侊紝涓嶉樆濉炴瀹犱笌璁℃椂銆?- Cloudflare Worker `/health` 杩斿洖鍚庣绫诲瀷涓庣煭杞鑳藉姏锛涗粨搴撲笉鍐呯疆鏈粡涓浗澶ч檰鐩爣缃戠粶瀹炴祴鐨勫叕缃戜腑杞湴鍧€銆?
 # Lili v0.19.0
 
-本次版本重点修复点歌结果与实际播放不一致、误进歌手主页以及含义不清的“更新失败”。
-
-- 点歌改为 `search → exact match → play → verify`，只有媒体会话返回的歌名和歌手都匹配才显示播放成功。
-- 搜索结果仅接受歌曲类型；歌手、专辑、MV、歌单及歌手不匹配的结果会被拒绝。
-- QQ 音乐、网易云音乐、酷狗音乐、Apple Music、Spotify 使用独立 Provider Adapter，不共享固定坐标或页面布局假设。
-- 删除搜索后按方向键、回车或固定坐标播放第一条结果的旧逻辑；指定歌曲点播不会用全局播放键续播旧队列。
-- 实际歌曲不匹配时最多重试一次精确播放，随后返回明确结果；不再伪装成成功。
-- 内部区分 `SEARCH_FAILED`、`RESULT_NOT_FOUND`、`PLAY_ACTION_FAILED`、`MEDIA_SESSION_TIMEOUT`、`TRACK_VERIFY_FAILED`，并记录请求、候选和当前媒体信息调试日志。
-- Windows 使用 UI Automation 定位歌曲行与该行播放按钮，再由 GSMTC 校验；macOS Apple Music 使用 Apple Events，其他客户端使用已授权 Accessibility Adapter。
-
-同时包含 v0.18.1 的 macOS Codex CLI 绝对路径检测、最近 30 轮聊天记忆、五类右键菜单和四标签搭子自习室改进。
+鏈鐗堟湰閲嶇偣淇鐐规瓕缁撴灉涓庡疄闄呮挱鏀句笉涓€鑷淬€佽杩涙瓕鎵嬩富椤典互鍙婂惈涔変笉娓呯殑鈥滄洿鏂板け璐モ€濄€?
+- 鐐规瓕鏀逛负 `search 鈫?exact match 鈫?play 鈫?verify`锛屽彧鏈夊獟浣撲細璇濊繑鍥炵殑姝屽悕鍜屾瓕鎵嬮兘鍖归厤鎵嶆樉绀烘挱鏀炬垚鍔熴€?- 鎼滅储缁撴灉浠呮帴鍙楁瓕鏇茬被鍨嬶紱姝屾墜銆佷笓杈戙€丮V銆佹瓕鍗曞強姝屾墜涓嶅尮閰嶇殑缁撴灉浼氳鎷掔粷銆?- QQ 闊充箰銆佺綉鏄撲簯闊充箰銆侀叿鐙楅煶涔愩€丄pple Music銆丼potify 浣跨敤鐙珛 Provider Adapter锛屼笉鍏变韩鍥哄畾鍧愭爣鎴栭〉闈㈠竷灞€鍋囪銆?- 鍒犻櫎鎼滅储鍚庢寜鏂瑰悜閿€佸洖杞︽垨鍥哄畾鍧愭爣鎾斁绗竴鏉＄粨鏋滅殑鏃ч€昏緫锛涙寚瀹氭瓕鏇茬偣鎾笉浼氱敤鍏ㄥ眬鎾斁閿画鎾棫闃熷垪銆?- 瀹為檯姝屾洸涓嶅尮閰嶆椂鏈€澶氶噸璇曚竴娆＄簿纭挱鏀撅紝闅忓悗杩斿洖鏄庣‘缁撴灉锛涗笉鍐嶄吉瑁呮垚鎴愬姛銆?- 鍐呴儴鍖哄垎 `SEARCH_FAILED`銆乣RESULT_NOT_FOUND`銆乣PLAY_ACTION_FAILED`銆乣MEDIA_SESSION_TIMEOUT`銆乣TRACK_VERIFY_FAILED`锛屽苟璁板綍璇锋眰銆佸€欓€夊拰褰撳墠濯掍綋淇℃伅璋冭瘯鏃ュ織銆?- Windows 浣跨敤 UI Automation 瀹氫綅姝屾洸琛屼笌璇ヨ鎾斁鎸夐挳锛屽啀鐢?GSMTC 鏍￠獙锛沵acOS Apple Music 浣跨敤 Apple Events锛屽叾浠栧鎴风浣跨敤宸叉巿鏉?Accessibility Adapter銆?
+鍚屾椂鍖呭惈 v0.18.1 鐨?macOS Codex CLI 缁濆璺緞妫€娴嬨€佹渶杩?30 杞亰澶╄蹇嗐€佷簲绫诲彸閿彍鍗曞拰鍥涙爣绛炬惌瀛愯嚜涔犲鏀硅繘銆?
