@@ -28,6 +28,9 @@ class StoryTrigger:
     reply_templates: tuple[str, ...]
     trigger_threshold: int
     cooldown_seconds: float
+    strong_keywords: tuple[str, ...] = ()
+    confidence_threshold: float = 0.72
+    cooldown_turns: int = 6
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,9 @@ def load_story_triggers(path: Path | None = None) -> tuple[StoryTrigger, ...]:
                 reply_templates=_as_strings(item.get("reply_templates")),
                 trigger_threshold=max(1, int(item.get("trigger_threshold", 1))),
                 cooldown_seconds=max(0.0, float(item.get("cooldown", 3600))),
+                strong_keywords=_as_strings(item.get("strong_keywords")),
+                confidence_threshold=max(0.0, min(1.0, float(item.get("confidence", 0.72)))),
+                cooldown_turns=max(1, int(item.get("cooldown_turns", 6))),
             )
         )
     return tuple(stories)
@@ -89,6 +95,9 @@ class StoryTriggerEngine:
         self.stories = tuple(stories)
         self.clock = clock
         self._last_used: dict[str, float] = {}
+        self._last_used_turn: dict[str, int] = {}
+        self._last_story_turn: int | None = None
+        self._turn = 0
 
     @classmethod
     def from_resources(cls) -> "StoryTriggerEngine":
@@ -118,10 +127,21 @@ class StoryTriggerEngine:
         if not text.strip():
             return None
         now = self.clock()
-        candidates: list[tuple[int, StoryTrigger, tuple[str, ...]]] = []
+        if mark_used:
+            # A turn advances even when no story matches; otherwise a
+            # cooldown measured in turns could never expire during ordinary
+            # conversation.
+            self._turn += 1
+        current_turn = self._turn
+        candidates: list[tuple[float, StoryTrigger, tuple[str, ...]]] = []
         for story in self.stories:
             last_used = self._last_used.get(story.story_id)
             if last_used is not None and now - last_used < story.cooldown_seconds:
+                continue
+            last_turn = self._last_used_turn.get(story.story_id)
+            if last_turn is not None and current_turn - last_turn < story.cooldown_turns:
+                continue
+            if self._last_story_turn is not None and current_turn - self._last_story_turn < 3:
                 continue
             if any(marker.casefold() in text for marker in story.exclude_keywords):
                 continue
@@ -132,16 +152,37 @@ class StoryTriggerEngine:
             )
             if len(set(matched)) < story.trigger_threshold:
                 continue
-            candidates.append((len(set(matched)), story, matched))
+            unique_matched = tuple(dict.fromkeys(matched))
+            strong = tuple(
+                keyword
+                for keyword in story.strong_keywords
+                if keyword.casefold() in text
+            )
+            # A strong phrase is enough for a high-confidence trigger.  A
+            # generic keyword alone is deliberately capped below the default
+            # threshold, so “今天论文写不动” cannot summon a father story.
+            confidence = min(
+                0.98,
+                (0.84 if strong else 0.0)
+                + min(0.12, max(0, len(set(unique_matched)) - len(set(strong))) * 0.04),
+            )
+            if confidence < story.confidence_threshold:
+                continue
+            candidates.append((confidence, story, unique_matched))
         if not candidates:
             return None
         _, story, matched = max(candidates, key=lambda item: item[0])
         if mark_used:
             self._last_used[story.story_id] = now
+            self._last_used_turn[story.story_id] = current_turn
+            self._last_story_turn = current_turn
         return StoryMatch(story, matched)
 
     def reset(self) -> None:
         self._last_used.clear()
+        self._last_used_turn.clear()
+        self._last_story_turn = None
+        self._turn = 0
 
 
 _DEFAULT_ENGINE: StoryTriggerEngine | None = None

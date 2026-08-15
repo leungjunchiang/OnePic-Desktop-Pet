@@ -34,6 +34,7 @@ from .ai import (
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
+from .chat_intent import CHEN_PROFILE, classify_intent
 from .liumao_worldview import story_response, worldview_response
 
 
@@ -357,6 +358,25 @@ class OfflineDialogueManager:
         reply = self.companion.reply_to(text)
         return ManagedChatReply(reply.text, reply.state, "offline")
 
+    @staticmethod
+    def should_handle_locally(message: str) -> bool:
+        """Return whether a short social exchange should avoid an AI rewrite.
+
+        Greetings, affection, thanks and goodbyes are stable character moments.
+        Sending them to an online model made the reply unexpectedly formal or
+        over-explained, even though no outside knowledge was needed.
+        """
+
+        text = " ".join(str(message or "").split())[:80]
+        if not text:
+            return True
+        markers = (
+            "爱你", "很爱你", "喜欢你", "想你", "抱抱", "亲亲",
+            "谢谢", "感谢", "你好", "嗨", "早上好", "早安",
+            "晚安", "再见", "拜拜", "有没有人告诉你", "有没有人告诉我",
+        )
+        return any(marker in text for marker in markers)
+
     def _is_complex(self, text: str) -> bool:
         """保守识别需要外部知识、长推理或代码执行的请求。"""
 
@@ -443,13 +463,22 @@ class ChatManager(QObject):
             return False
         # 角色身份和隐私边界不能交给在线模型自由改写；明确的世界观短问句
         # 直接本地回答，确保“你认识陈楚生吗”不会退化成百科人物介绍。
+        intent = classify_intent(message, history)
         worldview = worldview_response(message, history=history)
-        if worldview is not None:
+        # A broad profile question should reach the online composer so it can
+        # use the 6-10 retrieved timeline blocks.  The same worldview reply
+        # remains the offline fallback inside OfflineDialogueManager.
+        if worldview is not None and not (
+            intent.primary_intent == CHEN_PROFILE and worldview.key == "father_history"
+        ):
             self.reply_ready.emit(ManagedChatReply(worldview.text, worldview.state, "offline"))
             return True
         story = story_response(message, history=history)
         if story is not None:
             self.reply_ready.emit(ManagedChatReply(story.text, story.state, "offline"))
+            return True
+        if self.offline.should_handle_locally(message):
+            self.reply_ready.emit(self.offline.reply(message, history))
             return True
         provider = self.settings.ai_provider
         status = self.agents.status(provider)
@@ -508,3 +537,4 @@ def should_start_startup_detection() -> bool:
     """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+

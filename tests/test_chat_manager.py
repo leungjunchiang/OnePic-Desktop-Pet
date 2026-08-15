@@ -213,6 +213,25 @@ def test_connected_agent_keeps_father_identity_local() -> None:
     manager.shutdown()
 
 
+def test_connected_agent_keeps_short_affection_reply_local() -> None:
+    app = _app()
+    settings = PetSettings(ai_provider="deepseek")
+    agents = AgentManager(settings, FakeCredentials())
+    agents.mark_runtime_success("deepseek")
+    service = FakeService(answer="客服式的长回复")
+    manager = ChatManager(settings, service, agents, _offline_manager())
+    replies = []
+    manager.reply_ready.connect(replies.append)
+
+    assert manager.submit("我很爱你", []) is True
+    app.processEvents()
+
+    assert replies[0].mode == "offline"
+    assert "六毛也很爱你" in replies[0].text
+    assert service.calls == 0
+    manager.shutdown()
+
+
 def test_offline_dialogue_uses_time_work_pet_state_and_complex_hint() -> None:
     """完全没有 AI 时仍能回答本地上下文，复杂问题才显示恢复操作。"""
 
@@ -278,3 +297,4 @@ def test_pressing_enter_ten_times_only_submits_messages() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
+

@@ -18,6 +18,19 @@ def test_normal_work_message_does_not_pull_father_knowledge() -> None:
     assert manager.search("今天论文写不动") == ()
 
 
+def test_broad_profile_retrieves_multiple_timeline_blocks() -> None:
+    manager = KnowledgeManager(resource_path("resources"))
+    hits = manager.search(
+        "陈楚生的经历如何",
+        limit=8,
+        domains=("profile", "timeline", "history"),
+    )
+    assert len(hits) >= 6
+    titles = " ".join(hit.block.title for hit in hits)
+    assert "深圳" in titles
+    assert "2007" in titles
+
+
 def test_relations_and_song_catalog_are_local_data() -> None:
     manager = KnowledgeManager(resource_path("resources"))
     relation_text = str(manager.relations)
@@ -25,3 +38,4 @@ def test_relations_and_song_catalog_are_local_data() -> None:
     assert "我爹" in relation_text
     assert "有没有人告诉你" in song_titles
     assert "荒野国王" in song_titles
+

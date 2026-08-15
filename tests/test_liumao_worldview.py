@@ -14,7 +14,10 @@ from onepic_desktop_pet.liumao_worldview import (
 def test_worldview_identity_and_boundaries_are_short() -> None:
     assert worldview_response("你是谁", random.Random(1)).text == "六毛。"
     assert worldview_response("谁家的", random.Random(1)).text == "陈楚生家的。"
-    assert worldview_response("陈楚生是谁", random.Random(1)).text == "我爹。"
+    identity = worldview_response("陈楚生是谁", random.Random(1))
+    assert identity is not None
+    assert identity.text.startswith("陈楚生")
+    assert "我爹" in identity.text
     assert worldview_response("你认识陈楚生吗", random.Random(1)).key == "father_identity"
     assert "我爹" in worldview_response("你认识陈楚生吗", random.Random(1)).text
     assert worldview_response("你爹现在在哪", random.Random(1)).key == "privacy"
@@ -32,6 +35,8 @@ def test_family_song_and_prompt_are_on_demand() -> None:
     response = worldview_response("有没有人告诉你这首别切", random.Random(0))
     assert response is not None
     assert response.state is PetState.SIT
+    assert "我爹" in response.text
+    assert response.text != "诶。"
     assert worldview_prompt_context("今天写论文") == ""
     assert "少说话" in worldview_prompt_context("正在听有没有人告诉你")
     assert "我爹" in worldview_prompt_context("你认识陈楚生吗")
@@ -53,6 +58,26 @@ def test_follow_up_uses_family_context_and_does_not_guess_lyrics() -> None:
     assert "不能替你续歌词" in lyric_answer.text
 
 
+def test_father_history_is_short_and_does_not_add_unasked_song_catalog() -> None:
+    answer = worldview_response("陈楚生的经历如何", random.Random(1))
+    assert answer is not None
+    assert answer.key == "father_history"
+    assert "深圳" in answer.text
+    assert "2007" in answer.text
+    assert "有没有人告诉你" not in answer.text
+
+
+def test_bare_song_title_is_not_forced_into_song_worldview() -> None:
+    assert classify_worldview("有没有人告诉你") is None
+
+
+def test_explicit_song_question_answers_the_artist_before_persona() -> None:
+    answer = worldview_response("《有没有人告诉你》是谁唱的？", random.Random(1))
+    assert answer is not None
+    assert answer.key == "family_song"
+    assert answer.text.startswith("陈楚生")
+
+
 def test_family_prompt_includes_retrieved_context_for_pronoun_follow_up() -> None:
     history = [("user", "你爹是谁"), ("assistant", "我爹。")]
     prompt = worldview_prompt_context("他唱歌怎么样", history)
@@ -64,3 +89,4 @@ def test_family_music_mode_only_uses_public_track_metadata() -> None:
     assert family_music_mode("陈楚生", "任意歌名")
     assert family_music_mode("", "有没有人告诉你")
     assert not family_music_mode("其他歌手", "其他歌名")
+

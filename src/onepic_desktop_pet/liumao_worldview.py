@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .behavior import PetState
+from .chat_intent import SONG_QUERY, classify_intent
 from .story_trigger_engine import get_story_trigger_engine
 
 
@@ -68,12 +69,27 @@ def classify_worldview(
     family_context = _family_context(text, history)
     if _has(text, "后面一句", "下一句", "歌词", "歌词是什么", "续上", "接下来怎么唱") and family_context:
         return "family_song_lyrics"
-    if _has(text, FAMILY_SONG):
+    # The title is also an ordinary unfinished sentence.  Only explicit song
+    # context may enter the song branch; a bare title is casual conversation.
+    if _has(text, FAMILY_SONG) and classify_intent(text, history).primary_intent == SONG_QUERY:
         return "family_song"
     if family_context and _has(text, "唱歌怎么样", "唱得怎么样", "唱歌好听", "歌好听", "声音怎么样", "会唱歌吗"):
         return "father_music"
     if family_context and _has(text, "他是谁", "这个人是谁", "他是干嘛的", "他做什么"):
         return "father_identity"
+    if family_context and _has(
+        text,
+        "经历如何",
+        "经历怎么样",
+        "经历是怎样",
+        "人生经历",
+        "他的经历",
+        "你爹的经历",
+        "怎么出道",
+        "怎么走过来",
+        "一路怎么走",
+    ):
+        return "father_history"
     if _has(text, "你爹现在在哪", "你爹在哪", "我爹现在在哪", "他现在在哪", "私生活", "最喜欢什么", "最喜欢哪"):
         return "privacy"
     if _has(text, "没抢到", "抢不到") and _has(text, "票", "演唱会"):
@@ -88,6 +104,10 @@ def classify_worldview(
         return "history_2023"
     if _has(text, "2025", "歌手2025", "歌王") and _has(text, "陈楚生", "你爹", "我爹", "歌手"):
         return "history_2025"
+    if _has(text, "0713", "老北北", "再就业", "快乐再出发", "老友局", "那几个叔", "老朋友") and _has(
+        text, "哪六个", "都有谁", "成员", "什么关系", "什么意思", "谁"
+    ):
+        return "relation_query"
     if _has(text, "0713", "老北北", "再就业", "快乐再出发", "老友局", "那几个叔", "老朋友"):
         return "friends"
     if _has(text, "荒野国王"):
@@ -96,9 +116,9 @@ def classify_worldview(
         return "guitar"
     if _has(text, "海南", "三亚", "天涯海角", "海边", "大海", "椰子"):
         return "hainan"
-    if _has(text, "谁家的", "你爹是谁", "你爸爸是谁", "哪家的"):
+    if _has(text, "谁家的", "哪家的"):
         return "family_identity"
-    if _has(text, "陈楚生是谁", "你认识陈楚生", "认识陈楚生", "知道陈楚生", "听说过陈楚生", "了解陈楚生", "陈楚生是什么人", "陈楚生是哪位"):
+    if _has(text, "你爹是谁", "你爸爸是谁", "陈楚生是谁", "你认识陈楚生", "认识陈楚生", "知道陈楚生", "听说过陈楚生", "了解陈楚生", "陈楚生是什么人", "陈楚生是哪位"):
         return "father_identity"
     if _has(text, "你是谁", "介绍一下你"):
         return "self_identity"
@@ -114,7 +134,9 @@ def classify_worldview(
 _PROMPT_CONTEXT = {
     "family_song_lyrics": "这是陈楚生的歌，但不要提供或续写受版权保护的歌词；可以说明这是我爹的歌，改聊歌曲感受。",
     "family_song": "听到陈楚生相关歌曲时，六毛先听歌少说话；只可提歌名，不引用歌词。",
-    "father_identity": "提到陈楚生时，六毛要把他识别为‘我爹’；用户问‘你认识/知道陈楚生吗’时，直接说‘认识啊，我爹’，不要改成普通百科人物介绍。六毛不是陈楚生本人。",
+    "father_identity": "事实先说清楚：陈楚生是中国内地唱作人和歌手，六毛才会把他叫作‘我爹’；不要用角色称呼替换人物事实。六毛不是陈楚生本人。",
+    "father_history": "这是宽泛人物经历问题：优先按时间线组织 6-10 句，覆盖海南/吉他、深圳驻唱、早期比赛、2007 快男、之后持续创作、0713、2023 X-Leader 与 2025 歌王；不要逐段复述资料。",
+    "relation_query": "0713 严格指 2007 快乐男声全国 13 强；如果用户问的是再就业男团，再给出陈楚生、苏醒、王栎鑫、张远、王铮亮、陆虎六人，不要把两个概念完全等同。",
     "privacy": "六毛不是陈楚生本人；没有实时资料时不编造行踪、私生活或未公开偏好，只说‘他没跟我报备’。",
     "history_2007": "陈楚生相关公开经历只按产品资料使用：海南成长、深圳与酒吧唱歌、2003 PUB 冠军、2007 快乐男声冠军。",
     "history_2023": "可把 2023 披荆斩棘第三季年度冠军视为家族彩蛋，语气克制，不夸张造神。",
@@ -150,6 +172,8 @@ def story_response(
 ) -> WorldviewResponse | None:
     """Return one cooldown-protected story response for offline chat."""
 
+    if not classify_intent(message, history).story_allowed:
+        return None
     match = get_story_trigger_engine().match(message, history, mark_used=True)
     if match is None or not match.story.reply_templates:
         return None
@@ -184,10 +208,23 @@ def worldview_response(
     replies: dict[str, tuple[str, ...]] = {
         "self_identity": ("六毛。",),
         "family_identity": ("陈楚生家的。",),
-        "father_identity": ("我爹。",),
+        "father_identity": (
+            "陈楚生，中国内地唱作人和歌手；按六毛的说法嘛——我爹。",
+            "你问陈楚生啊？是个唱歌、写歌的人。对我来说，他就是我爹。",
+        ),
         "father_music": ("我觉得挺好听的。我爹是唱歌的，背着吉他唱了好多年。",),
         "family_song_lyrics": ("这是我爹的歌，我知道。后面那句我不能替你续歌词，但可以陪你听。",),
-        "family_song": ("诶。", "我爹。", "这首别切。"),
+        "family_song": (
+            "陈楚生唱的。嗯，我爹。你是在听这首吗？",
+            "这首是我爹很有代表性的一首，先别切。",
+        ),
+        "father_history": (
+            "挺绕的：他在海南长大，少年时就和吉他、写歌沾上了边，后来去了深圳。刚开始不是明星，做过普通工作，也在酒吧唱了很多年。2003 年拿过全国 PUB 歌手大赛冠军，真正被全国看见是 2007 年《快乐男声》夺冠。之后经历过职业转折，但一直在做音乐，也有 SPY.C 这些阶段。后来是 0713、再就业男团、《披荆斩棘》和《歌手2025》把不同阶段又连了起来。按六毛的说法，这就是我爹一条绕出去很远、但没离开音乐的路。",
+            "不是少年成名一路开挂那种：海南长大、抱吉他、去深圳、酒吧驻唱，先把很长一段日子唱过去。2003 年有过 PUB 冠军，2007 年《快乐男声》才被更多人认识。后面有职业转折，也一直继续写歌、做音乐；再到 0713、2023 年《披荆斩棘》的年度 X-Leader、2025 年《歌手》的歌王。大概就是——我爹没走直线，但一直在往音乐那边走。",
+        ),
+        "relation_query": (
+            "0713 严格说是 2007 年《快乐男声》全国 13 强，不是固定的六个人。你要问的是再就业男团的话，通常指陈楚生、苏醒、王栎鑫、张远、王铮亮、陆虎。",
+        ),
         "history_2007": (
             "我？我可能还没长毛。",
             "知道。我爹那年拿了冠军。",
@@ -206,5 +243,12 @@ def worldview_response(
         "bias": ("在我这当然是。", "你问他儿子，这答案还有悬念吗。"),
         "privacy": ("不知道啊，他没跟我报备。",),
     }
-    state = PetState.SIT if key in {"family_song", "family_song_lyrics", "effort", "hainan"} else PetState.CURIOUS
+    if key == "father_identity" and _has(text, "你爹是谁", "你爸爸是谁"):
+        return WorldviewResponse("陈楚生啊。", PetState.CURIOUS, key)
+    if key == "father_identity" and _has(text, "你认识陈楚生", "认识陈楚生", "知道陈楚生"):
+        return WorldviewResponse("我爹。", PetState.CURIOUS, key)
+    if key == "family_song" and _has(text, "谁唱", "是谁唱", "唱的"):
+        return WorldviewResponse("陈楚生唱的。嗯，我爹。", PetState.SIT, key)
+    state = PetState.SIT if key in {"family_song", "family_song_lyrics", "effort", "hainan", "father_history"} else PetState.CURIOUS
     return WorldviewResponse(randomizer.choice(replies[key]), state, key)
+
