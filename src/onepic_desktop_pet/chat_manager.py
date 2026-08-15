@@ -34,7 +34,7 @@ from .ai import (
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
-from .liumao_worldview import worldview_response
+from .liumao_worldview import story_response, worldview_response
 
 
 class AgentConnectionState(str, Enum):
@@ -329,6 +329,9 @@ class OfflineDialogueManager:
         worldview = worldview_response(text, self.random, history)
         if worldview is not None:
             return ManagedChatReply(worldview.text, worldview.state, "offline")
+        story = story_response(text, self.random, history)
+        if story is not None:
+            return ManagedChatReply(story.text, story.state, "offline")
         if any(marker in text for marker in ("几点", "现在时间", "当前时间", "星期几", "几号")):
             current = self.now()
             return ManagedChatReply(
@@ -443,6 +446,10 @@ class ChatManager(QObject):
         worldview = worldview_response(message, history=history)
         if worldview is not None:
             self.reply_ready.emit(ManagedChatReply(worldview.text, worldview.state, "offline"))
+            return True
+        story = story_response(message, history=history)
+        if story is not None:
+            self.reply_ready.emit(ManagedChatReply(story.text, story.state, "offline"))
             return True
         provider = self.settings.ai_provider
         status = self.agents.status(provider)

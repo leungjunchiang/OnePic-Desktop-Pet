@@ -33,6 +33,18 @@ from pathlib import Path
 from typing import Iterable
 
 from .liumao_worldview import worldview_prompt_context
+from .knowledge_manager import retrieve_prompt_context
+from .resources import resource_path
+
+
+def _load_short_persona() -> str:
+    try:
+        return resource_path("resources/liumao_persona.txt").read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return "你是六毛，不是陈楚生本人；陈楚生是你的‘我爹’。事实不确定时不要编造。"
+
+
+LIUMAO_PERSONA = _load_short_persona()
 
 
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
@@ -600,10 +612,15 @@ def _conversation_text(
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
     recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
-    lines = [SYSTEM_PROMPT]
+    # The short persona is always injected.  The larger knowledge file is
+    # retrieved separately and only matching blocks are appended.
+    lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA]
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
+    knowledge_context = retrieve_prompt_context(message, entries)
+    if knowledge_context and knowledge_context not in worldview_context:
+        lines.extend(("", knowledge_context))
     if summary:
         lines.extend(("", "更早对话的长期摘要：", summary))
     lines.extend(("", "以下是最近三十轮以内的完整对话："))
@@ -753,10 +770,13 @@ def ask_compatible_api(
         raise AIConnectionError("还没有填写模型名称。")
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
-    system_content = SYSTEM_PROMPT
+    system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}"
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         system_content += f"\n\n{worldview_context}"
+    knowledge_context = retrieve_prompt_context(message, entries)
+    if knowledge_context and knowledge_context not in worldview_context:
+        system_content += f"\n\n{knowledge_context}"
     if summary:
         system_content += f"\n\n更早对话的长期摘要：\n{summary}"
     messages = [{"role": "system", "content": system_content}]

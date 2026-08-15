@@ -283,6 +283,23 @@ class CompanionModel:
         """在本地按关键词回应用户输入，并限制用于回显的文本长度。"""
 
         text = " ".join(message.split())[:120]
+        # 六毛的默认陪伴气质是慢、稳、松弛，不把每个工作日都变成
+        # 绩效提醒。更具体的父亲故事由本地 story trigger 低频处理。
+        if any(word in text for word in ("今天没工作", "一天没工作", "今天不搞", "不想工作一天")):
+            return CompanionReply(
+                "今天不搞？也行。六毛先去旁边看会儿书，你想开工的时候叫我。",
+                PetState.SIT,
+            )
+        if any(word in text for word in ("又来活了", "晚上开工", "现在开始工作")):
+            return CompanionReply(
+                "行，又来活了。先做一小步，不用一下子把今晚都安排完。",
+                PetState.SIT,
+            )
+        if any(word in text for word in ("凌晨", "很晚了", "工作三小时", "工作很久")):
+            return CompanionReply(
+                "还没收工啊。六毛先给你端杯水，做完这一小段就收尾。",
+                PetState.SLEEPY,
+            )
         if not text:
             return CompanionReply("你还没说话呢，六毛在认真听。", PetState.CURIOUS)
         if any(word in text for word in ("你好", "嗨", "早上好", "早安")):

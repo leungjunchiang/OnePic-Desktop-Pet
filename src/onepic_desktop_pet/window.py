@@ -1205,6 +1205,34 @@ class PetWindow(QWidget):
         threshold = max(30, int(getattr(self.settings, "idle_pause_seconds", 300)))
         idle_seconds = max(0.0, float(system_idle_seconds()))
         if self._auto_paused_for_idle:
+            # `idle_seconds` is only the OS counter at this sample.  The
+            # previous implementation copied the threshold crossing (usually
+            # 300 seconds) into `_pending_idle_seconds` and never advanced it,
+            # so a user who was away for 40 minutes was still asked about
+            # "5 minutes".  Keep the episode start time as the source of truth
+            # and refresh the displayed duration on every 5-second sample.
+            if self._idle_pause_started_at is not None:
+                elapsed_seconds = max(
+                    0,
+                    int(
+                        (
+                            datetime.now().astimezone()
+                            - self._idle_pause_started_at
+                        ).total_seconds()
+                    ),
+                )
+                self._pending_idle_seconds = max(
+                    self._pending_idle_seconds,
+                    elapsed_seconds,
+                )
+            # While the OS still reports idle, retain the larger of the native
+            # reading and the wall-clock episode duration.  This also handles
+            # platforms whose idle counter has a wraparound or coarse sample.
+            if idle_seconds >= threshold:
+                self._pending_idle_seconds = max(
+                    self._pending_idle_seconds,
+                    int(idle_seconds),
+                )
             # The OS idle counter drops as soon as the user returns.  Delay
             # the question to the event loop so the first input is not
             # blocked by a modal dialog.  Once this episode is resolved, do
