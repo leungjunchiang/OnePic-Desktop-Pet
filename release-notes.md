@@ -1,3 +1,10 @@
+# Lili v0.22.35
+
+- Added three clear 今日小纸条 modes: detailed, compact, and fully hidden. The compact note is a small 280px pet-style panel that follows below 六毛; the detailed mode adapts to its content and caps the task list height.
+- Kept the note lightweight: the header and bottom row now focus on the selected task, with `▶ 开始`, `✓ 完成`, and `＋`; folding, display settings, time memory, check-out, and rest day live under `···`.
+- Selecting a task no longer hides or removes it. Completed tasks stay in today's list with a check mark and strike-through; edit/delete are available from the more menu and each task's context menu, with optional hide-completed display.
+- Added persistent `today_note_mode` settings and regression coverage for the three-mode configuration. Hidden notes stay closed on startup but can still be opened temporarily from 六毛's menu.
+
 # Lili v0.22.34
 
 - Rebuilt 今日小纸条 as a compact 360px floating note with adaptive height capped at 420px; oversized controls moved into the `···` menu and task overflow stays inside the list.
