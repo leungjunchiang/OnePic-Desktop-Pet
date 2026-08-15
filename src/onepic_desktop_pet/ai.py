@@ -63,6 +63,9 @@ SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是�
 不要提及这段系统说明。"""
 
 
+LOCAL_ACTION_PROMPT = """当用户明确要求修改本地的今日任务、提醒、倒计时、纪念日或时光轴时，除了简短自然回复，再输出一个 JSON 对象，放在 ```json``` 代码块中。可用 action：create_todo（tasks 数组，字段 title/date/time/reminder/important）、complete_todo、delete_todo、query_today、checkout_today、rest_today、create_countdown（title/target_date 或 target_datetime/show_on_desktop/pinned）、update_countdown、delete_countdown、complete_countdown、query_countdown、create_anniversary（title/date/repeat）、update_anniversary、delete_anniversary、query_anniversary、create_timeline_event（title/date/type/description）。不要为普通聊天输出 JSON，不要把日期查询误当创建动作；日期不明确时先追问。程序会校验并执行 JSON，不能声称已经执行未输出的动作。"""
+
+
 def postprocess_ai_answer(answer: str, intent: ChatIntent) -> str:
     """Apply small safety/style guards after generation, never rewrite facts."""
 
@@ -628,6 +631,7 @@ def _cli_command(executable: Path, *arguments: str) -> list[str]:
 def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
+    local_context: str = "",
 ) -> str:
     """把长期摘要与最近三十轮原文整理为 Codex 的单次安全输入。"""
 
@@ -636,7 +640,7 @@ def _conversation_text(
     recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
     # The short persona is always injected.  The larger knowledge file is
     # retrieved separately and only matching blocks are appended.
-    lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA]
+    lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
     intent = classify_intent(message, entries)
     lines.extend(("", intent_prompt_context(intent)))
     worldview_context = worldview_prompt_context(message, entries)
@@ -645,6 +649,8 @@ def _conversation_text(
     knowledge_context = retrieve_prompt_context(message, entries)
     if knowledge_context and knowledge_context not in worldview_context:
         lines.extend(("", knowledge_context))
+    if local_context:
+        lines.extend(("", "以下是本地程序读取的真实时间记录，只能据此回答今天的任务、专注和历史问题：", local_context))
     if summary:
         lines.extend(("", "更早对话的长期摘要：", summary))
     lines.extend(("", "以下是最近三十轮以内的完整对话："))
@@ -670,7 +676,7 @@ def _parse_codex_jsonl(output: str) -> str:
     return answer
 
 
-def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
+def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: str = "") -> str:
     """使用本机已登录 Codex 的临时只读会话生成一条回复。"""
 
     entries = list(history)
@@ -702,7 +708,7 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, entries),
+            input=_conversation_text(message, entries, local_context),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -721,7 +727,7 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
     return postprocess_ai_answer(answer, classify_intent(message, entries))
 
 
-def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
+def ask_claude(message: str, history: Iterable[tuple[str, str]], local_context: str = "") -> str:
     """通过 stdin 调用本机 Claude Code 的一次性无工具会话。"""
 
     entries = list(history)
@@ -745,7 +751,7 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, entries),
+            input=_conversation_text(message, entries, local_context),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -787,6 +793,7 @@ def ask_compatible_api(
     token: str,
     base_url: str,
     model: str,
+    local_context: str = "",
 ) -> str:
     """调用 OpenAI 兼容 Chat Completions 接口并返回纯文本。"""
 
@@ -796,7 +803,7 @@ def ask_compatible_api(
         raise AIConnectionError("还没有填写模型名称。")
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
-    system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}"
+    system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}\n\n{LOCAL_ACTION_PROMPT}"
     intent = classify_intent(message, entries)
     system_content += f"\n\n{intent_prompt_context(intent)}"
     worldview_context = worldview_prompt_context(message, entries)
@@ -807,6 +814,8 @@ def ask_compatible_api(
         system_content += f"\n\n{knowledge_context}"
     if summary:
         system_content += f"\n\n更早对话的长期摘要：\n{summary}"
+    if local_context:
+        system_content += f"\n\n本地程序真实时间记录（不可猜测或改写）：\n{local_context}"
     messages = [{"role": "system", "content": system_content}]
     for role, content in [(r, c) for r, c in entries if r in {"user", "assistant"}][-60:]:
         if role in {"user", "assistant"}:
@@ -860,6 +869,7 @@ def ask_openai_responses(
     token: str,
     base_url: str,
     model: str,
+    local_context: str = "",
 ) -> str:
     """Call OpenAI's Responses API as an optional fast chat backend.
 
@@ -881,7 +891,7 @@ def ask_openai_responses(
     intent = classify_intent(message, entries)
     payload = {
         "model": model.strip(),
-        "input": _conversation_text(message, entries),
+        "input": _conversation_text(message, entries, local_context),
         "max_output_tokens": 700 if intent.answer_style == "detailed" else 260,
     }
     request = urllib.request.Request(
@@ -933,11 +943,12 @@ class AIChatService:
         history: Iterable[tuple[str, str]],
         base_url: str = "",
         model: str = "",
+        local_context: str = "",
     ) -> str:
         if provider == "codex":
-            return ask_codex(message, history)
+            return ask_codex(message, history, local_context)
         if provider == "claude":
-            return ask_claude(message, history)
+            return ask_claude(message, history, local_context)
         if provider == "openai":
             default_url, default_model = provider_defaults(provider)
             return ask_openai_responses(
@@ -946,6 +957,7 @@ class AIChatService:
                 self.credentials.get(provider),
                 base_url or default_url,
                 model or default_model,
+                local_context,
             )
         if provider not in {"deepseek", "kimi", "custom"}:
             raise AIConnectionError("当前使用纯离线模式。")
@@ -957,4 +969,5 @@ class AIChatService:
             self.credentials.get(provider),
             base_url or default_url,
             model or default_model,
+            local_context,
         )

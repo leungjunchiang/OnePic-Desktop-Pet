@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import random
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -35,6 +36,10 @@ from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
 from .liumao_worldview import story_response, worldview_response
+from .structured_actions import LocalActionExecutor, extract_action
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AgentConnectionState(str, Enum):
@@ -304,12 +309,14 @@ class OfflineDialogueManager:
         focus_stars: Callable[[], int] | None = None,
         now: Callable[[], datetime] | None = None,
         random_source: random.Random | None = None,
+        local_context: Callable[[], str] | None = None,
     ) -> None:
         self.companion = companion
         self.work_status = work_status
         self.focus_stars = focus_stars or (lambda: 0)
         self.now = now or datetime.now
         self.random = random_source or random.Random()
+        self.local_context = local_context or (lambda: "")
 
     def reply(
         self,
@@ -319,6 +326,13 @@ class OfflineDialogueManager:
         """优先处理本地上下文，再回退到现有陪伴关键词库。"""
 
         text = " ".join(message.split())[:1200]
+        if any(marker in text for marker in ("今天干了多久", "今天工作多久", "今天还有什么没做", "今天有哪些任务", "今天收工")):
+            try:
+                context = self.local_context()
+            except Exception:
+                context = ""
+            if context:
+                return ManagedChatReply(context, PetState.CURIOUS, "offline")
         if self._is_complex(text):
             return ManagedChatReply(
                 "现在是离线模式，等 AI 恢复后再帮你处理。你也可以先告诉我最着急的那一小步，六毛会继续陪你。",
@@ -398,6 +412,7 @@ class AIReplyThread(QThread):
         history: list[tuple[str, str]],
         base_url: str,
         model: str,
+        local_context: str = "",
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -407,6 +422,7 @@ class AIReplyThread(QThread):
         self.history = history
         self.base_url = base_url
         self.model = model
+        self.local_context = local_context
 
     def run(self) -> None:
         try:
@@ -416,6 +432,7 @@ class AIReplyThread(QThread):
                 self.history,
                 self.base_url,
                 self.model,
+                self.local_context,
             )
         except AIConnectionError as exc:
             self.failed.emit(str(exc))
@@ -439,16 +456,22 @@ class ChatManager(QObject):
         agents: AgentManager,
         offline: OfflineDialogueManager,
         parent: QObject | None = None,
+        *,
+        local_context_provider: Callable[[], str] | None = None,
+        action_executor: LocalActionExecutor | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.service = service
         self.agents = agents
         self.offline = offline
+        self.local_context_provider = local_context_provider or (lambda: "")
+        self.action_executor = action_executor
         self._thread: AIReplyThread | None = None
         self._pending_message = ""
         self._pending_history: list[tuple[str, str]] = []
         self._pending_provider = "offline"
+        self._pending_local_context = ""
 
     @property
     def busy(self) -> bool:
@@ -478,6 +501,10 @@ class ChatManager(QObject):
         self._pending_message = message
         self._pending_history = list(history)
         self._pending_provider = provider
+        try:
+            self._pending_local_context = str(self.local_context_provider() or "")[:5000]
+        except Exception:
+            self._pending_local_context = ""
         self._thread = AIReplyThread(
             self.service,
             provider,
@@ -485,6 +512,7 @@ class ChatManager(QObject):
             history,
             self.settings.ai_base_url,
             self.settings.ai_model,
+            self._pending_local_context,
             self,
         )
         self._thread.succeeded.connect(self._ai_succeeded)
@@ -501,6 +529,20 @@ class ChatManager(QObject):
 
     def _ai_succeeded(self, answer: str) -> None:
         self.agents.mark_runtime_success(self._pending_provider)
+        action = extract_action(answer)
+        if action is not None and self.action_executor is not None:
+            try:
+                result = self.action_executor.execute(action)
+            except (KeyError, TypeError, ValueError) as exc:
+                LOGGER.warning("忽略无法执行的本地时间动作：%s", exc)
+                result = None
+            if result is not None:
+                # Structured-only responses are replaced with a safe local
+                # confirmation; a normal conversational answer remains intact.
+                if answer.lstrip().startswith("{") or "```" in answer:
+                    answer = result.reply_hint or "已按本地记录处理。"
+                elif result.reply_hint:
+                    answer = f"{answer.rstrip()}\n{result.reply_hint}"
         state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
         self.reply_ready.emit(ManagedChatReply(answer, state, "ai"))
 

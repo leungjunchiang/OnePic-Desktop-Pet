@@ -82,6 +82,10 @@ class DesktopPetApplication:
         social_action.triggered.connect(self.window.open_social_hub)
         menu.addAction(social_action)
 
+        paper_action = QAction("今日小纸条…", menu)
+        paper_action.triggered.connect(self.window.show_today_note)
+        menu.addAction(paper_action)
+
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(
             lambda _checked=False: self.window.open_settings("user_action")
@@ -141,6 +145,12 @@ class DesktopPetApplication:
 
         self.window.place_at_start()
         self.show_window()
+        paper_mode = getattr(self.settings, "today_note_display_mode", "pending")
+        should_show_paper = paper_mode == "always" or (
+            paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
+        ) or bool(getattr(self.settings, "today_note_autoshow", False))
+        if paper_mode != "hidden" and should_show_paper:
+            QTimer.singleShot(300, self.window.show_today_note)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         if smoke_test_ms is not None:
