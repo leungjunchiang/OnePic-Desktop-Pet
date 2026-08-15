@@ -1,4 +1,8 @@
-# Lili v0.22.39
+# Lili v0.22.40
+
+## Test harness correction
+
+- Kept the compact Todo interaction regression test non-blocking while still exercising the real `⋯` button-to-menu path.
 
 ## Compact Todo attachment and accessory layout
 
