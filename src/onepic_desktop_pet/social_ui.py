@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,30 @@ from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .work_timer import format_work_duration
 
 LOGGER = logging.getLogger(__name__)
+
+# Supabase returns timestamptz values with their UTC offset.  The room UI is
+# intentionally fixed to China Standard Time instead of inheriting the
+# machine's local timezone, so users in different regions see the same room
+# timeline.  A fixed UTC+8 offset is sufficient for Beijing (no DST).
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def _beijing_now() -> datetime:
+    return datetime.now(BEIJING_TIMEZONE)
+
+
+def _format_beijing_time(value: str) -> str:
+    """Convert an ISO-8601 timestamp to the room's Beijing time (HH:MM)."""
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        # Server timestamps are timestamptz values.  Treat a legacy naive
+        # value as UTC rather than silently using the user's machine timezone.
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(BEIJING_TIMEZONE).strftime("%H:%M")
+    except (TypeError, ValueError, OverflowError):
+        return ""
 
 
 def _presence_working(presence: dict[str, Any]) -> bool:
@@ -779,6 +803,9 @@ class SocialHubDialog(QDialog):
         self.room_members = QListWidget(); self.room_members.setSpacing(5)
         self.room_members.setMinimumHeight(46); self.room_members.setMaximumHeight(310)
         room_layout.addWidget(self.room_members)
+        self.room_activity_label = QLabel("房间动态（北京时间）")
+        self.room_activity_label.setObjectName("muted")
+        room_layout.addWidget(self.room_activity_label)
         self.room_activity = QListWidget(); self.room_activity.setMinimumHeight(90); self.room_activity.setMaximumHeight(180)
         room_layout.addWidget(self.room_activity)
         self.room_ritual = QLabel("共同开工/收工：未设置")
@@ -1137,8 +1164,7 @@ class SocialHubDialog(QDialog):
         # recent interactions cannot disappear behind older activity.
         for entry in entries[:8]:
             if isinstance(entry, dict):
-                created = str(entry.get("created_at") or "")
-                stamp = created[11:16] if len(created) >= 16 and "T" in created else ""
+                stamp = _format_beijing_time(str(entry.get("created_at") or ""))
                 text = str(entry.get("text") or entry.get("message") or "")
                 if not text:
                     actor = social_pet_label(entry.get("owner_nickname") or entry.get("nickname") or entry.get("actor_nickname"))
@@ -1167,7 +1193,7 @@ class SocialHubDialog(QDialog):
             return
         schedule = self._room_schedule_state
         if schedule:
-            now_text = datetime.now().strftime("%H:%M")
+            now_text = _beijing_now().strftime("%H:%M")
             for key, label in (("start_at", "一起开工"), ("end_at", "一起收工")):
                 marker = f"{key}:{now_text}"
                 if str(schedule.get(key) or "") == now_text and marker != self._last_ritual_notice:
@@ -1187,7 +1213,7 @@ class SocialHubDialog(QDialog):
                 due_dt = datetime.fromisoformat(due.replace("Z", "+00:00"))
                 if due_dt.tzinfo is None:
                     due_dt = due_dt.astimezone()
-                seconds = max(0, int((due_dt - datetime.now().astimezone()).total_seconds()))
+                seconds = max(0, int((due_dt - _beijing_now()).total_seconds()))
                 remaining = f" · 倒计时 {format_work_duration(seconds)}"
             except ValueError:
                 pass
@@ -1205,8 +1231,7 @@ class SocialHubDialog(QDialog):
             return
         self._begin_action("正在保存共同任务…")
         try:
-            due = datetime.now().astimezone().timestamp() + minutes * 60
-            due_at = datetime.fromtimestamp(due).astimezone().isoformat()
+            due_at = (_beijing_now() + timedelta(minutes=minutes)).isoformat()
             setter = getattr(self.client, "set_room_goal", None)
             if callable(setter):
                 setter(room_id=self.current_room_id, title=title.strip()[:80], target_seconds=minutes * 60, due_at=due_at)
