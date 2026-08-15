@@ -57,6 +57,17 @@ def test_complete_todo_sets_completed_at(tmp_path) -> None:
     assert manager.get(item.id).completed_at
 
 
+def test_completed_todo_remains_available_for_today_note(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 9, 42))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add("完成后仍然保留")
+    memory.select_task(item.id)
+    memory.complete_task(item.id)
+    assert memory.current_task_id == item.id
+    assert memory.todos.today()[0].completed is True
+    assert memory.todos.get(item.id) is not None
+
+
 def test_important_todo_is_selected_and_work_is_attributed(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 15, 10, 0))
     memory = TimeMemory(tmp_path, now_provider=clock)
@@ -194,4 +205,3 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     summary = memory.summary.today()
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
-
