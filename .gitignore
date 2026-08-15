@@ -43,3 +43,7 @@ relay/cloudflare-worker/.wrangler/
 
 # CloudBase deployment archives are generated locally and never committed
 relay/*-deploy.zip
+
+# 用户提供的歌词原文只在本机使用，不进入仓库或 Release
+lyrics_raw/
+*.lyrics.txt

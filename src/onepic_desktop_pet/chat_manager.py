@@ -36,6 +36,7 @@ from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
 from .liumao_worldview import story_response, worldview_response
+from .song_knowledge import offline_song_reply, song_prompt_context
 from .structured_actions import LocalActionExecutor, extract_action
 
 
@@ -310,6 +311,7 @@ class OfflineDialogueManager:
         now: Callable[[], datetime] | None = None,
         random_source: random.Random | None = None,
         local_context: Callable[[], str] | None = None,
+        lyrics_path: Callable[[], str] | None = None,
     ) -> None:
         self.companion = companion
         self.work_status = work_status
@@ -317,6 +319,7 @@ class OfflineDialogueManager:
         self.now = now or datetime.now
         self.random = random_source or random.Random()
         self.local_context = local_context or (lambda: "")
+        self.lyrics_path = lyrics_path or (lambda: "")
 
     def reply(
         self,
@@ -333,6 +336,12 @@ class OfflineDialogueManager:
                 context = ""
             if context:
                 return ManagedChatReply(context, PetState.CURIOUS, "offline")
+        try:
+            song_reply = offline_song_reply(text, history, self.lyrics_path())
+        except Exception:
+            song_reply = None
+        if song_reply:
+            return ManagedChatReply(song_reply, PetState.CURIOUS, "offline")
         if self._is_complex(text):
             return ManagedChatReply(
                 "现在是离线模式，等 AI 恢复后再帮你处理。你也可以先告诉我最着急的那一小步，六毛会继续陪你。",
@@ -502,7 +511,15 @@ class ChatManager(QObject):
         self._pending_history = list(history)
         self._pending_provider = provider
         try:
-            self._pending_local_context = str(self.local_context_provider() or "")[:5000]
+            base_context = str(self.local_context_provider() or "")[:5000]
+            song_context = song_prompt_context(
+                message,
+                history,
+                str(getattr(self.settings, "local_lyrics_path", "") or ""),
+            )
+            self._pending_local_context = "\n\n".join(
+                part for part in (base_context, song_context) if part
+            )[:7000]
         except Exception:
             self._pending_local_context = ""
         self._thread = AIReplyThread(

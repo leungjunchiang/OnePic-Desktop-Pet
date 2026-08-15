@@ -117,7 +117,7 @@ jobs:
             gh release create "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "Lili $release_tag - Pet-attached compact Todos" \
+              --title "Lili $release_tag - Local song understanding" \
               --generate-notes \
-              --notes "Compact Todos now render as a frameless strip directly below 六毛 and follow the pet. The standalone 便利贴 remains separate, while Todo completion and editing stay local and lightweight."
+              --notes "Adds a local-first song understanding layer for 六毛. Public assets contain song cards and tags only; a user-selected local lyric catalog is matched in memory and lyric text is not bundled, uploaded, or continued."
           fi
