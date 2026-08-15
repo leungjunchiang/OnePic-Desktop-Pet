@@ -119,7 +119,9 @@ async function handleDashboard(env, event, roomId = "") {
 async function handlePresence(env, event, body) {
   const token = bearer(event);
   const now = new Date().toISOString();
-  const payload = { ...body, user_id: userIdFromBearer(token), working: Boolean(body.working), focus_date: String(body.focus_date || now.slice(0, 10)), last_seen: String(body.last_seen || now), updated_at: now, today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)), room_id: body.room_id ? String(body.room_id) : null, outfit_key: String(body.outfit_key || "").slice(0, 60), quick_status: String(body.quick_status || "").trim().slice(0, 40), quick_status_expires_at: body.quick_status_expires_at ? String(body.quick_status_expires_at) : null };
+  // Never trust a desktop clock for presence freshness. The database trigger
+  // is authoritative; this server timestamp also protects proxy-only traffic.
+  const payload = { user_id: userIdFromBearer(token), working: Boolean(body.working), session_started_at: body.session_started_at || null, focus_date: String(body.focus_date || now.slice(0, 10)), last_seen: now, updated_at: now, today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)), room_id: body.room_id ? String(body.room_id) : null, outfit_key: String(body.outfit_key || "").slice(0, 60), quick_status: String(body.quick_status || "").trim().slice(0, 40), quick_status_expires_at: body.quick_status_expires_at ? String(body.quick_status_expires_at) : null };
   return supabaseFetch(env, event, "/rest/v1/lili_focus_presence?on_conflict=user_id", { body: payload });
 }
 async function handleRequest(event, env) {

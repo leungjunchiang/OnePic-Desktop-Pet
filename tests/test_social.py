@@ -196,6 +196,33 @@ def test_http_backend_uses_direct_supabase_paths():
     backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
     paths = [call[1] for call in backend.calls]
     assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/lili_focus_presence?on_conflict=user_id"]
+    heartbeat_body = backend.calls[-1][2]
+    assert "last_seen" not in heartbeat_body
+    assert "updated_at" not in heartbeat_body
+
+
+def test_presence_freshness_is_server_authoritative_in_all_relays():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260815000100_lili_presence_server_timestamp.sql").read_text(encoding="utf-8")
+    cloudbase = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8")
+    edge = (root / "supabase" / "functions" / "lili-social-relay" / "index.ts").read_text(encoding="utf-8")
+    worker = (root / "relay" / "cloudflare-worker" / "src" / "index.js").read_text(encoding="utf-8")
+    assert "new.last_seen := now()" in migration
+    assert "create trigger lili_presence_server_timestamp" in migration
+    assert "last_seen: now" in cloudbase
+    assert "last_seen: now" in edge
+    assert "last_seen: now" in worker
+    assert "String(body.last_seen || now)" not in cloudbase + edge + worker
+
+
+def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260815000200_lili_room_focus_ledger.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.lili_room_focus_sessions" in migration
+    assert "create unique index if not exists lili_room_focus_sessions_one_active_user" in migration
+    assert "public.lili_room_focus_seconds(r.id)" in migration
+    assert "update public.lili_room_focus_totals" in migration
+    assert "lili_presence_focus_session" in migration
 
 
 def test_new_cloudbase_function_is_proxy_not_a_database_client():

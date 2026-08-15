@@ -178,11 +178,12 @@ async function handlePresence(env, request, body) {
   const now = new Date().toISOString();
   const payload = {
     ...safeBody(body, [
-      "working", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "quick_status", "quick_status_expires_at", "last_seen",
+      "working", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "quick_status", "quick_status_expires_at",
     ]),
     user_id: userId,
     focus_date: String(body.focus_date || now.slice(0, 10)),
-    last_seen: String(body.last_seen || now),
+    // Presence freshness must use this server's clock, never the desktop's.
+    last_seen: now,
     updated_at: now,
   };
   payload.working = Boolean(payload.working);
