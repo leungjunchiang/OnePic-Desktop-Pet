@@ -285,6 +285,8 @@ class CompanionModel:
         text = " ".join(message.split())[:120]
         # 六毛的默认陪伴气质是慢、稳、松弛，不把每个工作日都变成
         # 绩效提醒。更具体的父亲故事由本地 story trigger 低频处理。
+        if text in {"有没有人告诉你", "有没有人告诉我"}:
+            return CompanionReply("告诉我什么？", PetState.CURIOUS)
         if any(word in text for word in ("今天没工作", "一天没工作", "今天不搞", "不想工作一天")):
             return CompanionReply(
                 "今天不搞？也行。六毛先去旁边看会儿书，你想开工的时候叫我。",
@@ -310,7 +312,7 @@ class CompanionModel:
         if any(word in text for word in ("爱你", "喜欢你", "想你", "抱抱", "亲亲")):
             self.mood.receive_affection()
             return CompanionReply(
-                "六毛也很爱你。无论今天顺不顺利，你都不是孤零零的一个人。",
+                "六毛也很爱你呀。今天先陪你一会儿。",
                 PetState.SHY,
             )
         if any(word in text for word in ("做不到", "没用", "很笨", "差劲", "不配")):

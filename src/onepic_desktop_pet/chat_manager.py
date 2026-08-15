@@ -34,7 +34,6 @@ from .ai import (
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
-from .liumao_worldview import story_response, worldview_response
 
 
 class AgentConnectionState(str, Enum):
@@ -357,6 +356,25 @@ class OfflineDialogueManager:
         reply = self.companion.reply_to(text)
         return ManagedChatReply(reply.text, reply.state, "offline")
 
+    @staticmethod
+    def should_handle_locally(message: str) -> bool:
+        """Return whether the offline fallback has a concise local match.
+
+        This helper is retained for callers that explicitly request local
+        handling.  ``ChatManager`` deliberately does not use it to bypass an
+        available online model.
+        """
+
+        text = " ".join(str(message or "").split())[:80]
+        if not text:
+            return True
+        markers = (
+            "爱你", "很爱你", "喜欢你", "想你", "抱抱", "亲亲",
+            "谢谢", "感谢", "你好", "嗨", "早上好", "早安",
+            "晚安", "再见", "拜拜", "有没有人告诉你", "有没有人告诉我",
+        )
+        return any(marker in text for marker in markers)
+
     def _is_complex(self, text: str) -> bool:
         """保守识别需要外部知识、长推理或代码执行的请求。"""
 
@@ -436,21 +454,21 @@ class ChatManager(QObject):
         return self._thread is not None and self._thread.isRunning()
 
     def submit(self, message: str, history: list[tuple[str, str]]) -> bool:
-        """使用缓存状态路由消息；这里不会执行完整连接检测。"""
+        """Submit natural language to AI when available.
+
+        Short messages are not treated as deterministic commands.  They may
+        depend on context, may be ambiguous, and should be understood by the
+        same language layer as longer messages.  Local worldview/story rules
+        remain available inside ``OfflineDialogueManager`` as the fallback.
+        """
 
         if self.busy:
             self.notice.emit("上一句话还在路上，稍等我一下。")
             return False
-        # 角色身份和隐私边界不能交给在线模型自由改写；明确的世界观短问句
-        # 直接本地回答，确保“你认识陈楚生吗”不会退化成百科人物介绍。
-        worldview = worldview_response(message, history=history)
-        if worldview is not None:
-            self.reply_ready.emit(ManagedChatReply(worldview.text, worldview.state, "offline"))
-            return True
-        story = story_response(message, history=history)
-        if story is not None:
-            self.reply_ready.emit(ManagedChatReply(story.text, story.state, "offline"))
-            return True
+        # Do not intercept online chat with keyword, worldview, story, or
+        # short-social shortcuts.  The model receives the recent conversation,
+        # current work state, and only the small knowledge snippets selected by
+        # the AI context builder.
         provider = self.settings.ai_provider
         status = self.agents.status(provider)
         if provider == "offline" or status.state != AgentConnectionState.CONNECTED:

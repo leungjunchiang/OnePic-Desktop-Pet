@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from .chat_intent import classify_intent
 from .resources import resource_path
 from .story_trigger_engine import StoryMatch, get_story_trigger_engine
 
@@ -98,6 +99,33 @@ class KnowledgeManager:
                     tags=tags,
                 )
             )
+        # The compact TXT remains the compatibility source.  The richer
+        # timeline is loaded as separate blocks so a broad profile question
+        # can retrieve several stages without sending the whole TXT.
+        timeline = _read_json(self.resource_dir / "chen_chusheng_timeline.json", {})
+        timeline_items = timeline.get("blocks", []) if isinstance(timeline, dict) else []
+        known_ids = {block.block_id for block in blocks}
+        if isinstance(timeline_items, list):
+            for index, item in enumerate(timeline_items):
+                if not isinstance(item, dict):
+                    continue
+                block_id = str(item.get("id") or _slug(str(item.get("title", "")), index)).strip()
+                if not block_id or block_id in known_ids:
+                    continue
+                title = str(item.get("title", "")).strip()
+                content = str(item.get("content", "")).strip()
+                if not title or not content:
+                    continue
+                blocks.append(
+                    KnowledgeBlock(
+                        block_id=block_id,
+                        title=title,
+                        content=content,
+                        keywords=_as_json_strings(item.get("keywords")),
+                        tags=_as_json_strings(item.get("tags")),
+                    )
+                )
+                known_ids.add(block_id)
         return tuple(blocks)
 
     def search(
@@ -106,6 +134,7 @@ class KnowledgeManager:
         history: Iterable[tuple[str, str]] = (),
         *,
         limit: int = 3,
+        domains: Iterable[str] = (),
     ) -> tuple[KnowledgeHit, ...]:
         recent = " ".join(
             str(content or "")
@@ -113,6 +142,7 @@ class KnowledgeManager:
             if role in {"user", "assistant"}
         )[-900:]
         text = f"{recent} {query}".casefold()
+        wanted_domains = {str(domain).casefold() for domain in domains if str(domain).strip()}
         hits: list[KnowledgeHit] = []
         for block in self.blocks:
             score = 0
@@ -121,9 +151,18 @@ class KnowledgeManager:
                     score += 2 if len(keyword) >= 3 else 1
             if block.title.casefold() in text:
                 score += 3
+            matched_domains = wanted_domains.intersection(tag.casefold() for tag in block.tags)
+            if matched_domains:
+                # Domain boosts make broad questions such as “经历如何”
+                # retrieve the timeline even when the query has no exact
+                # year/place keyword.  It never applies to casual chat,
+                # because the caller only supplies domains for knowledge
+                # intents.
+                score += 4 + len(matched_domains)
             if score:
                 hits.append(KnowledgeHit(block, score))
-        hits.sort(key=lambda hit: (-hit.score, hit.block.block_id))
+        order = {block.block_id: index for index, block in enumerate(self.blocks)}
+        hits.sort(key=lambda hit: (-hit.score, order.get(hit.block.block_id, 0)))
         return tuple(hits[: max(0, limit)])
 
     def by_ids(self, block_ids: Iterable[str]) -> tuple[KnowledgeBlock, ...]:
@@ -135,7 +174,19 @@ class KnowledgeManager:
         )
 
 
-def _render_context(hits: Iterable[KnowledgeHit], story: StoryMatch | None) -> str:
+def _as_json_strings(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+
+
+def _render_context(
+    hits: Iterable[KnowledgeHit],
+    story: StoryMatch | None,
+    *,
+    max_blocks: int = 4,
+    max_chars: int = 3600,
+) -> str:
     blocks: list[KnowledgeBlock] = [hit.block for hit in hits]
     if story is not None:
         manager = get_knowledge_manager()
@@ -144,7 +195,7 @@ def _render_context(hits: Iterable[KnowledgeHit], story: StoryMatch | None) -> s
     if not blocks and story is None:
         return ""
     parts = ["本轮仅供参考的六毛本地知识（只使用与当前问题相关的片段）："]
-    for block in blocks[:4]:
+    for block in blocks[:max_blocks]:
         parts.append(f"【{block.title}】\n{block.content[:900]}")
     if story is not None:
         parts.append(
@@ -152,7 +203,7 @@ def _render_context(hits: Iterable[KnowledgeHit], story: StoryMatch | None) -> s
             f"{story.story.story_summary}；语气：{story.story.reply_style}。"
             "只在自然相关时提一次‘我爹’，不要编造私人原话。"
         )
-    return "\n\n".join(parts)[:3600]
+    return "\n\n".join(parts)[:max_chars]
 
 
 @lru_cache(maxsize=1)
@@ -175,9 +226,26 @@ def retrieve_prompt_context(
 ) -> str:
     manager = get_knowledge_manager()
     entries = tuple(history)
-    hits = manager.search(message, entries, limit=3)
-    story = get_story_trigger_engine().match(message, entries, mark_used=True)
-    return _render_context(hits, story)
+    intent = classify_intent(message, entries)
+    if not intent.need_knowledge:
+        return ""
+    hits = manager.search(
+        message,
+        entries,
+        limit=intent.retrieval_limit,
+        domains=intent.knowledge_domains,
+    )
+    # Retrieval must be side-effect free.  The chat manager is the only layer
+    # allowed to consume a story cooldown; the model merely receives a hint.
+    story = None
+    if intent.story_allowed:
+        story = get_story_trigger_engine().match(message, entries, mark_used=False)
+    return _render_context(
+        hits,
+        story,
+        max_blocks=max(4, intent.retrieval_limit),
+        max_chars=5200 if intent.primary_intent == "chen_chusheng_profile" else 3600,
+    )
 
 
 def story_match(

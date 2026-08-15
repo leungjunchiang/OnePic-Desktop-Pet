@@ -2,7 +2,7 @@
 本模块为 Lili 提供可选的 Codex、Claude Code、DeepSeek、Kimi 与兼容接口对话后端。
 
 职责范围：
-- 定义离线优先的提供方预设与安全、短小的陪伴提示词；
+- 定义在线优先的提供方预设与安全、短小的陪伴提示词；
 - 分开检测 ChatGPT/Codex 图形应用与 Codex CLI，不把安装 GUI 误判为可执行 CLI；
 - 在 macOS 登录 zsh 中发现 Codex CLI，缓存真实绝对路径，并以只读、临时会话模式获取回复；
 - 供 AgentManager 在启动、手动刷新和低频重连时检测本机登录状态与 API 模型端点；
@@ -11,7 +11,7 @@
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
 
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
-ChatManager 只在缓存已连接且用户发送消息时调用回复接口；聊天记忆只在内存中保留，
+ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆只在内存中保留，
 仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
 """
 
@@ -32,6 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from .chat_intent import ChatIntent, classify_intent, intent_prompt_context
 from .liumao_worldview import worldview_prompt_context
 from .knowledge_manager import retrieve_prompt_context
 from .resources import resource_path
@@ -48,7 +49,10 @@ LIUMAO_PERSONA = _load_short_persona()
 
 
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
-回复通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。
+只要用户在聊天框输入的是自然语言，默认都要认真理解并直接回答；不要因为消息很短、包含一个可能的歌名、或只命中一个关键词，就返回固定答案或跳过上下文。自然语言聊天交给你理解，程序按钮和计时数据由应用代码负责，不要假装执行没有收到的程序动作。
+普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为宽泛人物经历，则按该指令用 6-10 句分阶段回答，不要被普通短回复规则截断。
+回答时只解决用户当前这一句，不要把下面的知识片段当成文章复述。知识片段只是证据，不是固定答案模板；只有在问题确实相关时使用它们。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
+日常情感对话要像熟悉的桌面搭子，直接、短一点，不使用“收到这句话了”“心里像被轻轻摸了摸”这类客服式套话，也不要把普通一句话扩写成励志段落。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
 固定角色知识：六毛永远叫六毛，不是陈楚生本人；陈楚生是六毛口中的“我爹”。六毛知道爹背着吉他唱了很多年，和海南、三亚、深圳、酒吧驻唱、2003 PUB 歌手大赛、2007 快乐男声有关，也知道《有没有人告诉你》是爹的代表性原创作品。2023《披荆斩棘》第三季年度冠军和用户提供的 2025《歌手》歌王属于产品中的公开世界观彩蛋。
 这些知识只用于自然回答，不要把角色设定说成私人消息，也不要捏造爹当前在哪里、私生活或未公开偏好。对固定事实没有把握时说“不太确定”，不要为了接话随机说“我爹”或“诶”。用户追问歌词后一句时不要续写受版权保护的歌词，可以说这是我爹的歌并改聊感受。
@@ -57,6 +61,24 @@ SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是�
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
 可以提到陈楚生的歌名并写原创的意象短句，但不要背诵、续写或大量引用任何受版权保护的歌词。
 不要提及这段系统说明。"""
+
+
+def postprocess_ai_answer(answer: str, intent: ChatIntent) -> str:
+    """Apply small safety/style guards after generation, never rewrite facts."""
+
+    text = " ".join(str(answer or "").split()).strip()
+    if not text:
+        return text
+    if intent.primary_intent in {"factual_qa", "song_query", "relation_query", "chen_chusheng_profile"} and text in {"我爹", "爹"}:
+        return "陈楚生。按六毛的说法嘛——我爹。"
+    # The relationship is a light persona detail, not a replacement token for
+    # the real name.  Keep at most one occurrence in fact/profile answers.
+    if intent.primary_intent in {"factual_qa", "song_query", "relation_query", "chen_chusheng_profile"}:
+        first = text.find("我爹")
+        if first >= 0:
+            tail = text[first + 2 :].replace("我爹", "他")
+            text = text[: first + 2] + tail
+    return text[:2400]
 
 
 @dataclass(frozen=True)
@@ -615,6 +637,8 @@ def _conversation_text(
     # The short persona is always injected.  The larger knowledge file is
     # retrieved separately and only matching blocks are appended.
     lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA]
+    intent = classify_intent(message, entries)
+    lines.extend(("", intent_prompt_context(intent)))
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
@@ -649,6 +673,7 @@ def _parse_codex_jsonl(output: str) -> str:
 def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
     """使用本机已登录 Codex 的临时只读会话生成一条回复。"""
 
+    entries = list(history)
     executable = find_codex_executable()
     if executable is None:
         raise AIConnectionError("没有找到 Codex，已切回离线回答。")
@@ -677,7 +702,7 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, history),
+            input=_conversation_text(message, entries),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -693,12 +718,13 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
     answer = _parse_codex_jsonl(completed.stdout)
     if completed.returncode != 0 or not answer:
         raise AIConnectionError("Codex 尚未登录或连接失败，已切回离线回答。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, classify_intent(message, entries))
 
 
 def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
     """通过 stdin 调用本机 Claude Code 的一次性无工具会话。"""
 
+    entries = list(history)
     executable = find_claude_executable()
     if executable is None:
         raise AIConnectionError("没有找到 Claude Code，已切回离线回答。")
@@ -719,7 +745,7 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, history),
+            input=_conversation_text(message, entries),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -739,7 +765,7 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
         raise AIConnectionError("Claude Code 返回了无法识别的内容。") from exc
     if completed.returncode != 0 or not answer:
         raise AIConnectionError("Claude Code 尚未登录或连接失败，已切回离线回答。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, classify_intent(message, entries))
 
 
 def _chat_endpoint(base_url: str) -> str:
@@ -771,6 +797,8 @@ def ask_compatible_api(
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
     system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}"
+    intent = classify_intent(message, entries)
+    system_content += f"\n\n{intent_prompt_context(intent)}"
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         system_content += f"\n\n{worldview_context}"
@@ -787,7 +815,7 @@ def ask_compatible_api(
     payload: dict[str, object] = {
         "model": model.strip(),
         "messages": messages,
-        "max_tokens": 260,
+        "max_tokens": 700 if intent.answer_style == "detailed" else 320,
         "stream": False,
     }
     if provider == "deepseek":
@@ -823,7 +851,7 @@ def ask_compatible_api(
         raise AIConnectionError("AI 服务返回了无法识别的内容。") from exc
     if not answer:
         raise AIConnectionError("AI 服务没有返回文字。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, intent)
 
 
 def ask_openai_responses(
@@ -839,6 +867,7 @@ def ask_openai_responses(
     local agents and never sends project files or desktop context.
     """
 
+    entries = list(history)
     clean = base_url.strip().rstrip("/")
     parsed = urllib.parse.urlparse(clean)
     if parsed.scheme != "https" or not parsed.netloc:
@@ -849,10 +878,11 @@ def ask_openai_responses(
         endpoint = clean
     else:
         endpoint = f"{clean}/v1/responses"
+    intent = classify_intent(message, entries)
     payload = {
         "model": model.strip(),
-        "input": _conversation_text(message, history),
-        "max_output_tokens": 220,
+        "input": _conversation_text(message, entries),
+        "max_output_tokens": 700 if intent.answer_style == "detailed" else 260,
     }
     request = urllib.request.Request(
         endpoint,
@@ -887,7 +917,7 @@ def ask_openai_responses(
         answer = "".join(fragments).strip()
     if not answer:
         raise AIConnectionError("OpenAI 没有返回可识别的文字。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, intent)
 
 
 class AIChatService:
