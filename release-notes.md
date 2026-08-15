@@ -1,3 +1,10 @@
+# Lili v0.22.34
+
+- Rebuilt 今日小纸条 as a compact 360px floating note with adaptive height capped at 420px; oversized controls moved into the `···` menu and task overflow stays inside the list.
+- Clicking a task now only selects it. Starting and completing are explicit actions; completed tasks remain visible with a check mark, muted text, and strike-through, with an optional hide-completed setting.
+- Reduced the core action row to `▶ 开始`, `✓ 完成`, and `＋`, while keeping check-out, rest day, display settings, and time memory available from the more menu.
+- Added regression coverage confirming completed tasks remain in today's data and the selected task remains selected after completion.
+
 # Lili v0.22.33
 
 - Added a local-first time-memory system for today's note, Todo items, reminders, work-session attribution, daily check-out records, weekly/monthly statistics, and rest days.

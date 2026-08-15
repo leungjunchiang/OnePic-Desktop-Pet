@@ -104,6 +104,7 @@ class PetSettings:
     today_note_always_on_top: bool = False
     today_note_autoshow: bool = False
     today_note_folded: bool = False
+    today_note_hide_completed: bool = False
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -234,6 +235,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
     settings.today_note_folded = bool(settings.today_note_folded)
+    settings.today_note_hide_completed = bool(settings.today_note_hide_completed)
     return settings
 
 
@@ -294,6 +296,7 @@ def load_settings(
                 "today_note_always_on_top",
                 "today_note_autoshow",
                 "today_note_folded",
+                "today_note_hide_completed",
             }
         }
     )
@@ -352,6 +355,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "today_note_always_on_top": settings.today_note_always_on_top,
         "today_note_autoshow": settings.today_note_autoshow,
         "today_note_folded": settings.today_note_folded,
+        "today_note_hide_completed": settings.today_note_hide_completed,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
