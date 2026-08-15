@@ -425,7 +425,7 @@ class AISettingsDialog(QDialog):
         form.addRow(self.stand, self.stand_minutes)
         self.auto_pause_idle = QCheckBox("键鼠无操作时自动暂停专注计时")
         self.auto_pause_idle.setChecked(settings.auto_pause_on_idle)
-        self.idle_pause_minutes = QSpinBox(); self.idle_pause_minutes.setRange(1, 60); self.idle_pause_minutes.setSuffix(" 分钟"); self.idle_pause_minutes.setValue(max(1, settings.idle_pause_seconds // 60))
+        self.idle_pause_minutes = QSpinBox(); self.idle_pause_minutes.setRange(1, 60); self.idle_pause_minutes.setSuffix(" 分钟"); self.idle_pause_minutes.setValue(max(1, settings.idle_pause_seconds // 60)); self.idle_pause_minutes.setToolTip("这是触发自动暂停的无操作阈值；回来后会显示这次实际离开了多久。")
         form.addRow(self.auto_pause_idle, self.idle_pause_minutes)
         self.music_service = QComboBox()
         for label, key in (

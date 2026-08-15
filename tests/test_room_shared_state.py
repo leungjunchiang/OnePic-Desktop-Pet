@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -166,6 +167,31 @@ def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, t
     window._check_input_idle()
     window._ask_idle_recovery()
     assert not dialog.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_idle_recovery_duration_keeps_growing_after_threshold(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    window = PetWindow(PetSettings(idle_pause_seconds=60))
+    readings = iter((61.0, 61.0, 0.0))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_idle_seconds",
+        lambda: next(readings, 0.0),
+    )
+    window.start_work_timer()
+    window._check_input_idle()
+    window._check_input_idle()
+    assert window._auto_paused_for_idle is True
+
+    # Simulate remaining away for 15 minutes after the original 60-second
+    # threshold.  The dialog must show the episode duration, not the trigger.
+    window._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=901)
+    window._check_input_idle()
+    window._ask_idle_recovery()
+    assert window._idle_recovery_dialog is not None
+    summary = window._idle_recovery_dialog.summary_label.text()
+    assert "15" in summary and "01" in summary
     window.close(); window.deleteLater(); app.processEvents()
 
 

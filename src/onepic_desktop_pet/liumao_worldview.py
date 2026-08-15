@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .behavior import PetState
+from .story_trigger_engine import get_story_trigger_engine
 
 
 FAMILY_ARTIST = "陈楚生"
@@ -140,6 +141,24 @@ def worldview_prompt_context(
     if not context:
         return ""
     return f"本轮六毛世界观提示（只按需参考）：{context}"
+
+
+def story_response(
+    message: str,
+    random_source: random.Random | None = None,
+    history: Iterable[tuple[str, str]] = (),
+) -> WorldviewResponse | None:
+    """Return one cooldown-protected story response for offline chat."""
+
+    match = get_story_trigger_engine().match(message, history, mark_used=True)
+    if match is None or not match.story.reply_templates:
+        return None
+    chooser = random_source or random.Random()
+    return WorldviewResponse(
+        chooser.choice(match.story.reply_templates),
+        PetState.SIT,
+        f"story:{match.story_id}",
+    )
 
 
 def family_music_mode(artist: str = "", title: str = "") -> bool:
