@@ -29,7 +29,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .config import PetSettings, load_settings, save_settings
+from .config import PET_NAME, PetSettings, load_settings, save_settings
 from .companion import APP_DISPLAY_NAME
 from .resources import resource_path
 from .window import PetWindow
@@ -51,30 +51,40 @@ class DesktopPetApplication:
         self.window = PetWindow(self.settings)
         self.window.quit_requested.connect(self.quit)
         self.tray = self._create_tray()
+        self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
     def _create_tray(self) -> QSystemTrayIcon:
         """创建系统托盘图标及其操作菜单。"""
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
-        tray.setToolTip("Lili · 六毛")
+        pet_name = PET_NAME
+        tray.setToolTip(f"Lili · {pet_name}")
         menu = QMenu()
 
         show_action = QAction("显示宠物", menu)
         show_action.triggered.connect(self.show_window)
         menu.addAction(show_action)
 
-        panel_action = QAction("六毛快捷口袋", menu)
+        panel_action = QAction(f"{pet_name}快捷口袋", menu)
         panel_action.triggered.connect(self.window.show_quick_panel)
         menu.addAction(panel_action)
 
-        dialogue_action = QAction("和六毛聊聊…", menu)
+        dialogue_action = QAction(f"和{pet_name}聊聊…", menu)
         dialogue_action.triggered.connect(self.window.prompt_dialogue)
         menu.addAction(dialogue_action)
+
+        rename_action = QAction("修改主人称呼…", menu)
+        rename_action.triggered.connect(self.window.rename_pet)
+        menu.addAction(rename_action)
 
         social_action = QAction("搭子与自习室…", menu)
         social_action.triggered.connect(self.window.open_social_hub)
         menu.addAction(social_action)
+
+        paper_action = QAction("便利贴…", menu)
+        paper_action.triggered.connect(self.window.show_sticky_note)
+        menu.addAction(paper_action)
 
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(
@@ -101,8 +111,19 @@ class DesktopPetApplication:
 
         tray.setContextMenu(menu)
         self.tray_menu = menu
+        self.panel_action = panel_action
+        self.dialogue_action = dialogue_action
+        self.rename_action = rename_action
         tray.activated.connect(self._tray_activated)
         return tray
+
+    def _owner_nickname_changed(self, _owner_nickname: str) -> None:
+        """Keep the pet identity fixed while refreshing the rename entry."""
+
+        self.tray.setToolTip(f"Lili · {PET_NAME}")
+        self.panel_action.setText(f"{PET_NAME}快捷口袋")
+        self.dialogue_action.setText(f"和{PET_NAME}聊聊…")
+        self.rename_action.setText("修改主人称呼…")
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
@@ -124,6 +145,13 @@ class DesktopPetApplication:
 
         self.window.place_at_start()
         self.show_window()
+        paper_mode = getattr(self.settings, "today_note_display_mode", "pending")
+        note_style = getattr(self.settings, "today_note_mode", "detailed")
+        should_show_paper = paper_mode == "always" or (
+            paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
+        ) or bool(getattr(self.settings, "today_note_autoshow", False))
+        if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
+            QTimer.singleShot(300, self.window.show_today_note)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         if smoke_test_ms is not None:

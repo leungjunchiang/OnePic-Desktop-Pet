@@ -7,7 +7,7 @@
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
-- 允许用户选择本机音乐客户端、巴布达音频和自有歌词文本，绝不把这些路径上传；
+- 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 为复杂离线请求提供“重新连接 AI”和“去设置”按钮，但绝不自动打开设置窗口；
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -56,6 +57,7 @@ from .ai import (
     launch_codex_gui,
     provider_defaults,
 )
+from .config import PET_NAME
 from .config import PetSettings
 from .chat_manager import AgentConnectionState, AgentManager
 
@@ -138,11 +140,25 @@ class ChatDialog(QDialog):
 
     message_submitted = Signal(str)
     settings_requested = Signal(str)
+    rename_requested = Signal()
     reconnect_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        pet_name: str = "六毛",
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("和六毛聊聊")
+        self.pet_name = PET_NAME
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setWindowTitle(f"和{self.pet_name}聊聊")
         self.setObjectName("liliPanel")
         self.setMinimumSize(430, 520)
         self.resize(470, 580)
@@ -153,10 +169,18 @@ class ChatDialog(QDialog):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        title = QLabel("六毛的小纸条")
+        title = QLabel(f"{self.pet_name}的小纸条")
+        self.pet_title = title
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
+        self.rename_button = QPushButton("修改主人称呼")
+        self.rename_button.setObjectName("softButton")
+        self.rename_button.setToolTip("用于自习室、串门和搭子互动时区分不同六毛")
+        self.rename_button.setAutoDefault(False)
+        self.rename_button.setDefault(False)
+        self.rename_button.clicked.connect(self.rename_requested.emit)
+        header.addWidget(self.rename_button)
         self.settings_button = QPushButton("AI 设置")
         self.settings_button.setObjectName("softButton")
         self.settings_button.setAutoDefault(False)
@@ -199,7 +223,7 @@ class ChatDialog(QDialog):
 
         entry = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("跟六毛说点什么……")
+        self.input.setPlaceholderText(f"跟{self.pet_name}说点什么……")
         self.input.setMaxLength(1200)
         self.input.returnPressed.connect(self._submit)
         entry.addWidget(self.input, 1)
@@ -210,10 +234,24 @@ class ChatDialog(QDialog):
         entry.addWidget(self.send_button)
         layout.addLayout(entry)
 
-        privacy = QLabel("🔒 对话不落盘。在线模式只把当前消息和最近少量上下文发给所选 AI。")
+        privacy = QLabel("🔒 对话摘要和最近消息只保存在本机；在线模式只把角色设定、相关知识和有限上下文发给所选 AI。")
         privacy.setObjectName("status")
         privacy.setWordWrap(True)
         layout.addWidget(privacy)
+
+    def set_pet_name(self, pet_name: str) -> None:
+        """更新聊天窗口中显示的昵称，不清空已有对话。"""
+
+        self.pet_name = PET_NAME
+        self.setWindowTitle(f"和{self.pet_name}聊聊")
+        self.pet_title.setText(f"{self.pet_name}的小纸条")
+        self.input.setPlaceholderText(f"跟{self.pet_name}说点什么……")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """关闭按钮只隐藏聊天窗，不关闭桌宠或丢失会话。"""
+
+        event.ignore()
+        self.hide()
 
     def _submit(self) -> None:
         message = " ".join(self.input.text().split())
@@ -241,7 +279,11 @@ class ChatDialog(QDialog):
                 AgentConnectionState.ERROR.value: "暂时出错，已自动使用离线陪伴",
             }
             label = state_labels.get(state, "已自动使用离线陪伴")
-            detail = f"{preset.label} · {label}" + (f"\n{detail}" if detail else "")
+            # AgentManager 的 detail 可能是“Codex 已连接。”，再拼在
+            # “Codex（使用本机登录）· 已连接”下面会造成截图中的重复状态。
+            # 成功状态只保留一个稳定标签；失败状态才显示诊断原因。
+            suffix = "" if state == AgentConnectionState.CONNECTED.value else (f"\n{detail}" if detail else "")
+            detail = f"{preset.label} · {label}{suffix}"
         self.status_label.setText(detail)
 
     def show_recovery_actions(self, visible: bool) -> None:
@@ -250,8 +292,9 @@ class ChatDialog(QDialog):
         self.recovery_actions.setVisible(bool(visible))
 
     def append_message(self, role: str, text: str) -> None:
-        color = "#426b7c" if role == "六毛" else "#496f9b"
-        background = "#edf5f7" if role == "六毛" else "#eaf1fa"
+        is_pet = role != "你"
+        color = "#426b7c" if is_pet else "#496f9b"
+        background = "#edf5f7" if is_pet else "#eaf1fa"
         safe = escape(text).replace("\n", "<br>")
         self.transcript.append(
             f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
@@ -263,7 +306,7 @@ class ChatDialog(QDialog):
     def set_busy(self, busy: bool) -> None:
         self.input.setEnabled(not busy)
         self.send_button.setEnabled(not busy)
-        self.send_button.setText("六毛在想…" if busy else "发送")
+        self.send_button.setText(f"{self.pet_name}在想…" if busy else "发送")
         if not busy:
             self.input.setFocus()
 
@@ -285,7 +328,7 @@ class AISettingsDialog(QDialog):
         self.agent_manager = agent_manager
         self.music_manager = music_manager
         self._connection_thread: ConnectionCheckThread | None = None
-        self.setWindowTitle("Lili · 六毛设置")
+        self.setWindowTitle(f"Lili · {PET_NAME}设置")
         self.setObjectName("liliPanel")
         self.setMinimumWidth(500)
         self.resize(620, 760)
@@ -325,6 +368,10 @@ class AISettingsDialog(QDialog):
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("留空则保留已安全保存的令牌")
         form.addRow("API 令牌", self.token)
+        self.owner_nickname = QLineEdit(getattr(settings, "owner_nickname", ""))
+        self.owner_nickname.setMaxLength(24)
+        self.owner_nickname.setPlaceholderText("例如：小梁、mianmian；留空则显示搭子家的六毛")
+        form.addRow("主人称呼", self.owner_nickname)
         layout.addLayout(form)
 
         self.token_status = QLabel()
@@ -343,6 +390,15 @@ class AISettingsDialog(QDialog):
         self.always_on_top = QCheckBox("始终置顶（关闭后为桌面模式，不抢输入焦点）")
         self.always_on_top.setChecked(settings.always_on_top)
         layout.addWidget(self.always_on_top)
+
+        self.allow_autonomous_walk = QCheckBox(
+            "允许六毛自动跑动（默认关闭；打开后会在桌面上来回移动）"
+        )
+        self.allow_autonomous_walk.setChecked(settings.allow_autonomous_walk)
+        self.allow_autonomous_walk.setToolTip(
+            "关闭时仍保留眨眼、坐下、睡觉和互动动画，只是不自动横向跑动。"
+        )
+        layout.addWidget(self.allow_autonomous_walk)
 
         self.grumbling = QCheckBox("允许六毛偶尔发一句轻松的牢骚")
         self.grumbling.setChecked(settings.automatic_grumbling)
@@ -367,8 +423,13 @@ class AISettingsDialog(QDialog):
         self.stand.setChecked(settings.stand_reminder_enabled)
         self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
         form.addRow(self.stand, self.stand_minutes)
+        self.auto_pause_idle = QCheckBox("键鼠无操作时自动暂停专注计时")
+        self.auto_pause_idle.setChecked(settings.auto_pause_on_idle)
+        self.idle_pause_minutes = QSpinBox(); self.idle_pause_minutes.setRange(1, 60); self.idle_pause_minutes.setSuffix(" 分钟"); self.idle_pause_minutes.setValue(max(1, settings.idle_pause_seconds // 60)); self.idle_pause_minutes.setToolTip("这是触发自动暂停的无操作阈值；回来后会显示这次实际离开了多久。")
+        form.addRow(self.auto_pause_idle, self.idle_pause_minutes)
         self.music_service = QComboBox()
         for label, key in (
+            ("自动选择（推荐）", "auto"),
             ("网易云音乐", "netease"),
             ("QQ 音乐", "qq"),
             ("酷狗音乐", "kugou"),
@@ -378,11 +439,11 @@ class AISettingsDialog(QDialog):
             self.music_service.addItem(label, key)
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
         self.music_service.currentIndexChanged.connect(self._music_provider_changed)
-        form.addRow("音乐播放器", self.music_service)
+        form.addRow("优先播放器（高级）", self.music_service)
         self.music_status = QLabel()
         self.music_status.setObjectName("status")
         self.music_status.setWordWrap(True)
-        form.addRow("播放控制状态", self.music_status)
+        form.addRow("自动选择状态", self.music_status)
 
         self.qq_music_path = QLineEdit(settings.qq_music_path)
         self.qq_music_path.setPlaceholderText("自动寻找，或选择 QQMusic.exe / QQMusic.app")
@@ -457,14 +518,19 @@ class AISettingsDialog(QDialog):
         self._music_provider_changed()
 
     def _music_provider_changed(self) -> None:
-        """显示缓存的真实能力等级；实际命令会在后台再次刷新系统状态。"""
+        """分别显示应用、Transport 与自动选歌能力，不把安装称为已连接。"""
 
         provider = str(self.music_service.currentData())
         if self.music_manager is None:
-            self.music_status.setText("尚未验证播放控制；请从六毛快捷口袋发送播放命令。")
+            self.music_status.setText("音乐播放器：自动选择\n当前使用：尚未开始播放\n首次播放时将检测本机播放器。")
             return
-        status = self.music_manager.cached_status(provider)
-        self.music_status.setText(status.message)
+        if provider == "auto":
+            self.music_status.setText(self.music_manager.auto_status_text())
+            return
+        self.music_status.setText(
+            f"自动选择已开启；优先尝试{self.music_service.currentText()}。\n"
+            f"{self.music_manager.provider_status_text(provider)}"
+        )
 
     def _provider_changed(self) -> None:
         provider = str(self.provider.currentData())
@@ -622,11 +688,14 @@ class AISettingsDialog(QDialog):
             thread.deleteLater()
 
     def apply(self) -> None:
+        self.settings.owner_nickname = self.owner_nickname.text().strip()[:24]
+        self.settings.pet_name = PET_NAME
         provider = str(self.provider.currentData())
         self.settings.ai_provider = provider
         self.settings.ai_base_url = self.base_url.text().strip()
         self.settings.ai_model = self.model.text().strip()
         self.settings.always_on_top = self.always_on_top.isChecked()
+        self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
         self.settings.app_awareness = self.app_awareness.isChecked()
@@ -636,6 +705,8 @@ class AISettingsDialog(QDialog):
         self.settings.stand_reminder_enabled = self.stand.isChecked()
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
+        self.settings.auto_pause_on_idle = self.auto_pause_idle.isChecked()
+        self.settings.idle_pause_seconds = self.idle_pause_minutes.value() * 60
         self.settings.music_service = str(self.music_service.currentData())
         self.settings.qq_music_path = self.qq_music_path.text().strip()
         self.settings.netease_music_path = self.netease_music_path.text().strip()

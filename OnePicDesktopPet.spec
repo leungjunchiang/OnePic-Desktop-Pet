@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-datas = [("assets", "assets"), ("config", "config")]
+datas = [("assets", "assets"), ("config", "config"), ("resources", "resources")]
 hiddenimports = ["winrt.windows.media.control", "uiautomation"] if sys.platform == "win32" else []
 private_assets = Path("user_assets")
 if os.environ.get("ONEPIC_INCLUDE_USER_ASSETS") == "1" and private_assets.exists():
@@ -71,8 +71,8 @@ if sys.platform == "darwin":
         bundle_identifier="io.github.leungjunchiang.lili",
         info_plist={
             "CFBundleDisplayName": "Lili",
-            "CFBundleShortVersionString": "0.19.0",
-            "CFBundleVersion": "0.19.0",
+            "CFBundleShortVersionString": "0.22.0",
+            "CFBundleVersion": "0.22.0",
             "CFBundlePackageType": "APPL",
             "LSUIElement": False,
             "NSHighResolutionCapable": True,

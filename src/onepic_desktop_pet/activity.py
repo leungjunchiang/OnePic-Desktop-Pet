@@ -71,3 +71,46 @@ def active_application_category() -> str:
     """检测并返回当前前台应用的粗粒度类别。"""
 
     return classify_application(active_application_name())
+
+
+def active_window_is_fullscreen() -> bool:
+    """Return whether the foreground window fills its monitor.
+
+    This intentionally compares window geometry only.  It does not inspect
+    a title, document, pixel content or input stream.  Unsupported platforms
+    safely report ``False``.
+    """
+
+    if os.name != "nt":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
+
+        window_rect = RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
+            return False
+        monitor = user32.MonitorFromWindow(hwnd, 2)
+        if not monitor:
+            return False
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return False
+        bounds = info.rcMonitor
+        return (
+            abs(window_rect.left - bounds.left) <= 2
+            and abs(window_rect.top - bounds.top) <= 2
+            and abs(window_rect.right - bounds.right) <= 2
+            and abs(window_rect.bottom - bounds.bottom) <= 2
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False

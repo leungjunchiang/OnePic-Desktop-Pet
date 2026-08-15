@@ -6,7 +6,7 @@
 - 从当前用户本地应用数据目录读取上次窗口位置、显示尺寸和非敏感体验设置；
 - 持久化“始终置顶/桌面模式”，默认采用不抢焦点的 QQ 宠物式置顶行为；
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
-- 仅在用户配置目录保存窗口、AI 提供方和陪伴开关，不保存任何 API 令牌。
+- 仅在用户配置目录保存窗口、AI 提供方、陪伴开关和音乐 Provider 成败统计，不保存任何 API 令牌。
 
 Agent 快速定位：
 - 配置数据结构位于 PetSettings；
@@ -23,17 +23,41 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 from .resources import resource_path
 
 
+PET_NAME = "六毛"
+DEFAULT_OWNER_NICKNAME = "搭子"
+
+
+def clean_owner_nickname(value: Any) -> str:
+    """Return the short social nickname, never a mutable pet identity."""
+
+    clean = str(value or "").replace("\x00", "").strip()[:24]
+    # The old default was accidentally rendered as “六毛搭子的六毛”.  Treat
+    # it as an unset owner nickname while preserving real historical names.
+    return "" if clean in {PET_NAME, "六毛搭子"} else clean
+
+
+def social_pet_label(owner_nickname: Any) -> str:
+    """Build the only social-facing identity used for another user's pet."""
+
+    owner = clean_owner_nickname(owner_nickname) or DEFAULT_OWNER_NICKNAME
+    return f"{owner}家的{PET_NAME}"
+
+
 @dataclass
 class PetSettings:
     """保存桌面宠物可配置参数和上次窗口位置。"""
 
+    # Kept as a compatibility field for old settings files and integrations.
+    # It is always normalised back to PET_NAME and is never edited by the UI.
+    pet_name: str = PET_NAME
+    owner_nickname: str = ""
     display_height: int = 160
     movement_interval_ms: int = 16
     movement_step: int = 1
@@ -46,6 +70,9 @@ class PetSettings:
     inactive_sit_ms: int = 300000
     inactive_sleep_ms: int = 600000
     always_on_top: bool = True
+    # Keep the pet's ambient animation alive, but do not make it cross the
+    # desktop until the user explicitly enables autonomous walking.
+    allow_autonomous_walk: bool = False
     start_x: int | None = None
     start_y: int | None = None
     ai_provider: str = "offline"
@@ -60,7 +87,10 @@ class PetSettings:
     stand_reminder_enabled: bool = False
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
-    music_service: str = "netease"
+    auto_pause_on_idle: bool = True
+    idle_pause_seconds: int = 300
+    music_service: str = "auto"
+    music_provider_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     qq_music_path: str = ""
     netease_music_path: str = ""
     kugou_music_path: str = ""
@@ -70,6 +100,17 @@ class PetSettings:
     local_lyrics_path: str = ""
     lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
+    today_note_display_mode: str = "pending"
+    today_note_mode: str = "detailed"
+    today_note_always_on_top: bool = False
+    today_note_autoshow: bool = False
+    today_note_folded: bool = False
+    today_note_hide_completed: bool = False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "pet_name":
+            value = PET_NAME
+        super().__setattr__(name, value)
 
 
 def user_settings_path() -> Path:
@@ -131,7 +172,13 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.inactive_sit_ms + 5000,
         int(settings.inactive_sleep_ms),
     )
+    legacy_name = settings.pet_name
+    settings.owner_nickname = clean_owner_nickname(
+        settings.owner_nickname or (legacy_name if legacy_name != PET_NAME else "")
+    )
+    settings.pet_name = PET_NAME
     settings.always_on_top = bool(settings.always_on_top)
+    settings.allow_autonomous_walk = bool(settings.allow_autonomous_walk)
     if settings.ai_provider not in {"offline", "codex", "claude", "deepseek", "kimi", "custom"}:
         settings.ai_provider = "offline"
     settings.ai_base_url = str(settings.ai_base_url).strip()[:500]
@@ -145,8 +192,36 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
-    if settings.music_service not in {"qq", "netease", "kugou", "apple", "spotify"}:
-        settings.music_service = "netease"
+    settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
+    settings.idle_pause_seconds = min(3600, max(30, int(settings.idle_pause_seconds)))
+    if settings.music_service not in {"auto", "qq", "netease", "kugou", "apple", "spotify"}:
+        settings.music_service = "auto"
+    def safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    history: dict[str, dict[str, Any]] = {}
+    if isinstance(settings.music_provider_history, dict):
+        for provider, raw in settings.music_provider_history.items():
+            if provider not in {"qq", "netease", "kugou", "apple", "spotify"} or not isinstance(raw, dict):
+                continue
+            history[provider] = {
+                "success_count": max(0, min(10_000, safe_int(raw.get("success_count", 0)))),
+                "failure_count": max(0, min(10_000, safe_int(raw.get("failure_count", 0)))),
+                "consecutive_failures": max(0, min(100, safe_int(raw.get("consecutive_failures", 0)))),
+                "last_success_at": max(0.0, safe_float(raw.get("last_success_at", 0.0))),
+                "last_failure_at": max(0.0, safe_float(raw.get("last_failure_at", 0.0))),
+                "last_error": str(raw.get("last_error", ""))[:80],
+            }
+    settings.music_provider_history = history
     settings.qq_music_path = str(settings.qq_music_path).replace("\x00", "").strip()[:1200]
     settings.netease_music_path = str(settings.netease_music_path).replace("\x00", "").strip()[:1200]
     settings.kugou_music_path = str(settings.kugou_music_path).replace("\x00", "").strip()[:1200]
@@ -156,6 +231,14 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.local_lyrics_path = str(settings.local_lyrics_path).replace("\x00", "").strip()[:1200]
     settings.lyric_interval_minutes = min(120, max(2, int(settings.lyric_interval_minutes)))
     settings.equipped_outfit = str(settings.equipped_outfit)[:60]
+    if settings.today_note_display_mode not in {"always", "pending", "hidden"}:
+        settings.today_note_display_mode = "pending"
+    if settings.today_note_mode not in {"detailed", "compact", "hidden"}:
+        settings.today_note_mode = "detailed"
+    settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
+    settings.today_note_autoshow = bool(settings.today_note_autoshow)
+    settings.today_note_folded = bool(settings.today_note_folded)
+    settings.today_note_hide_completed = bool(settings.today_note_hide_completed)
     return settings
 
 
@@ -180,10 +263,13 @@ def load_settings(
             for key, value in override.items()
             if key
             in {
+                "pet_name",
+                "owner_nickname",
                 "display_height",
                 "start_x",
                 "start_y",
                 "always_on_top",
+                "allow_autonomous_walk",
                 "ai_provider",
                 "ai_base_url",
                 "ai_model",
@@ -196,7 +282,10 @@ def load_settings(
                 "stand_reminder_enabled",
                 "water_interval_minutes",
                 "stand_interval_minutes",
+                "auto_pause_on_idle",
+                "idle_pause_seconds",
                 "music_service",
+                "music_provider_history",
                 "qq_music_path",
                 "netease_music_path",
                 "kugou_music_path",
@@ -206,9 +295,24 @@ def load_settings(
                 "local_lyrics_path",
                 "lyric_interval_minutes",
                 "equipped_outfit",
+                "today_note_display_mode",
+                "today_note_mode",
+                "today_note_always_on_top",
+                "today_note_autoshow",
+                "today_note_folded",
+                "today_note_hide_completed",
             }
         }
     )
+    # Older builds used pet_name/name/display_name/nickname for the editable
+    # value.  Preserve that value as the new owner nickname, but never let it
+    # alter the fixed pet identity.
+    if not str(base.get("owner_nickname") or "").strip():
+        for legacy_key in ("nickname", "display_name", "name", "pet_name"):
+            legacy_value = str(override.get(legacy_key) or "").strip()
+            if legacy_value and legacy_value != PET_NAME:
+                base["owner_nickname"] = legacy_value
+                break
     return _validated(base)
 
 
@@ -219,10 +323,13 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".json.tmp")
     state = {
+        "pet_name": PET_NAME,
+        "owner_nickname": clean_owner_nickname(settings.owner_nickname),
         "display_height": settings.display_height,
         "start_x": settings.start_x,
         "start_y": settings.start_y,
         "always_on_top": settings.always_on_top,
+        "allow_autonomous_walk": settings.allow_autonomous_walk,
         "ai_provider": settings.ai_provider,
         "ai_base_url": settings.ai_base_url,
         "ai_model": settings.ai_model,
@@ -235,7 +342,10 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "stand_reminder_enabled": settings.stand_reminder_enabled,
         "water_interval_minutes": settings.water_interval_minutes,
         "stand_interval_minutes": settings.stand_interval_minutes,
+        "auto_pause_on_idle": settings.auto_pause_on_idle,
+        "idle_pause_seconds": settings.idle_pause_seconds,
         "music_service": settings.music_service,
+        "music_provider_history": settings.music_provider_history,
         "qq_music_path": settings.qq_music_path,
         "netease_music_path": settings.netease_music_path,
         "kugou_music_path": settings.kugou_music_path,
@@ -245,6 +355,12 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "local_lyrics_path": settings.local_lyrics_path,
         "lyric_interval_minutes": settings.lyric_interval_minutes,
         "equipped_outfit": settings.equipped_outfit,
+        "today_note_display_mode": settings.today_note_display_mode,
+        "today_note_mode": settings.today_note_mode,
+        "today_note_always_on_top": settings.today_note_always_on_top,
+        "today_note_autoshow": settings.today_note_autoshow,
+        "today_note_folded": settings.today_note_folded,
+        "today_note_hide_completed": settings.today_note_hide_completed,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

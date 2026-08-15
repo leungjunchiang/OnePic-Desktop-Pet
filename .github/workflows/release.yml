@@ -5,6 +5,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "release/v*"
 
 permissions:
   contents: write
@@ -33,7 +35,9 @@ jobs:
         run: choco install innosetup --no-progress -y
       - name: Build Windows installer
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 0.19.0
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^release/', '' -replace '^v', ''
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version $version
       - name: Create Windows portable ZIP and checksums
         shell: powershell
         run: |
@@ -90,7 +94,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
     needs:
       - windows-build
       - macos-build
@@ -104,14 +108,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release-assets/* \
+          release_tag="${GITHUB_REF_NAME#release/}"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
           else
-            gh release create "$GITHUB_REF_NAME" release-assets/* \
+            gh release create "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $GITHUB_REF_NAME" \
+              --target "$GITHUB_SHA" \
+              --title "Lili $release_tag - Compact Todo attachment" \
               --generate-notes \
-              --notes "Lili 0.18：修复 macOS 图形应用环境中的 Codex CLI 绝对路径检测与缓存，ChatGPT.app 和 CLI 分开判断；陪伴聊天完整保留最近 30 轮，并滚动摘要更早内容；右键入口整理为五个分组，搭子自习室升级为首页、聊天、专注、我的四标签页面。无 AI 时继续离线陪伴且不弹设置。公开包不含 user_assets、原图、源视频、私人歌词、令牌、聊天记录或本机工作文件。macOS DMG 因没有 Apple Developer ID 证书而未签名、公证。"
+              --notes "Fixes Compact Todo collapse and action-menu hit testing, and keeps the speech bubble, pet Todo strip, and detailed 便利贴 aligned to the pet."
           fi
+

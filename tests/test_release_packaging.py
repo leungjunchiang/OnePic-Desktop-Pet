@@ -1,5 +1,6 @@
 """Validate that public release automation stays cross-platform and private-data safe."""
 
+import re
 from pathlib import Path
 
 
@@ -40,29 +41,35 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
 
     assert "Lili-Windows-x64.zip" in workflow
     assert "Lili-Windows-x64-Setup.exe" in workflow
-    assert "-Version 0.19.0" in workflow
-    assert "-Version 0.18.1" not in workflow
+    assert "GITHUB_REF_NAME" in workflow
+    assert "-Version $version" in workflow
+    assert "-Version 0.19.1" not in workflow
     assert "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
     assert 'dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"' in macos_build
     assert 'arm64) release_arch="arm64"' in macos_build
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
-    assert 'gh release view "$GITHUB_REF_NAME"' in workflow
-    assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
+    assert 'release_tag="${GITHUB_REF_NAME#release/}"' in workflow
+    assert 'gh release view "$release_tag"' in workflow
+    assert 'gh release upload "$release_tag"' in workflow
+    assert '--target "$GITHUB_SHA"' in workflow
     assert "--clobber" in workflow
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
     assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
-    assert 'default: "v0.19.0"' in publisher
+    assert 'default: "v0.22.0"' in publisher
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.19.0"' in spec
+    assert '"CFBundleShortVersionString": "0.22.0"' in spec
+    assert '"CFBundleVersion": "0.22.0"' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
-    assert 'version = "0.19.0"' in pyproject
+    version_match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+    assert version_match is not None
+    assert version_match.group(1) != "0.22.0"
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer

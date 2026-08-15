@@ -2,13 +2,16 @@
 
 每个音乐平台拥有独立 Provider Adapter。搜索成功、打开客户端或触发控件都不等于
 播放成功；只有当前媒体标题和歌手与最终选中的歌曲同时匹配时才返回成功。Windows
-Adapter 使用 UI Automation 定位“歌曲”结果，macOS 优先使用 Apple Events，并在
-需要时使用已授权的 Accessibility。任何无法确认的情况都会返回明确失败码。
+Adapter 使用 UI Automation 定位“歌曲”结果；网易云 3.x 不公开 Chromium 控件树时，
+使用绑定用户 Default 桌面的 DPI-aware 本机交互回退。macOS 优先使用 Apple Events，
+并在需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放
+动作已执行但媒体 Session 暂不可读时标记为未验证启动，不会因此主动停止音乐。
 """
 
 from __future__ import annotations
 
 import logging
+import base64
 import random
 import subprocess
 import sys
@@ -31,10 +34,18 @@ class MusicPlaybackError(str, Enum):
     """点歌闭环中可以被日志、测试和界面稳定识别的失败阶段。"""
 
     SEARCH_FAILED = "SEARCH_FAILED"
+    UI_AUTOMATION_UNAVAILABLE = "UI_AUTOMATION_UNAVAILABLE"
     RESULT_NOT_FOUND = "RESULT_NOT_FOUND"
     PLAY_ACTION_FAILED = "PLAY_ACTION_FAILED"
     MEDIA_SESSION_TIMEOUT = "MEDIA_SESSION_TIMEOUT"
     TRACK_VERIFY_FAILED = "TRACK_VERIFY_FAILED"
+
+
+class MusicPlaybackOutcome(str, Enum):
+    """基础随机播放成功后的可验证程度。"""
+
+    PLAYBACK_CONFIRMED = "PLAYBACK_CONFIRMED"
+    PLAYBACK_STARTED_UNVERIFIED = "PLAYBACK_STARTED_UNVERIFIED"
 
 
 class TrackSnapshot(Protocol):
@@ -58,7 +69,7 @@ class SongCandidate:
 
 @dataclass(frozen=True)
 class SongPlaybackResult:
-    """一次完整点歌闭环的结果；成功必然意味着媒体信息已通过校验。"""
+    """一次播放结果；严格点歌需确认，随机歌手播放允许标记为未验证启动。"""
 
     success: bool
     provider: str
@@ -70,10 +81,16 @@ class SongPlaybackResult:
     current_title: str = ""
     current_artist: str = ""
     play_attempts: int = 0
+    outcome: MusicPlaybackOutcome | None = None
+    attempted_providers: tuple[str, ...] = ()
 
 
 class ProviderSearchError(RuntimeError):
     """Provider 无法完成搜索或读取结果时使用的内部异常。"""
+
+
+class UIAutomationUnavailableError(ProviderSearchError):
+    """Windows UIAutomation 根节点、窗口或控件无法访问。"""
 
 
 class MusicProviderAdapter(Protocol):
@@ -100,6 +117,7 @@ def _same_song(left: str, right: str) -> bool:
 def _failure_message(code: MusicPlaybackError, *, random_artist: bool = False) -> str:
     messages = {
         MusicPlaybackError.SEARCH_FAILED: "歌曲搜索失败，请确认播放器正在运行并允许辅助功能。",
+        MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE: "播放器界面暂时无法访问，请在交互式 Windows 桌面中运行网易云音乐。",
         MusicPlaybackError.RESULT_NOT_FOUND: (
             "没有找到这位歌手的歌曲。" if random_artist else "没有找到这首歌。"
         ),
@@ -220,6 +238,7 @@ class ExactMusicPlaybackManager:
                     current_title=current_title,
                     current_artist=current_artist,
                     play_attempts=attempt,
+                    outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED,
                 )
             self._debug(
                 "verify_retry" if attempt == 1 else "verify_failed",
@@ -320,6 +339,291 @@ class ExactMusicPlaybackManager:
         )
 
 
+class BasicRandomArtistPlaybackManager:
+    """用于陪伴场景的宽松随机播放闭环。
+
+    与精确点播不同，这条路径只需要把播放器带到目标歌手的歌曲区域并
+    发起一次真实播放动作。媒体 Session 仅作为日志和可选反馈，读取不到
+    当前歌曲时也不能阻止基础播放。
+    """
+
+    def __init__(
+        self,
+        adapters: Mapping[str, MusicProviderAdapter],
+        track_reader: Callable[[str], TrackSnapshot | None] | None = None,
+        *,
+        random_source: random.Random | None = None,
+        verify_timeout_seconds: float = 5.0,
+        poll_interval_seconds: float = 0.55,
+        action_attempts: int = 2,
+        retry_delay_seconds: float = 0.65,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.adapters = dict(adapters)
+        self.track_reader = track_reader
+        self.random_source = random_source or random.Random()
+        self.verify_timeout_seconds = max(0.0, verify_timeout_seconds)
+        self.poll_interval_seconds = max(0.01, poll_interval_seconds)
+        self.action_attempts = max(1, int(action_attempts))
+        self.retry_delay_seconds = max(0.0, retry_delay_seconds)
+        self.sleep = sleep
+
+    def play_random_artist(self, provider: str, artist: str) -> SongPlaybackResult:
+        adapter = self.adapters.get(provider)
+        title = ""
+        self._debug("search", provider, title, artist)
+        if adapter is None:
+            return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
+        candidates: tuple[SongCandidate, ...] = ()
+        search_error: Exception | None = None
+        for search_attempt in range(1, self.action_attempts + 1):
+            try:
+                candidates = tuple(adapter.search("", artist))
+                self._debug(
+                    "search_attempt",
+                    provider,
+                    title,
+                    artist,
+                    attempt=search_attempt,
+                    candidate_count=len(candidates),
+                )
+                search_error = None
+                if candidates or search_attempt == self.action_attempts:
+                    break
+                self._debug("search_empty_retry", provider, title, artist, attempt=search_attempt)
+            except (UIAutomationUnavailableError, ProviderSearchError) as exc:
+                search_error = exc
+                self._debug("search_error", provider, title, artist, attempt=search_attempt, error=repr(exc))
+                if search_attempt == self.action_attempts:
+                    break
+            except Exception as exc:
+                self._debug("search_failed", provider, title, artist, attempt=search_attempt, error=repr(exc))
+                return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
+            self.sleep(self.retry_delay_seconds)
+
+        if search_error is not None:
+            # Windows UI Automation and the PowerShell bridge can fail after
+            # the client was found. Let adapters with a native random action
+            # try that path before giving up.
+            native_result = self._try_native_random(adapter, provider, artist)
+            if native_result is not None:
+                return native_result
+            if isinstance(search_error, UIAutomationUnavailableError) or isinstance(adapter, WindowsUIAutomationAdapter):
+                return self._failed(provider, artist, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+            return self._failed(provider, artist, MusicPlaybackError.SEARCH_FAILED)
+
+        # Song rows are preferred, but an artist page/playlist returned by an
+        # adapter is also a valid target for random playback.
+        song_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() == "song"
+            and _same_song(candidate.artist, artist)
+        ]
+        selectable = song_candidates or [
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() in {"artist", "album", "playlist"}
+        ]
+        if not selectable:
+            # An adapter may expose a native “play artist/random” action when
+            # the client does not expose individual rows through automation.
+            native_result = self._try_native_random(adapter, provider, artist)
+            if native_result is not None:
+                return native_result
+            self._debug("result_not_found", provider, title, artist)
+            return self._failed(provider, artist, MusicPlaybackError.RESULT_NOT_FOUND)
+        selected = self.random_source.choice(selectable)
+        self._debug(
+            "random_match",
+            provider,
+            title,
+            artist,
+            selected_title=selected.title,
+            selected_artist=selected.artist,
+            selected_type=selected.result_type,
+        )
+        current_title = current_artist = ""
+        current_status = ""
+        play_attempts = 0
+        current: TrackSnapshot | None = None
+        explicit_not_playing = False
+        for play_attempt in range(1, self.action_attempts + 1):
+            play_attempts = play_attempt
+            try:
+                played = bool(adapter.play(selected))
+            except Exception as exc:
+                self._debug("play_exception", provider, title, artist, attempt=play_attempt, error=repr(exc))
+                played = False
+            self._debug("play_attempt", provider, title, artist, attempt=play_attempt, accepted=played)
+            if not played:
+                if play_attempt < self.action_attempts:
+                    self.sleep(self.retry_delay_seconds)
+                    continue
+                self._debug("play_action_failed", provider, title, artist, attempts=play_attempt)
+                return self._failed(provider, artist, MusicPlaybackError.PLAY_ACTION_FAILED, selected=selected)
+
+            if self.track_reader is None:
+                break
+            current = self._wait_for_playing(provider, artist)
+            current_status = str(getattr(current, "playback_status", "") or "")
+            if "playing" in current_status.casefold() or not current_status:
+                break
+            explicit_not_playing = True
+            if play_attempt < self.action_attempts:
+                self._debug("playback_not_started_retry", provider, title, artist, attempt=play_attempt, playback_status=current_status)
+                self.sleep(self.retry_delay_seconds)
+                continue
+            self._debug("playback_not_started", provider, title, artist, attempts=play_attempt, playback_status=current_status)
+        if explicit_not_playing and "playing" not in current_status.casefold():
+            return self._failed(
+                provider,
+                artist,
+                MusicPlaybackError.PLAY_ACTION_FAILED,
+                selected=selected,
+                current=current,
+                attempts=play_attempts,
+            )
+        if current is not None:
+            current_title = str(getattr(current, "title", "") or "")
+            current_artist = str(getattr(current, "artist", "") or "")
+        confirmed = bool(_canonical(artist)) and _canonical(artist) in _canonical(current_artist)
+        outcome = (
+            MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+            if confirmed
+            else MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+        )
+        self._debug(
+            "started",
+            provider,
+            title,
+            artist,
+            selected_title=selected.title,
+            selected_artist=selected.artist,
+            current_title=current_title,
+            current_artist=current_artist,
+            playback_status=current_status,
+            outcome=outcome.value,
+        )
+        return SongPlaybackResult(
+            True,
+            provider,
+            title,
+            artist,
+            f"正在播放{artist}的随机歌曲" + (f"：{selected.title}" if selected.title else ""),
+            selected=selected,
+            current_title=current_title,
+            current_artist=current_artist,
+            play_attempts=play_attempts or 1,
+            outcome=outcome,
+        )
+
+    def _wait_for_playing(self, provider: str, artist: str) -> TrackSnapshot | None:
+        """等待目标播放器进入 Playing；读不到 Session 不能阻止已发出的播放动作。
+
+        UI Automation 只负责把播放器带到歌曲区域并触发播放。播放是否真正启动，
+        优先观察该 Provider 的媒体 Session 的 playback_status；标题和歌手只用于
+        可选的歌曲确认，不再作为“已开始播放”的硬门槛。
+        """
+
+        deadline = time.monotonic() + self.verify_timeout_seconds
+        latest: TrackSnapshot | None = None
+        while True:
+            try:
+                latest = self.track_reader(provider) if self.track_reader else None
+            except Exception as exc:
+                self._debug("media_read_error", provider, "", artist, error=repr(exc))
+                latest = None
+            status = str(getattr(latest, "playback_status", "") or "").casefold()
+            title = str(getattr(latest, "title", "") or "")
+            current_artist = str(getattr(latest, "artist", "") or "")
+            if latest is not None and (status == "playing" or "playing" in status):
+                self._debug(
+                    "playback_started",
+                    provider,
+                    "",
+                    artist,
+                    playback_status=status,
+                    current_title=title,
+                    current_artist=current_artist,
+                )
+                return latest
+            if time.monotonic() >= deadline:
+                self._debug(
+                    "playback_unverified",
+                    provider,
+                    "",
+                    artist,
+                    playback_status=status,
+                    current_title=title,
+                    current_artist=current_artist,
+                )
+                return latest
+            self.sleep(min(self.poll_interval_seconds, max(0.0, deadline - time.monotonic())))
+
+    def _try_native_random(
+        self,
+        adapter: MusicProviderAdapter,
+        provider: str,
+        artist: str,
+    ) -> SongPlaybackResult | None:
+        """UI 树不可读时调用 Provider 自己的歌手随机播放能力。"""
+
+        native_random = getattr(adapter, "play_random_artist", None)
+        if not callable(native_random):
+            return None
+        try:
+            if not bool(native_random(artist)):
+                return None
+        except Exception as exc:
+            self._debug("play_exception", provider, "", artist, error=repr(exc))
+            return None
+        self._debug("started", provider, "", artist, selected_type="native_random")
+        return SongPlaybackResult(
+            True,
+            provider,
+            "",
+            artist,
+            f"正在播放{artist}的随机歌曲",
+            play_attempts=1,
+            outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED,
+        )
+
+    @staticmethod
+    def _debug(stage: str, provider: str, title: str, artist: str, **values: object) -> None:
+        details = " ".join(f"{key}={value!r}" for key, value in values.items())
+        LOGGER.debug(
+            "music_playback stage=%s provider=%s requestedTitle=%r requestedArtist=%r %s",
+            stage,
+            provider,
+            title,
+            artist,
+            details,
+        )
+
+    @staticmethod
+    def _failed(
+        provider: str,
+        artist: str,
+        code: MusicPlaybackError,
+        *,
+        selected: SongCandidate | None = None,
+        current: TrackSnapshot | None = None,
+        attempts: int = 0,
+    ) -> SongPlaybackResult:
+        return SongPlaybackResult(
+            False,
+            provider,
+            "",
+            artist,
+            _failure_message(code, random_artist=True),
+            code,
+            selected,
+            str(getattr(current, "title", "") or ""),
+            str(getattr(current, "artist", "") or ""),
+            attempts,
+        )
+
 class WindowsUIAutomationAdapter:
     """Windows 客户端 Adapter 基类；子类必须提供自身窗口、搜索框和播放按钮语义。"""
 
@@ -344,6 +648,8 @@ class WindowsUIAutomationAdapter:
 
     def search(self, title: str, artist: str) -> Sequence[SongCandidate]:
         auto = self._automation()
+        if auto is None:
+            return self._powershell_search(title, artist)
         client = self.client_finder(self.provider, self._custom_path())
         if client is None:
             raise ProviderSearchError("music client not installed")
@@ -358,16 +664,16 @@ class WindowsUIAutomationAdapter:
         window = self._wait_for_window(auto)
         search_box = self._find_search_box(window)
         if search_box is None:
-            raise ProviderSearchError("search box not exposed through UI Automation")
+            raise UIAutomationUnavailableError("search box not exposed through UI Automation")
         try:
             search_box.SetFocus()
             search_box.SendKeys("{Ctrl}a{Del}")
             search_box.SendKeys(f"{artist} {title}".strip())
             search_box.SendKeys("{Enter}")
         except Exception as exc:
-            raise ProviderSearchError("search input failed") from exc
-        if not self._select_song_tab(window):
-            raise ProviderSearchError("song results tab not found")
+            raise UIAutomationUnavailableError("search input failed") from exc
+        if not self._select_song_tab(window) and title:
+            raise UIAutomationUnavailableError("song results tab not found")
         deadline = time.monotonic() + self.wait_seconds
         while time.monotonic() < deadline:
             candidates = self._song_candidates(window, title, artist)
@@ -378,6 +684,8 @@ class WindowsUIAutomationAdapter:
 
     def play(self, candidate: SongCandidate) -> bool:
         control = candidate.native
+        if isinstance(control, tuple) and control and control[0] == "powershell":
+            return self._powershell_play(candidate)
         if control is None:
             return False
         row = self._matching_row(control, candidate.artist)
@@ -404,8 +712,141 @@ class WindowsUIAutomationAdapter:
         try:
             import uiautomation as auto
         except (ImportError, OSError) as exc:
-            raise ProviderSearchError("uiautomation is unavailable") from exc
+            # The packaged app may run without the optional Python wrapper.
+            # Windows' built-in UIAutomationClient is used as a fallback.
+            return None
         return auto
+
+    def _powershell_search(self, title: str, artist: str) -> Sequence[SongCandidate]:
+        client = self.client_finder(self.provider, self._custom_path())
+        if client is None:
+            raise ProviderSearchError("music client not installed")
+        script = r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+try { $proc=Start-Process -FilePath $exe -PassThru } catch { Write-Output ("UI|root=0|error=start_process"); exit 10 }
+function Desc($root) {
+  $all = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
+  return $all
+}
+$root=[System.Windows.Automation.AutomationElement]::RootElement
+$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
+$deadline=(Get-Date).AddSeconds(12); $win=$null
+$wins=@()
+while((Get-Date) -lt $deadline -and $null -eq $win) {
+  try { $wins=@($root.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)) } catch { Write-Output "UI|root=0|error=find_windows"; exit 10 }
+  foreach($candidate in $wins) {
+    if (($candidate.Current.Name -match $pattern) -or ($candidate.Current.ClassName -match $pattern)) { $win=$candidate; break }
+  }
+  if($null -eq $win){ Start-Sleep -Milliseconds 350 }
+}
+if($null -eq $win){ Write-Output ("UI|root=1|topLevel=" + $wins.Count + "|window=0|pid=" + $proc.Id); exit 10 }
+$items=Desc $win
+Write-Output ("META|pid=" + $win.Current.ProcessId + "|handle=" + $win.Current.NativeWindowHandle + "|title=" + $win.Current.Name + "|root=1|topLevel=" + $wins.Count + "|controls=" + $items.Count)
+$edit=$items | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit } | Select-Object -First 1
+if($null -eq $edit){ Write-Output "UI|searchBox=0"; exit 11 }
+Write-Output "UI|searchBox=1"
+try { $vp=$edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); $vp.SetValue($artist); $edit.SetFocus() } catch { exit 12 }
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 2
+$items=Desc $win
+Write-Output ("UI|searchResultsControls=" + $items.Count)
+$artistElements=@($items | Where-Object { $_.Current.Name -eq $artist })
+$out=@()
+foreach($ae in $artistElements){
+  $row=$ae
+  for($i=0;$i -lt 6 -and $null -ne $row;$i++){
+    $children=Desc $row | Where-Object { $_.Current.Name -and $_.Current.Name -ne $artist }
+    $title=$children | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -or $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::DataItem } | Select-Object -First 1
+    if($null -ne $title){ $out += ($title.Current.Name + "`t" + $artist); break }
+    try { $row=$walker.GetParent($row) } catch { break }
+  }
+}
+$out | Select-Object -Unique
+Write-Output ("UI|candidateCount=" + $out.Count)
+'''
+        script = (
+            "$exe=" + self._ps_literal(str(client)) + "; $pattern=" + self._ps_literal(self.window_pattern)
+            + "; $artist=" + self._ps_literal(artist) + ";\n" + script
+        )
+        completed = self._run_powershell(script)
+        self._log_powershell_output(completed.stdout, provider=self.provider, stage="search")
+        if completed.returncode in {10, 11, 12}:
+            raise UIAutomationUnavailableError("UIAutomation root/window/search controls unavailable")
+        if completed.returncode != 0:
+            raise UIAutomationUnavailableError(
+                str(completed.stderr or "UIAutomation search failed")
+            )
+        candidates = []
+        for line in str(completed.stdout or "").splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2 and parts[0].strip():
+                candidates.append(SongCandidate(self.provider, parts[0].strip(), parts[1].strip(), "song", native=("powershell", parts[0].strip(), artist)))
+        return tuple(candidates)
+
+    def _powershell_play(self, candidate: SongCandidate) -> bool:
+        script = r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root=[System.Windows.Automation.AutomationElement]::RootElement
+$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
+function Desc($root) { @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)) }
+$win=$null
+foreach($candidate in @($root.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition))) { if(($candidate.Current.Name -match $pattern) -or ($candidate.Current.ClassName -match $pattern)){ $win=$candidate; break } }
+if($null -eq $win){ Write-Output "UI|root=1|window=0"; exit 10 }
+$titleElement=Desc $win | Where-Object { $_.Current.Name -eq $title } | Select-Object -First 1
+if($null -eq $titleElement){ Write-Output "UI|titleControl=0"; exit 11 }
+$row=$titleElement
+for($i=0;$i -lt 6;$i++){
+  $children=Desc $row
+  if(@($children | Where-Object { $_.Current.Name -eq $artist }).Count -gt 0){
+    $button=$children | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $_.Current.IsEnabled } | Select-Object -First 1
+    if($null -ne $button){ try { $ip=$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern); $ip.Invoke(); Write-Output ("PLAY|control=" + $button.Current.Name + "|title=" + $title + "|artist=" + $artist); 'PLAYED'; exit 0 } catch {} }
+  }
+  try { $row=$walker.GetParent($row) } catch { break }
+}
+exit 12
+'''
+        script = (
+            "$pattern=" + self._ps_literal(self.window_pattern) + "; $title=" + self._ps_literal(candidate.title)
+            + "; $artist=" + self._ps_literal(candidate.artist) + ";\n" + script
+        )
+        completed = self._run_powershell(script)
+        self._log_powershell_output(completed.stdout, provider=self.provider, stage="play")
+        return completed.returncode == 0 and "PLAYED" in str(completed.stdout or "")
+
+    @staticmethod
+    def _log_powershell_output(output: str | None, *, provider: str, stage: str) -> None:
+        for line in str(output or "").splitlines():
+            if line.startswith(("META|", "UI|", "PLAY|")):
+                LOGGER.debug("music_playback ui_automation provider=%s stage=%s %s", provider, stage, line)
+
+    @staticmethod
+    def _ps_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def _run_powershell(script: str) -> subprocess.CompletedProcess:
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        try:
+            kwargs = {
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "timeout": 25,
+                "check": False,
+            }
+            if sys.platform == "win32":
+                # Do not flash a console window while the worker performs
+                # the interactive client handoff.
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            return subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                **kwargs,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise UIAutomationUnavailableError("PowerShell UIAutomation request failed") from exc
 
     def _wait_for_window(self, auto):
         deadline = time.monotonic() + self.wait_seconds
@@ -418,7 +859,7 @@ class WindowsUIAutomationAdapter:
                 if window.Exists():
                     return window
             time.sleep(0.3)
-        raise ProviderSearchError("player window not found")
+        raise UIAutomationUnavailableError("player window not found")
 
     def _find_search_box(self, window):
         wanted = {_canonical(name) for name in self.search_names}
@@ -536,10 +977,178 @@ class QQMusicAdapter(WindowsUIAutomationAdapter):
 
 
 class NeteaseMusicAdapter(WindowsUIAutomationAdapter):
+    """网易云 Adapter；新版 Chromium UI 不公开控件时使用真实桌面 DPI 回退。"""
+
     provider = "netease"
     window_pattern = ".*(网易云音乐|NetEase|CloudMusic).*"
     search_names = ("搜索", "搜索音乐、视频、播客、用户", "Search")
     play_button_names = ("播放", "播放全部", "Play")
+
+    def play_random_artist(self, artist: str) -> bool:
+        client = self.client_finder(self.provider, self._custom_path())
+        if client is None:
+            return False
+        try:
+            self.process_launcher(
+                [str(client)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return False
+        # 首条搜索建议会进入陈楚生专辑/歌曲列表；直接随机双击可见歌曲行，
+        # 避免“下一首”逸出目标队列，也不依赖 Chromium 未公开的内部控件树。
+        # The first click can arrive while the Chromium surface is still
+        # loading. Retry the complete native action once, inside the worker
+        # thread, so the user does not need to click Lili twice.
+        for attempt in range(1, 3):
+            random_index = random.randint(0, 4)
+            try:
+                completed = self._run_powershell(
+                    self._netease_default_desktop_script(str(client), artist, random_index)
+                )
+            except UIAutomationUnavailableError as exc:
+                LOGGER.debug(
+                    "music_playback provider=%s stage=native_random attempt=%s error=%r",
+                    self.provider,
+                    attempt,
+                    exc,
+                )
+                completed = None
+            if completed is not None:
+                self._log_powershell_output(
+                    completed.stdout,
+                    provider=self.provider,
+                    stage=f"native_random_attempt_{attempt}",
+                )
+                if completed.returncode == 0 and "PLAYED|" in str(completed.stdout or ""):
+                    return True
+            if attempt < 2:
+                time.sleep(0.65)
+        return False
+
+    @classmethod
+    def _netease_default_desktop_script(
+        cls,
+        client: str,
+        artist: str,
+        random_index: int,
+    ) -> str:
+        # Windows 11/网易云 3.x 会把真正窗口放在用户的 Default Desktop；
+        # 后台 Agent 或沙盒进程的 AutomationElement.RootElement 因此可能为空。
+        query = "chenchusheng" if _canonical(artist) == _canonical("陈楚生") else artist
+        return (
+            "$exe=" + cls._ps_literal(client)
+            + ";$artist=" + cls._ps_literal(artist)
+            + ";$query=" + cls._ps_literal(query)
+            + ";$pick=" + str(max(0, min(4, int(random_index))))
+            + r''';
+$source=@'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class LiliNeteaseDefaultDesktop {
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenDesktop(string n,uint f,bool i,uint a);
+  [DllImport("user32.dll", SetLastError=true)] static extern bool SetThreadDesktop(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
+  [DllImport("user32.dll")] static extern bool EnumDesktopWindows(IntPtr d, Callback c, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
+  [DllImport("user32.dll")] static extern int GetClassName(IntPtr h,StringBuilder s,int n);
+  [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h,StringBuilder s,int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h,int c);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int z,uint f);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a,uint b,bool attach);
+  [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+  [DllImport("user32.dll")] static extern void mouse_event(uint f,uint x,uint y,uint d,UIntPtr e);
+  [DllImport("user32.dll")] static extern void keybd_event(byte v,byte s,uint f,UIntPtr e);
+  delegate bool Callback(IntPtr h,IntPtr l);
+  struct Rect { public int L,T,R,B; }
+  static void Key(byte v) { keybd_event(v,0,0,UIntPtr.Zero); keybd_event(v,0,2,UIntPtr.Zero); }
+  static void Click(int x,int y) { SetCursorPos(x,y); mouse_event(2,0,0,0,UIntPtr.Zero); mouse_event(4,0,0,0,UIntPtr.Zero); }
+  static string Title(IntPtr h) { var b=new StringBuilder(512); GetWindowText(h,b,b.Capacity); return b.ToString(); }
+  public static string Run(string query,string artist,int pick) {
+    string result="";
+    var thread=new Thread(()=>{
+      var desk=OpenDesktop("Default",0,false,0x01ff);
+      if(desk==IntPtr.Zero || !SetThreadDesktop(desk)) { result="ERROR|desktop="+Marshal.GetLastWin32Error(); return; }
+      SetThreadDpiAwarenessContext(new IntPtr(-4));
+      IntPtr win=IntPtr.Zero;
+      var deadline=DateTime.UtcNow.AddSeconds(12);
+      while(win==IntPtr.Zero && DateTime.UtcNow<deadline) {
+        EnumDesktopWindows(desk,(h,l)=>{
+          uint pid; GetWindowThreadProcessId(h,out pid);
+          var c=new StringBuilder(128); GetClassName(h,c,c.Capacity);
+          if(IsWindowVisible(h) && c.ToString()=="OrpheusBrowserHost") { win=h; return false; }
+          return true;
+        },IntPtr.Zero);
+        if(win==IntPtr.Zero) Thread.Sleep(350);
+      }
+      if(win==IntPtr.Zero) { result="ERROR|window=0"; return; }
+      IntPtr previousWindow=GetForegroundWindow();
+      uint targetPid, foregroundPid;
+      uint targetThread=GetWindowThreadProcessId(win,out targetPid);
+      uint foregroundThread=GetWindowThreadProcessId(GetForegroundWindow(),out foregroundPid);
+      uint currentThread=GetCurrentThreadId();
+      AttachThreadInput(currentThread,targetThread,true);
+      AttachThreadInput(currentThread,foregroundThread,true);
+      ShowWindow(win,9);
+      // The player must be briefly active for keyboard/mouse input, but do
+      // not make it topmost. The previous foreground app is restored after
+      // the click sequence so the command behaves like a background action.
+      SetWindowPos(win,IntPtr.Zero,0,0,0,0,0x17);
+      SetForegroundWindow(win);
+      Thread.Sleep(600);
+      Rect r; if(!GetWindowRect(win,out r)) { result="ERROR|rect=0"; return; }
+      int width=r.R-r.L, height=r.B-r.T;
+      // 搜索框和歌曲卡片均按窗口物理像素比例定位，兼容 125%/150% 高分屏。
+      Click(r.L+(int)(width*0.385), r.T+(int)(height*0.049));
+      Thread.Sleep(250);
+      keybd_event(0x11,0,0,UIntPtr.Zero); Key(0x41); keybd_event(0x11,0,2,UIntPtr.Zero); Key(0x08);
+      foreach(char ch in query) Key((byte)Char.ToUpperInvariant(ch));
+      // 第一次回车展示搜索建议，第二次回车选中首条歌手建议并进入结果页。
+      Key(0x0d); Thread.Sleep(1100); Key(0x0d); Thread.Sleep(4800);
+      // 当前客户端首条建议为陈楚生专辑；每个可见歌曲行都明确标有陈楚生。
+      double[] songRows={0.514,0.589,0.665,0.740,0.816};
+      int songX=r.L+(int)(width*0.32);
+      int songY=r.T+(int)(height*songRows[pick]);
+      // 点击动作只负责把客户端带到播放状态；窗口标题不能可靠地代表当前歌曲。
+      // 播放是否真正启动由 Python 侧的目标 GSMTC Session 轮询确认。
+      Click(songX,songY); Thread.Sleep(120); Click(songX,songY); Thread.Sleep(900);
+      string title=Title(win);
+      bool titleArtistMatch=title.IndexOf(artist,StringComparison.OrdinalIgnoreCase)>=0;
+      SetWindowPos(win,IntPtr.Zero,0,0,0,0,0x17);
+      AttachThreadInput(currentThread,targetThread,false);
+      AttachThreadInput(currentThread,foregroundThread,false);
+      bool restored=false;
+      if(previousWindow!=IntPtr.Zero && previousWindow!=win) {
+        uint previousPid;
+        uint previousThread=GetWindowThreadProcessId(previousWindow,out previousPid);
+        AttachThreadInput(currentThread,previousThread,true);
+        restored=SetForegroundWindow(previousWindow);
+        AttachThreadInput(currentThread,previousThread,false);
+      }
+      result="PLAYED|pid_window="+win.ToInt64()+"|title="+title+
+        "|titleArtistMatch="+titleArtistMatch+"|restoredForeground="+restored+
+        "|width="+width+"|height="+height+"|pick="+pick;
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start(); thread.Join(30000);
+    return result;
+  }
+}
+'@;
+Add-Type $source
+$result=[LiliNeteaseDefaultDesktop]::Run($query,$artist,$pick)
+Write-Output $result
+if($result -notlike 'PLAYED|*'){ exit 14 }
+'''
+        )
 
 
 class KugouMusicAdapter(WindowsUIAutomationAdapter):

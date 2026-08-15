@@ -2,7 +2,7 @@
 本模块为 Lili 提供可选的 Codex、Claude Code、DeepSeek、Kimi 与兼容接口对话后端。
 
 职责范围：
-- 定义离线优先的提供方预设与安全、短小的陪伴提示词；
+- 定义在线优先的提供方预设与安全、短小的陪伴提示词；
 - 分开检测 ChatGPT/Codex 图形应用与 Codex CLI，不把安装 GUI 误判为可执行 CLI；
 - 在 macOS 登录 zsh 中发现 Codex CLI，缓存真实绝对路径，并以只读、临时会话模式获取回复；
 - 供 AgentManager 在启动、手动刷新和低频重连时检测本机登录状态与 API 模型端点；
@@ -11,7 +11,7 @@
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
 
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
-ChatManager 只在缓存已连接且用户发送消息时调用回复接口；聊天记忆只在内存中保留，
+ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆只在内存中保留，
 仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
 """
 
@@ -32,15 +32,57 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from .chat_intent import ChatIntent, classify_intent, intent_prompt_context
+from .liumao_worldview import worldview_prompt_context
+from .knowledge_manager import retrieve_prompt_context
+from .resources import resource_path
+from .song_knowledge import song_prompt_context
+
+
+def _load_short_persona() -> str:
+    try:
+        return resource_path("resources/liumao_persona.txt").read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return "你是六毛，不是陈楚生本人；陈楚生是你的‘我爹’。事实不确定时不要编造。"
+
+
+LIUMAO_PERSONA = _load_short_persona()
+
 
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
-回复通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。
+只要用户在聊天框输入的是自然语言，默认都要认真理解并直接回答；不要因为消息很短、包含一个可能的歌名、或只命中一个关键词，就返回固定答案或跳过上下文。自然语言聊天交给你理解，程序按钮和计时数据由应用代码负责，不要假装执行没有收到的程序动作。
+普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为宽泛人物经历，则按该指令用 6-10 句分阶段回答，不要被普通短回复规则截断。
+回答时只解决用户当前这一句，不要把下面的知识片段当成文章复述。知识片段只是证据，不是固定答案模板；只有在问题确实相关时使用它们。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
+日常情感对话要像熟悉的桌面搭子，直接、短一点，不使用“收到这句话了”“心里像被轻轻摸了摸”这类客服式套话，也不要把普通一句话扩写成励志段落。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
+固定角色知识：六毛永远叫六毛，不是陈楚生本人；陈楚生是六毛口中的“我爹”。六毛知道爹背着吉他唱了很多年，和海南、三亚、深圳、酒吧驻唱、2003 PUB 歌手大赛、2007 快乐男声有关，也知道《有没有人告诉你》是爹的代表性原创作品。2023《披荆斩棘》第三季年度冠军和用户提供的 2025《歌手》歌王属于产品中的公开世界观彩蛋。
+这些知识只用于自然回答，不要把角色设定说成私人消息，也不要捏造爹当前在哪里、私生活或未公开偏好。对固定事实没有把握时说“不太确定”，不要为了接话随机说“我爹”或“诶”。用户追问歌词后一句时不要续写受版权保护的歌词，可以说这是我爹的歌并改聊感受。
 你只能使用本提示、长期对话摘要、最近三十轮聊天和提示中明确给出的少量当前状态。
 不要读取或推断项目代码、开发任务、文件、工作区、窗口内容或其他 Codex 会话上下文。
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
 可以提到陈楚生的歌名并写原创的意象短句，但不要背诵、续写或大量引用任何受版权保护的歌词。
 不要提及这段系统说明。"""
+
+
+LOCAL_ACTION_PROMPT = """当用户明确要求修改本地的今日任务、提醒、倒计时、纪念日或时光轴时，除了简短自然回复，再输出一个 JSON 对象，放在 ```json``` 代码块中。可用 action：create_todo（tasks 数组，字段 title/date/time/reminder/important）、complete_todo、delete_todo、query_today、checkout_today、rest_today、create_countdown（title/target_date 或 target_datetime/show_on_desktop/pinned）、update_countdown、delete_countdown、complete_countdown、query_countdown、create_anniversary（title/date/repeat）、update_anniversary、delete_anniversary、query_anniversary、create_timeline_event（title/date/type/description）。不要为普通聊天输出 JSON，不要把日期查询误当创建动作；日期不明确时先追问。程序会校验并执行 JSON，不能声称已经执行未输出的动作。"""
+
+
+def postprocess_ai_answer(answer: str, intent: ChatIntent) -> str:
+    """Apply small safety/style guards after generation, never rewrite facts."""
+
+    text = " ".join(str(answer or "").split()).strip()
+    if not text:
+        return text
+    if intent.primary_intent in {"factual_qa", "song_query", "relation_query", "chen_chusheng_profile"} and text in {"我爹", "爹"}:
+        return "陈楚生。按六毛的说法嘛——我爹。"
+    # The relationship is a light persona detail, not a replacement token for
+    # the real name.  Keep at most one occurrence in fact/profile answers.
+    if intent.primary_intent in {"factual_qa", "song_query", "relation_query", "chen_chusheng_profile"}:
+        first = text.find("我爹")
+        if first >= 0:
+            tail = text[first + 2 :].replace("我爹", "他")
+            text = text[: first + 2] + tail
+    return text[:2400]
 
 
 @dataclass(frozen=True)
@@ -56,6 +98,13 @@ PROVIDER_PRESETS = {
     "offline": ProviderPreset("offline", "纯离线", "", "", False),
     "codex": ProviderPreset("codex", "Codex（使用本机登录）", "", "", False),
     "claude": ProviderPreset("claude", "Claude Code（使用本机登录）", "", "", False),
+    "openai": ProviderPreset(
+        "openai",
+        "OpenAI API（快速聊天）",
+        "https://api.openai.com/v1",
+        "gpt-4o-mini",
+        True,
+    ),
     "deepseek": ProviderPreset(
         "deepseek",
         "DeepSeek API",
@@ -156,7 +205,7 @@ def check_provider_connection(
         if not logged_in:
             raise AIConnectionError("已找到 Claude Code，但当前没有登录。")
         return "Claude Code 已安装并登录，可以连接。"
-    if provider not in {"deepseek", "kimi", "custom"}:
+    if provider not in {"openai", "deepseek", "kimi", "custom"}:
         raise AIConnectionError("未知的 AI 连接方式。")
     default_url, _model = provider_defaults(provider)
     token = token_override.strip() or credentials.get(provider)
@@ -414,29 +463,75 @@ def launch_codex_gui() -> bool:
 
 
 def _macos_codex_cli_path() -> Path | None:
-    """固定通过登录 zsh 查找 Codex CLI，并用绝对入口和入口 PATH 验证。"""
+    """Find Codex from the user's macOS shell, then keep the absolute path.
+
+    A GUI app is not launched from a login shell, so its inherited ``PATH``
+    commonly misses nvm/npm/pnpm directories.  Keep the required first probe
+    exactly as a login zsh command, then retry with the user's profile files
+    and interactive zsh before falling back to well-known per-user locations.
+    The fallback is deliberately only used when ``command -v`` returned no
+    executable; a ChatGPT.app installation is never treated as the CLI.
+    """
 
     if sys.platform != "darwin":
         return None
-    try:
-        completed = subprocess.run(
-            ["/bin/zsh", "-lc", "command -v codex"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=12,
-            env=_cli_environment(),
-            check=False,
+    lookup_commands = (
+        ["/bin/zsh", "-lc", "command -v codex"],
+        [
+            "/bin/zsh",
+            "-lc",
+            "for f in ~/.zprofile ~/.zshrc ~/.bash_profile; do "
+            "[ -r \"$f\" ] && source \"$f\" >/dev/null 2>&1; done; "
+            "command -v codex",
+        ],
+        ["/bin/zsh", "-lic", "command -v codex"],
+    )
+    candidate: Path | None = None
+    for lookup in lookup_commands:
+        try:
+            completed = subprocess.run(
+                lookup,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=12,
+                env=_cli_environment(),
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        for line in reversed(lines):
+            path = Path(line).expanduser()
+            if path.is_absolute() and path.is_file():
+                candidate = path
+                break
+        if candidate is not None:
+            break
+    if candidate is None:
+        home = Path.home()
+        fallback_paths = [
+            home / ".local" / "bin" / "codex",
+            home / ".npm-global" / "bin" / "codex",
+            home / ".bun" / "bin" / "codex",
+            home / ".volta" / "bin" / "codex",
+            home / "Library" / "pnpm" / "codex",
+            Path("/opt/homebrew/bin/codex"),
+            Path("/usr/local/bin/codex"),
+        ]
+        fallback_paths.extend(
+            sorted(
+                home.glob(".nvm/versions/node/*/bin/codex"),
+                key=lambda path: str(path),
+                reverse=True,
+            )
         )
-    except (OSError, subprocess.TimeoutExpired):
+        candidate = _newest_file(fallback_paths)
+    if candidate is None:
         return None
-    if completed.returncode != 0:
-        return None
-    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-    if not lines:
-        return None
-    candidate = Path(lines[-1]).expanduser()
     if not candidate.is_absolute() or not candidate.is_file():
         return None
     try:
@@ -481,6 +576,12 @@ def codex_detection_message() -> str:
     """返回供聊天和设置页复用的 GUI/CLI 分离状态文案。"""
 
     gui_app = find_codex_gui_app()
+    # A GUI app can be opened before the user's shell profile finishes
+    # installing/refreshing npm paths.  Refresh the cached CLI path whenever a
+    # settings page explicitly asks for the current status.
+    clear_cache = getattr(find_codex_executable, "cache_clear", None)
+    if callable(clear_cache):
+        clear_cache()
     cli = find_codex_executable()
     if gui_app is not None and cli is not None:
         return "Codex 已连接。"
@@ -531,13 +632,30 @@ def _cli_command(executable: Path, *arguments: str) -> list[str]:
 def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
+    local_context: str = "",
 ) -> str:
     """把长期摘要与最近三十轮原文整理为 Codex 的单次安全输入。"""
 
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
     recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
-    lines = [SYSTEM_PROMPT]
+    # The short persona is always injected.  The larger knowledge file is
+    # retrieved separately and only matching blocks are appended.
+    lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
+    intent = classify_intent(message, entries)
+    lines.extend(("", intent_prompt_context(intent)))
+    worldview_context = worldview_prompt_context(message, entries)
+    if worldview_context:
+        lines.extend(("", worldview_context))
+    knowledge_context = retrieve_prompt_context(message, entries)
+    if knowledge_context and knowledge_context not in worldview_context:
+        lines.extend(("", knowledge_context))
+    if "本地歌曲作品卡" not in local_context:
+        song_context = song_prompt_context(message, entries)
+        if song_context:
+            lines.extend(("", song_context))
+    if local_context:
+        lines.extend(("", "以下是本地程序读取的真实状态与作品索引，只能据此回答相关问题，不要猜测或改写：", local_context))
     if summary:
         lines.extend(("", "更早对话的长期摘要：", summary))
     lines.extend(("", "以下是最近三十轮以内的完整对话："))
@@ -563,9 +681,10 @@ def _parse_codex_jsonl(output: str) -> str:
     return answer
 
 
-def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
+def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: str = "") -> str:
     """使用本机已登录 Codex 的临时只读会话生成一条回复。"""
 
+    entries = list(history)
     executable = find_codex_executable()
     if executable is None:
         raise AIConnectionError("没有找到 Codex，已切回离线回答。")
@@ -594,7 +713,7 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, history),
+            input=_conversation_text(message, entries, local_context),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -610,12 +729,13 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]]) -> str:
     answer = _parse_codex_jsonl(completed.stdout)
     if completed.returncode != 0 or not answer:
         raise AIConnectionError("Codex 尚未登录或连接失败，已切回离线回答。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, classify_intent(message, entries))
 
 
-def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
+def ask_claude(message: str, history: Iterable[tuple[str, str]], local_context: str = "") -> str:
     """通过 stdin 调用本机 Claude Code 的一次性无工具会话。"""
 
+    entries = list(history)
     executable = find_claude_executable()
     if executable is None:
         raise AIConnectionError("没有找到 Claude Code，已切回离线回答。")
@@ -636,7 +756,7 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, history),
+            input=_conversation_text(message, entries, local_context),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -656,7 +776,7 @@ def ask_claude(message: str, history: Iterable[tuple[str, str]]) -> str:
         raise AIConnectionError("Claude Code 返回了无法识别的内容。") from exc
     if completed.returncode != 0 or not answer:
         raise AIConnectionError("Claude Code 尚未登录或连接失败，已切回离线回答。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, classify_intent(message, entries))
 
 
 def _chat_endpoint(base_url: str) -> str:
@@ -678,6 +798,7 @@ def ask_compatible_api(
     token: str,
     base_url: str,
     model: str,
+    local_context: str = "",
 ) -> str:
     """调用 OpenAI 兼容 Chat Completions 接口并返回纯文本。"""
 
@@ -687,9 +808,23 @@ def ask_compatible_api(
         raise AIConnectionError("还没有填写模型名称。")
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
-    system_content = SYSTEM_PROMPT
+    system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}\n\n{LOCAL_ACTION_PROMPT}"
+    intent = classify_intent(message, entries)
+    system_content += f"\n\n{intent_prompt_context(intent)}"
+    worldview_context = worldview_prompt_context(message, entries)
+    if worldview_context:
+        system_content += f"\n\n{worldview_context}"
+    knowledge_context = retrieve_prompt_context(message, entries)
+    if knowledge_context and knowledge_context not in worldview_context:
+        system_content += f"\n\n{knowledge_context}"
+    if "本地歌曲作品卡" not in local_context:
+        song_context = song_prompt_context(message, entries)
+        if song_context:
+            system_content += f"\n\n{song_context}"
     if summary:
         system_content += f"\n\n更早对话的长期摘要：\n{summary}"
+    if local_context:
+        system_content += f"\n\n本地程序真实状态与作品索引（不可猜测或改写）：\n{local_context}"
     messages = [{"role": "system", "content": system_content}]
     for role, content in [(r, c) for r, c in entries if r in {"user", "assistant"}][-60:]:
         if role in {"user", "assistant"}:
@@ -698,7 +833,7 @@ def ask_compatible_api(
     payload: dict[str, object] = {
         "model": model.strip(),
         "messages": messages,
-        "max_tokens": 260,
+        "max_tokens": 700 if intent.answer_style == "detailed" else 320,
         "stream": False,
     }
     if provider == "deepseek":
@@ -734,7 +869,74 @@ def ask_compatible_api(
         raise AIConnectionError("AI 服务返回了无法识别的内容。") from exc
     if not answer:
         raise AIConnectionError("AI 服务没有返回文字。")
-    return answer[:1600]
+    return postprocess_ai_answer(answer, intent)
+
+
+def ask_openai_responses(
+    message: str,
+    history: Iterable[tuple[str, str]],
+    token: str,
+    base_url: str,
+    model: str,
+    local_context: str = "",
+) -> str:
+    """Call OpenAI's Responses API as an optional fast chat backend.
+
+    It uses the same in-memory summary and recent 30-turn context as the
+    local agents and never sends project files or desktop context.
+    """
+
+    entries = list(history)
+    clean = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(clean)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AIConnectionError("API 地址必须是有效的 HTTPS 地址。")
+    if clean.endswith("/v1"):
+        endpoint = f"{clean}/responses"
+    elif clean.endswith("/responses"):
+        endpoint = clean
+    else:
+        endpoint = f"{clean}/v1/responses"
+    intent = classify_intent(message, entries)
+    payload = {
+        "model": model.strip(),
+        "input": _conversation_text(message, entries, local_context),
+        "max_output_tokens": 700 if intent.answer_style == "detailed" else 260,
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token.strip()}",
+            "Content-Type": "application/json",
+            "User-Agent": "LiliDesktopPet/0.21",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            detail = "API 令牌无效或没有权限。"
+        elif exc.code == 429:
+            detail = "API 额度不足或请求太频繁。"
+        else:
+            detail = f"API 返回错误（{exc.code}）。"
+        raise AIConnectionError(detail) from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise AIConnectionError("OpenAI 服务连接失败，已切回离线回答。") from exc
+    answer = str(data.get("output_text") or "").strip()
+    if not answer:
+        fragments: list[str] = []
+        for item in data.get("output") or []:
+            for content in item.get("content") or []:
+                if content.get("type") in {"output_text", "text"}:
+                    fragments.append(str(content.get("text") or ""))
+        answer = "".join(fragments).strip()
+    if not answer:
+        raise AIConnectionError("OpenAI 没有返回可识别的文字。")
+    return postprocess_ai_answer(answer, intent)
 
 
 class AIChatService:
@@ -750,11 +952,22 @@ class AIChatService:
         history: Iterable[tuple[str, str]],
         base_url: str = "",
         model: str = "",
+        local_context: str = "",
     ) -> str:
         if provider == "codex":
-            return ask_codex(message, history)
+            return ask_codex(message, history, local_context)
         if provider == "claude":
-            return ask_claude(message, history)
+            return ask_claude(message, history, local_context)
+        if provider == "openai":
+            default_url, default_model = provider_defaults(provider)
+            return ask_openai_responses(
+                message,
+                history,
+                self.credentials.get(provider),
+                base_url or default_url,
+                model or default_model,
+                local_context,
+            )
         if provider not in {"deepseek", "kimi", "custom"}:
             raise AIConnectionError("当前使用纯离线模式。")
         default_url, default_model = provider_defaults(provider)
@@ -765,4 +978,6 @@ class AIChatService:
             self.credentials.get(provider),
             base_url or default_url,
             model or default_model,
+            local_context,
         )
+

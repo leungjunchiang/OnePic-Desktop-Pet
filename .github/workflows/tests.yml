@@ -19,3 +19,15 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest
 
+  relay-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check CloudBase proxy syntax and routes
+        working-directory: relay/cloudbase-function
+        run: |
+          npm test
+          npm run check

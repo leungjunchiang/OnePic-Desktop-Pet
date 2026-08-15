@@ -19,6 +19,7 @@ from onepic_desktop_pet.ai import (
     _parse_codex_jsonl,
     ask_claude,
     ask_codex,
+    ask_openai_responses,
     ask_compatible_api,
     check_provider_connection,
     codex_detection_message,
@@ -292,6 +293,59 @@ def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_pat
     assert calls[-1][1]["PATH"].split(os.pathsep)[0] == str(executable.parent)
     assert find_codex_executable() == executable
     find_codex_executable.cache_clear()
+
+
+def test_macos_codex_lookup_retries_user_shell_profiles(monkeypatch, tmp_path) -> None:
+    executable = tmp_path / "nvm" / "bin" / "codex"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("codex", encoding="utf-8")
+    executable.chmod(0o755)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == ["/bin/zsh", "-lc", "command -v codex"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if command[0:2] == ["/bin/zsh", "-lc"] and "~/.zshrc" in command[2]:
+            return SimpleNamespace(returncode=0, stdout=f"{executable}\n", stderr="")
+        if command == [str(executable), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli 1.0", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    find_codex_executable.cache_clear()
+
+    assert find_codex_executable() == executable
+    assert calls[0] == ["/bin/zsh", "-lc", "command -v codex"]
+    assert any("~/.zshrc" in command[-1] for command in calls)
+    find_codex_executable.cache_clear()
+
+
+def test_openai_responses_api_preserves_context_without_token_in_payload(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse({"output_text": "六毛已经收到啦。"})
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.urllib.request.urlopen", fake_urlopen)
+    answer = ask_openai_responses(
+        "继续刚才的话题",
+        [("summary", "用户在准备考试"), ("user", "我有点累")],
+        "secret-token",
+        "https://api.openai.com/v1",
+        "gpt-4o-mini",
+    )
+    request = captured["request"]
+    payload = json.loads(request.data.decode("utf-8"))
+    assert answer == "六毛已经收到啦。"
+    assert request.full_url == "https://api.openai.com/v1/responses"
+    assert request.get_header("Authorization") == "Bearer secret-token"
+    assert "secret-token" not in json.dumps(payload)
+    assert "用户在准备考试" in payload["input"]
+    assert captured["timeout"] == 30
 
 
 def test_chatgpt_without_cli_uses_required_neutral_status(monkeypatch) -> None:

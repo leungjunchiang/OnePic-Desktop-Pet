@@ -20,7 +20,7 @@ os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QDialog, QScrollArea
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QScrollArea
 
 from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
 from onepic_desktop_pet.behavior import PetState, StateDecision
@@ -28,7 +28,9 @@ from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
-from onepic_desktop_pet.chat import AISettingsDialog
+from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
+from onepic_desktop_pet.time_memory import TimeMemory
+from onepic_desktop_pet.compact_todo import CompactTodoPanel
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -96,16 +98,240 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     app = QApplication.instance() or QApplication([])
     dialog = AISettingsDialog(PetSettings(), CredentialStore())
     assert dialog.findChild(QScrollArea) is not None
+    assert dialog.allow_autonomous_walk.isChecked() is False
     services = {
         dialog.music_service.itemData(index)
         for index in range(dialog.music_service.count())
     }
-    assert {"qq", "netease", "kugou", "apple", "spotify"} <= services
+    assert {"auto", "qq", "netease", "kugou", "apple", "spotify"} <= services
+    assert dialog.music_service.currentData() == "auto"
     assert dialog.apple_music_path.isEnabled()
     assert dialog.spotify_music_path.isEnabled()
     assert dialog.always_on_top.isChecked()
     dialog.close()
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_owner_nickname_changes_social_identity_without_changing_pet_name() -> None:
+    app = QApplication.instance() or QApplication([])
+    settings = PetSettings()
+    settings_dialog = AISettingsDialog(settings, CredentialStore())
+
+    assert settings_dialog.owner_nickname.text() == ""
+    settings_dialog.owner_nickname.setText("团团")
+    settings_dialog.apply()
+
+    assert settings.owner_nickname == "团团"
+    assert settings.pet_name == "六毛"
+    chat = ChatDialog(None, settings.pet_name)
+    assert chat.windowTitle() == "和六毛聊聊"
+    assert chat.pet_title.text() == "六毛的小纸条"
+    assert chat.rename_button.text() == "修改主人称呼"
+    assert "主人称呼" in chat.rename_button.toolTip() or "自习室" in chat.rename_button.toolTip()
+    chat.set_pet_name("阿毛")
+    assert chat.windowTitle() == "和六毛聊聊"
+    assert chat.input.placeholderText() == "跟六毛说点什么……"
+
+    settings_dialog.close()
+    settings_dialog.deleteLater()
+    chat.close()
+    chat.deleteLater()
+    app.processEvents()
+
+
+def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
+    app, window = _create_window()
+    assert window.settings.allow_autonomous_walk is False
+    assert window._walk_allowed() is False
+    assert window.animation_timer.isActive()
+
+    window.set_allow_autonomous_walk(True, persist=False)
+    assert window.settings.allow_autonomous_walk is True
+    assert window._walk_allowed() is True
+
+    window.set_allow_autonomous_walk(False, persist=False)
+    assert window._walk_allowed() is False
+    assert window.animation_timer.isActive()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_chat_rename_button_opens_visible_rename_flow(monkeypatch) -> None:
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.QInputDialog.getText",
+        lambda *args, **kwargs: ("团子", True),
+    )
+
+    window.prompt_dialogue()
+    assert window._chat_dialog is not None
+    assert window._chat_dialog.rename_button.isVisible()
+    window._chat_dialog.rename_button.click()
+    app.processEvents()
+
+    assert window.settings.owner_nickname == "团子"
+    assert window.settings.pet_name == "六毛"
+    assert window._chat_dialog.pet_title.text() == "六毛的小纸条"
+    assert window.windowTitle().endswith("· 六毛")
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_chat_connected_status_is_not_rendered_twice() -> None:
+    dialog = ChatDialog()
+    dialog.set_provider("codex", "connected", "Codex 已连接。")
+    assert dialog.status_label.text() == "Codex（使用本机登录） · 已连接，优先使用 AI"
+    assert "\n" not in dialog.status_label.text()
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("整理回归结果")
+    panel = CompactTodoPanel(memory, settings=PetSettings(today_note_mode="compact"))
+    panel.show()
+    app.processEvents()
+
+    assert panel.windowTitle() == ""
+    assert panel.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert not panel.findChildren(QLabel, "todayNoteTitle")
+    assert set(panel.rows) == {task.id}
+    assert panel.rows[task.id].checkbox.isChecked() is False
+
+    panel.rows[task.id].checkbox.setChecked(True)
+    app.processEvents()
+    assert memory.todos.get(task.id).completed is True
+    assert panel.rows[task.id].checkbox.isChecked() is True
+    panel.set_collapsed(True)
+    app.processEvents()
+    assert panel.collapsed is True
+    assert panel.rows_scroll.isVisible() is True
+    assert set(panel.rows) == {task.id}
+    assert panel.rows[task.id].label.isVisible()
+    assert panel.expand_button.isVisible() is False
+    panel.set_collapsed(False)
+    app.processEvents()
+    assert panel.rows_scroll.isVisible() is True
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
+def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("修改论文", time="20:00")
+    memory.todos.add("整理回归结果")
+    memory.todos.add("发材料", time="22:30")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.move(120, 120)
+    window.show()
+    app.processEvents()
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None
+    assert len(panel.rows) == 3
+    assert panel.rows_scroll.height() <= panel.MAX_EXPANDED_ROWS * 34 + 2
+    panel.set_collapsed(True)
+    app.processEvents()
+    assert len(panel.rows) == 1
+    assert panel.expand_button.isVisible()
+    panel.set_collapsed(False)
+    app.processEvents()
+    assert len(panel.rows) == 3
+    row = next(iter(panel.rows.values()))
+    assert row.more_button.isEnabled()
+    assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    # Keep the click-path assertion non-modal.  The real menu is exercised by
+    # the production slot; this test only verifies that the visible button
+    # receives the mouse click and emits its request signal.
+    row.more_requested.disconnect(panel._show_task_menu)
+    more_spy = QSignalSpy(row.more_requested)
+    row.more_button.click()
+    assert more_spy.count() == 1
+    before = panel.pos()
+    # Keep the second position inside the offscreen test monitor.  The
+    # companion is clamped to the available geometry, so moving farther
+    # right/down can legitimately leave it at the same clamped position.
+    window.move(10, 20)
+    app.processEvents()
+    assert panel.pos() != before
+    visible_bounds = window.mask().boundingRect()
+    pet_left = window.x() + visible_bounds.left()
+    pet_right = window.x() + visible_bounds.right() + 1
+    available = (QApplication.screenAt(window.geometry().center()) or QApplication.primaryScreen()).availableGeometry()
+    if pet_left - panel.width() - 8 >= available.left():
+        assert panel.x() + panel.width() + 8 <= pet_left
+    elif pet_right + 8 + panel.width() <= available.right() + 1:
+        assert panel.x() >= pet_right + 8
+    else:
+        assert panel.y() >= window.y() + visible_bounds.bottom() + 1 + 6 or panel.y() <= window.y() + visible_bounds.top() - panel.height() - 6
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_hourly_unlocks_never_override_manual_outfit_selection(monkeypatch) -> None:
+    """小时成长线只解锁娃衣，不能把用户选好的外观强行换掉。"""
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.settings.equipped_outfit = "hour-01"
+    window.work_timer._lifetime_seconds = 10 * 3600
+    window.work_timer._running_since = None
+    window.work_timer._notified_outfit_count = 0
+
+    window._sync_hourly_outfit(announce=False)
+    assert window.work_timer.unlocked_outfit_count() == 10
+    assert window.settings.equipped_outfit == "hour-01"
+
+    window._sync_hourly_outfit(announce=True)
+    assert window.settings.equipped_outfit == "hour-01"
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_study_room_menu_restores_minimized_window() -> None:
+    """再次点击自习室入口会恢复原窗口，而不是重复创建窗口。"""
+    app, window = _create_window()
+    window.open_social_hub()
+    dialog = window._social_dialog
+    assert dialog is not None
+    assert dialog.parent() is None
+    dialog.showMinimized()
+    app.processEvents()
+
+    window.open_social_hub()
+    app.processEvents()
+    assert window._social_dialog is dialog
+    assert not dialog.isMinimized()
+    dialog.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_background_visit_refresh_does_not_reopen_same_window(monkeypatch) -> None:
+    app, window = _create_window()
+    calls = []
+    monkeypatch.setattr(window._buddy_visit_window, "show_peer", lambda *args, **kwargs: calls.append(args))
+    peer = {"id": "visit-1", "nickname": "搭子", "today_seconds": 5}
+    window._show_buddy_visit(peer)
+    window._show_buddy_visit(peer)
+    assert len(calls) == 1
+    window.close()
+    window.deleteLater()
     app.processEvents()
 
 
@@ -397,7 +623,39 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
     app.processEvents()
 
 
-def test_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
+def test_context_menu_uses_direct_high_frequency_entries() -> None:
+    """一级菜单直接呈现聊天、工作、音乐、自习室、动作和喂食入口。"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels[:8] == [
+        "修改主人称呼…",
+        "和六毛聊聊…",
+        "工作打卡/工作计时",
+        "音乐",
+        "搭子自习室…",
+        "动作",
+        "给六毛喂食",
+        "换装与外观",
+    ]
+    assert "隐藏" in labels
+    assert "退出" in labels
+    assert "陪伴动作" not in labels
+    assert "完整图片动作" not in labels
+    assert not any("›" in label for label in labels)
+    music = next(action for action in menu.actions() if action.text() == "音乐")
+    music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
+    assert music_labels == ["随机听一首陈楚生", "播放/暂停", "下一首", "上一首", "音乐播放器设置"]
+    food = next(action for action in menu.actions() if action.text() == "给六毛喂食")
+    assert food.menu() is not None
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def _legacy_context_menu_uses_five_clear_groups_with_working_submenus() -> None:
     """右键菜单只保留五个一级分组，功能放入语义明确的子菜单。"""
 
     app, window = _create_window()
@@ -877,3 +1135,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+
