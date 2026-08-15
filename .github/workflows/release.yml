@@ -100,10 +100,22 @@ jobs:
       - macos-build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Build content update manifest
+        shell: bash
+        run: |
+          release_tag="${GITHUB_REF_NAME#release/}"
+          python tools/build_content_manifest.py \
+            --root . \
+            --version "$release_tag" \
+            --min-app-version "0.22.44" \
+            --ref "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output release-assets/content-manifest.json
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,8 +129,8 @@ jobs:
             gh release create "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "Lili $release_tag - Compact Todo attachment" \
+              --title "Lili $release_tag - Compact Todo + content updates" \
               --generate-notes \
-              --notes "Fixes Compact Todo collapse and action-menu hit testing, and keeps the speech bubble, pet Todo strip, and detailed 便利贴 aligned to the pet."
+              --notes "Adds content-only online updates for knowledge, configuration, and assets; compact Todo width now hugs visible task content and stays anchored to 六毛."
           fi
 

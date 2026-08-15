@@ -88,6 +88,7 @@ class TodoRow(QWidget):
     def __init__(self, task: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.task_id = str(task.id)
+        self._full_text = ""
         self.setFixedHeight(34)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QHBoxLayout(self)
@@ -131,15 +132,29 @@ class TodoRow(QWidget):
         text = str(task.title)
         if getattr(task, "time", None):
             text += f" · {task.time}"
-        self.label.setText(
-            QFontMetrics(self.label.font()).elidedText(
-                text, Qt.TextElideMode.ElideRight, 198
-            )
-        )
+        self._full_text = text
+        self.label.setToolTip(text)
+        self._update_label_text()
         if bool(task.completed):
             self.label.setStyleSheet("color:#819399;text-decoration:line-through;")
         else:
             self.label.setStyleSheet("color:#183c4c;")
+
+    def _update_label_text(self) -> None:
+        """Fit the label to the actual row width instead of a magic number."""
+
+        available = max(24, self.label.contentsRect().width())
+        self.label.setText(
+            QFontMetrics(self.label.font()).elidedText(
+                self._full_text,
+                Qt.TextElideMode.ElideRight,
+                available,
+            )
+        )
+
+    def resizeEvent(self, event: object) -> None:
+        self._update_label_text()
+        super().resizeEvent(event)
 
     def set_selected(self, selected: bool) -> None:
         self.setStyleSheet(
@@ -165,6 +180,9 @@ class CompactTodoPanel(QWidget):
 
     MAX_COLLAPSED_ROWS = 1
     MAX_EXPANDED_ROWS = 3
+    MIN_WIDTH = 156
+    MAX_WIDTH = 320
+    ROW_HEIGHT = 34
     COMPLETION_PREVIEW_SECONDS = 1.1
 
     def __init__(
@@ -196,7 +214,7 @@ class CompactTodoPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(COMPACT_TODO_STYLE)
-        self.setFixedWidth(250)
+        self.setFixedWidth(self.MIN_WIDTH)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(5, 4, 5, 4)
@@ -309,6 +327,7 @@ class CompactTodoPanel(QWidget):
         tasks = self._visible_tasks()
         display_limit = self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS
         display_tasks = tasks[:display_limit]
+        self._resize_width(display_tasks)
         for task in display_tasks:
             row = TodoRow(task, self.rows_container)
             row.set_selected(task.id == self.selected_task_id)
@@ -333,14 +352,38 @@ class CompactTodoPanel(QWidget):
             self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS,
         )
         if visible_rows:
-            self.rows_scroll.setFixedHeight(visible_rows * 34)
+            self.rows_scroll.setFixedHeight(visible_rows * self.ROW_HEIGHT)
         else:
             self.rows_scroll.setFixedHeight(0)
         # No fixed empty canvas: an empty panel is just the tiny add affordance.
         self.adjustSize()
         footer_height = 27
-        content_height = visible_rows * 34 + footer_height + 8
+        content_height = visible_rows * self.ROW_HEIGHT + footer_height + 8
         self.setFixedHeight(max(38, content_height))
+
+    @staticmethod
+    def _task_text(task: Any) -> str:
+        text = str(getattr(task, "title", ""))
+        if getattr(task, "time", None):
+            text += f" · {task.time}"
+        return text
+
+    def _resize_width(self, tasks: list[Any]) -> None:
+        """Use one content-hugging width for all visible rows.
+
+        The width includes the checkbox, row padding, and the real action
+        button.  It is intentionally bounded so one verbose task cannot turn
+        the pet accessory into a second application window.
+        """
+
+        metrics = QFontMetrics(self.font())
+        longest = max(
+            (metrics.horizontalAdvance(self._task_text(task)) for task in tasks),
+            default=0,
+        )
+        fixed_controls = 16 + 6 + 3 + 26 + 7 + 10
+        desired = longest + fixed_controls
+        self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
 
     def _select_task(self, task_id: str) -> None:
         task = self.memory.todos.get(task_id)

@@ -17,6 +17,8 @@ Agent 快速定位：
 from __future__ import annotations
 
 import sys
+import json
+import os
 from pathlib import Path
 
 
@@ -29,10 +31,76 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+_content_root_override: Path | None = None
+_active_content_cache: tuple[Path, int, Path | None] | None = None
+
+
+def content_update_root() -> Path:
+    """Return the user-writable root used by optional content patches."""
+
+    if _content_root_override is not None:
+        return _content_root_override
+    base = os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / ".desktop_pet"
+    return root / "Lili" / "content_updates"
+
+
+def set_content_update_root(path: Path | None) -> None:
+    """Override the content root for tests or an explicitly managed install."""
+
+    global _content_root_override, _active_content_cache
+    _content_root_override = Path(path) if path is not None else None
+    _active_content_cache = None
+
+
+def _active_content_root() -> Path | None:
+    """Resolve the active versioned overlay without trusting arbitrary paths."""
+
+    global _active_content_cache
+    root = content_update_root()
+    pointer = root / "active.json"
+    try:
+        stamp = pointer.stat().st_mtime_ns
+    except OSError:
+        _active_content_cache = (root, -1, None)
+        return None
+    if _active_content_cache is not None and _active_content_cache[:2] == (root, stamp):
+        return _active_content_cache[2]
+    try:
+        payload = json.loads(pointer.read_text(encoding="utf-8"))
+        version_dir_name = str(payload.get("directory", ""))
+        if not version_dir_name or Path(version_dir_name).name != version_dir_name:
+            raise ValueError("invalid content overlay directory")
+        versions = (root / "versions").resolve()
+        candidate = (versions / version_dir_name).resolve()
+        candidate.relative_to(versions)
+        active = candidate if candidate.is_dir() else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        active = None
+    _active_content_cache = (root, stamp, active)
+    return active
+
+
+def clear_content_overlay_cache() -> None:
+    """Make a newly committed content overlay visible immediately."""
+
+    global _active_content_cache
+    _active_content_cache = None
+
+
 def resource_path(relative_path: str | Path) -> Path:
     """解析并验证资源路径，缺失时抛出 FileNotFoundError。"""
 
-    path = resource_root() / Path(relative_path)
+    relative = Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"资源路径必须是项目内相对路径：{relative_path}")
+    overlay = _active_content_root()
+    if overlay is not None:
+        overlay_path = overlay / relative
+        if overlay_path.exists():
+            return overlay_path
+    path = resource_root() / relative
     if not path.exists():
         raise FileNotFoundError(f"缺少应用资源：{path}")
     return path
+
