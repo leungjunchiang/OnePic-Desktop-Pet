@@ -15,3 +15,5 @@ def test_social_edge_relay_has_stable_routes_and_no_server_secret() -> None:
         assert operation in source
     assert "service_role" not in source
     assert "SUPABASE_SECRET_KEY" not in source
+    assert "last_seen: now" in source
+    assert "String(body.last_seen || now)" not in source

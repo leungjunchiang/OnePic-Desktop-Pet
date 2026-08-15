@@ -187,7 +187,8 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
     room_id: body.room_id ? String(body.room_id) : null,
     quick_status: String(body.quick_status || "").trim().slice(0, 40),
     quick_status_expires_at: body.quick_status_expires_at || null,
-    last_seen: String(body.last_seen || now),
+    // Presence freshness must use this server's clock, never the desktop's.
+    last_seen: now,
     updated_at: now,
     user_id: String(user.id || ""),
   };
