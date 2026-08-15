@@ -169,7 +169,7 @@ class ChatDialog(QDialog):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        title = QLabel(f"{self.pet_name}的小纸条")
+        title = QLabel(f"和{self.pet_name}聊聊")
         self.pet_title = title
         title.setObjectName("title")
         header.addWidget(title)
@@ -244,7 +244,7 @@ class ChatDialog(QDialog):
 
         self.pet_name = PET_NAME
         self.setWindowTitle(f"和{self.pet_name}聊聊")
-        self.pet_title.setText(f"{self.pet_name}的小纸条")
+        self.pet_title.setText(f"和{self.pet_name}聊聊")
         self.input.setPlaceholderText(f"跟{self.pet_name}说点什么……")
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -390,6 +390,15 @@ class AISettingsDialog(QDialog):
         self.always_on_top = QCheckBox("始终置顶（关闭后为桌面模式，不抢输入焦点）")
         self.always_on_top.setChecked(settings.always_on_top)
         layout.addWidget(self.always_on_top)
+
+        self.content_updates = QCheckBox(
+            "自动检查补充内容更新（知识库、配置和素材，不替换程序）"
+        )
+        self.content_updates.setChecked(getattr(settings, "content_updates_enabled", True))
+        self.content_updates.setToolTip(
+            "关闭后不会在启动时自动检查内容补丁；托盘中的“检查补充内容更新”仍可手动执行。"
+        )
+        layout.addWidget(self.content_updates)
 
         self.allow_autonomous_walk = QCheckBox(
             "允许六毛自动跑动（默认关闭；打开后会在桌面上来回移动）"
@@ -695,6 +704,7 @@ class AISettingsDialog(QDialog):
         self.settings.ai_base_url = self.base_url.text().strip()
         self.settings.ai_model = self.model.text().strip()
         self.settings.always_on_top = self.always_on_top.isChecked()
+        self.settings.content_updates_enabled = self.content_updates.isChecked()
         self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()

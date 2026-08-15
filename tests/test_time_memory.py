@@ -177,8 +177,9 @@ def test_timeline_event_query_is_curated_and_sorted(tmp_path) -> None:
 
 def test_structured_action_extracts_only_explicit_json() -> None:
     assert extract_action("有没有人告诉你") is None
-    action = extract_action('```json\n{"action":"create_todo","tasks":[{"title":"跑回归"}]}\n```')
+    action = extract_action('先记一下：```json\n{"action":"create_todo","tasks":[{"title":"跑回归"},{"title":"发材料"}]}\n```')
     assert action["action"] == "create_todo"
+    assert len(action["tasks"]) == 2
 
 
 def test_structured_create_todo_action_is_local_and_durable(tmp_path) -> None:
@@ -187,6 +188,51 @@ def test_structured_create_todo_action_is_local_and_durable(tmp_path) -> None:
     result = memory.actions.execute({"action": "create_todo", "tasks": [{"title": "买数据线", "important": True}]})
     assert result is not None and memory.todos.find("买数据线").important
     assert TodoManager(tmp_path / "todos.json", now_provider=clock).find("买数据线") is not None
+
+
+def test_chat_todo_action_writes_reminder_and_merges_similar_task(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    old = memory.todos.add("9点论文", time="09:00", reminder=True)
+    result = memory.actions.execute(
+        {
+            "action": "create_todo",
+            "tasks": [
+                {
+                    "title": "修改论文",
+                    "date": "2026-08-16",
+                    "time": "09:30",
+                    "reminder": True,
+                    "source": "chat",
+                }
+            ],
+        }
+    )
+    assert result is not None and result.ok is True
+    assert len(memory.todos.items) == 1
+    task = memory.todos.get(old.id)
+    assert task is not None and task.title == "修改论文"
+    assert task.date == "2026-08-16" and task.time == "09:30"
+    assert len(memory.reminders.items) == 1
+    assert memory.reminders.items[0].source_id == task.id
+
+
+def test_chat_todo_update_complete_and_delete_are_real_local_operations(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    task = memory.todos.add("整理材料")
+    updated = memory.actions.execute(
+        {"action": "update_todo", "target": "整理材料", "time": "20:00", "reminder": True}
+    )
+    assert updated is not None and updated.ok
+    assert memory.todos.get(task.id).time == "20:00"
+    assert len(memory.reminders.items) == 1
+    completed = memory.actions.execute({"action": "complete_todo", "target": "整理材料"})
+    assert completed is not None and completed.ok and memory.todos.get(task.id).completed
+    deleted = memory.actions.execute({"action": "delete_todo", "target": "整理材料"})
+    assert deleted is not None and deleted.ok
+    assert memory.todos.get(task.id) is None
+    assert memory.reminders.items == ()
 
 
 def test_structured_query_today_uses_local_truth(tmp_path) -> None:

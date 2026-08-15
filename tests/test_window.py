@@ -126,7 +126,7 @@ def test_owner_nickname_changes_social_identity_without_changing_pet_name() -> N
     assert settings.pet_name == "六毛"
     chat = ChatDialog(None, settings.pet_name)
     assert chat.windowTitle() == "和六毛聊聊"
-    assert chat.pet_title.text() == "六毛的小纸条"
+    assert chat.pet_title.text() == "和六毛聊聊"
     assert chat.rename_button.text() == "修改主人称呼"
     assert "主人称呼" in chat.rename_button.toolTip() or "自习室" in chat.rename_button.toolTip()
     chat.set_pet_name("阿毛")
@@ -174,7 +174,7 @@ def test_chat_rename_button_opens_visible_rename_flow(monkeypatch) -> None:
 
     assert window.settings.owner_nickname == "团子"
     assert window.settings.pet_name == "六毛"
-    assert window._chat_dialog.pet_title.text() == "六毛的小纸条"
+    assert window._chat_dialog.pet_title.text() == "和六毛聊聊"
     assert window.windowTitle().endswith("· 六毛")
     window.close()
     window.deleteLater()

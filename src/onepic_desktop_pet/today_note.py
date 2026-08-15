@@ -85,7 +85,7 @@ class TodayNoteWindow(QDialog):
         self._note_save_timer.setInterval(350)
         self._note_save_timer.timeout.connect(self._save_sticky_note)
 
-        self.setWindowTitle("便利贴 · 六毛")
+        self.setWindowTitle("待办 · 六毛")
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -122,7 +122,7 @@ class TodayNoteWindow(QDialog):
         root.addWidget(self.important_label)
 
         self.note_editor = QPlainTextEdit()
-        self.note_editor.setPlaceholderText("写点什么，六毛先替你放在便利贴上……")
+        self.note_editor.setPlaceholderText("补充说明，六毛先替你记着……")
         self.note_editor.setMaximumBlockCount(80)
         self.note_editor.setFixedHeight(72)
         self.note_editor.textChanged.connect(self._schedule_note_save)
@@ -193,7 +193,7 @@ class TodayNoteWindow(QDialog):
         settings_action = QAction("显示设置", self)
         settings_action.triggered.connect(self.configure_display)
         menu.addAction(settings_action)
-        clear_note = QAction("清空便利贴", self)
+        clear_note = QAction("清空补充说明", self)
         clear_note.triggered.connect(self._clear_sticky_note)
         menu.addAction(clear_note)
         memory_action = QAction("我的时光", self)
@@ -212,7 +212,7 @@ class TodayNoteWindow(QDialog):
         self.setFixedWidth(360)
 
     def _set_mode_visibility(self) -> None:
-        self.title_label.setText("便利贴")
+        self.title_label.setText("待办")
         self.important_label.setVisible(True)
         self.note_editor.setVisible(True)
         self.task_list.show()
@@ -468,15 +468,15 @@ class TodayNoteWindow(QDialog):
         if self.settings is None:
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("便利贴显示设置")
+        dialog.setWindowTitle("待办显示设置")
         form = QFormLayout(dialog)
         style = QComboBox(dialog)
-        style.addItem("详细便利贴", "detailed")
+        style.addItem("详细待办", "detailed")
         style.addItem("紧凑待办小窗", "compact")
         style.addItem("完全隐藏", "hidden")
         current_style = str(getattr(self.settings, "today_note_mode", "detailed"))
         style.setCurrentIndex(max(0, style.findData(current_style)))
-        form.addRow("便签样式", style)
+        form.addRow("待办样式", style)
         policy = QComboBox(dialog)
         policy.addItem("有待办时显示", "pending")
         policy.addItem("始终显示", "always")

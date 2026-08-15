@@ -18,7 +18,7 @@ from .work_session_manager import WorkSessionManager
 
 
 class TimeMemory:
-    """One small dependency container shared by the 便利贴 window and chat."""
+    """One small dependency container shared by the Todo views and chat."""
 
     def __init__(self, base=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
         def path(name: str):

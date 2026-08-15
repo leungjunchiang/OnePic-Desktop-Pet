@@ -37,7 +37,7 @@ from .companion import CompanionModel
 from .config import PetSettings
 from .liumao_worldview import story_response, worldview_response
 from .song_knowledge import offline_song_reply, song_prompt_context
-from .structured_actions import LocalActionExecutor, extract_action
+from .structured_actions import ActionResult, LocalActionExecutor, extract_action
 
 
 LOGGER = logging.getLogger(__name__)
@@ -455,6 +455,7 @@ class ChatManager(QObject):
     """统一决定走缓存已连接的 AI，还是立即返回本地离线回复。"""
 
     reply_ready = Signal(object)
+    action_executed = Signal(object)
     busy_changed = Signal(bool)
     notice = Signal(str)
 
@@ -550,13 +551,28 @@ class ChatManager(QObject):
         if action is not None and self.action_executor is not None:
             try:
                 result = self.action_executor.execute(action)
-            except (KeyError, TypeError, ValueError) as exc:
-                LOGGER.warning("忽略无法执行的本地时间动作：%s", exc)
-                result = None
+            except (KeyError, TypeError, ValueError, OSError) as exc:
+                LOGGER.warning("本地待办动作执行失败：%s", exc)
+                result = ActionResult(
+                    str(action.get("action") or "unknown"),
+                    "本地待办没有保存成功，我没有假装记住；请再试一次。",
+                    {"saved": False, "error": str(exc)},
+                    False,
+                )
+            if result is None:
+                result = ActionResult(
+                    str(action.get("action") or "unknown"),
+                    "这个本地动作没有执行成功，我没有假装记住；请再试一次。",
+                    {"saved": False},
+                    False,
+                )
             if result is not None:
+                self.action_executed.emit(result)
                 # Structured-only responses are replaced with a safe local
                 # confirmation; a normal conversational answer remains intact.
-                if answer.lstrip().startswith("{") or "```" in answer:
+                if not result.ok:
+                    answer = result.reply_hint
+                elif answer.lstrip().startswith("{") or "```" in answer:
                     answer = result.reply_hint or "已按本地记录处理。"
                 elif result.reply_hint:
                     answer = f"{answer.rstrip()}\n{result.reply_hint}"

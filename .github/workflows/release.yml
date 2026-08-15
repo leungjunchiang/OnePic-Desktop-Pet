@@ -112,7 +112,7 @@ jobs:
           python tools/build_content_manifest.py \
             --root . \
             --version "$release_tag" \
-            --min-app-version "0.22.44" \
+            --min-app-version "0.22.45" \
             --ref "$GITHUB_REF_NAME" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json
@@ -129,7 +129,7 @@ jobs:
             gh release create "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "Lili $release_tag - Compact Todo + content updates" \
+              --title "Lili $release_tag - Chat actions + Todo + content updates" \
               --generate-notes \
-              --notes "Adds content-only online updates for knowledge, configuration, and assets; compact Todo width now hugs visible task content and stays anchored to 六毛."
+              --notes "Chat can now create, update, complete, delete, and query the same local Todo store; content-only updates are user-controllable and the compact Todo stays anchored to 六毛."
           fi

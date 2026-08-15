@@ -376,6 +376,7 @@ class PetWindow(QWidget):
         )
         self.agent_manager.status_changed.connect(self._agent_status_changed)
         self.chat_manager.reply_ready.connect(self._managed_chat_reply)
+        self.chat_manager.action_executed.connect(self._chat_action_executed)
         self.chat_manager.busy_changed.connect(self._chat_busy_changed)
         self.chat_manager.notice.connect(self._chat_notice)
         self.music_controller.result_ready.connect(self._music_control_result)
@@ -1964,6 +1965,25 @@ class PetWindow(QWidget):
                 # turn rather than waiting for the next pet movement.
                 self._position_compact_todos()
 
+    def _chat_action_executed(self, result: object) -> None:
+        """Refresh every Todo surface after a real chat-side local write."""
+
+        action = str(getattr(result, "action", "") or "")
+        if action in {
+            "create_todo", "update_todo", "complete_todo", "delete_todo",
+            "move_pending_to_today",
+        }:
+            self._refresh_todo_surfaces()
+            # Respect an intentionally hidden panel.  If compact mode is the
+            # configured surface, create it lazily so a successful chat action
+            # becomes visible without requiring a manual refresh.
+            if (
+                self._compact_todo_panel is None
+                and str(getattr(self.settings, "today_note_mode", "detailed")) == "compact"
+                and str(getattr(self.settings, "today_note_display_mode", "pending")) != "hidden"
+            ):
+                self.show_compact_todos()
+
     def _select_todo_from_note(self, task_id: str) -> None:
         item = self.time_memory.todos.get(task_id)
         if item is None:
@@ -3275,13 +3295,6 @@ class PetWindow(QWidget):
         add_paper = QAction("添加待办…", self)
         add_paper.triggered.connect(self.add_compact_todo)
         todo_menu.addAction(add_paper)
-        paper_menu = work_menu.addMenu("便利贴")
-        show_paper = QAction("打开便利贴", self)
-        show_paper.triggered.connect(self.show_sticky_note)
-        paper_menu.addAction(show_paper)
-        hide_paper = QAction("隐藏便利贴", self)
-        hide_paper.triggered.connect(self.hide_sticky_note)
-        paper_menu.addAction(hide_paper)
         memory_action = QAction("我的时光…", self)
         memory_action.triggered.connect(self.show_time_memory)
         work_menu.addAction(memory_action)
@@ -3512,13 +3525,6 @@ class PetWindow(QWidget):
         todo_add = QAction("添加待办…", self)
         todo_add.triggered.connect(self.add_compact_todo)
         todo_menu.addAction(todo_add)
-        paper_menu = focus_group.addMenu("便利贴")
-        paper_show = QAction("打开便利贴", self)
-        paper_show.triggered.connect(self.show_sticky_note)
-        paper_menu.addAction(paper_show)
-        paper_hide = QAction("隐藏便利贴", self)
-        paper_hide.triggered.connect(self.hide_sticky_note)
-        paper_menu.addAction(paper_hide)
         timeline_action = QAction("我的时光…", self)
         timeline_action.triggered.connect(self.show_time_memory)
         focus_group.addAction(timeline_action)
