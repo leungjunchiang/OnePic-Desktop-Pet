@@ -230,6 +230,8 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     )
     window.time_memory = memory
     window.move(120, 120)
+    window.show()
+    app.processEvents()
     window.show_compact_todos()
     app.processEvents()
     panel = window._compact_todo_panel
