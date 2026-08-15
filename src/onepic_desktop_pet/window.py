@@ -1071,6 +1071,12 @@ class PetWindow(QWidget):
         super().moveEvent(event)
         if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
             self._position_speech_bubble()
+        if (
+            getattr(self, "_today_note_window", None) is not None
+            and self._today_note_window.isVisible()
+            and getattr(self._today_note_window, "mode", "detailed") == "compact"
+        ):
+            self._place_today_note_below_pet()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
@@ -1762,6 +1768,8 @@ class PetWindow(QWidget):
         """Open the single non-modal paper window and refresh its local facts."""
 
         self._record_user_interaction()
+        configured_mode = str(getattr(self.settings, "today_note_mode", "detailed"))
+        display_mode = configured_mode if configured_mode in {"detailed", "compact"} else "detailed"
         if self._today_note_window is None:
             self._today_note_window = TodayNoteWindow(
                 self.time_memory,
@@ -1779,13 +1787,32 @@ class PetWindow(QWidget):
             self._today_note_window.checkout_requested.connect(self.checkout_today)
             self._today_note_window.rest_requested.connect(self.rest_today)
             self._today_note_window.memory_requested.connect(self.show_time_memory)
+        self._today_note_window.set_mode(display_mode, persist=False)
         self._today_note_window.refresh()
         if self._today_note_window.isMinimized():
             self._today_note_window.showNormal()
         else:
             self._today_note_window.show()
+        if display_mode == "compact":
+            self._place_today_note_below_pet()
         self._today_note_window.raise_()
         self._today_note_window.activateWindow()
+
+    def _place_today_note_below_pet(self) -> None:
+        """Keep the compact note visually attached to the pet without covering it."""
+
+        note = self._today_note_window
+        if note is None:
+            return
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        x = self.x() + (self.width() - note.width()) // 2
+        y = self.y() + self.height() + 8
+        x = max(available.left(), min(x, available.right() - note.width() + 1))
+        y = max(available.top(), min(y, available.bottom() - note.height() + 1))
+        note.move(x, y)
 
     def hide_today_note(self) -> None:
         if self._today_note_window is not None:

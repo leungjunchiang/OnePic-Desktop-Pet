@@ -146,10 +146,11 @@ class DesktopPetApplication:
         self.window.place_at_start()
         self.show_window()
         paper_mode = getattr(self.settings, "today_note_display_mode", "pending")
+        note_style = getattr(self.settings, "today_note_mode", "detailed")
         should_show_paper = paper_mode == "always" or (
             paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
         ) or bool(getattr(self.settings, "today_note_autoshow", False))
-        if paper_mode != "hidden" and should_show_paper:
+        if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
             QTimer.singleShot(300, self.window.show_today_note)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()

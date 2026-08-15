@@ -95,6 +95,18 @@ def test_autonomous_walk_is_off_by_default_and_persistable(tmp_path) -> None:
     assert load_settings(override_path=path).allow_autonomous_walk is True
 
 
+def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.today_note_mode == "detailed"
+    settings.today_note_mode = "compact"
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).today_note_mode == "compact"
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps({"today_note_mode": "giant-task-manager"}), encoding="utf-8")
+    assert load_settings(override_path=invalid).today_note_mode == "detailed"
+
+
 def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
     assert settings.auto_pause_on_idle is True

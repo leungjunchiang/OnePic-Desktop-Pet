@@ -101,6 +101,7 @@ class PetSettings:
     lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
     today_note_display_mode: str = "pending"
+    today_note_mode: str = "detailed"
     today_note_always_on_top: bool = False
     today_note_autoshow: bool = False
     today_note_folded: bool = False
@@ -232,6 +233,8 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.equipped_outfit = str(settings.equipped_outfit)[:60]
     if settings.today_note_display_mode not in {"always", "pending", "hidden"}:
         settings.today_note_display_mode = "pending"
+    if settings.today_note_mode not in {"detailed", "compact", "hidden"}:
+        settings.today_note_mode = "detailed"
     settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
     settings.today_note_folded = bool(settings.today_note_folded)
@@ -293,6 +296,7 @@ def load_settings(
                 "lyric_interval_minutes",
                 "equipped_outfit",
                 "today_note_display_mode",
+                "today_note_mode",
                 "today_note_always_on_top",
                 "today_note_autoshow",
                 "today_note_folded",
@@ -352,6 +356,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "lyric_interval_minutes": settings.lyric_interval_minutes,
         "equipped_outfit": settings.equipped_outfit,
         "today_note_display_mode": settings.today_note_display_mode,
+        "today_note_mode": settings.today_note_mode,
         "today_note_always_on_top": settings.today_note_always_on_top,
         "today_note_autoshow": settings.today_note_autoshow,
         "today_note_folded": settings.today_note_folded,
