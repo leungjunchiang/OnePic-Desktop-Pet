@@ -30,7 +30,9 @@ class RoomClient:
                 "room_people": [{"user_id": "peer", "nickname": "搭子", "working": True, "status": "focus", "today_seconds": 120}],
                 "room_summary": {"member_count": 2, "focus_count": 2, "shared_focus_seconds": 240},
                 "room_goal": {"title": "完成第二节", "target_seconds": 1800, "completed_seconds": 240},
-                "room_activity": [{"kind": "cheer", "nickname": "我", "target_nickname": "搭子", "created_at": "2026-08-13T12:34:00+08:00"}],
+                # Supabase commonly returns UTC timestamps; the UI must show
+                # the same event as 12:34 Beijing time.
+                "room_activity": [{"kind": "cheer", "nickname": "我", "target_nickname": "搭子", "created_at": "2026-08-13T04:34:00+00:00"}],
             }
         return data
 
@@ -51,6 +53,7 @@ def test_study_room_is_resizable_and_renders_room_scoped_summary():
     assert "2 人" in dialog.room_summary.text()
     assert "完成第二节" in dialog.room_goal.text()
     assert "加油" in dialog.room_activity.item(0).text()
+    assert dialog.room_activity.item(0).text().startswith("12:34")
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

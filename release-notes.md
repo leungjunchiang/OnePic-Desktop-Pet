@@ -1,3 +1,9 @@
+# Lili v0.22.24
+
+- Room activity timestamps are now rendered consistently in Beijing time (UTC+8), regardless of the computer's local timezone.
+- Shared task countdowns and room ritual checks use the same Beijing-time reference.
+- Added regression coverage for converting UTC Supabase timestamps to Beijing time.
+
 # Lili v0.22.23
 
 - Fixed Supabase Direct presence heartbeats by adding the required PostgREST merge-duplicates preference to `lili_focus_presence` upserts. Direct clients no longer hit the primary-key duplicate error after the first heartbeat, so active buddies correctly remain online and room focus counts update.
