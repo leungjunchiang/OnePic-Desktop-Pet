@@ -1779,11 +1779,10 @@ class PetWindow(QWidget):
             )
             if getattr(self.settings, "today_note_always_on_top", False):
                 self._today_note_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            if getattr(self.settings, "today_note_folded", False):
-                self._today_note_window.toggle_fold()
             self._today_note_window.start_requested.connect(self._start_todo_from_note)
             self._today_note_window.select_requested.connect(self._select_todo_from_note)
             self._today_note_window.complete_requested.connect(self._complete_todo_from_note)
+            self._today_note_window.task_checked.connect(self._set_todo_completion_from_note)
             self._today_note_window.checkout_requested.connect(self.checkout_today)
             self._today_note_window.rest_requested.connect(self.rest_today)
             self._today_note_window.memory_requested.connect(self.show_time_memory)
@@ -1836,6 +1835,20 @@ class PetWindow(QWidget):
             self._today_note_window.refresh()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
         self.show_speech("这项做完了，给你记上。", 4200)
+
+    def _set_todo_completion_from_note(self, task_id: str, completed: bool) -> None:
+        task = self.time_memory.todos.get(task_id)
+        if task is None:
+            return
+        if completed:
+            self.time_memory.complete_task(task_id)
+            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+            self.show_speech("这项做完了，给你记上。", 4200)
+        else:
+            self.time_memory.todos.complete(task_id, False)
+            self.time_memory.summary.refresh_tasks()
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
 
     def checkout_today(self) -> None:
         """Persist a real end-of-day record without requiring network access."""
@@ -3090,17 +3103,17 @@ class PetWindow(QWidget):
             pause_work = QAction("暂停/结束工作", self)
             pause_work.triggered.connect(self.show_work_controls)
             work_menu.addAction(pause_work)
-        paper_menu = work_menu.addMenu("今日小纸条")
-        show_paper = QAction("显示小纸条", self)
+        paper_menu = work_menu.addMenu("便利贴")
+        show_paper = QAction("显示便利贴", self)
         show_paper.triggered.connect(self.show_today_note)
         paper_menu.addAction(show_paper)
-        hide_paper = QAction("隐藏小纸条", self)
+        hide_paper = QAction("隐藏便利贴", self)
         hide_paper.triggered.connect(self.hide_today_note)
         paper_menu.addAction(hide_paper)
         add_paper = QAction("添加待办…", self)
         add_paper.triggered.connect(self.show_today_note)
         paper_menu.addAction(add_paper)
-        today_paper = QAction("查看今天", self)
+        today_paper = QAction("查看今天的待办", self)
         today_paper.triggered.connect(self.show_today_note)
         paper_menu.addAction(today_paper)
         memory_action = QAction("我的时光…", self)
@@ -3323,11 +3336,11 @@ class PetWindow(QWidget):
         focus_social = QAction("打开搭子自习室…", self)
         focus_social.triggered.connect(self.open_social_hub)
         focus_group.addAction(focus_social)
-        paper_menu = focus_group.addMenu("今日小纸条")
-        paper_show = QAction("显示小纸条", self)
+        paper_menu = focus_group.addMenu("便利贴")
+        paper_show = QAction("显示便利贴", self)
         paper_show.triggered.connect(self.show_today_note)
         paper_menu.addAction(paper_show)
-        paper_hide = QAction("隐藏小纸条", self)
+        paper_hide = QAction("隐藏便利贴", self)
         paper_hide.triggered.connect(self.hide_today_note)
         paper_menu.addAction(paper_hide)
         timeline_action = QAction("我的时光…", self)

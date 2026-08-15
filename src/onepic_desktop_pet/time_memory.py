@@ -11,13 +11,14 @@ from .daily_record_manager import DailyRecordManager
 from .daily_summary_service import DailySummaryService
 from .reminder_manager import ReminderManager
 from .structured_actions import LocalActionExecutor
+from .sticky_note_manager import StickyNoteManager
 from .timeline_manager import TimelineManager
 from .todo_manager import TodoManager
 from .work_session_manager import WorkSessionManager
 
 
 class TimeMemory:
-    """One small dependency container shared by the paper window and chat."""
+    """One small dependency container shared by the 便利贴 window and chat."""
 
     def __init__(self, base=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
         def path(name: str):
@@ -31,6 +32,7 @@ class TimeMemory:
         self.records = DailyRecordManager(path("daily_records.json"), now_provider=now_provider, persist=persist)
         self.sessions = WorkSessionManager(path("work_sessions.json"), now_provider=now_provider, persist=persist)
         self.reminders = ReminderManager(path("reminders.json"), now_provider=now_provider, persist=persist)
+        self.sticky_note = StickyNoteManager(path("sticky_note.json"), now_provider=now_provider, persist=persist)
         self.countdowns = CountdownManager(path("countdowns.json"), now_provider=now_provider, persist=persist)
         self.anniversaries = AnniversaryManager(path("anniversaries.json"), now_provider=now_provider, persist=persist)
         self.timeline = TimelineManager(path("timeline_events.json"), now_provider=now_provider, persist=persist)

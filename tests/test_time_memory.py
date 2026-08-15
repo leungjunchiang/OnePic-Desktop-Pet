@@ -8,6 +8,7 @@ from onepic_desktop_pet.daily_record_manager import AUTO_CHECKIN_SECONDS, DailyR
 from onepic_desktop_pet.daily_summary_service import DailySummaryService
 from onepic_desktop_pet.local_data import read_json, write_json_atomic
 from onepic_desktop_pet.reminder_manager import ReminderManager
+from onepic_desktop_pet.sticky_note_manager import StickyNoteManager
 from onepic_desktop_pet.structured_actions import LocalActionExecutor, extract_action
 from onepic_desktop_pet.timeline_manager import TimelineManager
 from onepic_desktop_pet.time_memory import TimeMemory
@@ -47,6 +48,14 @@ def test_create_todo_has_required_fields_and_persists(tmp_path) -> None:
     assert item.created_at and item.completed_at is None and item.work_seconds == 0
     reloaded = TodoManager(tmp_path / "todos.json", now_provider=clock)
     assert reloaded.get(item.id).title == "修改论文第三节"
+
+
+def test_sticky_note_is_separate_and_restart_safe(tmp_path) -> None:
+    note = StickyNoteManager(tmp_path / "sticky_note.json")
+    note.update("记得把材料发给老师")
+    reloaded = StickyNoteManager(tmp_path / "sticky_note.json")
+    assert reloaded.text == "记得把材料发给老师"
+    assert reloaded.path.name == "sticky_note.json"
 
 
 def test_complete_todo_sets_completed_at(tmp_path) -> None:

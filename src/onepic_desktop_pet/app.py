@@ -82,7 +82,7 @@ class DesktopPetApplication:
         social_action.triggered.connect(self.window.open_social_hub)
         menu.addAction(social_action)
 
-        paper_action = QAction("今日小纸条…", menu)
+        paper_action = QAction("便利贴…", menu)
         paper_action.triggered.connect(self.window.show_today_note)
         menu.addAction(paper_action)
 
