@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QInputDialog,
+    QPlainTextEdit,
     QPushButton,
     QTabWidget,
     QToolButton,
@@ -41,14 +42,16 @@ QPushButton, QToolButton { background:#d6ece8; color:#154b54; border:0; border-r
 QPushButton:hover, QToolButton:hover { background:#c4e3de; }
 QToolButton#moreButton { background:transparent; color:#607985; font-size:18px; padding:0 5px; }
 QLineEdit { background:white; border:1px solid #b7ccd5; border-radius:8px; padding:7px; }
+QPlainTextEdit { background:#fffdf4; border:1px solid #e3d9b9; border-radius:9px; padding:7px; color:#445866; }
 """
 
 
 class TodayNoteWindow(QDialog):
-    """A small note beside the pet, with detailed/compact/hidden modes."""
+    """The standalone 便利贴, or its task-only compact view."""
 
     start_requested = Signal(str)
     complete_requested = Signal(str)
+    task_checked = Signal(str, bool)
     select_requested = Signal(str)
     checkout_requested = Signal()
     rest_requested = Signal()
@@ -68,13 +71,18 @@ class TodayNoteWindow(QDialog):
         self.memory = memory
         self.settings = settings
         self.save_settings_callback = save_settings_callback
-        self.folded = False
         self.hide_completed = bool(getattr(settings, "today_note_hide_completed", False))
         configured_mode = str(getattr(settings, "today_note_mode", "detailed"))
         self.mode = configured_mode if configured_mode in {"detailed", "compact"} else "detailed"
         self.selected_task_id = str(memory.current_task_id or "")
+        self._refreshing_tasks = False
+        self._loading_note = False
+        self._note_save_timer = QTimer(self)
+        self._note_save_timer.setSingleShot(True)
+        self._note_save_timer.setInterval(350)
+        self._note_save_timer.timeout.connect(self._save_sticky_note)
 
-        self.setWindowTitle("今日小纸条 · 六毛")
+        self.setWindowTitle("便利贴 · 六毛")
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -91,7 +99,7 @@ class TodayNoteWindow(QDialog):
 
         header = QHBoxLayout()
         header.setSpacing(4)
-        self.title_label = QLabel("📋 六毛的小纸条")
+        self.title_label = QLabel()
         self.title_label.setStyleSheet("font-size:17px;font-weight:700;")
         header.addWidget(self.title_label)
         header.addStretch(1)
@@ -110,15 +118,12 @@ class TodayNoteWindow(QDialog):
         self.important_label.setStyleSheet("font-size:13px;font-weight:700;color:#0c807b;")
         root.addWidget(self.important_label)
 
-        self.folded_label = QLabel()
-        self.folded_label.setStyleSheet("font-size:12px;color:#527080;")
-        self.folded_label.hide()
-        root.addWidget(self.folded_label)
-
-        self.compact_label = QLabel()
-        self.compact_label.setWordWrap(True)
-        self.compact_label.setStyleSheet("background:#e3f2ef;border-radius:10px;padding:8px;color:#185761;font-size:13px;")
-        root.addWidget(self.compact_label)
+        self.note_editor = QPlainTextEdit()
+        self.note_editor.setPlaceholderText("写点什么，六毛先替你放在便利贴上……")
+        self.note_editor.setMaximumBlockCount(80)
+        self.note_editor.setFixedHeight(72)
+        self.note_editor.textChanged.connect(self._schedule_note_save)
+        root.addWidget(self.note_editor)
 
         self.task_list = QListWidget()
         self.task_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -126,6 +131,7 @@ class TodayNoteWindow(QDialog):
         self.task_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.task_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.task_list.itemClicked.connect(self._select_item)
+        self.task_list.itemChanged.connect(self._toggle_task_from_checkbox)
         self.task_list.customContextMenuRequested.connect(self._task_context_menu)
         root.addWidget(self.task_list)
 
@@ -169,9 +175,6 @@ class TodayNoteWindow(QDialog):
     def _build_more_menu(self) -> QMenu:
         menu = QMenu(self)
         menu.aboutToShow.connect(self._update_action_state)
-        self.fold_action = QAction("折叠便签", self)
-        self.fold_action.triggered.connect(self.toggle_fold)
-        menu.addAction(self.fold_action)
         self.edit_action = QAction("修改选中任务", self)
         self.edit_action.triggered.connect(self.edit_task)
         menu.addAction(self.edit_action)
@@ -187,6 +190,9 @@ class TodayNoteWindow(QDialog):
         settings_action = QAction("显示设置", self)
         settings_action.triggered.connect(self.configure_display)
         menu.addAction(settings_action)
+        clear_note = QAction("清空便利贴", self)
+        clear_note.triggered.connect(self._clear_sticky_note)
+        menu.addAction(clear_note)
         memory_action = QAction("我的时光", self)
         memory_action.triggered.connect(self.memory_requested.emit)
         menu.addAction(memory_action)
@@ -203,18 +209,15 @@ class TodayNoteWindow(QDialog):
         self.setFixedWidth(280 if self.mode == "compact" else 360)
 
     def _set_mode_visibility(self) -> None:
-        if self.folded:
-            for widget in (self.important_label, self.compact_label, self.task_list, self.action_widget, self.stats_label):
-                widget.hide()
-            self.folded_label.show()
-            return
-        self.folded_label.hide()
         compact = self.mode == "compact"
+        self.title_label.setText("今天要做" if compact else "便利贴")
         self.important_label.setVisible(not compact)
-        self.compact_label.setVisible(compact)
-        self.task_list.setVisible(not compact)
+        self.note_editor.setVisible(not compact)
+        self.task_list.show()
+        self.start_button.setVisible(not compact)
+        self.complete_button.setVisible(not compact)
         self.action_widget.show()
-        self.stats_label.show()
+        self.stats_label.setVisible(not compact)
 
     def set_mode(self, mode: str, *, persist: bool = True) -> None:
         mode = self._normalise_mode(mode)
@@ -238,7 +241,12 @@ class TodayNoteWindow(QDialog):
         tasks = self.memory.todos.today()
         selected_id = self.selected_task_id or str(self.memory.current_task_id or "")
         visible_tasks = [item for item in tasks if not self.hide_completed or not item.completed]
-        self.task_list.clear()
+        note_manager = getattr(self.memory, "sticky_note", None)
+        note_text = str(getattr(note_manager, "text", "") or "")
+        if self.note_editor.toPlainText() != note_text:
+            self._loading_note = True
+            self.note_editor.setPlainText(note_text)
+            self._loading_note = False
         important = self.memory.todos.important_for()
         if important is None:
             self.important_label.setText("★ 今日最重要：还没设置，点右下角 ＋ 添加")
@@ -250,23 +258,36 @@ class TodayNoteWindow(QDialog):
                 self.important_label.setStyleSheet("font-size:13px;color:#7b9098;text-decoration:line-through;")
             else:
                 self.important_label.setStyleSheet("font-size:13px;font-weight:700;color:#0c807b;")
+        self._refreshing_tasks = True
+        self.task_list.clear()
         for item in visible_tasks:
             selected = item.id == selected_id
-            prefix = "✓" if item.completed else ("●" if selected else "○")
-            parts = [f"{prefix} {item.title}"]
+            parts = [item.title]
             if item.time:
                 parts.append(item.time)
             if item.work_seconds:
                 parts.append(format_duration(item.work_seconds))
             list_item = QListWidgetItem(" · ".join(parts))
+            list_item.setFlags(
+                list_item.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsEnabled
+            )
+            list_item.setCheckState(
+                Qt.CheckState.Checked if item.completed else Qt.CheckState.Unchecked
+            )
             list_item.setData(Qt.ItemDataRole.UserRole, item.id)
             list_item.setToolTip(item.title)
+            if selected and not item.completed:
+                list_item.setBackground(Qt.GlobalColor.lightGray)
             if item.completed:
                 font = list_item.font()
                 font.setStrikeOut(True)
                 list_item.setFont(font)
                 list_item.setForeground(Qt.GlobalColor.gray)
             self.task_list.addItem(list_item)
+        self._refreshing_tasks = False
         if not visible_tasks:
             message = "今天还没有待办，点右下角 ＋ 添加" if not tasks else "已完成的任务已隐藏"
             empty = QListWidgetItem(message)
@@ -280,44 +301,29 @@ class TodayNoteWindow(QDialog):
                 if item.data(Qt.ItemDataRole.UserRole) == selected_id:
                     self.task_list.setCurrentItem(item)
                     break
-        active = self.memory.todos.get(selected_id) if selected_id else None
-        if active is None:
-            active = next((item for item in tasks if not item.completed), None)
-        if active is None:
-            self.compact_label.setText("今天还没有待办\n点右下角 ＋，给六毛写一件")
-        else:
-            state = "已完成" if active.completed else "当前任务"
-            work = f" · 已专注 {format_duration(active.work_seconds)}" if active.work_seconds else ""
-            self.compact_label.setText(f"{state}：{active.title}{work}")
         summary = self.memory.summary.today()
         self.stats_label.setText(f"今日专注 {summary['focus']} · 完成 {summary['completed_tasks']}/{summary['total_tasks']}")
-        pending_count = len([item for item in tasks if not item.completed])
-        self.folded_label.setText(f"📋 今天 {pending_count} 件待办 · 今日专注 {summary['focus']}")
         self.hide_completed_action.setChecked(self.hide_completed)
-        self.fold_action.setText("展开便签" if self.folded else "折叠便签")
         self._set_mode_visibility()
         self._update_action_state()
         self._resize_to_content(len(visible_tasks))
 
     def _resize_to_content(self, task_count: int) -> None:
         self._set_width_for_mode()
-        if self.folded:
-            self.setMinimumHeight(0)
-            self.setMaximumHeight(78)
-            self.resize(self.width(), 70)
-            return
         if self.mode == "compact":
             self.setMinimumHeight(0)
-            self.setMaximumHeight(220)
+            self.setMaximumHeight(360)
+            rows = max(1, min(8, task_count))
+            self.task_list.setFixedHeight(34 + rows * 32)
             self.adjustSize()
-            self.resize(self.width(), max(126, min(220, self.sizeHint().height())))
+            self.resize(self.width(), max(96, min(360, self.sizeHint().height())))
             return
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(300)
         self.setMaximumHeight(420)
         rows = max(1, min(5, task_count))
-        self.task_list.setFixedHeight(42 + rows * 34)
+        self.task_list.setFixedHeight(42 + rows * 32)
         self.adjustSize()
-        self.resize(self.width(), max(220, min(420, self.sizeHint().height())))
+        self.resize(self.width(), max(300, min(420, self.sizeHint().height())))
 
     def _select_item(self, item: QListWidgetItem) -> None:
         task_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
@@ -327,6 +333,33 @@ class TodayNoteWindow(QDialog):
         self.memory.select_task(task_id)
         self.select_requested.emit(task_id)
         self._update_action_state()
+
+    def _toggle_task_from_checkbox(self, item: QListWidgetItem) -> None:
+        """Persist checkbox changes; selecting a row never changes its state."""
+
+        if self._refreshing_tasks:
+            return
+        task_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not task_id:
+            return
+        completed = item.checkState() == Qt.CheckState.Checked
+        task = self.memory.todos.get(task_id)
+        if task is None or task.completed == completed:
+            return
+        self.task_checked.emit(task_id, completed)
+
+    def _schedule_note_save(self) -> None:
+        if not self._loading_note:
+            self._note_save_timer.start()
+
+    def _save_sticky_note(self) -> None:
+        manager = getattr(self.memory, "sticky_note", None)
+        if manager is not None:
+            manager.update(self.note_editor.toPlainText())
+
+    def _clear_sticky_note(self) -> None:
+        self.note_editor.clear()
+        self._save_sticky_note()
 
     def _selected_id(self) -> str:
         if self.mode == "compact":
@@ -440,25 +473,15 @@ class TodayNoteWindow(QDialog):
                 self.save_settings_callback(self.settings)
         self.refresh()
 
-    def toggle_fold(self) -> None:
-        self.folded = not self.folded
-        self.fold_action.setText("展开便签" if self.folded else "折叠便签")
-        if self.settings is not None:
-            self.settings.today_note_folded = self.folded
-            if self.save_settings_callback is not None:
-                self.save_settings_callback(self.settings)
-        self._set_mode_visibility()
-        self._resize_to_content(self.task_list.count())
-
     def configure_display(self) -> None:
         if self.settings is None:
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("今日小纸条显示设置")
+        dialog.setWindowTitle("便利贴显示设置")
         form = QFormLayout(dialog)
         style = QComboBox(dialog)
-        style.addItem("详细便签", "detailed")
-        style.addItem("紧凑小窗", "compact")
+        style.addItem("详细便利贴", "detailed")
+        style.addItem("紧凑待办小窗", "compact")
         style.addItem("完全隐藏", "hidden")
         current_style = str(getattr(self.settings, "today_note_mode", "detailed"))
         style.setCurrentIndex(max(0, style.findData(current_style)))
@@ -474,12 +497,9 @@ class TodayNoteWindow(QDialog):
         topmost.setChecked(bool(getattr(self.settings, "today_note_always_on_top", False)))
         autoshow = QCheckBox("启动时自动打开", dialog)
         autoshow.setChecked(bool(getattr(self.settings, "today_note_autoshow", False)))
-        folded = QCheckBox("打开时默认折叠", dialog)
-        folded.setChecked(bool(getattr(self.settings, "today_note_folded", False)))
         form.addRow("", topmost)
         form.addRow("", autoshow)
-        form.addRow("", folded)
-        hint = QLabel("紧凑小窗会贴在六毛下方；完全隐藏后仍可从右键菜单临时打开。", dialog)
+        hint = QLabel("紧凑模式只显示待办；最小化会正常进入 Windows 任务栏。完全隐藏后仍可从右键菜单临时打开。", dialog)
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#607985;")
         form.addRow(hint)
@@ -493,7 +513,6 @@ class TodayNoteWindow(QDialog):
         self.settings.today_note_display_mode = str(policy.currentData())
         self.settings.today_note_always_on_top = topmost.isChecked()
         self.settings.today_note_autoshow = autoshow.isChecked()
-        self.settings.today_note_folded = folded.isChecked()
         if self.save_settings_callback is not None:
             self.save_settings_callback(self.settings)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, topmost.isChecked())
@@ -506,8 +525,6 @@ class TodayNoteWindow(QDialog):
             place_note = getattr(owner, "_place_today_note_below_pet", None)
             if callable(place_note):
                 place_note()
-        if folded.isChecked() != self.folded:
-            self.toggle_fold()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         event.ignore()

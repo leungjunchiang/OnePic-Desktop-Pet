@@ -1,3 +1,10 @@
+# Lili v0.22.36
+
+- Separated the compact window from the 便利贴 presentation: compact mode now renders only today's checkable Todo rows and a small `＋` add entry. It no longer shows note text, focus totals, task counts, room status, or other dashboard statistics.
+- Renamed the former 今日小纸条 UI to 便利贴 and added a small, locally persisted free-form text area in the detailed view. The note is stored separately in `sticky_note.json` and is never rendered in compact mode.
+- Removed the custom folded mini-bar behavior. The window keeps the normal Windows minimize button and minimizes to the taskbar; compact mode is an explicit display choice, not a substitute for minimizing.
+- Added checkbox completion handling, restart-safe sticky-note storage, and offscreen UI regression coverage for task-only compact rendering and normal minimization flags.
+
 # Lili v0.22.35
 
 - Added three clear 今日小纸条 modes: detailed, compact, and fully hidden. The compact note is a small 280px pet-style panel that follows below 六毛; the detailed mode adapts to its content and caps the task list height.

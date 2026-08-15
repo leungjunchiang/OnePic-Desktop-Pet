@@ -1,4 +1,4 @@
-"""Local, durable tasks behind 今日小纸条."""
+"""Local, durable tasks behind the compact Todo view."""
 
 from __future__ import annotations
 
