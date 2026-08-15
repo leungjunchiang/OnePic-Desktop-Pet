@@ -91,9 +91,9 @@ class DesktopPetApplication:
         social_action.triggered.connect(self.window.open_social_hub)
         menu.addAction(social_action)
 
-        paper_action = QAction("便利贴…", menu)
-        paper_action.triggered.connect(self.window.show_sticky_note)
-        menu.addAction(paper_action)
+        todo_action = QAction("待办…", menu)
+        todo_action.triggered.connect(self.window.show_compact_todos)
+        menu.addAction(todo_action)
 
         update_action = QAction("检查补充内容更新", menu)
         update_action.triggered.connect(self.check_content_updates)
@@ -197,7 +197,12 @@ class DesktopPetApplication:
 
         if self._content_update_worker is not None and self._content_update_worker.isRunning():
             return
-        if self._content_updates_disabled():
+        # The setting controls silent startup checks only.  A user clicking
+        # the tray action is an explicit request and should still work.  The
+        # environment switch remains a hard disable for test/admin runs.
+        if os.environ.get("LILI_DISABLE_CONTENT_UPDATES", "").strip() == "1":
+            return
+        if (not bool(getattr(self.settings, "content_updates_enabled", True))) and not manual:
             return
         worker = ContentUpdateWorker(ContentUpdateManager(), self.qt_app)
         self._content_update_worker = worker
@@ -208,7 +213,7 @@ class DesktopPetApplication:
         worker.start()
 
     def _content_updates_disabled(self) -> bool:
-        return bool(getattr(self.settings, "disable_content_updates", False)) or os.environ.get(
+        return (not bool(getattr(self.settings, "content_updates_enabled", True))) or os.environ.get(
             "LILI_DISABLE_CONTENT_UPDATES", ""
         ).strip() == "1"
 

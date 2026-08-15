@@ -20,7 +20,7 @@ from .reminder_manager import ReminderManager
 
 
 ACTION_NAMES = {
-    "create_todo", "complete_todo", "delete_todo", "query_today", "create_countdown",
+    "create_todo", "update_todo", "complete_todo", "delete_todo", "query_today", "create_countdown",
     "update_countdown", "delete_countdown", "complete_countdown", "query_countdown", "create_anniversary",
     "update_anniversary", "delete_anniversary", "query_anniversary", "create_timeline_event", "delete_timeline_event",
     "query_timeline", "checkout_today", "rest_today", "move_pending_to_today",
@@ -32,14 +32,28 @@ class ActionResult:
     action: str
     reply_hint: str
     data: dict[str, Any]
+    ok: bool = True
 
 
 def extract_action(text: str) -> dict[str, Any] | None:
     """Extract one object from fenced or plain AI output; reject prose."""
 
     source = str(text or "").strip()
-    candidates = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", source, flags=re.IGNORECASE | re.DOTALL)
-    candidates.append(source)
+    candidates: list[str] = []
+    # Do not use a non-greedy ``{.*?}`` expression here: a tasks array is a
+    # nested JSON object and that expression stops at the first task's brace.
+    candidates.extend(
+        match.group(1).strip()
+        for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", source, flags=re.IGNORECASE)
+    )
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(source):
+        if char == "{":
+            try:
+                _, end = decoder.raw_decode(source[index:])
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            candidates.append(source[index : index + end])
     for candidate in candidates:
         try:
             value = json.loads(candidate)
@@ -65,18 +79,80 @@ class LocalActionExecutor:
         if action not in ACTION_NAMES:
             return None
         if action == "create_todo":
-            created = [self.todos.add(str(item.get("title") or ""), date=item.get("date"), time=item.get("time"), reminder=bool(item.get("reminder", False)), important=bool(item.get("important", False))) for item in value.get("tasks", []) if isinstance(item, dict) and str(item.get("title") or "").strip()]
-            if self.reminders is not None:
-                for task in created:
-                    if task.reminder and task.time:
-                        self.reminders.add(task.title, f"{task.date}T{task.time}:00", source_id=task.id)
-            return ActionResult(action, f"记上了，今天新增 {len(created)} 项。", {"tasks": [item.to_dict() for item in created]})
+            raw_tasks = value.get("tasks")
+            if not isinstance(raw_tasks, list):
+                raw_tasks = [value]
+            created = []
+            updated = []
+            for raw in raw_tasks:
+                if not isinstance(raw, dict) or not str(raw.get("title") or "").strip():
+                    continue
+                title = str(raw.get("title") or "").strip()
+                date = raw.get("date") or "today"
+                existing = self.todos.find_similar_pending(title, date)
+                changes = {
+                    key: raw[key]
+                    for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "source")
+                    if key in raw
+                }
+                if existing is not None and not bool(raw.get("force_new", False)):
+                    if "reminder" not in changes and ("time" in changes or "remind_at" in changes):
+                        changes["reminder"] = True
+                    task = self.todos.update(existing.id, **changes)
+                    updated.append(task)
+                else:
+                    task = self.todos.add(
+                        title,
+                        date=date,
+                        time=raw.get("time"),
+                        reminder=bool(raw.get("reminder", bool(raw.get("remind_at") or raw.get("time")))),
+                        important=bool(raw.get("important", False)),
+                        due_at=raw.get("due_at"),
+                        remind_at=raw.get("remind_at"),
+                        source=str(raw.get("source") or "chat"),
+                    )
+                    created.append(task)
+                self._sync_todo_reminder(task)
+            if not created and not updated:
+                return ActionResult(action, "没有明确的待办内容，我还没保存。", {"saved": False}, False)
+            parts = []
+            if created:
+                parts.append(f"新增 {len(created)} 项")
+            if updated:
+                parts.append(f"更新 {len(updated)} 项")
+            tasks = created + updated
+            return ActionResult(
+                action,
+                f"已经放进待办了：{'，'.join(parts)}。",
+                {"saved": True, "created": [item.to_dict() for item in created], "updated": [item.to_dict() for item in updated], "tasks": [item.to_dict() for item in tasks]},
+            )
+        if action == "update_todo":
+            item = self.todos.find(str(value.get("target") or value.get("title") or ""))
+            if item is None:
+                return ActionResult(action, "没找到对应的待办，我没有改动任何东西。", {"saved": False}, False)
+            changes = {
+                key: value[key]
+                for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "source")
+                if key in value
+            }
+            if not changes:
+                return ActionResult(action, "你想改哪一项？我还没有改动。", {"saved": False}, False)
+            if "reminder" not in changes and ("time" in changes or "remind_at" in changes):
+                changes["reminder"] = True
+            item = self.todos.update(item.id, **changes)
+            self._sync_todo_reminder(item)
+            return ActionResult(action, f"待办改好了：{item.title}。", {"saved": True, "task": item.to_dict()})
         if action in {"complete_todo", "delete_todo"}:
             item = self.todos.find(str(value.get("target") or value.get("title") or ""))
             if item is None:
-                return ActionResult(action, "我没找到对应的今日事项。", {})
+                return ActionResult(action, "我没找到对应的待办，没有改动。", {"saved": False}, False)
             ok = self.todos.complete(item.id) if action == "complete_todo" else self.todos.delete(item.id)
-            return ActionResult(action, "处理好了。" if ok else "这项没改动。", {"id": item.id})
+            if self.reminders is not None:
+                if action == "complete_todo":
+                    self.reminders.complete_for_source(item.id)
+                else:
+                    self.reminders.remove_for_source(item.id)
+            return ActionResult(action, "处理好了。" if ok else "这项没改动。", {"saved": bool(ok), "id": item.id}, bool(ok))
         if action == "query_today":
             return ActionResult(action, "", self.summary.today())
         if action == "checkout_today":
@@ -124,3 +200,16 @@ class LocalActionExecutor:
         if action == "query_timeline":
             return ActionResult(action, "", {"items": [item.__dict__ for item in self.timeline.query()]})
         return None
+
+    def _sync_todo_reminder(self, task: Any) -> None:
+        """Keep one real local reminder aligned with the Todo record."""
+
+        if self.reminders is None:
+            return
+        if not task.reminder:
+            self.reminders.remove_for_source(task.id)
+            return
+        due = task.remind_at or task.due_at
+        if due:
+            self.reminders.upsert_for_source(task.title, due, source_id=task.id)
+

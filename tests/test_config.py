@@ -107,6 +107,14 @@ def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
     assert load_settings(override_path=invalid).today_note_mode == "detailed"
 
 
+def test_content_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.content_updates_enabled is True
+    settings.content_updates_enabled = False
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).content_updates_enabled is False
+
+
 def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
     assert settings.auto_pause_on_idle is True
@@ -252,3 +260,4 @@ def test_window_mode_is_loaded_from_user_settings(tmp_path) -> None:
     override_path.write_text('{"always_on_top": false}', encoding="utf-8")
 
     assert load_settings(default_path, override_path).always_on_top is False
+

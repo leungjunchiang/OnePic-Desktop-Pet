@@ -106,6 +106,9 @@ class PetSettings:
     today_note_autoshow: bool = False
     today_note_folded: bool = False
     today_note_hide_completed: bool = False
+    # Content-only updates (knowledge/config/assets) are independent from
+    # installing a new program version and can be disabled by the user.
+    content_updates_enabled: bool = True
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -239,6 +242,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
     settings.today_note_folded = bool(settings.today_note_folded)
     settings.today_note_hide_completed = bool(settings.today_note_hide_completed)
+    settings.content_updates_enabled = bool(settings.content_updates_enabled)
     return settings
 
 
@@ -301,6 +305,7 @@ def load_settings(
                 "today_note_autoshow",
                 "today_note_folded",
                 "today_note_hide_completed",
+                "content_updates_enabled",
             }
         }
     )
@@ -361,6 +366,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "today_note_autoshow": settings.today_note_autoshow,
         "today_note_folded": settings.today_note_folded,
         "today_note_hide_completed": settings.today_note_hide_completed,
+        "content_updates_enabled": settings.content_updates_enabled,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
@@ -368,3 +374,4 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
     )
     temporary.replace(target)
     return target
+

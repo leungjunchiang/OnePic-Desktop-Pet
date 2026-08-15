@@ -1,4 +1,16 @@
-# Lili v0.22.44
+# Lili v0.22.45
+
+## Chat actions and one Todo store
+
+- Chat JSON actions now survive nested `tasks` objects, execute against the same local TodoStore as the desktop panel, and emit a refresh event immediately.
+- Added real Todo create/update/complete/delete/query handling, separate `due_at` and `remind_at` fields, source tracking, similar-task merging, and idempotent local reminder synchronization.
+- Removed user-facing duplicate “便利贴” entries; chat is named “和六毛聊聊”, and the desktop/tray entry is unified as “待办”.
+- Failed local actions now report failure instead of leaving an AI confirmation that was never saved.
+
+## User-controlled content updates
+
+- Added a persistent setting for automatic supplement-content checks (knowledge/configuration/assets only).
+- Turning it off disables silent startup checks while keeping the explicit tray action available.
 
 ## Content-only online updates
 

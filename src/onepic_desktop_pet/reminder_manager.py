@@ -55,6 +55,42 @@ class ReminderManager:
         self._save()
         return item
 
+    def upsert_for_source(self, title: str, due_at: str | datetime, *, source_id: str) -> Reminder:
+        """Create or update one reminder for a Todo without duplicate retries."""
+
+        due = parse_datetime(due_at, self._now).isoformat()
+        item = next(
+            (candidate for candidate in self._items if candidate.source_id == str(source_id) and not candidate.done),
+            None,
+        )
+        if item is None:
+            item = Reminder(uuid4().hex, str(title).strip()[:240], due, str(source_id))
+            self._items.append(item)
+        else:
+            item.title = str(title).strip()[:240]
+            item.due_at = due
+            item.notified = False
+        self._save()
+        return item
+
+    def remove_for_source(self, source_id: str) -> bool:
+        before = len(self._items)
+        self._items = [item for item in self._items if item.source_id != str(source_id)]
+        changed = len(self._items) != before
+        if changed:
+            self._save()
+        return changed
+
+    def complete_for_source(self, source_id: str) -> bool:
+        changed = False
+        for item in self._items:
+            if item.source_id == str(source_id) and not item.done:
+                item.done = True
+                changed = True
+        if changed:
+            self._save()
+        return changed
+
     def due(self, *, include_notified: bool = False) -> list[Reminder]:
         current = now_local(self._now)
         result = []

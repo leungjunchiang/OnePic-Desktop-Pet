@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
@@ -23,6 +24,7 @@ from onepic_desktop_pet.chat_manager import (
 )
 from onepic_desktop_pet.companion import CompanionModel
 from onepic_desktop_pet.config import PetSettings
+from onepic_desktop_pet.time_memory import TimeMemory
 
 
 class FakeCredentials:
@@ -259,6 +261,44 @@ def test_connected_agent_uses_ai_for_ambiguous_short_phrase() -> None:
     manager.shutdown()
 
 
+def test_online_chat_action_writes_todo_and_emits_refresh_signal(tmp_path) -> None:
+    """Chat confirmation is backed by a real Todo write, not only prose."""
+
+    app = _app()
+    settings = PetSettings(ai_provider="deepseek")
+    agents = AgentManager(settings, FakeCredentials())
+    agents.mark_runtime_success("deepseek")
+    service = FakeService(
+        answer=(
+            "行，我来记。\n"
+            "```json\n"
+            '{"action":"create_todo","tasks":[{"title":"修改论文","date":"2026-08-16","time":"09:30","reminder":true}]}\n'
+            "```"
+        )
+    )
+    memory = TimeMemory(Path(tmp_path), persist=False, now_provider=lambda: datetime(2026, 8, 15, 12, 0))
+    manager = ChatManager(
+        settings,
+        service,
+        agents,
+        _offline_manager(),
+        action_executor=memory.actions,
+    )
+    replies = QSignalSpy(manager.reply_ready)
+    actions = QSignalSpy(manager.action_executed)
+
+    assert manager.submit("明天9点半提醒我修改论文", []) is True
+    assert manager._thread is not None
+    assert manager._thread.wait(2000)
+    app.processEvents()
+
+    assert actions.count() == 1
+    assert memory.todos.find("修改论文") is not None
+    assert len(memory.reminders.items) == 1
+    assert "已经放进待办" in replies.at(0)[0].text
+    manager.shutdown()
+
+
 def test_offline_dialogue_uses_time_work_pet_state_and_complex_hint() -> None:
     """完全没有 AI 时仍能回答本地上下文，复杂问题才显示恢复操作。"""
 
@@ -324,3 +364,4 @@ def test_pressing_enter_ten_times_only_submits_messages() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
+
