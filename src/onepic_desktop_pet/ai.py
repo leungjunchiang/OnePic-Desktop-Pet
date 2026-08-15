@@ -36,6 +36,7 @@ from .chat_intent import ChatIntent, classify_intent, intent_prompt_context
 from .liumao_worldview import worldview_prompt_context
 from .knowledge_manager import retrieve_prompt_context
 from .resources import resource_path
+from .song_knowledge import song_prompt_context
 
 
 def _load_short_persona() -> str:
@@ -649,8 +650,12 @@ def _conversation_text(
     knowledge_context = retrieve_prompt_context(message, entries)
     if knowledge_context and knowledge_context not in worldview_context:
         lines.extend(("", knowledge_context))
+    if "本地歌曲作品卡" not in local_context:
+        song_context = song_prompt_context(message, entries)
+        if song_context:
+            lines.extend(("", song_context))
     if local_context:
-        lines.extend(("", "以下是本地程序读取的真实时间记录，只能据此回答今天的任务、专注和历史问题：", local_context))
+        lines.extend(("", "以下是本地程序读取的真实状态与作品索引，只能据此回答相关问题，不要猜测或改写：", local_context))
     if summary:
         lines.extend(("", "更早对话的长期摘要：", summary))
     lines.extend(("", "以下是最近三十轮以内的完整对话："))
@@ -812,10 +817,14 @@ def ask_compatible_api(
     knowledge_context = retrieve_prompt_context(message, entries)
     if knowledge_context and knowledge_context not in worldview_context:
         system_content += f"\n\n{knowledge_context}"
+    if "本地歌曲作品卡" not in local_context:
+        song_context = song_prompt_context(message, entries)
+        if song_context:
+            system_content += f"\n\n{song_context}"
     if summary:
         system_content += f"\n\n更早对话的长期摘要：\n{summary}"
     if local_context:
-        system_content += f"\n\n本地程序真实时间记录（不可猜测或改写）：\n{local_context}"
+        system_content += f"\n\n本地程序真实状态与作品索引（不可猜测或改写）：\n{local_context}"
     messages = [{"role": "system", "content": system_content}]
     for role, content in [(r, c) for r, c in entries if r in {"user", "assistant"}][-60:]:
         if role in {"user", "assistant"}:
@@ -971,3 +980,4 @@ class AIChatService:
             model or default_model,
             local_context,
         )
+

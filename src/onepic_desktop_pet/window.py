@@ -357,6 +357,7 @@ class PetWindow(QWidget):
             self.work_timer.status_text,
             lambda: self.work_timer.today_seconds() // 3600,
             local_context=self.time_memory.summary.context,
+            lyrics_path=lambda: self.settings.local_lyrics_path,
         )
         self.chat_manager = ChatManager(
             self.settings,
@@ -3588,3 +3589,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+

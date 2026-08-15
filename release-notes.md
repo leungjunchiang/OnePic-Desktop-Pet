@@ -1,3 +1,10 @@
+# Lili v0.22.38
+
+- Added a local-first Chen Chusheng song understanding layer with 117 public song cards containing titles, themes, emotions, imagery, and 六毛 usage hints.
+- The app can match a user-selected local lyric TXT in memory to recognize a song or a user-provided lyric fragment, without putting lyric lines into prompts, replies, build artifacts, or the GitHub Release.
+- Added copyright-safe song context to online AI prompts and offline fallback replies; ambiguous bare phrases remain ordinary conversation instead of being forced into a song match.
+- Added regression coverage for public-card safety, explicit song disambiguation, local fragment recognition, and non-continuation behavior.
+
 # Lili v0.22.37
 
 - Replaced the compact Todo QDialog with a frameless `CompactTodoPanel` that sits directly below 六毛 and follows pet movement across screens and DPI changes.
@@ -127,3 +134,4 @@
 - Windows 使用 UI Automation 定位歌曲行与该行播放按钮，再由 GSMTC 校验；macOS Apple Music 使用 Apple Events，其他客户端使用已授权 Accessibility Adapter。
 
 同时包含 v0.18.1 的 macOS Codex CLI 绝对路径检测、最近 30 轮聊天记忆、五类右键菜单和四标签搭子自习室改进。
+
