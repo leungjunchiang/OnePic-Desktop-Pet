@@ -13,12 +13,14 @@ from onepic_desktop_pet.social import (
 
 
 class FakeTransport:
-    def __init__(self, name: str, *, fail_dashboard: int = 0):
+    def __init__(self, name: str, *, fail_dashboard: int = 0, fail_health: int = 0, fail_sign_in: int = 0):
         self.name = name
         self.base_url = f"https://{name}.example.test"
         self.session = SocialSession("token", "refresh", "user-1", 9_999_999_999) if name == "direct" else None
         self.calls = []
         self.fail_dashboard = fail_dashboard
+        self.fail_health = fail_health
+        self.fail_sign_in = fail_sign_in
 
     @property
     def signed_in(self):
@@ -26,6 +28,9 @@ class FakeTransport:
 
     def health(self):
         self.calls.append("health")
+        if self.fail_health:
+            self.fail_health -= 1
+            raise SocialError("timeout", kind="timeout", retryable=True)
         return {"ok": True, "backend": self.name}
 
     def dashboard(self, room_id=None, allow_cache=True):
@@ -37,6 +42,9 @@ class FakeTransport:
 
     def sign_in(self, email, password):
         self.calls.append("sign_in")
+        if self.fail_sign_in:
+            self.fail_sign_in -= 1
+            raise SocialError("timeout", kind="timeout", retryable=True)
         self.session = SocialSession("proxy-token", "proxy-refresh", "user-1", 9_999_999_999)
 
     def __getattr__(self, name):
@@ -101,7 +109,7 @@ def test_health_check_is_one_lightweight_request_and_does_not_load_dashboard():
     assert proxy.calls == []
 
 
-def test_proxy_health_check_stays_on_one_proxy_request():
+def test_health_rechecks_direct_when_previous_route_was_proxy():
     direct = FakeTransport("direct")
     proxy = FakeTransport("proxy")
     manager = BackendRouteManager(direct, proxy, persist_state=False)
@@ -109,8 +117,53 @@ def test_proxy_health_check_stays_on_one_proxy_request():
     client = SocialClient(backend=manager, persist_tokens=False)
     result = client.diagnose_connection()
     assert result["connection_state"] == "ONLINE"
-    assert direct.calls == []
+    assert direct.calls == ["health"]
+    assert proxy.calls == []
+    assert manager.current_route == BackendRouteManager.DIRECT_SUPABASE
+
+
+def test_health_uses_proxy_only_after_two_direct_network_failures():
+    direct = FakeTransport("direct", fail_health=2)
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    manager.current_route = BackendRouteManager.CLOUDBASE_PROXY
+    client = SocialClient(backend=manager, persist_tokens=False)
+    result = client.diagnose_connection()
+    assert result["connection_state"] == "ONLINE"
+    assert direct.calls == ["health", "health"]
     assert proxy.calls == ["health"]
+    assert manager.current_route == BackendRouteManager.CLOUDBASE_PROXY
+
+
+def test_saved_proxy_route_is_only_a_hint_and_startup_stays_direct(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    state_path = tmp_path / "Lili" / "social-route.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({"route": BackendRouteManager.CLOUDBASE_PROXY}), encoding="utf-8")
+    manager = BackendRouteManager(FakeTransport("direct"), FakeTransport("proxy"), persist_state=True)
+    assert manager.current_route == BackendRouteManager.DIRECT_SUPABASE
+    assert manager.last_route_hint == BackendRouteManager.CLOUDBASE_PROXY
+
+
+def test_sign_in_rechecks_direct_before_using_stale_proxy_route():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    manager.current_route = BackendRouteManager.CLOUDBASE_PROXY
+    manager.request("sign_in", "a@example.com", "secret123")
+    assert direct.calls == ["health", "sign_in"]
+    assert proxy.calls == []
+    assert manager.current_route == BackendRouteManager.DIRECT_SUPABASE
+
+
+def test_sign_in_does_not_submit_credentials_twice_before_proxy_fallback():
+    direct = FakeTransport("direct", fail_sign_in=1)
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    manager.request("sign_in", "a@example.com", "secret123")
+    assert direct.calls == ["health", "sign_in"]
+    assert proxy.calls == ["sign_in"]
+    assert manager.current_route == BackendRouteManager.CLOUDBASE_PROXY
 
 
 def test_http_backend_uses_direct_supabase_paths():

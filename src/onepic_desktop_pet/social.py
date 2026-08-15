@@ -1050,13 +1050,16 @@ class BackendRouteManager:
     DIRECT_SUPABASE = "DIRECT_SUPABASE"
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
+    AUTH_METHODS = {"sign_in", "sign_up"}
     BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in"}
+    DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend, *, persist_state: bool = True) -> None:
         self.direct = direct
         self.proxy = proxy
         self.persist_state = persist_state
         self.current_route = self.DIRECT_SUPABASE
+        self.last_route_hint = self.DIRECT_SUPABASE
         self.last_latency_ms: float | None = None
         self.failure_count = 0
         self.success_count = 0
@@ -1076,8 +1079,12 @@ class BackendRouteManager:
             return
         try:
             data = json.loads(self._state_path().read_text(encoding="utf-8"))
+            # The saved route is telemetry only.  A VPN, DNS route, or network
+            # can change between launches, so never use yesterday's fallback as
+            # today's active route.  Every new process starts Direct-first and
+            # lets the first lightweight request select the actual route.
             if data.get("route") in {self.DIRECT_SUPABASE, self.CLOUDBASE_PROXY}:
-                self.current_route = str(data["route"])
+                self.last_route_hint = str(data["route"])
             self.last_latency_ms = float(data["last_latency_ms"]) if data.get("last_latency_ms") is not None else None
             self.failure_count = int(data.get("failure_count") or 0)
             self.success_count = int(data.get("success_count") or 0)
@@ -1142,7 +1149,7 @@ class BackendRouteManager:
         self._save_state()
 
     def _probe_direct_recovery(self) -> None:
-        if self.current_route != self.CLOUDBASE_PROXY or time.monotonic() - self._last_direct_probe < 600:
+        if self.current_route != self.CLOUDBASE_PROXY or time.monotonic() - self._last_direct_probe < self.DIRECT_RECOVERY_INTERVAL_SECONDS:
             return
         self._last_direct_probe = time.monotonic()
         try:
@@ -1155,18 +1162,18 @@ class BackendRouteManager:
                 self._direct_recovery_successes = 0
 
     def health(self) -> dict[str, Any]:
-        """One lightweight health request; no dashboard or presence reads."""
+        """Select the current route with a lightweight Supabase-first probe.
+
+        The normal path is exactly one request.  Only when Direct is actually
+        unreachable do we retry Direct once and then probe the CloudBase proxy.
+        This makes the visible route follow the current network instead of a
+        stale persisted fallback.
+        """
         started = time.monotonic()
-        if self.current_route == self.CLOUDBASE_PROXY:
-            # The visible health check must stay one request.  Recovery probes
-            # are deliberately scheduled separately by _probe_direct_recovery.
-            result = self.proxy.health()
-            self._switch(self.CLOUDBASE_PROXY)
-            self._mark_success(started)
-            return {**result, "route": self.current_route, "route_label": self.backend_name}
         try:
             result = self.direct.health()
             self._switch(self.DIRECT_SUPABASE)
+            self._direct_recovery_successes = 0
             self._mark_success(started)
             return {**result, "route": self.current_route, "route_label": self.backend_name}
         except SocialError as first:
@@ -1176,6 +1183,7 @@ class BackendRouteManager:
             try:
                 result = self.direct.health()
                 self._switch(self.DIRECT_SUPABASE)
+                self._direct_recovery_successes = 0
                 self._mark_success(started)
                 return {**result, "route": self.current_route, "route_label": self.backend_name}
             except SocialError as second:
@@ -1187,9 +1195,64 @@ class BackendRouteManager:
                 self._mark_success(started)
                 return {**result, "route": self.current_route, "route_label": self.backend_name}
 
+    def _select_auth_route(self) -> HttpSocialBackend:
+        """Choose a route before login without replaying credentials blindly."""
+        previous_route = self.current_route
+        # Do not persist this temporary choice until the probe succeeds.  This
+        # prevents a stale proxy state from surviving a changed VPN/network.
+        self.current_route = self.DIRECT_SUPABASE
+        for _ in range(2):
+            started = time.monotonic()
+            try:
+                self.direct.health()
+                self._switch(self.DIRECT_SUPABASE)
+                self._mark_success(started)
+                return self.direct
+            except SocialError as exc:
+                if not self._is_network_failure(exc):
+                    self.current_route = previous_route
+                    raise
+                self._mark_failure()
+        self._switch(self.CLOUDBASE_PROXY)
+        return self.proxy
+
+    def _request_auth(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        """Authenticate Direct-first, falling back only on network failure.
+
+        A failed login must not be submitted twice to Supabase.  We probe the
+        route first, then send credentials once on that route; a network error
+        may retry once on the proxy, while 401/403 and validation errors stop.
+        """
+        backend = self._select_auth_route()
+        self._sync_sessions(self.direct if backend is self.direct else self.proxy, backend)
+        started = time.monotonic()
+        try:
+            result = getattr(backend, method)(*args, **kwargs)
+            if backend is self.proxy:
+                self._sync_sessions(self.proxy, self.direct)
+                self.direct._save_session()
+            else:
+                self._sync_sessions(self.direct, self.proxy)
+            self._mark_success(started)
+            return result
+        except SocialError as first:
+            if not (backend is self.direct and self._is_network_failure(first)):
+                if self._is_network_failure(first):
+                    self._mark_failure()
+                raise
+            self._mark_failure()
+            self._switch(self.CLOUDBASE_PROXY)
+            result = getattr(self.proxy, method)(*args, **kwargs)
+            self._sync_sessions(self.proxy, self.direct)
+            self.direct._save_session()
+            self._mark_success(started)
+            return result
+
     def request(self, method: str, *args: Any, **kwargs: Any) -> Any:
         if method not in self.BUSINESS_METHODS:
             raise AttributeError(method)
+        if method in self.AUTH_METHODS:
+            return self._request_auth(method, *args, **kwargs)
         self._probe_direct_recovery()
         backend = self.active
         self._sync_sessions(self.direct if backend is self.direct else self.proxy, backend)
@@ -1284,6 +1347,9 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return bool(self._manager.request("sign_up", email, password, nickname))
 
     def sign_in(self, email: str, password: str) -> None:
+        # Treat sign-in as an account switch.  Do not let a failed attempt
+        # leave a previous user's token active in the desktop session.
+        self.sign_out()
         self._manager.request("sign_in", email, password)
 
     def sign_out(self) -> None:
