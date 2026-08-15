@@ -237,7 +237,10 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert len(panel.rows) == 3
     assert panel.rows_scroll.height() <= panel.MAX_COLLAPSED_ROWS * 35 + 2
     before = panel.pos()
-    window.move(260, 180)
+    # Keep the second position inside the offscreen test monitor.  The
+    # companion is clamped to the available geometry, so moving farther
+    # right/down can legitimately leave it at the same clamped position.
+    window.move(10, 20)
     app.processEvents()
     assert panel.pos() != before
     assert panel.y() >= window.y() + window.height()
