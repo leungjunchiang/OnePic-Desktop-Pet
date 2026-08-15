@@ -1,3 +1,11 @@
+# Lili v0.22.20
+
+- Startup and sign-in now probe Supabase Direct first instead of trusting a stale saved CloudBase route.
+- CloudBase fallback is selected only after two network-level Direct failures; authentication and business errors never trigger a route switch.
+- Login credentials are submitted once on Direct and, only after a network failure, once on the CloudBase proxy. Failed account switches no longer leave an old user session active.
+- Direct recovery checks run every minute while using the proxy, so changing VPN/network conditions is reflected promptly.
+- Updated route regression tests and release metadata to avoid garbled release titles and notes.
+
 # Lili v0.22.19
 
 - Supabase remains the only authentication, PostgreSQL/RLS, room, focus and interaction source of truth.
