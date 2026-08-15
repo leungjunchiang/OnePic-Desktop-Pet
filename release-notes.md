@@ -1,4 +1,12 @@
-# Lili v0.22.38
+# Lili v0.22.39
+
+## Compact Todo attachment and accessory layout
+
+- Fixed collapsed `CompactTodoPanel` so it always keeps the highest-priority Todo visible; an empty list shows only the small add affordance.
+- Replaced the competing collapse controls with one real expand/collapse button, and kept the `⋯` action as a mouse-enabled `QToolButton` whose menu remains clickable after refreshes.
+- Prioritized the current task, pinned tasks, nearest scheduled time, and creation time for the compact row.
+- Reflowed the speech bubble, compact Todo strip, and detailed 便利贴 from the pet as one anchor; the Todo strip stays below the pet and the detailed note moves to the available side with screen-edge fallback.
+- Added regression coverage for one-row collapse, three-row expansion, action-button hit testing, and pet-following placement.
 
 - Added a local-first Chen Chusheng song understanding layer with 117 public song cards containing titles, themes, emotions, imagery, and 六毛 usage hints.
 - The app can match a user-selected local lyric TXT in memory to recognize a song or a user-provided lyric fragment, without putting lyric lines into prompts, replies, build artifacts, or the GitHub Release.

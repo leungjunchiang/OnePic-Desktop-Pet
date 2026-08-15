@@ -117,8 +117,8 @@ jobs:
             gh release create "$release_tag" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "Lili $release_tag - Local song understanding" \
+              --title "Lili $release_tag - Compact Todo attachment" \
               --generate-notes \
-              --notes "Adds a local-first song understanding layer for 六毛. Public assets contain song cards and tags only; a user-selected local lyric catalog is matched in memory and lyric text is not bundled, uploaded, or continued."
+              --notes "Fixes Compact Todo collapse and action-menu hit testing, and keeps the speech bubble, pet Todo strip, and detailed 便利贴 aligned to the pet."
           fi
 

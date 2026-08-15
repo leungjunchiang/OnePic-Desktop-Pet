@@ -92,11 +92,18 @@ class TodoRow(QWidget):
         self.more_button.setText("⋯")
         self.more_button.setFixedWidth(23)
         self.more_button.setToolTip("任务操作")
-        self.more_button.clicked.connect(
-            lambda: self.more_requested.emit(self.task_id, self.more_button)
-        )
+        # This is intentionally a real button, not a decorative label.  The
+        # panel is a separate native window, so keeping mouse events enabled
+        # here prevents the pet's drag surface from swallowing the click.
+        self.more_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.more_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.more_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_button.clicked.connect(self._request_more)
         layout.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.installEventFilter(self)
+
+    def _request_more(self) -> None:
+        self.more_requested.emit(self.task_id, self.more_button)
 
     def set_task(self, task: Any) -> None:
         text = str(task.title)
@@ -120,9 +127,11 @@ class TodoRow(QWidget):
         )
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
+        # Do not install a catch-all click handler on the more button.  The
+        # QToolButton owns that hit area and must always receive its click.
         if (watched is self or watched is self.label) and event.type() == QEvent.Type.MouseButtonPress:
             self.selected.emit(self.task_id)
-        return super().eventFilter(watched, event)
+        return False
 
 
 class CompactTodoPanel(QWidget):
@@ -132,8 +141,8 @@ class CompactTodoPanel(QWidget):
     task_checked = Signal(str, bool)
     task_changed = Signal()
 
-    MAX_COLLAPSED_ROWS = 5
-    MAX_EXPANDED_ROWS = 8
+    MAX_COLLAPSED_ROWS = 1
+    MAX_EXPANDED_ROWS = 3
     COMPLETION_PREVIEW_SECONDS = 1.1
 
     def __init__(
@@ -195,14 +204,14 @@ class CompactTodoPanel(QWidget):
         footer.addWidget(self.add_button)
         self.expand_button = QToolButton(self)
         self.expand_button.setObjectName("expandButton")
-        self.expand_button.setToolTip("展开更多待办")
+        self.expand_button.setText("⌄")
+        self.expand_button.setToolTip("收起待办")
         self.expand_button.clicked.connect(self._toggle_expanded)
         footer.addWidget(self.expand_button)
-        self.collapse_button = QToolButton(self)
-        self.collapse_button.setText("⌄")
-        self.collapse_button.setToolTip("收起待办")
-        self.collapse_button.clicked.connect(lambda: self.set_collapsed(True))
-        footer.addWidget(self.collapse_button)
+        # Kept as an alias for older callers/tests.  There is only one real
+        # toggle now; the former second button caused the collapsed state to
+        # turn into an untargetable ellipsis.
+        self.collapse_button = self.expand_button
         root.addLayout(footer)
         self.refresh()
 
@@ -229,41 +238,45 @@ class CompactTodoPanel(QWidget):
 
     def set_collapsed(self, collapsed: bool) -> None:
         self.collapsed = bool(collapsed)
-        self.rows_scroll.setVisible(not self.collapsed)
-        self.add_button.setVisible(not self.collapsed)
-        self.expand_button.setVisible(
-            False
-            if self.collapsed
-            else len(self._visible_tasks()) > self.MAX_COLLAPSED_ROWS
-        )
-        self.collapse_button.setText("···" if self.collapsed else "⌄")
-        self.collapse_button.setToolTip("展开待办" if self.collapsed else "收起待办")
-        if self.collapsed:
-            self.setFixedHeight(28)
-        else:
-            self._resize_to_content()
+        self.expanded = not self.collapsed
+        self.refresh()
 
     def _toggle_expanded(self) -> None:
-        self.expanded = not self.expanded
-        self.expand_button.setText("∧" if self.expanded else "∨")
-        self.expand_button.setToolTip("收起更多待办" if self.expanded else "展开更多待办")
-        self._resize_to_content()
+        if len(self._visible_tasks()) <= 1:
+            return
+        self.set_collapsed(not self.collapsed)
 
     def _visible_tasks(self) -> list[Any]:
         now = monotonic()
         self._just_completed = {
             key: deadline for key, deadline in self._just_completed.items() if deadline > now
         }
-        return [
+        tasks = [
             item
             for item in self.memory.todos.today()
             if not item.completed or item.id in self._just_completed
         ]
+        return sorted(tasks, key=self._task_priority_key)
+
+    def _task_priority_key(self, task: Any) -> tuple[int, int, int, str]:
+        """Return the stable order used by both expanded and collapsed views."""
+
+        current = str(getattr(task, "id", "")) == str(self.memory.current_task_id or "")
+        important = bool(getattr(task, "important", False))
+        raw_time = str(getattr(task, "time", "") or "")
+        try:
+            hour, minute = (int(part) for part in raw_time.split(":", 1))
+            time_value = hour * 60 + minute
+        except (TypeError, ValueError):
+            time_value = 24 * 60 + 1
+        return (
+            -int(current),
+            -int(important),
+            time_value,
+            str(getattr(task, "created_at", "") or ""),
+        )
 
     def refresh(self) -> None:
-        if self.collapsed:
-            self._resize_to_content()
-            return
         for row in tuple(self._rows.values()):
             row.deleteLater()
         self._rows.clear()
@@ -272,7 +285,9 @@ class CompactTodoPanel(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         tasks = self._visible_tasks()
-        for task in tasks:
+        display_limit = self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS
+        display_tasks = tasks[:display_limit]
+        for task in display_tasks:
             row = TodoRow(task, self.rows_container)
             row.set_selected(task.id == self.selected_task_id)
             row.selected.connect(self._select_task)
@@ -281,20 +296,29 @@ class CompactTodoPanel(QWidget):
             self._rows[task.id] = row
             self.rows_layout.addWidget(row)
         self.rows_layout.addStretch(1)
-        self.expand_button.setVisible(len(tasks) > self.MAX_COLLAPSED_ROWS)
-        self.expand_button.setText("∧" if self.expanded else "∨")
+        has_multiple = len(tasks) > 1
+        self.expand_button.setVisible(has_multiple)
+        self.expand_button.setText("⌃" if self.collapsed else "⌄")
+        self.expand_button.setToolTip("展开更多待办" if self.collapsed else "收起待办")
+        self.rows_scroll.setVisible(bool(display_tasks))
+        self.add_button.setVisible(True)
         self._resize_to_content()
 
     def _resize_to_content(self) -> None:
-        if self.collapsed:
-            self.setFixedHeight(28)
-            return
         count = len(self._visible_tasks())
-        visible_rows = min(count, self.MAX_EXPANDED_ROWS if self.expanded else self.MAX_COLLAPSED_ROWS)
-        visible_rows = max(1, visible_rows)
-        self.rows_scroll.setFixedHeight(visible_rows * 35)
+        visible_rows = min(
+            count,
+            self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS,
+        )
+        if visible_rows:
+            self.rows_scroll.setFixedHeight(visible_rows * 35)
+        else:
+            self.rows_scroll.setFixedHeight(0)
+        # No fixed empty canvas: an empty panel is just the tiny add affordance.
         self.adjustSize()
-        self.setFixedHeight(min(40 + visible_rows * 35, 40 + self.MAX_EXPANDED_ROWS * 35))
+        footer_height = 27
+        content_height = visible_rows * 35 + footer_height + 8
+        self.setFixedHeight(max(38, content_height))
 
     def _select_task(self, task_id: str) -> None:
         task = self.memory.todos.get(task_id)
@@ -404,3 +428,4 @@ class CompactTodoPanel(QWidget):
         self.memory.todos.update(task_id, **changes)
         self.refresh()
         self.task_changed.emit()
+
