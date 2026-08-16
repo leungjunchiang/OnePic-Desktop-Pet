@@ -37,7 +37,7 @@ jobs:
           python tools/build_content_manifest.py \
             --root . \
             --version "${{ inputs.release_tag }}" \
-            --min-app-version "0.22.52" \
+            --min-app-version "0.22.53" \
             --ref "${{ inputs.release_tag }}" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json

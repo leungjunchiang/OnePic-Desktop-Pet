@@ -19,6 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QScrollArea
 
@@ -31,7 +32,7 @@ from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
-from onepic_desktop_pet.compact_todo import CompactTodoPanel
+from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -244,7 +245,7 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     panel = window._compact_todo_panel
     assert panel is not None
     assert len(panel.rows) == 3
-    assert panel.rows_scroll.height() <= panel.MAX_EXPANDED_ROWS * 34 + 2
+    assert panel.rows_scroll.height() >= sum(row.height() for row in panel.rows.values())
     panel.set_collapsed(True)
     app.processEvents()
     assert len(panel.rows) == 1
@@ -254,17 +255,19 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert len(panel.rows) == 3
     row = next(iter(panel.rows.values()))
     assert row.more_button.isEnabled()
-    assert row.more_button.parent() is panel.action_column
-    assert panel.action_column.width() == panel.action_column.WIDTH
+    assert row.more_button.parent() is row
     assert 32 <= row.more_button.width() <= 36
     assert 32 <= panel.add_button.width() <= 36
-    assert row.more_button.x() + row.more_button.width() <= panel.action_column.width()
-    assert panel.add_button.x() + panel.add_button.width() <= panel.action_column.width()
-    assert row.more_button.x() == panel.add_button.x()
+    assert row.more_button.x() + row.more_button.width() <= row.width()
+    assert panel.add_button.x() + panel.add_button.width() <= panel.add_button.parent().width()
+    more_center = row.more_button.mapTo(panel, row.more_button.rect().center()).x()
+    add_center = panel.add_button.mapTo(panel, panel.add_button.rect().center()).x()
+    assert abs(more_center - add_center) <= 1
     last_row = list(panel.rows.values())[-1]
-    assert panel.add_button.y() >= last_row.more_button.y() + last_row.more_button.height() + 6
-    assert panel.action_column.y() + panel.action_column.height() <= panel.height()
-    assert panel.add_button.y() + panel.add_button.height() <= panel.action_column.height()
+    last_bottom = last_row.mapTo(panel, QPoint(0, last_row.height())).y()
+    add_top = panel.add_button.mapTo(panel, QPoint(0, 0)).y()
+    assert add_top >= last_bottom + 8
+    assert add_top + panel.add_button.height() <= panel.height()
     assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     # Keep the click-path assertion non-modal.  The real menu is exercised by
     # the production slot; this test only verifies that the visible button
@@ -322,18 +325,40 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
 
     assert short_width < panel.width() <= panel.MAX_WIDTH
     assert panel.rows[task.id].label.toolTip() == "修改论文第三部分机制分析并整理稳健性回归结果 · 22:00"
-    assert panel.rows[task.id].label.text().endswith("…")
     row = panel.rows[task.id]
+    assert "\n" in row.label.text()
+    assert row.height() > panel.ROW_HEIGHT
     assert row.label.geometry().right() <= row.width()
-    assert row.more_button.parent() is panel.action_column
-    assert row.more_button.x() + row.more_button.width() <= panel.action_column.width()
-    assert panel.add_button.x() == row.more_button.x()
-    assert panel.add_button.y() + panel.add_button.height() <= panel.action_column.height()
-    assert panel.action_column.y() + panel.action_column.height() <= panel.height()
+    assert row.more_button.parent() is row
+    assert row.more_button.x() + row.more_button.width() <= row.width()
+    assert abs(
+        row.more_button.mapTo(panel, row.more_button.rect().center()).x()
+        - panel.add_button.mapTo(panel, panel.add_button.rect().center()).x()
+    ) <= 1
+    assert panel.add_button.y() + panel.add_button.height() <= panel.height()
     assert panel.x() != 0 or panel.y() != 0
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_todo_row_wraps_before_eliding_and_limits_to_two_lines() -> None:
+    app = QApplication.instance() or QApplication([])
+    metrics = QFontMetrics(app.font())
+
+    short = TodoRow._wrap_lines("论文", metrics, 180)
+    medium = TodoRow._wrap_lines("开始写论文 · 09:30", metrics, 220)
+    long = TodoRow._wrap_lines("codex重置之后重新处理自习室连接问题", metrics, 180)
+    very_long = TodoRow._wrap_lines(
+        "继续修改当前六毛桌面待办条和在线更新功能并完成真实测试" * 3,
+        metrics,
+        180,
+    )
+
+    assert len(short) == 1 and "…" not in short[0]
+    assert len(medium) == 1 and "…" not in medium[0]
+    assert len(long) == 2
+    assert len(very_long) == 2 and very_long[1].endswith("…")
 
 
 def test_hourly_unlocks_never_override_manual_outfit_selection(monkeypatch) -> None:
@@ -1189,3 +1214,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+
