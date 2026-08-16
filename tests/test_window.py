@@ -261,7 +261,9 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     add_top = panel.add_button.mapTo(panel, QPoint(0, 0)).y()
     more_bottom = panel.more_button.mapTo(panel, QPoint(0, panel.more_button.height())).y()
     assert add_top >= more_bottom + 8
-    assert add_top + panel.add_button.height() <= panel.height()
+    assert add_top + panel.add_button.height() <= panel.height() - panel.PANEL_VERTICAL_SAFETY
+    action_add_bottom = panel.add_button.y() + panel.add_button.height()
+    assert action_add_bottom <= panel.action_column.height() - panel.ACTION_VERTICAL_PADDING
     timed_row = next(row for row in panel.rows.values() if "20:00" in row.label.toolTip())
     assert "20:00" in timed_row.label.text()
     # The unified menu owns one real clickable button.  Select a row first;
@@ -326,7 +328,8 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
         panel.more_button.mapTo(panel, panel.more_button.rect().center()).x()
         - panel.add_button.mapTo(panel, panel.add_button.rect().center()).x()
     ) <= 1
-    assert panel.add_button.y() + panel.add_button.height() <= panel.height()
+    assert panel.add_button.y() + panel.add_button.height() <= panel.height() - panel.PANEL_VERTICAL_SAFETY
+    assert panel.add_button.y() + panel.add_button.height() <= panel.height() - panel.layout().contentsMargins().bottom()
     panel_rect = panel.geometry()
     # PetWindow is a transparent native host and is intentionally wider than
     # the visible sprite.  The accessory must not overlap the sprite's real
