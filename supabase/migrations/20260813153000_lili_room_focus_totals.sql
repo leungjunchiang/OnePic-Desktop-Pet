@@ -93,4 +93,3 @@ $$;
 
 revoke execute on function public.lili_room_dashboard(uuid) from public, anon;
 grant execute on function public.lili_room_dashboard(uuid) to authenticated;
-

@@ -68,4 +68,3 @@ def classify_idle(evidence: IdleEvidence) -> IdleClassification:
         return IdleClassification("focus", 0.78, "前台应用属于工作或阅读场景", app_key)
     return IdleClassification("rest", 0.58, "当前没有足够证据判断为专注", app_key)
 
-

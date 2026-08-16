@@ -282,4 +282,3 @@ def reload_runtime_content() -> None:
     knowledge_manager.get_knowledge_manager.cache_clear()
     song_knowledge._load_public_cards.cache_clear()
     story_trigger_engine._DEFAULT_ENGINE = None
-

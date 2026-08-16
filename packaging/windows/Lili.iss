@@ -38,4 +38,3 @@ Name: "{autodesktop}\Lili"; Filename: "{app}\Lili.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Lili.exe"; Description: "启动 Lili"; Flags: nowait postinstall skipifsilent
-

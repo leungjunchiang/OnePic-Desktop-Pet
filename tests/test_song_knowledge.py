@@ -63,4 +63,3 @@ def test_offline_song_reply_does_not_continue_lyrics(tmp_path) -> None:
     assert answer is not None
     assert "有没有人告诉你" in answer
     assert "这是一个只在本机使用的歌词片段测试" not in answer
-

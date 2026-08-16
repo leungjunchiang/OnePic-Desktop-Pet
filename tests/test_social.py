@@ -338,4 +338,3 @@ def test_room_shared_state_migrations_are_retained_as_supabase_history():
     migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")
     assert "lili_room_dashboard" in migration
     assert "lili_room_events" in migration
-

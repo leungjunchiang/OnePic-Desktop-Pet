@@ -126,4 +126,3 @@ class ReminderManager:
         item.done = True
         self._save()
         return True
-

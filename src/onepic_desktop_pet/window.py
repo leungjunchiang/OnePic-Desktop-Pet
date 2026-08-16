@@ -1910,7 +1910,8 @@ class PetWindow(QWidget):
         if self._today_note_window is None:
             self._today_note_window = TodayNoteWindow(
                 self.time_memory,
-                self,
+                None,
+                owner=self,
                 settings=self.settings,
                 save_settings_callback=save_settings,
             )
@@ -2212,7 +2213,7 @@ class PetWindow(QWidget):
 
     def show_time_memory(self) -> None:
         if self._time_memory_window is None:
-            self._time_memory_window = TimeMemoryWindow(self.time_memory, self)
+            self._time_memory_window = TimeMemoryWindow(self.time_memory)
         self._time_memory_window.refresh()
         if self._time_memory_window.isMinimized():
             self._time_memory_window.showNormal()
@@ -3828,4 +3829,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-

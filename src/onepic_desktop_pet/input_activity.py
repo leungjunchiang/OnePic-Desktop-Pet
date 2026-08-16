@@ -100,4 +100,3 @@ def system_idle_seconds() -> float:
                 return 0.0
 
     return 0.0
-

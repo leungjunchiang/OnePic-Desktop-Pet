@@ -33,7 +33,7 @@ from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
 from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
-from onepic_desktop_pet.today_note import TimeMemoryWindow
+from onepic_desktop_pet.today_note import TimeMemoryWindow, TodayNoteWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -212,14 +212,13 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
     app.processEvents()
     assert memory.todos.get(task.id).completed is True
     assert panel.rows[task.id].checkbox.isChecked() is True
-    panel.set_collapsed(True)
-    app.processEvents()
-    assert panel.collapsed is True
     assert panel.rows_scroll.isVisible() is True
     assert set(panel.rows) == {task.id}
     assert panel.rows[task.id].label.isVisible()
-    assert panel.expand_button.isVisible() is False
-    panel.set_collapsed(False)
+    assert not hasattr(panel, "expand_button")
+    assert not hasattr(panel.rows[task.id], "more_button")
+    assert panel.more_button.isVisible()
+    assert panel.add_button.isVisible()
     app.processEvents()
     assert panel.rows_scroll.isVisible() is True
     panel.close()
@@ -247,38 +246,28 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert panel is not None
     assert len(panel.rows) == 3
     assert panel.rows_scroll.height() >= sum(row.height() for row in panel.rows.values())
-    panel.set_collapsed(True)
-    app.processEvents()
-    assert len(panel.rows) == 1
-    assert panel.expand_button.isVisible()
-    panel.set_collapsed(False)
-    app.processEvents()
     assert len(panel.rows) == 3
     row = next(iter(panel.rows.values()))
-    assert row.more_button.isEnabled()
-    assert row.more_button.parent() is row
-    assert 32 <= row.more_button.width() <= 36
+    assert not hasattr(row, "more_button")
+    assert panel.more_button.isEnabled()
+    assert panel.more_button.parent() is panel.action_column
+    assert 32 <= panel.more_button.width() <= 36
     assert 32 <= panel.add_button.width() <= 36
-    assert row.more_button.x() + row.more_button.width() <= row.width()
-    assert panel.add_button.x() + panel.add_button.width() <= panel.add_button.parent().width()
-    more_center = row.more_button.mapTo(panel, row.more_button.rect().center()).x()
+    assert panel.more_button.x() + panel.more_button.width() <= panel.action_column.width()
+    assert panel.add_button.x() + panel.add_button.width() <= panel.action_column.width()
+    more_center = panel.more_button.mapTo(panel, panel.more_button.rect().center()).x()
     add_center = panel.add_button.mapTo(panel, panel.add_button.rect().center()).x()
     assert abs(more_center - add_center) <= 1
-    last_row = list(panel.rows.values())[-1]
-    last_bottom = last_row.mapTo(panel, QPoint(0, last_row.height())).y()
     add_top = panel.add_button.mapTo(panel, QPoint(0, 0)).y()
-    assert add_top >= last_bottom + 8
+    more_bottom = panel.more_button.mapTo(panel, QPoint(0, panel.more_button.height())).y()
+    assert add_top >= more_bottom + 8
     assert add_top + panel.add_button.height() <= panel.height()
-    assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     timed_row = next(row for row in panel.rows.values() if "20:00" in row.label.toolTip())
     assert "20:00" in timed_row.label.text()
-    # Keep the click-path assertion non-modal.  The real menu is exercised by
-    # the production slot; this test only verifies that the visible button
-    # receives the mouse click and emits its request signal.
-    row.more_requested.disconnect(panel._show_task_menu)
-    more_spy = QSignalSpy(row.more_requested)
-    row.more_button.click()
-    assert more_spy.count() == 1
+    # The unified menu owns one real clickable button.  Select a row first;
+    # production opens the QMenu from this exact button hit area.
+    row.selected.emit(row.task_id)
+    assert panel.selected_task_id == row.task_id
     before = panel.pos()
     # Keep the second position inside the offscreen test monitor.  The
     # companion is clamped to the available geometry, so moving farther
@@ -332,10 +321,9 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
     assert "\n" in row.label.text()
     assert row.height() > panel.ROW_HEIGHT
     assert row.label.geometry().right() <= row.width()
-    assert row.more_button.parent() is row
-    assert row.more_button.x() + row.more_button.width() <= row.width()
+    assert not hasattr(row, "more_button")
     assert abs(
-        row.more_button.mapTo(panel, row.more_button.rect().center()).x()
+        panel.more_button.mapTo(panel, panel.more_button.rect().center()).x()
         - panel.add_button.mapTo(panel, panel.add_button.rect().center()).x()
     ) <= 1
     assert panel.add_button.y() + panel.add_button.height() <= panel.height()
@@ -373,6 +361,40 @@ def test_time_memory_window_keeps_ids_for_edit_and_delete_menus(tmp_path) -> Non
     assert memory.timeline.query() == []
     dialog.close()
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_time_memory_and_detailed_todo_are_normal_taskbar_windows(tmp_path) -> None:
+    """可最小化窗口进入任务栏，不再成为桌宠的附属小框。"""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    time_memory = TimeMemoryWindow(memory)
+    detailed = TodayNoteWindow(memory)
+
+    for dialog in (time_memory, detailed):
+        flags = dialog.windowFlags()
+        assert (int(flags) & 0x0F) == int(Qt.WindowType.Window)
+        assert flags & Qt.WindowType.WindowMinimizeButtonHint
+        assert flags & Qt.WindowType.WindowSystemMenuHint
+        assert flags & Qt.WindowType.WindowCloseButtonHint
+        assert not flags & Qt.WindowType.FramelessWindowHint
+        assert not flags & Qt.WindowType.WindowStaysOnTopHint
+        assert dialog.parent() is None
+        assert not dialog.isModal()
+
+        dialog.show()
+        app.processEvents()
+        dialog.showMinimized()
+        app.processEvents()
+        assert dialog.isMinimized()
+        dialog.showNormal()
+        app.processEvents()
+
+    time_memory.close()
+    detailed.close()
+    time_memory.deleteLater()
+    detailed.deleteLater()
     app.processEvents()
 
 
@@ -1248,4 +1270,3 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
-

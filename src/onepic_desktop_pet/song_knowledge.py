@@ -409,4 +409,3 @@ def offline_song_reply(
     if match.match_type == "lyric_fragment":
         return f"你说的这句像是《{card.title}》里的片段。我不把歌词整段搬出来，但知道你在说哪首；这首大概是{card.themes[0]}和{card.emotions[0]}的气质。"
     return f"这是《{card.title}》，陈楚生唱的。六毛记得它的气质是{card.themes[0]}、{card.emotions[0]}；歌词原文我不直接展开。"
-

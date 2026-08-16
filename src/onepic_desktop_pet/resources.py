@@ -103,4 +103,3 @@ def resource_path(relative_path: str | Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"缺少应用资源：{path}")
     return path
-

@@ -92,4 +92,3 @@ def test_content_manifest_rejects_paths_outside_content_roots() -> None:
 
     with pytest.raises(ContentUpdateError, match="不允许在线覆盖"):
         ContentManifest.from_mapping(mapping)
-

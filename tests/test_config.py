@@ -270,4 +270,3 @@ def test_window_mode_is_loaded_from_user_settings(tmp_path) -> None:
     override_path.write_text('{"always_on_top": false}', encoding="utf-8")
 
     assert load_settings(default_path, override_path).always_on_top is False
-

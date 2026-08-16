@@ -282,4 +282,3 @@ class TodoManager:
         if moved:
             self._save()
         return moved
-

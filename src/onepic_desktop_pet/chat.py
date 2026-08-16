@@ -772,4 +772,3 @@ class AISettingsDialog(QDialog):
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()
         if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())
-

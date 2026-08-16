@@ -31,4 +31,3 @@ def test_saved_application_rule_overrides_detection():
     )
     assert result.decision == "rest"
     assert result.confidence == 0.99
-

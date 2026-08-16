@@ -58,7 +58,6 @@ QCheckBox::indicator:checked {
 QLabel#todoTitle { color: #183c4c; padding: 0 2px; }
 QToolButton { color: #557681; background: transparent; border: 0; padding: 1px 4px; }
 QToolButton:hover { color: #0c807b; background: rgba(185, 228, 220, 130); border-radius: 7px; }
-QToolButton#addButton, QToolButton#expandButton { font-size: 15px; }
 QToolButton#addButton {
     min-width: 32px; max-width: 32px;
     min-height: 32px; max-height: 32px;
@@ -100,23 +99,21 @@ QToolButton#moreButton:pressed {
 class TodoRow(QWidget):
     """A task row whose text and height are measured independently.
 
-    The more button belongs to this row, rather than to a shared action rail.
-    That distinction matters once one task wraps to two lines: every row can
-    then grow without moving or overlapping another task's action button.
+    The panel owns the single More button.  Keeping the row free of action
+    controls means wrapped rows can grow naturally without clipping a button
+    or leaving a fake action column at the end of every item.
     """
 
     MIN_HEIGHT = 36
     VERTICAL_PADDING = 12
     CHECKBOX_WIDTH = 22
-    BUTTON_SIZE = 32
     ROW_LEFT = 5
     ROW_RIGHT = 4
-    CONTENT_GAP = 4
+    CONTENT_GAP = 6
     MAX_LINES = 2
 
     selected = Signal(str)
     checked = Signal(str, bool)
-    more_requested = Signal(str, object)
 
     def __init__(self, task: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -154,23 +151,8 @@ class TodoRow(QWidget):
         self.label.installEventFilter(self)
         layout.addWidget(self.label, 1, Qt.AlignmentFlag.AlignTop)
 
-        self.more_button = QToolButton(self)
-        self.more_button.setObjectName("moreButton")
-        self.more_button.setText("⋯")
-        self.more_button.setFixedSize(self.BUTTON_SIZE, self.BUTTON_SIZE)
-        self.more_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.more_button.setToolTip("任务操作")
-        self.more_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.more_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.more_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.more_button.clicked.connect(self._request_more)
-        layout.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignTop)
-
         self.set_task(task)
         self.installEventFilter(self)
-
-    def _request_more(self) -> None:
-        self.more_requested.emit(self.task_id, self.more_button)
 
     def set_task(self, task: Any) -> None:
         text = str(getattr(task, "display_text", "") or task.title).replace("\n", " ")
@@ -232,7 +214,14 @@ class TodoRow(QWidget):
 
     def resizeEvent(self, event: object) -> None:
         super().resizeEvent(event)
-        available = max(24, self.width() - self.ROW_LEFT - self.ROW_RIGHT - self.CHECKBOX_WIDTH - self.BUTTON_SIZE - self.CONTENT_GAP * 2)
+        available = max(
+            24,
+            self.width()
+            - self.ROW_LEFT
+            - self.ROW_RIGHT
+            - self.CHECKBOX_WIDTH
+            - self.CONTENT_GAP,
+        )
         if available != self.label.width():
             self._content_width_hint = available
             self.label.setFixedWidth(available)
@@ -246,8 +235,6 @@ class TodoRow(QWidget):
         )
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
-        # Do not install a catch-all click handler on the more button.  The
-        # QToolButton owns that hit area and must always receive its click.
         if (watched is self or watched is self.label) and event.type() == QEvent.Type.MouseButtonPress:
             self.selected.emit(self.task_id)
         return False
@@ -260,18 +247,18 @@ class CompactTodoPanel(QWidget):
     task_checked = Signal(str, bool)
     task_changed = Signal()
 
-    MAX_COLLAPSED_ROWS = 1
-    MAX_EXPANDED_ROWS = 3
+    MAX_VISIBLE_ROWS = 5
     MIN_WIDTH = 156
     MAX_WIDTH = 320
-    CONTENT_MIN_WIDTH = 180
+    CONTENT_MIN_WIDTH = 64
     CONTENT_MAX_WIDTH = 220
-    # Row margins + checkbox + two gaps + the complete 32px menu button.
-    # Keep this as a single source of truth so the label can never consume
-    # the action button's hit area.
-    PANEL_HORIZONTAL_OVERHEAD = 81
+    ACTION_COLUMN_WIDTH = 40
+    ACTION_BUTTON_SIZE = 32
+    ACTION_GAP = 8
+    PANEL_GAP = 8
     TEXT_MEASURE_SAFETY = 14
     ROW_HEIGHT = TodoRow.MIN_HEIGHT
+    MAX_SCROLL_HEIGHT = 360
     COMPLETION_PREVIEW_SECONDS = 1.1
 
     def __init__(
@@ -288,11 +275,10 @@ class CompactTodoPanel(QWidget):
         self.memory = memory
         self.settings = settings
         self.save_settings_callback = save_settings_callback
-        self.collapsed = False
-        self.expanded = False
         self.selected_task_id = str(memory.current_task_id or "")
         self._just_completed: dict[str, float] = {}
         self._rows: dict[str, TodoRow] = {}
+        self._list_width = 100
         self.setObjectName("compactTodoPanel")
         self.setWindowTitle("")
         self.setWindowFlags(
@@ -306,17 +292,14 @@ class CompactTodoPanel(QWidget):
         self.setMinimumWidth(self.MIN_WIDTH)
         self.setMaximumWidth(self.MAX_WIDTH)
 
-        root = QVBoxLayout(self)
+        root = QHBoxLayout(self)
         root.setContentsMargins(5, 4, 5, 4)
-        root.setSpacing(2)
+        root.setSpacing(self.PANEL_GAP)
 
         self.rows_scroll = QScrollArea(self)
-        self.rows_scroll.setWidgetResizable(True)
+        self.rows_scroll.setWidgetResizable(False)
         self.rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # The compact strip deliberately renders at most three rows.  The
-        # panel grows to the measured row heights instead of reserving a
-        # scrollbar that could steal the last few pixels from the action area.
-        self.rows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.rows_scroll.setContentsMargins(0, 0, 0, 0)
         self.rows_scroll.viewport().setContentsMargins(0, 0, 0, 0)
@@ -327,27 +310,38 @@ class CompactTodoPanel(QWidget):
         self.rows_layout.setSpacing(6)
         self.rows_scroll.setWidget(self.rows_container)
 
-        # Each TodoRow owns its own more button.  The add button is a final
-        # list row, so a wrapped task can grow without shifting another row's
-        # action or clipping a shared action rail.
-        root.addWidget(self.rows_scroll)
+        root.addWidget(self.rows_scroll, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 0, 0, 0)
-        footer.addStretch(1)
-        self.expand_button = QToolButton(self)
-        self.expand_button.setObjectName("expandButton")
-        self.expand_button.setText("⌄")
-        self.expand_button.setToolTip("收起待办")
-        self.expand_button.setFixedSize(24, 26)
-        self.expand_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.expand_button.clicked.connect(self._toggle_expanded)
-        footer.addWidget(self.expand_button, 0, Qt.AlignmentFlag.AlignBottom)
-        # Kept as an alias for older callers/tests.  There is only one real
-        # toggle now; the former second button caused the collapsed state to
-        # turn into an untargetable ellipsis.
-        self.collapse_button = self.expand_button
-        root.addLayout(footer)
+        self.action_column = QWidget(self)
+        self.action_column.setObjectName("todoActionColumn")
+        self.action_column.setFixedWidth(self.ACTION_COLUMN_WIDTH)
+        action_layout = QVBoxLayout(self.action_column)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(self.ACTION_GAP)
+        action_layout.addStretch(1)
+
+        self.more_button = QToolButton(self.action_column)
+        self.more_button.setObjectName("moreButton")
+        self.more_button.setText("⋯")
+        self.more_button.setFixedSize(self.ACTION_BUTTON_SIZE, self.ACTION_BUTTON_SIZE)
+        self.more_button.setToolTip("待办管理")
+        self.more_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.more_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_button.clicked.connect(self._show_management_menu)
+        action_layout.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.add_button = QToolButton(self.action_column)
+        self.add_button.setObjectName("addButton")
+        self.add_button.setText("＋")
+        self.add_button.setFixedSize(self.ACTION_BUTTON_SIZE, self.ACTION_BUTTON_SIZE)
+        self.add_button.setToolTip("添加待办")
+        self.add_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_button.clicked.connect(self.add_task)
+        action_layout.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        action_layout.addStretch(1)
+        self.action_column.setFixedHeight(self.ACTION_BUTTON_SIZE * 2 + self.ACTION_GAP)
+        root.addWidget(self.action_column, 0, Qt.AlignmentFlag.AlignVCenter)
         self._event_refresh_timer = QTimer(self)
         self._event_refresh_timer.setInterval(60_000)
         self._event_refresh_timer.timeout.connect(self.refresh)
@@ -376,14 +370,10 @@ class CompactTodoPanel(QWidget):
             self.show()
 
     def set_collapsed(self, collapsed: bool) -> None:
-        self.collapsed = bool(collapsed)
-        self.expanded = not self.collapsed
-        self.refresh()
+        """Compatibility no-op; the compact list no longer hides tasks."""
 
-    def _toggle_expanded(self) -> None:
-        if len(self._visible_tasks()) <= 1:
-            return
-        self.set_collapsed(not self.collapsed)
+        del collapsed
+        self.refresh()
 
     def _visible_tasks(self) -> list[Any]:
         now = monotonic()
@@ -397,7 +387,7 @@ class CompactTodoPanel(QWidget):
         return sorted(tasks, key=self._task_priority_key)
 
     def _task_priority_key(self, task: Any) -> tuple[int, int, int, str]:
-        """Return the stable order used by both expanded and collapsed views."""
+        """Return stable priority order for the visible Todo list."""
 
         current = str(getattr(task, "id", "")) == str(self.memory.current_task_id or "")
         important = bool(getattr(task, "important", False))
@@ -423,10 +413,8 @@ class CompactTodoPanel(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         tasks = self._visible_tasks()
-        display_limit = self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS
-        display_tasks = tasks[:display_limit]
-        self._resize_width(display_tasks)
-        for task in display_tasks:
+        self._resize_width(tasks[: self.MAX_VISIBLE_ROWS])
+        for task in tasks:
             row = TodoRow(
                 task,
                 self.rows_container,
@@ -434,99 +422,53 @@ class CompactTodoPanel(QWidget):
             row.set_selected(task.id == self.selected_task_id)
             row.selected.connect(self._select_task)
             row.checked.connect(self._check_task)
-            row.more_requested.connect(self._show_task_menu)
             self._rows[task.id] = row
             self.rows_layout.addWidget(row)
-
-        add_row = QWidget(self.rows_container)
-        add_layout = QHBoxLayout(add_row)
-        add_layout.setContentsMargins(TodoRow.ROW_LEFT, 2, TodoRow.ROW_RIGHT, 2)
-        add_layout.setSpacing(0)
-        add_layout.addStretch(1)
-        self.add_button = QToolButton(add_row)
-        self.add_button.setObjectName("addButton")
-        self.add_button.setText("＋")
-        self.add_button.setFixedSize(TodoRow.BUTTON_SIZE, TodoRow.BUTTON_SIZE)
-        self.add_button.setToolTip("添加待办")
-        self.add_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.add_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_button.clicked.connect(self.add_task)
-        add_layout.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignTop)
-        add_row.setFixedHeight(TodoRow.BUTTON_SIZE + 4)
-        self._add_row = add_row
-        self.rows_layout.addWidget(add_row)
-        has_multiple = len(tasks) > 1
-        self.expand_button.setVisible(has_multiple)
-        self.expand_button.setText("⌃" if self.collapsed else "⌄")
-        self.expand_button.setToolTip("展开更多待办" if self.collapsed else "收起待办")
         self.rows_scroll.setVisible(True)
         self._resize_to_content()
 
     def _resize_to_content(self) -> None:
-        count = len(self._visible_tasks())
-        visible_rows = min(
-            count,
-            self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS,
-        )
+        """Measure rows first, then size the scroll host and native window."""
+
         self.ensurePolished()
         root_layout = self.layout()
         root_layout.invalidate()
         root_layout.activate()
 
-        # The panel width is already based on the longest visible title.  Use
-        # the actual viewport width for the label, keeping checkbox and more
-        # button fixed while the content area gets all remaining space.
-        container_width = max(1, self.width() - 10)
-        self.rows_scroll.setFixedWidth(container_width)
-        self.rows_scroll.ensurePolished()
+        list_width = max(1, self._list_width)
+        self.rows_scroll.setFixedWidth(list_width)
+        self.rows_container.setFixedWidth(list_width)
         content_width = max(
             24,
-            container_width
+            list_width
             - TodoRow.ROW_LEFT
             - TodoRow.ROW_RIGHT
             - TodoRow.CHECKBOX_WIDTH
-            - TodoRow.BUTTON_SIZE
-            - TodoRow.CONTENT_GAP * 2,
+            - TodoRow.CONTENT_GAP,
         )
-        self.rows_container.setFixedWidth(container_width)
         for row in self._rows.values():
             row.set_content_width(content_width)
-            row.setFixedWidth(self.rows_container.width())
+            row.setFixedWidth(list_width)
 
         self.rows_layout.invalidate()
         self.rows_layout.activate()
-        add_row = getattr(self, "_add_row", None)
-        if add_row is not None:
-            add_row.setFixedWidth(self.rows_container.width())
-        row_heights = [row.height() for row in self._rows.values()]
+        row_heights = [row.sizeHint().height() for row in self._rows.values()]
         row_gap = max(0, self.rows_layout.spacing())
-        list_height = sum(row_heights)
+        content_height = sum(row_heights)
         if row_heights:
-            list_height += (len(row_heights) - 1) * row_gap
-        if add_row is not None:
-            list_height += (row_gap if row_heights else 0) + add_row.height()
-        self.rows_container.adjustSize()
-        self.rows_scroll.setFixedHeight(max(36, list_height + 4))
-        # The expand control is useful only when there is something to
-        # expand.  Keeping its layout row alive for a single task used to
-        # leave a large empty tail below the accessory.
-        # ``isVisible()`` is false while the companion native window itself
-        # is hidden, even when the button has been explicitly enabled for the
-        # next show.  Use the widget visibility property so the first layout
-        # calculation also reserves the footer correctly.
-        footer_height = self.expand_button.sizeHint().height() if not self.expand_button.isHidden() else 0
-
-        # This is a native, frameless companion window.  Its own geometry is
-        # the clipping boundary, so calculate it from the real layout after
-        # every child has received its final size.  The previous code used
-        # ``body + footer + 8`` and omitted the root layout spacing and a
-        # safety pixel; that cut the lower half of the add button on Windows.
+            content_height += (len(row_heights) - 1) * row_gap
+        list_height = max(36, content_height)
+        self.rows_container.setFixedHeight(list_height)
+        self.rows_scroll.setFixedHeight(
+            min(self.MAX_SCROLL_HEIGHT, max(36, list_height + 4))
+        )
+        self.action_column.setFixedHeight(
+            self.ACTION_BUTTON_SIZE * 2 + self.ACTION_GAP
+        )
         root_layout.invalidate()
         root_layout.activate()
         layout_height = root_layout.sizeHint().height()
-        explicit_height = list_height + footer_height + 12 + (2 if footer_height else 0)
-        self.setFixedHeight(max(38, layout_height + 2, explicit_height))
+        self.setFixedHeight(max(layout_height + 2, self.action_column.height() + 8))
         root_layout.activate()
         self._log_geometry("resize")
 
@@ -547,17 +489,29 @@ class CompactTodoPanel(QWidget):
             (metrics.horizontalAdvance(self._task_text(task)) for task in tasks),
             default=0,
         )
-        # The previous estimate used the application font before the row was
-        # polished.  On Windows that could be a few pixels smaller than the
-        # actual label font, leaving the last characters under the menu
-        # button.  Reserve a small measured-font safety margin and keep a
-        # useful compact minimum so ordinary tasks never lose their time.
         content = min(
             self.CONTENT_MAX_WIDTH,
             max(self.CONTENT_MIN_WIDTH, longest + self.TEXT_MEASURE_SAFETY),
         )
-        desired = content + self.PANEL_HORIZONTAL_OVERHEAD
-        self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
+        list_desired = (
+            TodoRow.ROW_LEFT
+            + TodoRow.CHECKBOX_WIDTH
+            + TodoRow.CONTENT_GAP
+            + content
+            + TodoRow.ROW_RIGHT
+        )
+        panel_desired = 5 + list_desired + self.PANEL_GAP + self.ACTION_COLUMN_WIDTH + 5
+        panel_width = max(self.MIN_WIDTH, min(self.MAX_WIDTH, panel_desired))
+        self.setFixedWidth(panel_width)
+        # Reserve the complete action rail before assigning any width to text.
+        self._list_width = max(
+            64,
+            panel_width
+            - 5
+            - self.PANEL_GAP
+            - self.ACTION_COLUMN_WIDTH
+            - 5,
+        )
 
     def _log_geometry(self, reason: str) -> None:
         """Log the actual widget/window sizes when debug logging is enabled."""
@@ -568,20 +522,22 @@ class CompactTodoPanel(QWidget):
         first_row = next(iter(self._rows.values()), None)
         LOGGER.debug(
             "[TodoLayout] reason=%s panel=(x=%s,y=%s,w=%s,h=%s) "
-            "requested=(w=%s,h=%s) rows=(w=%s,h=%s) first_row=(x=%s,y=%s,w=%s,h=%s) "
+            "requested=(w=%s,h=%s) rows=(x=%s,y=%s,w=%s,h=%s) "
+            "first_row=(x=%s,y=%s,w=%s,h=%s) action=(x=%s,y=%s,w=%s,h=%s) "
             "more=(x=%s,y=%s,w=%s,h=%s) add=(x=%s,y=%s,w=%s,h=%s)",
             reason,
             self.x(), self.y(), self.width(), self.height(),
             root_layout.sizeHint().width(), root_layout.sizeHint().height(),
+            self.rows_scroll.x(), self.rows_scroll.y(),
             self.rows_scroll.width(), self.rows_scroll.height(),
             first_row.x() if first_row else -1,
             first_row.y() if first_row else -1,
             first_row.width() if first_row else -1,
             first_row.height() if first_row else -1,
-            first_row.more_button.x() if first_row else -1,
-            first_row.more_button.y() if first_row else -1,
-            first_row.more_button.width() if first_row else -1,
-            first_row.more_button.height() if first_row else -1,
+            self.action_column.x(), self.action_column.y(),
+            self.action_column.width(), self.action_column.height(),
+            self.more_button.x(), self.more_button.y(),
+            self.more_button.width(), self.more_button.height(),
             self.add_button.x(), self.add_button.y(),
             self.add_button.width(), self.add_button.height(),
         )
@@ -626,37 +582,45 @@ class CompactTodoPanel(QWidget):
         self.refresh()
         self.task_changed.emit()
 
-    def _show_task_menu(self, task_id: str, button: object) -> None:
-        task = self.memory.get_todo_view_item(task_id)
-        if task is None:
-            return
+    def _show_management_menu(self) -> None:
+        """Open the one panel-level menu for the selected Todo row."""
+
+        task = self.memory.get_todo_view_item(self.selected_task_id)
         menu = QMenu(self)
         edit = time_action = pin = None
-        if task.source_type == "todo":
-            edit = menu.addAction("编辑")
-            time_action = menu.addAction("修改时间")
-            pin = menu.addAction("取消置顶" if task.important else "置顶")
-        elif task.source_type == "anniversary":
-            menu.addAction("这个日子先不显示").setData("acknowledge")
-        complete = menu.addAction("取消完成" if task.completed else "完成")
+        complete = delete = None
+        if task is not None:
+            if task.source_type == "todo":
+                edit = menu.addAction("编辑选中待办")
+                time_action = menu.addAction("修改时间")
+                pin = menu.addAction("取消置顶" if task.important else "置顶")
+            elif task.source_type == "anniversary":
+                menu.addAction("这个日子先不显示").setData("acknowledge")
+            complete = menu.addAction("取消完成" if task.completed else "完成")
+            menu.addSeparator()
+            delete = menu.addAction("删除")
+        else:
+            menu.addAction("先点选一项待办").setEnabled(False)
         menu.addSeparator()
-        delete = menu.addAction("删除")
-        chosen = menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
-        if edit is not None and chosen is edit:
-            self._edit_task(task_id, include_time=True)
-        elif time_action is not None and chosen is time_action:
-            self._edit_task(task_id, include_time=True, time_only=True)
-        elif pin is not None and chosen is pin:
-            self.memory.todos.update(task_id, important=not task.important)
+        add = menu.addAction("添加待办")
+        chosen = menu.exec(
+            self.more_button.mapToGlobal(self.more_button.rect().bottomLeft())
+        )
+        if task is not None and edit is not None and chosen is edit:
+            self._edit_task(task.id, include_time=True)
+        elif task is not None and time_action is not None and chosen is time_action:
+            self._edit_task(task.id, include_time=True, time_only=True)
+        elif task is not None and pin is not None and chosen is pin:
+            self.memory.todos.update(task.source_id, important=not task.important)
             self.refresh()
             self.task_changed.emit()
-        elif chosen is complete:
-            self._check_task(task_id, not task.completed)
-        elif chosen is not None and chosen.data() == "acknowledge":
-            self.memory.complete_todo_view_item(task_id, True)
+        elif task is not None and chosen is complete:
+            self._check_task(task.id, not task.completed)
+        elif task is not None and chosen is not None and chosen.data() == "acknowledge":
+            self.memory.complete_todo_view_item(task.id, True)
             self.refresh()
             self.task_changed.emit()
-        elif chosen is delete:
+        elif task is not None and delete is not None and chosen is delete:
             answer = QMessageBox.question(
                 self,
                 "删除待办",
@@ -665,9 +629,12 @@ class CompactTodoPanel(QWidget):
                 QMessageBox.StandardButton.No,
             )
             if answer == QMessageBox.StandardButton.Yes:
-                self.memory.delete_todo_view_item(task_id)
+                self.memory.delete_todo_view_item(task.id)
+                self.selected_task_id = ""
                 self.refresh()
                 self.task_changed.emit()
+        elif chosen is add:
+            self.add_task()
 
     def _edit_task(self, task_id: str, *, include_time: bool, time_only: bool = False) -> None:
         task = self.memory.get_todo_view_item(task_id)
@@ -704,4 +671,3 @@ class CompactTodoPanel(QWidget):
         self.memory.todos.update(task.source_id, **changes)
         self.refresh()
         self.task_changed.emit()
-
