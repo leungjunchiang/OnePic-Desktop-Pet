@@ -1,3 +1,11 @@
+# Lili v0.22.56
+
+## Compact Todo unified action layout
+
+- 每个待办行只保留勾选框和文字；整个待办区统一使用一个 `⋯` 管理按钮和一个 `＋` 新增按钮。
+- 移除待办区的 `∨/↓` 控件，长文本按真实字体宽度最多换行两行，按钮区独立保留完整尺寸。
+- 宠物附属待办面板按真实布局测量宽高，避免文字、操作按钮被宠物层或宿主窗口裁切。
+
 # Lili v0.22.55
 
 ## 窗口最小化行为
@@ -284,3 +292,4 @@
 - Windows 使用 UI Automation 定位歌曲行与该行播放按钮，再由 GSMTC 校验；macOS Apple Music 使用 Apple Events，其他客户端使用已授权 Accessibility Adapter。
 
 同时包含 v0.18.1 的 macOS Codex CLI 绝对路径检测、最近 30 轮聊天记忆、五类右键菜单和四标签搭子自习室改进。
+
