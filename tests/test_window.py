@@ -417,6 +417,33 @@ def test_todo_row_wraps_before_eliding_and_limits_to_two_lines() -> None:
     assert len(very_long) == 2 and very_long[1].endswith("…")
 
 
+def test_todo_row_reserves_full_font_box_for_descenders(tmp_path) -> None:
+    """Todo text must not lose its lower glyph pixels at any supported DPI."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("开始写论文 · 09:30")
+    panel = CompactTodoPanel(memory, settings=PetSettings(today_note_mode="compact"))
+    panel.show()
+    app.processEvents()
+
+    row = panel.rows[task.id]
+    app.processEvents()
+    metrics = row.label.fontMetrics()
+    expected_label_height = (
+        max(metrics.height(), metrics.lineSpacing()) + TodoRow.GLYPH_SAFETY
+    ) * row._line_count
+
+    assert row.label.height() >= expected_label_height
+    margins = row.layout().contentsMargins()
+    assert row.height() >= row.label.height() + margins.top() + margins.bottom()
+    assert row.label.geometry().bottom() < row.height()
+
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
 def test_hourly_unlocks_never_override_manual_outfit_selection(monkeypatch) -> None:
     """小时成长线只解锁娃衣，不能把用户选好的外观强行换掉。"""
     app, window = _create_window()
@@ -1270,3 +1297,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+

@@ -55,7 +55,10 @@ QCheckBox::indicator:unchecked {
 QCheckBox::indicator:checked {
     border: 1px solid #2faaa0; border-radius: 8px; background: #55c7b1;
 }
-QLabel#todoTitle { color: #183c4c; padding: 0 2px; }
+/* Keep the measured text width equal to the drawable text width.  The
+   panel reserves the checkbox and action column explicitly, so an extra
+   stylesheet padding here would silently eat the final glyphs. */
+QLabel#todoTitle { color: #183c4c; padding: 0; }
 QToolButton { color: #557681; background: transparent; border: 0; padding: 1px 4px; }
 QToolButton:hover { color: #0c807b; background: rgba(185, 228, 220, 130); border-radius: 7px; }
 QToolButton#addButton {
@@ -111,6 +114,11 @@ class TodoRow(QWidget):
     ROW_RIGHT = 4
     CONTENT_GAP = 6
     MAX_LINES = 2
+    # QFontMetrics.lineSpacing() is a baseline-to-baseline distance.  It is
+    # not guaranteed to include the full painted glyph box on every platform
+    # and font/DPI combination, so reserve a couple of pixels around the
+    # actual font height instead of fixing the label to lineSpacing alone.
+    GLYPH_SAFETY = 2
 
     selected = Signal(str)
     checked = Signal(str, bool)
@@ -145,6 +153,8 @@ class TodoRow(QWidget):
         self.label.setObjectName("todoTitle")
         self.label.setWordWrap(False)
         self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.label.setContentsMargins(0, 0, 0, 0)
+        self.label.setMargin(0)
         self.label.setMinimumWidth(24)
         self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.label.setToolTip(str(task.title))
@@ -201,10 +211,17 @@ class TodoRow(QWidget):
         lines = self._wrap_lines(self._full_text, metrics, available)
         self._line_count = len(lines)
         self.label.setText("\n".join(lines))
-        line_height = max(1, metrics.lineSpacing())
+        # Use the larger of the font's painted box and baseline spacing, then
+        # add a small rasterisation/DPI allowance.  Without this, glyphs with
+        # descenders (for example “有”“还”“天”) can have their lower pixels
+        # clipped even though the row's nominal line spacing looks correct.
+        line_height = max(1, metrics.height(), metrics.lineSpacing()) + self.GLYPH_SAFETY
         self.label.setFixedHeight(line_height * self._line_count)
         self.setFixedHeight(
-            max(self.MIN_HEIGHT, line_height * self._line_count + self.VERTICAL_PADDING)
+            max(
+                self.MIN_HEIGHT,
+                line_height * self._line_count + self.VERTICAL_PADDING,
+            )
         )
 
     def set_content_width(self, width: int) -> None:
@@ -689,3 +706,4 @@ class CompactTodoPanel(QWidget):
         self.memory.todos.update(task.source_id, **changes)
         self.refresh()
         self.task_changed.emit()
+
