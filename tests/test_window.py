@@ -340,7 +340,12 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
     ) <= 1
     assert panel.add_button.y() + panel.add_button.height() <= panel.height()
     panel_rect = panel.geometry()
-    pet_rect = window.geometry()
+    # PetWindow is a transparent native host and is intentionally wider than
+    # the visible sprite.  The accessory must not overlap the sprite's real
+    # mask (with the same small anti-aliasing safety margin used by the
+    # production placement code), but it may occupy transparent host pixels.
+    visible_bounds = window.mask().boundingRect().translated(window.pos())
+    pet_rect = visible_bounds.adjusted(-6, -6, 6, 6)
     assert not panel_rect.intersects(pet_rect)
     assert panel.x() != 0 or panel.y() != 0
     window.close()
