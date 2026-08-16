@@ -55,7 +55,7 @@ QToolButton { color: #557681; background: transparent; border: 0; padding: 1px 4
 QToolButton:hover { color: #0c807b; background: rgba(185, 228, 220, 130); border-radius: 7px; }
 QToolButton#addButton, QToolButton#expandButton { font-size: 15px; }
 QToolButton#addButton {
-    min-width: 32px; max-width: 32px;
+    min-width: 30px; max-width: 30px;
     min-height: 26px; max-height: 26px;
     color: #557681;
     background: rgba(230, 244, 240, 180);
@@ -69,7 +69,7 @@ QToolButton#addButton:hover {
     border-color: rgba(36, 128, 128, 150);
 }
 QToolButton#moreButton {
-    min-width: 32px; max-width: 32px;
+    min-width: 30px; max-width: 30px;
     min-height: 30px; max-height: 30px;
     color: #315765;
     background: rgba(214, 238, 233, 210);
@@ -130,7 +130,7 @@ class TodoRow(QWidget):
         self.more_button = QToolButton(self)
         self.more_button.setObjectName("moreButton")
         self.more_button.setText("⋯")
-        self.more_button.setFixedSize(32, 30)
+        self.more_button.setFixedSize(30, 30)
         self.more_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.more_button.setToolTip("任务操作")
         # This is intentionally a real button, not a decorative label.  The
@@ -275,7 +275,7 @@ class CompactTodoPanel(QWidget):
         self.add_button = QToolButton(self)
         self.add_button.setObjectName("addButton")
         self.add_button.setText("＋")
-        self.add_button.setFixedSize(32, 26)
+        self.add_button.setFixedSize(30, 26)
         self.add_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.add_button.setToolTip("添加待办")
         self.add_button.clicked.connect(self.add_task)
@@ -416,7 +416,7 @@ class CompactTodoPanel(QWidget):
         )
         # checkbox + gaps/padding + the fixed 30px more button.  The add
         # button lives below the rows and therefore does not change row width.
-        fixed_controls = 22 + 4 + 4 + 32 + 5 + 4 + 10
+        fixed_controls = 22 + 4 + 4 + 30 + 5 + 4 + 10
         desired = longest + fixed_controls
         self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
 
