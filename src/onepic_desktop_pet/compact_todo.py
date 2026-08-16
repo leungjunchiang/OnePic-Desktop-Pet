@@ -257,12 +257,48 @@ class TodoActionColumn(QWidget):
             0,
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
         )
-        button_stack = len(buttons) * self.BUTTON_SIZE + max(0, len(buttons) - 1) * self.ROW_GAP
-        button_stack += self.ADD_GAP if buttons else 0
-        button_stack += self.BUTTON_SIZE
-        row_stack = max(0, visible_rows) * CompactTodoPanel.ROW_HEIGHT
-        self.setFixedHeight(max(row_stack, button_stack, self.BUTTON_SIZE))
         self.layout.activate()
+        self.setFixedHeight(
+            max(
+                max(0, visible_rows) * CompactTodoPanel.ROW_HEIGHT,
+                self.required_height(),
+                self.BUTTON_SIZE,
+            )
+        )
+        self.layout.activate()
+
+    def required_height(self) -> int:
+        """Return the action rail height from actual rendered button sizes.
+
+        Some Qt styles/DPI combinations render a nominal 32px tool button as
+        34px.  Using ``BUTTON_SIZE`` alone then places the add button outside
+        the native companion window.  The layout must reserve the size Qt
+        actually requested, not the size we hoped the style would use.
+        """
+
+        widgets = [
+            self.layout.itemAt(index).widget()
+            for index in range(self.layout.count())
+            if self.layout.itemAt(index).widget() is not None
+        ]
+        heights = [
+            max(widget.height(), widget.sizeHint().height(), self.BUTTON_SIZE)
+            for widget in widgets
+        ]
+        if not heights:
+            return self.BUTTON_SIZE
+        row_count = max(0, len(heights) - 1)
+        nominal = sum(heights)
+        nominal += max(0, row_count - 1) * max(0, self.layout.spacing())
+        nominal += self.ADD_GAP if row_count else 0
+        # Include the actual post-layout bottom as a second guard.  This
+        # catches style-specific spacing and rounding that sizeHint alone
+        # cannot predict.
+        rendered_bottom = max(
+            (widget.y() + widget.height() for widget in widgets),
+            default=0,
+        )
+        return max(nominal, rendered_bottom + 2, self.BUTTON_SIZE)
 
 
 class CompactTodoPanel(QWidget):
@@ -464,12 +500,7 @@ class CompactTodoPanel(QWidget):
             self.rows_scroll.setFixedHeight(visible_rows * self.ROW_HEIGHT)
         else:
             self.rows_scroll.setFixedHeight(0)
-        button_stack = (
-            visible_rows * TodoActionColumn.BUTTON_SIZE
-            + max(0, visible_rows - 1) * TodoActionColumn.ROW_GAP
-            + (TodoActionColumn.ADD_GAP if visible_rows else 0)
-            + TodoActionColumn.BUTTON_SIZE
-        )
+        button_stack = self.action_column.required_height()
         body_height = max(
             visible_rows * self.ROW_HEIGHT,
             button_stack,
