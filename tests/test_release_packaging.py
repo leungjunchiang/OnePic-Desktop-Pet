@@ -52,9 +52,10 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "macos-15-intel" in workflow
     assert 'release_tag="${GITHUB_REF_NAME#release/}"' in workflow
     assert 'gh release view "$release_tag"' in workflow
-    assert 'gh release upload "$release_tag"' in workflow
+    assert 'gh release delete "$release_tag"' in workflow
+    assert "--cleanup-tag" in workflow
+    assert 'gh release create "$release_tag"' in workflow
     assert '--target "$GITHUB_SHA"' in workflow
-    assert "--clobber" in workflow
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
     assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
@@ -62,8 +63,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.22.55"' in spec
-    assert '"CFBundleVersion": "0.22.55"' in spec
+    assert '"CFBundleShortVersionString": APP_VERSION' in spec
+    assert '"CFBundleVersion": APP_VERSION' in spec
+    assert 'collect_data_files("certifi")' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
@@ -72,6 +74,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert version_match.group(1) != "0.22.0"
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
+    assert "certifi" in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
     assert "ChineseSimplified.isl" not in installer

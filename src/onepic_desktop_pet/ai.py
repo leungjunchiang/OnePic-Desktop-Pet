@@ -18,12 +18,14 @@ ChatManager 在缓存已连接且用户发送消息时调用回复接口，在�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,6 +39,9 @@ from .liumao_worldview import worldview_prompt_context
 from .knowledge_manager import retrieve_prompt_context
 from .resources import resource_path
 from .song_knowledge import song_prompt_context
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _load_short_persona() -> str:
@@ -328,6 +333,18 @@ def _cli_environment(executable: Path | None = None) -> dict[str, str]:
     """构造 CLI 环境；把已发现入口目录放在最前，兼容 nvm/npm 包装脚本。"""
 
     environment = dict(os.environ)
+    if sys.platform == "darwin":
+        # Finder-launched .app processes can have a minimal environment.  The
+        # shell probes below still locate the executable, but the CLI itself
+        # also needs a stable HOME to find the user's login credentials.
+        environment["HOME"] = str(Path.home())
+        environment.setdefault("SHELL", "/bin/zsh")
+        # Keep CLI authentication on the user's normal Codex profile unless
+        # the user explicitly configured another CODEX_HOME.  Finder-launched
+        # apps frequently inherit neither HOME nor a useful shell profile.
+        environment.setdefault("CODEX_HOME", str(Path.home() / ".codex"))
+        environment.setdefault("LANG", "en_US.UTF-8")
+        environment.setdefault("LC_ALL", environment["LANG"])
     current = environment.get("PATH", "")
     additions: list[str] = []
     if executable is not None and executable.is_absolute():
@@ -466,6 +483,23 @@ def launch_codex_gui() -> bool:
     return True
 
 
+def codex_runtime_diagnostics(*, include_cli: bool = True) -> dict[str, str]:
+    """Return safe diagnostics for Finder-vs-Terminal Codex discovery."""
+
+    details = {
+        "platform": sys.platform,
+        "home": str(Path.home()),
+        "shell": os.environ.get("SHELL", ""),
+        "path": os.environ.get("PATH", ""),
+    }
+    if include_cli:
+        try:
+            details["cli"] = str(find_codex_executable() or "未找到")
+        except Exception as exc:  # pragma: no cover - defensive diagnostics
+            details["cli"] = f"检测失败：{type(exc).__name__}"
+    return details
+
+
 def _macos_codex_cli_path() -> Path | None:
     """Find Codex from the user's macOS shell, then keep the absolute path.
 
@@ -535,6 +569,10 @@ def _macos_codex_cli_path() -> Path | None:
         )
         candidate = _newest_file(fallback_paths)
     if candidate is None:
+        LOGGER.info(
+            "[AI Codex] Finder lookup did not find a CLI; diagnostics=%s",
+            codex_runtime_diagnostics(include_cli=False),
+        )
         return None
     if not candidate.is_absolute() or not candidate.is_file():
         return None
@@ -551,7 +589,14 @@ def _macos_codex_cli_path() -> Path | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return candidate if version.returncode == 0 else None
+    if version.returncode != 0:
+        LOGGER.warning(
+            "[AI Codex] candidate failed --version: path=%s stderr=%s",
+            candidate,
+            (version.stderr or "").strip()[:300],
+        )
+        return None
+    return candidate
 
 
 @lru_cache(maxsize=1)
@@ -633,6 +678,82 @@ def _cli_command(executable: Path, *arguments: str) -> list[str]:
     return [str(executable), *arguments]
 
 
+def _codex_model_override() -> str:
+    """Return Lili's per-process Codex model choice.
+
+    macOS gets the low-latency model used by Lili only.  This is passed as a
+    one-shot CLI config override and never changes the user's Codex profile.
+    An explicit environment override is useful for machines where that model
+    is not enabled yet; ``off`` keeps the CLI default.
+    """
+
+    configured = os.environ.get("LILI_CODEX_MODEL", "").strip()
+    if configured.casefold() in {"off", "none", "default"}:
+        return ""
+    if configured:
+        return configured[:120]
+    return "gpt-5.6-luna" if sys.platform == "darwin" else ""
+
+
+def _codex_timeout_seconds() -> int:
+    """Keep a stuck local CLI from blocking chat for the old 75 seconds."""
+
+    raw = os.environ.get("LILI_CODEX_TIMEOUT_SECONDS", "").strip()
+    try:
+        value = int(raw) if raw else 45
+    except ValueError:
+        value = 45
+    return max(15, min(90, value))
+
+
+def _codex_exec_command(executable: Path, prompt: str, *, model: str | None = None) -> list[str]:
+    """Build one isolated, non-interactive Codex command for Lili."""
+
+    selected_model = _codex_model_override() if model is None else model
+    arguments = [
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+    ]
+    if sys.platform == "darwin":
+        # Finder-launched Lili must not inherit arbitrary user MCP/plugin or
+        # transport settings.  Codex authentication remains in its normal
+        # auth store; this only skips config.toml for this child process.
+        arguments.append("--ignore-user-config")
+    arguments.extend((
+        "--ignore-rules",
+        "--config",
+        'model_reasoning_effort="low"',
+    ))
+    if selected_model:
+        arguments.extend(("--config", f'model="{selected_model.replace(chr(34), "")}"'))
+    arguments.extend((
+        "--sandbox",
+        "read-only",
+        "--json",
+        # ``codex exec`` accepts the task as the final positional argument.
+        prompt,
+    ))
+    return _cli_command(executable, *arguments)
+
+
+def _looks_like_model_rejection(stderr: str) -> bool:
+    """Recognize a missing model so one safe default retry can be attempted."""
+
+    text = stderr.casefold()
+    return any(
+        marker in text
+        for marker in (
+            "unknown model",
+            "model not found",
+            "model_not_found",
+            "unsupported model",
+            "invalid model",
+            "model is not available",
+        )
+    )
+
+
 def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
@@ -694,44 +815,72 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: s
         raise AIConnectionError("没有找到 Codex，已切回离线回答。")
     working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
     working_root.mkdir(parents=True, exist_ok=True)
-    command = _cli_command(
-        executable,
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--ignore-rules",
-        "--config",
-        'model_reasoning_effort="low"',
-        "--sandbox",
-        "read-only",
-        "--json",
-        "-",
-    )
+    prompt = _conversation_text(message, entries, local_context)
+    selected_model = _codex_model_override()
+    command = _codex_exec_command(executable, prompt, model=selected_model)
     startupinfo = None
     creationflags = 0
     if os.name == "nt":
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         creationflags = subprocess.CREATE_NO_WINDOW
-    try:
-        completed = subprocess.run(
-            command,
+    timeout = _codex_timeout_seconds()
+    started_at = time.monotonic()
+
+    def run_command(command_to_run: list[str]):
+        return subprocess.run(
+            command_to_run,
             cwd=working_root,
-            input=_conversation_text(message, entries, local_context),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=75,
+            timeout=timeout,
             env=_cli_environment(executable),
             startupinfo=startupinfo,
             creationflags=creationflags,
             check=False,
         )
+
+    try:
+        completed = run_command(command)
     except (OSError, subprocess.TimeoutExpired) as exc:
+        LOGGER.warning(
+            "[AI Codex] exec did not return: elapsed=%.1fs timeout=%ss error=%s",
+            time.monotonic() - started_at,
+            timeout,
+            exc,
+        )
         raise AIConnectionError("Codex 暂时没有回应，已切回离线回答。") from exc
+
+    stderr = " ".join((completed.stderr or "").split())
+    # Some accounts do not have Luna enabled yet.  A single immediate retry
+    # with the normal CLI-selected model keeps chat usable without adding a
+    # second request for ordinary failures.
+    if completed.returncode != 0 and selected_model and _looks_like_model_rejection(stderr):
+        LOGGER.info("[AI Codex] model override rejected; retrying with CLI default")
+        try:
+            completed = run_command(_codex_exec_command(executable, prompt, model=""))
+            stderr = " ".join((completed.stderr or "").split())
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            LOGGER.warning(
+                "[AI Codex] fallback exec did not return: elapsed=%.1fs error=%s",
+                time.monotonic() - started_at,
+                exc,
+            )
+            raise AIConnectionError("Codex 暂时没有回应，已切回离线回答。") from exc
+
     answer = _parse_codex_jsonl(completed.stdout)
     if completed.returncode != 0 or not answer:
+        LOGGER.warning(
+            "[AI Codex] exec failed: returncode=%s elapsed=%.1fs stderr=%s stdout_bytes=%s",
+            completed.returncode,
+            time.monotonic() - started_at,
+            stderr[:800],
+            len(completed.stdout or ""),
+        )
+        if completed.returncode == 0:
+            raise AIConnectionError("Codex 返回了无法识别的内容，已切回离线回答。")
         raise AIConnectionError("Codex 尚未登录或连接失败，已切回离线回答。")
     return postprocess_ai_answer(answer, classify_intent(message, entries))
 

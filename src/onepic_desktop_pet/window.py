@@ -385,6 +385,7 @@ class PetWindow(QWidget):
             self,
             local_context_provider=self.time_memory.summary.context,
             action_executor=self.time_memory.actions,
+            todo_now_provider=self.time_memory.now,
         )
         self.music_provider_manager = MusicProviderManager(self.settings)
         self.music_controller = MusicController(

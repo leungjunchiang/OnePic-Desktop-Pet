@@ -42,6 +42,12 @@ class TimeMemory:
         self.current_task_id: str | None = None
         self._now = now_provider
 
+    def now(self) -> datetime:
+        """Return the same clock used by every local time-memory store."""
+
+        value = self._now() if self._now is not None else datetime.now().astimezone()
+        return value
+
     def select_task(self, task_id: str | None) -> None:
         self.current_task_id = str(task_id) if task_id else None
 

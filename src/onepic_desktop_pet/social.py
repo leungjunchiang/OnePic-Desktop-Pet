@@ -11,6 +11,7 @@ import logging
 import os
 import socket
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .resources import resource_path
+from .tls_support import tls_diagnostics, verified_ssl_context
 
 
 LOGGER = logging.getLogger(__name__)
@@ -109,6 +111,13 @@ def _network_error(exc: BaseException, base_url: str) -> SocialError:
     if isinstance(reason, ConnectionRefusedError) or "refused" in str(reason).lower():
         return SocialError(f"服务器拒绝连接：请检查自习室中转服务（{host}）是否在线。", kind="refused", endpoint=host, retryable=True)
     if isinstance(reason, ssl.SSLError) or "ssl" in str(reason).lower() or "certificate" in str(reason).lower():
+        LOGGER.warning(
+            "[StudyRoom TLS] endpoint=%s exception=%s diagnostics=%s",
+            host,
+            str(reason),
+            tls_diagnostics(),
+            exc_info=True,
+        )
         return SocialError(f"TLS/证书连接失败：无法安全连接自习室服务器（{host}）。", kind="tls", endpoint=host)
     return SocialError(f"网络不可达：无法连接自习室服务器（{host}）。", kind="network", endpoint=host, retryable=True)
 
@@ -123,6 +132,20 @@ def _social_request_timeout() -> float:
         )
     except ValueError:
         return 4.0
+
+
+def _verified_urlopen(request: urllib.request.Request, *, timeout: float):
+    """Open a social request with an explicit verified context on macOS.
+
+    Windows and Linux keep their normal urllib system behavior.  macOS uses
+    an explicit verified system CA bundle, with the application-bundled
+    certifi file as fallback, so Finder-launched frozen builds do not depend
+    on a terminal-only Python installation.
+    """
+
+    if sys.platform == "darwin":
+        return urllib.request.urlopen(request, timeout=timeout, context=verified_ssl_context())
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
 @dataclass
@@ -234,7 +257,7 @@ class HttpSocialBackend:
             headers.update({str(key): str(value) for key, value in extra_headers.items()})
         request = urllib.request.Request(f"{self.base_url}{path}", data=payload, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=_social_request_timeout()) as response:
+            with _verified_urlopen(request, timeout=_social_request_timeout()) as response:
                 server_time = response.headers.get("X-Lili-Server-Time") or response.headers.get("Date")
                 if server_time:
                     try:
@@ -786,7 +809,7 @@ class LegacyDirectSocialClient:
             headers.update(extra_headers)
         request = urllib.request.Request(f"{self.url}{path}", data=payload, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=_social_request_timeout()) as response:
+            with _verified_urlopen(request, timeout=_social_request_timeout()) as response:
                 raw = response.read()
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:

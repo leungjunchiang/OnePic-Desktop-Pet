@@ -38,6 +38,7 @@ from .config import PetSettings
 from .liumao_worldview import story_response, worldview_response
 from .song_knowledge import offline_song_reply, song_prompt_context
 from .structured_actions import ActionResult, LocalActionExecutor, extract_action
+from .todo_nlp import parse_explicit_todo_request
 
 
 LOGGER = logging.getLogger(__name__)
@@ -469,6 +470,7 @@ class ChatManager(QObject):
         *,
         local_context_provider: Callable[[], str] | None = None,
         action_executor: LocalActionExecutor | None = None,
+        todo_now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
@@ -477,6 +479,7 @@ class ChatManager(QObject):
         self.offline = offline
         self.local_context_provider = local_context_provider or (lambda: "")
         self.action_executor = action_executor
+        self.todo_now_provider = todo_now_provider
         self._thread: AIReplyThread | None = None
         self._pending_message = ""
         self._pending_history: list[tuple[str, str]] = []
@@ -499,6 +502,31 @@ class ChatManager(QObject):
         if self.busy:
             self.notice.emit("上一句话还在路上，稍等我一下。")
             return False
+        # Explicit date/time plans should not wait for a model.  This is both
+        # faster and more reliable: the same local action executor used by an
+        # AI JSON action writes the task and reminder before we acknowledge it.
+        # Ambiguous language returns None and continues through the normal AI
+        # conversation path.
+        if self.action_executor is not None:
+            try:
+                fast_action = parse_explicit_todo_request(
+                    message,
+                    now=self.todo_now_provider,
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                LOGGER.debug("待办快速解析跳过：%s", exc)
+                fast_action = None
+            if fast_action is not None:
+                result = self._execute_local_action(fast_action)
+                if result is not None:
+                    self.reply_ready.emit(
+                        ManagedChatReply(
+                            result.reply_hint,
+                            PetState.CURIOUS,
+                            "local-action",
+                        )
+                    )
+                    return True
         # Do not intercept online chat with keyword, worldview, story, or
         # short-social shortcuts.  The model receives the recent conversation,
         # current work state, and only the small knowledge snippets selected by
@@ -549,25 +577,8 @@ class ChatManager(QObject):
         self.agents.mark_runtime_success(self._pending_provider)
         action = extract_action(answer)
         if action is not None and self.action_executor is not None:
-            try:
-                result = self.action_executor.execute(action)
-            except (KeyError, TypeError, ValueError, OSError) as exc:
-                LOGGER.warning("本地待办动作执行失败：%s", exc)
-                result = ActionResult(
-                    str(action.get("action") or "unknown"),
-                    "本地待办没有保存成功，我没有假装记住；请再试一次。",
-                    {"saved": False, "error": str(exc)},
-                    False,
-                )
-            if result is None:
-                result = ActionResult(
-                    str(action.get("action") or "unknown"),
-                    "这个本地动作没有执行成功，我没有假装记住；请再试一次。",
-                    {"saved": False},
-                    False,
-                )
+            result = self._execute_local_action(action)
             if result is not None:
-                self.action_executed.emit(result)
                 # Structured-only responses are replaced with a safe local
                 # confirmation; a normal conversational answer remains intact.
                 if not result.ok:
@@ -578,6 +589,31 @@ class ChatManager(QObject):
                     answer = f"{answer.rstrip()}\n{result.reply_hint}"
         state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
         self.reply_ready.emit(ManagedChatReply(answer, state, "ai"))
+
+    def _execute_local_action(self, action: dict[str, object]) -> ActionResult | None:
+        """Run one local action and emit the refresh signal exactly once."""
+
+        if self.action_executor is None:
+            return None
+        try:
+            result = self.action_executor.execute(action)
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            LOGGER.warning("本地待办动作执行失败：%s", exc)
+            result = ActionResult(
+                str(action.get("action") or "unknown"),
+                "本地待办没有保存成功，我没有假装记住；请再试一次。",
+                {"saved": False, "error": str(exc)},
+                False,
+            )
+        if result is None:
+            result = ActionResult(
+                str(action.get("action") or "unknown"),
+                "这个本地动作没有执行成功，我没有假装记住；请再试一次。",
+                {"saved": False},
+                False,
+            )
+        self.action_executed.emit(result)
+        return result
 
     def _ai_failed(self, error: str) -> None:
         self.agents.mark_runtime_error(self._pending_provider, error)

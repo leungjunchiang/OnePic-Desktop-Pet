@@ -283,19 +283,22 @@ def test_online_chat_action_writes_todo_and_emits_refresh_signal(tmp_path) -> No
         agents,
         _offline_manager(),
         action_executor=memory.actions,
+        todo_now_provider=memory.now,
     )
     replies = QSignalSpy(manager.reply_ready)
     actions = QSignalSpy(manager.action_executed)
 
     assert manager.submit("明天9点半提醒我修改论文", []) is True
-    assert manager._thread is not None
-    assert manager._thread.wait(2000)
+    # An explicit date/time todo is intentionally executed locally before AI
+    # so it is reliable even when Codex is slow or unavailable.
+    assert manager._thread is None
     app.processEvents()
 
     assert actions.count() == 1
     assert memory.todos.find("修改论文") is not None
     assert len(memory.reminders.items) == 1
     assert "已经放进待办" in replies.at(0)[0].text
+    assert service.calls == 0
     manager.shutdown()
 
 

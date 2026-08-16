@@ -1,12 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import re
 import sys
 from pathlib import Path
 
 
 datas = [("assets", "assets"), ("config", "config"), ("resources", "resources")]
+try:
+    from PyInstaller.utils.hooks import collect_data_files
+
+    datas += collect_data_files("certifi")
+except Exception:
+    # The source test environment does not need PyInstaller's hook helpers;
+    # release builds do, and the explicit certifi dependency is still loaded.
+    pass
 hiddenimports = ["winrt.windows.media.control", "uiautomation"] if sys.platform == "win32" else []
+metadata = Path("pyproject.toml")
+version_match = re.search(r'^version = "([^"]+)"$', metadata.read_text(encoding="utf-8"), re.MULTILINE) if metadata.is_file() else None
+APP_VERSION = os.environ.get("LILI_VERSION") or (version_match.group(1) if version_match else "0.0.0")
 private_assets = Path("user_assets")
 if os.environ.get("ONEPIC_INCLUDE_USER_ASSETS") == "1" and private_assets.exists():
     workflow = private_assets / "workflow.json"
@@ -71,8 +83,8 @@ if sys.platform == "darwin":
         bundle_identifier="io.github.leungjunchiang.lili",
         info_plist={
             "CFBundleDisplayName": "Lili",
-            "CFBundleShortVersionString": "0.22.55",
-            "CFBundleVersion": "0.22.55",
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
             "CFBundlePackageType": "APPL",
             "LSUIElement": False,
             "NSHighResolutionCapable": True,

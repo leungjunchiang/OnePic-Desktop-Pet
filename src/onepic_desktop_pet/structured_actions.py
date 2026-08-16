@@ -121,9 +121,16 @@ class LocalActionExecutor:
             if updated:
                 parts.append(f"更新 {len(updated)} 项")
             tasks = created + updated
+            labels = [
+                f"{item.title} · {item.time}" if item.time else item.title
+                for item in tasks
+            ]
+            summary = "、".join(labels[:4])
+            if len(labels) > 4:
+                summary += f"等 {len(labels)} 项"
             return ActionResult(
                 action,
-                f"已经放进待办了：{'，'.join(parts)}。",
+                f"已经放进待办了：{summary}（{'，'.join(parts)}）。",
                 {"saved": True, "created": [item.to_dict() for item in created], "updated": [item.to_dict() for item in updated], "tasks": [item.to_dict() for item in tasks]},
             )
         if action == "update_todo":

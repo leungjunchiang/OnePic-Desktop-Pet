@@ -1,6 +1,8 @@
 """Tests for Supabase-first routing and the CloudBase proxy fallback."""
 
 import json
+import ssl
+import sys
 import time
 from pathlib import Path
 
@@ -12,6 +14,39 @@ from onepic_desktop_pet.social import (
     SocialError,
     SocialSession,
 )
+
+
+def test_macos_social_transport_uses_verified_certificate_context(monkeypatch):
+    """Finder-launched macOS builds must pass a real verifying SSL context."""
+
+    import onepic_desktop_pet.social as social_module
+
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(request, **kwargs):
+        captured["request"] = request
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(social_module.sys, "platform", "darwin")
+    monkeypatch.setattr(social_module.urllib.request, "urlopen", fake_urlopen)
+    request = social_module.urllib.request.Request("https://example.test/health")
+
+    with social_module._verified_urlopen(request, timeout=3.0):
+        pass
+
+    assert captured["timeout"] == 3.0
+    context = captured["context"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
 
 
 class FakeTransport:

@@ -1,3 +1,45 @@
+# Lili v0.22.64
+
+## 加快 macOS 聊天恢复并让自然语言待办真实落盘
+
+- macOS 的 Lili 聊天使用独立临时 Codex 会话、低推理模式和 45 秒超时，跳过用户级配置，避免插件/MCP 配置拖慢本机聊天；模型不可用时自动回退到 Codex 默认模型。
+- 明确的“明天/后天/具体日期 + 时间 + 待办”请求先由本地解析并写入同一套 Todo/Reminder 数据，再返回确认，不再出现 AI 口头答应但待办没有变化。
+- 支持“下午三点”“晚上八点”“明天的待办事项：10点起床”等中文时间表达；普通聊天和歌曲歧义不会被待办快速通道拦截。
+- 聊天动作继续复用现有 LocalActionExecutor，并通过原有刷新信号同步桌面待办条。
+
+# Lili v0.22.63
+
+## 修复 macOS 本机 Codex 已连接但聊天回退离线
+
+- 修正 `codex exec` 的非交互调用：完整提示词现在作为命令参数传递，不再把 `-` 当成提示词并仅写入 stdin。
+- Finder 启动的 macOS App 会显式补齐用户 `HOME`、`CODEX_HOME`、Shell PATH 与 UTF-8 环境，继续使用绝对路径调用 Codex CLI。
+- 保留 Codex GUI、CLI、登录状态三者的独立诊断；Codex CLI 执行失败会记录安全的错误摘要，不记录聊天提示词、令牌或密码。
+- 自习室仍然保持 Supabase Direct 优先；本次只修复 AI 聊天调用，不会把 CloudBase 变成主后端或第二数据库。
+
+# Lili v0.22.62
+
+## 固化 macOS TLS 修复并保持 Supabase 优先
+
+- macOS 自习室 HTTPS 请求现在优先使用系统可信 CA（`/etc/ssl/cert.pem` 等），找不到或不可用时回退到应用内置 certifi；始终保持证书校验和主机名校验，不使用 `verify=False`。
+- 增加安全 TLS 诊断字段，记录实际使用的 CA 来源，便于区分系统证书、应用证书与网络问题。
+- 保持 Supabase 为唯一主后端和首选线路：每次启动都从 Supabase Direct 开始，旧的 CloudBase 线路只作为记录提示；连续网络级失败后才切换 CloudBase Proxy，恢复检查成功后自动切回。
+- 业务错误（401/403/参数错误等）不会触发线路切换，也不会把 CloudBase 当作第二数据库。
+
+# Lili v0.22.60
+
+## 修正 Qt/DPI 安全边距测试
+
+- 保留 v0.22.59 的待办操作列安全边距修复。
+- 修正 Windows Qt 实际布局边界的回归断言，确保测试验证的是按钮确实没有贴到面板底部，而不是强制要求未必一致的逻辑 padding 数值。
+
+# Lili v0.22.59
+
+## 修复紧凑待办 `+` 按钮底部裁切
+
+- 为操作列增加明确的上下安全边距，确保 `⋯` 和 `+` 在 Windows DPI 缩放下不会触碰宿主窗口边界。
+- 面板高度现在同时包含操作列安全边距和原生按钮绘制余量。
+- 增加操作列与面板底部留白的回归断言。
+
 # Lili v0.22.58
 
 ## 修复程序更新检查的 GitHub 403
@@ -301,3 +343,10 @@
 - Windows 使用 UI Automation 定位歌曲行与该行播放按钮，再由 GSMTC 校验；macOS Apple Music 使用 Apple Events，其他客户端使用已授权 Accessibility Adapter。
 
 同时包含 v0.18.1 的 macOS Codex CLI 绝对路径检测、最近 30 轮聊天记忆、五类右键菜单和四标签搭子自习室改进。
+## v0.22.61
+
+- 修复 macOS Finder 启动的 `.app` 找不到 CA 根证书导致 CloudBase 自习室 TLS 连接失败的问题：发布包显式携带 certifi CA bundle，并在 macOS 社交请求中使用正常证书校验的 SSL context。
+- TLS 失败日志增加平台、Python/OpenSSL、certifi 路径和系统验证路径诊断；不关闭证书校验，不使用 `verify=False`。
+- 修复 macOS 图形应用与终端环境 PATH 不同导致 Codex CLI 找不到的问题，继续使用绝对路径和 `codex login status` 独立检测。
+- macOS 自习室与 Codex 聊天保持独立连接状态；一个服务失败不会把另一个服务误判为离线。
+- macOS App 的 Bundle 版本号改为从项目版本动态生成，避免安装包仍显示旧版本。

@@ -122,14 +122,15 @@ jobs:
         run: |
           release_tag="${GITHUB_REF_NAME#release/}"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$release_tag" release-assets/* \
+            echo "Removing stale release $release_tag before publishing the verified artifacts."
+            gh release delete "$release_tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --clobber
-          else
-            gh release create "$release_tag" release-assets/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "Lili $release_tag - Compact Todo + automatic program updates" \
-              --generate-notes \
-              --notes "Compact Todo now keeps the action column visible; the app can check, verify, download, and launch the matching GitHub installer after confirmation. Content-only updates remain user-controllable."
+              --yes \
+              --cleanup-tag
           fi
+          gh release create "$release_tag" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Lili $release_tag - Compact Todo + automatic program updates" \
+            --generate-notes \
+            --notes "Compact Todo now keeps the action column visible; the app can check, verify, download, and launch the matching GitHub installer after confirmation. Content-only updates remain user-controllable."
