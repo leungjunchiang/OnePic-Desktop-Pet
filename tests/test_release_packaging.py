@@ -62,8 +62,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.22.55"' in spec
-    assert '"CFBundleVersion": "0.22.55"' in spec
+    assert '"CFBundleShortVersionString": APP_VERSION' in spec
+    assert '"CFBundleVersion": APP_VERSION' in spec
+    assert 'collect_data_files("certifi")' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
@@ -72,6 +73,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert version_match.group(1) != "0.22.0"
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
+    assert "certifi" in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
     assert "ChineseSimplified.isl" not in installer
@@ -148,3 +150,4 @@ def test_ai_settings_has_one_source_guarded_open_path() -> None:
     assert "def open_settings(self, source: str) -> bool:" in window
     assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
     assert "AISettingsDialog" not in chat_manager
+

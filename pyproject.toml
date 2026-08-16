@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lili-desktop-pet"
-version = "0.22.60"
+version = "0.22.61"
 description = "Lili desktop work companion"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "PySide6>=6.8,<7",
     "Pillow>=10,<13",
+    "certifi>=2024.8.30,<2026",
     "keyring>=25,<27",
     "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10,<13; sys_platform == 'darwin'",

@@ -316,4 +316,11 @@
 - Windows 使用 UI Automation 定位歌曲行与该行播放按钮，再由 GSMTC 校验；macOS Apple Music 使用 Apple Events，其他客户端使用已授权 Accessibility Adapter。
 
 同时包含 v0.18.1 的 macOS Codex CLI 绝对路径检测、最近 30 轮聊天记忆、五类右键菜单和四标签搭子自习室改进。
+## v0.22.61
+
+- 修复 macOS Finder 启动的 `.app` 找不到 CA 根证书导致 CloudBase 自习室 TLS 连接失败的问题：发布包显式携带 certifi CA bundle，并在 macOS 社交请求中使用正常证书校验的 SSL context。
+- TLS 失败日志增加平台、Python/OpenSSL、certifi 路径和系统验证路径诊断；不关闭证书校验，不使用 `verify=False`。
+- 修复 macOS 图形应用与终端环境 PATH 不同导致 Codex CLI 找不到的问题，继续使用绝对路径和 `codex login status` 独立检测。
+- macOS 自习室与 Codex 聊天保持独立连接状态；一个服务失败不会把另一个服务误判为离线。
+- macOS App 的 Bundle 版本号改为从项目版本动态生成，避免安装包仍显示旧版本。
 

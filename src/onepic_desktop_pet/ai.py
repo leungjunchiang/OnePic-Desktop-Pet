@@ -18,6 +18,7 @@ ChatManager 在缓存已连接且用户发送消息时调用回复接口，在�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -37,6 +38,9 @@ from .liumao_worldview import worldview_prompt_context
 from .knowledge_manager import retrieve_prompt_context
 from .resources import resource_path
 from .song_knowledge import song_prompt_context
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _load_short_persona() -> str:
@@ -328,6 +332,12 @@ def _cli_environment(executable: Path | None = None) -> dict[str, str]:
     """构造 CLI 环境；把已发现入口目录放在最前，兼容 nvm/npm 包装脚本。"""
 
     environment = dict(os.environ)
+    if sys.platform == "darwin":
+        # Finder-launched .app processes can have a minimal environment.  The
+        # shell probes below still locate the executable, but the CLI itself
+        # also needs a stable HOME to find the user's login credentials.
+        environment.setdefault("HOME", str(Path.home()))
+        environment.setdefault("SHELL", "/bin/zsh")
     current = environment.get("PATH", "")
     additions: list[str] = []
     if executable is not None and executable.is_absolute():
@@ -466,6 +476,23 @@ def launch_codex_gui() -> bool:
     return True
 
 
+def codex_runtime_diagnostics(*, include_cli: bool = True) -> dict[str, str]:
+    """Return safe diagnostics for Finder-vs-Terminal Codex discovery."""
+
+    details = {
+        "platform": sys.platform,
+        "home": str(Path.home()),
+        "shell": os.environ.get("SHELL", ""),
+        "path": os.environ.get("PATH", ""),
+    }
+    if include_cli:
+        try:
+            details["cli"] = str(find_codex_executable() or "未找到")
+        except Exception as exc:  # pragma: no cover - defensive diagnostics
+            details["cli"] = f"检测失败：{type(exc).__name__}"
+    return details
+
+
 def _macos_codex_cli_path() -> Path | None:
     """Find Codex from the user's macOS shell, then keep the absolute path.
 
@@ -535,6 +562,10 @@ def _macos_codex_cli_path() -> Path | None:
         )
         candidate = _newest_file(fallback_paths)
     if candidate is None:
+        LOGGER.info(
+            "[AI Codex] Finder lookup did not find a CLI; diagnostics=%s",
+            codex_runtime_diagnostics(include_cli=False),
+        )
         return None
     if not candidate.is_absolute() or not candidate.is_file():
         return None
@@ -551,7 +582,14 @@ def _macos_codex_cli_path() -> Path | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return candidate if version.returncode == 0 else None
+    if version.returncode != 0:
+        LOGGER.warning(
+            "[AI Codex] candidate failed --version: path=%s stderr=%s",
+            candidate,
+            (version.stderr or "").strip()[:300],
+        )
+        return None
+    return candidate
 
 
 @lru_cache(maxsize=1)
@@ -984,3 +1022,4 @@ class AIChatService:
             model or default_model,
             local_context,
         )
+
