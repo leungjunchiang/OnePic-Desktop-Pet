@@ -16,6 +16,7 @@ import platform
 import re
 import sys
 import tempfile
+from time import monotonic
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +33,9 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_RELEASES_URL = (
     "https://api.github.com/repos/leungjunchiang/OnePic-Desktop-Pet/releases/latest"
+)
+DEFAULT_RELEASE_PAGE_URL = (
+    "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/latest"
 )
 _VERSION_PATTERN = re.compile(r"\d+")
 _SEMVER_PATTERN = re.compile(
@@ -55,6 +59,10 @@ class ProgramUpdateError(RuntimeError):
 
 class NoProgramRelease(ProgramUpdateError):
     """Raised when GitHub has no public stable Release to inspect."""
+
+
+class GitHubApiRateLimited(ProgramUpdateError):
+    """Raised when the unauthenticated GitHub API refuses another request."""
 
 
 class UpdateState(str, Enum):
@@ -126,16 +134,36 @@ class ProgramUpdateManager:
         self,
         *,
         releases_url: str = DEFAULT_RELEASES_URL,
+        release_page_url: str | None = None,
         app_version: str = __version__,
         timeout: float = 8.0,
+        cache_seconds: float = 300.0,
         opener: Callable[..., object] | None = None,
         download_root: Path | None = None,
     ) -> None:
         self.releases_url = str(releases_url or "").strip()
+        self.release_page_url = str(release_page_url or "").strip() or self._derive_release_page_url(self.releases_url)
         self.app_version = str(app_version or "0.0.0")
         self.timeout = max(1.0, float(timeout))
+        self.cache_seconds = max(0.0, float(cache_seconds))
         self._opener = opener or urllib.request.urlopen
         self.download_root = Path(download_root) if download_root is not None else Path(tempfile.gettempdir()) / "Lili" / "updates"
+        self._cached_check: tuple[float, ProgramUpdateCheckResult] | None = None
+
+    @staticmethod
+    def _derive_release_page_url(api_url: str) -> str:
+        """Convert the standard GitHub Releases API URL to its web URL."""
+
+        parsed = urllib.parse.urlparse(api_url)
+        parts = [part for part in parsed.path.split("/") if part]
+        try:
+            repos_index = parts.index("repos")
+            owner, repo = parts[repos_index + 1 : repos_index + 3]
+        except (ValueError, IndexError):
+            return DEFAULT_RELEASE_PAGE_URL if not api_url else ""
+        if parsed.netloc.casefold() != "api.github.com":
+            return ""
+        return f"https://github.com/{owner}/{repo}/releases/latest"
 
     def _read_url(self, url: str, *, max_bytes: int) -> bytes:
         parsed = urllib.parse.urlparse(url)
@@ -163,9 +191,102 @@ class ProgramUpdateManager:
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise NoProgramRelease("GitHub 暂未找到可用的程序 Release") from exc
+            if exc.code in {403, 429}:
+                raise GitHubApiRateLimited(
+                    f"GitHub API 请求受限：HTTP {exc.code}"
+                ) from exc
             raise ProgramUpdateError(f"程序更新网络请求失败：HTTP {exc.code}") from exc
         except (OSError, urllib.error.URLError, ValueError) as exc:
             raise ProgramUpdateError(f"程序更新网络请求失败：{exc}") from exc
+
+    def _read_release_page_redirect(self) -> str:
+        """Read only the Release page redirect, avoiding the API rate limit."""
+
+        if not self.release_page_url:
+            raise ProgramUpdateError("没有可用的 GitHub Release 网页地址")
+        parsed = urllib.parse.urlparse(self.release_page_url)
+        if parsed.scheme != "https" or not _is_github_host(parsed.netloc):
+            raise ProgramUpdateError("程序更新网页地址不是受信任的 GitHub 地址")
+        request = urllib.request.Request(
+            self.release_page_url,
+            headers={
+                "User-Agent": "Lili-Desktop-Pet",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        try:
+            response = self._opener(request, timeout=self.timeout)
+            with response:
+                final_url = getattr(response, "geturl", lambda: self.release_page_url)()
+                # Consume a small amount so custom urllib adapters and HTTP
+                # clients finish the response cleanly.  The body is not used.
+                response.read(16 * 1024)
+                return str(final_url or self.release_page_url)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise NoProgramRelease("GitHub 暂未找到可用的程序 Release") from exc
+            raise ProgramUpdateError(
+                f"GitHub Release 网页请求失败：HTTP {exc.code}"
+            ) from exc
+        except (OSError, urllib.error.URLError, ValueError) as exc:
+            raise ProgramUpdateError(f"GitHub Release 网页请求失败：{exc}") from exc
+
+    @staticmethod
+    def _release_from_redirect(
+        redirect_url: str,
+        *,
+        current_version: str,
+        asset_name: str,
+    ) -> ProgramUpdateCheckResult:
+        """Build a minimal verified-asset plan from /releases/latest redirect."""
+
+        parsed = urllib.parse.urlparse(redirect_url)
+        if parsed.scheme != "https" or not _is_github_host(parsed.netloc):
+            raise ProgramUpdateError("GitHub Release 重定向地址不受信任")
+        match = re.search(r"/releases/tag/([^/?#]+)", parsed.path)
+        if not match:
+            raise NoProgramRelease("GitHub Release 页面没有定位到版本标签")
+        tag_name = urllib.parse.unquote(match.group(1))
+        version = tag_name.removeprefix("v")
+        if not _SEMVER_PATTERN.fullmatch(version):
+            raise ProgramUpdateError("程序更新信息格式无效：版本号格式无法识别")
+        if version_key(version) <= version_key(current_version):
+            return ProgramUpdateCheckResult(current_version, version, None)
+
+        repository_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.split('/releases/tag/')[0]}"
+        encoded_tag = urllib.parse.quote(tag_name, safe="")
+        encoded_asset = urllib.parse.quote(asset_name, safe="")
+        release_url = f"{repository_url}/releases/tag/{encoded_tag}"
+        asset_url = f"{repository_url}/releases/download/{encoded_tag}/{encoded_asset}"
+        checksum_url = f"{asset_url}.sha256"
+        release = ProgramRelease(
+            version=version,
+            tag_name=tag_name,
+            release_url=release_url,
+            asset_name=asset_name,
+            asset_url=asset_url,
+            # The page redirect does not expose the byte size.  The actual
+            # download reads Content-Length and still reports progress.
+            asset_size=0,
+            checksum_url=checksum_url,
+            checksum_value=None,
+            release_notes="",
+        )
+        LOGGER.info("[Update] GitHub API limited; release-page fallback=%s", tag_name)
+        return ProgramUpdateCheckResult(current_version, version, release)
+
+    def _check_via_release_page(
+        self,
+        *,
+        current_version: str,
+        asset_name: str,
+    ) -> ProgramUpdateCheckResult:
+        redirect_url = self._read_release_page_redirect()
+        return self._release_from_redirect(
+            redirect_url,
+            current_version=current_version,
+            asset_name=asset_name,
+        )
 
     def check_latest(self) -> ProgramUpdateCheckResult:
         """Return current/latest versions and an optional verified asset plan."""
@@ -181,15 +302,35 @@ class ProgramUpdateManager:
             current = str(self.app_version).removeprefix("v")
             return ProgramUpdateCheckResult(current, current, None, status="no_release")
         current_version = str(self.app_version).removeprefix("v")
+        if self._cached_check is not None:
+            checked_at, cached = self._cached_check
+            if self.cache_seconds > 0 and monotonic() - checked_at < self.cache_seconds:
+                LOGGER.info("[Update] returning cached release check result")
+                return cached
         try:
             raw = self._read_url(self.releases_url, max_bytes=_MAX_METADATA_BYTES)
+        except GitHubApiRateLimited:
+            try:
+                result = self._check_via_release_page(
+                    current_version=current_version,
+                    asset_name=asset_name,
+                )
+            except ProgramUpdateError as fallback_exc:
+                raise ProgramUpdateError(
+                    "GitHub API 被限制，Release 网页线路也不可用："
+                    f"{fallback_exc}"
+                ) from fallback_exc
+            self._cached_check = (monotonic(), result)
+            return result
         except NoProgramRelease:
-            return ProgramUpdateCheckResult(
+            result = ProgramUpdateCheckResult(
                 current_version,
                 current_version,
                 None,
                 status="no_release",
             )
+            self._cached_check = (monotonic(), result)
+            return result
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -197,12 +338,14 @@ class ProgramUpdateManager:
         if not isinstance(payload, dict):
             raise ProgramUpdateError("程序更新信息格式无效：Release 不是对象")
         if bool(payload.get("draft")) or bool(payload.get("prerelease")):
-            return ProgramUpdateCheckResult(
+            result = ProgramUpdateCheckResult(
                 current_version,
                 current_version,
                 None,
                 status="no_release",
             )
+            self._cached_check = (monotonic(), result)
+            return result
         tag_name = str(payload.get("tag_name") or "").strip()
         version = tag_name.removeprefix("v")
         if not tag_name or not version:
@@ -211,7 +354,9 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("程序更新信息格式无效：版本号格式无法识别")
         if version_key(version) <= version_key(current_version):
             LOGGER.info("[Update] latest release=%s result=UP_TO_DATE", version)
-            return ProgramUpdateCheckResult(current_version, version, None)
+            result = ProgramUpdateCheckResult(current_version, version, None)
+            self._cached_check = (monotonic(), result)
+            return result
         release_url = str(payload.get("html_url") or "").strip()
         assets = payload.get("assets")
         if not isinstance(assets, list):
@@ -238,7 +383,9 @@ class ProgramUpdateManager:
             release_notes=str(payload.get("body") or "").strip(),
         )
         LOGGER.info("[Update] latest release=%s result=UPDATE_AVAILABLE", version)
-        return ProgramUpdateCheckResult(current_version, version, release)
+        result = ProgramUpdateCheckResult(current_version, version, release)
+        self._cached_check = (monotonic(), result)
+        return result
 
     def fetch_latest(self) -> ProgramRelease | None:
         """Backward-compatible helper returning only a newer release."""
@@ -348,3 +495,4 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
         return ProgramUpdateResult(release=release, installer_path=final_path)
+

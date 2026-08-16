@@ -35,6 +35,15 @@ class Response:
         return value
 
 
+class RedirectResponse(Response):
+    def __init__(self, payload: bytes, final_url: str) -> None:
+        super().__init__(payload)
+        self.final_url = final_url
+
+    def geturl(self) -> str:
+        return self.final_url
+
+
 def test_program_version_comparison_is_numeric() -> None:
     assert version_key("v0.22.10") > version_key("0.22.9")
     assert version_key("0.22.45") == (0, 22, 45)
@@ -232,3 +241,58 @@ def test_check_latest_rejects_malformed_release(monkeypatch) -> None:
     manager = ProgramUpdateManager(app_version="0.22.46", opener=opener)
     with pytest.raises(ProgramUpdateError):
         manager.check_latest()
+
+
+def test_api_rate_limit_falls_back_to_release_page_redirect(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+
+    def opener(request, timeout=0):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "api.github.com" in url:
+            raise urllib.error.HTTPError(
+                url,
+                403,
+                "Forbidden",
+                hdrs=None,
+                fp=None,
+            )
+        return RedirectResponse(
+            b"release page",
+            "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.22.57",
+        )
+
+    manager = ProgramUpdateManager(app_version="0.22.56", opener=opener)
+    result = manager.check_latest()
+
+    assert result.latest_version == "0.22.57"
+    assert result.release is not None
+    assert result.release.asset_url.endswith(
+        "/releases/download/v0.22.57/Lili-Windows-x64-Setup.exe"
+    )
+    assert result.release.checksum_url.endswith(
+        "/releases/download/v0.22.57/Lili-Windows-x64-Setup.exe.sha256"
+    )
+    assert result.release.asset_size == 0
+
+
+def test_release_check_is_cached_to_avoid_repeated_api_requests(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+    calls = 0
+    payload = {"tag_name": "v0.22.57", "draft": False, "prerelease": False, "assets": []}
+
+    def opener(request, timeout=0):
+        nonlocal calls
+        calls += 1
+        return Response(json.dumps(payload).encode("utf-8"))
+
+    manager = ProgramUpdateManager(app_version="0.22.57", opener=opener, cache_seconds=300)
+    first = manager.check_latest()
+    second = manager.check_latest()
+
+    assert first == second
+    assert calls == 1
+
