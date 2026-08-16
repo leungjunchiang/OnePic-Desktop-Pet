@@ -33,6 +33,7 @@ from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
 from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
+from onepic_desktop_pet.today_note import TimeMemoryWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -269,6 +270,8 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert add_top >= last_bottom + 8
     assert add_top + panel.add_button.height() <= panel.height()
     assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    timed_row = next(row for row in panel.rows.values() if "20:00" in row.label.toolTip())
+    assert "20:00" in timed_row.label.text()
     # Keep the click-path assertion non-modal.  The real menu is exercised by
     # the production slot; this test only verifies that the visible button
     # receives the mouse click and emits its request signal.
@@ -336,9 +339,35 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
         - panel.add_button.mapTo(panel, panel.add_button.rect().center()).x()
     ) <= 1
     assert panel.add_button.y() + panel.add_button.height() <= panel.height()
+    panel_rect = panel.geometry()
+    pet_rect = window.geometry()
+    assert not panel_rect.intersects(pet_rect)
     assert panel.x() != 0 or panel.y() != 0
     window.close()
     window.deleteLater()
+    app.processEvents()
+
+
+def test_time_memory_window_keeps_ids_for_edit_and_delete_menus(tmp_path) -> None:
+    """倒计时、纪念日、时光轴列表都保留真实 ID，菜单才能编辑/删除原记录。"""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    countdown = memory.countdowns.add("论文投稿", "2026-09-01")
+    anniversary = memory.anniversaries.add("六毛来到桌面", "2025-08-15", repeat="yearly")
+    event = memory.timeline.add("第一次投出论文")
+    dialog = TimeMemoryWindow(memory)
+    app.processEvents()
+
+    assert dialog.countdown_list.item(0).data(Qt.ItemDataRole.UserRole) == countdown.id
+    assert dialog.anniversary_list.item(0).data(Qt.ItemDataRole.UserRole) == anniversary.id
+    assert dialog.timeline_list.item(0).data(Qt.ItemDataRole.UserRole) == event.id
+    assert dialog.countdown_list.toolTip().startswith("双击编辑")
+
+    assert memory.timeline.delete(event.id)
+    assert memory.timeline.query() == []
+    dialog.close()
+    dialog.deleteLater()
     app.processEvents()
 
 

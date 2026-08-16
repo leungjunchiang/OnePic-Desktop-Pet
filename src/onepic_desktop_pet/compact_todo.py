@@ -264,8 +264,13 @@ class CompactTodoPanel(QWidget):
     MAX_EXPANDED_ROWS = 3
     MIN_WIDTH = 156
     MAX_WIDTH = 320
+    CONTENT_MIN_WIDTH = 180
     CONTENT_MAX_WIDTH = 220
+    # Row margins + checkbox + two gaps + the complete 32px menu button.
+    # Keep this as a single source of truth so the label can never consume
+    # the action button's hit area.
     PANEL_HORIZONTAL_OVERHEAD = 81
+    TEXT_MEASURE_SAFETY = 14
     ROW_HEIGHT = TodoRow.MIN_HEIGHT
     COMPLETION_PREVIEW_SECONDS = 1.1
 
@@ -313,6 +318,8 @@ class CompactTodoPanel(QWidget):
         # scrollbar that could steal the last few pixels from the action area.
         self.rows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.rows_scroll.setContentsMargins(0, 0, 0, 0)
+        self.rows_scroll.viewport().setContentsMargins(0, 0, 0, 0)
         self.rows_container = QWidget(self.rows_scroll)
         self.rows_container.setObjectName("todoRows")
         self.rows_layout = QVBoxLayout(self.rows_container)
@@ -540,7 +547,15 @@ class CompactTodoPanel(QWidget):
             (metrics.horizontalAdvance(self._task_text(task)) for task in tasks),
             default=0,
         )
-        content = min(self.CONTENT_MAX_WIDTH, max(60, longest))
+        # The previous estimate used the application font before the row was
+        # polished.  On Windows that could be a few pixels smaller than the
+        # actual label font, leaving the last characters under the menu
+        # button.  Reserve a small measured-font safety margin and keep a
+        # useful compact minimum so ordinary tasks never lose their time.
+        content = min(
+            self.CONTENT_MAX_WIDTH,
+            max(self.CONTENT_MIN_WIDTH, longest + self.TEXT_MEASURE_SAFETY),
+        )
         desired = content + self.PANEL_HORIZONTAL_OVERHEAD
         self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
 

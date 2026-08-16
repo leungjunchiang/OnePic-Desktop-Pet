@@ -167,6 +167,18 @@ def test_yearly_anniversary_rolls_to_next_year(tmp_path) -> None:
     assert next_yearly_occurrence("2025-08-15", clock).isoformat() == "2027-08-15"
 
 
+def test_anniversary_can_be_edited_and_deleted(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    manager = AnniversaryManager(tmp_path / "anniversaries.json", now_provider=clock)
+    item = manager.add("旧纪念日", "2026-09-01", repeat="none")
+    manager.update(item.id, title="新纪念日", date="2026-09-02", repeat="yearly", show_before_days=14)
+    assert manager.find("新纪念日").date == "2026-09-02"
+    assert manager.find("新纪念日").repeat == "yearly"
+    assert manager.find("新纪念日").show_before_days == 14
+    assert manager.delete(item.id)
+    assert manager.items == ()
+
+
 def test_near_term_events_flow_into_one_todo_view_without_copying(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 15, 12, 0))
     memory = TimeMemory(tmp_path, now_provider=clock)
@@ -207,6 +219,15 @@ def test_timeline_event_query_is_curated_and_sorted(tmp_path) -> None:
     manager.add("第一次专注", date="2026-08-15", event_type="milestone")
     assert manager.query(event_type="project")[0].title == "投出论文"
     assert manager.query()[0].date == "2026-09-01"
+
+
+def test_timeline_event_can_be_deleted_without_affecting_other_records(tmp_path) -> None:
+    manager = TimelineManager(tmp_path / "timeline.json")
+    keep = manager.add("保留记录")
+    remove = manager.add("删除记录")
+    assert manager.delete(remove.id)
+    assert [item.id for item in manager.events] == [keep.id]
+    assert manager.delete(remove.id) is False
 
 
 def test_structured_action_extracts_only_explicit_json() -> None:
@@ -294,3 +315,4 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     summary = memory.summary.today()
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
+

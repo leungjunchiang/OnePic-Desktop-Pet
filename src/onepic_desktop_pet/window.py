@@ -50,7 +50,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -1955,6 +1955,11 @@ class PetWindow(QWidget):
         self._compact_todo_panel.refresh()
         self._compact_todo_panel.show()
         self._position_compact_todos()
+        # The pet and the compact panel are separate native windows.  Raise
+        # the panel after positioning so a transient pet repaint cannot cover
+        # the label or the trailing menu button.  The panel itself never
+        # accepts focus, so this does not steal keyboard input.
+        self._compact_todo_panel.raise_()
 
     def _position_compact_todos(self) -> None:
         """Keep the Todo strip close to the pet, preferring its left side.
@@ -1983,6 +1988,17 @@ class PetWindow(QWidget):
             right = self.x() + visible_bounds.right() + 1
             top = self.y() + visible_bounds.top()
             bottom = self.y() + visible_bounds.bottom() + 1
+
+        # A mask can end a few pixels before the visible anti-aliased sprite
+        # edge on Windows/DPI-scaled displays.  Reserve that edge explicitly;
+        # otherwise the pet can visually sit on top of the panel's final
+        # characters and its ⋯ button even when the Qt rectangles do not
+        # mathematically intersect.
+        pet_safety = 6
+        left -= pet_safety
+        right += pet_safety
+        top -= pet_safety
+        bottom += pet_safety
         gap_x = 8
         gap_y = 6
         panel_width = panel.width()
@@ -1993,24 +2009,41 @@ class PetWindow(QWidget):
         can_place_left = left_x >= available.left()
         can_place_right = right_x + panel_width <= available.right() + 1
 
+        pet_rect = QRect(left, top, max(1, right - left), max(1, bottom - top))
+        candidates = []
         if can_place_left:
-            x = left_x
-            y = center_y
-        elif can_place_right:
-            x = right_x
-            y = center_y
-        else:
-            # Both sides are occupied or too narrow.  Only then use the
-            # familiar below-pet fallback, keeping the gap small.
-            x = (left + right - panel_width) // 2
-            y = bottom + gap_y
-            if y + panel_height > available.bottom() + 1:
-                above = top - panel_height - gap_y
-                if above >= available.top():
-                    y = above
+            candidates.append((left_x, center_y))
+        if can_place_right:
+            candidates.append((right_x, center_y))
+        # Both sides can be unavailable near a monitor edge.  Use a below or
+        # above placement only then, but still reject any rectangle touching
+        # the pet.  This is a real non-overlap guarantee, not just a visual
+        # offset guess.
+        candidates.extend(
+            [
+                ((left + right - panel_width) // 2, bottom + gap_y),
+                ((left + right - panel_width) // 2, top - panel_height - gap_y),
+            ]
+        )
+        x = y = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+            if not available.contains(candidate):
+                continue
+            if candidate.intersects(pet_rect):
+                continue
+            x, y = candidate_x, candidate_y
+            break
+        if x is None or y is None:
+            # Extremely small work areas can make every ideal placement
+            # impossible.  Clamp to the monitor as a last resort, then raise
+            # the panel so its controls remain usable.
+            x = max(available.left(), min(left_x, available.right() - panel_width + 1))
+            y = max(available.top(), min(center_y, available.bottom() - panel_height + 1))
         x = max(available.left(), min(x, available.right() - panel_width + 1))
         y = max(available.top(), min(y, available.bottom() - panel_height + 1))
         panel.move(x, y)
+        panel.raise_()
         LOGGER.debug(
             "[TodoLayout] host=(x=%s,y=%s,w=%s,h=%s) panel=(x=%s,y=%s,w=%s,h=%s) "
             "available=(x=%s,y=%s,w=%s,h=%s) pet_bounds=(left=%s,top=%s,right=%s,bottom=%s)",

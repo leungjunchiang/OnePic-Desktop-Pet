@@ -547,7 +547,14 @@ class TimeMemoryWindow(QDialog):
         self.countdown_list = QListWidget()
         self.anniversary_list = QListWidget()
         self.timeline_list = QListWidget()
-        self.countdown_list.itemDoubleClicked.connect(self._complete_countdown)
+        for listing in (self.countdown_list, self.anniversary_list, self.timeline_list):
+            listing.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            listing.setToolTip("双击编辑；右键打开编辑、完成或删除菜单")
+            listing.customContextMenuRequested.connect(
+                lambda position, current=listing: self._show_memory_menu(current, position)
+            )
+        self.countdown_list.itemDoubleClicked.connect(self._edit_countdown)
+        self.anniversary_list.itemDoubleClicked.connect(self._edit_anniversary)
         self.tabs.addTab(self._page(self.countdown_list, self.add_countdown), "倒计时")
         self.tabs.addTab(self._page(self.anniversary_list, self.add_anniversary), "纪念日")
         self.tabs.addTab(self._page(self.timeline_list, self.add_timeline), "时光轴")
@@ -575,10 +582,45 @@ class TimeMemoryWindow(QDialog):
         self.anniversary_list.clear()
         for item in self.memory.anniversaries.items:
             remaining = self.memory.anniversaries.remaining_days(item)
-            self.anniversary_list.addItem(f"{item.title} · {'今天' if remaining == 0 else f'还有 {remaining} 天'}")
+            list_item = QListWidgetItem(
+                f"{item.title} · {'今天' if remaining == 0 else f'还有 {remaining} 天'}"
+            )
+            list_item.setData(Qt.ItemDataRole.UserRole, item.id)
+            self.anniversary_list.addItem(list_item)
         self.timeline_list.clear()
         for item in self.memory.timeline.query()[:100]:
-            self.timeline_list.addItem(f"{item.date} {item.time}  {item.title}\n{item.description}")
+            list_item = QListWidgetItem(f"{item.date} {item.time}  {item.title}\n{item.description}")
+            list_item.setData(Qt.ItemDataRole.UserRole, item.id)
+            self.timeline_list.addItem(list_item)
+
+    def _show_memory_menu(self, listing: QListWidget, position) -> None:
+        """Offer real edit/delete actions for every time-memory record."""
+
+        item = listing.itemAt(position)
+        if item is None:
+            return
+        item_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not item_id:
+            return
+        menu = QMenu(self)
+        if listing is self.countdown_list:
+            edit = menu.addAction("编辑倒计时…")
+            edit.triggered.connect(lambda: self._edit_countdown(item))
+            complete = menu.addAction("标记完成并记入时光轴")
+            complete.triggered.connect(lambda: self._complete_countdown(item))
+            menu.addSeparator()
+            remove = menu.addAction("删除倒计时")
+            remove.triggered.connect(lambda: self._delete_countdown(item_id))
+        elif listing is self.anniversary_list:
+            edit = menu.addAction("编辑纪念日…")
+            edit.triggered.connect(lambda: self._edit_anniversary(item))
+            menu.addSeparator()
+            remove = menu.addAction("删除纪念日")
+            remove.triggered.connect(lambda: self._delete_anniversary(item_id))
+        else:
+            remove = menu.addAction("删除这条记录")
+            remove.triggered.connect(lambda: self._delete_timeline(item_id))
+        menu.exec(listing.viewport().mapToGlobal(position))
 
     def add_countdown(self) -> None:
         title, ok = QInputDialog.getText(self, "添加倒计时", "事项名称")
@@ -615,14 +657,94 @@ class TimeMemoryWindow(QDialog):
             QMessageBox.warning(self, "纪念日", "日期格式不对，请填写 YYYY-MM-DD。")
         self.refresh()
 
+    def _edit_countdown(self, item: QListWidgetItem) -> None:
+        item_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        countdown = self.memory.countdowns.get(item_id)
+        if countdown is None:
+            return
+        title, ok = QInputDialog.getText(self, "编辑倒计时", "事项名称", text=countdown.title)
+        if not ok or not title.strip():
+            return
+        target, ok = QInputDialog.getText(
+            self, "编辑倒计时", "目标日期（YYYY-MM-DD）", text=countdown.target_datetime[:10]
+        )
+        if not ok or not target.strip():
+            return
+        show_before, ok = QInputDialog.getInt(
+            self, "编辑倒计时", "提前几天进入待办？", countdown.show_before_days, 0, 365, 1
+        )
+        if not ok:
+            return
+        try:
+            self.memory.countdowns.update(
+                item_id, title=title.strip(), target_datetime=target.strip(), show_before_days=show_before
+            )
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "倒计时", "日期格式不对，请填写 YYYY-MM-DD。")
+            return
+        self.refresh()
+
+    def _edit_anniversary(self, item: QListWidgetItem) -> None:
+        item_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        anniversary = self.memory.anniversaries.get(item_id)
+        if anniversary is None:
+            return
+        title, ok = QInputDialog.getText(self, "编辑纪念日", "纪念什么？", text=anniversary.title)
+        if not ok or not title.strip():
+            return
+        value, ok = QInputDialog.getText(
+            self, "编辑纪念日", "日期（YYYY-MM-DD）", text=anniversary.date
+        )
+        if not ok or not value.strip():
+            return
+        repeat, ok = QInputDialog.getItem(
+            self, "编辑纪念日", "重复方式", ["none", "yearly"],
+            1 if anniversary.repeat == "yearly" else 0, False
+        )
+        if not ok:
+            return
+        show_before, ok = QInputDialog.getInt(
+            self, "编辑纪念日", "提前几天进入待办？", anniversary.show_before_days, 0, 365, 1
+        )
+        if not ok:
+            return
+        try:
+            self.memory.anniversaries.update(
+                item_id, title=title.strip(), date=value.strip(), repeat=repeat,
+                show_before_days=show_before,
+            )
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "纪念日", "日期格式不对，请填写 YYYY-MM-DD。")
+            return
+        self.refresh()
+
     def _complete_countdown(self, item: QListWidgetItem) -> None:
         item_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
         if item_id:
             self.memory.complete_countdown(item_id)
             self.refresh()
 
+    def _delete_countdown(self, item_id: str) -> None:
+        if QMessageBox.question(self, "删除倒计时", "确定删除这个倒计时吗？") != QMessageBox.StandardButton.Yes:
+            return
+        self.memory.countdowns.delete(item_id)
+        self.refresh()
+
+    def _delete_anniversary(self, item_id: str) -> None:
+        if QMessageBox.question(self, "删除纪念日", "确定删除这个纪念日吗？") != QMessageBox.StandardButton.Yes:
+            return
+        self.memory.anniversaries.delete(item_id)
+        self.refresh()
+
+    def _delete_timeline(self, item_id: str) -> None:
+        if QMessageBox.question(self, "删除时光记录", "确定删除这条时光记录吗？") != QMessageBox.StandardButton.Yes:
+            return
+        self.memory.timeline.delete(item_id)
+        self.refresh()
+
     def add_timeline(self) -> None:
         title, ok = QInputDialog.getText(self, "记住今天", "今天发生了什么？")
         if ok and title.strip():
             self.memory.timeline.add(title.strip())
             self.refresh()
+
