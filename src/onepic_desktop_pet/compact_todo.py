@@ -54,15 +54,29 @@ QLabel#todoTitle { color: #183c4c; padding: 0 2px; }
 QToolButton { color: #557681; background: transparent; border: 0; padding: 1px 4px; }
 QToolButton:hover { color: #0c807b; background: rgba(185, 228, 220, 130); border-radius: 7px; }
 QToolButton#addButton, QToolButton#expandButton { font-size: 15px; }
-QToolButton#moreButton {
-    min-width: 26px; max-width: 26px;
+QToolButton#addButton {
+    min-width: 30px; max-width: 30px;
     min-height: 26px; max-height: 26px;
+    color: #557681;
+    background: rgba(230, 244, 240, 180);
+    border: 1px solid rgba(112, 173, 170, 95);
+    border-radius: 8px;
+    padding: 0;
+}
+QToolButton#addButton:hover {
+    color: #0b625f;
+    background: rgba(190, 231, 224, 220);
+    border-color: rgba(36, 128, 128, 150);
+}
+QToolButton#moreButton {
+    min-width: 30px; max-width: 30px;
+    min-height: 30px; max-height: 30px;
     color: #315765;
     background: rgba(214, 238, 233, 210);
     border: 1px solid rgba(73, 137, 141, 125);
     border-radius: 8px;
     padding: 0;
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 600;
 }
 QToolButton#moreButton:hover {
@@ -92,9 +106,11 @@ class TodoRow(QWidget):
         self.setFixedHeight(34)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 0, 3, 0)
-        layout.setSpacing(3)
+        layout.setContentsMargins(5, 0, 4, 0)
+        layout.setSpacing(4)
         self.checkbox = QCheckBox(self)
+        self.checkbox.setFixedWidth(22)
+        self.checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.checkbox.setChecked(bool(task.completed))
         self.checkbox.setToolTip("标记完成")
         self.checkbox.stateChanged.connect(
@@ -105,6 +121,7 @@ class TodoRow(QWidget):
         layout.addWidget(self.checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
         self.label = QLabel(self)
         self.label.setObjectName("todoTitle")
+        self.label.setMinimumWidth(0)
         self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.label.setToolTip(str(task.title))
         self.label.installEventFilter(self)
@@ -113,7 +130,8 @@ class TodoRow(QWidget):
         self.more_button = QToolButton(self)
         self.more_button.setObjectName("moreButton")
         self.more_button.setText("⋯")
-        self.more_button.setFixedSize(26, 26)
+        self.more_button.setFixedSize(30, 30)
+        self.more_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.more_button.setToolTip("任务操作")
         # This is intentionally a real button, not a decorative label.  The
         # panel is a separate native window, so keeping mouse events enabled
@@ -122,6 +140,8 @@ class TodoRow(QWidget):
         self.more_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.more_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.more_button.clicked.connect(self._request_more)
+        # The action button is the third fixed-width segment.  The label is
+        # the only stretchable segment, so long titles can only elide text.
         layout.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.installEventFilter(self)
 
@@ -214,7 +234,8 @@ class CompactTodoPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(COMPACT_TODO_STYLE)
-        self.setFixedWidth(self.MIN_WIDTH)
+        self.setMinimumWidth(self.MIN_WIDTH)
+        self.setMaximumWidth(self.MAX_WIDTH)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(5, 4, 5, 4)
@@ -236,18 +257,30 @@ class CompactTodoPanel(QWidget):
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.addStretch(1)
-        self.add_button = QToolButton(self)
-        self.add_button.setObjectName("addButton")
-        self.add_button.setText("＋")
-        self.add_button.setToolTip("添加待办")
-        self.add_button.clicked.connect(self.add_task)
-        footer.addWidget(self.add_button)
         self.expand_button = QToolButton(self)
         self.expand_button.setObjectName("expandButton")
         self.expand_button.setText("⌄")
         self.expand_button.setToolTip("收起待办")
+        self.expand_button.setFixedSize(24, 26)
+        self.expand_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.expand_button.clicked.connect(self._toggle_expanded)
-        footer.addWidget(self.expand_button)
+        footer.addWidget(self.expand_button, 0, Qt.AlignmentFlag.AlignBottom)
+
+        # Keep the add affordance in the same fixed action column as every
+        # row's more button.  This prevents it from drifting under the text
+        # when the panel width adapts to a long title.
+        self.action_column = QVBoxLayout()
+        self.action_column.setContentsMargins(0, 0, 0, 0)
+        self.action_column.setSpacing(4)
+        self.add_button = QToolButton(self)
+        self.add_button.setObjectName("addButton")
+        self.add_button.setText("＋")
+        self.add_button.setFixedSize(30, 26)
+        self.add_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.add_button.setToolTip("添加待办")
+        self.add_button.clicked.connect(self.add_task)
+        self.action_column.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        footer.addLayout(self.action_column)
         # Kept as an alias for older callers/tests.  There is only one real
         # toggle now; the former second button caused the collapsed state to
         # turn into an untargetable ellipsis.
@@ -381,7 +414,9 @@ class CompactTodoPanel(QWidget):
             (metrics.horizontalAdvance(self._task_text(task)) for task in tasks),
             default=0,
         )
-        fixed_controls = 16 + 6 + 3 + 26 + 7 + 10
+        # checkbox + gaps/padding + the fixed 30px more button.  The add
+        # button lives below the rows and therefore does not change row width.
+        fixed_controls = 22 + 4 + 4 + 30 + 5 + 4 + 10
         desired = longest + fixed_controls
         self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
 

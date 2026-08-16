@@ -400,6 +400,17 @@ class AISettingsDialog(QDialog):
         )
         layout.addWidget(self.content_updates)
 
+        self.program_updates = QCheckBox(
+            "自动检查程序更新（下载前会询问，安装包会先校验）"
+        )
+        self.program_updates.setChecked(
+            getattr(settings, "program_updates_enabled", True)
+        )
+        self.program_updates.setToolTip(
+            "开启后启动时自动检查新版程序；不会静默安装，必须由你确认。Windows 会启动安装器，macOS 会打开 DMG。"
+        )
+        layout.addWidget(self.program_updates)
+
         self.allow_autonomous_walk = QCheckBox(
             "允许六毛自动跑动（默认关闭；打开后会在桌面上来回移动）"
         )
@@ -705,6 +716,7 @@ class AISettingsDialog(QDialog):
         self.settings.ai_model = self.model.text().strip()
         self.settings.always_on_top = self.always_on_top.isChecked()
         self.settings.content_updates_enabled = self.content_updates.isChecked()
+        self.settings.program_updates_enabled = self.program_updates.isChecked()
         self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
