@@ -89,6 +89,24 @@ def test_tray_update_actions_are_explicit_manual_checks() -> None:
     assert "lambda _checked=False: self.check_content_updates(True)" in app_source
 
 
+def test_program_download_exposes_progress_to_the_gui() -> None:
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    worker_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "update_worker.py").read_text(
+        encoding="utf-8"
+    )
+    updater_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "program_updates.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "QProgressDialog" in app_source
+    assert "worker.progress.connect(self._program_download_progress_changed)" in app_source
+    assert "progress = Signal(int, int)" in worker_source
+    assert "progress=self.progress.emit" in worker_source
+    assert "progress: Callable[[int, int], None] | None = None" in updater_source
+
+
 def test_one_command_release_script_has_safety_checks() -> None:
     """一键发布必须先验登录、干净工作区、测试、主分支和标签归属。"""
 

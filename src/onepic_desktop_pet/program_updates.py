@@ -245,7 +245,38 @@ class ProgramUpdateManager:
 
         return self.check_latest().release
 
-    def _download(self, url: str, destination: Path, *, max_bytes: int) -> None:
+    @staticmethod
+    def _response_content_length(response: object) -> int:
+        """Read a response size without requiring a concrete urllib class."""
+
+        headers = getattr(response, "headers", None)
+        raw: object | None = None
+        if headers is not None:
+            try:
+                raw = headers.get("Content-Length")
+            except (AttributeError, TypeError):
+                raw = None
+        if raw is None:
+            getheader = getattr(response, "getheader", None)
+            if callable(getheader):
+                try:
+                    raw = getheader("Content-Length")
+                except (OSError, TypeError, ValueError):
+                    raw = None
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _download(
+        self,
+        url: str,
+        destination: Path,
+        *,
+        max_bytes: int,
+        expected_size: int = 0,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https" or not _is_github_host(parsed.netloc):
             raise ProgramUpdateError("安装包地址不是受信任的 GitHub 地址")
@@ -254,6 +285,9 @@ class ProgramUpdateManager:
             response = self._opener(request, timeout=self.timeout)
             with response, destination.open("wb") as handle:
                 size = 0
+                total = self._response_content_length(response) or max(0, int(expected_size))
+                if progress is not None:
+                    progress(0, total)
                 while True:
                     chunk = response.read(1024 * 1024)
                     if not chunk:
@@ -262,6 +296,12 @@ class ProgramUpdateManager:
                     if size > max_bytes:
                         raise ProgramUpdateError("安装包超过安全大小限制")
                     handle.write(chunk)
+                    if progress is not None:
+                        progress(size, total)
+                if progress is not None and total > 0 and size < total:
+                    # A server may omit or under-report Content-Length.  The
+                    # final callback still lets the UI finish at 100%.
+                    progress(size, size)
         except ProgramUpdateError:
             raise
         except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -275,13 +315,24 @@ class ProgramUpdateManager:
             raise ProgramUpdateError(f"找不到安装包校验值：{asset_name}")
         return match.group(1).casefold()
 
-    def download_and_verify(self, release: ProgramRelease) -> ProgramUpdateResult:
+    def download_and_verify(
+        self,
+        release: ProgramRelease,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> ProgramUpdateResult:
         self.download_root.mkdir(parents=True, exist_ok=True)
         safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", release.tag_name).strip("._") or "release"
         final_path = self.download_root / f"{safe_tag}-{release.asset_name}"
         partial_path = final_path.with_suffix(final_path.suffix + ".part")
         partial_path.unlink(missing_ok=True)
-        self._download(release.asset_url, partial_path, max_bytes=_MAX_INSTALLER_BYTES)
+        self._download(
+            release.asset_url,
+            partial_path,
+            max_bytes=_MAX_INSTALLER_BYTES,
+            expected_size=release.asset_size,
+            progress=progress,
+        )
         expected = release.checksum_value
         if release.checksum_url:
             checksum_path = partial_path.with_suffix(partial_path.suffix + ".sha256")

@@ -62,6 +62,7 @@ class ProgramUpdateDownloadWorker(QThread):
 
     completed = Signal(object)
     failed = Signal(str)
+    progress = Signal(int, int)
 
     def __init__(
         self,
@@ -76,7 +77,10 @@ class ProgramUpdateDownloadWorker(QThread):
     def run(self) -> None:
         LOGGER.info("[Update] installer download started: %s", self.release.asset_name)
         try:
-            result = self.manager.download_app_update(self.release)
+            result = self.manager.download_app_update(
+                self.release,
+                progress=self.progress.emit,
+            )
         except Exception as exc:
             LOGGER.warning("[Update] installer download failed: %s", exc)
             self.failed.emit(str(exc))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from .content_updates import ContentUpdateManager, ContentUpdateResult
 from .program_updates import (
     ProgramRelease,
@@ -35,5 +37,10 @@ class UpdateManager:
     def check_app_update(self) -> ProgramUpdateCheckResult:
         return self.program.check_latest()
 
-    def download_app_update(self, release: ProgramRelease) -> ProgramUpdateResult:
-        return self.program.download_and_verify(release)
+    def download_app_update(
+        self,
+        release: ProgramRelease,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> ProgramUpdateResult:
+        return self.program.download_and_verify(release, progress=progress)
