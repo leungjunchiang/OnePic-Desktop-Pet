@@ -467,8 +467,19 @@ class CompactTodoPanel(QWidget):
         )
         root_layout.invalidate()
         root_layout.activate()
+        # QScrollArea.sizeHint() is allowed to report a smaller viewport than
+        # its fixed child when the parent has not been shown yet.  Using that
+        # hint for the native companion window was the source of the last
+        # clipping bug: the rows container was 108px tall while the visible
+        # viewport was only 94px.  Derive the minimum from the actual measured
+        # list and action rail, then add the root layout's vertical margins.
+        root_margins = root_layout.contentsMargins()
         layout_height = root_layout.sizeHint().height()
-        self.setFixedHeight(max(layout_height + 2, self.action_column.height() + 8))
+        list_required = list_height + 4  # scroll-frame breathing room
+        action_required = self.action_column.height()
+        content_required = max(list_required, action_required)
+        margin_height = root_margins.top() + root_margins.bottom()
+        self.setFixedHeight(max(content_required + margin_height, layout_height + 2))
         root_layout.activate()
         self._log_geometry("resize")
 
