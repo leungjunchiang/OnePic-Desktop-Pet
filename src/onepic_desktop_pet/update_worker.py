@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QThread, Signal
 
-from .content_updates import ContentUpdateManager, ContentUpdateResult
-from .program_updates import ProgramRelease, ProgramUpdateManager
+from .program_updates import ProgramRelease
+from .update_manager import UpdateManager
 
 
 class ContentUpdateWorker(QThread):
@@ -14,13 +14,13 @@ class ContentUpdateWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, manager: ContentUpdateManager, parent=None) -> None:
+    def __init__(self, manager: UpdateManager, parent=None) -> None:
         super().__init__(parent)
         self.manager = manager
 
     def run(self) -> None:
         try:
-            result = self.manager.check_and_apply()
+            result = self.manager.check_content_update()
         except Exception as exc:  # convert network/validation errors to UI data
             self.failed.emit(str(exc))
         else:
@@ -33,13 +33,13 @@ class ProgramUpdateCheckWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, manager: ProgramUpdateManager, parent=None) -> None:
+    def __init__(self, manager: UpdateManager, parent=None) -> None:
         super().__init__(parent)
         self.manager = manager
 
     def run(self) -> None:
         try:
-            result = self.manager.fetch_latest()
+            result = self.manager.check_app_update()
         except Exception as exc:
             self.failed.emit(str(exc))
         else:
@@ -54,7 +54,7 @@ class ProgramUpdateDownloadWorker(QThread):
 
     def __init__(
         self,
-        manager: ProgramUpdateManager,
+        manager: UpdateManager,
         release: ProgramRelease,
         parent=None,
     ) -> None:
@@ -64,9 +64,8 @@ class ProgramUpdateDownloadWorker(QThread):
 
     def run(self) -> None:
         try:
-            result = self.manager.download_and_verify(self.release)
+            result = self.manager.download_app_update(self.release)
         except Exception as exc:
             self.failed.emit(str(exc))
         else:
             self.completed.emit(result)
-

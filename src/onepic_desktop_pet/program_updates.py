@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Callable
 
@@ -42,6 +43,19 @@ def _is_github_host(host: str) -> bool:
 
 class ProgramUpdateError(RuntimeError):
     """Raised when a program release cannot be safely checked or verified."""
+
+
+class UpdateState(str, Enum):
+    """Visible lifecycle states shared by the program update UI."""
+
+    IDLE = "idle"
+    CHECKING = "checking"
+    UP_TO_DATE = "up_to_date"
+    UPDATE_AVAILABLE = "update_available"
+    DOWNLOADING = "downloading"
+    READY_TO_INSTALL = "ready_to_install"
+    INSTALLING = "installing"
+    ERROR = "error"
 
 
 def version_key(value: str) -> tuple[int, ...]:
@@ -68,6 +82,20 @@ class ProgramRelease:
     asset_size: int
     checksum_url: str | None
     checksum_value: str | None
+    release_notes: str = ""
+
+
+@dataclass(frozen=True)
+class ProgramUpdateCheckResult:
+    """The result of a metadata-only check, including the no-update case."""
+
+    current_version: str
+    latest_version: str
+    release: ProgramRelease | None
+
+    @property
+    def update_available(self) -> bool:
+        return self.release is not None
 
 
 @dataclass(frozen=True)
@@ -120,23 +148,30 @@ class ProgramUpdateManager:
         except (OSError, urllib.error.URLError, ValueError) as exc:
             raise ProgramUpdateError(f"程序更新网络请求失败：{exc}") from exc
 
-    def fetch_latest(self) -> ProgramRelease | None:
-        """Return a newer release for this platform, or ``None``."""
+    def check_latest(self) -> ProgramUpdateCheckResult:
+        """Return current/latest versions and an optional verified asset plan."""
 
         asset_name = _asset_name()
         if not asset_name or not self.releases_url:
-            return None
+            current = str(self.app_version).removeprefix("v")
+            return ProgramUpdateCheckResult(current, current, None)
         raw = self._read_url(self.releases_url, max_bytes=_MAX_METADATA_BYTES)
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ProgramUpdateError(f"程序更新信息格式无效：{exc}") from exc
-        if not isinstance(payload, dict) or bool(payload.get("draft")) or bool(payload.get("prerelease")):
-            return None
+        if not isinstance(payload, dict):
+            raise ProgramUpdateError("程序更新信息格式无效：Release 不是对象")
+        if bool(payload.get("draft")) or bool(payload.get("prerelease")):
+            current = str(self.app_version).removeprefix("v")
+            return ProgramUpdateCheckResult(current, current, None)
         tag_name = str(payload.get("tag_name") or "").strip()
         version = tag_name.removeprefix("v")
-        if not tag_name or version_key(version) <= version_key(self.app_version):
-            return None
+        current_version = str(self.app_version).removeprefix("v")
+        if not tag_name or not version:
+            raise ProgramUpdateError("程序更新信息格式无效：缺少 tag_name")
+        if version_key(version) <= version_key(current_version):
+            return ProgramUpdateCheckResult(current_version, version, None)
         release_url = str(payload.get("html_url") or "").strip()
         assets = payload.get("assets")
         if not isinstance(assets, list):
@@ -151,7 +186,7 @@ class ProgramUpdateManager:
         checksum_asset = next((item for item in assets if isinstance(item, dict) and item.get("name") == checksum_name), None)
         checksum_url = str(checksum_asset.get("browser_download_url") or "").strip() if isinstance(checksum_asset, dict) else None
         checksum_value = str(asset.get("digest") or "").removeprefix("sha256:").casefold() or None
-        return ProgramRelease(
+        release = ProgramRelease(
             version=version,
             tag_name=tag_name,
             release_url=release_url,
@@ -160,7 +195,14 @@ class ProgramUpdateManager:
             asset_size=max(0, int(asset.get("size") or 0)),
             checksum_url=checksum_url,
             checksum_value=checksum_value if _SHA256_PATTERN.fullmatch(checksum_value or "") else None,
+            release_notes=str(payload.get("body") or "").strip(),
         )
+        return ProgramUpdateCheckResult(current_version, version, release)
+
+    def fetch_latest(self) -> ProgramRelease | None:
+        """Backward-compatible helper returning only a newer release."""
+
+        return self.check_latest().release
 
     def _download(self, url: str, destination: Path, *, max_bytes: int) -> None:
         parsed = urllib.parse.urlparse(url)
@@ -214,4 +256,3 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
         return ProgramUpdateResult(release=release, installer_path=final_path)
-

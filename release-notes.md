@@ -1,3 +1,17 @@
+# Lili v0.22.47
+
+## Compact Todo action column
+
+- Rebuilt the right-side controls as a fixed 40px action column with complete 32px `⋯` and `＋` buttons.
+- Long task titles now elide only the content area; the action buttons remain fully visible and clickable.
+- The panel height accounts for the vertical action rail, including an 8px gap between `⋯` and `＋`.
+
+## Program update feedback
+
+- Added a shared `UpdateManager` for content-only and full-program updates.
+- “检查程序更新” now immediately shows a checking state and reports latest/current versions, available releases, network failures, malformed metadata, and download verification failures.
+- Added release-note previews, semantic version comparisons, and a visible program version in AI and companion settings.
+
 # Lili v0.22.46
 
 ## Compact Todo action column
@@ -194,4 +208,3 @@
 - Windows 使用 UI Automation 定位歌曲行与该行播放按钮，再由 GSMTC 校验；macOS Apple Music 使用 Apple Events，其他客户端使用已授权 Accessibility Adapter。
 
 同时包含 v0.18.1 的 macOS Codex CLI 绝对路径检测、最近 30 轮聊天记忆、五类右键菜单和四标签搭子自习室改进。
-

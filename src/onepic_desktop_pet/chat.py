@@ -57,6 +57,7 @@ from .ai import (
     launch_codex_gui,
     provider_defaults,
 )
+from . import __version__
 from .config import PET_NAME
 from .config import PetSettings
 from .chat_manager import AgentConnectionState, AgentManager
@@ -411,6 +412,13 @@ class AISettingsDialog(QDialog):
         )
         layout.addWidget(self.program_updates)
 
+        self.version_label = QLabel(
+            f"程序版本：{__version__} · 补充内容更新与程序更新分开"
+        )
+        self.version_label.setObjectName("status")
+        self.version_label.setWordWrap(True)
+        layout.addWidget(self.version_label)
+
         self.allow_autonomous_walk = QCheckBox(
             "允许六毛自动跑动（默认关闭；打开后会在桌面上来回移动）"
         )
@@ -740,4 +748,3 @@ class AISettingsDialog(QDialog):
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()
         if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())
-

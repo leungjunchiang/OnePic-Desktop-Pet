@@ -37,7 +37,7 @@ jobs:
           python tools/build_content_manifest.py \
             --root . \
             --version "${{ inputs.release_tag }}" \
-            --min-app-version "0.22.46" \
+            --min-app-version "0.22.47" \
             --ref "${{ inputs.release_tag }}" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json
@@ -49,4 +49,3 @@ jobs:
           gh release upload "${{ inputs.release_tag }}" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
-
