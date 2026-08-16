@@ -1,3 +1,12 @@
+# Lili v0.22.62
+
+## 固化 macOS TLS 修复并保持 Supabase 优先
+
+- macOS 自习室 HTTPS 请求现在优先使用系统可信 CA（`/etc/ssl/cert.pem` 等），找不到或不可用时回退到应用内置 certifi；始终保持证书校验和主机名校验，不使用 `verify=False`。
+- 增加安全 TLS 诊断字段，记录实际使用的 CA 来源，便于区分系统证书、应用证书与网络问题。
+- 保持 Supabase 为唯一主后端和首选线路：每次启动都从 Supabase Direct 开始，旧的 CloudBase 线路只作为记录提示；连续网络级失败后才切换 CloudBase Proxy，恢复检查成功后自动切回。
+- 业务错误（401/403/参数错误等）不会触发线路切换，也不会把 CloudBase 当作第二数据库。
+
 # Lili v0.22.60
 
 ## 修正 Qt/DPI 安全边距测试
