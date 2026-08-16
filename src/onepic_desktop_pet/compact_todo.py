@@ -254,7 +254,9 @@ class CompactTodoPanel(QWidget):
     CONTENT_MAX_WIDTH = 220
     ACTION_COLUMN_WIDTH = 40
     ACTION_BUTTON_SIZE = 32
-    ACTION_GAP = 8
+    # Keep a small visual gap after Qt/DPI rounding; the measured native
+    # distance between the two 32px buttons remains at least 8px.
+    ACTION_GAP = 10
     PANEL_GAP = 8
     TEXT_MEASURE_SAFETY = 14
     ROW_HEIGHT = TodoRow.MIN_HEIGHT
