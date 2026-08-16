@@ -8,6 +8,7 @@ the pet whenever the pet moves.
 
 from __future__ import annotations
 
+import logging
 from time import monotonic
 from typing import Any, Callable
 
@@ -32,6 +33,9 @@ from PySide6.QtWidgets import (
 )
 
 from .time_memory import TimeMemory
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 COMPACT_TODO_STYLE = """
@@ -213,6 +217,8 @@ class TodoActionColumn(QWidget):
         super().__init__(parent)
         self.setObjectName("todoActionColumn")
         self.setFixedWidth(self.WIDTH)
+        self.setMinimumWidth(self.WIDTH)
+        self.setMaximumWidth(self.WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -223,6 +229,9 @@ class TodoActionColumn(QWidget):
         self.add_button.setFixedSize(self.BUTTON_SIZE, self.BUTTON_SIZE)
         self.add_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.add_button.setToolTip("添加待办")
+        self.add_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.add_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def rebuild(self, buttons: list[QToolButton], visible_rows: int) -> None:
         """Replace row actions without changing the rail width."""
@@ -253,6 +262,7 @@ class TodoActionColumn(QWidget):
         button_stack += self.BUTTON_SIZE
         row_stack = max(0, visible_rows) * CompactTodoPanel.ROW_HEIGHT
         self.setFixedHeight(max(row_stack, button_stack, self.BUTTON_SIZE))
+        self.layout.activate()
 
 
 class CompactTodoPanel(QWidget):
@@ -466,11 +476,31 @@ class CompactTodoPanel(QWidget):
             TodoActionColumn.BUTTON_SIZE,
         )
         self.action_column.setFixedHeight(body_height)
-        # No fixed empty canvas: an empty panel is just the tiny add affordance.
-        self.adjustSize()
-        footer_height = 27
-        content_height = body_height + footer_height + 8
-        self.setFixedHeight(max(38, content_height))
+        # The expand control is useful only when there is something to
+        # expand.  Keeping its layout row alive for a single task used to
+        # leave a large empty tail below the accessory.
+        # ``isVisible()`` is false while the companion native window itself
+        # is hidden, even when the button has been explicitly enabled for the
+        # next show.  Use the widget visibility property so the first layout
+        # calculation also reserves the footer correctly.
+        footer_height = self.expand_button.sizeHint().height() if not self.expand_button.isHidden() else 0
+
+        # This is a native, frameless companion window.  Its own geometry is
+        # the clipping boundary, so calculate it from the real layout after
+        # every child has received its final size.  The previous code used
+        # ``body + footer + 8`` and omitted the root layout spacing and a
+        # safety pixel; that cut the lower half of the add button on Windows.
+        self.ensurePolished()
+        self.action_column.ensurePolished()
+        self.action_column.layout.activate()
+        root_layout = self.layout()
+        root_layout.invalidate()
+        root_layout.activate()
+        layout_height = root_layout.sizeHint().height()
+        explicit_height = body_height + footer_height + 8 + (2 if footer_height else 0) + 2
+        self.setFixedHeight(max(38, layout_height + 2, explicit_height))
+        root_layout.activate()
+        self._log_geometry("resize")
 
     @staticmethod
     def _task_text(task: Any) -> str:
@@ -492,12 +522,33 @@ class CompactTodoPanel(QWidget):
             (metrics.horizontalAdvance(self._task_text(task)) for task in tasks),
             default=0,
         )
-        # Left row padding + checkbox + checkbox gap + body gap + the fixed
-        # 40px action rail + panel margins.  The rail owns both buttons, so
-        # title width can never consume their space.
-        fixed_controls = 5 + 22 + 4 + 6 + TodoActionColumn.WIDTH + 10
+        # Exact horizontal overhead of the real layouts:
+        # panel margins (10) + body spacing (6) + fixed action rail (40) +
+        # row margins/checkbox/gaps (35).  The rail is never part of the
+        # stretchable label, so a long title can only elide the title.
+        fixed_controls = 10 + 6 + TodoActionColumn.WIDTH + 5 + 22 + 4 + 4
         desired = longest + fixed_controls
         self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
+
+    def _log_geometry(self, reason: str) -> None:
+        """Log the actual widget/window sizes when debug logging is enabled."""
+
+        if not LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        root_layout = self.layout()
+        LOGGER.debug(
+            "[TodoLayout] reason=%s panel=(x=%s,y=%s,w=%s,h=%s) "
+            "requested=(w=%s,h=%s) rows=(w=%s,h=%s) action=(x=%s,y=%s,w=%s,h=%s) "
+            "add=(x=%s,y=%s,w=%s,h=%s)",
+            reason,
+            self.x(), self.y(), self.width(), self.height(),
+            root_layout.sizeHint().width(), root_layout.sizeHint().height(),
+            self.rows_scroll.width(), self.rows_scroll.height(),
+            self.action_column.x(), self.action_column.y(),
+            self.action_column.width(), self.action_column.height(),
+            self.add_button.x(), self.add_button.y(),
+            self.add_button.width(), self.add_button.height(),
+        )
 
     def _select_task(self, task_id: str) -> None:
         task = self.memory.todos.get(task_id)
