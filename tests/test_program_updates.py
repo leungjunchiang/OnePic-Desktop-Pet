@@ -86,6 +86,59 @@ def test_fetch_and_verify_platform_installer(tmp_path, monkeypatch) -> None:
     assert result.installer_path.name == "v0.22.46-Lili-Windows-x64-Setup.exe"
 
 
+def test_download_reports_byte_progress(tmp_path, monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+    installer = b"installer payload for progress"
+    digest = hashlib.sha256(installer).hexdigest()
+    payload = {
+        "tag_name": "v0.22.46",
+        "html_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.22.46",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "Lili-Windows-x64-Setup.exe",
+                "browser_download_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/download/v0.22.46/Lili-Windows-x64-Setup.exe",
+                "size": len(installer),
+            },
+            {
+                "name": "Lili-Windows-x64-Setup.exe.sha256",
+                "browser_download_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/download/v0.22.46/Lili-Windows-x64-Setup.exe.sha256",
+                "size": 80,
+            },
+        ],
+    }
+
+    def opener(request, timeout=0):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        path = urlparse(url).path
+        if path.endswith("/releases/latest"):
+            return Response(json.dumps(payload).encode("utf-8"))
+        if path.endswith(".sha256"):
+            return Response(f"{digest}  Lili-Windows-x64-Setup.exe\n".encode("ascii"))
+        return Response(installer)
+
+    manager = ProgramUpdateManager(
+        app_version="0.22.45",
+        opener=opener,
+        download_root=tmp_path / "updates",
+    )
+    release = manager.fetch_latest()
+    assert release is not None
+    updates: list[tuple[int, int]] = []
+    result = manager.download_and_verify(
+        release,
+        progress=lambda done, total: updates.append((done, total)),
+    )
+
+    assert result.installer_path.exists()
+    assert updates[0] == (0, len(installer))
+    assert updates[-1] == (len(installer), len(installer))
+    assert all(done <= total for done, total in updates if total > 0)
+
+
 def test_no_update_for_same_or_older_release(tmp_path, monkeypatch) -> None:
     import onepic_desktop_pet.program_updates as module
 

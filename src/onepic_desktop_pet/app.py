@@ -29,7 +29,13 @@ import sys
 
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QMenu,
+    QMessageBox,
+    QProgressDialog,
+    QSystemTrayIcon,
+)
 
 from . import __version__
 from .config import PET_NAME, PetSettings, load_settings, save_settings
@@ -77,6 +83,7 @@ class DesktopPetApplication:
         self._content_update_manual = False
         self._program_update_check_worker: ProgramUpdateCheckWorker | None = None
         self._program_update_download_worker: ProgramUpdateDownloadWorker | None = None
+        self._program_update_progress: QProgressDialog | None = None
         self._program_update_manual = False
         self._program_release: ProgramRelease | None = None
         self.program_update_state = UpdateState.IDLE
@@ -364,20 +371,77 @@ class DesktopPetApplication:
             return
         self.program_update_state = UpdateState.DOWNLOADING
         self.window.show_speech(f"正在下载 Lili {release.version}，校验后再安装。", 4200)
+        self._show_program_download_progress(release)
         worker = ProgramUpdateDownloadWorker(self.update_manager, release, self.qt_app)
         self._program_update_download_worker = worker
         worker.completed.connect(self._program_update_downloaded)
         worker.failed.connect(self._program_update_download_failed)
+        worker.progress.connect(self._program_download_progress_changed)
         worker.finished.connect(self._program_update_download_finished)
         worker.start()
+
+    def _show_program_download_progress(self, release: ProgramRelease) -> None:
+        """Show a real byte-progress dialog while the installer is downloading."""
+
+        if self._program_update_progress is not None:
+            self._program_update_progress.close()
+            self._program_update_progress.deleteLater()
+        progress = QProgressDialog(
+            f"正在下载 Lili {release.version}…",
+            "",
+            0,
+            100,
+            self.window,
+        )
+        progress.setWindowTitle("下载程序更新")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setCancelButton(None)
+        progress.setValue(0)
+        progress.show()
+        self._program_update_progress = progress
+
+    def _program_download_progress_changed(self, downloaded: int, total: int) -> None:
+        progress = self._program_update_progress
+        if progress is None:
+            return
+        downloaded = max(0, int(downloaded))
+        total = max(0, int(total))
+        if total <= 0:
+            progress.setRange(0, 0)
+            progress.setLabelText("正在下载程序更新…（大小获取中）")
+            return
+        progress.setRange(0, 100)
+        percent = min(100, max(0, int(downloaded * 100 / total)))
+        downloaded_mb = downloaded / 1024 / 1024
+        total_mb = total / 1024 / 1024
+        progress.setValue(percent)
+        progress.setLabelText(
+            f"正在下载程序更新… {percent}%\n"
+            f"已下载 {downloaded_mb:.1f} / {total_mb:.1f} MB"
+        )
+
+    def _close_program_download_progress(self) -> None:
+        progress = self._program_update_progress
+        self._program_update_progress = None
+        if progress is not None:
+            progress.close()
+            progress.deleteLater()
 
     def _program_update_download_finished(self) -> None:
         worker = self._program_update_download_worker
         self._program_update_download_worker = None
+        # Defensive cleanup for an unexpected thread termination; normal
+        # success/failure paths close the dialog after verification.
+        if worker is not None and self._program_update_progress is not None:
+            self._close_program_download_progress()
         if worker is not None:
             worker.deleteLater()
 
     def _program_update_download_failed(self, message: str) -> None:
+        self._close_program_download_progress()
         self.program_update_state = UpdateState.ERROR
         QMessageBox.warning(
             self.window,
@@ -387,6 +451,7 @@ class DesktopPetApplication:
         )
 
     def _program_update_downloaded(self, result: object) -> None:
+        self._close_program_download_progress()
         if not isinstance(result, ProgramUpdateResult):
             self.program_update_state = UpdateState.ERROR
             self.window.show_speech("更新包无效，没有改动当前程序。", 4200)
