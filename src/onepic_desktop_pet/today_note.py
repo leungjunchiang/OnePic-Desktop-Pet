@@ -242,7 +242,7 @@ class TodayNoteWindow(QDialog):
         self.refresh()
 
     def refresh(self) -> None:
-        tasks = self.memory.todos.today()
+        tasks = self.memory.todo_view_today()
         selected_id = self.selected_task_id or str(self.memory.current_task_id or "")
         visible_tasks = [item for item in tasks if not self.hide_completed or not item.completed]
         note_manager = getattr(self.memory, "sticky_note", None)
@@ -266,9 +266,7 @@ class TodayNoteWindow(QDialog):
         self.task_list.clear()
         for item in visible_tasks:
             selected = item.id == selected_id
-            parts = [item.title]
-            if item.time:
-                parts.append(item.time)
+            parts = [item.display_text]
             if item.work_seconds:
                 parts.append(format_duration(item.work_seconds))
             list_item = QListWidgetItem(" · ".join(parts))
@@ -326,7 +324,8 @@ class TodayNoteWindow(QDialog):
         if not task_id:
             return
         self.selected_task_id = task_id
-        self.memory.select_task(task_id)
+        if getattr(self.memory.get_todo_view_item(task_id), "source_type", "todo") == "todo":
+            self.memory.select_task(task_id)
         self.select_requested.emit(task_id)
         self._update_action_state()
 
@@ -339,7 +338,7 @@ class TodayNoteWindow(QDialog):
         if not task_id:
             return
         completed = item.checkState() == Qt.CheckState.Checked
-        task = self.memory.todos.get(task_id)
+        task = self.memory.get_todo_view_item(task_id)
         if task is None or task.completed == completed:
             return
         self.task_checked.emit(task_id, completed)
@@ -363,12 +362,13 @@ class TodayNoteWindow(QDialog):
 
     def _update_action_state(self) -> None:
         task_id = self._selected_id()
-        task = self.memory.todos.get(task_id) if task_id else None
-        enabled = task is not None and not task.completed
-        self.start_button.setEnabled(enabled)
+        view_item = self.memory.get_todo_view_item(task_id) if task_id else None
+        task = self.memory.todos.get(task_id) if view_item and view_item.source_type == "todo" else None
+        enabled = view_item is not None and not view_item.completed
+        self.start_button.setEnabled(enabled and task is not None)
         self.complete_button.setEnabled(enabled)
         self.edit_action.setEnabled(task is not None)
-        self.delete_action.setEnabled(task is not None)
+        self.delete_action.setEnabled(view_item is not None)
 
     def _start_selected(self) -> None:
         task_id = self._selected_id()
@@ -380,8 +380,8 @@ class TodayNoteWindow(QDialog):
 
     def _complete_selected(self) -> None:
         task_id = self._selected_id()
-        task = self.memory.todos.get(task_id) if task_id else None
-        if task is not None and not task.completed:
+        view_item = self.memory.get_todo_view_item(task_id) if task_id else None
+        if view_item is not None and not view_item.completed:
             self.complete_requested.emit(task_id)
 
     def add_task(self, important: bool = False) -> None:
@@ -396,8 +396,9 @@ class TodayNoteWindow(QDialog):
 
     def edit_task(self) -> None:
         task_id = self._selected_id()
-        task = self.memory.todos.get(task_id) if task_id else None
-        if task is None:
+        view_item = self.memory.get_todo_view_item(task_id) if task_id else None
+        task = self.memory.todos.get(task_id) if view_item and view_item.source_type == "todo" else None
+        if view_item is None or task is None:
             return
         dialog = QDialog(self)
         dialog.setWindowTitle("修改任务")
@@ -421,14 +422,14 @@ class TodayNoteWindow(QDialog):
 
     def delete_task(self) -> None:
         task_id = self._selected_id()
-        task = self.memory.todos.get(task_id) if task_id else None
-        if task is None:
+        view_item = self.memory.get_todo_view_item(task_id) if task_id else None
+        if view_item is None:
             return
-        answer = QMessageBox.question(self, "删除任务", f"确定删除“{task.title}”？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        answer = QMessageBox.question(self, "删除待办", f"确定移除“{view_item.title}”？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self.memory.todos.delete(task.id)
-        if self.selected_task_id == task.id:
+        self.memory.delete_todo_view_item(view_item.id)
+        if self.selected_task_id == view_item.id:
             self.selected_task_id = ""
             self.memory.select_task(None)
         self.refresh()
@@ -586,8 +587,11 @@ class TimeMemoryWindow(QDialog):
         target, ok = QInputDialog.getText(self, "添加倒计时", "目标日期（YYYY-MM-DD）")
         if not ok or not target.strip():
             return
+        show_before, ok = QInputDialog.getInt(self, "添加倒计时", "提前几天进入待办？", 7, 0, 365, 1)
+        if not ok:
+            return
         try:
-            self.memory.countdowns.add(title.strip(), target.strip())
+            self.memory.countdowns.add(title.strip(), target.strip(), show_before_days=show_before)
         except (TypeError, ValueError):
             QMessageBox.warning(self, "倒计时", "日期格式不对，请填写 YYYY-MM-DD。")
         self.refresh()
@@ -602,8 +606,11 @@ class TimeMemoryWindow(QDialog):
         repeat, ok = QInputDialog.getItem(self, "添加纪念日", "重复方式", ["none", "yearly"], 1, False)
         if not ok:
             return
+        show_before, ok = QInputDialog.getInt(self, "添加纪念日", "提前几天进入待办？", 7, 0, 365, 1)
+        if not ok:
+            return
         try:
-            self.memory.anniversaries.add(title.strip(), value.strip(), repeat=repeat)
+            self.memory.anniversaries.add(title.strip(), value.strip(), repeat=repeat, show_before_days=show_before)
         except (TypeError, ValueError):
             QMessageBox.warning(self, "纪念日", "日期格式不对，请填写 YYYY-MM-DD。")
         self.refresh()
@@ -619,4 +626,3 @@ class TimeMemoryWindow(QDialog):
         if ok and title.strip():
             self.memory.timeline.add(title.strip())
             self.refresh()
-

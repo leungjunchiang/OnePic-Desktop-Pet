@@ -20,13 +20,15 @@ class Anniversary:
     category: str = "personal"
     show_on_desktop: bool = False
     reminder_offsets: list[str] | None = None
+    show_before_days: int = 7
+    acknowledged_date: str | None = None
     created_at: str = ""
     note: str = ""
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Anniversary":
         repeat = str(value.get("repeat") or "none")
-        return cls(str(value.get("id") or uuid4().hex), str(value.get("title") or "未命名纪念日")[:240], str(value.get("date") or ""), repeat if repeat in {"none", "yearly"} else "none", str(value.get("category") or "personal")[:30], bool(value.get("show_on_desktop", False)), [str(item) for item in value.get("reminder_offsets", []) if item] if isinstance(value.get("reminder_offsets", []), list) else [], str(value.get("created_at") or datetime.now().astimezone().isoformat()), str(value.get("note") or "")[:500])
+        return cls(str(value.get("id") or uuid4().hex), str(value.get("title") or "未命名纪念日")[:240], str(value.get("date") or ""), repeat if repeat in {"none", "yearly"} else "none", str(value.get("category") or "personal")[:30], bool(value.get("show_on_desktop", False)), [str(item) for item in value.get("reminder_offsets", []) if item] if isinstance(value.get("reminder_offsets", []), list) else [], max(0, min(365, int(value.get("show_before_days", 7) or 0))), str(value.get("acknowledged_date") or "") or None, str(value.get("created_at") or datetime.now().astimezone().isoformat()), str(value.get("note") or "")[:500])
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,9 +50,9 @@ class AnniversaryManager:
         if self.persist:
             write_json_atomic(self.path, [item.to_dict() for item in self._items])
 
-    def add(self, title: str, value: str | date, *, repeat: str = "none", category: str = "personal", show_on_desktop: bool = False, reminder_offsets: list[str] | None = None, note: str = "") -> Anniversary:
+    def add(self, title: str, value: str | date, *, repeat: str = "none", category: str = "personal", show_on_desktop: bool = False, reminder_offsets: list[str] | None = None, show_before_days: int = 7, note: str = "") -> Anniversary:
         day = parse_date(value, self._now)
-        item = Anniversary(uuid4().hex, str(title).strip()[:240], day.isoformat(), repeat if repeat in {"none", "yearly"} else "none", str(category)[:30], bool(show_on_desktop), list(reminder_offsets or []), now_local(self._now).isoformat(), str(note)[:500])
+        item = Anniversary(uuid4().hex, str(title).strip()[:240], day.isoformat(), repeat if repeat in {"none", "yearly"} else "none", str(category)[:30], bool(show_on_desktop), list(reminder_offsets or []), max(0, min(365, int(show_before_days))), None, now_local(self._now).isoformat(), str(note)[:500])
         self._items.append(item)
         self._save()
         return item
@@ -87,8 +89,22 @@ class AnniversaryManager:
                 value = bool(value)
             elif key == "reminder_offsets":
                 value = [str(entry) for entry in value if entry] if isinstance(value, list) else []
+            elif key == "show_before_days":
+                value = max(0, min(365, int(value)))
+            elif key == "acknowledged_date":
+                value = str(value or "")[:10] or None
             if hasattr(item, key):
                 setattr(item, key, value)
+        self._save()
+        return item
+
+    def acknowledge(self, item_id: str) -> Anniversary:
+        """Dismiss the current occurrence without deleting a yearly date."""
+
+        item = self.get(item_id)
+        if item is None:
+            raise KeyError(item_id)
+        item.acknowledged_date = self.next_date(item).isoformat()
         self._save()
         return item
 

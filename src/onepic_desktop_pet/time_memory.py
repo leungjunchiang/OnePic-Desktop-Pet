@@ -14,6 +14,7 @@ from .structured_actions import LocalActionExecutor
 from .sticky_note_manager import StickyNoteManager
 from .timeline_manager import TimelineManager
 from .todo_manager import TodoManager
+from .todo_view import TodoViewItem, collect_todo_view
 from .work_session_manager import WorkSessionManager
 
 
@@ -43,6 +44,52 @@ class TimeMemory:
 
     def select_task(self, task_id: str | None) -> None:
         self.current_task_id = str(task_id) if task_id else None
+
+    def todo_view_today(self) -> list[TodoViewItem]:
+        """Return ordinary Todos plus near-term countdowns/anniversaries."""
+
+        return collect_todo_view(
+            self.todos.today(), self.countdowns.items, self.anniversaries.items,
+            countdown_remaining=self.countdowns.remaining_days,
+            anniversary_remaining=self.anniversaries.remaining_days,
+            anniversary_next_date=self.anniversaries.next_date,
+        )
+
+    def get_todo_view_item(self, item_id: str) -> TodoViewItem | None:
+        return next((item for item in self.todo_view_today() if item.id == str(item_id)), None)
+
+    def complete_todo_view_item(self, item_id: str, completed: bool = True) -> bool:
+        """Complete a projected event without duplicating it into todos.json."""
+
+        item = self.get_todo_view_item(item_id)
+        if item is None:
+            return False
+        if item.source_type == "todo":
+            if completed:
+                self.complete_task(item.source_id)
+            else:
+                self.todos.complete(item.source_id, False)
+            return True
+        if not completed:
+            return False
+        if item.source_type == "countdown":
+            return self.complete_countdown(item.source_id)
+        if item.source_type == "anniversary":
+            self.anniversaries.acknowledge(item.source_id)
+            return True
+        return False
+
+    def delete_todo_view_item(self, item_id: str) -> bool:
+        item = self.get_todo_view_item(item_id)
+        if item is None:
+            return False
+        if item.source_type == "todo":
+            return self.todos.delete(item.source_id)
+        if item.source_type == "countdown":
+            return self.countdowns.delete(item.source_id)
+        if item.source_type == "anniversary":
+            return self.anniversaries.delete(item.source_id)
+        return False
 
     def record_focus(self, seconds: int, *, completed_session: bool = False, task_id: str | None = None, started_at: datetime | None = None) -> None:
         """Commit one real timer segment to both the task and daily record."""
@@ -97,4 +144,3 @@ class TimeMemory:
                 important=True,
             )
         return True
-

@@ -21,6 +21,7 @@ class Countdown:
     pinned: bool = False
     show_on_desktop: bool = False
     reminder_offsets: list[str] | None = None
+    show_before_days: int = 7
     completed: bool = False
     created_at: str = ""
     completed_at: str | None = None
@@ -37,6 +38,7 @@ class Countdown:
             pinned=bool(value.get("pinned", False)),
             show_on_desktop=bool(value.get("show_on_desktop", False)),
             reminder_offsets=[str(item) for item in value.get("reminder_offsets", []) if item] if isinstance(value.get("reminder_offsets", []), list) else [],
+            show_before_days=max(0, min(365, int(value.get("show_before_days", 7) or 0))),
             completed=bool(value.get("completed", False)),
             created_at=str(value.get("created_at") or datetime.now().astimezone().isoformat()),
             completed_at=str(value.get("completed_at") or "") or None,
@@ -63,12 +65,12 @@ class CountdownManager:
         if self.persist:
             write_json_atomic(self.path, [item.to_dict() for item in self._items])
 
-    def add(self, title: str, target_datetime: str | date | datetime, *, all_day: bool = True, category: str = "other", pinned: bool = False, show_on_desktop: bool = False, reminder_offsets: list[str] | None = None, note: str = "") -> Countdown:
+    def add(self, title: str, target_datetime: str | date | datetime, *, all_day: bool = True, category: str = "other", pinned: bool = False, show_on_desktop: bool = False, reminder_offsets: list[str] | None = None, show_before_days: int = 7, note: str = "") -> Countdown:
         if isinstance(target_datetime, date) and not isinstance(target_datetime, datetime):
             target = datetime.combine(target_datetime, datetime.min.time()).replace(tzinfo=now_local(self._now).tzinfo)
         else:
             target = parse_datetime(target_datetime, self._now)
-        item = Countdown(uuid4().hex, str(title).strip()[:240], target.isoformat(), bool(all_day), str(category)[:30], bool(pinned), bool(show_on_desktop), list(reminder_offsets or []), False, now_local(self._now).isoformat(), None, str(note)[:500])
+        item = Countdown(uuid4().hex, str(title).strip()[:240], target.isoformat(), bool(all_day), str(category)[:30], bool(pinned), bool(show_on_desktop), list(reminder_offsets or []), max(0, min(365, int(show_before_days))), False, now_local(self._now).isoformat(), None, str(note)[:500])
         self._items.append(item)
         self._save()
         return item
@@ -91,6 +93,8 @@ class CountdownManager:
                 value = str(value)[: (240 if key == "title" else 500)]
             elif key == "reminder_offsets":
                 value = [str(item) for item in value if item] if isinstance(value, list) else []
+            elif key == "show_before_days":
+                value = max(0, min(365, int(value)))
             elif key in {"all_day", "pinned", "show_on_desktop", "completed"}:
                 value = bool(value)
             if hasattr(item, key):
@@ -123,4 +127,3 @@ class CountdownManager:
         visible = [item for item in self._items if item.show_on_desktop and not item.completed]
         visible.sort(key=lambda item: (not item.pinned, self.remaining_days(item), item.title))
         return [(item, self.remaining_days(item)) for item in visible[:max(1, int(limit))]]
-

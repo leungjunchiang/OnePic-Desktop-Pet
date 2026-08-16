@@ -66,7 +66,7 @@ SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是�
 
 LOCAL_ACTION_PROMPT = """当用户明确要求修改本地待办、提醒、倒计时、纪念日或时光轴时，必须在简短自然回复之外输出一个 JSON 对象，并放在 ```json``` 代码块中；程序会先执行 JSON 的本地动作，成功后才会刷新界面。绝对不能只说“记住了/已经加上”却不输出动作。
 
-待办动作：create_todo（tasks 数组，每项至少有 title，可有 date/time/due_at/remind_at/reminder/important/source；“明天9点半提醒我改论文”应把 date=明天、time=09:30、reminder=true）、update_todo（target 加上要改的 title/date/time/due_at/remind_at/reminder/important）、complete_todo、delete_todo、query_today。提醒时间 remind_at 与截止时间 due_at 分开；不确定用户是新建还是修改时先追问。其余动作：checkout_today、rest_today、move_pending_to_today、create_countdown（title/target_date 或 target_datetime/show_on_desktop/pinned）、update_countdown、delete_countdown、complete_countdown、query_countdown、create_anniversary（title/date/repeat）、update_anniversary、delete_anniversary、query_anniversary、create_timeline_event（title/date/type/description）、delete_timeline_event、query_timeline。
+待办动作：create_todo（tasks 数组，每项至少有 title，可有 date/time/due_at/remind_at/reminder/important/source；“明天9点半提醒我改论文”应把 date=明天、time=09:30、reminder=true）、update_todo（target 加上要改的 title/date/time/due_at/remind_at/reminder/important）、complete_todo、delete_todo、query_today。提醒时间 remind_at 与截止时间 due_at 分开；不确定用户是新建还是修改时先追问。其余动作：checkout_today、rest_today、move_pending_to_today、create_countdown（title/target_date 或 target_datetime/show_on_desktop/pinned/show_before_days，默认提前7天进入待办）、update_countdown、delete_countdown、complete_countdown、query_countdown、create_anniversary（title/date/repeat/show_before_days，默认提前7天进入待办）、update_anniversary、delete_anniversary、query_anniversary、create_timeline_event（title/date/type/description）、delete_timeline_event、query_timeline。
 
 不要为普通聊天输出 JSON，不要把“距离某天还有多久”的查询误当创建；日期不明确时先追问。JSON 不是装饰：如果动作没有输出或本地执行失败，不能声称已经保存。"""
 
@@ -984,4 +984,3 @@ class AIChatService:
             model or default_model,
             local_context,
         )
-

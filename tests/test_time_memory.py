@@ -167,6 +167,40 @@ def test_yearly_anniversary_rolls_to_next_year(tmp_path) -> None:
     assert next_yearly_occurrence("2025-08-15", clock).isoformat() == "2027-08-15"
 
 
+def test_near_term_events_flow_into_one_todo_view_without_copying(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    manual = memory.todos.add("修改论文")
+    near = memory.countdowns.add("论文投稿", "2026-08-22")
+    far = memory.countdowns.add("答辩", "2026-08-30")
+    expired = memory.countdowns.add("旧截止", "2026-08-14")
+    anniversary = memory.anniversaries.add("演唱会", "2026-08-20", repeat="none")
+
+    view = memory.todo_view_today()
+    ids = {item.id for item in view}
+    assert manual.id in ids
+    assert f"countdown:{near.id}" in ids
+    assert f"countdown:{expired.id}" in ids
+    assert f"countdown:{far.id}" not in ids
+    assert next(item for item in view if item.source_id == near.id).display_text == "论文投稿 · 还有7天"
+    assert next(item for item in view if item.source_id == anniversary.id).display_text == "演唱会 · 还有5天"
+    assert len(memory.todos.items) == 1
+
+    assert memory.complete_todo_view_item(f"countdown:{near.id}")
+    assert memory.countdowns.get(near.id).completed is True
+    assert memory.complete_todo_view_item(f"anniversary:{anniversary.id}")
+    assert f"anniversary:{anniversary.id}" not in {item.id for item in memory.todo_view_today()}
+
+
+def test_event_show_before_days_can_be_customized(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.countdowns.add("月底事项", "2026-08-25", show_before_days=14)
+    assert f"countdown:{item.id}" in {entry.id for entry in memory.todo_view_today()}
+    memory.countdowns.update(item.id, show_before_days=3)
+    assert f"countdown:{item.id}" not in {entry.id for entry in memory.todo_view_today()}
+
+
 def test_timeline_event_query_is_curated_and_sorted(tmp_path) -> None:
     manager = TimelineManager(tmp_path / "timeline.json")
     manager.add("投出论文", date="2026-09-01", event_type="project", important=True)
@@ -260,4 +294,3 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     summary = memory.summary.today()
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
-
