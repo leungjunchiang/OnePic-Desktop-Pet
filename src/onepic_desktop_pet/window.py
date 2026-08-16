@@ -2005,22 +2005,23 @@ class PetWindow(QWidget):
             self.start_work_timer()
 
     def _complete_todo_from_note(self, task_id: str) -> None:
-        self.time_memory.complete_task(task_id)
+        if not self.time_memory.complete_todo_view_item(task_id, True):
+            return
         if self._today_note_window is not None:
             self._today_note_window.refresh()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
         self.show_speech("这项做完了，给你记上。", 4200)
 
     def _set_todo_completion_from_note(self, task_id: str, completed: bool) -> None:
-        task = self.time_memory.todos.get(task_id)
+        task = self.time_memory.get_todo_view_item(task_id)
         if task is None:
             return
         if completed:
-            self.time_memory.complete_task(task_id)
+            self.time_memory.complete_todo_view_item(task_id, True)
             self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
             self.show_speech("这项做完了，给你记上。", 4200)
         else:
-            self.time_memory.todos.complete(task_id, False)
+            self.time_memory.complete_todo_view_item(task_id, False)
             self.time_memory.summary.refresh_tasks()
         if self._today_note_window is not None:
             self._today_note_window.refresh()
@@ -2028,15 +2029,15 @@ class PetWindow(QWidget):
     def _set_todo_completion_from_panel(self, task_id: str, completed: bool) -> None:
         """Reflect a compact checkbox in the real local Todo store."""
 
-        task = self.time_memory.todos.get(task_id)
+        task = self.time_memory.get_todo_view_item(task_id)
         if task is None:
             return
         if completed:
-            self.time_memory.complete_task(task_id)
+            self.time_memory.complete_todo_view_item(task_id, True)
             self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
             self.show_speech("这项做完了，给你记上。", 4200)
         else:
-            self.time_memory.todos.complete(task_id, False)
+            self.time_memory.complete_todo_view_item(task_id, False)
             self.time_memory.summary.refresh_tasks()
         self._refresh_todo_surfaces()
 

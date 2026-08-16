@@ -163,9 +163,7 @@ class TodoRow(QWidget):
         self.more_requested.emit(self.task_id, self.more_button)
 
     def set_task(self, task: Any) -> None:
-        text = str(task.title)
-        if getattr(task, "time", None):
-            text += f" · {task.time}"
+        text = str(getattr(task, "display_text", "") or task.title)
         self._full_text = text
         self.label.setToolTip(text)
         self._update_label_text()
@@ -392,6 +390,10 @@ class CompactTodoPanel(QWidget):
         # turn into an untargetable ellipsis.
         self.collapse_button = self.expand_button
         root.addLayout(footer)
+        self._event_refresh_timer = QTimer(self)
+        self._event_refresh_timer.setInterval(60_000)
+        self._event_refresh_timer.timeout.connect(self.refresh)
+        self._event_refresh_timer.start()
         self.refresh()
 
     @property
@@ -431,8 +433,7 @@ class CompactTodoPanel(QWidget):
             key: deadline for key, deadline in self._just_completed.items() if deadline > now
         }
         tasks = [
-            item
-            for item in self.memory.todos.today()
+            item for item in self.memory.todo_view_today()
             if not item.completed or item.id in self._just_completed
         ]
         return sorted(tasks, key=self._task_priority_key)
@@ -535,10 +536,7 @@ class CompactTodoPanel(QWidget):
 
     @staticmethod
     def _task_text(task: Any) -> str:
-        text = str(getattr(task, "title", ""))
-        if getattr(task, "time", None):
-            text += f" · {task.time}"
-        return text
+        return str(getattr(task, "display_text", "") or getattr(task, "title", ""))
 
     def _resize_width(self, tasks: list[Any]) -> None:
         """Use one content-hugging width for all visible rows.
@@ -582,20 +580,22 @@ class CompactTodoPanel(QWidget):
         )
 
     def _select_task(self, task_id: str) -> None:
-        task = self.memory.todos.get(task_id)
+        task = self.memory.get_todo_view_item(task_id)
         if task is None:
             return
-        self.memory.select_task(task.id)
+        if task.source_type == "todo":
+            self.memory.select_task(task.source_id)
         self.selected_task_id = task.id
         for key, row in self._rows.items():
             row.set_selected(key == task.id)
         self.task_selected.emit(task.id)
 
     def _check_task(self, task_id: str, completed: bool) -> None:
-        task = self.memory.todos.get(task_id)
+        task = self.memory.get_todo_view_item(task_id)
         if task is None or bool(task.completed) == bool(completed):
             return
-        self.memory.todos.complete(task_id, completed)
+        if not self.memory.complete_todo_view_item(task_id, completed):
+            return
         if completed:
             self._just_completed[task_id] = monotonic() + self.COMPLETION_PREVIEW_SECONDS
             QTimer.singleShot(
@@ -620,27 +620,35 @@ class CompactTodoPanel(QWidget):
         self.task_changed.emit()
 
     def _show_task_menu(self, task_id: str, button: object) -> None:
-        task = self.memory.todos.get(task_id)
+        task = self.memory.get_todo_view_item(task_id)
         if task is None:
             return
         menu = QMenu(self)
-        edit = menu.addAction("编辑")
-        time_action = menu.addAction("修改时间")
-        pin = menu.addAction("取消置顶" if task.important else "置顶")
+        edit = time_action = pin = None
+        if task.source_type == "todo":
+            edit = menu.addAction("编辑")
+            time_action = menu.addAction("修改时间")
+            pin = menu.addAction("取消置顶" if task.important else "置顶")
+        elif task.source_type == "anniversary":
+            menu.addAction("这个日子先不显示").setData("acknowledge")
         complete = menu.addAction("取消完成" if task.completed else "完成")
         menu.addSeparator()
         delete = menu.addAction("删除")
         chosen = menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
-        if chosen is edit:
+        if edit is not None and chosen is edit:
             self._edit_task(task_id, include_time=True)
-        elif chosen is time_action:
+        elif time_action is not None and chosen is time_action:
             self._edit_task(task_id, include_time=True, time_only=True)
-        elif chosen is pin:
+        elif pin is not None and chosen is pin:
             self.memory.todos.update(task_id, important=not task.important)
             self.refresh()
             self.task_changed.emit()
         elif chosen is complete:
             self._check_task(task_id, not task.completed)
+        elif chosen is not None and chosen.data() == "acknowledge":
+            self.memory.complete_todo_view_item(task_id, True)
+            self.refresh()
+            self.task_changed.emit()
         elif chosen is delete:
             answer = QMessageBox.question(
                 self,
@@ -650,13 +658,13 @@ class CompactTodoPanel(QWidget):
                 QMessageBox.StandardButton.No,
             )
             if answer == QMessageBox.StandardButton.Yes:
-                self.memory.todos.delete(task_id)
+                self.memory.delete_todo_view_item(task_id)
                 self.refresh()
                 self.task_changed.emit()
 
     def _edit_task(self, task_id: str, *, include_time: bool, time_only: bool = False) -> None:
-        task = self.memory.todos.get(task_id)
-        if task is None:
+        task = self.memory.get_todo_view_item(task_id)
+        if task is None or task.source_type != "todo":
             return
         dialog = QDialog(self)
         dialog.setWindowTitle("修改待办")
@@ -686,6 +694,6 @@ class CompactTodoPanel(QWidget):
         changes: dict[str, Any] = {"time": time.text().strip() or None}
         if not time_only:
             changes.update(title=title.text().strip(), important=important.isChecked())
-        self.memory.todos.update(task_id, **changes)
+        self.memory.todos.update(task.source_id, **changes)
         self.refresh()
         self.task_changed.emit()

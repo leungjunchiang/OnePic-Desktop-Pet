@@ -161,7 +161,7 @@ class LocalActionExecutor:
             record = self.summary.records.set_rest_day(True, note=str(value.get("note") or ""))
             return ActionResult(action, "行，那今天不算旷工。", {"date": record.date})
         if action == "create_countdown":
-            item = self.countdowns.add(str(value.get("title") or "未命名倒计时"), str(value.get("target_datetime") or value.get("target_date") or ""), pinned=bool(value.get("pinned", False)), show_on_desktop=bool(value.get("show_on_desktop", False)), category=str(value.get("category") or "other"))
+            item = self.countdowns.add(str(value.get("title") or "未命名倒计时"), str(value.get("target_datetime") or value.get("target_date") or ""), pinned=bool(value.get("pinned", False)), show_on_desktop=bool(value.get("show_on_desktop", False)), show_before_days=int(value.get("show_before_days", 7) or 0), category=str(value.get("category") or "other"))
             return ActionResult(action, f"记上了。{item.title}已经放进倒计时。", {"id": item.id, "remaining_days": self.countdowns.remaining_days(item)})
         if action in {"update_countdown", "delete_countdown", "complete_countdown"}:
             item = self.countdowns.find(str(value.get("target") or value.get("title") or ""))
@@ -176,17 +176,17 @@ class LocalActionExecutor:
                 if not self.timeline.has_source(source):
                     self.timeline.add(f"完成倒计时：{item.title}", event_type="milestone", source=source, related_countdown_id=item.id, important=True)
                 return ActionResult(action, "完成了，已经留进时光轴。", {"id": item.id})
-            self.countdowns.update(item.id, **{key: val for key, val in value.items() if key in {"title", "target_datetime", "pinned", "show_on_desktop", "note"}})
+            self.countdowns.update(item.id, **{key: val for key, val in value.items() if key in {"title", "target_datetime", "pinned", "show_on_desktop", "show_before_days", "note"}})
             return ActionResult(action, "倒计时改好了。", {"id": item.id})
         if action == "query_countdown":
             return ActionResult(action, "", {"items": [{"title": item.title, "remaining_days": self.countdowns.remaining_days(item)} for item in self.countdowns.items if not item.completed]})
         if action == "create_anniversary":
-            item = self.anniversaries.add(str(value.get("title") or "未命名纪念日"), str(value.get("date") or ""), repeat=str(value.get("repeat") or "none"), show_on_desktop=bool(value.get("show_on_desktop", False)))
+            item = self.anniversaries.add(str(value.get("title") or "未命名纪念日"), str(value.get("date") or ""), repeat=str(value.get("repeat") or "none"), show_on_desktop=bool(value.get("show_on_desktop", False)), show_before_days=int(value.get("show_before_days", 7) or 0))
             return ActionResult(action, f"这个日子我记下了：{item.title}。", {"id": item.id})
         if action in {"update_anniversary", "delete_anniversary"}:
             item = self.anniversaries.find(str(value.get("target") or value.get("title") or ""))
             if action == "update_anniversary" and item is not None:
-                changes = {key: val for key, val in value.items() if key in {"title", "date", "repeat", "show_on_desktop", "note"}}
+                changes = {key: val for key, val in value.items() if key in {"title", "date", "repeat", "show_on_desktop", "show_before_days", "note"}}
                 self.anniversaries.update(item.id, **changes)
                 return ActionResult(action, "纪念日改好了。", {"id": item.id})
             return ActionResult(action, "纪念日已删。" if item and self.anniversaries.delete(item.id) else "没找到这个纪念日。", {})
