@@ -51,6 +51,29 @@ def _format_beijing_time(value: str) -> str:
         return ""
 
 
+def _room_focus_summary_text(summary: dict[str, Any], member_count: int = 0, focus_count: int = 0) -> str:
+    """Render room focus as today's time plus the room's historical total.
+
+    ``shared_focus_seconds`` remains a compatibility fallback for an older
+    deployed function. New dashboards provide the two explicit room-scoped
+    values so a member's personal daily total is never shown as the room
+    total.
+    """
+
+    today_seconds = int(summary.get("today_shared_focus_seconds") or 0)
+    cumulative_seconds = int(
+        summary.get("cumulative_shared_focus_seconds")
+        or summary.get("shared_focus_seconds")
+        or 0
+    )
+    return (
+        f"本房间 {int(summary.get('member_count') or member_count)} 人 · "
+        f"{int(summary.get('focus_count') or focus_count)} 人正在专注 · "
+        f"今日共同专注 {format_work_duration(today_seconds)} · "
+        f"累计共同专注 {format_work_duration(cumulative_seconds)}"
+    )
+
+
 def _presence_working(presence: dict[str, Any]) -> bool:
     """Read both the legacy boolean and the new explicit presence status.
 
@@ -1264,7 +1287,8 @@ class SocialHubDialog(QDialog):
                     self,
                     "本次自习室总结",
                     f"{room_name}\n\n"
-                    f"共同专注：{format_work_duration(int(summary.get('shared_focus_seconds') or 0))}\n"
+                    f"今日共同专注：{format_work_duration(int(summary.get('today_shared_focus_seconds') or 0))}\n"
+                    f"累计共同专注：{format_work_duration(int(summary.get('cumulative_shared_focus_seconds') or summary.get('shared_focus_seconds') or 0))}\n"
                     f"参与成员：{int(summary.get('member_count') or 0)} 人\n"
                     f"离开后可再次用房间码加入。",
                 )
@@ -1554,11 +1578,7 @@ class SocialHubDialog(QDialog):
         goal = room_detail.get("room_goal") or self.data.get("room_goal") or {}
         summary = room_detail.get("room_summary") or self.data.get("room_summary") or {}
         if isinstance(summary, dict) and summary:
-            self.room_summary.setText(
-                f"本房间 {int(summary.get('member_count') or len(room_people))} 人 · "
-                f"{int(summary.get('focus_count') or 0)} 人正在专注 · "
-                f"共同专注 {format_work_duration(int(summary.get('shared_focus_seconds') or 0))}"
-            )
+            self.room_summary.setText(_room_focus_summary_text(summary, len(room_people)))
         elif hasattr(self, "room_summary"):
             self.room_summary.setText("你当前没有加入工作间。创建工作间或输入房间码加入后，这里才会显示共同状态。")
         self._room_goal_state = dict(goal) if isinstance(goal, dict) else {}

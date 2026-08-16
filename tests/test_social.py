@@ -243,6 +243,15 @@ def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     assert "lili_presence_focus_session" in migration
 
 
+def test_room_dashboard_exposes_today_and_cumulative_focus_metrics():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260816000100_lili_room_focus_today_total.sql").read_text(encoding="utf-8")
+    assert "lili_room_focus_seconds_today" in migration
+    assert "today_shared_focus_seconds" in migration
+    assert "cumulative_shared_focus_seconds" in migration
+    assert "Asia/Shanghai" in migration
+
+
 def test_new_cloudbase_function_is_proxy_not_a_database_client():
     root = Path(__file__).resolve().parents[1]
     source = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8").lower()
@@ -258,4 +267,3 @@ def test_room_shared_state_migrations_are_retained_as_supabase_history():
     migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")
     assert "lili_room_dashboard" in migration
     assert "lili_room_events" in migration
-
