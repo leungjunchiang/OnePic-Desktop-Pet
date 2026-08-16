@@ -52,9 +52,10 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "macos-15-intel" in workflow
     assert 'release_tag="${GITHUB_REF_NAME#release/}"' in workflow
     assert 'gh release view "$release_tag"' in workflow
-    assert 'gh release upload "$release_tag"' in workflow
+    assert 'gh release delete "$release_tag"' in workflow
+    assert "--cleanup-tag" in workflow
+    assert 'gh release create "$release_tag"' in workflow
     assert '--target "$GITHUB_SHA"' in workflow
-    assert "--clobber" in workflow
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
     assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
@@ -150,3 +151,4 @@ def test_ai_settings_has_one_source_guarded_open_path() -> None:
     assert "def open_settings(self, source: str) -> bool:" in window
     assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
     assert "AISettingsDialog" not in chat_manager
+
