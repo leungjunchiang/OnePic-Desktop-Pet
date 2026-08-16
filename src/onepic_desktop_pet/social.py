@@ -138,8 +138,9 @@ def _verified_urlopen(request: urllib.request.Request, *, timeout: float):
     """Open a social request with an explicit verified context on macOS.
 
     Windows and Linux keep their normal urllib system behavior.  macOS uses
-    the application-bundled certifi CA file so Finder-launched frozen builds
-    do not depend on a terminal-only Python installation.
+    an explicit verified system CA bundle, with the application-bundled
+    certifi file as fallback, so Finder-launched frozen builds do not depend
+    on a terminal-only Python installation.
     """
 
     if sys.platform == "darwin":
@@ -1540,4 +1541,3 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
-

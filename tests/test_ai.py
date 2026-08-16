@@ -123,7 +123,7 @@ def test_codex_jsonl_parser_takes_last_agent_message() -> None:
     assert _parse_codex_jsonl(output) == "最终回复"
 
 
-def test_codex_uses_ephemeral_read_only_session_and_stdin(monkeypatch) -> None:
+def test_codex_uses_ephemeral_read_only_session_and_prompt_argument(monkeypatch) -> None:
     captured = {}
 
     def fake_run(command, **kwargs):
@@ -147,9 +147,23 @@ def test_codex_uses_ephemeral_read_only_session_and_stdin(monkeypatch) -> None:
     command = captured["command"]
     assert "--ephemeral" in command
     assert command[command.index("--sandbox") + 1] == "read-only"
-    assert command[-1] == "-"
-    assert "这句话不能出现在命令参数里" not in " ".join(command)
-    assert "这句话不能出现在命令参数里" in captured["kwargs"]["input"]
+    assert command[-1] != "-"
+    assert "这句话不能出现在命令参数里" in command[-1]
+    assert captured["kwargs"].get("input") is None
+
+
+def test_codex_exec_failure_is_logged_without_prompt_or_credentials(monkeypatch, caplog) -> None:
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(returncode=2, stdout="", stderr="not logged in")
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("codex"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+
+    with pytest.raises(AIConnectionError, match="尚未登录或连接失败"):
+        ask_codex("不要把这段完整提示写进日志", [])
+
+    assert "exec failed" in caplog.text
+    assert "不要把这段完整提示写进日志" not in caplog.text
 
 
 def test_claude_uses_one_shot_no_tools_session_and_stdin(monkeypatch) -> None:

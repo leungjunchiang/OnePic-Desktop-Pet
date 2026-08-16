@@ -736,4 +736,3 @@ class CompactTodoPanel(QWidget):
         self.memory.todos.update(task.source_id, **changes)
         self.refresh()
         self.task_changed.emit()
-

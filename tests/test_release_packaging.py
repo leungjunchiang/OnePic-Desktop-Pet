@@ -150,4 +150,3 @@ def test_ai_settings_has_one_source_guarded_open_path() -> None:
     assert "def open_settings(self, source: str) -> bool:" in window
     assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
     assert "AISettingsDialog" not in chat_manager
-

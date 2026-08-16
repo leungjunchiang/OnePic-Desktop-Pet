@@ -295,4 +295,3 @@ def test_release_check_is_cached_to_avoid_repeated_api_requests(monkeypatch) -> 
 
     assert first == second
     assert calls == 1
-

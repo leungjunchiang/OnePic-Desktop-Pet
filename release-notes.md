@@ -1,3 +1,21 @@
+# Lili v0.22.63
+
+## 修复 macOS 本机 Codex 已连接但聊天回退离线
+
+- 修正 `codex exec` 的非交互调用：完整提示词现在作为命令参数传递，不再把 `-` 当成提示词并仅写入 stdin。
+- Finder 启动的 macOS App 会显式补齐用户 `HOME`、`CODEX_HOME`、Shell PATH 与 UTF-8 环境，继续使用绝对路径调用 Codex CLI。
+- 保留 Codex GUI、CLI、登录状态三者的独立诊断；Codex CLI 执行失败会记录安全的错误摘要，不记录聊天提示词、令牌或密码。
+- 自习室仍然保持 Supabase Direct 优先；本次只修复 AI 聊天调用，不会把 CloudBase 变成主后端或第二数据库。
+
+# Lili v0.22.62
+
+## 固化 macOS TLS 修复并保持 Supabase 优先
+
+- macOS 自习室 HTTPS 请求现在优先使用系统可信 CA（`/etc/ssl/cert.pem` 等），找不到或不可用时回退到应用内置 certifi；始终保持证书校验和主机名校验，不使用 `verify=False`。
+- 增加安全 TLS 诊断字段，记录实际使用的 CA 来源，便于区分系统证书、应用证书与网络问题。
+- 保持 Supabase 为唯一主后端和首选线路：每次启动都从 Supabase Direct 开始，旧的 CloudBase 线路只作为记录提示；连续网络级失败后才切换 CloudBase Proxy，恢复检查成功后自动切回。
+- 业务错误（401/403/参数错误等）不会触发线路切换，也不会把 CloudBase 当作第二数据库。
+
 # Lili v0.22.60
 
 ## 修正 Qt/DPI 安全边距测试
@@ -323,4 +341,3 @@
 - 修复 macOS 图形应用与终端环境 PATH 不同导致 Codex CLI 找不到的问题，继续使用绝对路径和 `codex login status` 独立检测。
 - macOS 自习室与 Codex 聊天保持独立连接状态；一个服务失败不会把另一个服务误判为离线。
 - macOS App 的 Bundle 版本号改为从项目版本动态生成，避免安装包仍显示旧版本。
-

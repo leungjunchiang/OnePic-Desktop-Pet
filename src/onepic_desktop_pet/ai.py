@@ -336,8 +336,14 @@ def _cli_environment(executable: Path | None = None) -> dict[str, str]:
         # Finder-launched .app processes can have a minimal environment.  The
         # shell probes below still locate the executable, but the CLI itself
         # also needs a stable HOME to find the user's login credentials.
-        environment.setdefault("HOME", str(Path.home()))
+        environment["HOME"] = str(Path.home())
         environment.setdefault("SHELL", "/bin/zsh")
+        # Keep CLI authentication on the user's normal Codex profile unless
+        # the user explicitly configured another CODEX_HOME.  Finder-launched
+        # apps frequently inherit neither HOME nor a useful shell profile.
+        environment.setdefault("CODEX_HOME", str(Path.home() / ".codex"))
+        environment.setdefault("LANG", "en_US.UTF-8")
+        environment.setdefault("LC_ALL", environment["LANG"])
     current = environment.get("PATH", "")
     additions: list[str] = []
     if executable is not None and executable.is_absolute():
@@ -732,6 +738,7 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: s
         raise AIConnectionError("没有找到 Codex，已切回离线回答。")
     working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
     working_root.mkdir(parents=True, exist_ok=True)
+    prompt = _conversation_text(message, entries, local_context)
     command = _cli_command(
         executable,
         "exec",
@@ -743,7 +750,11 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: s
         "--sandbox",
         "read-only",
         "--json",
-        "-",
+        # Codex CLI's non-interactive mode accepts the task prompt as the
+        # final positional argument.  Passing ``-`` and putting the prompt
+        # only on stdin makes recent Codex versions treat the dash as the
+        # prompt, which can pass `login status` but fail every real chat.
+        prompt,
     )
     startupinfo = None
     creationflags = 0
@@ -755,7 +766,6 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: s
         completed = subprocess.run(
             command,
             cwd=working_root,
-            input=_conversation_text(message, entries, local_context),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -767,9 +777,19 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: s
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
+        LOGGER.warning("[AI Codex] exec did not return: error=%s", exc)
         raise AIConnectionError("Codex 暂时没有回应，已切回离线回答。") from exc
     answer = _parse_codex_jsonl(completed.stdout)
     if completed.returncode != 0 or not answer:
+        stderr = " ".join((completed.stderr or "").split())
+        LOGGER.warning(
+            "[AI Codex] exec failed: returncode=%s stderr=%s stdout_bytes=%s",
+            completed.returncode,
+            stderr[:800],
+            len(completed.stdout or ""),
+        )
+        if completed.returncode == 0:
+            raise AIConnectionError("Codex 返回了无法识别的内容，已切回离线回答。")
         raise AIConnectionError("Codex 尚未登录或连接失败，已切回离线回答。")
     return postprocess_ai_answer(answer, classify_intent(message, entries))
 
@@ -1022,4 +1042,3 @@ class AIChatService:
             model or default_model,
             local_context,
         )
-

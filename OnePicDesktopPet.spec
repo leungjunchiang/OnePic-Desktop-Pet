@@ -91,4 +91,3 @@ if sys.platform == "darwin":
             "NSAppleEventsUsageDescription": "Lili 需要在您点击音乐控制后操作 Apple Music 或 Spotify 的播放、暂停与切歌。",
         },
     )
-
