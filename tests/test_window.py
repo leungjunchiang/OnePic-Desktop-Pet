@@ -252,8 +252,8 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert len(panel.rows) == 3
     row = next(iter(panel.rows.values()))
     assert row.more_button.isEnabled()
-    assert row.more_button.width() == 30
-    assert panel.add_button.width() == 30
+    assert row.more_button.width() == 32
+    assert panel.add_button.width() == 32
     assert panel.add_button.x() + panel.add_button.width() <= panel.width()
     assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     # Keep the click-path assertion non-modal.  The real menu is exercised by
