@@ -274,7 +274,13 @@ class CompactTodoPanel(QWidget):
     # Keep a small visual gap after Qt/DPI rounding; the measured native
     # distance between the two 32px buttons remains at least 8px.
     ACTION_GAP = 10
+    # Do not size the action rail to the mathematical sum of its children.
+    # Windows/DPI rounding and the native button frame can paint a few pixels
+    # outside the logical 32px box.  The old exact-height rail was therefore
+    # clipped at the bottom on some displays, most visibly on the `+` button.
+    ACTION_VERTICAL_PADDING = 6
     PANEL_GAP = 8
+    PANEL_VERTICAL_SAFETY = 4
     TEXT_MEASURE_SAFETY = 14
     ROW_HEIGHT = TodoRow.MIN_HEIGHT
     MAX_SCROLL_HEIGHT = 360
@@ -335,7 +341,12 @@ class CompactTodoPanel(QWidget):
         self.action_column.setObjectName("todoActionColumn")
         self.action_column.setFixedWidth(self.ACTION_COLUMN_WIDTH)
         action_layout = QVBoxLayout(self.action_column)
-        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setContentsMargins(
+            0,
+            self.ACTION_VERTICAL_PADDING,
+            0,
+            self.ACTION_VERTICAL_PADDING,
+        )
         action_layout.setSpacing(self.ACTION_GAP)
         action_layout.addStretch(1)
 
@@ -359,7 +370,7 @@ class CompactTodoPanel(QWidget):
         self.add_button.clicked.connect(self.add_task)
         action_layout.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignHCenter)
         action_layout.addStretch(1)
-        self.action_column.setFixedHeight(self.ACTION_BUTTON_SIZE * 2 + self.ACTION_GAP)
+        self.action_column.setFixedHeight(self._action_column_required_height())
         root.addWidget(self.action_column, 0, Qt.AlignmentFlag.AlignVCenter)
         self._event_refresh_timer = QTimer(self)
         self._event_refresh_timer.setInterval(60_000)
@@ -486,9 +497,7 @@ class CompactTodoPanel(QWidget):
         self.rows_scroll.setFixedHeight(
             min(self.MAX_SCROLL_HEIGHT, max(36, list_height + 4))
         )
-        self.action_column.setFixedHeight(
-            self.ACTION_BUTTON_SIZE * 2 + self.ACTION_GAP
-        )
+        self.action_column.setFixedHeight(self._action_column_required_height())
         root_layout.invalidate()
         root_layout.activate()
         # QScrollArea.sizeHint() is allowed to report a smaller viewport than
@@ -503,9 +512,30 @@ class CompactTodoPanel(QWidget):
         action_required = self.action_column.height()
         content_required = max(list_required, action_required)
         margin_height = root_margins.top() + root_margins.bottom()
-        self.setFixedHeight(max(content_required + margin_height, layout_height + 2))
+        self.setFixedHeight(
+            max(
+                content_required + margin_height + self.PANEL_VERTICAL_SAFETY,
+                layout_height + self.PANEL_VERTICAL_SAFETY,
+            )
+        )
         root_layout.activate()
         self._log_geometry("resize")
+
+    def _action_column_required_height(self) -> int:
+        """Return the full logical height needed by the two action buttons.
+
+        The padding is intentional: a fixed-height QWidget that ends exactly
+        at the button's logical bottom can lose the lower border/anti-aliased
+        pixels after Windows device-pixel conversion.  Keeping the clearance
+        in the layout (rather than adding a one-off button offset) also makes
+        the guarantee hold when the panel is repositioned or refreshed.
+        """
+
+        return (
+            self.ACTION_VERTICAL_PADDING * 2
+            + self.ACTION_BUTTON_SIZE * 2
+            + self.ACTION_GAP
+        )
 
     @staticmethod
     def _task_text(task: Any) -> str:
