@@ -33,7 +33,7 @@ from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
 from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
-from onepic_desktop_pet.today_note import TimeMemoryWindow
+from onepic_desktop_pet.today_note import TimeMemoryWindow, TodayNoteWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -373,6 +373,40 @@ def test_time_memory_window_keeps_ids_for_edit_and_delete_menus(tmp_path) -> Non
     assert memory.timeline.query() == []
     dialog.close()
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_time_memory_and_detailed_todo_are_normal_taskbar_windows(tmp_path) -> None:
+    """可最小化窗口进入任务栏，不再成为桌宠的附属小框。"""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    time_memory = TimeMemoryWindow(memory)
+    detailed = TodayNoteWindow(memory)
+
+    for dialog in (time_memory, detailed):
+        flags = dialog.windowFlags()
+        assert (int(flags) & 0x0F) == int(Qt.WindowType.Window)
+        assert flags & Qt.WindowType.WindowMinimizeButtonHint
+        assert flags & Qt.WindowType.WindowSystemMenuHint
+        assert flags & Qt.WindowType.WindowCloseButtonHint
+        assert not flags & Qt.WindowType.FramelessWindowHint
+        assert not flags & Qt.WindowType.WindowStaysOnTopHint
+        assert dialog.parent() is None
+        assert not dialog.isModal()
+
+        dialog.show()
+        app.processEvents()
+        dialog.showMinimized()
+        app.processEvents()
+        assert dialog.isMinimized()
+        dialog.showNormal()
+        app.processEvents()
+
+    time_memory.close()
+    detailed.close()
+    time_memory.deleteLater()
+    detailed.deleteLater()
     app.processEvents()
 
 
