@@ -62,8 +62,8 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.22.47"' in spec
-    assert '"CFBundleVersion": "0.22.47"' in spec
+    assert '"CFBundleShortVersionString": "0.22.48"' in spec
+    assert '"CFBundleVersion": "0.22.48"' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
@@ -77,6 +77,16 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "ChineseSimplified.isl" not in installer
     assert installer_script.isascii()
     assert 'ln -s /Applications "$dmg_root/Applications"' in macos_build
+
+
+def test_tray_update_actions_are_explicit_manual_checks() -> None:
+    """QAction.triggered's bool must not silently become manual=False."""
+
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    assert "lambda _checked=False: self.check_program_updates(True)" in app_source
+    assert "lambda _checked=False: self.check_content_updates(True)" in app_source
 
 
 def test_one_command_release_script_has_safety_checks() -> None:

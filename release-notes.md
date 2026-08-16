@@ -1,3 +1,16 @@
+# Lili v0.22.48
+
+## Compact Todo geometry
+
+- Recomputed the pet-attached Todo panel from the real row/action-column layout so long titles elide only the text area.
+- Reserved the complete vertical action rail and native companion-window safety space, keeping `⋯` and `＋` fully visible at 100%/125%/150% DPI.
+- Added debug geometry logging for the panel, rows, action rail, buttons, host pet window, and monitor bounds.
+
+## Program update feedback
+
+- Fixed tray `QAction` signal wiring so “检查程序更新” is treated as an explicit manual check instead of a silent background check.
+- Added update-chain logging, immediate checking feedback, explicit no-Release messaging, and strict semantic-version validation.
+
 # Lili v0.22.47
 
 ## Compact Todo action column

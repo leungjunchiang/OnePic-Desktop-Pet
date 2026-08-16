@@ -1896,6 +1896,14 @@ class PetWindow(QWidget):
         x = max(available.left(), min(x, available.right() - panel_width + 1))
         y = max(available.top(), min(y, available.bottom() - panel_height + 1))
         panel.move(x, y)
+        LOGGER.debug(
+            "[TodoLayout] host=(x=%s,y=%s,w=%s,h=%s) panel=(x=%s,y=%s,w=%s,h=%s) "
+            "available=(x=%s,y=%s,w=%s,h=%s) pet_bounds=(left=%s,top=%s,right=%s,bottom=%s)",
+            self.x(), self.y(), self.width(), self.height(),
+            panel.x(), panel.y(), panel.width(), panel.height(),
+            available.x(), available.y(), available.width(), available.height(),
+            left, top, right, bottom,
+        )
 
     def _position_sticky_note(self) -> None:
         """Place the detailed 便利贴 beside the pet, with screen-edge fallback."""
@@ -3671,4 +3679,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-

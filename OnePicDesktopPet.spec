@@ -71,8 +71,8 @@ if sys.platform == "darwin":
         bundle_identifier="io.github.leungjunchiang.lili",
         info_plist={
             "CFBundleDisplayName": "Lili",
-            "CFBundleShortVersionString": "0.22.47",
-            "CFBundleVersion": "0.22.47",
+            "CFBundleShortVersionString": "0.22.48",
+            "CFBundleVersion": "0.22.48",
             "CFBundlePackageType": "APPL",
             "LSUIElement": False,
             "NSHighResolutionCapable": True,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import urllib.error
 from urllib.parse import urlparse
 
 import pytest
@@ -99,7 +100,43 @@ def test_no_update_for_same_or_older_release(tmp_path, monkeypatch) -> None:
     assert result.current_version == "0.22.45"
     assert result.latest_version == "0.22.45"
     assert result.release is None
+    assert result.status == "ok"
     assert manager.fetch_latest() is None
+
+
+def test_missing_github_release_is_distinguished_from_up_to_date(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+
+    def opener(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            404,
+            "Not Found",
+            hdrs=None,
+            fp=None,
+        )
+
+    result = ProgramUpdateManager(app_version="0.22.48", opener=opener).check_latest()
+    assert result.release is None
+    assert result.status == "no_release"
+    assert result.current_version == "0.22.48"
+
+
+def test_release_version_must_be_semver(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+
+    def opener(request, timeout=0):
+        return Response(
+            json.dumps({"tag_name": "latest", "draft": False, "prerelease": False}).encode("utf-8")
+        )
+
+    manager = ProgramUpdateManager(app_version="0.22.48", opener=opener)
+    with pytest.raises(ProgramUpdateError, match="版本号格式无法识别"):
+        manager.check_latest()
 
 
 def test_check_latest_returns_structured_new_release_and_notes(monkeypatch) -> None:

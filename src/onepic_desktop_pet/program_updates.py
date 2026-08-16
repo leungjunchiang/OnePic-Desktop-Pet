@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import platform
 import re
 import sys
@@ -26,10 +27,17 @@ from typing import Callable
 from . import __version__
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 DEFAULT_RELEASES_URL = (
     "https://api.github.com/repos/leungjunchiang/OnePic-Desktop-Pet/releases/latest"
 )
 _VERSION_PATTERN = re.compile(r"\d+")
+_SEMVER_PATTERN = re.compile(
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 _SHA256_PATTERN = re.compile(r"\b([0-9a-fA-F]{64})\b")
 _TRUSTED_API_HOSTS = {"api.github.com"}
 _MAX_METADATA_BYTES = 5 * 1024 * 1024
@@ -43,6 +51,10 @@ def _is_github_host(host: str) -> bool:
 
 class ProgramUpdateError(RuntimeError):
     """Raised when a program release cannot be safely checked or verified."""
+
+
+class NoProgramRelease(ProgramUpdateError):
+    """Raised when GitHub has no public stable Release to inspect."""
 
 
 class UpdateState(str, Enum):
@@ -92,6 +104,9 @@ class ProgramUpdateCheckResult:
     current_version: str
     latest_version: str
     release: ProgramRelease | None
+    # ``no_release`` is distinct from ``up_to_date`` so the UI never turns a
+    # missing GitHub Release into a misleading "already latest" message.
+    status: str = "ok"
 
     @property
     def update_available(self) -> bool:
@@ -145,6 +160,10 @@ class ProgramUpdateManager:
                 return b"".join(chunks)
         except ProgramUpdateError:
             raise
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise NoProgramRelease("GitHub 暂未找到可用的程序 Release") from exc
+            raise ProgramUpdateError(f"程序更新网络请求失败：HTTP {exc.code}") from exc
         except (OSError, urllib.error.URLError, ValueError) as exc:
             raise ProgramUpdateError(f"程序更新网络请求失败：{exc}") from exc
 
@@ -152,10 +171,25 @@ class ProgramUpdateManager:
         """Return current/latest versions and an optional verified asset plan."""
 
         asset_name = _asset_name()
+        LOGGER.info(
+            "[Update] querying GitHub Releases url=%s current=%s asset=%s",
+            self.releases_url,
+            self.app_version,
+            asset_name,
+        )
         if not asset_name or not self.releases_url:
             current = str(self.app_version).removeprefix("v")
-            return ProgramUpdateCheckResult(current, current, None)
-        raw = self._read_url(self.releases_url, max_bytes=_MAX_METADATA_BYTES)
+            return ProgramUpdateCheckResult(current, current, None, status="no_release")
+        current_version = str(self.app_version).removeprefix("v")
+        try:
+            raw = self._read_url(self.releases_url, max_bytes=_MAX_METADATA_BYTES)
+        except NoProgramRelease:
+            return ProgramUpdateCheckResult(
+                current_version,
+                current_version,
+                None,
+                status="no_release",
+            )
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -163,14 +197,20 @@ class ProgramUpdateManager:
         if not isinstance(payload, dict):
             raise ProgramUpdateError("程序更新信息格式无效：Release 不是对象")
         if bool(payload.get("draft")) or bool(payload.get("prerelease")):
-            current = str(self.app_version).removeprefix("v")
-            return ProgramUpdateCheckResult(current, current, None)
+            return ProgramUpdateCheckResult(
+                current_version,
+                current_version,
+                None,
+                status="no_release",
+            )
         tag_name = str(payload.get("tag_name") or "").strip()
         version = tag_name.removeprefix("v")
-        current_version = str(self.app_version).removeprefix("v")
         if not tag_name or not version:
             raise ProgramUpdateError("程序更新信息格式无效：缺少 tag_name")
+        if not _SEMVER_PATTERN.fullmatch(version):
+            raise ProgramUpdateError("程序更新信息格式无效：版本号格式无法识别")
         if version_key(version) <= version_key(current_version):
+            LOGGER.info("[Update] latest release=%s result=UP_TO_DATE", version)
             return ProgramUpdateCheckResult(current_version, version, None)
         release_url = str(payload.get("html_url") or "").strip()
         assets = payload.get("assets")
@@ -197,6 +237,7 @@ class ProgramUpdateManager:
             checksum_value=checksum_value if _SHA256_PATTERN.fullmatch(checksum_value or "") else None,
             release_notes=str(payload.get("body") or "").strip(),
         )
+        LOGGER.info("[Update] latest release=%s result=UPDATE_AVAILABLE", version)
         return ProgramUpdateCheckResult(current_version, version, release)
 
     def fetch_latest(self) -> ProgramRelease | None:

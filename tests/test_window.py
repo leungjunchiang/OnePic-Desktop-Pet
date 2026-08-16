@@ -263,6 +263,8 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert row.more_button.x() == panel.add_button.x()
     last_row = list(panel.rows.values())[-1]
     assert panel.add_button.y() >= last_row.more_button.y() + last_row.more_button.height() + 6
+    assert panel.action_column.y() + panel.action_column.height() <= panel.height()
+    assert panel.add_button.y() + panel.add_button.height() <= panel.action_column.height()
     assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     # Keep the click-path assertion non-modal.  The real menu is exercised by
     # the production slot; this test only verifies that the visible button
@@ -326,6 +328,8 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
     assert row.more_button.parent() is panel.action_column
     assert row.more_button.x() + row.more_button.width() <= panel.action_column.width()
     assert panel.add_button.x() == row.more_button.x()
+    assert panel.add_button.y() + panel.add_button.height() <= panel.action_column.height()
+    assert panel.action_column.y() + panel.action_column.height() <= panel.height()
     assert panel.x() != 0 or panel.y() != 0
     window.close()
     window.deleteLater()

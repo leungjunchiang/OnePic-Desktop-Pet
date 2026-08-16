@@ -24,6 +24,7 @@ Agent 快速定位：
 from __future__ import annotations
 
 import os
+import logging
 import sys
 
 from PySide6.QtCore import QProcess, Qt, QTimer
@@ -51,6 +52,9 @@ from .update_worker import (
 )
 from .update_manager import UpdateManager
 from .window import PetWindow
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DesktopPetApplication:
@@ -113,11 +117,18 @@ class DesktopPetApplication:
         menu.addAction(todo_action)
 
         update_action = QAction("检查补充内容更新", menu)
-        update_action.triggered.connect(self.check_content_updates)
+        # QAction.triggered emits a checked bool.  Do not pass that bool as
+        # the ``manual`` argument: a tray click is always an explicit user
+        # request and must show progress/result feedback.
+        update_action.triggered.connect(
+            lambda _checked=False: self.check_content_updates(True)
+        )
         menu.addAction(update_action)
 
         program_update_action = QAction("检查程序更新", menu)
-        program_update_action.triggered.connect(self.check_program_updates)
+        program_update_action.triggered.connect(
+            lambda _checked=False: self.check_program_updates(True)
+        )
         menu.addAction(program_update_action)
 
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
@@ -258,6 +269,8 @@ class DesktopPetApplication:
     def check_program_updates(self, manual: bool = True) -> None:
         """Check the official GitHub installer without blocking the UI."""
 
+        LOGGER.info("[Update] menu/worker entry: manual=%s current=%s", manual, __version__)
+
         if self._program_update_check_worker is not None and self._program_update_check_worker.isRunning():
             if manual:
                 self.window.show_speech("程序更新正在检查中…", 2400)
@@ -267,6 +280,7 @@ class DesktopPetApplication:
         self.program_update_state = UpdateState.CHECKING
         if manual:
             self.window.show_speech("正在检查程序更新…", 2400)
+        LOGGER.info("[Update] check_app_update started")
         worker = ProgramUpdateCheckWorker(self.update_manager, self.qt_app)
         self._program_update_check_worker = worker
         self._program_update_manual = bool(manual)
@@ -282,6 +296,7 @@ class DesktopPetApplication:
             worker.deleteLater()
 
     def _program_update_checked(self, result: object) -> None:
+        LOGGER.info("[Update] check_app_update completed result=%r", result)
         if not isinstance(result, ProgramUpdateCheckResult):
             self.program_update_state = UpdateState.ERROR
             if self._program_update_manual:
@@ -297,9 +312,14 @@ class DesktopPetApplication:
                 QMessageBox.information(
                     self.window,
                     "检查程序更新",
-                    "六毛已经是最新版。\n"
-                    f"当前版本：{result.current_version}\n"
-                    f"最新版本：{result.latest_version}",
+                    (
+                        "暂未找到可用的程序发布版本。\n"
+                        if result.status == "no_release"
+                        else "六毛已经是最新版。\n"
+                    )
+                    + f"当前版本：{result.current_version}\n"
+                    + f"最新版本：{result.latest_version}\n"
+                    + "更新源：GitHub Releases",
                 )
             return
         self.program_update_state = UpdateState.UPDATE_AVAILABLE
@@ -328,6 +348,7 @@ class DesktopPetApplication:
             self.window.show_speech("好，先不更新。需要时可以从托盘再次检查。", 3200)
 
     def _program_update_check_failed(self, message: str) -> None:
+        LOGGER.warning("[Update] check_app_update failed: %s", message)
         self.program_update_state = UpdateState.ERROR
         if self._program_update_manual:
             QMessageBox.warning(

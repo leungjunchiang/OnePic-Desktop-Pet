@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QThread, Signal
 
 from .program_updates import ProgramRelease
 from .update_manager import UpdateManager
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ContentUpdateWorker(QThread):
@@ -19,11 +24,14 @@ class ContentUpdateWorker(QThread):
         self.manager = manager
 
     def run(self) -> None:
+        LOGGER.info("[Update] content check started")
         try:
             result = self.manager.check_content_update()
         except Exception as exc:  # convert network/validation errors to UI data
+            LOGGER.warning("[Update] content check failed: %s", exc)
             self.failed.emit(str(exc))
         else:
+            LOGGER.info("[Update] content check completed: %r", result)
             self.completed.emit(result)
 
 
@@ -38,11 +46,14 @@ class ProgramUpdateCheckWorker(QThread):
         self.manager = manager
 
     def run(self) -> None:
+        LOGGER.info("[Update] GitHub release request started")
         try:
             result = self.manager.check_app_update()
         except Exception as exc:
+            LOGGER.warning("[Update] GitHub release request failed: %s", exc)
             self.failed.emit(str(exc))
         else:
+            LOGGER.info("[Update] GitHub release request completed: %r", result)
             self.completed.emit(result)
 
 
@@ -63,9 +74,12 @@ class ProgramUpdateDownloadWorker(QThread):
         self.release = release
 
     def run(self) -> None:
+        LOGGER.info("[Update] installer download started: %s", self.release.asset_name)
         try:
             result = self.manager.download_app_update(self.release)
         except Exception as exc:
+            LOGGER.warning("[Update] installer download failed: %s", exc)
             self.failed.emit(str(exc))
         else:
+            LOGGER.info("[Update] installer download completed: %r", result)
             self.completed.emit(result)
