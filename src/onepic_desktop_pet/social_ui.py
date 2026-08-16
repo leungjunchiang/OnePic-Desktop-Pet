@@ -66,9 +66,14 @@ def _room_focus_summary_text(summary: dict[str, Any], member_count: int = 0, foc
         or summary.get("shared_focus_seconds")
         or 0
     )
+    focus_text = (
+        "当前专注人数待确认"
+        if summary.get("presence_uncertain")
+        else f"{int(summary.get('focus_count') or focus_count)} 人正在专注"
+    )
     return (
         f"本房间 {int(summary.get('member_count') or member_count)} 人 · "
-        f"{int(summary.get('focus_count') or focus_count)} 人正在专注 · "
+        f"{focus_text} · "
         f"今日共同专注 {format_work_duration(today_seconds)} · "
         f"累计共同专注 {format_work_duration(cumulative_seconds)}"
     )
@@ -96,9 +101,11 @@ def _presence_working(presence: dict[str, Any]) -> bool:
 def _presence_status(presence: dict[str, Any]) -> str:
     """Return a stable user-facing status for old and new API payloads."""
 
-    # A cached snapshot is deliberately not current presence.  Check this
-    # before the legacy ``working`` value because stale payloads can still
-    # contain the last known focus state.
+    # A short dashboard outage is a transport problem, not a peer leave.  Keep
+    # that state distinct so an old snapshot cannot be rendered as a false
+    # “offline” result.
+    if bool(presence.get("presence_uncertain")):
+        return "unknown"
     if bool(presence.get("stale_presence")):
         return "offline"
     status = str(presence.get("status") or "").strip().casefold()
@@ -301,21 +308,34 @@ class BuddyCardWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(5)
-        online = bool(buddy.get("online")) and not bool(buddy.get("stale_presence"))
+        uncertain = bool(buddy.get("presence_uncertain"))
+        online = bool(buddy.get("online")) and not bool(buddy.get("stale_presence")) and not uncertain
         working = _presence_working(buddy)
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         status = _presence_status(buddy)
-        status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+        if status == "unknown":
+            if bool(buddy.get("online")) and bool(buddy.get("working")):
+                status_text = "正在工作（同步恢复中）"
+            elif bool(buddy.get("online")):
+                status_text = "在线待确认"
+            else:
+                status_text = "状态待确认"
+        else:
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         headline = QLabel(
-            f"{'🟢' if online else '⚪'}  {social_pet_label(nickname)}"
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
         headline.setWordWrap(True)
         headline.setStyleSheet("font-size:15px;font-weight:600;color:#203847;")
         root.addWidget(headline)
         duration = buddy.get("today_seconds")
-        if buddy.get("stale_presence"):
+        if uncertain:
+            age = int(buddy.get("presence_age_seconds") or 0)
+            age_text = f"约 {max(1, age // 60)} 分钟前" if age else "刚才"
+            time_text = f"实时状态暂无法确认（最后确认{age_text}），正在自动恢复"
+        elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
             time_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
@@ -1466,9 +1486,12 @@ class SocialHubDialog(QDialog):
                 if previous is not None and bool(previous.get("working")) != bool(buddy.get("working")):
                     state_text = "开始专注" if buddy.get("working") else "结束专注"
                     self.buddy_subscription_notice.emit(f"{_owner_label(buddy)} {state_text}了。")
-            is_stale = bool(buddy.get("stale_presence")) or self.data.get("_sync_offline")
-            working_count += int(bool(buddy.get("working")) and not is_stale)
-            duration = None if is_stale else buddy.get("today_seconds")
+            is_stale = bool(buddy.get("stale_presence"))
+            is_uncertain = bool(buddy.get("presence_uncertain"))
+            # A transport outage must not turn the last peer state into an
+            # offline event, but it also must not inflate current room totals.
+            working_count += int(bool(buddy.get("working")) and not is_stale and not is_uncertain)
+            duration = None if is_stale or is_uncertain else buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
             item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
             buddy_widget = BuddyCardWidget(buddy, self.buddies)
@@ -1628,7 +1651,11 @@ class SocialHubDialog(QDialog):
         active=self.data.get("active_visits") or []
         if active and not self.data.get("_sync_offline"): self.active_visit.emit(active[0])
         state = str(self.data.get("_connection_state") or "")
-        if self.data.get("_sync_offline") or state == "OFFLINE":
+        if self.data.get("_presence_grace_active") or state == "DEGRADED":
+            self._set_status(
+                "自习室连接暂时不稳定，搭子最近状态仍保留显示；正在自动恢复实时同步。"
+            )
+        elif self.data.get("_sync_offline") or state == "OFFLINE":
             age = int(self.data.get("_sync_age_minutes") or 0)
             age_text = f"约 {age} 分钟前" if age else "刚才"
             # Local focus is independent from room synchronization.  A focus
@@ -1725,3 +1752,4 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+

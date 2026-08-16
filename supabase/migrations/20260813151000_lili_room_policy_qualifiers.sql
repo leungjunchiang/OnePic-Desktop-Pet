@@ -10,3 +10,4 @@ create policy lili_room_events_read on public.lili_room_events for select to aut
   exists(select 1 from public.lili_room_members m
     where m.room_id=public.lili_room_events.room_id and m.user_id=auth.uid())
 );
+

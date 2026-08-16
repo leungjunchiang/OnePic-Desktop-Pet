@@ -1,11 +1,13 @@
 """Tests for Supabase-first routing and the CloudBase proxy fallback."""
 
 import json
+import time
 from pathlib import Path
 
 from onepic_desktop_pet.social import (
     BackendRouteManager,
     HttpSocialBackend,
+    PRESENCE_GRACE_SECONDS,
     SocialClient,
     SocialError,
     SocialSession,
@@ -262,8 +264,78 @@ def test_new_cloudbase_function_is_proxy_not_a_database_client():
     assert "@cloudbase/node-sdk" not in package
 
 
+def test_recent_cached_dashboard_preserves_last_known_peer_presence():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+    client._dashboard_cache = {
+        "room-1": {
+            "saved_at": time.time() - 90,
+            "data": {
+                "buddies": [
+                    {
+                        "user_id": "buddy-1",
+                        "owner_nickname": "小梁",
+                        "online": True,
+                        "working": True,
+                        "status": "focus",
+                        "today_seconds": 600,
+                    }
+                ],
+                "room_summary": {"member_count": 2, "focus_count": 1},
+            },
+        }
+    }
+
+    cached = client.cached_dashboard("room-1")
+
+    assert cached is not None
+    assert cached["_connection_state"] == "DEGRADED"
+    assert cached["_presence_grace_active"] is True
+    assert client.connection_state == "DEGRADED"
+    peer = cached["buddies"][0]
+    assert peer["online"] is True
+    assert peer["working"] is True
+    assert peer["presence_uncertain"] is True
+    assert peer.get("stale_presence") is not True
+    assert cached["room_summary"]["presence_uncertain"] is True
+
+
+def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+    client._dashboard_cache = {
+        "room-1": {
+            "saved_at": time.time() - PRESENCE_GRACE_SECONDS - 1,
+            "data": {
+                "buddies": [
+                    {"user_id": "buddy-1", "online": True, "working": True, "status": "focus"}
+                ]
+            },
+        }
+    }
+
+    cached = client.cached_dashboard("room-1")
+
+    assert cached is not None
+    assert cached["_connection_state"] == "OFFLINE"
+    assert cached["_presence_grace_active"] is False
+    assert client.connection_state == "OFFLINE"
+    peer = cached["buddies"][0]
+    assert peer["online"] is False
+    assert peer["working"] is False
+    assert peer["stale_presence"] is True
+    assert peer["presence_uncertain"] is False
+
+
 def test_room_shared_state_migrations_are_retained_as_supabase_history():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")
     assert "lili_room_dashboard" in migration
     assert "lili_room_events" in migration
+

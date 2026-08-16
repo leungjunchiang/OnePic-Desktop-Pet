@@ -88,7 +88,10 @@ class PetSettings:
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
     auto_pause_on_idle: bool = True
-    idle_pause_seconds: int = 300
+    idle_pause_seconds: int = 600
+    # Per-application corrections for automatic idle classification.  Values
+    # are deliberately small and local-only: ``rest`` or ``focus``.
+    idle_classification_rules: dict[str, str] = field(default_factory=dict)
     music_service: str = "auto"
     music_provider_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     qq_music_path: str = ""
@@ -200,7 +203,17 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
     settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
-    settings.idle_pause_seconds = min(3600, max(30, int(settings.idle_pause_seconds)))
+    # Ten minutes is the safe default.  Keep five minutes as the lower bound
+    # so short reading pauses never become an automatic away episode.
+    settings.idle_pause_seconds = min(7200, max(300, int(settings.idle_pause_seconds)))
+    rules: dict[str, str] = {}
+    if isinstance(settings.idle_classification_rules, dict):
+        for raw_key, raw_value in settings.idle_classification_rules.items():
+            key = str(raw_key).replace("\x00", "").strip().casefold()[:160]
+            value = str(raw_value).strip().casefold()
+            if key and value in {"rest", "focus"}:
+                rules[key] = value
+    settings.idle_classification_rules = rules
     if settings.music_service not in {"auto", "qq", "netease", "kugou", "apple", "spotify"}:
         settings.music_service = "auto"
     def safe_int(value: Any, default: int = 0) -> int:
@@ -293,6 +306,7 @@ def load_settings(
                 "stand_interval_minutes",
                 "auto_pause_on_idle",
                 "idle_pause_seconds",
+                "idle_classification_rules",
                 "music_service",
                 "music_provider_history",
                 "qq_music_path",
@@ -355,6 +369,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "stand_interval_minutes": settings.stand_interval_minutes,
         "auto_pause_on_idle": settings.auto_pause_on_idle,
         "idle_pause_seconds": settings.idle_pause_seconds,
+        "idle_classification_rules": settings.idle_classification_rules,
         "music_service": settings.music_service,
         "music_provider_history": settings.music_provider_history,
         "qq_music_path": settings.qq_music_path,

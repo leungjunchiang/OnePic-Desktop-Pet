@@ -62,8 +62,8 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.22.51"' in spec
-    assert '"CFBundleVersion": "0.22.51"' in spec
+    assert '"CFBundleShortVersionString": "0.22.52"' in spec
+    assert '"CFBundleVersion": "0.22.52"' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
@@ -148,3 +148,4 @@ def test_ai_settings_has_one_source_guarded_open_path() -> None:
     assert "def open_settings(self, source: str) -> bool:" in window
     assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
     assert "AISettingsDialog" not in chat_manager
+

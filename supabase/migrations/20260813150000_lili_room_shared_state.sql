@@ -200,3 +200,4 @@ grant execute on function public.lili_send_interaction(uuid,text,uuid) to authen
 grant execute on function public.lili_set_room_goal(uuid,text,integer,timestamptz) to authenticated;
 grant execute on function public.lili_leave_room(uuid) to authenticated;
 grant execute on function public.lili_room_dashboard(uuid) to authenticated;
+

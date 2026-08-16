@@ -91,7 +91,7 @@ except ImportError:
 
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
-from .activity import active_application_category
+from .activity import active_application_category, active_application_name, active_window_is_fullscreen
 from .behavior import (
     BehaviorModel,
     CompanionBehaviorController,
@@ -118,7 +118,8 @@ from .companion import (
 )
 from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
-from .input_activity import system_idle_seconds
+from .input_activity import system_idle_seconds, system_session_state
+from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
@@ -159,59 +160,57 @@ SETTINGS_SOURCE_USER_ACTION = "user_action"
 DEFAULT_WALK_MOTION_FACTORS = (0.45, 0.7, 1.2, 1.65, 0.45, 0.7, 1.2, 1.65)
 
 
-class IdleRecoveryDialog(QDialog):
-    """Show one reusable, non-modal decision window for an idle episode.
+class IdleRecoveryDialog(QWidget):
+    """Show one non-modal correction hint for an automatically classified gap.
 
-    A modal ``QMessageBox.exec()`` used to be created every time the system
-    idle counter dipped below the threshold.  The dialog now lives for the
-    whole pet window and emits one decision, so a single absence cannot spawn
-    a stack of windows or block the desktop event loop.
+    The class name remains for compatibility with older callers, but this is
+    no longer a decision dialog.  The default classification is recorded
+    before it is shown; the only action offered is a lightweight correction.
+    It never raises, activates, flashes, or steals focus from the user's app.
     """
 
     decision_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("回来啦")
-        self.setModal(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setMinimumWidth(390)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setMinimumWidth(330)
         self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 11, 14, 10)
+        layout.setSpacing(6)
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
-        self.summary_label.setStyleSheet("font-size: 15px;")
+        self.summary_label.setStyleSheet("font-size: 13px; color: #27313d;")
         layout.addWidget(self.summary_label)
         self.detail_label = QLabel(
-            "这里只根据键盘/鼠标的系统输入计时；电脑后台运行、播放音乐或下载文件不算键鼠操作。"
+            "已自动记为休息；如果刚才仍在工作，可以改成专注。"
         )
         self.detail_label.setWordWrap(True)
-        self.detail_label.setStyleSheet("color: #667784; font-size: 12px;")
+        self.detail_label.setStyleSheet("color: #667784; font-size: 11px;")
         layout.addWidget(self.detail_label)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        self.rest_button = QPushButton("算作休息")
-        self.rest_button.setAutoDefault(False)
-        self.rest_button.clicked.connect(lambda: self._request_decision("rest"))
-        buttons.addWidget(self.rest_button)
-        self.focus_button = QPushButton("计入专注")
+        self.focus_button = QPushButton("改成专注")
         self.focus_button.setAutoDefault(False)
+        self.focus_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.focus_button.clicked.connect(lambda: self._request_decision("focus"))
         buttons.addWidget(self.focus_button)
         layout.addLayout(buttons)
+        self.setStyleSheet(
+            "QWidget { background: rgba(255, 255, 255, 242); border: 1px solid #b9d1dc; "
+            "border-radius: 10px; } QPushButton { background: #d9eeeb; color: #245965; "
+            "border: 0; border-radius: 8px; padding: 5px 12px; }"
+        )
 
     def set_away_seconds(self, seconds: int) -> None:
-        """Update the elapsed absence shown by the reusable dialog."""
+        """Update the post-grace-period absence shown by the hint."""
 
         seconds = max(1, int(seconds))
         minutes, remainder = divmod(seconds, 60)
@@ -222,9 +221,25 @@ class IdleRecoveryDialog(QDialog):
             duration = f"{minutes} 分 {remainder:02d} 秒"
         else:
             duration = f"{remainder} 秒"
-        self.summary_label.setText(
-            f"检测到你刚刚离开了约 {duration}。\n这段时间要记作休息，还是计入专注？"
-        )
+        self.summary_label.setText(f"刚才离开 {duration}，我先算休息啦")
+
+    def show_hint(self, anchor: QWidget) -> None:
+        """Show beside the pet without activating the native window."""
+
+        self.adjustSize()
+        screen = anchor.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            bounds = screen.availableGeometry()
+            point = anchor.mapToGlobal(QPoint(anchor.width() + 8, max(8, anchor.height() // 3)))
+            x = point.x()
+            y = point.y()
+            if x + self.width() > bounds.right():
+                x = max(bounds.left(), anchor.mapToGlobal(QPoint(-self.width() - 8, 8)).x())
+            if y + self.height() > bounds.bottom():
+                y = max(bounds.top(), bounds.bottom() - self.height() - 8)
+            self.move(x, y)
+        self.show()
+        QTimer.singleShot(6500, self.hide)
 
     def _request_decision(self, decision: str) -> None:
         """Hide first, then notify the owner so the window cannot duplicate."""
@@ -320,6 +335,9 @@ class PetWindow(QWidget):
         self._idle_prompt_pending = False
         self._idle_recovery_resolved = False
         self._idle_above_threshold_samples = 0
+        self._idle_context: IdleEvidence | None = None
+        self._idle_hint_classification: IdleClassification | None = None
+        self._idle_hint_record: dict[str, object] | None = None
         self._idle_recovery_dialog: IdleRecoveryDialog | None = None
         self._sleep_after_sit = False
         self._room_quick_status = ""
@@ -1210,7 +1228,7 @@ class PetWindow(QWidget):
         self._sleep_after_sit = False
 
     def _reset_idle_episode(self) -> None:
-        """Forget the current idle episode and close its reusable prompt."""
+        """Forget the current idle episode and close its one-shot hint."""
 
         self._auto_paused_for_idle = False
         self._idle_prompt_pending = False
@@ -1218,32 +1236,133 @@ class PetWindow(QWidget):
         self._idle_above_threshold_samples = 0
         self._pending_idle_seconds = 0
         self._idle_pause_started_at = None
+        self._idle_context = None
+        self._idle_hint_classification = None
+        self._idle_hint_record = None
         if hasattr(self, "idle_recovery_timer"):
             self.idle_recovery_timer.stop()
         if self._idle_recovery_dialog is not None:
             self._idle_recovery_dialog.hide()
 
-    def _check_input_idle(self) -> None:
-        """Automatically pause focus after a sustained keyboard/mouse idle.
+    def _idle_history_path(self) -> Path:
+        """Return the local, non-synced idle classification history path."""
 
-        A pause is deliberately not auto-resumed: a user may have switched to
-        reading, a meeting, or another task.  They can resume explicitly from
-        the pet bubble or the study-room page, while the room receives the
-        normal presence update on the next social heartbeat.
-        """
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path.home() / ".desktop_pet"
+        return root / "Lili" / "idle-classification-history.json"
+
+    def _write_idle_history(self, record: dict[str, object]) -> None:
+        """Atomically retain a small, user-local review history."""
+
+        path = self._idle_history_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            history: list[dict[str, object]] = []
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    history = [item for item in raw if isinstance(item, dict)][-199:]
+            history.append(record)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(history[-200:], ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            LOGGER.debug("无法保存离开分类记录: %s", exc)
+
+    def _capture_idle_context(self) -> IdleEvidence:
+        """Capture only coarse foreground/session evidence at the threshold."""
+
+        app_name = active_application_name()
+        category = active_application_category()
+        session = system_session_state()
+        media_playing = False
+        player = getattr(self, "_media_player", None)
+        if player is not None:
+            try:
+                state = player.playbackState()
+                media_playing = "PlayingState" in str(state)
+            except Exception:
+                media_playing = False
+        return IdleEvidence(
+            app_name=app_name,
+            app_category=category,
+            locked=bool(session.get("locked")),
+            sleeping=bool(session.get("sleeping")),
+            fullscreen=bool(active_window_is_fullscreen()),
+            media_playing=media_playing,
+            user_rule=str(
+                getattr(self.settings, "idle_classification_rules", {}).get(
+                    app_name.casefold().strip() or category,
+                    "",
+                )
+            ),
+        )
+
+    def _classify_idle_episode(self, seconds: int) -> IdleClassification:
+        evidence = self._idle_context or self._capture_idle_context()
+        classification = classify_idle(evidence)
+        record: dict[str, object] = {
+            "id": str(time.time_ns()),
+            "created_at": datetime.now().astimezone().isoformat(),
+            "away_seconds": max(0, int(seconds)),
+            "decision": classification.decision,
+            "confidence": classification.confidence,
+            "reason": classification.reason,
+            "app_key": classification.app_key,
+            "corrected_to": None,
+        }
+        self._idle_hint_classification = classification
+        self._idle_hint_record = record
+        self._write_idle_history(record)
+        return classification
+
+    def _update_idle_history_correction(self, decision: str) -> None:
+        record = self._idle_hint_record
+        if not record:
+            return
+        record["corrected_to"] = decision
+        record["corrected_at"] = datetime.now().astimezone().isoformat()
+        self._write_idle_history(record)
+
+    def _save_idle_app_rule(self, app_key: str, decision: str) -> None:
+        if not app_key or decision not in {"rest", "focus"}:
+            return
+        rules = dict(getattr(self.settings, "idle_classification_rules", {}) or {})
+        rules[app_key] = decision
+        self.settings.idle_classification_rules = rules
+        save_settings(self.settings)
+
+    def _complete_idle_episode(self, decision: str) -> None:
+        """Commit one classification; no prompt is needed afterwards."""
+
+        if self._idle_recovery_resolved:
+            return
+        seconds = max(1, int(self._pending_idle_seconds))
+        if decision == "focus":
+            self.focus_analytics.record_session(
+                seconds,
+                started_at=self._idle_pause_started_at or datetime.now().astimezone(),
+                completed=False,
+                away_count=1,
+                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            )
+        self._idle_recovery_resolved = True
+        self._pending_idle_seconds = 0
+        self._idle_pause_started_at = None
+
+    def _check_input_idle(self) -> None:
+        """Pause only after the grace period and classify the excess interval."""
 
         if not getattr(self.settings, "auto_pause_on_idle", True):
             self._idle_above_threshold_samples = 0
             return
-        threshold = max(30, int(getattr(self.settings, "idle_pause_seconds", 300)))
+        threshold = max(300, int(getattr(self.settings, "idle_pause_seconds", 600)))
         idle_seconds = max(0.0, float(system_idle_seconds()))
         if self._auto_paused_for_idle:
-            # `idle_seconds` is only the OS counter at this sample.  The
-            # previous implementation copied the threshold crossing (usually
-            # 300 seconds) into `_pending_idle_seconds` and never advanced it,
-            # so a user who was away for 40 minutes was still asked about
-            # "5 minutes".  Keep the episode start time as the source of truth
-            # and refresh the displayed duration on every 5-second sample.
+            effective_idle = max(0, int(idle_seconds) - threshold)
             if self._idle_pause_started_at is not None:
                 elapsed_seconds = max(
                     0,
@@ -1261,15 +1380,10 @@ class PetWindow(QWidget):
             # While the OS still reports idle, retain the larger of the native
             # reading and the wall-clock episode duration.  This also handles
             # platforms whose idle counter has a wraparound or coarse sample.
-            if idle_seconds >= threshold:
-                self._pending_idle_seconds = max(
-                    self._pending_idle_seconds,
-                    int(idle_seconds),
-                )
-            # The OS idle counter drops as soon as the user returns.  Delay
-            # the question to the event loop so the first input is not
-            # blocked by a modal dialog.  Once this episode is resolved, do
-            # not ask again until the user explicitly starts a new session.
+            self._pending_idle_seconds = max(self._pending_idle_seconds, effective_idle)
+            # The OS idle counter drops as soon as the user returns.  Defer
+            # classification to the event loop so the first input is never
+            # blocked by a dialog.  Once resolved, do not ask again.
             if (
                 not self._idle_recovery_resolved
                 and idle_seconds < max(1, threshold - 1)
@@ -1281,7 +1395,9 @@ class PetWindow(QWidget):
         if not self.work_timer.is_running:
             self._idle_above_threshold_samples = 0
             return
-        if idle_seconds < threshold:
+        # Exactly the grace boundary is still ignored.  The episode must
+        # exceed ten minutes before the timer is paused or a record is made.
+        if idle_seconds <= threshold:
             self._idle_above_threshold_samples = 0
             return
         # Require two consecutive OS samples.  This filters a single bad
@@ -1292,53 +1408,52 @@ class PetWindow(QWidget):
         self._idle_above_threshold_samples = 0
         self._auto_paused_for_idle = True
         self._idle_recovery_resolved = False
-        self._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=int(idle_seconds))
-        self._pending_idle_seconds = max(1, int(idle_seconds))
+        effective_idle = max(0, int(idle_seconds) - threshold)
+        self._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=effective_idle)
+        self._pending_idle_seconds = effective_idle
+        self._idle_context = self._capture_idle_context()
         self._focus_quality_tracker.note_away()
         self.pause_work_timer(reason="idle")
 
     def _ask_idle_recovery(self) -> None:
-        """Show one reusable decision window for the current absence."""
+        """Automatically classify once; show a single hint only if uncertain."""
 
         self._idle_prompt_pending = False
         if not self._auto_paused_for_idle or self._idle_recovery_resolved:
             return
         seconds = max(1, int(self._pending_idle_seconds))
+        classification = self._classify_idle_episode(seconds)
+        if classification.confidence >= 0.75:
+            self._complete_idle_episode(classification.decision)
+            return
+        # Low confidence defaults to rest, but leaves one reversible hint.
+        self._complete_idle_episode("rest")
         if self._idle_recovery_dialog is None:
             self._idle_recovery_dialog = IdleRecoveryDialog(self)
-            self._idle_recovery_dialog.decision_requested.connect(
-                self._resolve_idle_recovery
-            )
+            self._idle_recovery_dialog.decision_requested.connect(self._resolve_idle_recovery)
         self._idle_recovery_dialog.set_away_seconds(seconds)
-        self._idle_recovery_dialog.show()
-        self._idle_recovery_dialog.raise_()
-        self._idle_recovery_dialog.activateWindow()
+        self._idle_recovery_dialog.show_hint(self)
 
     def _resolve_idle_recovery(self, decision: str) -> None:
-        """Resolve the episode once; later idle samples cannot reopen it."""
+        """Apply the only supported correction from the one-shot hint."""
 
-        if not self._auto_paused_for_idle or self._idle_recovery_resolved:
+        if decision != "focus" or self._idle_hint_record is None:
             return
-        seconds = max(1, int(self._pending_idle_seconds))
-        if decision == "focus":
-            # The timer remains paused until the user explicitly starts the
-            # next round, but the choice is reflected in local statistics.
-            self.focus_analytics.record_session(
-                seconds,
-                started_at=self._idle_pause_started_at or datetime.now().astimezone(),
-                completed=False,
-                away_count=1,
-                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
-            )
-            self.show_speech("好，这段离开时间已计入专注。需要继续时点开始专注。", 5200)
-        elif decision == "rest":
-            minutes = max(1, round(seconds / 60))
-            self.show_speech(f"已把约 {minutes} 分钟记为休息，回来后再开一轮吧。", 4800)
-        # Dismissing the window is intentionally silent, but still resolves
-        # this episode so it cannot create another popup every few seconds.
-        self._idle_recovery_resolved = True
-        self._pending_idle_seconds = 0
-        self._idle_pause_started_at = None
+        seconds = max(1, int(self._idle_hint_record.get("away_seconds", 0)))
+        self.focus_analytics.record_session(
+            seconds,
+            started_at=datetime.now().astimezone() - timedelta(seconds=seconds),
+            completed=False,
+            away_count=1,
+            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+        )
+        classification = self._idle_hint_classification
+        if classification is not None:
+            self._save_idle_app_rule(classification.app_key, "focus")
+        self._update_idle_history_correction("focus")
+        if self._idle_recovery_dialog is not None:
+            self._idle_recovery_dialog.hide()
+        self._idle_hint_record = None
 
     def _schedule_sleep_via_sit(self) -> None:
         """先完整坐下，再从坐姿播放入睡序列。"""
@@ -1713,7 +1828,7 @@ class PetWindow(QWidget):
         duration = format_work_duration(self.work_timer.today_seconds())
         if was_running and reason == "idle":
             reply = CompanionReply(
-                "检测到一段时间没有键鼠操作，六毛先帮你暂停计时。回来后会只询问一次这段时间如何归类。",
+                "检测到一段时间没有键鼠操作，六毛先帮你暂停计时；回来后会自动判断，只有不确定时轻轻问一次。",
                 PetState.CURIOUS,
             )
         elif was_running:
@@ -3680,3 +3795,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+

@@ -27,6 +27,11 @@ from .resources import resource_path
 LOGGER = logging.getLogger(__name__)
 
 CONNECTION_STATES = {"CONNECTING", "ONLINE", "DEGRADED", "OFFLINE", "RECONNECTING"}
+# A short dashboard outage must not turn the last confirmed remote presence
+# into a false offline result.  The server itself uses a two-minute heartbeat
+# freshness window; allowing one extra minute here covers a missed poll and
+# the time needed for the next retry without claiming that the peer is live.
+PRESENCE_GRACE_SECONDS = 180
 
 
 class ConnectionStateStore:
@@ -54,7 +59,7 @@ class ConnectionStateStore:
         now = datetime.now().astimezone().isoformat()
         if self.state == "ONLINE":
             self.last_success_at = now
-        elif self.state in {"OFFLINE", "RECONNECTING"}:
+        elif self.state in {"OFFLINE", "RECONNECTING", "DEGRADED"}:
             self.last_failure_at = now
 
     def payload(self) -> dict[str, Any]:
@@ -499,8 +504,8 @@ class LegacyDirectSocialClient:
             backend_name = str(health.get("backend") or backend_name)
             service_endpoint = str(health.get("service") or service_endpoint)
         except SocialError as exc:
-            self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
-            self._diagnostic_log("health", room_id, exc=exc, elapsed=time.monotonic() - started)
+            cached = self.cached_dashboard(room_id)
+            self._diagnostic_log("health", room_id, result=cached, exc=exc, elapsed=time.monotonic() - started)
             raise
 
         if not self.signed_in:
@@ -545,10 +550,10 @@ class LegacyDirectSocialClient:
             }
         except SocialError as exc:
             checks["room_snapshot"] = {"ok": False, "kind": exc.kind, "status": exc.status}
-            state = "DEGRADED" if exc.kind == "auth" else "OFFLINE"
-            realtime_state = "not_authenticated" if state == "DEGRADED" else "unavailable"
-            self.connection.set(state, data_source="local_cache", realtime_state=realtime_state)
             cached = self.cached_dashboard(room_id)
+            state = str((cached or {}).get("_connection_state") or ("DEGRADED" if exc.kind == "auth" else "OFFLINE"))
+            realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
+            self.connection.set(state, data_source="local_cache" if cached is not None else "none", realtime_state=realtime_state)
             if cached is not None:
                 cached["_connection_state"] = state
             result = {
@@ -676,10 +681,17 @@ class LegacyDirectSocialClient:
             return None
         data = json.loads(json.dumps(entry["data"], ensure_ascii=False))
         saved_at = float(entry.get("saved_at") or 0)
-        age_minutes = max(0, int((time.time() - saved_at) / 60)) if saved_at else 0
-        self._mark_remote_presence_stale(data)
+        age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
+        age_minutes = max(0, int(age_seconds / 60)) if saved_at else 0
+        presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
+        if presence_grace:
+            self._mark_remote_presence_uncertain(data, age_seconds)
+        else:
+            self._mark_remote_presence_stale(data)
         data["_sync_offline"] = True
-        data["_connection_state"] = "OFFLINE"
+        data["_connection_state"] = "DEGRADED" if presence_grace else "OFFLINE"
+        data["_presence_grace_active"] = presence_grace
+        data["_presence_uncertainty_seconds"] = age_seconds if presence_grace else 0
         data["data_source"] = "local_cache"
         data["_data_source"] = "local_cache"
         data["_sync_age_minutes"] = age_minutes
@@ -688,6 +700,12 @@ class LegacyDirectSocialClient:
         except (OSError, OverflowError, ValueError):
             data["_server_timestamp"] = ""
         data["_sync_error"] = self._last_error or "当前网络无法访问自习室服务"
+        self.connection.set(
+            "DEGRADED" if presence_grace else "OFFLINE",
+            data_source="local_cache",
+            realtime_state="polling_degraded" if presence_grace else "unavailable",
+            server_timestamp=data["_server_timestamp"],
+        )
         return data
 
     @staticmethod
@@ -706,6 +724,7 @@ class LegacyDirectSocialClient:
                 item["session_seconds"] = 0
                 item["today_seconds"] = None
                 item["stale_presence"] = True
+                item["presence_uncertain"] = False
 
         mark(data.get("buddies"))
         mark(data.get("room_people"))
@@ -719,6 +738,41 @@ class LegacyDirectSocialClient:
         summary = data.get("room_summary")
         if isinstance(summary, dict):
             summary["focus_count"] = 0
+
+    @staticmethod
+    def _mark_remote_presence_uncertain(data: dict[str, Any], age_seconds: int) -> None:
+        """Keep the last confirmed state during a short transport outage.
+
+        This is intentionally different from ``stale_presence``: a failed
+        dashboard request says something about this client's transport, not
+        that every peer left the room.  The UI can therefore show “状态待
+        确认” instead of manufacturing an offline event from an old cache.
+        """
+
+        def mark(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict) or item.get("is_self"):
+                    continue
+                if item.get("stale_presence"):
+                    continue
+                item.pop("stale_presence", None)
+                item["presence_uncertain"] = True
+                item["presence_age_seconds"] = age_seconds
+
+        mark(data.get("buddies"))
+        mark(data.get("room_people"))
+        mark(data.get("active_visits"))
+        room = data.get("current_room")
+        if isinstance(room, dict):
+            mark(room.get("room_people"))
+            summary = room.get("room_summary")
+            if isinstance(summary, dict):
+                summary["presence_uncertain"] = True
+        summary = data.get("room_summary")
+        if isinstance(summary, dict):
+            summary["presence_uncertain"] = True
 
     def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -998,7 +1052,7 @@ class DashboardCacheClientBase:
             if not isinstance(items, list): return
             for item in items:
                 if not isinstance(item, dict) or item.get("is_self"): continue
-                item.update({"online": False, "working": False, "status": "offline", "session_seconds": 0, "today_seconds": None, "stale_presence": True})
+                item.update({"online": False, "working": False, "status": "offline", "session_seconds": 0, "today_seconds": None, "stale_presence": True, "presence_uncertain": False})
         mark(data.get("buddies")); mark(data.get("room_people")); mark(data.get("active_visits"))
         room = data.get("current_room")
         if isinstance(room, dict):
@@ -1006,11 +1060,39 @@ class DashboardCacheClientBase:
             if isinstance(room.get("room_summary"), dict): room["room_summary"]["focus_count"] = 0
         if isinstance(data.get("room_summary"), dict): data["room_summary"]["focus_count"] = 0
 
+    @staticmethod
+    def _mark_remote_presence_uncertain(data: dict[str, Any], age_seconds: int) -> None:
+        """Keep recent peer state visible while the dashboard transport recovers."""
+
+        def mark(items: Any) -> None:
+            if not isinstance(items, list): return
+            for item in items:
+                if not isinstance(item, dict) or item.get("is_self") or item.get("stale_presence"): continue
+                item.pop("stale_presence", None)
+                item["presence_uncertain"] = True
+                item["presence_age_seconds"] = age_seconds
+        mark(data.get("buddies")); mark(data.get("room_people")); mark(data.get("active_visits"))
+        room = data.get("current_room")
+        if isinstance(room, dict):
+            mark(room.get("room_people"))
+            if isinstance(room.get("room_summary"), dict): room["room_summary"]["presence_uncertain"] = True
+        if isinstance(data.get("room_summary"), dict): data["room_summary"]["presence_uncertain"] = True
+
     def cached_dashboard(self, room_id: str | None = None) -> dict[str, Any] | None:
         key = str(room_id or ""); entry = self._dashboard_cache.get(key) or (self._dashboard_cache.get("") if key else None)
         if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict): return None
         data = json.loads(json.dumps(entry["data"], ensure_ascii=False)); saved_at = float(entry.get("saved_at") or 0)
-        self._mark_remote_presence_stale(data); data.update({"_sync_offline": True, "_connection_state": "OFFLINE", "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int((time.time() - saved_at) / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
+        age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
+        presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
+        if presence_grace: self._mark_remote_presence_uncertain(data, age_seconds)
+        else: self._mark_remote_presence_stale(data)
+        data.update({"_sync_offline": True, "_connection_state": "DEGRADED" if presence_grace else "OFFLINE", "_presence_grace_active": presence_grace, "_presence_uncertainty_seconds": age_seconds if presence_grace else 0, "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int(age_seconds / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
+        self.connection.set(
+            "DEGRADED" if presence_grace else "OFFLINE",
+            data_source="local_cache",
+            realtime_state="polling_degraded" if presence_grace else "unavailable",
+            server_timestamp=str(data.get("_server_timestamp") or ""),
+        )
         return data
 
     def diagnose_connection(self, room_id: str | None = None) -> dict[str, Any]:
@@ -1018,8 +1100,11 @@ class DashboardCacheClientBase:
         try:
             health = self.health(); checks["edge_function"] = {"ok": True, "backend": health.get("backend", "supabase"), "transport": "https-rest"}
         except SocialError as exc:
-            self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
-            return {"connection_state": "OFFLINE", "data_source": "local_cache", "realtime_state": "unavailable", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": self.cached_dashboard(room_id), "error": str(exc)}
+            cached = self.cached_dashboard(room_id)
+            state = str((cached or {}).get("_connection_state") or "OFFLINE")
+            realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
+            self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
         if not self.signed_in:
             self.connection.set("DEGRADED", data_source="local_live", realtime_state="not_authenticated")
             return {"connection_state": "DEGRADED", "data_source": "local_live", "realtime_state": "not_authenticated", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
@@ -1027,8 +1112,11 @@ class DashboardCacheClientBase:
             snapshot = self.dashboard(room_id, allow_cache=False); checks["room_snapshot"] = {"ok": True}; checks["presence"] = {"ok": True}; checks["realtime"] = {"ok": True, "mode": "desktop low-frequency polling"}
             return {"connection_state": "ONLINE", "data_source": "server", "realtime_state": "polling", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": snapshot}
         except SocialError as exc:
-            cached = self.cached_dashboard(room_id); self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
-            return {"connection_state": "OFFLINE", "data_source": "local_cache" if cached else "none", "realtime_state": "unavailable", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
+            cached = self.cached_dashboard(room_id)
+            state = str((cached or {}).get("_connection_state") or "OFFLINE")
+            realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
+            self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
 
     def sign_up(self, email: str, password: str, nickname: str) -> bool:
         data = self._require_backend().sign_up(email, password, nickname)
@@ -1379,8 +1467,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             return {"connection_state": "ONLINE" if self.signed_in else "DEGRADED", "data_source": "local_live", "realtime_state": "not_started", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
         except SocialError as exc:
             cached = self.cached_dashboard(None)
-            self.connection.set("OFFLINE", data_source="local_cache" if cached else "none", realtime_state="unavailable")
-            return {"connection_state": "OFFLINE", "data_source": "local_cache" if cached else "none", "realtime_state": "unavailable", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
+            state = str((cached or {}).get("_connection_state") or "OFFLINE")
+            realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
+            self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
 
     def sign_up(self, email: str, password: str, nickname: str) -> bool:
         return bool(self._manager.request("sign_up", email, password, nickname))
@@ -1428,3 +1518,4 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
+

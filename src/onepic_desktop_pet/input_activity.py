@@ -12,6 +12,35 @@ import sys
 import time
 
 
+def system_session_state() -> dict[str, bool]:
+    """Return coarse lock/sleep hints without reading user content.
+
+    Windows exposes the currently interactive desktop through
+    ``OpenInputDesktop``.  A missing desktop or foreground window generally
+    means the secure lock screen is active.  Other platforms return an
+    intentionally conservative unknown state; the idle duration and
+    application evidence still provide the normal fallback classification.
+    """
+
+    state = {"locked": False, "sleeping": False}
+    if sys.platform != "win32":
+        return state
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        desktop = user32.OpenInputDesktop(0, False, 0x0100)
+        foreground = user32.GetForegroundWindow()
+        if not desktop or not foreground:
+            state["locked"] = True
+        if desktop:
+            user32.CloseDesktop(desktop)
+    except Exception:
+        # A native probe failure must never turn into a false rest record.
+        return state
+    return state
+
+
 def _windows_elapsed_ms(current_tick: int, last_input_tick: int) -> int:
     """Calculate a 32-bit Windows input age, including tick-counter wrap."""
 
@@ -71,3 +100,4 @@ def system_idle_seconds() -> float:
                 return 0.0
 
     return 0.0
+

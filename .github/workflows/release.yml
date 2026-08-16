@@ -112,7 +112,7 @@ jobs:
           python tools/build_content_manifest.py \
             --root . \
             --version "$release_tag" \
-            --min-app-version "0.22.51" \
+            --min-app-version "0.22.52" \
             --ref "$GITHUB_REF_NAME" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json
@@ -133,3 +133,4 @@ jobs:
               --generate-notes \
               --notes "Compact Todo now keeps the action column visible; the app can check, verify, download, and launch the matching GitHub installer after confirmation. Content-only updates remain user-controllable."
           fi
+
