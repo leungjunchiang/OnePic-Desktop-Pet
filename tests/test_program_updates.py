@@ -6,7 +6,13 @@ import hashlib
 import json
 from urllib.parse import urlparse
 
-from onepic_desktop_pet.program_updates import ProgramUpdateManager, version_key
+import pytest
+
+from onepic_desktop_pet.program_updates import (
+    ProgramUpdateError,
+    ProgramUpdateManager,
+    version_key,
+)
 
 
 class Response:
@@ -89,4 +95,50 @@ def test_no_update_for_same_or_older_release(tmp_path, monkeypatch) -> None:
         return Response(json.dumps(payload).encode("utf-8"))
 
     manager = ProgramUpdateManager(app_version="0.22.45", opener=opener, download_root=tmp_path)
+    result = manager.check_latest()
+    assert result.current_version == "0.22.45"
+    assert result.latest_version == "0.22.45"
+    assert result.release is None
     assert manager.fetch_latest() is None
+
+
+def test_check_latest_returns_structured_new_release_and_notes(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+    payload = {
+        "tag_name": "v0.22.47",
+        "html_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.22.47",
+        "body": "修复待办操作列裁切\n完善程序更新反馈\n第三行不需要全部展示",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "Lili-Windows-x64-Setup.exe",
+                "browser_download_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/download/v0.22.47/Lili-Windows-x64-Setup.exe",
+                "size": 12 * 1024 * 1024,
+            }
+        ],
+    }
+
+    def opener(request, timeout=0):
+        return Response(json.dumps(payload).encode("utf-8"))
+
+    result = ProgramUpdateManager(app_version="0.22.46", opener=opener).check_latest()
+    assert result.update_available is True
+    assert result.release is not None
+    assert result.release.version == "0.22.47"
+    assert "修复待办操作列裁切" in result.release.release_notes
+
+
+def test_check_latest_rejects_malformed_release(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+
+    def opener(request, timeout=0):
+        return Response(json.dumps({"draft": False, "prerelease": False}).encode("utf-8"))
+
+    manager = ProgramUpdateManager(app_version="0.22.46", opener=opener)
+    with pytest.raises(ProgramUpdateError):
+        manager.check_latest()

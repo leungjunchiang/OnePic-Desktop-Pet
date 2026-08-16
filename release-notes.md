@@ -1,3 +1,17 @@
+# Lili v0.22.47
+
+## Compact Todo action column
+
+- Rebuilt the right-side controls as a fixed 40px action column with complete 32px `⋯` and `＋` buttons.
+- Long task titles now elide only the content area; the action buttons remain fully visible and clickable.
+- The panel height accounts for the vertical action rail, including an 8px gap between `⋯` and `＋`.
+
+## Program update feedback
+
+- Added a shared `UpdateManager` for content-only and full-program updates.
+- “检查程序更新” now immediately shows a checking state and reports latest/current versions, available releases, network failures, malformed metadata, and download verification failures.
+- Added release-note previews, semantic version comparisons, and a visible program version in AI and companion settings.
+
 # Lili v0.22.46
 
 ## Compact Todo action column

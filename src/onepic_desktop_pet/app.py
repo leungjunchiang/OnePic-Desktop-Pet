@@ -30,20 +30,26 @@ from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
+from . import __version__
 from .config import PET_NAME, PetSettings, load_settings, save_settings
 from .companion import APP_DISPLAY_NAME
 from .content_updates import (
-    ContentUpdateManager,
     ContentUpdateResult,
     reload_runtime_content,
 )
-from .program_updates import ProgramRelease, ProgramUpdateManager, ProgramUpdateResult
+from .program_updates import (
+    ProgramRelease,
+    ProgramUpdateCheckResult,
+    ProgramUpdateResult,
+    UpdateState,
+)
 from .resources import resource_path
 from .update_worker import (
     ContentUpdateWorker,
     ProgramUpdateCheckWorker,
     ProgramUpdateDownloadWorker,
 )
+from .update_manager import UpdateManager
 from .window import PetWindow
 
 
@@ -62,12 +68,14 @@ class DesktopPetApplication:
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
         self.window.quit_requested.connect(self.quit)
+        self.update_manager = UpdateManager()
         self._content_update_worker: ContentUpdateWorker | None = None
         self._content_update_manual = False
         self._program_update_check_worker: ProgramUpdateCheckWorker | None = None
         self._program_update_download_worker: ProgramUpdateDownloadWorker | None = None
         self._program_update_manual = False
         self._program_release: ProgramRelease | None = None
+        self.program_update_state = UpdateState.IDLE
         self.tray = self._create_tray()
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
@@ -229,7 +237,7 @@ class DesktopPetApplication:
             return
         if (not bool(getattr(self.settings, "content_updates_enabled", True))) and not manual:
             return
-        worker = ContentUpdateWorker(ContentUpdateManager(), self.qt_app)
+        worker = ContentUpdateWorker(self.update_manager, self.qt_app)
         self._content_update_worker = worker
         self._content_update_manual = bool(manual)
         worker.completed.connect(self._content_update_completed)
@@ -251,10 +259,15 @@ class DesktopPetApplication:
         """Check the official GitHub installer without blocking the UI."""
 
         if self._program_update_check_worker is not None and self._program_update_check_worker.isRunning():
+            if manual:
+                self.window.show_speech("程序更新正在检查中…", 2400)
             return
         if not manual and not self._program_updates_enabled():
             return
-        worker = ProgramUpdateCheckWorker(ProgramUpdateManager(), self.qt_app)
+        self.program_update_state = UpdateState.CHECKING
+        if manual:
+            self.window.show_speech("正在检查程序更新…", 2400)
+        worker = ProgramUpdateCheckWorker(self.update_manager, self.qt_app)
         self._program_update_check_worker = worker
         self._program_update_manual = bool(manual)
         worker.completed.connect(self._program_update_checked)
@@ -269,33 +282,68 @@ class DesktopPetApplication:
             worker.deleteLater()
 
     def _program_update_checked(self, result: object) -> None:
-        if not isinstance(result, ProgramRelease):
+        if not isinstance(result, ProgramUpdateCheckResult):
+            self.program_update_state = UpdateState.ERROR
             if self._program_update_manual:
-                self.window.show_speech("现在已经是最新程序了。", 3000)
+                QMessageBox.warning(
+                    self.window,
+                    "检查程序更新",
+                    f"更新信息异常，当前程序不会被修改。\n当前版本：{__version__}",
+                )
             return
-        self._program_release = result
-        size_mb = max(1, round(result.asset_size / 1024 / 1024))
+        if result.release is None:
+            self.program_update_state = UpdateState.UP_TO_DATE
+            if self._program_update_manual:
+                QMessageBox.information(
+                    self.window,
+                    "检查程序更新",
+                    "六毛已经是最新版。\n"
+                    f"当前版本：{result.current_version}\n"
+                    f"最新版本：{result.latest_version}",
+                )
+            return
+        self.program_update_state = UpdateState.UPDATE_AVAILABLE
+        release = result.release
+        self._program_release = release
+        size_mb = max(1, round(release.asset_size / 1024 / 1024))
+        notes = [
+            line.strip(" -*•\t")
+            for line in release.release_notes.splitlines()
+            if line.strip()
+        ][:2]
+        notes_text = "\n\n更新说明：\n" + "\n".join(f"• {line}" for line in notes) if notes else ""
         answer = QMessageBox.question(
             self.window,
             "发现六毛新版本",
-            f"发现 Lili {result.version}。\n将下载约 {size_mb} MB 的安装包并启动更新，是否现在更新？",
+            f"发现新版本 Lili {release.version}\n"
+            f"当前版本：{result.current_version}\n"
+            f"更新大小：约 {size_mb} MB{notes_text}\n\n"
+            "下载后会校验安装包，再启动更新。是否现在更新？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self._download_program_update(result)
+            self._download_program_update(release)
         elif self._program_update_manual:
             self.window.show_speech("好，先不更新。需要时可以从托盘再次检查。", 3200)
 
-    def _program_update_check_failed(self, _message: str) -> None:
+    def _program_update_check_failed(self, message: str) -> None:
+        self.program_update_state = UpdateState.ERROR
         if self._program_update_manual:
-            self.window.show_speech("程序更新暂时没连上，稍后再试。", 3600)
+            QMessageBox.warning(
+                self.window,
+                "检查程序更新失败",
+                "暂时无法检查程序更新。\n"
+                f"当前版本：{__version__}\n"
+                f"原因：{message or '无法连接更新服务器'}",
+            )
 
     def _download_program_update(self, release: ProgramRelease) -> None:
         if self._program_update_download_worker is not None and self._program_update_download_worker.isRunning():
             return
+        self.program_update_state = UpdateState.DOWNLOADING
         self.window.show_speech(f"正在下载 Lili {release.version}，校验后再安装。", 4200)
-        worker = ProgramUpdateDownloadWorker(ProgramUpdateManager(), release, self.qt_app)
+        worker = ProgramUpdateDownloadWorker(self.update_manager, release, self.qt_app)
         self._program_update_download_worker = worker
         worker.completed.connect(self._program_update_downloaded)
         worker.failed.connect(self._program_update_download_failed)
@@ -308,13 +356,21 @@ class DesktopPetApplication:
         if worker is not None:
             worker.deleteLater()
 
-    def _program_update_download_failed(self, _message: str) -> None:
-        self.window.show_speech("安装包下载或校验失败，没有改动当前程序。", 4200)
+    def _program_update_download_failed(self, message: str) -> None:
+        self.program_update_state = UpdateState.ERROR
+        QMessageBox.warning(
+            self.window,
+            "程序更新失败",
+            "安装包下载或校验失败，没有改动当前程序。\n"
+            f"原因：{message or '未知错误'}",
+        )
 
     def _program_update_downloaded(self, result: object) -> None:
         if not isinstance(result, ProgramUpdateResult):
+            self.program_update_state = UpdateState.ERROR
             self.window.show_speech("更新包无效，没有改动当前程序。", 4200)
             return
+        self.program_update_state = UpdateState.READY_TO_INSTALL
         installer = str(result.installer_path)
         if sys.platform == "win32":
             started = QProcess.startDetached(
@@ -326,8 +382,10 @@ class DesktopPetApplication:
         else:
             started = False
         if not started:
+            self.program_update_state = UpdateState.ERROR
             self.window.show_speech("更新包已下载，但无法自动打开安装程序。", 4200)
             return
+        self.program_update_state = UpdateState.INSTALLING
         self.window.show_speech("更新程序已启动，六毛先重启一下。", 3000)
         QTimer.singleShot(500, self.quit)
 

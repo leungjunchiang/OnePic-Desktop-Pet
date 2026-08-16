@@ -41,6 +41,7 @@ QWidget#compactTodoPanel {
     border-radius: 12px;
 }
 QWidget#todoRows { background: transparent; border: 0; }
+QWidget#todoActionColumn { background: transparent; border: 0; }
 QScrollArea { background: transparent; border: 0; }
 QCheckBox { spacing: 6px; color: #183c4c; }
 QCheckBox::indicator { width: 16px; height: 16px; }
@@ -55,8 +56,8 @@ QToolButton { color: #557681; background: transparent; border: 0; padding: 1px 4
 QToolButton:hover { color: #0c807b; background: rgba(185, 228, 220, 130); border-radius: 7px; }
 QToolButton#addButton, QToolButton#expandButton { font-size: 15px; }
 QToolButton#addButton {
-    min-width: 30px; max-width: 30px;
-    min-height: 26px; max-height: 26px;
+    min-width: 32px; max-width: 32px;
+    min-height: 32px; max-height: 32px;
     color: #557681;
     background: rgba(230, 244, 240, 180);
     border: 1px solid rgba(112, 173, 170, 95);
@@ -69,8 +70,8 @@ QToolButton#addButton:hover {
     border-color: rgba(36, 128, 128, 150);
 }
 QToolButton#moreButton {
-    min-width: 30px; max-width: 30px;
-    min-height: 30px; max-height: 30px;
+    min-width: 32px; max-width: 32px;
+    min-height: 32px; max-height: 32px;
     color: #315765;
     background: rgba(214, 238, 233, 210);
     border: 1px solid rgba(73, 137, 141, 125);
@@ -99,7 +100,13 @@ class TodoRow(QWidget):
     checked = Signal(str, bool)
     more_requested = Signal(str, object)
 
-    def __init__(self, task: Any, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        task: Any,
+        parent: QWidget | None = None,
+        *,
+        action_parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.task_id = str(task.id)
         self._full_text = ""
@@ -127,10 +134,12 @@ class TodoRow(QWidget):
         self.label.installEventFilter(self)
         self.set_task(task)
         layout.addWidget(self.label, 1, Qt.AlignmentFlag.AlignVCenter)
-        self.more_button = QToolButton(self)
+        # In the panel the button is reparented into the fixed action column;
+        # keeping it exposed on the row preserves the row-level signal API.
+        self.more_button = QToolButton(action_parent or self)
         self.more_button.setObjectName("moreButton")
         self.more_button.setText("⋯")
-        self.more_button.setFixedSize(30, 30)
+        self.more_button.setFixedSize(TodoActionColumn.BUTTON_SIZE, TodoActionColumn.BUTTON_SIZE)
         self.more_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.more_button.setToolTip("任务操作")
         # This is intentionally a real button, not a decorative label.  The
@@ -142,7 +151,8 @@ class TodoRow(QWidget):
         self.more_button.clicked.connect(self._request_more)
         # The action button is the third fixed-width segment.  The label is
         # the only stretchable segment, so long titles can only elide text.
-        layout.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        if action_parent is None:
+            layout.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.installEventFilter(self)
 
     def _request_more(self) -> None:
@@ -189,6 +199,60 @@ class TodoRow(QWidget):
         if (watched is self or watched is self.label) and event.type() == QEvent.Type.MouseButtonPress:
             self.selected.emit(self.task_id)
         return False
+
+
+class TodoActionColumn(QWidget):
+    """Fixed-width action rail shared by all visible Todo rows."""
+
+    WIDTH = 40
+    BUTTON_SIZE = 32
+    ROW_GAP = 1
+    ADD_GAP = 8
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("todoActionColumn")
+        self.setFixedWidth(self.WIDTH)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(self.ROW_GAP)
+        self.add_button = QToolButton(self)
+        self.add_button.setObjectName("addButton")
+        self.add_button.setText("＋")
+        self.add_button.setFixedSize(self.BUTTON_SIZE, self.BUTTON_SIZE)
+        self.add_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.add_button.setToolTip("添加待办")
+
+    def rebuild(self, buttons: list[QToolButton], visible_rows: int) -> None:
+        """Replace row actions without changing the rail width."""
+
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            widget = item.widget()
+            if widget is None or widget is self.add_button:
+                continue
+            widget.setParent(None)
+            widget.deleteLater()
+        for button in buttons:
+            button.setParent(self)
+            self.layout.addWidget(
+                button,
+                0,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            )
+        if buttons:
+            self.layout.addSpacing(self.ADD_GAP)
+        self.layout.addWidget(
+            self.add_button,
+            0,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+        )
+        button_stack = len(buttons) * self.BUTTON_SIZE + max(0, len(buttons) - 1) * self.ROW_GAP
+        button_stack += self.ADD_GAP if buttons else 0
+        button_stack += self.BUTTON_SIZE
+        row_stack = max(0, visible_rows) * CompactTodoPanel.ROW_HEIGHT
+        self.setFixedHeight(max(row_stack, button_stack, self.BUTTON_SIZE))
 
 
 class CompactTodoPanel(QWidget):
@@ -252,7 +316,19 @@ class CompactTodoPanel(QWidget):
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
         self.rows_layout.setSpacing(1)
         self.rows_scroll.setWidget(self.rows_container)
-        root.addWidget(self.rows_scroll)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+        body.addWidget(self.rows_scroll, 1)
+        # The rail is part of the panel's layout, not a footer widget.  Its
+        # width never changes when a title grows, so neither action can be
+        # pushed outside the native window or clipped by the row container.
+        self.action_column = TodoActionColumn(self)
+        self.add_button = self.action_column.add_button
+        self.add_button.clicked.connect(self.add_task)
+        body.addWidget(self.action_column, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(body)
 
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
@@ -265,22 +341,6 @@ class CompactTodoPanel(QWidget):
         self.expand_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.expand_button.clicked.connect(self._toggle_expanded)
         footer.addWidget(self.expand_button, 0, Qt.AlignmentFlag.AlignBottom)
-
-        # Keep the add affordance in the same fixed action column as every
-        # row's more button.  This prevents it from drifting under the text
-        # when the panel width adapts to a long title.
-        self.action_column = QVBoxLayout()
-        self.action_column.setContentsMargins(0, 0, 0, 0)
-        self.action_column.setSpacing(4)
-        self.add_button = QToolButton(self)
-        self.add_button.setObjectName("addButton")
-        self.add_button.setText("＋")
-        self.add_button.setFixedSize(30, 26)
-        self.add_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.add_button.setToolTip("添加待办")
-        self.add_button.clicked.connect(self.add_task)
-        self.action_column.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignHCenter)
-        footer.addLayout(self.action_column)
         # Kept as an alias for older callers/tests.  There is only one real
         # toggle now; the former second button caused the collapsed state to
         # turn into an untargetable ellipsis.
@@ -361,21 +421,27 @@ class CompactTodoPanel(QWidget):
         display_limit = self.MAX_COLLAPSED_ROWS if self.collapsed else self.MAX_EXPANDED_ROWS
         display_tasks = tasks[:display_limit]
         self._resize_width(display_tasks)
+        action_buttons: list[QToolButton] = []
         for task in display_tasks:
-            row = TodoRow(task, self.rows_container)
+            row = TodoRow(
+                task,
+                self.rows_container,
+                action_parent=self.action_column,
+            )
             row.set_selected(task.id == self.selected_task_id)
             row.selected.connect(self._select_task)
             row.checked.connect(self._check_task)
             row.more_requested.connect(self._show_task_menu)
             self._rows[task.id] = row
+            action_buttons.append(row.more_button)
             self.rows_layout.addWidget(row)
         self.rows_layout.addStretch(1)
+        self.action_column.rebuild(action_buttons, len(display_tasks))
         has_multiple = len(tasks) > 1
         self.expand_button.setVisible(has_multiple)
         self.expand_button.setText("⌃" if self.collapsed else "⌄")
         self.expand_button.setToolTip("展开更多待办" if self.collapsed else "收起待办")
         self.rows_scroll.setVisible(bool(display_tasks))
-        self.add_button.setVisible(True)
         self._resize_to_content()
 
     def _resize_to_content(self) -> None:
@@ -388,10 +454,22 @@ class CompactTodoPanel(QWidget):
             self.rows_scroll.setFixedHeight(visible_rows * self.ROW_HEIGHT)
         else:
             self.rows_scroll.setFixedHeight(0)
+        button_stack = (
+            visible_rows * TodoActionColumn.BUTTON_SIZE
+            + max(0, visible_rows - 1) * TodoActionColumn.ROW_GAP
+            + (TodoActionColumn.ADD_GAP if visible_rows else 0)
+            + TodoActionColumn.BUTTON_SIZE
+        )
+        body_height = max(
+            visible_rows * self.ROW_HEIGHT,
+            button_stack,
+            TodoActionColumn.BUTTON_SIZE,
+        )
+        self.action_column.setFixedHeight(body_height)
         # No fixed empty canvas: an empty panel is just the tiny add affordance.
         self.adjustSize()
         footer_height = 27
-        content_height = visible_rows * self.ROW_HEIGHT + footer_height + 8
+        content_height = body_height + footer_height + 8
         self.setFixedHeight(max(38, content_height))
 
     @staticmethod
@@ -414,9 +492,10 @@ class CompactTodoPanel(QWidget):
             (metrics.horizontalAdvance(self._task_text(task)) for task in tasks),
             default=0,
         )
-        # checkbox + gaps/padding + the fixed 30px more button.  The add
-        # button lives below the rows and therefore does not change row width.
-        fixed_controls = 22 + 4 + 4 + 30 + 5 + 4 + 10
+        # Left row padding + checkbox + checkbox gap + body gap + the fixed
+        # 40px action rail + panel margins.  The rail owns both buttons, so
+        # title width can never consume their space.
+        fixed_controls = 5 + 22 + 4 + 6 + TodoActionColumn.WIDTH + 10
         desired = longest + fixed_controls
         self.setFixedWidth(max(self.MIN_WIDTH, min(self.MAX_WIDTH, desired)))
 

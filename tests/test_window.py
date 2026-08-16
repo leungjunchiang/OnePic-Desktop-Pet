@@ -23,6 +23,7 @@ from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QScrollArea
 
 from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
+from onepic_desktop_pet import __version__
 from onepic_desktop_pet.behavior import PetState, StateDecision
 from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
@@ -107,6 +108,7 @@ def test_connection_and_companion_settings_scroll_and_include_music_clients() ->
     assert dialog.music_service.currentData() == "auto"
     assert dialog.apple_music_path.isEnabled()
     assert dialog.spotify_music_path.isEnabled()
+    assert dialog.version_label.text().startswith(f"程序版本：{__version__}")
     assert dialog.always_on_top.isChecked()
     dialog.close()
     dialog.deleteLater()
@@ -252,9 +254,15 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     assert len(panel.rows) == 3
     row = next(iter(panel.rows.values()))
     assert row.more_button.isEnabled()
-    assert 30 <= row.more_button.width() <= 32
-    assert 30 <= panel.add_button.width() <= 32
-    assert panel.add_button.x() + panel.add_button.width() <= panel.width()
+    assert row.more_button.parent() is panel.action_column
+    assert panel.action_column.width() == panel.action_column.WIDTH
+    assert 32 <= row.more_button.width() <= 36
+    assert 32 <= panel.add_button.width() <= 36
+    assert row.more_button.x() + row.more_button.width() <= panel.action_column.width()
+    assert panel.add_button.x() + panel.add_button.width() <= panel.action_column.width()
+    assert row.more_button.x() == panel.add_button.x()
+    last_row = list(panel.rows.values())[-1]
+    assert panel.add_button.y() >= last_row.more_button.y() + last_row.more_button.height() + 6
     assert not row.more_button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     # Keep the click-path assertion non-modal.  The real menu is exercised by
     # the production slot; this test only verifies that the visible button
@@ -314,8 +322,10 @@ def test_compact_todo_panel_hugs_task_content_and_repositions_after_refresh(tmp_
     assert panel.rows[task.id].label.toolTip() == "修改论文第三部分机制分析并整理稳健性回归结果 · 22:00"
     assert panel.rows[task.id].label.text().endswith("…")
     row = panel.rows[task.id]
-    assert row.label.geometry().right() < row.more_button.geometry().left()
-    assert row.more_button.geometry().right() <= row.width()
+    assert row.label.geometry().right() <= row.width()
+    assert row.more_button.parent() is panel.action_column
+    assert row.more_button.x() + row.more_button.width() <= panel.action_column.width()
+    assert panel.add_button.x() == row.more_button.x()
     assert panel.x() != 0 or panel.y() != 0
     window.close()
     window.deleteLater()
