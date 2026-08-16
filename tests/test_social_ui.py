@@ -62,6 +62,29 @@ class RoomClient(SignedInClient):
         return data
 
 
+class UncertainRoomClient(RoomClient):
+    def dashboard(self):
+        data = super().dashboard()
+        data["rooms"] = [{"id": "room-1", "name": "安静工作间", "members": 2, "invite_code": "ROOM1234"}]
+        data["room_people"] = [
+            {
+                "user_id": "buddy-1",
+                "nickname": "胡老师",
+                "owner_nickname": "胡老师",
+                "online": True,
+                "working": True,
+                "status": "focus",
+                "presence_uncertain": True,
+                "presence_age_seconds": 90,
+                "today_seconds": 900,
+            },
+        ]
+        data["_connection_state"] = "DEGRADED"
+        data["_sync_offline"] = True
+        data["_presence_grace_active"] = True
+        return data
+
+
 def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedOutClient())
@@ -153,6 +176,28 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     assert "正在工作" in dialog.room_members.itemWidget(dialog.room_members.item(1)).findChildren(QLabel)[0].text()
     assert dialog.room_activity.count() == 2
     assert "35分钟" in dialog.room_goal.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_recent_cached_presence_is_not_rendered_as_peer_offline() -> None:
+    app = QApplication.instance() or QApplication([])
+    client = UncertainRoomClient()
+    dialog = SocialHubDialog(client)
+    data = client.dashboard()
+    dialog.current_room_id = "room-1"
+    dialog._room_selection_explicit = True
+    dialog.apply_dashboard(data)
+    app.processEvents()
+
+    peer_labels = []
+    for index in range(dialog.room_members.count()):
+        widget = dialog.room_members.itemWidget(dialog.room_members.item(index))
+        if widget is not None:
+            peer_labels.extend(label.text() for label in widget.findChildren(QLabel))
+
+    assert any("正在工作（同步恢复中）" in text for text in peer_labels)
+    assert all("已离线" not in text for text in peer_labels)
+    assert "连接暂时不稳定" in dialog.status_label.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

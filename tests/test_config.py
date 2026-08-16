@@ -126,11 +126,13 @@ def test_program_updates_preference_is_persistent_and_defaults_on(tmp_path) -> N
 def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
     assert settings.auto_pause_on_idle is True
-    assert settings.idle_pause_seconds == 300
+    assert settings.idle_pause_seconds == 600
     settings.idle_pause_seconds = 5
+    settings.idle_classification_rules = {"WINWORD.EXE": "focus", "bad": "ignore"}
     path = save_settings(settings, tmp_path / "settings.json")
     loaded = load_settings(override_path=path)
-    assert loaded.idle_pause_seconds == 30
+    assert loaded.idle_pause_seconds == 300
+    assert loaded.idle_classification_rules == {"winword.exe": "focus"}
 
 
 def test_save_settings_writes_json(tmp_path) -> None:

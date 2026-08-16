@@ -129,11 +129,21 @@ def test_social_card_prefers_explicit_owner_nickname_and_marks_stale_presence_of
 def test_idle_input_pauses_focus_without_resuming_automatically(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    window = PetWindow(PetSettings(idle_pause_seconds=30))
-    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 31.0)
+    window = PetWindow(PetSettings(idle_pause_seconds=600))
+    readings = iter((599.0, 599.0, 600.0, 601.0, 601.0))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_idle_seconds",
+        lambda: next(readings, 600.0),
+    )
     window.start_work_timer()
+    window._check_input_idle()
     assert window.work_timer.is_running
-    # A single native reading is not enough to pause the session.
+    window._check_input_idle()
+    assert window.work_timer.is_running
+    # Two samples crossing ten minutes pause the session, but no excess time
+    # has been recorded yet.
+    window._check_input_idle()
+    assert window.work_timer.is_running
     window._check_input_idle()
     assert window.work_timer.is_running
     window._check_input_idle()
@@ -146,8 +156,8 @@ def test_idle_input_pauses_focus_without_resuming_automatically(monkeypatch, tmp
 def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    window = PetWindow(PetSettings(idle_pause_seconds=60))
-    readings = iter((61.0, 61.0, 0.0, 0.0, 0.0))
+    window = PetWindow(PetSettings(idle_pause_seconds=600))
+    readings = iter((601.0, 601.0, 0.0, 0.0, 0.0))
     monkeypatch.setattr(
         "onepic_desktop_pet.window.system_idle_seconds",
         lambda: next(readings, 0.0),
@@ -160,7 +170,7 @@ def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, t
     window._ask_idle_recovery()
     dialog = window._idle_recovery_dialog
     assert dialog is not None and dialog.isVisible()
-    assert "1 分 01 秒" in dialog.summary_label.text()
+    assert "1 秒" in dialog.summary_label.text()
 
     # More return samples reuse the same window and never create another one.
     window._check_input_idle()
@@ -181,8 +191,8 @@ def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, t
 def test_idle_recovery_duration_keeps_growing_after_threshold(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    window = PetWindow(PetSettings(idle_pause_seconds=60))
-    readings = iter((61.0, 61.0, 0.0))
+    window = PetWindow(PetSettings(idle_pause_seconds=600))
+    readings = iter((601.0, 601.0, 0.0))
     monkeypatch.setattr(
         "onepic_desktop_pet.window.system_idle_seconds",
         lambda: next(readings, 0.0),
@@ -192,8 +202,8 @@ def test_idle_recovery_duration_keeps_growing_after_threshold(monkeypatch, tmp_p
     window._check_input_idle()
     assert window._auto_paused_for_idle is True
 
-    # Simulate remaining away for 15 minutes after the original 60-second
-    # threshold.  The dialog must show the episode duration, not the trigger.
+    # Simulate remaining away for 15 minutes after the ten-minute grace
+    # period.  The hint must show the excess duration, not the trigger.
     window._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=901)
     window._check_input_idle()
     window._ask_idle_recovery()
