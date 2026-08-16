@@ -12,6 +12,7 @@ os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 from PySide6.QtWidgets import QApplication, QLabel
 
 from onepic_desktop_pet.config import PetSettings
+from onepic_desktop_pet.idle_classifier import IdleEvidence
 from onepic_desktop_pet.social_ui import BuddyCardWidget, SocialHubDialog
 from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
@@ -157,6 +158,14 @@ def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, t
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     window = PetWindow(PetSettings(idle_pause_seconds=600))
+    # Keep this test deterministic across desktop runners.  CI may report its
+    # hidden test host as a locked/fullscreen desktop, which is intentionally a
+    # high-confidence automatic rest decision and therefore has no hint.
+    monkeypatch.setattr(
+        window,
+        "_capture_idle_context",
+        lambda: IdleEvidence(app_name="unknown-test-host", app_category="other"),
+    )
     readings = iter((601.0, 601.0, 0.0, 0.0, 0.0))
     monkeypatch.setattr(
         "onepic_desktop_pet.window.system_idle_seconds",
@@ -192,6 +201,11 @@ def test_idle_recovery_duration_keeps_growing_after_threshold(monkeypatch, tmp_p
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     window = PetWindow(PetSettings(idle_pause_seconds=600))
+    monkeypatch.setattr(
+        window,
+        "_capture_idle_context",
+        lambda: IdleEvidence(app_name="unknown-test-host", app_category="other"),
+    )
     readings = iter((601.0, 601.0, 0.0))
     monkeypatch.setattr(
         "onepic_desktop_pet.window.system_idle_seconds",
