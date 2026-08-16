@@ -1,3 +1,18 @@
+# Lili v0.22.46
+
+## Compact Todo action column
+
+- Compact Todo rows now use fixed segments: checkbox, elided task text, and a 30px `⋯` button.
+- The add button is aligned in the same right-side action column below `⋯`; long titles can no longer clip or push either control out of the panel.
+- Added geometry tests for the short, long, multi-row, and repositioned pet-attached layouts.
+
+## Full-program automatic updates
+
+- Added automatic release checks with a persistent settings switch.
+- Users are asked before downloading; the matching Windows installer or macOS DMG is downloaded from GitHub Releases and verified with SHA-256 before launch.
+- Windows can launch the installer and restart Lili automatically; macOS opens the verified DMG for the standard app replacement flow.
+- Manual entry is available from the tray menu: `检查程序更新`.
+
 # Lili v0.22.45
 
 ## Chat actions and one Todo store

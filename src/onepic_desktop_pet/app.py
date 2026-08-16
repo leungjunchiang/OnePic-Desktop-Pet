@@ -26,9 +26,9 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from .config import PET_NAME, PetSettings, load_settings, save_settings
 from .companion import APP_DISPLAY_NAME
@@ -37,8 +37,13 @@ from .content_updates import (
     ContentUpdateResult,
     reload_runtime_content,
 )
+from .program_updates import ProgramRelease, ProgramUpdateManager, ProgramUpdateResult
 from .resources import resource_path
-from .update_worker import ContentUpdateWorker
+from .update_worker import (
+    ContentUpdateWorker,
+    ProgramUpdateCheckWorker,
+    ProgramUpdateDownloadWorker,
+)
 from .window import PetWindow
 
 
@@ -59,6 +64,10 @@ class DesktopPetApplication:
         self.window.quit_requested.connect(self.quit)
         self._content_update_worker: ContentUpdateWorker | None = None
         self._content_update_manual = False
+        self._program_update_check_worker: ProgramUpdateCheckWorker | None = None
+        self._program_update_download_worker: ProgramUpdateDownloadWorker | None = None
+        self._program_update_manual = False
+        self._program_release: ProgramRelease | None = None
         self.tray = self._create_tray()
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
@@ -99,6 +108,10 @@ class DesktopPetApplication:
         update_action.triggered.connect(self.check_content_updates)
         menu.addAction(update_action)
 
+        program_update_action = QAction("检查程序更新", menu)
+        program_update_action.triggered.connect(self.check_program_updates)
+        menu.addAction(program_update_action)
+
         ai_settings_action = QAction("AI 与陪伴设置…", menu)
         ai_settings_action.triggered.connect(
             lambda _checked=False: self.window.open_settings("user_action")
@@ -128,6 +141,7 @@ class DesktopPetApplication:
         self.dialogue_action = dialogue_action
         self.rename_action = rename_action
         self.update_action = update_action
+        self.program_update_action = program_update_action
         tray.activated.connect(self._tray_activated)
         return tray
 
@@ -172,6 +186,10 @@ class DesktopPetApplication:
             # The startup check is deliberately delayed and silent.  It only
             # fetches the manifest; changed files are downloaded in a worker.
             QTimer.singleShot(2500, lambda: self.check_content_updates(False))
+        if self._program_updates_enabled():
+            # The program check is metadata-only.  A download and installer
+            # launch happen only after the user confirms the discovered release.
+            QTimer.singleShot(5000, lambda: self.check_program_updates(False))
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
         return self.qt_app.exec()
@@ -185,6 +203,13 @@ class DesktopPetApplication:
             if self._content_update_worker is not None and self._content_update_worker.isRunning():
                 self._content_update_worker.requestInterruption()
                 self._content_update_worker.wait(6000)
+            for worker in (
+                self._program_update_check_worker,
+                self._program_update_download_worker,
+            ):
+                if worker is not None and worker.isRunning():
+                    worker.requestInterruption()
+                    worker.wait(6000)
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         finally:
@@ -216,6 +241,95 @@ class DesktopPetApplication:
         return (not bool(getattr(self.settings, "content_updates_enabled", True))) or os.environ.get(
             "LILI_DISABLE_CONTENT_UPDATES", ""
         ).strip() == "1"
+
+    def _program_updates_enabled(self) -> bool:
+        return bool(getattr(self.settings, "program_updates_enabled", True)) and os.environ.get(
+            "LILI_DISABLE_PROGRAM_UPDATES", ""
+        ).strip() != "1"
+
+    def check_program_updates(self, manual: bool = True) -> None:
+        """Check the official GitHub installer without blocking the UI."""
+
+        if self._program_update_check_worker is not None and self._program_update_check_worker.isRunning():
+            return
+        if not manual and not self._program_updates_enabled():
+            return
+        worker = ProgramUpdateCheckWorker(ProgramUpdateManager(), self.qt_app)
+        self._program_update_check_worker = worker
+        self._program_update_manual = bool(manual)
+        worker.completed.connect(self._program_update_checked)
+        worker.failed.connect(self._program_update_check_failed)
+        worker.finished.connect(self._program_update_check_finished)
+        worker.start()
+
+    def _program_update_check_finished(self) -> None:
+        worker = self._program_update_check_worker
+        self._program_update_check_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _program_update_checked(self, result: object) -> None:
+        if not isinstance(result, ProgramRelease):
+            if self._program_update_manual:
+                self.window.show_speech("现在已经是最新程序了。", 3000)
+            return
+        self._program_release = result
+        size_mb = max(1, round(result.asset_size / 1024 / 1024))
+        answer = QMessageBox.question(
+            self.window,
+            "发现六毛新版本",
+            f"发现 Lili {result.version}。\n将下载约 {size_mb} MB 的安装包并启动更新，是否现在更新？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._download_program_update(result)
+        elif self._program_update_manual:
+            self.window.show_speech("好，先不更新。需要时可以从托盘再次检查。", 3200)
+
+    def _program_update_check_failed(self, _message: str) -> None:
+        if self._program_update_manual:
+            self.window.show_speech("程序更新暂时没连上，稍后再试。", 3600)
+
+    def _download_program_update(self, release: ProgramRelease) -> None:
+        if self._program_update_download_worker is not None and self._program_update_download_worker.isRunning():
+            return
+        self.window.show_speech(f"正在下载 Lili {release.version}，校验后再安装。", 4200)
+        worker = ProgramUpdateDownloadWorker(ProgramUpdateManager(), release, self.qt_app)
+        self._program_update_download_worker = worker
+        worker.completed.connect(self._program_update_downloaded)
+        worker.failed.connect(self._program_update_download_failed)
+        worker.finished.connect(self._program_update_download_finished)
+        worker.start()
+
+    def _program_update_download_finished(self) -> None:
+        worker = self._program_update_download_worker
+        self._program_update_download_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _program_update_download_failed(self, _message: str) -> None:
+        self.window.show_speech("安装包下载或校验失败，没有改动当前程序。", 4200)
+
+    def _program_update_downloaded(self, result: object) -> None:
+        if not isinstance(result, ProgramUpdateResult):
+            self.window.show_speech("更新包无效，没有改动当前程序。", 4200)
+            return
+        installer = str(result.installer_path)
+        if sys.platform == "win32":
+            started = QProcess.startDetached(
+                installer,
+                ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
+            )
+        elif sys.platform == "darwin":
+            started = QProcess.startDetached("open", [installer])
+        else:
+            started = False
+        if not started:
+            self.window.show_speech("更新包已下载，但无法自动打开安装程序。", 4200)
+            return
+        self.window.show_speech("更新程序已启动，六毛先重启一下。", 3000)
+        QTimer.singleShot(500, self.quit)
 
     def _content_update_finished(self) -> None:
         worker = self._content_update_worker

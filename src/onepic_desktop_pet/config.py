@@ -109,6 +109,10 @@ class PetSettings:
     # Content-only updates (knowledge/config/assets) are independent from
     # installing a new program version and can be disabled by the user.
     content_updates_enabled: bool = True
+    # Program updates are checked automatically, but installation always
+    # requires an explicit user confirmation before the verified installer
+    # is launched.
+    program_updates_enabled: bool = True
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -243,6 +247,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.today_note_folded = bool(settings.today_note_folded)
     settings.today_note_hide_completed = bool(settings.today_note_hide_completed)
     settings.content_updates_enabled = bool(settings.content_updates_enabled)
+    settings.program_updates_enabled = bool(settings.program_updates_enabled)
     return settings
 
 
@@ -306,6 +311,7 @@ def load_settings(
                 "today_note_folded",
                 "today_note_hide_completed",
                 "content_updates_enabled",
+                "program_updates_enabled",
             }
         }
     )
@@ -367,6 +373,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "today_note_folded": settings.today_note_folded,
         "today_note_hide_completed": settings.today_note_hide_completed,
         "content_updates_enabled": settings.content_updates_enabled,
+        "program_updates_enabled": settings.program_updates_enabled,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

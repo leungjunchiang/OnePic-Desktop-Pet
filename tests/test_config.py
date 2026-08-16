@@ -115,6 +115,14 @@ def test_content_updates_preference_is_persistent_and_defaults_on(tmp_path) -> N
     assert load_settings(override_path=path).content_updates_enabled is False
 
 
+def test_program_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.program_updates_enabled is True
+    settings.program_updates_enabled = False
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).program_updates_enabled is False
+
+
 def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
     assert settings.auto_pause_on_idle is True
