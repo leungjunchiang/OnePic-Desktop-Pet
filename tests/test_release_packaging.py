@@ -63,7 +63,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
     assert '"CFBundleShortVersionString": "0.22.46"' in spec
-    assert '"CFBundleVersion": "0.22.0"' in spec
+    assert '"CFBundleVersion": "0.22.46"' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
