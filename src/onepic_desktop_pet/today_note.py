@@ -68,11 +68,17 @@ class TodayNoteWindow(QDialog):
         memory: TimeMemory,
         parent: QWidget | None = None,
         *,
+        owner: QWidget | None = None,
         settings: Any | None = None,
         save_settings_callback: Callable[[Any], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.memory = memory
+        # Keep the controller separate from the Qt parent.  These windows are
+        # deliberately unparented top-level windows so Windows gives them a
+        # normal taskbar button when minimized, while PetWindow still owns
+        # their lifecycle and can switch between detailed/compact/hidden.
+        self._owner = owner or parent
         self.settings = settings
         self.save_settings_callback = save_settings_callback
         self.hide_completed = bool(getattr(settings, "today_note_hide_completed", False))
@@ -93,6 +99,8 @@ class TodayNoteWindow(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowCloseButtonHint
         )
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setStyleSheet(PAPER_STYLE)
 
@@ -508,7 +516,7 @@ class TodayNoteWindow(QDialog):
         if self.save_settings_callback is not None:
             self.save_settings_callback(self.settings)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, topmost.isChecked())
-        owner = self.parentWidget()
+        owner = self._owner
         selected_mode = self.settings.today_note_mode
         if selected_mode == "hidden":
             self.hide()
@@ -536,10 +544,17 @@ class TimeMemoryWindow(QDialog):
     """Non-resident review window for countdowns, anniversaries and timeline."""
 
     def __init__(self, memory: TimeMemory, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+        # This is a normal independent utility window.  Do not parent it to
+        # the frameless desktop pet: an owned QDialog can disappear together
+        # with the pet and may be treated as a tool window instead of getting
+        # its own taskbar entry when minimized.
+        super().__init__(None)
         self.memory = memory
         self.setWindowTitle("我的时光 · 六毛")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowSystemMenuHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.resize(620, 480)
         self.setStyleSheet(PAPER_STYLE)
         root = QVBoxLayout(self)
