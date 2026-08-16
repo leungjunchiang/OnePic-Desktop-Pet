@@ -452,7 +452,12 @@ class CompactTodoPanel(QWidget):
 
         self.rows_layout.invalidate()
         self.rows_layout.activate()
-        row_heights = [row.sizeHint().height() for row in self._rows.values()]
+        # TodoRow sets a fixed height after measuring its actual label font.
+        # QWidget.sizeHint() can still expose the pre-layout hint here, which
+        # is smaller than the rendered row and causes the scroll viewport to
+        # clip the bottom row.  Use the current widget geometry as the source
+        # of truth after content widths have been assigned.
+        row_heights = [row.height() for row in self._rows.values()]
         row_gap = max(0, self.rows_layout.spacing())
         content_height = sum(row_heights)
         if row_heights:
