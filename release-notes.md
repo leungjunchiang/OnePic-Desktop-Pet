@@ -1,3 +1,11 @@
+# Lili v0.22.86
+
+## macOS Codex 聊天连接修复
+
+- 修正 macOS CI 中 Codex 登录 shell 路径探测测试对 subprocess 调用顺序的错误假设，确保 ARM 与 Intel 构建都能稳定验证 Finder 启动场景。
+- 保留 v0.22.85 的核心修复：Finder 启动时补齐 Codex 登录 shell PATH、固定 HOME/CODEX_HOME/SQLite 运行目录，并使用绝对 Codex CLI 路径。
+- Lili 专用 Codex App Server 与 exec 默认使用独立 HTTPS Responses provider 并关闭 WebSocket；App Server 失败时自动走同一 HTTPS exec 回退，模型不可用时回退到 Codex 默认模型。
+
 # Lili v0.22.85
 
 ## 修复 macOS Codex 聊天连接与 HTTPS 回退
