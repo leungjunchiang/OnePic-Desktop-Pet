@@ -1070,10 +1070,10 @@ def test_ten_messages_in_every_agent_state_never_open_settings(
 
     if scenario == "connected":
         window.agent_manager.mark_runtime_success("codex")
-        monkeypatch.setattr(window.chat_manager.service, "reply", successful_reply)
+        monkeypatch.setattr(window.chat_manager.service, "stream_reply", successful_reply)
     elif scenario == "timeout":
         window.agent_manager.mark_runtime_success("codex")
-        monkeypatch.setattr(window.chat_manager.service, "reply", timed_out_reply)
+        monkeypatch.setattr(window.chat_manager.service, "stream_reply", timed_out_reply)
     else:
         state = AgentConnectionState(scenario)
         window.agent_manager._set_status("codex", state, f"测试状态：{scenario}")
