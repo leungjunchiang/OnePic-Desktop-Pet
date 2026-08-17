@@ -37,7 +37,7 @@ class CodexAppServerClient:
         env: Mapping[str, str] | None = None,
         thread_id: str = "",
         on_thread_id: Callable[[str], None] | None = None,
-        client_version: str = "0.22.69",
+        client_version: str = "0.22.70",
     ) -> None:
         self.command = list(command)
         self.cwd = Path(cwd)

@@ -27,8 +27,8 @@ from html import escape
 if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal
+from PySide6.QtGui import QCloseEvent, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -491,6 +491,9 @@ class ChatHistoryDialog(QDialog):
         self.message_list = QListWidget()
         self.message_list.setWordWrap(True)
         self.message_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.message_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.message_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.message_list.currentRowChanged.connect(
             lambda _row: self._update_action_state()
@@ -589,11 +592,34 @@ class ChatHistoryDialog(QDialog):
             self.message_list.addItem(item)
         if session.messages:
             self.message_list.setCurrentRow(0)
+            self._refresh_message_item_sizes()
         else:
             item = QListWidgetItem("这段会话没有消息。")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self.message_list.addItem(item)
         self._update_action_state()
+
+    def resizeEvent(self, event) -> None:
+        """让长消息随历史窗口宽度变化完整换行显示。"""
+
+        super().resizeEvent(event)
+        self._refresh_message_item_sizes()
+
+    def _refresh_message_item_sizes(self) -> None:
+        """按当前可视宽度计算每条消息的完整行高，避免内容被截断。"""
+
+        width = max(220, self.message_list.viewport().width() - 18)
+        metrics = QFontMetrics(self.message_list.font())
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
+                continue
+            rect = metrics.boundingRect(
+                QRect(0, 0, width, 100000),
+                Qt.TextFlag.TextWordWrap,
+                item.text(),
+            )
+            item.setSizeHint(QSize(0, max(52, rect.height() + 20)))
 
     def set_mutation_enabled(self, enabled: bool) -> None:
         """生成回复时仍允许查看记录，但暂时锁定编辑和删除。"""
