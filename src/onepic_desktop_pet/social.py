@@ -118,6 +118,80 @@ def _endpoint_host(base_url: str) -> str:
     return parsed.netloc or "未配置"
 
 
+def _private_notes_from_payload(payload: Any) -> dict[str, str]:
+    """Normalize the private-note RPC response without exposing other users."""
+
+    if isinstance(payload, dict):
+        payload = payload.get("notes", payload)
+    if isinstance(payload, dict):
+        return {
+            str(user_id): str(note).strip()[:40]
+            for user_id, note in payload.items()
+            if str(user_id).strip() and str(note).strip()
+        }
+    if isinstance(payload, list):
+        result: dict[str, str] = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            user_id = item.get("buddy_user_id") or item.get("user_id")
+            note = item.get("private_note_name")
+            if user_id and note:
+                result[str(user_id)] = str(note).strip()[:40]
+        return result
+    return {}
+
+
+def _apply_buddy_private_notes(data: dict[str, Any], notes: dict[str, str]) -> dict[str, Any]:
+    """Decorate only the current user's dashboard snapshot with private labels."""
+
+    if not notes:
+        return data
+
+    def decorate(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id"):
+                user_id = item.get(field)
+                if user_id is not None and str(user_id) in notes:
+                    item["private_note_name"] = notes[str(user_id)]
+                    break
+
+    for key in ("buddies", "room_people", "active_visits", "visits", "requests"):
+        decorate(data.get(key))
+    current_room = data.get("current_room")
+    if isinstance(current_room, dict):
+        decorate(current_room.get("room_people"))
+        decorate(current_room.get("active_visits"))
+        decorate(current_room.get("visits"))
+        activity = current_room.get("room_activity")
+        if isinstance(activity, list):
+            for item in activity:
+                if not isinstance(item, dict):
+                    continue
+                actor_id = item.get("actor_id")
+                target_id = item.get("target_id")
+                if actor_id is not None and str(actor_id) in notes:
+                    item["actor_private_note_name"] = notes[str(actor_id)]
+                if target_id is not None and str(target_id) in notes:
+                    item["target_private_note_name"] = notes[str(target_id)]
+    activity = data.get("room_activity")
+    if isinstance(activity, list):
+        for item in activity:
+            if not isinstance(item, dict):
+                continue
+            actor_id = item.get("actor_id")
+            target_id = item.get("target_id")
+            if actor_id is not None and str(actor_id) in notes:
+                item["actor_private_note_name"] = notes[str(actor_id)]
+            if target_id is not None and str(target_id) in notes:
+                item["target_private_note_name"] = notes[str(target_id)]
+    return data
+
+
 def _network_error(exc: BaseException, base_url: str) -> SocialError:
     """把 urllib/Windows 错误转成用户能采取行动的分类。"""
 
@@ -1704,6 +1778,18 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
         try:
             result = dict(self._manager.request("dashboard", room_id=room_id) or {})
+            try:
+                note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
+                _apply_buddy_private_notes(result, _private_notes_from_payload(note_payload))
+            except SocialError as exc:
+                # The migration can be applied after the desktop release. The
+                # core dashboard must remain usable while that deployment is
+                # catching up, so private labels fail closed to public names.
+                LOGGER.info(
+                    "buddy private notes unavailable kind=%s status=%s",
+                    exc.kind,
+                    exc.status,
+                )
             stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
             result.update({"_connection_state": "ONLINE", "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)

@@ -17,6 +17,8 @@ const RPC_ALLOWLIST = new Set([
   "lili_leave_room",
   "lili_set_buddy_subscription",
   "lili_room_room_rituals",
+  "lili_buddy_private_notes",
+  "lili_set_buddy_private_note",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -289,3 +291,4 @@ Deno.serve(async (request: Request) => {
     return json(request, Deno.env.toObject(), { error: message }, status);
   }
 });
+

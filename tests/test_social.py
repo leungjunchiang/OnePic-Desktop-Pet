@@ -15,6 +15,7 @@ from onepic_desktop_pet.social import (
     SocialClient,
     SocialError,
     SocialSession,
+    _apply_buddy_private_notes,
     social_user_message,
 )
 
@@ -65,6 +66,25 @@ def test_refresh_token_reuse_error_has_user_safe_message():
             error_code="refresh_token_already_used",
         )
     ) == "登录状态已失效，请重新登录。"
+
+
+def test_private_buddy_notes_decorate_all_local_dashboard_projections():
+    data = {
+        "buddies": [{"user_id": "buddy-1", "owner_nickname": "公开昵称"}],
+        "room_people": [{"user_id": "buddy-1", "owner_nickname": "公开昵称"}],
+        "current_room": {
+            "room_people": [{"user_id": "buddy-1", "owner_nickname": "公开昵称"}],
+            "room_activity": [{"actor_id": "buddy-1", "target_id": "buddy-2", "owner_nickname": "公开昵称"}],
+        },
+    }
+
+    _apply_buddy_private_notes(data, {"buddy-1": "论文搭子", "buddy-2": "小梁"})
+
+    assert data["buddies"][0]["private_note_name"] == "论文搭子"
+    assert data["room_people"][0]["private_note_name"] == "论文搭子"
+    assert data["current_room"]["room_people"][0]["private_note_name"] == "论文搭子"
+    assert data["current_room"]["room_activity"][0]["actor_private_note_name"] == "论文搭子"
+    assert data["current_room"]["room_activity"][0]["target_private_note_name"] == "小梁"
 
 
 def test_macos_social_transport_uses_verified_certificate_context(monkeypatch):
@@ -331,6 +351,22 @@ def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     assert "lili_presence_focus_session" in migration
 
 
+def test_private_buddy_note_migration_is_owner_scoped_and_proxy_allowlisted():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260817000100_lili_buddy_private_notes.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.lili_buddy_private_notes" in migration
+    assert "alter table public.lili_buddy_private_notes enable row level security" in migration
+    assert "(select auth.uid()) = owner_user_id" in migration
+    assert "lili_set_buddy_private_note" in migration
+    assert "lili_buddy_private_notes()" in migration
+    for path in (
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_buddy_private_notes" in source
+        assert "lili_set_buddy_private_note" in source
 def test_room_dashboard_exposes_today_and_cumulative_focus_metrics():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260816000100_lili_room_focus_today_total.sql").read_text(encoding="utf-8")

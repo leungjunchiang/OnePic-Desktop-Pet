@@ -62,6 +62,23 @@ class RoomClient(SignedInClient):
         return data
 
 
+class PrivateNoteRoomClient(RoomClient):
+    def dashboard(self):
+        data = super().dashboard()
+        data["buddies"] = [
+            {
+                "user_id": "buddy-1",
+                "private_note_name": "论文搭子",
+                "nickname": "公开昵称",
+                "online": True,
+                "working": False,
+                "status": "rest",
+                "today_seconds": 120,
+            }
+        ]
+        return data
+
+
 class UncertainRoomClient(RoomClient):
     def dashboard(self):
         data = super().dashboard()
@@ -103,6 +120,20 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     app.processEvents()
     assert dialog.tabs.currentIndex() == 3
     assert "请先" in dialog.status_label.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(PrivateNoteRoomClient())
+    dialog.refresh()
+    app.processEvents()
+
+    assert dialog.buddies.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    item = dialog.buddies.item(0)
+    widget = dialog.buddies.itemWidget(item)
+    assert widget is not None
+    assert any("论文搭子家的六毛" in label.text() for label in widget.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -229,3 +260,4 @@ def test_offline_dashboard_does_not_mask_local_focus_when_no_room_is_selected() 
     assert "当前无法连接自习室" in dialog.status_label.text()
 
     dialog.close(); dialog.deleteLater(); app.processEvents()
+

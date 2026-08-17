@@ -9,6 +9,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_record_room_event", "lili_send_interaction", "lili_set_room_goal", "lili_leave_room",
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
+  "lili_buddy_private_notes", "lili_set_buddy_private_note",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -157,3 +158,4 @@ async function main(event, context) {
 }
 
 module.exports = { main, handleRequest, RelayError, pathOf, queryOf };
+

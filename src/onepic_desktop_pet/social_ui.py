@@ -14,7 +14,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget,
+    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QMenu,
     QVBoxLayout, QWidget, QSizePolicy,
 )
 
@@ -121,7 +121,12 @@ def _owner_nickname(record: dict[str, Any] | None) -> str:
 
     if not isinstance(record, dict):
         return "搭子"
-    return str(record.get("owner_nickname") or record.get("nickname") or "搭子").strip() or "搭子"
+    return str(
+        record.get("private_note_name")
+        or record.get("owner_nickname")
+        or record.get("nickname")
+        or "搭子"
+    ).strip() or "搭子"
 
 
 def _owner_label(record: dict[str, Any] | None) -> str:
@@ -763,6 +768,8 @@ class SocialHubDialog(QDialog):
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
         self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
+        self.buddies.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.buddies.customContextMenuRequested.connect(self._buddy_context_menu)
         buddies_layout.addWidget(self.buddies)
         layout.addWidget(buddies_card)
         layout.addStretch()
@@ -1210,8 +1217,13 @@ class SocialHubDialog(QDialog):
                 stamp = _format_beijing_time(str(entry.get("created_at") or ""))
                 text = str(entry.get("text") or entry.get("message") or "")
                 if not text:
-                    actor = social_pet_label(entry.get("owner_nickname") or entry.get("nickname") or entry.get("actor_nickname"))
-                    target = entry.get("target_owner_nickname") or entry.get("target_nickname")
+                    actor = social_pet_label(
+                        entry.get("actor_private_note_name")
+                        or entry.get("owner_nickname")
+                        or entry.get("nickname")
+                        or entry.get("actor_nickname")
+                    )
+                    target = entry.get("target_private_note_name") or entry.get("target_owner_nickname") or entry.get("target_nickname")
                     target_text = f" → {social_pet_label(target)}" if target else ""
                     kind_text = {
                         "join": "进入房间", "leave": "离开房间", "focus_start": "开始专注",
@@ -1707,6 +1719,89 @@ class SocialHubDialog(QDialog):
             else:
                 self.client.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": enabled, "p_on_focus_end": enabled, "p_muted": not enabled})
             self._set_status("搭子状态订阅已开启。" if enabled else "搭子状态订阅已关闭。")
+        except SocialError as exc:
+            self._error(exc)
+
+    def _buddy_context_menu(self, position) -> None:
+        """Keep private labels in the buddy list, where their scope is clear."""
+
+        item = self.buddies.itemAt(position)
+        if item is None:
+            return
+        buddy = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(buddy, dict) or buddy.get("is_self"):
+            return
+        buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+        if not buddy_id:
+            return
+        menu = QMenu(self)
+        edit = menu.addAction("修改私人备注…")
+        if str(buddy.get("private_note_name") or "").strip():
+            clear = menu.addAction("清空私人备注")
+        else:
+            clear = None
+        chosen = menu.exec(self.buddies.viewport().mapToGlobal(position))
+        if chosen is edit:
+            self._edit_buddy_private_note(buddy)
+        elif clear is not None and chosen is clear:
+            self._save_buddy_private_note(buddy, "")
+
+    def _edit_buddy_private_note(self, buddy: dict[str, Any]) -> None:
+        current = str(buddy.get("private_note_name") or "").strip()
+        value, accepted = QInputDialog.getText(
+            self,
+            "修改搭子备注",
+            "仅你可见的备注名：",
+            QLineEdit.EchoMode.Normal,
+            current,
+        )
+        if accepted:
+            self._save_buddy_private_note(buddy, value)
+
+    def _update_private_note_snapshot(self, buddy_id: str, note: str) -> None:
+        """Update every local projection so the label is immediately consistent."""
+
+        def update(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                ids = {
+                    str(item.get(field))
+                    for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id")
+                    if item.get(field) is not None
+                }
+                if buddy_id in ids:
+                    if note:
+                        item["private_note_name"] = note
+                    else:
+                        item.pop("private_note_name", None)
+
+        for key in ("buddies", "room_people", "active_visits", "visits", "requests"):
+            update(self.data.get(key))
+        current_room = self.data.get("current_room")
+        if isinstance(current_room, dict):
+            for key in ("room_people", "active_visits", "visits"):
+                update(current_room.get(key))
+
+    def _save_buddy_private_note(self, buddy: dict[str, Any], value: str) -> None:
+        if not self._require_login():
+            return
+        buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+        if not buddy_id:
+            return
+        note = str(value or "").strip()[:40]
+        self._begin_action("正在保存私人备注…")
+        try:
+            self.client.rpc(
+                "lili_set_buddy_private_note",
+                {"p_buddy_id": buddy_id, "p_private_note_name": note},
+            )
+            self._update_private_note_snapshot(buddy_id, note)
+            self._end_action()
+            self.apply_dashboard(self.data)
+            self._set_status("私人备注已保存；只有你能看到。" if note else "私人备注已清空；对方昵称保持不变。")
         except SocialError as exc:
             self._error(exc)
 
