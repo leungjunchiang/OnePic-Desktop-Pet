@@ -3696,8 +3696,6 @@ class PetWindow(QWidget):
 
         x = (point.x() - self.label.x()) / max(1, self.label.width())
         y = (point.y() - self.label.y()) / max(1, self.label.height())
-        if self.focus_session.snapshot().status in {"focus", "rest"} and 0.52 <= y <= 0.88 and 0.18 <= x <= 0.84:
-            return "work_device"
         if y < 0.24:
             return "head"
         if y < 0.46:
@@ -3712,14 +3710,9 @@ class PetWindow(QWidget):
         zone = self._interaction_zone(point)
         self._record_user_interaction()
         self.daily_stats.record_touch()
-        if zone == "work_device" or (
-            zone == "head" and self.focus_session.snapshot().status in {"focus", "rest"}
-        ):
-            if self.work_controls.isVisible():
-                self.work_controls.hide()
-            else:
-                self.show_work_controls()
-            return
+        # Work controls are available from explicit work/menu actions only;
+        # a normal left click on the pet must never create a floating button bar.
+        self.work_controls.hide()
         if zone == "camera":
             self.trigger_selfie()
             return

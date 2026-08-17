@@ -843,6 +843,20 @@ def test_work_controls_belong_to_pet_and_follow_focus_state() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_left_click_does_not_show_work_controls() -> None:
+    """普通左击六毛只触发宠物互动，不再弹出工作按钮条。"""
+
+    app, window = _create_window()
+    window.show_work_controls()
+    assert window.work_controls.isVisible()
+
+    window._handle_click(QPoint(window.width() // 2, 20))
+    app.processEvents()
+
+    assert not window.work_controls.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_feeding_updates_fullness_and_shows_speech_bubble() -> None:
     """从菜单喂苹果应更新状态，并在人物附近显示文字反馈。"""
 
