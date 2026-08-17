@@ -411,6 +411,8 @@ class OfflineDialogueManager:
 class AIReplyThread(QThread):
     """在后台执行一次可能较慢的 AI 请求。"""
 
+    stream_started = Signal()
+    delta = Signal(str)
     succeeded = Signal(str)
     failed = Signal(str)
 
@@ -436,14 +438,30 @@ class AIReplyThread(QThread):
 
     def run(self) -> None:
         try:
-            answer = self.service.reply(
-                self.provider,
-                self.message,
-                self.history,
-                self.base_url,
-                self.model,
-                self.local_context,
-            )
+            stream_reply = getattr(self.service, "stream_reply", None)
+            if self.provider == "codex" and callable(stream_reply):
+                self.stream_started.emit()
+                answer = stream_reply(
+                    self.provider,
+                    self.message,
+                    self.history,
+                    self.base_url,
+                    self.model,
+                    self.local_context,
+                    self.delta.emit,
+                )
+            else:
+                self.stream_started.emit()
+                answer = self.service.reply(
+                    self.provider,
+                    self.message,
+                    self.history,
+                    self.base_url,
+                    self.model,
+                    self.local_context,
+                )
+                if answer:
+                    self.delta.emit(answer)
         except AIConnectionError as exc:
             self.failed.emit(str(exc))
         except Exception:
@@ -456,6 +474,8 @@ class ChatManager(QObject):
     """统一决定走缓存已连接的 AI，还是立即返回本地离线回复。"""
 
     reply_ready = Signal(object)
+    reply_started = Signal()
+    reply_delta = Signal(str)
     action_executed = Signal(object)
     busy_changed = Signal(bool)
     notice = Signal(str)
@@ -485,6 +505,7 @@ class ChatManager(QObject):
         self._pending_history: list[tuple[str, str]] = []
         self._pending_provider = "offline"
         self._pending_local_context = ""
+        self._interrupt_requested = False
 
     @property
     def busy(self) -> bool:
@@ -563,6 +584,8 @@ class ChatManager(QObject):
         )
         self._thread.succeeded.connect(self._ai_succeeded)
         self._thread.failed.connect(self._ai_failed)
+        self._thread.stream_started.connect(self.reply_started.emit)
+        self._thread.delta.connect(self.reply_delta.emit)
         self._thread.finished.connect(self._thread_finished)
         self.busy_changed.emit(True)
         self._thread.start()
@@ -572,6 +595,19 @@ class ChatManager(QObject):
         """只响应用户主动点击，不打开设置页。"""
 
         return self.agents.reconnect_selected()
+
+    def interrupt(self) -> bool:
+        """中断当前 Codex turn；主动停止不应被记为连接故障。"""
+
+        if not self.busy or self._pending_provider != "codex":
+            return False
+        interrupter = getattr(self.service, "interrupt", None)
+        if not callable(interrupter):
+            return False
+        if not interrupter():
+            return False
+        self._interrupt_requested = True
+        return True
 
     def _ai_succeeded(self, answer: str) -> None:
         self.agents.mark_runtime_success(self._pending_provider)
@@ -616,6 +652,12 @@ class ChatManager(QObject):
         return result
 
     def _ai_failed(self, error: str) -> None:
+        if self._interrupt_requested:
+            self._interrupt_requested = False
+            self.reply_ready.emit(
+                ManagedChatReply("我先停在这里。", PetState.CURIOUS, "interrupted")
+            )
+            return
         self.agents.mark_runtime_error(self._pending_provider, error)
         self.reply_ready.emit(self.offline.reply(self._pending_message, self._pending_history))
 
@@ -630,8 +672,12 @@ class ChatManager(QObject):
         """退出时停止重连，并让正在运行的请求自然结束。"""
 
         self.agents.shutdown()
+        closer = getattr(self.service, "close", None)
+        if callable(closer):
+            closer()
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
+            self._thread.wait(1500)
 
 
 def should_start_startup_detection() -> bool:

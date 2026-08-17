@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -32,9 +33,11 @@ import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .chat_intent import ChatIntent, classify_intent, intent_prompt_context
+from .chat_memory import conversation_memory_path
+from .codex_app_server import CodexAppServerClient, CodexAppServerError
 from .liumao_worldview import worldview_prompt_context
 from .knowledge_manager import retrieve_prompt_context
 from .resources import resource_path
@@ -333,16 +336,13 @@ def _cli_environment(executable: Path | None = None) -> dict[str, str]:
     """构造 CLI 环境；把已发现入口目录放在最前，兼容 nvm/npm 包装脚本。"""
 
     environment = dict(os.environ)
-    if sys.platform == "darwin":
-        # Finder-launched .app processes can have a minimal environment.  The
-        # shell probes below still locate the executable, but the CLI itself
-        # also needs a stable HOME to find the user's login credentials.
+    if sys.platform == "darwin" or os.name == "nt":
+        # Finder-launched .app processes and some Windows desktop launches can
+        # omit HOME.  Codex needs it to locate the user's login credentials.
         environment["HOME"] = str(Path.home())
-        environment.setdefault("SHELL", "/bin/zsh")
-        # Keep CLI authentication on the user's normal Codex profile unless
-        # the user explicitly configured another CODEX_HOME.  Finder-launched
-        # apps frequently inherit neither HOME nor a useful shell profile.
         environment.setdefault("CODEX_HOME", str(Path.home() / ".codex"))
+    if sys.platform == "darwin":
+        environment.setdefault("SHELL", "/bin/zsh")
         environment.setdefault("LANG", "en_US.UTF-8")
         environment.setdefault("LC_ALL", environment["LANG"])
     current = environment.get("PATH", "")
@@ -605,6 +605,15 @@ def find_codex_executable() -> Path | None:
 
     if sys.platform == "darwin":
         return _macos_codex_cli_path()
+    if os.name == "nt":
+        # WindowsApps can expose a Store alias that is present in PATH but
+        # refuses child-process execution.  Prefer the real per-user Codex
+        # installation before consulting that alias.
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        root = local / "OpenAI" / "Codex" / "bin"
+        installed = _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
+        if installed is not None:
+            return installed
     command = _which_cli("codex")
     if command:
         return command
@@ -707,6 +716,75 @@ def _codex_timeout_seconds() -> int:
     return max(15, min(90, value))
 
 
+def _codex_turn_options(message: str) -> tuple[str | None, str]:
+    """选择六毛每一轮的低延迟模型与 reasoning effort。"""
+
+    text = " ".join(str(message or "").split())
+    configured = os.environ.get("LILI_CODEX_MODEL", "").strip()
+    disabled = configured.casefold() in {"off", "none", "default"}
+    model = "" if disabled else (_codex_model_override() or configured)
+    very_complex = len(text) > 420 or any(
+        marker in text
+        for marker in ("完整方案", "系统设计", "架构设计", "深入分析", "逐步推导", "复杂问题")
+    )
+    complex_request = len(text) > 120 or any(
+        marker in text
+        for marker in ("论文", "代码", "怎么做", "为什么", "分析", "总结", "比较", "排查")
+    )
+    if very_complex and not disabled and not configured and sys.platform in {"darwin", "win32"}:
+        model = "gpt-5.6-terra"
+    if disabled:
+        model = ""
+    return (model or None, "low" if complex_request or very_complex else "none")
+
+
+def _codex_app_server_command(executable: Path) -> list[str]:
+    """Build the cross-platform stdio App Server command for Lili only."""
+
+    # The chat prompt does not expose tools.  Keep user authentication and
+    # CODEX_HOME, but override the MCP map for this child so unrelated user
+    # servers/plugins cannot delay or break the chat session.
+    arguments = ["app-server", "--config", "mcp_servers={}", "--listen", "stdio://"]
+    if sys.platform == "darwin":
+        # Finder-launched Lili must not inherit arbitrary transport/plugin
+        # configuration.  Authentication remains in the normal Codex store.
+        arguments.append("--ignore-user-config")
+    return _cli_command(executable, *arguments)
+
+
+def _codex_thread_state_path() -> Path:
+    """Return the local-only App Server thread id path, never a project file."""
+
+    return conversation_memory_path().with_name("codex-app-server-thread.json")
+
+
+def _read_codex_thread_id() -> str:
+    try:
+        payload = json.loads(_codex_thread_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return ""
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return ""
+    return str(payload.get("thread_id") or "").strip()[:200]
+
+
+def _write_codex_thread_id(thread_id: str) -> None:
+    clean = str(thread_id or "").strip()[:200]
+    if not clean:
+        return
+    target = _codex_thread_state_path()
+    temporary = target.with_suffix(".json.tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps({"version": 1, "thread_id": clean}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+    except OSError:
+        LOGGER.debug("[AI Codex] failed to persist local thread id", exc_info=True)
+
+
 def _codex_exec_command(executable: Path, prompt: str, *, model: str | None = None) -> list[str]:
     """Build one isolated, non-interactive Codex command for Lili."""
 
@@ -788,6 +866,33 @@ def _conversation_text(
     for role, content in recent:
         label = "用户" if role == "user" else "六毛"
         lines.append(f"{label}：{content}")
+    lines.extend((f"用户：{message}", "六毛："))
+    return "\n".join(lines)
+
+
+def _conversation_turn_text(
+    message: str,
+    history: Iterable[tuple[str, str]],
+    local_context: str = "",
+) -> str:
+    """Build one App Server turn without duplicating the persistent thread history."""
+
+    entries = list(history)
+    lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
+    intent = classify_intent(message, entries)
+    lines.extend(("", intent_prompt_context(intent)))
+    worldview_context = worldview_prompt_context(message, entries)
+    if worldview_context:
+        lines.extend(("", worldview_context))
+    knowledge_context = retrieve_prompt_context(message, entries)
+    if knowledge_context and knowledge_context not in worldview_context:
+        lines.extend(("", knowledge_context))
+    if "本地歌曲作品卡" not in local_context:
+        song_context = song_prompt_context(message, entries)
+        if song_context:
+            lines.extend(("", song_context))
+    if local_context:
+        lines.extend(("", "以下是本地程序读取的真实状态与作品索引，只能据此回答相关问题，不要猜测或改写：", local_context))
     lines.extend((f"用户：{message}", "六毛："))
     return "\n".join(lines)
 
@@ -1098,6 +1203,10 @@ class AIChatService:
 
     def __init__(self, credential_store: CredentialStore | None = None) -> None:
         self.credentials = credential_store or CredentialStore()
+        self._codex_app_server: CodexAppServerClient | None = None
+        self._codex_app_server_lock = threading.RLock()
+        self._closing = False
+        self._interrupted = False
 
     def reply(
         self,
@@ -1134,3 +1243,96 @@ class AIChatService:
             model or default_model,
             local_context,
         )
+
+    def stream_reply(
+        self,
+        provider: str,
+        message: str,
+        history: Iterable[tuple[str, str]],
+        base_url: str = "",
+        model: str = "",
+        local_context: str = "",
+        on_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """Use a persistent App Server for Codex and stream agent deltas."""
+
+        if provider != "codex":
+            answer = self.reply(provider, message, history, base_url, model, local_context)
+            if on_delta is not None and answer:
+                on_delta(answer)
+            return answer
+
+        entries = list(history)
+        prompt = _conversation_turn_text(message, entries, local_context)
+        selected_model, effort = _codex_turn_options(message)
+        self._interrupted = False
+        try:
+            with self._codex_app_server_lock:
+                client = self._get_codex_app_server()
+            answer = client.stream_turn(
+                prompt,
+                model=selected_model,
+                effort=effort,
+                on_delta=on_delta,
+                timeout=float(_codex_timeout_seconds()),
+            )
+        except (CodexAppServerError, OSError, ValueError) as exc:
+            if self._interrupted:
+                raise AIConnectionError("Codex turn 已停止。") from exc
+            if self._closing:
+                raise AIConnectionError("Codex 连接正在关闭。") from exc
+            # Keep the user-facing chat usable when an older CLI has no
+            # app-server command, the session is corrupt, or the server exits.
+            # The fallback is the already existing isolated read-only exec path.
+            LOGGER.warning("[AI Codex] app-server failed; falling back to exec: %s", exc)
+            self._close_codex_app_server()
+            answer = ask_codex(message, entries, local_context)
+            if on_delta is not None and answer:
+                # The final UI replaces the partial stream with this answer, so
+                # emitting it as another delta would duplicate the fallback.
+                pass
+            return answer
+        intent = classify_intent(message, entries)
+        return postprocess_ai_answer(answer, intent)
+
+    def _get_codex_app_server(self) -> CodexAppServerClient:
+        if self._codex_app_server is not None and self._codex_app_server.is_running:
+            return self._codex_app_server
+        executable = find_codex_executable()
+        if executable is None:
+            raise CodexAppServerError("没有找到 Codex，已切回离线回答。")
+        working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
+        self._codex_app_server = CodexAppServerClient(
+            _codex_app_server_command(executable),
+            cwd=working_root,
+            env=_cli_environment(executable),
+            thread_id=_read_codex_thread_id(),
+            on_thread_id=_write_codex_thread_id,
+        )
+        return self._codex_app_server
+
+    def _close_codex_app_server(self) -> None:
+        with self._codex_app_server_lock:
+            client = self._codex_app_server
+            self._codex_app_server = None
+        if client is not None:
+            client.close()
+
+    def interrupt(self) -> bool:
+        """Interrupt the active persistent Codex turn when the UI asks to stop."""
+
+        with self._codex_app_server_lock:
+            client = self._codex_app_server
+        if client is None:
+            return False
+        self._interrupted = True
+        if client.interrupt():
+            return True
+        self._interrupted = False
+        return False
+
+    def close(self) -> None:
+        """Close the persistent Codex child process during application shutdown."""
+
+        self._closing = True
+        self._close_codex_app_server()

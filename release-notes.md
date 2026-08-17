@@ -1,3 +1,12 @@
+# Lili v0.22.66
+
+## Codex App Server 长驻聊天与增量回复
+
+- Windows 与 macOS 的 Lili 聊天改用长期存活的 Codex App Server：初始化一次并持续复用 thread，每句话只启动一个新的 turn。
+- 支持 `item/agentMessage/delta` 增量显示、停止按钮中断当前 turn，以及下次打开时恢复本地保存的聊天 thread；连接异常时保留原有 Codex CLI 回退路径。
+- 日常聊天使用 `gpt-5.6-luna` 无推理模式，较复杂问题使用低推理模式，极复杂问题再切换 Terra；明确的日期/时间待办继续优先走本地解析与落盘。
+- Windows 使用真实 Codex CLI 安装路径并隔离 App Server 配置，macOS 与 Windows 均保留 Codex 登录与 AI agent 连接能力。
+
 # Lili v0.22.65
 
 ## Windows 聊天默认使用更快的 GPT-5.6 Luna

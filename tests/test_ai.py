@@ -27,8 +27,10 @@ from onepic_desktop_pet.ai import (
     launch_codex_gui,
     _cli_command,
     _cli_environment,
+    _codex_app_server_command,
     _codex_exec_command,
     _codex_model_override,
+    _codex_turn_options,
     _codex_timeout_seconds,
     provider_defaults,
     _models_endpoint,
@@ -180,6 +182,27 @@ def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
     assert 'model="gpt-5.6-luna"' in command
     assert 'model_reasoning_effort="low"' in command
     assert _codex_model_override() == "gpt-5.6-luna"
+
+
+def test_app_server_command_uses_cross_platform_stdio_transport(monkeypatch) -> None:
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
+    command = _codex_app_server_command(Path("codex.exe"))
+    assert command[-2:] == ["--listen", "stdio://"]
+    assert "mcp_servers={}" in command
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    command = _codex_app_server_command(Path("/usr/local/bin/codex"))
+    assert command[-3:] == ["--listen", "stdio://", "--ignore-user-config"]
+
+
+def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
+    monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
+    assert _codex_turn_options("今天干嘛？") == ("gpt-5.6-luna", "none")
+    assert _codex_turn_options("请帮我做一个完整方案，分析系统设计和论文结构。") == (
+        "gpt-5.6-terra",
+        "low",
+    )
 
 
 def test_codex_exec_failure_is_logged_without_prompt_or_credentials(monkeypatch, caplog) -> None:

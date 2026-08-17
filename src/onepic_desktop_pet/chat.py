@@ -140,6 +140,7 @@ class ChatDialog(QDialog):
     """QQ 宠物式的轻量聊天窗口，但不复制其素材或商标。"""
 
     message_submitted = Signal(str)
+    stop_requested = Signal()
     settings_requested = Signal(str)
     rename_requested = Signal()
     reconnect_requested = Signal()
@@ -151,6 +152,8 @@ class ChatDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.pet_name = PET_NAME
+        self._transcript_entries: list[tuple[str, str]] = []
+        self._streaming_message_index: int | None = None
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -233,6 +236,13 @@ class ChatDialog(QDialog):
         self.send_button.setDefault(False)
         self.send_button.clicked.connect(self._submit)
         entry.addWidget(self.send_button)
+        self.stop_button = QPushButton("停止")
+        self.stop_button.setObjectName("softButton")
+        self.stop_button.setAutoDefault(False)
+        self.stop_button.setDefault(False)
+        self.stop_button.clicked.connect(self.stop_requested.emit)
+        self.stop_button.hide()
+        entry.addWidget(self.stop_button)
         layout.addLayout(entry)
 
         privacy = QLabel("🔒 对话摘要和最近消息只保存在本机；在线模式只把角色设定、相关知识和有限上下文发给所选 AI。")
@@ -293,23 +303,72 @@ class ChatDialog(QDialog):
         self.recovery_actions.setVisible(bool(visible))
 
     def append_message(self, role: str, text: str) -> None:
-        is_pet = role != "你"
-        color = "#426b7c" if is_pet else "#496f9b"
-        background = "#edf5f7" if is_pet else "#eaf1fa"
-        safe = escape(text).replace("\n", "<br>")
-        self.transcript.append(
-            f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
-            f'background:{background};"><b style="color:{color};">{escape(role)}</b><br>{safe}</div>'
-        )
+        self._streaming_message_index = None
+        self._transcript_entries.append((str(role), str(text)))
+        self._render_transcript()
+
+    def begin_streaming_message(self, role: str) -> None:
+        """Create a temporary assistant bubble that can be updated per delta."""
+
+        self._streaming_message_index = len(self._transcript_entries)
+        self._transcript_entries.append((str(role), ""))
+        self._render_transcript()
+
+    def append_streaming_delta(self, delta: str) -> None:
+        """Append one App Server agentMessage/delta to the temporary bubble."""
+
+        if self._streaming_message_index is None:
+            self.begin_streaming_message(self.pet_name)
+        index = self._streaming_message_index
+        if index is None or index >= len(self._transcript_entries):
+            return
+        role, current = self._transcript_entries[index]
+        self._transcript_entries[index] = (role, current + str(delta))
+        self._render_transcript()
+
+    def finish_streaming_message(self, text: str) -> None:
+        """Replace a partial stream with the authoritative final answer."""
+
+        if self._streaming_message_index is None:
+            self.append_message(self.pet_name, text)
+            return
+        index = self._streaming_message_index
+        role = self._transcript_entries[index][0]
+        self._transcript_entries[index] = (role, str(text))
+        self._streaming_message_index = None
+        self._render_transcript()
+
+    def _render_transcript(self) -> None:
+        """Render the bounded in-memory transcript, keeping streaming simple."""
+
+        blocks: list[str] = []
+        for role, text in self._transcript_entries:
+            is_pet = role != "你"
+            color = "#426b7c" if is_pet else "#496f9b"
+            background = "#edf5f7" if is_pet else "#eaf1fa"
+            safe = escape(text).replace("\n", "<br>")
+            blocks.append(
+                f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
+                f'background:{background};"><b style="color:{color};">{escape(role)}</b><br>{safe}</div>'
+            )
+        self.transcript.setHtml("".join(blocks))
         bar = self.transcript.verticalScrollBar()
         bar.setValue(bar.maximum())
 
     def set_busy(self, busy: bool) -> None:
         self.input.setEnabled(not busy)
         self.send_button.setEnabled(not busy)
+        self.stop_button.setVisible(bool(busy) and self.stop_button.isEnabled())
         self.send_button.setText(f"{self.pet_name}在想…" if busy else "发送")
         if not busy:
             self.input.setFocus()
+
+    def set_interrupt_available(self, available: bool) -> None:
+        """Only Codex App Server exposes a stop button in this chat panel."""
+
+        self.stop_button.setEnabled(bool(available))
+        if not available:
+            self.stop_button.hide()
 
 
 class AISettingsDialog(QDialog):
