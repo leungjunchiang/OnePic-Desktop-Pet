@@ -1,3 +1,11 @@
+# Lili v0.22.83
+
+## 修复程序更新 TLS 证书校验
+
+- 程序更新检查、Release 页面回退、安装包下载和 SHA-256 文件下载统一使用系统 CA 或内置 certifi 证书。
+- 保持主机名校验和证书校验开启，不使用 `verify=False` 或 `CERT_NONE`。
+- 修复 macOS Finder 启动旧版应用时常见的 `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate`。
+
 # Lili v0.22.82
 
 ## 修复旧内容覆盖层遮盖新版动作素材

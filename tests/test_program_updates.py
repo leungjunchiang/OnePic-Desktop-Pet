@@ -49,6 +49,30 @@ def test_program_version_comparison_is_numeric() -> None:
     assert version_key("0.22.45") == (0, 22, 45)
 
 
+def test_default_updater_opener_uses_verified_ssl_context(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    sentinel = object()
+    captured: dict[str, object] = {}
+
+    def fake_context():
+        return sentinel
+
+    def fake_urlopen(request, timeout=0, context=None):
+        captured["timeout"] = timeout
+        captured["context"] = context
+        return Response(b"{}")
+
+    monkeypatch.setattr(module, "verified_ssl_context", fake_context)
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    manager = ProgramUpdateManager(app_version="0.22.82")
+
+    manager._read_url("https://api.github.com/repos/example/releases/latest", max_bytes=1024)
+
+    assert captured["context"] is sentinel
+    assert captured["timeout"] == manager.timeout
+
+
 def test_fetch_and_verify_platform_installer(tmp_path, monkeypatch) -> None:
     import onepic_desktop_pet.program_updates as module
 
@@ -295,3 +319,4 @@ def test_release_check_is_cached_to_avoid_repeated_api_requests(monkeypatch) -> 
 
     assert first == second
     assert calls == 1
+

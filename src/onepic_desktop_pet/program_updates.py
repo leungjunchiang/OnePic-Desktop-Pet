@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import __version__
+from .tls_support import verified_ssl_context
 
 
 LOGGER = logging.getLogger(__name__)
@@ -147,8 +148,21 @@ class ProgramUpdateManager:
         self.timeout = max(1.0, float(timeout))
         self.cache_seconds = max(0.0, float(cache_seconds))
         self._opener = opener or urllib.request.urlopen
+        self._uses_verified_default_opener = opener is None
         self.download_root = Path(download_root) if download_root is not None else Path(tempfile.gettempdir()) / "Lili" / "updates"
         self._cached_check: tuple[float, ProgramUpdateCheckResult] | None = None
+
+    def _open(self, request: urllib.request.Request):
+        """Open updater HTTPS requests with the bundled/OS verified CA set."""
+
+        if self._uses_verified_default_opener:
+            return self._opener(
+                request,
+                timeout=self.timeout,
+                context=verified_ssl_context(),
+            )
+        # Test and embedding openers keep their existing small interface.
+        return self._opener(request, timeout=self.timeout)
 
     @staticmethod
     def _derive_release_page_url(api_url: str) -> str:
@@ -173,7 +187,7 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("程序更新地址不是受信任的 GitHub 地址")
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "Lili-Desktop-Pet"})
-            response = self._opener(request, timeout=self.timeout)
+            response = self._open(request)
             with response:
                 chunks: list[bytes] = []
                 size = 0
@@ -215,7 +229,7 @@ class ProgramUpdateManager:
             },
         )
         try:
-            response = self._opener(request, timeout=self.timeout)
+            response = self._open(request)
             with response:
                 final_url = getattr(response, "geturl", lambda: self.release_page_url)()
                 # Consume a small amount so custom urllib adapters and HTTP
@@ -429,7 +443,7 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包地址不是受信任的 GitHub 地址")
         request = urllib.request.Request(url, headers={"User-Agent": "Lili-Desktop-Pet"})
         try:
-            response = self._opener(request, timeout=self.timeout)
+            response = self._open(request)
             with response, destination.open("wb") as handle:
                 size = 0
                 total = self._response_content_length(response) or max(0, int(expected_size))
@@ -495,3 +509,4 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
         return ProgramUpdateResult(release=release, installer_path=final_path)
+
