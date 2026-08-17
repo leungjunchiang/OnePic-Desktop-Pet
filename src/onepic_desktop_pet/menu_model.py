@@ -64,6 +64,7 @@ class UnifiedMenuModel:
 
         state = dict(self._state_provider())
         work_label = str(state.get("work_action_label") or "开始工作")
+        work_status = str(state.get("work_status") or "idle")
         visible = bool(state.get("visible", True))
         music_children = [
             MenuItemSpec("播放 / 暂停", "music_toggle"),
@@ -122,14 +123,37 @@ class UnifiedMenuModel:
         ]
         settings_children = [item for item in settings_children if item is not None]
 
+        if work_status == "focus":
+            work_item = MenuItemSpec(
+                work_label,
+                children=(
+                    MenuItemSpec("暂停工作", "work_pause"),
+                    MenuItemSpec("结束工作", "work_finish"),
+                ),
+            )
+        elif work_status == "rest":
+            work_item = MenuItemSpec(
+                work_label,
+                children=(
+                    MenuItemSpec("继续工作", "work_resume"),
+                    MenuItemSpec("结束工作", "work_finish"),
+                ),
+            )
+        else:
+            work_item = MenuItemSpec(work_label, "work")
+
         entries: list[MenuItemSpec] = [
             MenuItemSpec(f"和{self.pet_name}聊聊…", "chat"),
-            MenuItemSpec(work_label, "work"),
+            work_item,
             MenuItemSpec("搭子自习室…", "social"),
             MenuItemSpec("音乐", children=tuple(music_children)),
         ]
         if interaction_children:
             entries.append(MenuItemSpec("六毛互动", children=tuple(interaction_children)))
+
+        # Separate high-frequency actions from history, outfit and todo
+        # surfaces before the settings/system section.
+        entries.append(MenuItemSpec.divider())
         if "outfit" in self._callbacks:
             entries.append(MenuItemSpec("换装与外观…", "outfit"))
         if work_record_children:
@@ -187,3 +211,4 @@ def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
             )
 
     add_items(menu, model.items(context))
+

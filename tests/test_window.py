@@ -899,6 +899,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
 
     app, window = _create_window()
     menu = window.build_unified_menu(None, "tray")
+    assert menu.parent() is None
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     assert labels[:7] == [
         "和六毛聊聊…",
@@ -924,6 +925,29 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "提醒我休息",
         "查看心情与能量",
     ]
+    separators = [index for index, action in enumerate(menu.actions()) if action.isSeparator()]
+    assert len(separators) == 3
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_tray_menu_keeps_work_actions_available_when_pet_is_not_active() -> None:
+    """状态栏菜单独立于六毛窗口，暂停时继续/结束都可用。"""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    window.pause_work_timer()
+    window.hide()
+    menu = window.build_unified_menu(None, "tray")
+
+    work = next(action for action in menu.actions() if action.text() == "继续工作")
+    assert work.menu() is not None
+    assert [action.text() for action in work.menu().actions()] == ["继续工作", "结束工作"]
+    assert all(action.isEnabled() for action in work.menu().actions())
+    assert all(action.isEnabled() for action in menu.actions() if not action.isSeparator())
+
     menu.close()
     window.close()
     window.deleteLater()
@@ -1493,3 +1517,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+

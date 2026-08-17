@@ -3478,6 +3478,7 @@ class PetWindow(QWidget):
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
         return {
             "work_action_label": labels.get(snapshot.status, "开始工作"),
+            "work_status": snapshot.status,
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
             "program_version": __version__,
@@ -3490,6 +3491,9 @@ class PetWindow(QWidget):
         callbacks: dict[str, Callable[[bool], object]] = {
             "chat": lambda _checked=False: self.prompt_dialogue(),
             "work": lambda _checked=False: self._quick_work_action(),
+            "work_pause": lambda _checked=False: self.pause_work_timer(),
+            "work_resume": lambda _checked=False: self.start_work_timer(),
+            "work_finish": lambda _checked=False: self.finish_work_timer(),
             "social": lambda _checked=False: self.open_social_hub(),
             "quick_panel": lambda _checked=False: self.show_quick_panel(),
             "music_toggle": lambda _checked=False: self.control_music("toggle"),
@@ -3531,9 +3535,24 @@ class PetWindow(QWidget):
     def build_unified_menu(self, parent=None, context: str = "pet") -> QMenu:
         """Render the unified menu for the requested platform entrance."""
 
-        menu = QMenu(parent or self)
-        populate_qmenu(menu, self.unified_menu_model(), context)
+        # Tray/Dock menus must not inherit the pet window's active/enabled
+        # state. A standalone menu remains usable while another app has focus
+        # or while the pet itself is hidden.
+        menu = QMenu(parent) if parent is not None else QMenu()
+        self.refresh_unified_menu(menu, context)
         return menu
+
+    def refresh_unified_menu(self, menu: QMenu, context: str = "pet") -> None:
+        """Refresh an existing menu without replacing its native owner.
+
+        Replacing a QSystemTrayIcon menu from ``aboutToShow`` can leave the
+        platform status-item bridge holding the old action tree. Updating the
+        existing standalone menu keeps the status item stable while dynamic
+        work/visibility state is refreshed.
+        """
+
+        menu.clear()
+        populate_qmenu(menu, self.unified_menu_model(), context)
 
     def _schedule_ambient(self) -> None:
         """用随机间隔安排六毛主动出现，保持存在感但避免频繁打扰。"""
@@ -4047,3 +4066,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+

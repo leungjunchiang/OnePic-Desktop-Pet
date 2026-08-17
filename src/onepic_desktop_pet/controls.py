@@ -44,6 +44,9 @@ font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
 QWidget#workControlDock QPushButton { background: rgba(231, 243, 246, 235); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 75); border-radius: 9px; padding: 5px 10px; }
 QWidget#workControlDock QPushButton:hover { background: #fff4d8; border: 2px solid #e74a4f; }
+QWidget#workControlDock QPushButton#finishWorkButton { background: rgba(241, 244, 245, 225); color: #5f6b73;
+border: 1px solid rgba(95, 107, 115, 60); }
+QWidget#workControlDock QPushButton#finishWorkButton:hover { background: #fff0ee; color: #b94b51; border: 1px solid #e7a0a4; }
 QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; border-radius: 10px;
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
@@ -378,3 +381,4 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
+

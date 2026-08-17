@@ -115,12 +115,11 @@ class DesktopPetApplication:
     def _refresh_tray_menu(self) -> None:
         """Re-render dynamic work, visibility, music, and topmost state."""
 
-        if not hasattr(self, "tray"):
+        if not hasattr(self, "tray") or not hasattr(self, "tray_menu"):
             return
-        menu = self.window.build_unified_menu(None, "tray")
-        menu.aboutToShow.connect(self._refresh_tray_menu)
-        self.tray.setContextMenu(menu)
-        self.tray_menu = menu
+        # Keep the same standalone menu object attached to the status item;
+        # only its dynamic action tree needs refreshing.
+        self.window.refresh_unified_menu(self.tray_menu, "tray")
 
     def _owner_nickname_changed(self, _owner_nickname: str) -> None:
         """Keep the pet identity fixed while refreshing the rename entry."""

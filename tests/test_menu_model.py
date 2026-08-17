@@ -10,6 +10,7 @@ def _top_level_titles(model: UnifiedMenuModel) -> list[str]:
 def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     state = {
         "work_action_label": "暂停工作",
+        "work_status": "focus",
         "visible": False,
         "always_on_top": True,
     }
@@ -19,6 +20,9 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         for key in (
             "chat",
             "work",
+            "work_pause",
+            "work_resume",
+            "work_finish",
             "social",
             "music_toggle",
             "music_previous",
@@ -75,3 +79,28 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     model.execute("topmost", False)
     model.execute("visibility")
     assert called[-2:] == [("topmost", False), ("visibility", False)]
+
+
+def test_unified_menu_model_exposes_end_work_for_focus_and_paused_sessions() -> None:
+    callbacks = {
+        command: (lambda _checked=False: None)
+        for command in ("work_pause", "work_resume", "work_finish")
+    }
+
+    for status, label, expected in (
+        ("focus", "暂停工作", ["暂停工作", "结束工作"]),
+        ("rest", "继续工作", ["继续工作", "结束工作"]),
+    ):
+        model = UnifiedMenuModel(
+            pet_name="六毛",
+            state_provider=lambda status=status, label=label: {
+                "work_status": status,
+                "work_action_label": label,
+            },
+            callbacks=callbacks,
+        )
+        item = next(item for item in model.items() if item.title == label)
+        assert item.children
+        assert [child.title for child in item.children] == expected
+        assert all(child.enabled for child in item.children)
+
