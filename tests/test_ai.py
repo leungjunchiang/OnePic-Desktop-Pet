@@ -170,6 +170,18 @@ def test_macos_lili_codex_call_is_isolated_and_uses_low_latency_model(monkeypatc
     assert _codex_timeout_seconds() == 45
 
 
+def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
+    monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
+    command = _codex_exec_command(Path("codex.exe"), "测试消息")
+
+    assert "--ignore-user-config" not in command
+    assert "--ephemeral" in command
+    assert 'model="gpt-5.6-luna"' in command
+    assert 'model_reasoning_effort="low"' in command
+    assert _codex_model_override() == "gpt-5.6-luna"
+
+
 def test_codex_exec_failure_is_logged_without_prompt_or_credentials(monkeypatch, caplog) -> None:
     def fake_run(_command, **_kwargs):
         return SimpleNamespace(returncode=2, stdout="", stderr="not logged in")

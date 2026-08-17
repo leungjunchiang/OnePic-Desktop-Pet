@@ -681,8 +681,9 @@ def _cli_command(executable: Path, *arguments: str) -> list[str]:
 def _codex_model_override() -> str:
     """Return Lili's per-process Codex model choice.
 
-    macOS gets the low-latency model used by Lili only.  This is passed as a
-    one-shot CLI config override and never changes the user's Codex profile.
+    Windows and macOS get the low-latency model used by Lili only.  This is
+    passed as a one-shot CLI config override and never changes the user's
+    Codex profile.
     An explicit environment override is useful for machines where that model
     is not enabled yet; ``off`` keeps the CLI default.
     """
@@ -692,7 +693,7 @@ def _codex_model_override() -> str:
         return ""
     if configured:
         return configured[:120]
-    return "gpt-5.6-luna" if sys.platform == "darwin" else ""
+    return "gpt-5.6-luna" if sys.platform in {"darwin", "win32"} else ""
 
 
 def _codex_timeout_seconds() -> int:

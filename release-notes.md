@@ -1,3 +1,11 @@
+# Lili v0.22.65
+
+## Windows 聊天默认使用更快的 GPT-5.6 Luna
+
+- Windows 与 macOS 的 Lili 对话默认使用 `gpt-5.6-luna` 和低推理模式，减少日常聊天等待时间。
+- 保留 `LILI_CODEX_MODEL` 的自定义模型与 `off` 关闭覆盖选项；指定模型不可用时继续回退到 Codex 默认模型。
+- 增加 Windows Codex 命令构造回归测试，确认本次选择只作用于 Lili 的一次性聊天进程。
+
 # Lili v0.22.64
 
 ## 加快 macOS 聊天恢复并让自然语言待办真实落盘
