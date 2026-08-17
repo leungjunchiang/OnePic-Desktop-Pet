@@ -12,7 +12,6 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         "work_action_label": "暂停工作",
         "visible": False,
         "always_on_top": True,
-        "music_status": "当前播放：陈楚生 · 有没有人告诉你",
     }
     called: list[tuple[str, bool]] = []
     callbacks = {
@@ -65,8 +64,12 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     updates = next(item for item in settings.children if item.title == "更新与关于")
     assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "检查程序更新"]
     music = next(item for item in model.items() if item.title == "音乐")
-    assert music.children[-1].title == state["music_status"]
-    assert music.children[-1].enabled is False
+    assert [item.title for item in music.children] == [
+        "播放 / 暂停",
+        "上一首",
+        "下一首",
+        "随机听陈楚生",
+    ]
     assert next(item for item in model.items() if item.title == "始终置顶（关闭即桌面模式）").checked
 
     model.execute("topmost", False)

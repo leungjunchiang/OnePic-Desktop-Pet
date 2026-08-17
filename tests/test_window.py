@@ -767,9 +767,7 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
     assert [button.text() for button in buttons] == ["", "", "", "", ""]
     assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "搭子自习室", "音乐", "设置"]
     assert all(not button.icon().isNull() for button in buttons)
-    assert window.quick_panel.music_status.text() == "当前播放：暂无"
     assert not window.quick_panel.title.isVisible()
-    assert not window.quick_panel.music_status.isVisible()
     assert 50 <= window.quick_panel.sizeHint().height() <= 60
     window.move(300, 200)
     window.show_quick_panel()
@@ -778,6 +776,39 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
     window.move(340, 240)
     app.processEvents()
     assert window.quick_panel.pos() - window.pos() == first_offset
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_work_controls_belong_to_pet_and_follow_focus_state() -> None:
+    """工作按钮贴在六毛下方，不再出现在待办区域。"""
+
+    app, window = _create_window()
+    window.move(300, 180)
+    window.start_work_timer()
+    window.show_work_controls()
+    app.processEvents()
+
+    controls = window.work_controls
+    assert controls.isVisible()
+    assert controls.pause_button.text() == "暂停工作"
+    assert not controls.geometry().intersects(window.geometry())
+    first_offset = controls.pos() - window.pos()
+
+    window.pause_work_timer()
+    app.processEvents()
+    assert controls.isVisible()
+    assert controls.pause_button.text() == "继续工作"
+
+    controls.pause_button.click()
+    app.processEvents()
+    assert window.focus_session.snapshot().status == "focus"
+    assert controls.pause_button.text() == "暂停工作"
+
+    window.move(340, 220)
+    app.processEvents()
+    assert controls.pos() - window.pos() == first_offset
+    window.finish_work_timer()
+    assert not controls.isVisible()
     window.close(); window.deleteLater(); app.processEvents()
 
 
@@ -839,7 +870,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
-    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听陈楚生", "当前播放：暂无"]
+    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听陈楚生"]
     interaction = next(action for action in menu.actions() if action.text() == "六毛互动")
     assert [action.text() for action in interaction.menu().actions()] == [
         "给我一个抱抱",

@@ -1,7 +1,7 @@
 """提供不依赖系统托盘的六毛快捷面板、原生音乐控制、工作气泡和尺寸调节器。
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
-播放、暂停、切歌和歌曲状态分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
+播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 """
 
@@ -32,6 +32,12 @@ QWidget#quickActionDock QPushButton { background: rgba(231, 243, 246, 235); colo
 border: 1px solid rgba(40, 125, 158, 75); border-radius: 11px; padding: 0px; }
 QWidget#quickActionDock QPushButton:hover { background: #fff4d8; border: 2px solid #e74a4f; }
 QWidget#quickActionDock QPushButton:pressed { background: #d9eef1; border: 2px solid #287d9e; }
+QWidget#workControlDock { background: rgba(248, 252, 253, 242); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 118); border-radius: 13px;
+font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+QWidget#workControlDock QPushButton { background: rgba(231, 243, 246, 235); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 75); border-radius: 9px; padding: 5px 10px; }
+QWidget#workControlDock QPushButton:hover { background: #fff4d8; border: 2px solid #e74a4f; }
 QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; border-radius: 10px;
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
@@ -40,24 +46,42 @@ QLabel { border: none; background: transparent; }
 
 
 class WorkControlBubble(QWidget):
-    """显示暂停与结束两个明确操作，避免计时控制藏在菜单。"""
+    """贴在六毛下方的工作状态操作区，不属于待办面板。"""
 
     pause_requested = Signal()
+    resume_requested = Signal()
     finish_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__(None)
-        self.setObjectName("floatingPanel")
+        self.setObjectName("workControlDock")
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        pause = QPushButton("暂停工作")
-        finish = QPushButton("结束工作")
-        pause.clicked.connect(self.pause_requested.emit)
-        finish.clicked.connect(self.finish_requested.emit)
-        layout.addWidget(pause); layout.addWidget(finish)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(5)
+        self.pause_button = QPushButton("暂停工作")
+        self.pause_button.setObjectName("pauseWorkButton")
+        self.finish_button = QPushButton("结束工作")
+        self.finish_button.setObjectName("finishWorkButton")
+        self._session_status = "focus"
+        self.pause_button.clicked.connect(self._toggle_session)
+        self.finish_button.clicked.connect(self.finish_requested.emit)
+        layout.addWidget(self.pause_button)
+        layout.addWidget(self.finish_button)
+
+    def set_session_status(self, status: str) -> None:
+        """Use the same two controls for focus and paused sessions."""
+
+        self._session_status = status
+        self.pause_button.setText("继续工作" if status == "rest" else "暂停工作")
+
+    def _toggle_session(self) -> None:
+        if self._session_status == "rest":
+            self.resume_requested.emit()
+        else:
+            self.pause_requested.emit()
 
 
 def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
@@ -140,8 +164,6 @@ class QuickControlPanel(QWidget):
         self.settings_button.clicked.connect(self._show_settings_menu)
         for button in (self.chat_button, self.work_button, self.social_button, self.music_button, self.settings_button):
             layout.addWidget(button)
-        self.music_status = QLabel("当前播放：暂无")
-        self.music_status.setVisible(False)
 
 
     @staticmethod
@@ -165,13 +187,8 @@ class QuickControlPanel(QWidget):
         self.work_button.setAccessibleName(label)
         self.work_button.setIcon(_quick_icon("work", active=label == "暂停工作"))
 
-    def set_music_status(self, text: str) -> None:
-        """Show the last confirmed player track as read-only panel state."""
-
-        self.music_status.setText(text.strip() or "当前播放：暂无")
-
     def _show_music_menu(self) -> None:
-        """Open the second-level music controls from the single music entry."""
+        """Open only actionable music controls; no Now Playing panel."""
 
         menu = QMenu(self)
         for label, command in (
@@ -189,8 +206,6 @@ class QuickControlPanel(QWidget):
                         self.music_control_requested, value
                     )
                 )
-        status = menu.addAction(self.music_status.text())
-        status.setEnabled(False)
         menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
 
     def _show_settings_menu(self) -> None:

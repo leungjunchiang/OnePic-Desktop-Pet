@@ -65,14 +65,11 @@ class UnifiedMenuModel:
         state = dict(self._state_provider())
         work_label = str(state.get("work_action_label") or "开始工作")
         visible = bool(state.get("visible", True))
-        music_status = str(state.get("music_status") or "当前播放：暂无")
-
         music_children = [
             MenuItemSpec("播放 / 暂停", "music_toggle"),
             MenuItemSpec("上一首", "music_previous"),
             MenuItemSpec("下一首", "music_next"),
             MenuItemSpec("随机听陈楚生", "music_random"),
-            MenuItemSpec(music_status, enabled=False),
         ]
 
         interaction_children = [

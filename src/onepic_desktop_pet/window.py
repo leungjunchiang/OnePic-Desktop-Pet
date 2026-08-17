@@ -146,7 +146,7 @@ from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
 from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialProfileThread, SocialSyncThread
-from .music_control import MusicControlResult, MusicController, MusicProviderManager, MusicState
+from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
@@ -486,6 +486,7 @@ class PetWindow(QWidget):
 
         self.work_controls = WorkControlBubble()
         self.work_controls.pause_requested.connect(self.pause_work_timer)
+        self.work_controls.resume_requested.connect(self.start_work_timer)
         self.work_controls.finish_requested.connect(self.finish_work_timer)
         self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
@@ -502,12 +503,6 @@ class PetWindow(QWidget):
         self.quick_panel.program_update_requested.connect(
             lambda: self._invoke_menu_external("program_update")
         )
-        self.music_controller.state_changed.connect(self._music_state_changed)
-        self.music_state_timer = QTimer(self)
-        self.music_state_timer.setInterval(5000)
-        self.music_state_timer.timeout.connect(self._refresh_music_state)
-        self.music_state_timer.start()
-
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
         self.movement_timer.timeout.connect(self._movement_tick)
@@ -1827,6 +1822,8 @@ class PetWindow(QWidget):
         self.work_timer_changed.emit(self.work_timer.is_running)
         self._schedule_social_tick()
         self._refresh_pixmap()
+        if self.work_controls.isVisible():
+            self._show_work_controls()
         return reply
 
     def pause_work_timer(self, reason: str = "") -> CompanionReply:
@@ -1877,7 +1874,10 @@ class PetWindow(QWidget):
         self.show_speech(reply.text + quality_text, 5600)
         self.work_timer_changed.emit(False)
         self._schedule_social_tick()
-        self.work_controls.hide()
+        if reason == "idle":
+            self.work_controls.hide()
+        else:
+            self._show_work_controls()
         self._refresh_pixmap()
         return reply
 
@@ -2119,6 +2119,8 @@ class PetWindow(QWidget):
             self._position_speech_bubble()
         if hasattr(self, "quick_panel") and self.quick_panel.isVisible():
             self._position_quick_panel()
+        if hasattr(self, "work_controls") and self.work_controls.isVisible():
+            self._position_work_controls()
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
             self._position_compact_todos()
         self._position_sticky_note()
@@ -3177,7 +3179,7 @@ class PetWindow(QWidget):
         return False
 
     def _music_control_result(self, result: MusicControlResult | SongPlaybackResult) -> None:
-        """只展示系统控制层返回的真实结果和能力等级。"""
+        """只在用户操作完成后给出轻量反馈，不显示歌曲或 Now Playing 状态。"""
 
         is_status = isinstance(result, MusicControlResult) and result.action == "status"
         if isinstance(result, MusicControlResult):
@@ -3197,28 +3199,29 @@ class PetWindow(QWidget):
             self._manual_activity_until = time.monotonic() + 45
         if isinstance(result, SongPlaybackResult):
             save_settings(self.settings)
-        if track_artist and track_title:
-            self.quick_panel.set_music_status(f"当前播放：{track_artist} · {track_title}")
-        elif isinstance(result, MusicControlResult) and result.success and result.status.is_playing:
-            self.quick_panel.set_music_status("当前播放：播放中")
-        self.show_speech(result.message, 6200)
-
-    def _music_state_changed(self, state: MusicState) -> None:
-        """Render the shared platform media state without guessing from clicks."""
-
-        if state.title:
-            detail = f"{state.artist} · {state.title}" if state.artist else state.title
-            self.quick_panel.set_music_status(f"当前播放：{detail}")
-        elif state.playing:
-            self.quick_panel.set_music_status("当前播放：播放中")
+        if result.success:
+            if isinstance(result, SongPlaybackResult):
+                feedback = "随机播放已启动。"
+            else:
+                feedback = {
+                    "toggle": "播放状态已切换。",
+                    "previous": "已切换到上一首。",
+                    "next": "已切换到下一首。",
+                }.get(result.action, "音乐操作已完成。")
         else:
-            self.quick_panel.set_music_status("当前播放：暂无")
-
-    def _refresh_music_state(self) -> None:
-        """Poll only while useful; the controller reads the real media session."""
-
-        if self.quick_panel.isVisible() or self.music_provider_manager.active_provider:
-            self.music_controller.refresh_status()
+            # 失败时也只反馈本次操作，避免把播放器返回的歌曲名、媒体状态或
+            # Now Playing 文案重新带回六毛气泡。音乐面板是控制入口，不是状态面板。
+            if isinstance(result, SongPlaybackResult):
+                feedback = "随机播放暂时没有成功，请确认播放器可用。"
+            else:
+                feedback = {
+                    "toggle": "播放/暂停暂时无法执行。",
+                    "previous": "上一首暂时无法执行。",
+                    "next": "下一首暂时无法执行。",
+                    "play": "播放暂时无法执行。",
+                    "pause": "暂停暂时无法执行。",
+                }.get(result.action, "音乐操作暂时无法执行。")
+        self.show_speech(feedback, 3200 if result.success else 4200)
 
     def set_activity(self, activity: str) -> None:
         """手动选择修正版动作表中的任意完整动作。"""
@@ -3284,26 +3287,84 @@ class PetWindow(QWidget):
         panel.move(x, y)
 
     def _position_quick_panel(self) -> None:
-        """Keep the five-icon dock at a fixed offset from the pet window.
+        """Place the icon dock above the pet, then use an edge-safe fallback.
 
-        This deliberately anchors to the top-left and size of ``PetWindow``,
-        not to the current animation mask.  Walking and breathing frames can
-        change their transparent bounds by a few pixels; the shortcut dock
-        must not jitter with those internal frames.
+        The anchor is always the pet window rectangle, never an animation mask,
+        so breathing and action frames cannot make the dock jump by a few
+        pixels.  The preferred gap leaves the red hair visible below the dock.
         """
 
         panel = self.quick_panel
         panel.adjustSize()
         area = self._screen_geometry()
         gap = 12
-        x = self.x() - panel.width() - gap
-        y = self.y() + (self.height() - panel.height()) // 2
-        if area is not None:
-            if x < area.left():
-                x = self.x() + self.width() + gap
-            x = min(max(x, area.left()), area.right() - panel.width() + 1)
-            y = min(max(y, area.top()), area.bottom() - panel.height() + 1)
-        panel.move(x, y)
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        blocked = [pet_rect]
+        for accessory in (self.speech_bubble, self._compact_todo_panel, self.work_controls):
+            if accessory is not None and accessory.isVisible():
+                blocked.append(accessory.geometry())
+        center_x = self.x() + (self.width() - panel.width()) // 2
+        upper_y = self.y() - panel.height() - gap
+        candidates = [
+            (center_x, upper_y),
+            (self.x() - panel.width() - gap, self.y() - panel.height() // 3),
+            (self.x() + self.width() + gap, self.y() - panel.height() // 3),
+            (self.x() - panel.width() - gap, self.y() + (self.height() - panel.height()) // 2),
+            (self.x() + self.width() + gap, self.y() + (self.height() - panel.height()) // 2),
+            (center_x, self.y() + self.height() + gap),
+        ]
+        chosen = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if any(candidate.intersects(item) for item in blocked):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            candidate_x, candidate_y = candidates[0]
+            if area is not None:
+                candidate_x = min(max(candidate_x, area.left()), area.right() - panel.width() + 1)
+                candidate_y = min(max(candidate_y, area.top()), area.bottom() - panel.height() + 1)
+            chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+        panel.move(chosen.topLeft())
+
+    def _position_work_controls(self) -> None:
+        """Keep pause/finish controls directly attached below the pet."""
+
+        panel = self.work_controls
+        panel.adjustSize()
+        area = self._screen_geometry()
+        gap = 8
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        blocked = [pet_rect]
+        for accessory in (self._compact_todo_panel, self.speech_bubble, self.quick_panel):
+            if accessory is not None and accessory.isVisible():
+                blocked.append(accessory.geometry())
+        center_x = self.x() + (self.width() - panel.width()) // 2
+        candidates = [
+            (center_x, self.y() + self.height() + gap),
+            (center_x, self.y() - panel.height() - gap),
+            (self.x() - panel.width() - gap, self.y() + self.height() - panel.height()),
+            (self.x() + self.width() + gap, self.y() + self.height() - panel.height()),
+        ]
+        chosen = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if any(candidate.intersects(item) for item in blocked):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            candidate_x, candidate_y = candidates[0]
+            if area is not None:
+                candidate_x = min(max(candidate_x, area.left()), area.right() - panel.width() + 1)
+                candidate_y = min(max(candidate_y, area.top()), area.bottom() - panel.height() + 1)
+            chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+        panel.move(chosen.topLeft())
 
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""
@@ -3312,17 +3373,26 @@ class PetWindow(QWidget):
             self.quick_panel.hide()
             return
         self._refresh_shortcut_state()
-        self._refresh_music_state()
         self._position_quick_panel()
         self.quick_panel.show(); self.quick_panel.raise_()
 
     def show_work_controls(self) -> None:
-        """在计时运行时显示暂停和结束两个操作气泡。"""
+        """在六毛下方显示当前工作会话的暂停/继续与结束操作。"""
 
-        if not self.work_timer.is_running:
+        if self.focus_session.snapshot().status not in {"focus", "rest"}:
             self.start_work_timer()
             return
-        self._position_floating_panel(self.work_controls)
+        self._show_work_controls()
+
+    def _show_work_controls(self) -> None:
+        """Show the work dock below the pet using the shared focus state."""
+
+        snapshot = self.focus_session.snapshot()
+        if snapshot.status not in {"focus", "rest"}:
+            self.work_controls.hide()
+            return
+        self.work_controls.set_session_status(snapshot.status)
+        self._position_work_controls()
         self.work_controls.show(); self.work_controls.raise_()
 
     def _quick_work_action(self) -> None:
@@ -3368,7 +3438,6 @@ class PetWindow(QWidget):
             "work_action_label": labels.get(snapshot.status, "开始工作"),
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
-            "music_status": self.quick_panel.music_status.text(),
             "program_version": __version__,
             "content_version": "内置内容",
         }
@@ -3585,7 +3654,7 @@ class PetWindow(QWidget):
 
         x = (point.x() - self.label.x()) / max(1, self.label.width())
         y = (point.y() - self.label.y()) / max(1, self.label.height())
-        if self.work_timer.is_running and 0.52 <= y <= 0.88 and 0.18 <= x <= 0.84:
+        if self.focus_session.snapshot().status in {"focus", "rest"} and 0.52 <= y <= 0.88 and 0.18 <= x <= 0.84:
             return "work_device"
         if y < 0.24:
             return "head"
@@ -3601,7 +3670,9 @@ class PetWindow(QWidget):
         zone = self._interaction_zone(point)
         self._record_user_interaction()
         self.daily_stats.record_touch()
-        if zone == "work_device" or (zone == "head" and self.work_timer.is_running):
+        if zone == "work_device" or (
+            zone == "head" and self.focus_session.snapshot().status in {"focus", "rest"}
+        ):
             self.show_work_controls()
             return
         if zone == "camera":
