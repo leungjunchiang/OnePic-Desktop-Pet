@@ -8,6 +8,7 @@ no duplicate Todo record is created.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Iterable
 
 
@@ -39,6 +40,20 @@ def _event_label(remaining_days: int, *, annual: bool = False) -> str:
     return f"还有{remaining_days}天"
 
 
+def _todo_date_label(item_date: str, today_date: str) -> str:
+    """Give future scheduled todos the same date cue as countdowns."""
+
+    try:
+        remaining_days = (date.fromisoformat(item_date) - date.fromisoformat(today_date)).days
+    except (TypeError, ValueError):
+        return item_date
+    if remaining_days == 1:
+        return "明天"
+    if remaining_days > 1:
+        return f"还有{remaining_days}天"
+    return "今天" if remaining_days == 0 else item_date
+
+
 def collect_todo_view(
     todos: Iterable[Any],
     countdowns: Iterable[Any],
@@ -47,6 +62,8 @@ def collect_todo_view(
     countdown_remaining,
     anniversary_remaining,
     anniversary_next_date,
+    today_date: str | None = None,
+    show_future_dates: bool = False,
 ) -> list[TodoViewItem]:
     """Merge ordinary Todos and near-term countdowns/anniversaries."""
 
@@ -55,6 +72,8 @@ def collect_todo_view(
         text = str(item.title)
         if getattr(item, "time", None):
             text += f" · {item.time}"
+        if show_future_dates and today_date and str(item.date) != today_date:
+            text = f"{_todo_date_label(str(item.date), today_date)} · {text}"
         result.append(
             TodoViewItem(
                 id=str(item.id), title=str(item.title), date=str(item.date),

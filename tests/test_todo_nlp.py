@@ -23,6 +23,13 @@ def test_explicit_tomorrow_half_hour_request_extracts_title_and_time() -> None:
     assert task["reminder"] is True
 
 
+def test_polite_setup_request_drops_the_question_prefix() -> None:
+    task = _task("你能不能给我设置一个明天3点写论文的待办")
+    assert task["title"] == "写论文"
+    assert task["date"] == "tomorrow"
+    assert task["time"] == "03:00"
+
+
 def test_chinese_number_afternoon_request_is_saved() -> None:
     task = _task("下午三点提醒我跑回归")
     assert task["title"] == "跑回归"

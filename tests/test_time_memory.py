@@ -40,6 +40,18 @@ def test_parse_today_tomorrow_and_midnight() -> None:
     assert parse_date("today", clock).isoformat() == "2026-08-16"
 
 
+def test_upcoming_todo_view_shows_tomorrow_with_a_date_label(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    task = memory.todos.add("写论文", date="tomorrow", time="03:00", reminder=True)
+
+    assert memory.todo_view_today() == []
+    upcoming = memory.todo_view_upcoming()
+    item = next(entry for entry in upcoming if entry.id == task.id)
+    assert item.display_text == "明天 · 写论文 · 03:00"
+    assert memory.get_todo_view_item(task.id).display_text == item.display_text
+
+
 def test_create_todo_has_required_fields_and_persists(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 15, 9, 42))
     manager = TodoManager(tmp_path / "todos.json", now_provider=clock)

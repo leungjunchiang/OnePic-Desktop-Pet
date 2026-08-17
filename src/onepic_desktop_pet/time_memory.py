@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Callable
 
 from .anniversary_manager import AnniversaryManager
@@ -61,8 +61,32 @@ class TimeMemory:
             anniversary_next_date=self.anniversaries.next_date,
         )
 
+    def todo_view_upcoming(self, days: int = 7) -> list[TodoViewItem]:
+        """Return today plus near-term scheduled todos for the compact strip."""
+
+        today = self.now().date()
+        latest = today + timedelta(days=max(0, int(days)))
+        scheduled = []
+        for item in self.todos.items:
+            if item.completed:
+                continue
+            try:
+                item_date = date.fromisoformat(str(item.date)[:10])
+            except (TypeError, ValueError):
+                continue
+            if today <= item_date <= latest:
+                scheduled.append(item)
+        return collect_todo_view(
+            scheduled, self.countdowns.items, self.anniversaries.items,
+            countdown_remaining=self.countdowns.remaining_days,
+            anniversary_remaining=self.anniversaries.remaining_days,
+            anniversary_next_date=self.anniversaries.next_date,
+            today_date=today.isoformat(),
+            show_future_dates=True,
+        )
+
     def get_todo_view_item(self, item_id: str) -> TodoViewItem | None:
-        return next((item for item in self.todo_view_today() if item.id == str(item_id)), None)
+        return next((item for item in self.todo_view_upcoming() if item.id == str(item_id)), None)
 
     def complete_todo_view_item(self, item_id: str, completed: bool = True) -> bool:
         """Complete a projected event without duplicating it into todos.json."""

@@ -173,7 +173,9 @@ def _extract_title(text: str, time_match: str, important: bool, current: date) -
     if time_match:
         result = result.replace(time_match, " ", 1)
     result = re.sub(
-        r"^(?:(?:请|帮我|给我)\s*)?(?:(?:用你的待办功能|使用待办功能)\s*)?"
+        r"^(?:(?:你能不能|能不能|可不可以|可以不可以)\s*)?"
+        r"(?:(?:可以帮我|请|帮我|给我)\s*)?"
+        r"(?:(?:用你的待办功能|使用待办功能)\s*)?"
         r"(?:(?:设置|安排|添加|加|记一下|备忘一下)(?:一个|一项)?\s*)?",
         "",
         result,

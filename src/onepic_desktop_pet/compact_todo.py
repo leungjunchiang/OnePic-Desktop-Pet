@@ -9,6 +9,7 @@ the pet whenever the pet moves.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from time import monotonic
 from typing import Any, Callable
 
@@ -411,7 +412,7 @@ class CompactTodoPanel(QWidget):
             key: deadline for key, deadline in self._just_completed.items() if deadline > now
         }
         tasks = [
-            item for item in self.memory.todo_view_today()
+            item for item in self.memory.todo_view_upcoming()
             if not item.completed or item.id in self._just_completed
         ]
         return sorted(tasks, key=self._task_priority_key)
@@ -421,6 +422,10 @@ class CompactTodoPanel(QWidget):
 
         current = str(getattr(task, "id", "")) == str(self.memory.current_task_id or "")
         important = bool(getattr(task, "important", False))
+        try:
+            day_value = (date.fromisoformat(str(getattr(task, "date", ""))) - self.memory.now().date()).days
+        except (TypeError, ValueError):
+            day_value = 3650
         raw_time = str(getattr(task, "time", "") or "")
         try:
             hour, minute = (int(part) for part in raw_time.split(":", 1))
@@ -430,6 +435,7 @@ class CompactTodoPanel(QWidget):
         return (
             -int(current),
             -int(important),
+            max(0, day_value),
             time_value,
             str(getattr(task, "created_at", "") or ""),
         )
