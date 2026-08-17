@@ -29,6 +29,7 @@ from onepic_desktop_pet.ai import (
     _cli_environment,
     _codex_app_server_command,
     _codex_exec_command,
+    _macos_login_shell_path_value,
     _codex_model_override,
     _codex_turn_options,
     _codex_timeout_seconds,
@@ -177,8 +178,10 @@ def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
     command = _codex_exec_command(Path("codex.exe"), "测试消息")
 
-    assert "--ignore-user-config" not in command
+    assert "--ignore-user-config" in command
     assert "--ephemeral" in command
+    assert 'model_provider="lili_http"' in command
+    assert any(part.endswith("supports_websockets=false") for part in command)
     assert 'model="gpt-5.6-luna"' in command
     assert 'model_reasoning_effort="low"' in command
     assert _codex_model_override() == "gpt-5.6-luna"
@@ -192,7 +195,10 @@ def test_app_server_command_uses_cross_platform_stdio_transport(monkeypatch) -> 
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     command = _codex_app_server_command(Path("/usr/local/bin/codex"))
-    assert command[-3:] == ["--listen", "stdio://", "--ignore-user-config"]
+    assert command[-2:] == ["--listen", "stdio://"]
+    assert "--config" in command
+    assert "--ignore-user-config" in command
+    assert any(part.endswith("supports_websockets=false") for part in command)
 
 
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:
@@ -309,6 +315,8 @@ def test_macos_codex_cli_uses_login_zsh_and_validates_absolute_path(
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs.get("env", {})))
+        if command[0:2] == ["/bin/zsh", "-lc"] and "__LILI_PATH__" in command[2]:
+            return SimpleNamespace(returncode=0, stdout="__LILI_PATH__/usr/bin:/bin\n", stderr="")
         if command == ["/bin/zsh", "-lc", "command -v codex"]:
             return SimpleNamespace(returncode=0, stdout=f"{executable}\n", stderr="")
         if command == [str(executable), "--version"]:
@@ -320,15 +328,17 @@ def test_macos_codex_cli_uses_login_zsh_and_validates_absolute_path(
     find_codex_executable.cache_clear()
 
     assert find_codex_executable() == executable
-    assert [command for command, _env in calls] == [
+    assert "__LILI_PATH__" in calls[0][0][2]
+    assert [command for command, _env in calls[1:]] == [
         ["/bin/zsh", "-lc", "command -v codex"],
         [str(executable), "--version"],
     ]
-    version_path = calls[1][1]["PATH"].split(os.pathsep)
+    version_path = calls[2][1]["PATH"].split(os.pathsep)
     assert version_path[0] == str(executable.parent)
     assert find_codex_executable() == executable
-    assert len(calls) == 2
+    assert len(calls) == 3
     find_codex_executable.cache_clear()
+    _macos_login_shell_path_value.cache_clear()
 
 
 def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_path) -> None:
@@ -342,6 +352,8 @@ def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_pat
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs.get("env", {})))
+        if command[0:2] == ["/bin/zsh", "-lc"] and "__LILI_PATH__" in command[2]:
+            return SimpleNamespace(returncode=0, stdout="__LILI_PATH__\n", stderr="")
         if command == ["/bin/zsh", "-lc", "command -v codex"]:
             return SimpleNamespace(returncode=0, stdout=f"{executable}\n", stderr="")
         if command == [str(executable), "--version"]:
@@ -360,6 +372,7 @@ def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_pat
     assert calls[-1][1]["PATH"].split(os.pathsep)[0] == str(executable.parent)
     assert find_codex_executable() == executable
     find_codex_executable.cache_clear()
+    _macos_login_shell_path_value.cache_clear()
 
 
 def test_macos_codex_lookup_retries_user_shell_profiles(monkeypatch, tmp_path) -> None:
@@ -371,6 +384,8 @@ def test_macos_codex_lookup_retries_user_shell_profiles(monkeypatch, tmp_path) -
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        if command[0:2] == ["/bin/zsh", "-lc"] and "__LILI_PATH__" in command[2]:
+            return SimpleNamespace(returncode=0, stdout="__LILI_PATH__\n", stderr="")
         if command == ["/bin/zsh", "-lc", "command -v codex"]:
             return SimpleNamespace(returncode=1, stdout="", stderr="")
         if command[0:2] == ["/bin/zsh", "-lc"] and "~/.zshrc" in command[2]:
@@ -384,9 +399,11 @@ def test_macos_codex_lookup_retries_user_shell_profiles(monkeypatch, tmp_path) -
     find_codex_executable.cache_clear()
 
     assert find_codex_executable() == executable
-    assert calls[0] == ["/bin/zsh", "-lc", "command -v codex"]
+    assert "__LILI_PATH__" in calls[0][2]
+    assert calls[1] == ["/bin/zsh", "-lc", "command -v codex"]
     assert any("~/.zshrc" in command[-1] for command in calls)
     find_codex_executable.cache_clear()
+    _macos_login_shell_path_value.cache_clear()
 
 
 def test_openai_responses_api_preserves_context_without_token_in_payload(monkeypatch) -> None:

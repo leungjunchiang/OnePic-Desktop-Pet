@@ -1,3 +1,12 @@
+# Lili v0.22.85
+
+## 修复 macOS Codex 聊天连接与 HTTPS 回退
+
+- 修复 macOS Finder 启动的 Lili 缺少登录 shell PATH，导致 Codex CLI 能检测到但实际聊天子进程无法启动的问题；现在会补齐 zsh、nvm、pnpm、Bun、Volta 等路径，并固定 HOME、CODEX_HOME 与 SQLite 运行目录。
+- Lili 专用 Codex App Server 和 exec 通道默认使用独立的 HTTPS Responses provider，禁用 WebSocket，避免网络环境导致的多次 WebSocket 超时；不修改用户自己的 Codex 配置。
+- App Server 失败时继续自动切换到同样的 HTTPS exec 通道；模型在当前账号不可用时自动回退到 Codex 默认模型，不再直接落到离线陪伴。
+- 保留本机登录、只读沙箱、上下文隔离和敏感信息脱敏日志；Windows 与 macOS 共用同一套修复逻辑。
+
 # Lili v0.22.84
 
 ## 工作控制与状态栏菜单修复

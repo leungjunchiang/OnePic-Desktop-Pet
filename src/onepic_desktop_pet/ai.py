@@ -332,6 +332,48 @@ def _cli_search_directories() -> tuple[Path, ...]:
     return tuple(path for path in values if str(path) not in {"", "."})
 
 
+@lru_cache(maxsize=1)
+def _macos_login_shell_path_value() -> str:
+    """Read the PATH that a Finder-launched app would otherwise miss.
+
+    A macOS ``.app`` normally starts without the user's interactive shell PATH.
+    Resolving the ``codex`` script is not enough when that script has a
+    ``#!/usr/bin/env node`` shebang: the child also needs the nvm/pnpm/Volta
+    Node directory.  Read the user's login profiles once and merge the result
+    into the child environment without changing the user's shell files.
+    """
+
+    if sys.platform != "darwin":
+        return ""
+    shell_environment = dict(os.environ)
+    shell_environment["HOME"] = str(Path.home())
+    shell_environment["SHELL"] = "/bin/zsh"
+    shell_environment.setdefault("LANG", "en_US.UTF-8")
+    shell_environment["PATH"] = shell_environment.get("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin"
+    script = (
+        'for f in "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile"; do '
+        '[ -r "$f" ] && source "$f" >/dev/null 2>&1; done; '
+        'printf "__LILI_PATH__%s\\n" "$PATH"'
+    )
+    try:
+        completed = subprocess.run(
+            ["/bin/zsh", "-lc", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=12,
+            env=shell_environment,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    for line in reversed(completed.stdout.splitlines()):
+        if line.startswith("__LILI_PATH__"):
+            return line.removeprefix("__LILI_PATH__").strip()
+    return ""
+
+
 def _cli_environment(executable: Path | None = None) -> dict[str, str]:
     """构造 CLI 环境；把已发现入口目录放在最前，兼容 nvm/npm 包装脚本。"""
 
@@ -340,12 +382,23 @@ def _cli_environment(executable: Path | None = None) -> dict[str, str]:
         # Finder-launched .app processes and some Windows desktop launches can
         # omit HOME.  Codex needs it to locate the user's login credentials.
         environment["HOME"] = str(Path.home())
-        environment.setdefault("CODEX_HOME", str(Path.home() / ".codex"))
+        codex_home = environment.get("CODEX_HOME", "").strip()
+        if not codex_home:
+            codex_home = str(Path.home() / ".codex")
+            environment["CODEX_HOME"] = codex_home
+        environment.setdefault(
+            "CODEX_SQLITE_HOME",
+            str(Path(codex_home).expanduser() / "sqlite"),
+        )
     if sys.platform == "darwin":
         environment.setdefault("SHELL", "/bin/zsh")
         environment.setdefault("LANG", "en_US.UTF-8")
         environment.setdefault("LC_ALL", environment["LANG"])
     current = environment.get("PATH", "")
+    if sys.platform == "darwin":
+        shell_path = _macos_login_shell_path_value()
+        if shell_path:
+            current = os.pathsep.join((shell_path, current))
     additions: list[str] = []
     if executable is not None and executable.is_absolute():
         additions.append(str(executable.parent))
@@ -738,17 +791,44 @@ def _codex_turn_options(message: str) -> tuple[str | None, str]:
     return (model or None, "low" if complex_request or very_complex else "none")
 
 
+def _codex_http_config_overrides() -> tuple[str, ...]:
+    """Force Lili's child Codex process onto HTTPS instead of WebSocket.
+
+    This is intentionally a per-process provider override.  It keeps the
+    user's normal Codex profile untouched while avoiding the repeated
+    WebSocket handshake timeout that is common for Finder-launched macOS
+    applications and some restrictive networks.  ``default``/``auto`` is a
+    diagnostic escape hatch for users who explicitly want the normal profile.
+    """
+
+    transport = os.environ.get("LILI_CODEX_TRANSPORT", "https").strip().casefold()
+    if transport in {"default", "auto", "off", "websocket", "ws"}:
+        return ()
+    return (
+        'model_provider="lili_http"',
+        'model_providers.lili_http.name="Lili HTTPS"',
+        'model_providers.lili_http.base_url="https://chatgpt.com/backend-api/codex"',
+        'model_providers.lili_http.wire_api="responses"',
+        'model_providers.lili_http.requires_openai_auth=true',
+        'model_providers.lili_http.supports_websockets=false',
+    )
+
+
 def _codex_app_server_command(executable: Path) -> list[str]:
     """Build the cross-platform stdio App Server command for Lili only."""
 
     # The chat prompt does not expose tools.  Keep user authentication and
     # CODEX_HOME, but override the MCP map for this child so unrelated user
     # servers/plugins cannot delay or break the chat session.
-    arguments = ["app-server", "--config", "mcp_servers={}", "--listen", "stdio://"]
-    if sys.platform == "darwin":
-        # Finder-launched Lili must not inherit arbitrary transport/plugin
-        # configuration.  Authentication remains in the normal Codex store.
-        arguments.append("--ignore-user-config")
+    arguments = [
+        "--ignore-user-config",
+        "--config",
+        "mcp_servers={}",
+        *_codex_http_config_overrides(),
+        "app-server",
+        "--listen",
+        "stdio://",
+    ]
     return _cli_command(executable, *arguments)
 
 
@@ -799,20 +879,17 @@ def _codex_exec_command(executable: Path, prompt: str, *, model: str | None = No
 
     selected_model = _codex_model_override() if model is None else model
     arguments = [
-        "exec",
+        "--ignore-user-config",
         "--ephemeral",
         "--skip-git-repo-check",
-    ]
-    if sys.platform == "darwin":
-        # Finder-launched Lili must not inherit arbitrary user MCP/plugin or
-        # transport settings.  Codex authentication remains in its normal
-        # auth store; this only skips config.toml for this child process.
-        arguments.append("--ignore-user-config")
-    arguments.extend((
         "--ignore-rules",
         "--config",
+        "mcp_servers={}",
+        *_codex_http_config_overrides(),
+        "--config",
         'model_reasoning_effort="low"',
-    ))
+        "exec",
+    ]
     if selected_model:
         arguments.extend(("--config", f'model="{selected_model.replace(chr(34), "")}"'))
     arguments.extend((
@@ -838,6 +915,10 @@ def _looks_like_model_rejection(stderr: str) -> bool:
             "unsupported model",
             "invalid model",
             "model is not available",
+            "model is unavailable",
+            "model does not exist",
+            "does not support model",
+            "not a valid model",
         )
     )
 
@@ -921,7 +1002,13 @@ def _parse_codex_jsonl(output: str) -> str:
     return answer
 
 
-def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: str = "") -> str:
+def ask_codex(
+    message: str,
+    history: Iterable[tuple[str, str]],
+    local_context: str = "",
+    *,
+    model_override: str | None = None,
+) -> str:
     """使用本机已登录 Codex 的临时只读会话生成一条回复。"""
 
     entries = list(history)
@@ -931,7 +1018,11 @@ def ask_codex(message: str, history: Iterable[tuple[str, str]], local_context: s
     working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
     working_root.mkdir(parents=True, exist_ok=True)
     prompt = _conversation_text(message, entries, local_context)
-    selected_model = _codex_model_override()
+    selected_model = (
+        _codex_model_override()
+        if model_override is None
+        else str(model_override).strip()[:120]
+    )
     command = _codex_exec_command(executable, prompt, model=selected_model)
     startupinfo = None
     creationflags = 0
@@ -1295,7 +1386,17 @@ class AIChatService:
             # The fallback is the already existing isolated read-only exec path.
             LOGGER.warning("[AI Codex] app-server failed; falling back to exec: %s", exc)
             self._close_codex_app_server()
-            answer = ask_codex(message, entries, local_context)
+            # A model can be available in one Codex account/platform and
+            # unavailable in another.  Let the normal CLI-selected model take
+            # over instead of sending the same rejected Luna/Terra override a
+            # second time.
+            fallback_model = "" if selected_model and _looks_like_model_rejection(str(exc)) else None
+            answer = ask_codex(
+                message,
+                entries,
+                local_context,
+                model_override=fallback_model,
+            )
             if on_delta is not None and answer:
                 # The final UI replaces the partial stream with this answer, so
                 # emitting it as another delta would duplicate the fallback.
