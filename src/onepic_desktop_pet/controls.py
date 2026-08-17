@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QGraphicsDropShadowEffect,
@@ -35,6 +35,9 @@ QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228)
 border: 1px solid rgba(231, 74, 79, 145); }
 QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
 border: 1px solid rgba(40, 125, 158, 135); }
+QLabel#quickActionHint { background: rgba(36, 71, 91, 238); color: #fffdf5;
+border: 1px solid rgba(255, 244, 216, 190); border-radius: 8px;
+padding: 4px 9px; font-size: 11px; }
 QWidget#workControlDock { background: rgba(248, 252, 253, 242); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 118); border-radius: 13px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
@@ -169,6 +172,20 @@ class QuickControlPanel(QWidget):
         shadow.setOffset(0, 3)
         shadow.setColor(QColor(36, 71, 91, 58))
         self.setGraphicsEffect(shadow)
+        self.hover_hint = QLabel(None)
+        self.hover_hint.setObjectName("quickActionHint")
+        self.hover_hint.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hover_hint.setStyleSheet(CONTROL_STYLE)
+        self.hover_hint.hide()
+        self._hint_button: QPushButton | None = None
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
@@ -182,8 +199,16 @@ class QuickControlPanel(QWidget):
         self.settings_button = self._button("settings", "设置", None)
         self.music_button.clicked.connect(self._show_music_menu)
         self.settings_button.clicked.connect(self._show_settings_menu)
-        for button in (self.chat_button, self.work_button, self.social_button, self.music_button, self.settings_button):
+        self._quick_buttons = (
+            self.chat_button,
+            self.work_button,
+            self.social_button,
+            self.music_button,
+            self.settings_button,
+        )
+        for button in self._quick_buttons:
             layout.addWidget(button)
+            button.installEventFilter(self)
 
 
     @staticmethod
@@ -208,6 +233,45 @@ class QuickControlPanel(QWidget):
         self.work_button.setToolTip(label)
         self.work_button.setAccessibleName(label)
         self.work_button.setIcon(_quick_icon("work", active=label == "暂停工作"))
+        if self._hint_button is self.work_button:
+            self._show_hint(self.work_button)
+
+    def _show_hint(self, button: QPushButton) -> None:
+        """Show a small six-mao label without changing the dock layout."""
+
+        text = button.toolTip().strip()
+        if not text:
+            return
+        self._hint_button = button
+        self.hover_hint.setText(text)
+        self.hover_hint.adjustSize()
+        below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
+        x = below.x() - self.hover_hint.width() // 2
+        y = below.y()
+        app = QGuiApplication.instance()
+        screen = app.screenAt(below) if app is not None else None
+        if screen is not None:
+            area = screen.availableGeometry()
+            x = min(max(x, area.left() + 4), area.right() - self.hover_hint.width() - 4)
+            if y + self.hover_hint.height() > area.bottom() - 4:
+                y = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7)).y()
+        self.hover_hint.move(x, y)
+        self.hover_hint.show()
+        self.hover_hint.raise_()
+
+    def _hide_hint(self) -> None:
+        """Hide the hover label when the pointer leaves a shortcut."""
+
+        self._hint_button = None
+        self.hover_hint.hide()
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched in getattr(self, "_quick_buttons", ()):
+            if event.type() == QEvent.Type.Enter:
+                self._show_hint(watched)
+            elif event.type() == QEvent.Type.Leave:
+                self._hide_hint()
+        return super().eventFilter(watched, event)
 
     def _show_music_menu(self) -> None:
         """Open only actionable music controls; no Now Playing panel."""
@@ -274,6 +338,10 @@ class QuickControlPanel(QWidget):
 
         super().showEvent(event)
         self.hide_timer.start(8000)
+
+    def hideEvent(self, event) -> None:
+        self._hide_hint()
+        super().hideEvent(event)
 
     def enterEvent(self, event) -> None:
         """鼠标操作期间暂停自动收起。"""

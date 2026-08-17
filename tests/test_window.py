@@ -770,6 +770,11 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
     assert all(button.size() == QSize(42, 42) for button in buttons)
+    window.quick_panel._show_hint(window.quick_panel.music_button)
+    app.processEvents()
+    assert window.quick_panel.hover_hint.text() == "音乐"
+    window.quick_panel._hide_hint()
+    assert not window.quick_panel.hover_hint.isVisible()
     assert 50 <= window.quick_panel.sizeHint().height() <= 60
     window.move(300, 200)
     window.show_quick_panel()
