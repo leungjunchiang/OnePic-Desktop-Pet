@@ -343,6 +343,29 @@ def test_recovery_buttons_only_emit_user_actions() -> None:
     app.processEvents()
 
 
+def test_chat_management_menu_exposes_clear_new_chat_and_history() -> None:
+    app = _app()
+    dialog = ChatDialog()
+    clear = QSignalSpy(dialog.clear_display_requested)
+    new_chat = QSignalSpy(dialog.new_conversation_requested)
+    history = QSignalSpy(dialog.history_requested)
+
+    dialog.clear_display_action.trigger()
+    dialog.new_conversation_action.trigger()
+    dialog.history_action.trigger()
+
+    assert clear.count() == 1
+    assert new_chat.count() == 1
+    assert history.count() == 1
+    dialog.append_message("你", "旧消息")
+    assert "旧消息" in dialog.transcript.toPlainText()
+    dialog.clear_transcript()
+    assert dialog.transcript.toPlainText() == ""
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
 def test_pressing_enter_ten_times_only_submits_messages() -> None:
     """QDialog 的回车不得把 AI 设置按钮当成默认按钮并误触。"""
 
@@ -367,3 +390,4 @@ def test_pressing_enter_ten_times_only_submits_messages() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
+

@@ -415,6 +415,25 @@ def test_openai_responses_api_preserves_context_without_token_in_payload(monkeyp
     assert captured["timeout"] == 30
 
 
+def test_reset_conversation_forgets_persisted_codex_thread_without_touching_service_config(
+    monkeypatch, tmp_path
+) -> None:
+    thread_path = tmp_path / "codex-app-server-thread.json"
+    thread_path.write_text(
+        '{"version": 1, "thread_id": "thr_saved"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.ai._codex_thread_state_path",
+        lambda: thread_path,
+    )
+
+    service = AIChatService(FakeCredentials())
+    service.reset_conversation()
+
+    assert not thread_path.exists()
+
+
 def test_chatgpt_without_cli_uses_required_neutral_status(monkeypatch) -> None:
     """安装 ChatGPT GUI 但缺少 CLI 时，不得误报“未安装 Codex”。"""
 
@@ -438,3 +457,4 @@ def test_macos_gui_launch_uses_open_a_chatgpt(monkeypatch) -> None:
 
     assert launch_codex_gui() is True
     assert calls[0][0] == ["open", "-a", "ChatGPT"]
+

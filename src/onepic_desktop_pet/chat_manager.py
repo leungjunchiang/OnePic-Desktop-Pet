@@ -9,8 +9,8 @@
 - 根据关键词、当前时间、工作时长和宠物状态生成不依赖网络的回复；
 - 识别离线下无法可靠完成的复杂问题，并让界面显示手动重连和设置入口。
 
-聊天内容和连接状态只保存在当前进程内存中，不写入磁盘。API 令牌仍由
-CredentialStore 放入系统安全凭据库；本模块不会主动打开任何设置窗口。
+聊天路由不直接管理聊天记录文件；窗口层会按用户操作保存有限的本地会话。
+API 令牌仍由 CredentialStore 放入系统安全凭据库；本模块不会主动打开任何设置窗口。
 """
 
 from __future__ import annotations
@@ -609,6 +609,21 @@ class ChatManager(QObject):
         self._interrupt_requested = True
         return True
 
+    def reset_conversation(self) -> bool:
+        """Forget the persistent AI thread so the next message starts cleanly."""
+
+        if self.busy:
+            self.notice.emit("上一句话还在路上，等它结束后再开始新对话。")
+            return False
+        resetter = getattr(self.service, "reset_conversation", None)
+        if callable(resetter):
+            try:
+                resetter()
+            except Exception as exc:
+                LOGGER.warning("重置 AI 对话上下文失败：%s", exc)
+                self.notice.emit("AI 连接已保留，新的聊天会在下次连接时重新开始。")
+        return True
+
     def _ai_succeeded(self, answer: str) -> None:
         self.agents.mark_runtime_success(self._pending_provider)
         action = extract_action(answer)
@@ -684,3 +699,4 @@ def should_start_startup_detection() -> bool:
     """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+

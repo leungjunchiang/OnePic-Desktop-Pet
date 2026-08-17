@@ -1,7 +1,7 @@
 """验证六毛只在内存中保留长期摘要与最近三十轮完整对话。"""
 
 from onepic_desktop_pet.ai import _conversation_text
-from onepic_desktop_pet.chat_memory import ConversationMemory
+from onepic_desktop_pet.chat_memory import ChatHistoryStore, ConversationMemory
 
 
 def test_thirty_rounds_remain_verbatim_without_summary_or_clipping() -> None:
@@ -64,3 +64,38 @@ def test_memory_clear_removes_local_file(tmp_path) -> None:
     assert path.exists()
     memory.clear()
     assert not path.exists()
+
+
+def test_chat_history_keeps_sessions_separate_and_round_trips(tmp_path) -> None:
+    path = tmp_path / "chat-history.json"
+    history = ChatHistoryStore(path)
+    history.append("user", "明天3点写论文")
+    history.append("assistant", "已经放进待办")
+    first_id = history.current_session_id
+    history.start_new_session()
+    history.append("user", "今天先喝水")
+
+    restored = ChatHistoryStore(path)
+    assert restored.current_messages() == (("user", "今天先喝水"),)
+    assert {session.session_id for session in restored.sessions()} == {
+        first_id,
+        restored.current_session_id,
+    }
+    first = restored.get(first_id)
+    assert first is not None
+    assert first.title == "明天3点写论文"
+    assert first.messages[-1] == ("assistant", "已经放进待办")
+
+
+def test_chat_history_clear_all_does_not_leave_a_local_file(tmp_path) -> None:
+    path = tmp_path / "chat-history.json"
+    history = ChatHistoryStore(path)
+    history.append("user", "只保存在本机")
+    assert path.exists()
+
+    history.clear_all()
+
+    assert history.sessions() == ()
+    assert history.current_messages() == ()
+    assert not path.exists()
+

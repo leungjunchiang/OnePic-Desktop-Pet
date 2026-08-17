@@ -13,7 +13,8 @@
 - 为复杂离线请求提供“重新连接 AI”和“去设置”按钮，但绝不自动打开设置窗口；
 - 手动连接检测放入 QThread；聊天请求和自动重连由 chat_manager.py 管理。
 
-聊天文本仅在窗口当前进程的内存中保留，关闭应用后不会写入磁盘。
+聊天窗口只保留当前显示的渲染内容；有限的聊天会话由窗口层分开保存在本机，
+用户可以清空显示、开始新对话或删除全部聊天记录。待办和提醒不属于聊天记录。
 """
 
 from __future__ import annotations
@@ -38,10 +39,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSpinBox,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -95,6 +100,8 @@ QPushButton {
 QPushButton:hover { background: #3d6d86; }
 QPushButton:disabled { background: #c8aaa5; }
 QPushButton#softButton { color: #405363; background: rgba(213, 229, 238, 180); }
+QToolButton#softToolButton { color: #405363; background: rgba(213, 229, 238, 180); border: none; border-radius: 11px; font-size: 20px; font-weight: 700; }
+QToolButton#softToolButton:hover { background: rgba(190, 214, 227, 220); }
 QLabel#title { color: #334e61; font-size: 20px; font-weight: 700; }
 QLabel#status { color: #667784; font-size: 12px; }
 """
@@ -144,6 +151,9 @@ class ChatDialog(QDialog):
     settings_requested = Signal(str)
     rename_requested = Signal()
     reconnect_requested = Signal()
+    clear_display_requested = Signal()
+    new_conversation_requested = Signal()
+    history_requested = Signal()
 
     def __init__(
         self,
@@ -178,6 +188,33 @@ class ChatDialog(QDialog):
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
+        self.chat_actions_button = QToolButton()
+        self.chat_actions_button.setObjectName("softToolButton")
+        self.chat_actions_button.setText("⋯")
+        self.chat_actions_button.setToolTip("清空聊天、开始新对话或查看聊天记录")
+        self.chat_actions_button.setAutoRaise(False)
+        self.chat_actions_button.setFixedWidth(38)
+        self.chat_actions_menu = QMenu(self)
+        self.clear_display_action = self.chat_actions_menu.addAction("清空当前显示")
+        self.new_conversation_action = self.chat_actions_menu.addAction(
+            "开始新对话（重置 AI 上下文）"
+        )
+        self.chat_actions_menu.addSeparator()
+        self.history_action = self.chat_actions_menu.addAction("查看聊天记录")
+        self.chat_actions_button.setMenu(self.chat_actions_menu)
+        self.chat_actions_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.clear_display_action.triggered.connect(
+            lambda _checked=False: self.clear_display_requested.emit()
+        )
+        self.new_conversation_action.triggered.connect(
+            lambda _checked=False: self.new_conversation_requested.emit()
+        )
+        self.history_action.triggered.connect(
+            lambda _checked=False: self.history_requested.emit()
+        )
+        header.addWidget(self.chat_actions_button)
         self.rename_button = QPushButton("修改主人称呼")
         self.rename_button.setObjectName("softButton")
         self.rename_button.setToolTip("用于自习室、串门和搭子互动时区分不同六毛")
@@ -307,6 +344,22 @@ class ChatDialog(QDialog):
         self._transcript_entries.append((str(role), str(text)))
         self._render_transcript()
 
+    def load_transcript(self, messages: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> None:
+        """加载本机会话记录到当前显示，不改变 AI 连接或待办数据。"""
+
+        self._streaming_message_index = None
+        self._transcript_entries = [
+            (str(role), str(text)) for role, text in messages if str(text).strip()
+        ]
+        self._render_transcript()
+
+    def clear_transcript(self) -> None:
+        """只清空窗口显示，不删除本地聊天记录或 AI 上下文。"""
+
+        self._streaming_message_index = None
+        self._transcript_entries.clear()
+        self._render_transcript()
+
     def begin_streaming_message(self, role: str) -> None:
         """Create a temporary assistant bubble that can be updated per delta."""
 
@@ -369,6 +422,94 @@ class ChatDialog(QDialog):
         self.stop_button.setEnabled(bool(available))
         if not available:
             self.stop_button.hide()
+
+
+class ChatHistoryDialog(QDialog):
+    """查看和删除本机保存的有限聊天记录。"""
+
+    clear_all_requested = Signal()
+
+    def __init__(self, history_store, pet_name: str = "六毛", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.history_store = history_store
+        self.pet_name = pet_name
+        self._sessions = []
+        self.setWindowTitle("聊天记录")
+        self.setObjectName("liliPanel")
+        self.setMinimumSize(620, 420)
+        self.resize(760, 520)
+        self.setStyleSheet(PANEL_STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(10)
+        title = QLabel("聊天记录")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        hint = QLabel("记录只保存在本机；删除聊天记录不会删除待办和提醒。")
+        hint.setObjectName("status")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        content = QHBoxLayout()
+        self.session_list = QListWidget()
+        self.session_list.setMinimumWidth(220)
+        self.session_list.currentRowChanged.connect(self._show_selected)
+        content.addWidget(self.session_list)
+        self.preview = QTextBrowser()
+        self.preview.setOpenExternalLinks(False)
+        content.addWidget(self.preview, 1)
+        layout.addLayout(content, 1)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.clear_all_button = QPushButton("删除全部聊天记录")
+        self.clear_all_button.setObjectName("softButton")
+        self.clear_all_button.setAutoDefault(False)
+        self.clear_all_button.setDefault(False)
+        self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
+        actions.addWidget(self.clear_all_button)
+        self.close_button = QPushButton("关闭")
+        self.close_button.setAutoDefault(False)
+        self.close_button.setDefault(False)
+        self.close_button.clicked.connect(self.close)
+        actions.addWidget(self.close_button)
+        layout.addLayout(actions)
+        self.refresh()
+
+    def refresh(self) -> None:
+        """重新读取会话列表并显示最近一段记录。"""
+
+        self._sessions = list(self.history_store.sessions())
+        self.session_list.clear()
+        for session in self._sessions:
+            marker = "（当前）" if session.session_id == self.history_store.current_session_id else ""
+            updated = session.updated_at.replace("T", " ")
+            item = QListWidgetItem(f"{session.title}{marker}\n{updated}")
+            item.setData(Qt.ItemDataRole.UserRole, session.session_id)
+            self.session_list.addItem(item)
+        if self._sessions:
+            self.session_list.setCurrentRow(0)
+        else:
+            self.preview.setPlainText("还没有聊天记录。")
+
+    def _show_selected(self, row: int) -> None:
+        if row < 0 or row >= len(self._sessions):
+            self.preview.setPlainText("还没有聊天记录。")
+            return
+        session = self._sessions[row]
+        blocks: list[str] = []
+        for role, text in session.messages:
+            label = "你" if role == "user" else self.pet_name
+            color = "#496f9b" if role == "user" else "#426b7c"
+            background = "#eaf1fa" if role == "user" else "#edf5f7"
+            safe = escape(text).replace("\n", "<br>")
+            blocks.append(
+                f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
+                f'background:{background};"><b style="color:{color};">{escape(label)}</b>'
+                f'<br>{safe}</div>'
+            )
+        self.preview.setHtml("".join(blocks))
 
 
 class AISettingsDialog(QDialog):
@@ -831,3 +972,4 @@ class AISettingsDialog(QDialog):
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()
         if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())
+

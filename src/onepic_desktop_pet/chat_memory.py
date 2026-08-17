@@ -10,13 +10,18 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
 MAX_RECENT_ROUNDS = 30
 MAX_RECENT_MESSAGES = MAX_RECENT_ROUNDS * 2
 MAX_SUMMARY_CHARS = 1800
+MAX_CHAT_HISTORY_SESSIONS = 20
+MAX_CHAT_HISTORY_MESSAGES = 120
+MAX_CHAT_HISTORY_TEXT_CHARS = 4000
 
 
 @dataclass(frozen=True)
@@ -183,3 +188,248 @@ def conversation_memory_path() -> Path:
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
     return root / "Lili" / "conversation-memory.json"
+
+
+@dataclass(frozen=True)
+class ChatHistorySession:
+    """一段可在聊天记录中查看的本地会话。"""
+
+    session_id: str
+    created_at: str
+    updated_at: str
+    title: str
+    messages: tuple[tuple[str, str], ...]
+
+
+class ChatHistoryStore:
+    """保存有限数量的本地聊天会话，不上传也不保存任何凭据。"""
+
+    def __init__(
+        self,
+        persist_path: Path | None = None,
+        *,
+        max_sessions: int = MAX_CHAT_HISTORY_SESSIONS,
+    ) -> None:
+        self.persist_path = Path(persist_path) if persist_path is not None else None
+        self.max_sessions = max(1, int(max_sessions))
+        self._sessions: list[dict[str, object]] = []
+        self._current_session_id = ""
+        if self.persist_path is not None:
+            self.load()
+
+    @property
+    def current_session_id(self) -> str:
+        """返回当前会话 ID；尚未产生消息时可能为空。"""
+
+        return self._current_session_id
+
+    def current_messages(self) -> tuple[tuple[str, str], ...]:
+        """返回当前会话的完整本地消息。"""
+
+        session = self._find(self._current_session_id)
+        return session.messages if session is not None else ()
+
+    def sessions(self) -> tuple[ChatHistorySession, ...]:
+        """按最近更新时间返回当前会话和历史会话。"""
+
+        values = [self._as_session(item) for item in self._sessions]
+        values.sort(key=lambda item: item.updated_at, reverse=True)
+        return tuple(values)
+
+    def get(self, session_id: str) -> ChatHistorySession | None:
+        """读取指定会话，供历史记录窗口展示。"""
+
+        item = self._find(str(session_id or ""))
+        return item
+
+    def append(self, role: str, content: str) -> None:
+        """把一条用户或六毛消息写入当前会话。"""
+
+        clean_role = str(role or "").strip().lower()
+        if clean_role not in {"user", "assistant"}:
+            return
+        clean = str(content or "").strip()
+        if not clean:
+            return
+        if not self._current_session_id:
+            self._current_session_id = uuid.uuid4().hex
+            now = self._now()
+            self._sessions.append(
+                {
+                    "id": self._current_session_id,
+                    "created_at": now,
+                    "updated_at": now,
+                    "title": "新对话",
+                    "messages": [],
+                }
+            )
+        item = self._find_raw(self._current_session_id)
+        if item is None:
+            self._current_session_id = ""
+            self.append(clean_role, clean)
+            return
+        messages = item.setdefault("messages", [])
+        if not isinstance(messages, list):
+            messages = []
+            item["messages"] = messages
+        messages.append([clean_role, clean[:MAX_CHAT_HISTORY_TEXT_CHARS]])
+        del messages[:-MAX_CHAT_HISTORY_MESSAGES]
+        if item.get("title") in {None, "", "新对话"} and clean_role == "user":
+            item["title"] = self._title_from(clean)
+        item["updated_at"] = self._now()
+        self._trim_sessions()
+        self.save()
+
+    def start_new_session(self) -> None:
+        """归档当前会话，下一条消息会创建一个新的会话。"""
+
+        if not self.current_messages():
+            return
+        self._current_session_id = ""
+        self.save()
+
+    def clear_all(self) -> None:
+        """删除本机所有聊天记录；不触碰待办、提醒或其他数据。"""
+
+        self._sessions.clear()
+        self._current_session_id = ""
+        if self.persist_path is not None:
+            try:
+                self.persist_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def bootstrap(self, messages: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> None:
+        """从旧版本的有界记忆初始化一次历史记录，避免升级后旧聊天消失。"""
+
+        if self._sessions:
+            return
+        for role, content in messages:
+            self.append(role, content)
+
+    def load(self) -> None:
+        """读取本地会话；损坏或未知格式只会安全地忽略。"""
+
+        if self.persist_path is None:
+            return
+        try:
+            payload = json.loads(self.persist_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("version") != 1:
+                return
+            current_id = str(payload.get("current_session_id") or "").strip()
+            raw_sessions = payload.get("sessions") or []
+            if not isinstance(raw_sessions, list):
+                return
+            loaded: list[dict[str, object]] = []
+            for raw in raw_sessions:
+                if not isinstance(raw, dict):
+                    continue
+                session_id = str(raw.get("id") or "").strip()[:80]
+                if not session_id:
+                    continue
+                messages = self._clean_messages(raw.get("messages"))
+                if not messages:
+                    continue
+                created = str(raw.get("created_at") or self._now())[:40]
+                updated = str(raw.get("updated_at") or created)[:40]
+                title = str(raw.get("title") or "新对话").strip()[:80] or "新对话"
+                loaded.append(
+                    {
+                        "id": session_id,
+                        "created_at": created,
+                        "updated_at": updated,
+                        "title": title,
+                        "messages": messages,
+                    }
+                )
+            self._sessions = loaded
+            self._current_session_id = (
+                current_id if self._find_raw(current_id) is not None else ""
+            )
+            self._trim_sessions()
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            self._sessions = []
+            self._current_session_id = ""
+
+    def save(self) -> None:
+        """原子保存聊天会话，写入失败不能阻塞正常聊天。"""
+
+        if self.persist_path is None:
+            return
+        payload = {
+            "version": 1,
+            "current_session_id": self._current_session_id,
+            "sessions": self._sessions,
+        }
+        temporary = self.persist_path.with_suffix(".json.tmp")
+        try:
+            self.persist_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self.persist_path)
+        except OSError:
+            return
+
+    def _find_raw(self, session_id: str) -> dict[str, object] | None:
+        for item in self._sessions:
+            if str(item.get("id") or "") == session_id:
+                return item
+        return None
+
+    def _find(self, session_id: str) -> ChatHistorySession | None:
+        item = self._find_raw(session_id)
+        return self._as_session(item) if item is not None else None
+
+    @staticmethod
+    def _as_session(item: dict[str, object]) -> ChatHistorySession:
+        messages = ChatHistoryStore._clean_messages(item.get("messages"))
+        return ChatHistorySession(
+            session_id=str(item.get("id") or ""),
+            created_at=str(item.get("created_at") or ""),
+            updated_at=str(item.get("updated_at") or ""),
+            title=str(item.get("title") or "新对话"),
+            messages=tuple((str(role), str(text)) for role, text in messages),
+        )
+
+    @staticmethod
+    def _clean_messages(value: object) -> list[list[str]]:
+        if not isinstance(value, list):
+            return []
+        cleaned: list[list[str]] = []
+        for item in value[-MAX_CHAT_HISTORY_MESSAGES:]:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            role = str(item[0] or "").strip().lower()
+            text = str(item[1] or "").strip()
+            if role in {"user", "assistant"} and text:
+                cleaned.append([role, text[:MAX_CHAT_HISTORY_TEXT_CHARS]])
+        return cleaned
+
+    def _trim_sessions(self) -> None:
+        self._sessions.sort(
+            key=lambda item: str(item.get("updated_at") or ""),
+            reverse=True,
+        )
+        self._sessions = self._sessions[: self.max_sessions]
+        if self._current_session_id and self._find_raw(self._current_session_id) is None:
+            self._current_session_id = ""
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now().isoformat(timespec="seconds")
+
+    @staticmethod
+    def _title_from(content: str) -> str:
+        compact = " ".join(str(content).split())
+        return compact[:32] + ("…" if len(compact) > 32 else "")
+
+
+def conversation_history_path() -> Path:
+    """返回本地聊天记录路径，与 AI 摘要分开保存。"""
+
+    base = os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / ".desktop_pet"
+    return root / "Lili" / "chat-history.json"
+

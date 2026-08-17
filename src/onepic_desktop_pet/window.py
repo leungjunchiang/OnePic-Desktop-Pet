@@ -12,7 +12,7 @@
 - 支持左键拖动、单击调戏、双击快捷口袋、无互动分级休息和连续尺寸滑块；
 - 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
 - 支持 Agent 状态缓存、异步 AI、无缝离线降级以及工作、爱意、鼓励和安慰动作；
-- 在内存中保留最近三十轮完整聊天，并把更早内容滚动压缩为长期摘要；
+- 在内存中保留最近三十轮完整聊天，并把更早内容滚动压缩为长期摘要；聊天记录由用户控制保存在本机；
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
@@ -74,6 +74,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QInputDialog,
     QMenu,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -99,7 +100,7 @@ from .behavior import (
     PetState,
     StateDecision,
 )
-from .chat import AISettingsDialog, ChatDialog
+from .chat import AISettingsDialog, ChatDialog, ChatHistoryDialog
 from .chat_manager import (
     AgentManager,
     ChatManager,
@@ -107,7 +108,12 @@ from .chat_manager import (
     OfflineDialogueManager,
     should_start_startup_detection,
 )
-from .chat_memory import ConversationMemory, conversation_memory_path
+from .chat_memory import (
+    ChatHistoryStore,
+    ConversationMemory,
+    conversation_history_path,
+    conversation_memory_path,
+)
 from .companion import (
     ACTION_BY_KEY,
     APP_DISPLAY_NAME,
@@ -370,6 +376,12 @@ class PetWindow(QWidget):
             if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
             else None,
         )
+        self._chat_history = ChatHistoryStore(
+            persist_path=conversation_history_path()
+            if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+            else None,
+        )
+        self._chat_history_dialog: ChatHistoryDialog | None = None
         self.agent_manager = AgentManager(self.settings, self.credentials, self)
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
@@ -2447,10 +2459,24 @@ class PetWindow(QWidget):
             self._chat_dialog.settings_requested.connect(self.open_settings)
             self._chat_dialog.rename_requested.connect(self.rename_pet)
             self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
-            self._chat_dialog.append_message(
-                self._pet_name(),
-                f"巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
-            )
+            self._chat_dialog.clear_display_requested.connect(self._clear_chat_display)
+            self._chat_dialog.new_conversation_requested.connect(self._start_new_conversation)
+            self._chat_dialog.history_requested.connect(self._show_chat_history)
+            if not self._chat_history.sessions():
+                self._chat_history.bootstrap(self._chat_memory.recent)
+            saved_messages = self._chat_history.current_messages()
+            if saved_messages:
+                self._chat_dialog.load_transcript(
+                    [
+                        ("你" if role == "user" else self._pet_name(), text)
+                        for role, text in saved_messages
+                    ]
+                )
+            else:
+                self._chat_dialog.append_message(
+                    self._pet_name(),
+                    "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
+                )
         status = self.agent_manager.status(self.settings.ai_provider)
         self._chat_dialog.set_provider(
             self.settings.ai_provider,
@@ -2548,6 +2574,7 @@ class PetWindow(QWidget):
         self._chat_dialog.append_message("你", message)
         history_before = self._chat_memory.snapshot().as_history()
         self._chat_memory.add("user", message)
+        self._chat_history.append("user", message)
         self._chat_dialog.show_recovery_actions(False)
         self.chat_manager.submit(message, history_before)
 
@@ -2555,6 +2582,7 @@ class PetWindow(QWidget):
         """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
 
         self._chat_memory.add("assistant", reply.text)
+        self._chat_history.append("assistant", reply.text)
         if self._chat_dialog is not None:
             if self._chat_streaming_active:
                 self._chat_dialog.finish_streaming_message(reply.text)
@@ -2600,6 +2628,90 @@ class PetWindow(QWidget):
 
         if self._chat_dialog is not None:
             self._chat_dialog.append_message(self._pet_name(), message)
+
+    def _clear_chat_display(self) -> None:
+        """只清除聊天窗口当前显示，不删除记录、待办或 AI 上下文。"""
+
+        if self.chat_manager.busy:
+            self._chat_notice("这一句还在生成中，等它结束后再清空显示。")
+            return
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+
+    def _start_new_conversation(self) -> None:
+        """确认后清掉当前上下文并启动新的本地会话，待办保持不变。"""
+
+        if self.chat_manager.busy:
+            self._chat_notice("上一句话还在路上，等它结束后再开始新对话。")
+            return
+        answer = QMessageBox.question(
+            self._chat_dialog or self,
+            "开始新对话",
+            "这会清除六毛当前的聊天上下文，并让下一句话创建新的 AI 对话。\n"
+            "已有聊天仍会保留在“聊天记录”里，待办和提醒不会被删除。\n\n继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if not self.chat_manager.reset_conversation():
+            return
+        self._chat_memory.clear()
+        self._chat_history.start_new_session()
+        self._chat_streaming_active = False
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+            self._chat_dialog.append_message(
+                self._pet_name(),
+                "好，新的聊天开始啦。之前的聊天记录还在，待办和提醒也都保留着。",
+            )
+
+    def _show_chat_history(self) -> None:
+        """打开本机聊天记录查看窗口，不启动 AI 或改变当前对话。"""
+
+        if self._chat_history_dialog is None:
+            self._chat_history_dialog = ChatHistoryDialog(
+                self._chat_history,
+                self._pet_name(),
+                self._chat_dialog or self,
+            )
+            self._chat_history_dialog.clear_all_requested.connect(
+                self._clear_all_chat_history
+            )
+        self._chat_history_dialog.refresh()
+        self._chat_history_dialog.show()
+        self._chat_history_dialog.raise_()
+        self._chat_history_dialog.activateWindow()
+
+    def _clear_all_chat_history(self) -> None:
+        """删除全部本地聊天记录，同时重置 AI 上下文但不碰待办。"""
+
+        if self.chat_manager.busy:
+            self._chat_notice("上一句话还在路上，等它结束后再删除聊天记录。")
+            return
+        answer = QMessageBox.question(
+            self._chat_history_dialog or self,
+            "删除全部聊天记录",
+            "确定删除本机保存的全部聊天记录并重置六毛的 AI 上下文吗？\n"
+            "待办、提醒和其他应用数据不会受到影响。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if not self.chat_manager.reset_conversation():
+            return
+        self._chat_history.clear_all()
+        self._chat_memory.clear()
+        self._chat_streaming_active = False
+        if self._chat_history_dialog is not None:
+            self._chat_history_dialog.refresh()
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+            self._chat_dialog.append_message(
+                self._pet_name(),
+                "聊天记录已经清空，新的聊天会从零开始；待办和提醒没有改变。",
+            )
 
     def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
         """后台检测完成后刷新缓存状态文案，恢复后下一条自然走 AI。"""
@@ -3862,3 +3974,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+

@@ -11,7 +11,7 @@
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
 
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
-ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆只在内存中保留，
+ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆由窗口层按用户操作保存在本机，
 仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
 """
 
@@ -785,6 +785,15 @@ def _write_codex_thread_id(thread_id: str) -> None:
         LOGGER.debug("[AI Codex] failed to persist local thread id", exc_info=True)
 
 
+def _clear_codex_thread_id() -> None:
+    """Forget the local App Server thread so the next turn starts fresh."""
+
+    try:
+        _codex_thread_state_path().unlink(missing_ok=True)
+    except OSError:
+        LOGGER.debug("[AI Codex] failed to clear local thread id", exc_info=True)
+
+
 def _codex_exec_command(executable: Path, prompt: str, *, model: str | None = None) -> list[str]:
     """Build one isolated, non-interactive Codex command for Lili."""
 
@@ -1331,8 +1340,17 @@ class AIChatService:
         self._interrupted = False
         return False
 
+    def reset_conversation(self) -> None:
+        """Start a new local Codex conversation without touching todo data."""
+
+        self._interrupted = False
+        self._closing = False
+        self._close_codex_app_server()
+        _clear_codex_thread_id()
+
     def close(self) -> None:
         """Close the persistent Codex child process during application shutdown."""
 
         self._closing = True
         self._close_codex_app_server()
+
