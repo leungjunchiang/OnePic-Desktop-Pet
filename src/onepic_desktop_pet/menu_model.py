@@ -1,0 +1,169 @@
+"""Shared menu model for the pet window, tray icon, and macOS Dock.
+
+The menu is deliberately represented as small, platform-neutral specifications.
+Windows and Qt render the same specs as ``QMenu`` actions, while macOS can
+render them as ``NSMenu`` items without maintaining another command list.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Mapping
+
+
+MenuCallback = Callable[[bool], object]
+
+
+@dataclass(frozen=True)
+class MenuItemSpec:
+    """One menu item, including an optional nested submenu."""
+
+    title: str = ""
+    command: str | None = None
+    children: tuple["MenuItemSpec", ...] = ()
+    enabled: bool = True
+    checkable: bool = False
+    checked: bool = False
+    separator: bool = False
+
+    @classmethod
+    def divider(cls) -> "MenuItemSpec":
+        return cls(separator=True)
+
+
+class UnifiedMenuModel:
+    """Build and dispatch the single menu definition used by all entrances."""
+
+    def __init__(
+        self,
+        *,
+        pet_name: str,
+        state_provider: Callable[[], Mapping[str, object]],
+        callbacks: Mapping[str, MenuCallback],
+    ) -> None:
+        self.pet_name = pet_name.strip() or "六毛"
+        self._state_provider = state_provider
+        self._callbacks = dict(callbacks)
+
+    def execute(self, command: str | None, checked: bool = False) -> None:
+        """Run a command from either a Qt action or a native menu item."""
+
+        if command is None:
+            return
+        callback = self._callbacks.get(command)
+        if callback is not None:
+            callback(bool(checked))
+
+    def _optional(self, title: str, command: str) -> MenuItemSpec | None:
+        if command not in self._callbacks:
+            return None
+        return MenuItemSpec(title, command)
+
+    def items(self, context: str = "pet") -> tuple[MenuItemSpec, ...]:
+        """Return the current menu projection for ``pet``, ``tray`` or ``dock``."""
+
+        state = dict(self._state_provider())
+        work_label = str(state.get("work_action_label") or "开始工作")
+        visible = bool(state.get("visible", True))
+        music_status = str(state.get("music_status") or "当前播放：暂无")
+
+        music_children = [
+            MenuItemSpec("播放 / 暂停", "music_toggle"),
+            MenuItemSpec("上一首", "music_previous"),
+            MenuItemSpec("下一首", "music_next"),
+            MenuItemSpec("随机听陈楚生", "music_random"),
+            MenuItemSpec(music_status, enabled=False),
+        ]
+
+        interaction_children = [
+            MenuItemSpec("给我一个抱抱", "companion_love"),
+            MenuItemSpec("为我加油", "companion_encourage"),
+            MenuItemSpec("提醒我休息", "companion_rest"),
+            MenuItemSpec("查看心情与能量", "companion_status"),
+        ]
+        interaction_children = [
+            item for item in interaction_children if item.command in self._callbacks
+        ]
+
+        work_record_children = [
+            self._optional("显示待办", "show_todos"),
+            self._optional("隐藏待办", "hide_todos"),
+            self._optional("添加待办…", "add_todo"),
+            self._optional("我的时光…", "time_memory"),
+            self._optional("查看今日累计", "show_work_time"),
+            self._optional("查看今日成长", "show_growth"),
+            self._optional("查看陪伴报告", "show_report"),
+            self._optional(f"打开{self.pet_name}相册", "open_album"),
+        ]
+        work_record_children = [item for item in work_record_children if item is not None]
+
+        settings_children = [
+            self._optional("修改主人称呼…", "rename"),
+            self._optional("AI 与陪伴设置…", "settings"),
+            self._optional("调整大小", "size"),
+            self._optional("检查补充内容更新", "content_update"),
+            self._optional("检查程序更新", "program_update"),
+        ]
+        settings_children = [item for item in settings_children if item is not None]
+
+        entries: list[MenuItemSpec] = [
+            MenuItemSpec(f"和{self.pet_name}聊聊…", "chat"),
+            MenuItemSpec(work_label, "work"),
+            MenuItemSpec("搭子自习室…", "social"),
+            MenuItemSpec("音乐", children=tuple(music_children)),
+        ]
+        if interaction_children:
+            entries.append(MenuItemSpec("六毛互动", children=tuple(interaction_children)))
+        if "outfit" in self._callbacks:
+            entries.append(MenuItemSpec("换装与外观…", "outfit"))
+        if work_record_children:
+            entries.append(MenuItemSpec("工作记录", children=tuple(work_record_children)))
+
+        entries.extend(
+            (
+                MenuItemSpec.divider(),
+                MenuItemSpec(
+                    "始终置顶（关闭即桌面模式）",
+                    "topmost",
+                    checkable=True,
+                    checked=bool(state.get("always_on_top", False)),
+                ),
+            )
+        )
+        if settings_children:
+            entries.append(MenuItemSpec("设置", children=tuple(settings_children)))
+        entries.extend(
+            (
+                MenuItemSpec.divider(),
+                MenuItemSpec("隐藏六毛" if visible else "显示六毛", "visibility"),
+                MenuItemSpec("退出", "quit"),
+            )
+        )
+        return tuple(entries)
+
+
+def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
+    """Render a :class:`UnifiedMenuModel` into a fresh Qt menu."""
+
+    from PySide6.QtWidgets import QMenu
+
+    def add_items(target: QMenu, items: tuple[MenuItemSpec, ...]) -> None:
+        for spec in items:
+            if spec.separator:
+                target.addSeparator()
+                continue
+            if spec.children:
+                submenu = target.addMenu(spec.title)
+                submenu.setEnabled(spec.enabled)
+                add_items(submenu, spec.children)
+                continue
+            action = target.addAction(spec.title)
+            action.setEnabled(spec.enabled)
+            action.setCheckable(spec.checkable)
+            action.setChecked(spec.checked)
+            action.triggered.connect(
+                lambda checked=False, command=spec.command: model.execute(command, checked)
+            )
+
+    add_items(menu, model.items(context))
+

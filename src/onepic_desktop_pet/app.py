@@ -28,10 +28,9 @@ import logging
 import sys
 
 from PySide6.QtCore import QProcess, Qt, QTimer
-from PySide6.QtGui import QAction, QGuiApplication, QIcon
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
-    QMenu,
     QMessageBox,
     QProgressDialog,
     QSystemTrayIcon,
@@ -57,6 +56,7 @@ from .update_worker import (
     ProgramUpdateDownloadWorker,
 )
 from .update_manager import UpdateManager
+from .macos_dock import install_dock_menu
 from .window import PetWindow
 
 
@@ -87,7 +87,15 @@ class DesktopPetApplication:
         self._program_update_manual = False
         self._program_release: ProgramRelease | None = None
         self.program_update_state = UpdateState.IDLE
+        self.window.set_menu_external_callbacks(
+            {
+                "content_update": lambda _checked=False: self.check_content_updates(True),
+                "program_update": lambda _checked=False: self.check_program_updates(True),
+                "quit": lambda _checked=False: self.quit(),
+            }
+        )
         self.tray = self._create_tray()
+        self._dock_controller = install_dock_menu(self.window.unified_menu_model)
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
     def _create_tray(self) -> QSystemTrayIcon:
@@ -97,87 +105,27 @@ class DesktopPetApplication:
         tray = QSystemTrayIcon(icon, self.qt_app)
         pet_name = PET_NAME
         tray.setToolTip(f"Lili · {pet_name}")
-        menu = QMenu()
-
-        show_action = QAction("显示宠物", menu)
-        show_action.triggered.connect(self.show_window)
-        menu.addAction(show_action)
-
-        panel_action = QAction(f"{pet_name}快捷口袋", menu)
-        panel_action.triggered.connect(self.window.show_quick_panel)
-        menu.addAction(panel_action)
-
-        dialogue_action = QAction(f"和{pet_name}聊聊…", menu)
-        dialogue_action.triggered.connect(self.window.prompt_dialogue)
-        menu.addAction(dialogue_action)
-
-        rename_action = QAction("修改主人称呼…", menu)
-        rename_action.triggered.connect(self.window.rename_pet)
-        menu.addAction(rename_action)
-
-        social_action = QAction("搭子与自习室…", menu)
-        social_action.triggered.connect(self.window.open_social_hub)
-        menu.addAction(social_action)
-
-        todo_action = QAction("待办…", menu)
-        todo_action.triggered.connect(self.window.show_compact_todos)
-        menu.addAction(todo_action)
-
-        update_action = QAction("检查补充内容更新", menu)
-        # QAction.triggered emits a checked bool.  Do not pass that bool as
-        # the ``manual`` argument: a tray click is always an explicit user
-        # request and must show progress/result feedback.
-        update_action.triggered.connect(
-            lambda _checked=False: self.check_content_updates(True)
-        )
-        menu.addAction(update_action)
-
-        program_update_action = QAction("检查程序更新", menu)
-        program_update_action.triggered.connect(
-            lambda _checked=False: self.check_program_updates(True)
-        )
-        menu.addAction(program_update_action)
-
-        ai_settings_action = QAction("AI 与陪伴设置…", menu)
-        ai_settings_action.triggered.connect(
-            lambda _checked=False: self.window.open_settings("user_action")
-        )
-        menu.addAction(ai_settings_action)
-
-        topmost_action = QAction("始终置顶（关闭即桌面模式）", menu)
-        topmost_action.setCheckable(True)
-        topmost_action.setChecked(self.settings.always_on_top)
-        topmost_action.toggled.connect(self.window.set_always_on_top)
-        self.window.always_on_top_changed.connect(topmost_action.setChecked)
-        menu.addAction(topmost_action)
-        self.topmost_action = topmost_action
-
-        hide_action = QAction("隐藏宠物", menu)
-        hide_action.triggered.connect(self.window.hide)
-        menu.addAction(hide_action)
-        menu.addSeparator()
-
-        quit_action = QAction("退出", menu)
-        quit_action.triggered.connect(self.quit)
-        menu.addAction(quit_action)
-
+        menu = self.window.build_unified_menu(None, "tray")
         tray.setContextMenu(menu)
         self.tray_menu = menu
-        self.panel_action = panel_action
-        self.dialogue_action = dialogue_action
-        self.rename_action = rename_action
-        self.update_action = update_action
-        self.program_update_action = program_update_action
+        menu.aboutToShow.connect(self._refresh_tray_menu)
         tray.activated.connect(self._tray_activated)
         return tray
+
+    def _refresh_tray_menu(self) -> None:
+        """Re-render dynamic work, visibility, music, and topmost state."""
+
+        if not hasattr(self, "tray"):
+            return
+        menu = self.window.build_unified_menu(None, "tray")
+        menu.aboutToShow.connect(self._refresh_tray_menu)
+        self.tray.setContextMenu(menu)
+        self.tray_menu = menu
 
     def _owner_nickname_changed(self, _owner_nickname: str) -> None:
         """Keep the pet identity fixed while refreshing the rename entry."""
 
         self.tray.setToolTip(f"Lili · {PET_NAME}")
-        self.panel_action.setText(f"{PET_NAME}快捷口袋")
-        self.dialogue_action.setText(f"和{PET_NAME}聊聊…")
-        self.rename_action.setText("修改主人称呼…")
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
@@ -239,6 +187,7 @@ class DesktopPetApplication:
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         finally:
+            self._dock_controller.close()
             self.tray.hide()
             self.window.close()
             self.qt_app.quit()
@@ -513,3 +462,4 @@ def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
     return DesktopPetApplication().start(smoke_test_ms=smoke_test_ms)
+

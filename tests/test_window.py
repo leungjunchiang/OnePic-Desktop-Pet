@@ -21,7 +21,7 @@ os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
 
 from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
 from onepic_desktop_pet import __version__
@@ -752,6 +752,16 @@ def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() -> None:
+    """快捷面板不再平铺低频设置和音乐控制。"""
+
+    app, window = _create_window()
+    labels = [button.text() for button in window.quick_panel.findChildren(QPushButton)]
+    assert labels == ["聊聊", "开始工作", "搭子自习室", "音乐", "调整大小"]
+    assert window.quick_panel.music_status.text() == "当前播放：暂无"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_feeding_updates_fullness_and_shows_speech_bubble() -> None:
     """从菜单喂苹果应更新状态，并在人物附近显示文字反馈。"""
 
@@ -789,31 +799,35 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
 
 
 def test_context_menu_uses_direct_high_frequency_entries() -> None:
-    """一级菜单直接呈现聊天、工作、音乐、自习室、动作和喂食入口。"""
+    """宠物右键菜单与托盘共用统一的高频入口和动态状态。"""
 
     app, window = _create_window()
     menu = window._build_context_menu()
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-    assert labels[:8] == [
-        "修改主人称呼…",
+    assert labels[:7] == [
         "和六毛聊聊…",
-        "工作打卡/工作计时",
-        "音乐",
+        "开始工作",
         "搭子自习室…",
-        "动作",
-        "给六毛喂食",
-        "换装与外观",
+        "音乐",
+        "六毛互动",
+        "换装与外观…",
+        "工作记录",
     ]
-    assert "隐藏" in labels
+    assert "始终置顶（关闭即桌面模式）" in labels
+    assert "设置" in labels
+    assert "隐藏六毛" in labels
     assert "退出" in labels
-    assert "陪伴动作" not in labels
-    assert "完整图片动作" not in labels
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
-    assert music_labels == ["随机听一首陈楚生", "播放/暂停", "下一首", "上一首", "音乐播放器设置"]
-    food = next(action for action in menu.actions() if action.text() == "给六毛喂食")
-    assert food.menu() is not None
+    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听陈楚生", "当前播放：暂无"]
+    interaction = next(action for action in menu.actions() if action.text() == "六毛互动")
+    assert [action.text() for action in interaction.menu().actions()] == [
+        "给我一个抱抱",
+        "为我加油",
+        "提醒我休息",
+        "查看心情与能量",
+    ]
     menu.close()
     window.close()
     window.deleteLater()
@@ -1300,3 +1314,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+

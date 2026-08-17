@@ -7,7 +7,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 CONTROL_STYLE = """
@@ -47,10 +56,10 @@ class QuickControlPanel(QWidget):
 
     chat_requested = Signal()
     work_requested = Signal()
+    social_requested = Signal()
     music_requested = Signal()
     music_control_requested = Signal(str)
     size_requested = Signal()
-    settings_requested = Signal(str)
 
     def __init__(self, pet_name: str = "六毛") -> None:
         super().__init__(None)
@@ -64,24 +73,64 @@ class QuickControlPanel(QWidget):
         self.hide_timer.timeout.connect(self.hide)
         layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9)
         self.title = QLabel(f"{pet_name}快捷口袋"); self.title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(self.title)
-        for label, signal, source in (
-            ("聊聊", self.chat_requested, None),
-            ("工作计时", self.work_requested, None),
-            ("播放 / 暂停", self.music_control_requested, "toggle"),
-            ("上一首", self.music_control_requested, "previous"),
-            ("下一首", self.music_control_requested, "next"),
-            ("正在播放", self.music_control_requested, "status"),
-            ("随机听陈楚生", self.music_requested, None),
-            ("连续调节大小", self.size_requested, None),
-            ("设置", self.settings_requested, "user_action"),
+        chat_button = QPushButton("聊聊")
+        chat_button.clicked.connect(lambda: self._choose(self.chat_requested))
+        layout.addWidget(chat_button)
+
+        self.work_button = QPushButton("开始工作")
+        self.work_button.clicked.connect(lambda: self._choose(self.work_requested))
+        layout.addWidget(self.work_button)
+
+        social_button = QPushButton("搭子自习室")
+        # This panel is intentionally limited to the five high-frequency
+        # entrances; the actual room is opened by the parent window.
+        social_button.clicked.connect(lambda: self._choose(self.social_requested))
+        layout.addWidget(social_button)
+
+        self.music_button = QPushButton("音乐")
+        self.music_button.clicked.connect(self._show_music_menu)
+        layout.addWidget(self.music_button)
+        self.music_status = QLabel("当前播放：暂无")
+        self.music_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.music_status.setStyleSheet("color: #607487; font-size: 11px;")
+        layout.addWidget(self.music_status)
+
+        size_button = QPushButton("调整大小")
+        size_button.clicked.connect(lambda: self._choose(self.size_requested))
+        layout.addWidget(size_button)
+
+    def set_work_action_label(self, label: str) -> None:
+        """Refresh the dynamic work action shown in the shortcut panel."""
+
+        self.work_button.setText(label.strip() or "开始工作")
+
+    def set_music_status(self, text: str) -> None:
+        """Show the last confirmed player track as read-only panel state."""
+
+        self.music_status.setText(text.strip() or "当前播放：暂无")
+
+    def _show_music_menu(self) -> None:
+        """Open the second-level music controls from the single music entry."""
+
+        menu = QMenu(self)
+        for label, command in (
+            ("播放 / 暂停", "toggle"),
+            ("上一首", "previous"),
+            ("下一首", "next"),
+            ("随机听陈楚生", "random"),
         ):
-            button = QPushButton(label)
-            button.clicked.connect(
-                lambda _checked=False, value=signal, value_source=source: self._choose(
-                    value, value_source
+            action = menu.addAction(label)
+            if command == "random":
+                action.triggered.connect(lambda: self._choose(self.music_requested))
+            else:
+                action.triggered.connect(
+                    lambda _checked=False, value=command: self._choose(
+                        self.music_control_requested, value
+                    )
                 )
-            )
-            layout.addWidget(button)
+        status = menu.addAction(self.music_status.text())
+        status.setEnabled(False)
+        menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
 
     def set_pet_name(self, pet_name: str) -> None:
         """昵称保存后同步快捷口袋标题。"""
@@ -138,3 +187,4 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
+
