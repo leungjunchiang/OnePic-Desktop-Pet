@@ -325,15 +325,21 @@ def test_macos_codex_cli_uses_login_zsh_and_validates_absolute_path(
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    _macos_login_shell_path_value.cache_clear()
     find_codex_executable.cache_clear()
 
     assert find_codex_executable() == executable
-    assert "__LILI_PATH__" in calls[0][0][2]
-    assert [command for command, _env in calls[1:]] == [
-        ["/bin/zsh", "-lc", "command -v codex"],
-        [str(executable), "--version"],
-    ]
-    version_path = calls[2][1]["PATH"].split(os.pathsep)
+    assert any(
+        command[0:2] == ["/bin/zsh", "-lc"] and "__LILI_PATH__" in command[2]
+        for command, _env in calls
+    )
+    commands = [command for command, _env in calls]
+    assert ["/bin/zsh", "-lc", "command -v codex"] in commands
+    assert [str(executable), "--version"] in commands
+    version_env = next(
+        env for command, env in calls if command == [str(executable), "--version"]
+    )
+    version_path = version_env["PATH"].split(os.pathsep)
     assert version_path[0] == str(executable.parent)
     assert find_codex_executable() == executable
     assert len(calls) == 3
@@ -365,6 +371,7 @@ def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_pat
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_gui_app", lambda: Path("/Applications/ChatGPT.app"))
     monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    _macos_login_shell_path_value.cache_clear()
     find_codex_executable.cache_clear()
 
     assert check_provider_connection("codex", FakeCredentials()) == "Codex 已连接。"
@@ -396,11 +403,15 @@ def test_macos_codex_lookup_retries_user_shell_profiles(monkeypatch, tmp_path) -
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    _macos_login_shell_path_value.cache_clear()
     find_codex_executable.cache_clear()
 
     assert find_codex_executable() == executable
-    assert "__LILI_PATH__" in calls[0][2]
-    assert calls[1] == ["/bin/zsh", "-lc", "command -v codex"]
+    assert any(
+        command[0:2] == ["/bin/zsh", "-lc"] and "__LILI_PATH__" in command[2]
+        for command in calls
+    )
+    assert ["/bin/zsh", "-lc", "command -v codex"] in calls
     assert any("~/.zshrc" in command[-1] for command in calls)
     find_codex_executable.cache_clear()
     _macos_login_shell_path_value.cache_clear()
