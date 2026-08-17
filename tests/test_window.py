@@ -773,6 +773,7 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
     window.quick_panel._show_hint(window.quick_panel.music_button)
     app.processEvents()
     assert window.quick_panel.hover_hint.text() == "音乐"
+    assert "color: #111111" in window.quick_panel.hover_hint.styleSheet()
     window.quick_panel._hide_hint()
     assert not window.quick_panel.hover_hint.isVisible()
     assert 50 <= window.quick_panel.sizeHint().height() <= 60
