@@ -288,6 +288,79 @@ class ChatHistoryStore:
         self._current_session_id = ""
         self.save()
 
+    def rename_session(self, session_id: str, title: str) -> bool:
+        """修改一段本地会话的标题。"""
+
+        item = self._find_raw(str(session_id or ""))
+        clean_title = " ".join(str(title or "").split())[:80]
+        if item is None or not clean_title:
+            return False
+        item["title"] = clean_title
+        item["updated_at"] = self._now()
+        self._trim_sessions()
+        self.save()
+        return True
+
+    def delete_session(self, session_id: str) -> bool:
+        """删除一段本地会话，并在删除当前会话时清空当前 ID。"""
+
+        clean_id = str(session_id or "").strip()
+        if self._find_raw(clean_id) is None:
+            return False
+        self._sessions = [
+            item for item in self._sessions if str(item.get("id") or "") != clean_id
+        ]
+        if self._current_session_id == clean_id:
+            self._current_session_id = ""
+        self.save()
+        return True
+
+    def update_message(self, session_id: str, index: int, content: str) -> bool:
+        """编辑一条本地消息；角色和会话上下文保持不变。"""
+
+        item = self._find_raw(str(session_id or ""))
+        clean = str(content or "").strip()[:MAX_CHAT_HISTORY_TEXT_CHARS]
+        messages = item.get("messages") if item is not None else None
+        if item is None or not clean or not isinstance(messages, list):
+            return False
+        if index < 0 or index >= len(messages):
+            return False
+        current = messages[index]
+        if not isinstance(current, list) or len(current) != 2:
+            return False
+        role = str(current[0] or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            return False
+        messages[index] = [role, clean]
+        item["updated_at"] = self._now()
+        self._trim_sessions()
+        self.save()
+        return True
+
+    def delete_message(self, session_id: str, index: int) -> bool:
+        """删除一条本地消息；空会话会随之移除。"""
+
+        clean_id = str(session_id or "")
+        item = self._find_raw(clean_id)
+        messages = item.get("messages") if item is not None else None
+        if item is None or not isinstance(messages, list):
+            return False
+        if index < 0 or index >= len(messages):
+            return False
+        del messages[index]
+        if not messages:
+            self._sessions = [
+                value
+                for value in self._sessions
+                if str(value.get("id") or "") != clean_id
+            ]
+            if self._current_session_id == clean_id:
+                self._current_session_id = ""
+        else:
+            item["updated_at"] = self._now()
+        self.save()
+        return True
+
     def clear_all(self) -> None:
         """删除本机所有聊天记录；不触碰待办、提醒或其他数据。"""
 
@@ -432,4 +505,3 @@ def conversation_history_path() -> Path:
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
     return root / "Lili" / "chat-history.json"
-

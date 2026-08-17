@@ -99,3 +99,32 @@ def test_chat_history_clear_all_does_not_leave_a_local_file(tmp_path) -> None:
     assert history.current_messages() == ()
     assert not path.exists()
 
+
+def test_chat_history_can_rename_edit_and_delete_one_message(tmp_path) -> None:
+    history = ChatHistoryStore(tmp_path / "chat-history.json")
+    history.append("user", "原来的问题")
+    history.append("assistant", "原来的回答")
+    session_id = history.current_session_id
+
+    assert history.rename_session(session_id, "整理后的聊天")
+    assert history.update_message(session_id, 0, "编辑后的问题")
+    assert history.get(session_id).title == "整理后的聊天"
+    assert history.get(session_id).messages == (
+        ("user", "编辑后的问题"),
+        ("assistant", "原来的回答"),
+    )
+    assert history.delete_message(session_id, 1)
+    assert history.get(session_id).messages == (("user", "编辑后的问题"),)
+    assert not history.update_message(session_id, 4, "越界")
+
+
+def test_chat_history_deleting_current_session_clears_only_chat_state(tmp_path) -> None:
+    history = ChatHistoryStore(tmp_path / "chat-history.json")
+    history.append("user", "这段会被删除")
+    session_id = history.current_session_id
+    history.append("assistant", "确认")
+
+    assert history.delete_session(session_id)
+    assert history.current_session_id == ""
+    assert history.sessions() == ()
+    assert history.current_messages() == ()

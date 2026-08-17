@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.ai import AIConnectionError
 from onepic_desktop_pet.behavior import PetMood, PetState
-from onepic_desktop_pet.chat import ChatDialog
+from onepic_desktop_pet.chat import ChatDialog, ChatHistoryDialog
 from onepic_desktop_pet.chat_manager import (
     AgentConnectionState,
     AgentManager,
@@ -24,6 +24,7 @@ from onepic_desktop_pet.chat_manager import (
 )
 from onepic_desktop_pet.companion import CompanionModel
 from onepic_desktop_pet.config import PetSettings
+from onepic_desktop_pet.chat_memory import ChatHistoryStore
 from onepic_desktop_pet.time_memory import TimeMemory
 
 
@@ -343,24 +344,45 @@ def test_recovery_buttons_only_emit_user_actions() -> None:
     app.processEvents()
 
 
-def test_chat_management_menu_exposes_clear_new_chat_and_history() -> None:
+def test_chat_management_buttons_expose_new_chat_and_history() -> None:
     app = _app()
     dialog = ChatDialog()
-    clear = QSignalSpy(dialog.clear_display_requested)
     new_chat = QSignalSpy(dialog.new_conversation_requested)
     history = QSignalSpy(dialog.history_requested)
 
-    dialog.clear_display_action.trigger()
-    dialog.new_conversation_action.trigger()
-    dialog.history_action.trigger()
+    dialog.new_conversation_button.click()
+    dialog.history_button.click()
 
-    assert clear.count() == 1
     assert new_chat.count() == 1
     assert history.count() == 1
     dialog.append_message("你", "旧消息")
     assert "旧消息" in dialog.transcript.toPlainText()
     dialog.clear_transcript()
     assert dialog.transcript.toPlainText() == ""
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_chat_history_window_has_visible_edit_actions_and_own_window_controls() -> None:
+    app = _app()
+    history = ChatHistoryStore()
+    history.append("user", "明天写论文")
+    history.append("assistant", "好的，已经记住。")
+    dialog = ChatHistoryDialog(history)
+    clear = QSignalSpy(dialog.clear_display_requested)
+    new_chat = QSignalSpy(dialog.new_conversation_requested)
+    assert dialog.windowFlags() & Qt.WindowType.Window
+    assert dialog.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
+    assert dialog.windowFlags() & Qt.WindowType.WindowCloseButtonHint
+    assert dialog.rename_session_button.isEnabled()
+    assert dialog.edit_message_button.isEnabled()
+
+    dialog.clear_display_button.click()
+    dialog.new_conversation_button.click()
+    assert clear.count() == 1
+    assert new_chat.count() == 1
+    assert dialog.message_list.count() == 2
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
@@ -390,4 +412,3 @@ def test_pressing_enter_ten_times_only_submits_messages() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
-

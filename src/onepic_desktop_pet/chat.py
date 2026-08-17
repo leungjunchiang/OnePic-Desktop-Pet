@@ -37,16 +37,16 @@ from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
     QTextBrowser,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -100,8 +100,6 @@ QPushButton {
 QPushButton:hover { background: #3d6d86; }
 QPushButton:disabled { background: #c8aaa5; }
 QPushButton#softButton { color: #405363; background: rgba(213, 229, 238, 180); }
-QToolButton#softToolButton { color: #405363; background: rgba(213, 229, 238, 180); border: none; border-radius: 11px; font-size: 20px; font-weight: 700; }
-QToolButton#softToolButton:hover { background: rgba(190, 214, 227, 220); }
 QLabel#title { color: #334e61; font-size: 20px; font-weight: 700; }
 QLabel#status { color: #667784; font-size: 12px; }
 """
@@ -174,8 +172,8 @@ class ChatDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle(f"和{self.pet_name}聊聊")
         self.setObjectName("liliPanel")
-        self.setMinimumSize(430, 520)
-        self.resize(470, 580)
+        self.setMinimumSize(560, 520)
+        self.resize(600, 580)
         self.setStyleSheet(PANEL_STYLE)
 
         layout = QVBoxLayout(self)
@@ -188,33 +186,23 @@ class ChatDialog(QDialog):
         title.setObjectName("title")
         header.addWidget(title)
         header.addStretch(1)
-        self.chat_actions_button = QToolButton()
-        self.chat_actions_button.setObjectName("softToolButton")
-        self.chat_actions_button.setText("⋯")
-        self.chat_actions_button.setToolTip("清空聊天、开始新对话或查看聊天记录")
-        self.chat_actions_button.setAutoRaise(False)
-        self.chat_actions_button.setFixedWidth(38)
-        self.chat_actions_menu = QMenu(self)
-        self.clear_display_action = self.chat_actions_menu.addAction("清空当前显示")
-        self.new_conversation_action = self.chat_actions_menu.addAction(
-            "开始新对话（重置 AI 上下文）"
+        # Keep the common chat actions visible.  A tiny ellipsis tool button
+        # with an implicit drop-down was difficult to discover and looked
+        # different across Windows and macOS, so these are ordinary buttons.
+        self.history_button = QPushButton("聊天记录")
+        self.history_button.setObjectName("softButton")
+        self.history_button.setAutoDefault(False)
+        self.history_button.setDefault(False)
+        self.history_button.clicked.connect(self.history_requested.emit)
+        header.addWidget(self.history_button)
+        self.new_conversation_button = QPushButton("新对话")
+        self.new_conversation_button.setObjectName("softButton")
+        self.new_conversation_button.setAutoDefault(False)
+        self.new_conversation_button.setDefault(False)
+        self.new_conversation_button.clicked.connect(
+            self.new_conversation_requested.emit
         )
-        self.chat_actions_menu.addSeparator()
-        self.history_action = self.chat_actions_menu.addAction("查看聊天记录")
-        self.chat_actions_button.setMenu(self.chat_actions_menu)
-        self.chat_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.clear_display_action.triggered.connect(
-            lambda _checked=False: self.clear_display_requested.emit()
-        )
-        self.new_conversation_action.triggered.connect(
-            lambda _checked=False: self.new_conversation_requested.emit()
-        )
-        self.history_action.triggered.connect(
-            lambda _checked=False: self.history_requested.emit()
-        )
-        header.addWidget(self.chat_actions_button)
+        header.addWidget(self.new_conversation_button)
         self.rename_button = QPushButton("修改主人称呼")
         self.rename_button.setObjectName("softButton")
         self.rename_button.setToolTip("用于自习室、串门和搭子互动时区分不同六毛")
@@ -425,19 +413,36 @@ class ChatDialog(QDialog):
 
 
 class ChatHistoryDialog(QDialog):
-    """查看和删除本机保存的有限聊天记录。"""
+    """查看、整理和删除本机保存的有限聊天记录。"""
 
     clear_all_requested = Signal()
+    clear_display_requested = Signal()
+    new_conversation_requested = Signal()
+    session_deleted_requested = Signal(str, bool)
 
     def __init__(self, history_store, pet_name: str = "六毛", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.history_store = history_store
         self.pet_name = pet_name
         self._sessions = []
+        self._selected_session_id = ""
+        self._mutation_enabled = True
+        # This is a utility window in its own right.  In particular, it must
+        # have its own taskbar/Dock entry and a real minimize button instead
+        # of being owned by the chat dialog as a child sheet.
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("聊天记录")
         self.setObjectName("liliPanel")
-        self.setMinimumSize(620, 420)
-        self.resize(760, 520)
+        self.setMinimumSize(760, 520)
+        self.resize(920, 620)
         self.setStyleSheet(PANEL_STYLE)
 
         layout = QVBoxLayout(self)
@@ -452,16 +457,77 @@ class ChatHistoryDialog(QDialog):
         layout.addWidget(hint)
 
         content = QHBoxLayout()
+        sessions_panel = QVBoxLayout()
+        sessions_label = QLabel("会话")
+        sessions_label.setObjectName("status")
+        sessions_panel.addWidget(sessions_label)
         self.session_list = QListWidget()
-        self.session_list.setMinimumWidth(220)
+        self.session_list.setMinimumWidth(260)
+        self.session_list.setWordWrap(True)
+        self.session_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.session_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.session_list.currentRowChanged.connect(self._show_selected)
-        content.addWidget(self.session_list)
-        self.preview = QTextBrowser()
-        self.preview.setOpenExternalLinks(False)
-        content.addWidget(self.preview, 1)
+        sessions_panel.addWidget(self.session_list, 1)
+        session_actions = QHBoxLayout()
+        self.rename_session_button = QPushButton("编辑名称")
+        self.rename_session_button.setObjectName("softButton")
+        self.rename_session_button.setAutoDefault(False)
+        self.rename_session_button.setDefault(False)
+        self.rename_session_button.clicked.connect(self._rename_selected_session)
+        session_actions.addWidget(self.rename_session_button)
+        self.delete_session_button = QPushButton("删除这段")
+        self.delete_session_button.setObjectName("softButton")
+        self.delete_session_button.setAutoDefault(False)
+        self.delete_session_button.setDefault(False)
+        self.delete_session_button.clicked.connect(self._delete_selected_session)
+        session_actions.addWidget(self.delete_session_button)
+        sessions_panel.addLayout(session_actions)
+        content.addLayout(sessions_panel)
+
+        messages_panel = QVBoxLayout()
+        messages_label = QLabel("消息（点击一条后可编辑或删除）")
+        messages_label.setObjectName("status")
+        messages_panel.addWidget(messages_label)
+        self.message_list = QListWidget()
+        self.message_list.setWordWrap(True)
+        self.message_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.message_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.message_list.currentRowChanged.connect(
+            lambda _row: self._update_action_state()
+        )
+        messages_panel.addWidget(self.message_list, 1)
+        message_actions = QHBoxLayout()
+        self.edit_message_button = QPushButton("编辑消息")
+        self.edit_message_button.setObjectName("softButton")
+        self.edit_message_button.setAutoDefault(False)
+        self.edit_message_button.setDefault(False)
+        self.edit_message_button.clicked.connect(self._edit_selected_message)
+        message_actions.addWidget(self.edit_message_button)
+        self.delete_message_button = QPushButton("删除消息")
+        self.delete_message_button.setObjectName("softButton")
+        self.delete_message_button.setAutoDefault(False)
+        self.delete_message_button.setDefault(False)
+        self.delete_message_button.clicked.connect(self._delete_selected_message)
+        message_actions.addWidget(self.delete_message_button)
+        messages_panel.addLayout(message_actions)
+        content.addLayout(messages_panel, 1)
         layout.addLayout(content, 1)
 
         actions = QHBoxLayout()
+        self.clear_display_button = QPushButton("清空当前显示")
+        self.clear_display_button.setObjectName("softButton")
+        self.clear_display_button.setAutoDefault(False)
+        self.clear_display_button.setDefault(False)
+        self.clear_display_button.clicked.connect(self.clear_display_requested.emit)
+        actions.addWidget(self.clear_display_button)
+        self.new_conversation_button = QPushButton("新对话")
+        self.new_conversation_button.setObjectName("softButton")
+        self.new_conversation_button.setAutoDefault(False)
+        self.new_conversation_button.setDefault(False)
+        self.new_conversation_button.clicked.connect(
+            self.new_conversation_requested.emit
+        )
+        actions.addWidget(self.new_conversation_button)
         actions.addStretch(1)
         self.clear_all_button = QPushButton("删除全部聊天记录")
         self.clear_all_button.setObjectName("softButton")
@@ -481,6 +547,11 @@ class ChatHistoryDialog(QDialog):
         """重新读取会话列表并显示最近一段记录。"""
 
         self._sessions = list(self.history_store.sessions())
+        selected_id = self._selected_session_id
+        if selected_id not in {session.session_id for session in self._sessions}:
+            selected_id = self._sessions[0].session_id if self._sessions else ""
+        self._selected_session_id = selected_id
+        self.session_list.blockSignals(True)
         self.session_list.clear()
         for session in self._sessions:
             marker = "（当前）" if session.session_id == self.history_store.current_session_id else ""
@@ -488,28 +559,134 @@ class ChatHistoryDialog(QDialog):
             item = QListWidgetItem(f"{session.title}{marker}\n{updated}")
             item.setData(Qt.ItemDataRole.UserRole, session.session_id)
             self.session_list.addItem(item)
-        if self._sessions:
-            self.session_list.setCurrentRow(0)
+        if selected_id:
+            for row, session in enumerate(self._sessions):
+                if session.session_id == selected_id:
+                    self.session_list.setCurrentRow(row)
+                    break
+        self.session_list.blockSignals(False)
+        if selected_id:
+            self._show_selected(self.session_list.currentRow())
         else:
-            self.preview.setPlainText("还没有聊天记录。")
+            self._show_selected(-1)
 
     def _show_selected(self, row: int) -> None:
         if row < 0 or row >= len(self._sessions):
-            self.preview.setPlainText("还没有聊天记录。")
+            self._selected_session_id = ""
+            self.message_list.clear()
+            item = QListWidgetItem("还没有聊天记录。")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.message_list.addItem(item)
+            self._update_action_state()
             return
         session = self._sessions[row]
-        blocks: list[str] = []
-        for role, text in session.messages:
+        self._selected_session_id = session.session_id
+        self.message_list.clear()
+        for index, (role, text) in enumerate(session.messages):
             label = "你" if role == "user" else self.pet_name
-            color = "#496f9b" if role == "user" else "#426b7c"
-            background = "#eaf1fa" if role == "user" else "#edf5f7"
-            safe = escape(text).replace("\n", "<br>")
-            blocks.append(
-                f'<div style="margin:7px 2px;padding:9px 11px;border-radius:12px;'
-                f'background:{background};"><b style="color:{color};">{escape(label)}</b>'
-                f'<br>{safe}</div>'
-            )
-        self.preview.setHtml("".join(blocks))
+            item = QListWidgetItem(f"{label}\n{text}")
+            item.setData(Qt.ItemDataRole.UserRole, index)
+            self.message_list.addItem(item)
+        if session.messages:
+            self.message_list.setCurrentRow(0)
+        else:
+            item = QListWidgetItem("这段会话没有消息。")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.message_list.addItem(item)
+        self._update_action_state()
+
+    def set_mutation_enabled(self, enabled: bool) -> None:
+        """生成回复时仍允许查看记录，但暂时锁定编辑和删除。"""
+
+        self._mutation_enabled = bool(enabled)
+        self._update_action_state()
+
+    def _selected_session(self):
+        if not self._selected_session_id:
+            return None
+        return self.history_store.get(self._selected_session_id)
+
+    def _selected_message_index(self) -> int | None:
+        item = self.message_list.currentItem()
+        if item is None:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole)
+        return int(value) if isinstance(value, int) else None
+
+    def _update_action_state(self) -> None:
+        session = self._selected_session()
+        has_message = session is not None and self._selected_message_index() is not None
+        can_mutate = self._mutation_enabled and session is not None
+        self.rename_session_button.setEnabled(can_mutate)
+        self.delete_session_button.setEnabled(can_mutate)
+        self.edit_message_button.setEnabled(can_mutate and has_message)
+        self.delete_message_button.setEnabled(can_mutate and has_message)
+
+    def _rename_selected_session(self) -> None:
+        session = self._selected_session()
+        if session is None or not self._mutation_enabled:
+            return
+        title, accepted = QInputDialog.getText(
+            self,
+            "编辑会话名称",
+            "会话名称：",
+            text=session.title,
+        )
+        title = " ".join(str(title).split())[:80]
+        if accepted and title and self.history_store.rename_session(session.session_id, title):
+            self.refresh()
+
+    def _edit_selected_message(self) -> None:
+        session = self._selected_session()
+        index = self._selected_message_index()
+        if session is None or index is None or not self._mutation_enabled:
+            return
+        role, current = session.messages[index]
+        text, accepted = QInputDialog.getMultiLineText(
+            self,
+            "编辑聊天记录",
+            f"{('你' if role == 'user' else self.pet_name)}的消息：",
+            current,
+        )
+        if accepted and str(text).strip() and self.history_store.update_message(
+            session.session_id, index, str(text)
+        ):
+            self.refresh()
+
+    def _delete_selected_message(self) -> None:
+        session = self._selected_session()
+        index = self._selected_message_index()
+        if session is None or index is None or not self._mutation_enabled:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除这条消息",
+            "确定删除选中的这条本地聊天记录吗？\n这不会删除待办和提醒。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes and self.history_store.delete_message(
+            session.session_id, index
+        ):
+            self.refresh()
+
+    def _delete_selected_session(self) -> None:
+        session = self._selected_session()
+        if session is None or not self._mutation_enabled:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除这段聊天记录",
+            f"确定删除“{session.title}”吗？\n待办、提醒和其他会话不会受到影响。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        was_current = session.session_id == self.history_store.current_session_id
+        if self.history_store.delete_session(session.session_id):
+            self.refresh()
+            self.session_deleted_requested.emit(session.session_id, was_current)
 
 
 class AISettingsDialog(QDialog):
@@ -972,4 +1149,3 @@ class AISettingsDialog(QDialog):
         self.settings.lyric_interval_minutes = self.lyric_minutes.value()
         if provider not in {"offline", "codex", "claude"} and self.token.text().strip():
             self.credentials.set(provider, self.token.text())
-

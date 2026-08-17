@@ -1135,6 +1135,8 @@ class PetWindow(QWidget):
 
         self.shutdown_work_timer()
         self.chat_manager.shutdown()
+        if self._chat_history_dialog is not None:
+            self._chat_history_dialog.close()
         self.music_controller.shutdown()
         self.photo_bubble.close()
         self.speech_bubble.close()
@@ -2615,6 +2617,8 @@ class PetWindow(QWidget):
         if self._chat_dialog is not None:
             self._chat_dialog.set_interrupt_available(self.settings.ai_provider == "codex")
             self._chat_dialog.set_busy(busy)
+        if self._chat_history_dialog is not None:
+            self._chat_history_dialog.set_mutation_enabled(not busy)
 
     def _interrupt_chat(self) -> None:
         """Stop only the active Codex App Server turn."""
@@ -2673,15 +2677,41 @@ class PetWindow(QWidget):
             self._chat_history_dialog = ChatHistoryDialog(
                 self._chat_history,
                 self._pet_name(),
-                self._chat_dialog or self,
+                None,
             )
             self._chat_history_dialog.clear_all_requested.connect(
                 self._clear_all_chat_history
             )
+            self._chat_history_dialog.clear_display_requested.connect(
+                self._clear_chat_display
+            )
+            self._chat_history_dialog.new_conversation_requested.connect(
+                self._start_new_conversation
+            )
+            self._chat_history_dialog.session_deleted_requested.connect(
+                self._chat_history_session_deleted
+            )
+        self._chat_history_dialog.set_mutation_enabled(not self.chat_manager.busy)
         self._chat_history_dialog.refresh()
         self._chat_history_dialog.show()
         self._chat_history_dialog.raise_()
         self._chat_history_dialog.activateWindow()
+
+    def _chat_history_session_deleted(self, _session_id: str, was_current: bool) -> None:
+        """删除当前会话时同步清掉 AI 上下文，待办和提醒保持不变。"""
+
+        if not was_current:
+            return
+        if not self.chat_manager.reset_conversation():
+            return
+        self._chat_memory.clear()
+        self._chat_streaming_active = False
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+            self._chat_dialog.append_message(
+                self._pet_name(),
+                "这段聊天记录已删除，新的聊天会从零开始；待办和提醒没有改变。",
+            )
 
     def _clear_all_chat_history(self) -> None:
         """删除全部本地聊天记录，同时重置 AI 上下文但不碰待办。"""
@@ -3974,4 +4004,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-
