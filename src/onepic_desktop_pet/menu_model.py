@@ -190,4 +190,3 @@ def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
             )
 
     add_items(menu, model.items(context))
-

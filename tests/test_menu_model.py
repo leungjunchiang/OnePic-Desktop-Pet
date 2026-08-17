@@ -72,4 +72,3 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     model.execute("topmost", False)
     model.execute("visibility")
     assert called[-2:] == [("topmost", False), ("visibility", False)]
-

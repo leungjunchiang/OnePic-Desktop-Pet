@@ -435,4 +435,3 @@
 - 修复 macOS 图形应用与终端环境 PATH 不同导致 Codex CLI 找不到的问题，继续使用绝对路径和 `codex login status` 独立检测。
 - macOS 自习室与 Codex 聊天保持独立连接状态；一个服务失败不会把另一个服务误判为离线。
 - macOS App 的 Bundle 版本号改为从项目版本动态生成，避免安装包仍显示旧版本。
-
