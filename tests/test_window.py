@@ -780,30 +780,54 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
 
 
 def test_work_controls_belong_to_pet_and_follow_focus_state() -> None:
-    """工作按钮贴在六毛下方，不再出现在待办区域。"""
+    """右键工作控制条按状态变化、位于六毛上方并随六毛移动。"""
 
     app, window = _create_window()
     window.move(300, 180)
-    window.start_work_timer()
-    window.show_work_controls()
+    window._show_deferred_context_menu()
     app.processEvents()
 
     controls = window.work_controls
     assert controls.isVisible()
+    assert controls.pause_button.text() == "开始工作"
+    assert not controls.finish_button.isVisible()
+
+    # IDLE 右键控制只提供开始，执行后自动收起。
+    controls.pause_button.click()
+    app.processEvents()
+    assert window.focus_session.snapshot().status == "focus"
+    assert not controls.isVisible()
+
+    window.speech_bubble.hide()
+    window.show_work_controls()
+    app.processEvents()
     assert controls.pause_button.text() == "暂停工作"
+    assert controls.finish_button.isVisible()
     assert not controls.geometry().intersects(window.geometry())
+
+    # 工作开始时的提示气泡会占用上方空间；关闭它后验证默认上方布局。
+    window.speech_bubble.hide()
+    window._position_work_controls()
+    assert controls.y() + controls.height() + 10 <= window.y()
     first_offset = controls.pos() - window.pos()
 
     window.pause_work_timer()
     app.processEvents()
-    assert controls.isVisible()
+    assert not controls.isVisible()
+
+    window.show_work_controls()
+    app.processEvents()
     assert controls.pause_button.text() == "继续工作"
+    assert controls.finish_button.isVisible()
 
     controls.pause_button.click()
     app.processEvents()
     assert window.focus_session.snapshot().status == "focus"
-    assert controls.pause_button.text() == "暂停工作"
+    assert not controls.isVisible()
 
+    window.speech_bubble.hide()
+    window.show_work_controls()
+    app.processEvents()
     window.move(340, 220)
     app.processEvents()
     assert controls.pos() - window.pos() == first_offset
@@ -849,10 +873,10 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
 
 
 def test_context_menu_uses_direct_high_frequency_entries() -> None:
-    """宠物右键菜单与托盘共用统一的高频入口和动态状态。"""
+    """任务栏/Dock 完整菜单继续使用统一的高频入口和动态状态。"""
 
     app, window = _create_window()
-    menu = window._build_context_menu()
+    menu = window.build_unified_menu(None, "tray")
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     assert labels[:7] == [
         "和六毛聊聊…",

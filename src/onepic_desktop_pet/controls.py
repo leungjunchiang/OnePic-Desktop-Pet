@@ -46,8 +46,9 @@ QLabel { border: none; background: transparent; }
 
 
 class WorkControlBubble(QWidget):
-    """贴在六毛下方的工作状态操作区，不属于待办面板。"""
+    """六毛右键弹出的轻量工作控制条，不属于待办或完整菜单。"""
 
+    start_requested = Signal()
     pause_requested = Signal()
     resume_requested = Signal()
     finish_requested = Signal()
@@ -65,20 +66,31 @@ class WorkControlBubble(QWidget):
         self.pause_button.setObjectName("pauseWorkButton")
         self.finish_button = QPushButton("结束工作")
         self.finish_button.setObjectName("finishWorkButton")
-        self._session_status = "focus"
+        self._session_status = "idle"
         self.pause_button.clicked.connect(self._toggle_session)
         self.finish_button.clicked.connect(self.finish_requested.emit)
         layout.addWidget(self.pause_button)
         layout.addWidget(self.finish_button)
+        self.set_session_status("idle")
 
     def set_session_status(self, status: str) -> None:
-        """Use the same two controls for focus and paused sessions."""
+        """Render only the action(s) valid for IDLE, FOCUSING or PAUSED."""
 
-        self._session_status = status
-        self.pause_button.setText("继续工作" if status == "rest" else "暂停工作")
+        self._session_status = status if status in {"idle", "focus", "rest"} else "idle"
+        self.pause_button.setText(
+            {
+                "idle": "开始工作",
+                "focus": "暂停工作",
+                "rest": "继续工作",
+            }[self._session_status]
+        )
+        self.finish_button.setVisible(self._session_status != "idle")
+        self.adjustSize()
 
     def _toggle_session(self) -> None:
-        if self._session_status == "rest":
+        if self._session_status == "idle":
+            self.start_requested.emit()
+        elif self._session_status == "rest":
             self.resume_requested.emit()
         else:
             self.pause_requested.emit()

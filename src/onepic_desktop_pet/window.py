@@ -50,7 +50,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QContextMenuEvent,
@@ -485,8 +485,12 @@ class PetWindow(QWidget):
         )
 
         self.work_controls = WorkControlBubble()
+        self._qt_application = QApplication.instance()
+        if self._qt_application is not None:
+            self._qt_application.installEventFilter(self)
+        self.work_controls.start_requested.connect(self._start_work_from_control)
         self.work_controls.pause_requested.connect(self.pause_work_timer)
-        self.work_controls.resume_requested.connect(self.start_work_timer)
+        self.work_controls.resume_requested.connect(self._resume_work_from_control)
         self.work_controls.finish_requested.connect(self.finish_work_timer)
         self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
@@ -1141,6 +1145,8 @@ class PetWindow(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
+        if self._qt_application is not None:
+            self._qt_application.removeEventFilter(self)
         self.shutdown_work_timer()
         self.chat_manager.shutdown()
         if self._chat_history_dialog is not None:
@@ -1874,10 +1880,8 @@ class PetWindow(QWidget):
         self.show_speech(reply.text + quality_text, 5600)
         self.work_timer_changed.emit(False)
         self._schedule_social_tick()
-        if reason == "idle":
-            self.work_controls.hide()
-        else:
-            self._show_work_controls()
+        # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
+        self.work_controls.hide()
         self._refresh_pixmap()
         return reply
 
@@ -3331,12 +3335,12 @@ class PetWindow(QWidget):
         panel.move(chosen.topLeft())
 
     def _position_work_controls(self) -> None:
-        """Keep pause/finish controls directly attached below the pet."""
+        """Keep the right-click work controls above the pet with edge fallback."""
 
         panel = self.work_controls
         panel.adjustSize()
         area = self._screen_geometry()
-        gap = 8
+        gap = 10
         pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
         blocked = [pet_rect]
         for accessory in (self._compact_todo_panel, self.speech_bubble, self.quick_panel):
@@ -3344,8 +3348,8 @@ class PetWindow(QWidget):
                 blocked.append(accessory.geometry())
         center_x = self.x() + (self.width() - panel.width()) // 2
         candidates = [
-            (center_x, self.y() + self.height() + gap),
             (center_x, self.y() - panel.height() - gap),
+            (center_x, self.y() + self.height() + gap),
             (self.x() - panel.width() - gap, self.y() + self.height() - panel.height()),
             (self.x() + self.width() + gap, self.y() + self.height() - panel.height()),
         ]
@@ -3377,23 +3381,29 @@ class PetWindow(QWidget):
         self.quick_panel.show(); self.quick_panel.raise_()
 
     def show_work_controls(self) -> None:
-        """在六毛下方显示当前工作会话的暂停/继续与结束操作。"""
+        """在六毛上方显示当前状态唯一有效的工作操作。"""
 
-        if self.focus_session.snapshot().status not in {"focus", "rest"}:
-            self.start_work_timer()
-            return
         self._show_work_controls()
 
     def _show_work_controls(self) -> None:
-        """Show the work dock below the pet using the shared focus state."""
+        """Show the work dock above the pet using the shared focus state."""
 
         snapshot = self.focus_session.snapshot()
-        if snapshot.status not in {"focus", "rest"}:
-            self.work_controls.hide()
-            return
         self.work_controls.set_session_status(snapshot.status)
         self._position_work_controls()
         self.work_controls.show(); self.work_controls.raise_()
+
+    def _start_work_from_control(self) -> None:
+        """Start from the IDLE right-click control, then collapse it."""
+
+        self.start_work_timer()
+        self.work_controls.hide()
+
+    def _resume_work_from_control(self) -> None:
+        """Resume from the PAUSED right-click control, then collapse it."""
+
+        self.start_work_timer()
+        self.work_controls.hide()
 
     def _quick_work_action(self) -> None:
         """快捷入口直接切换开始、暂停和继续，不再弹出第三层控制。"""
@@ -3673,7 +3683,10 @@ class PetWindow(QWidget):
         if zone == "work_device" or (
             zone == "head" and self.focus_session.snapshot().status in {"focus", "rest"}
         ):
-            self.show_work_controls()
+            if self.work_controls.isVisible():
+                self.work_controls.hide()
+            else:
+                self.show_work_controls()
             return
         if zone == "camera":
             self.trigger_selfie()
@@ -3845,12 +3858,12 @@ class PetWindow(QWidget):
         self.set_paused(not self.paused)
 
     def _build_context_menu(self) -> QMenu:
-        """Render the shared menu model for the pet window entrance."""
+        """Keep a full-menu helper for diagnostics; pet right-click never opens it."""
 
-        return self.build_unified_menu(self, "pet")
+        return self.build_unified_menu(self, "tray")
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """稍候显示单次右键菜单，为双击右键的巴布达语音留出判定时间。"""
+        """稍候显示六毛当前工作控制，为双击右键语音留出判定时间。"""
 
         self._record_user_interaction()
         if time.monotonic() < self._suppress_context_until:
@@ -3861,10 +3874,31 @@ class PetWindow(QWidget):
         event.accept()
 
     def _show_deferred_context_menu(self) -> None:
-        """确认不是双击后，在原鼠标位置打开普通右键菜单。"""
+        """确认不是双击后，切换六毛上方的工作控制条。"""
 
         if time.monotonic() >= self._suppress_context_until:
-            self._build_context_menu().exec(self._pending_context_global)
+            if self.work_controls.isVisible():
+                self.work_controls.hide()
+            else:
+                self._show_work_controls()
+
+    def eventFilter(self, watched, event) -> bool:
+        """点击其它 Qt 窗口时收起右键工作条，按钮本身不受影响。"""
+
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and self.work_controls.isVisible()
+        ):
+            watched_is_widget = isinstance(watched, QWidget)
+            belongs_to_pet = watched is self or (
+                watched_is_widget and self.isAncestorOf(watched)
+            )
+            belongs_to_controls = watched is self.work_controls or (
+                watched_is_widget and self.work_controls.isAncestorOf(watched)
+            )
+            if not belongs_to_pet and not belongs_to_controls:
+                self.work_controls.hide()
+        return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """记录左键按下；只有移动超过系统阈值后才真正进入拖拽。"""
