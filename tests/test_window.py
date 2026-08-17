@@ -753,11 +753,20 @@ def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
 
 
 def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() -> None:
-    """快捷面板不再平铺低频设置和音乐控制。"""
+    """快捷面板使用五个红黄蓝图标入口和悬停说明。"""
 
     app, window = _create_window()
-    labels = [button.text() for button in window.quick_panel.findChildren(QPushButton)]
-    assert labels == ["聊聊", "开始工作", "搭子自习室", "音乐", "调整大小"]
+    buttons = window.quick_panel.findChildren(QPushButton)
+    assert [button.objectName() for button in buttons] == [
+        "quickAction_chat",
+        "quickAction_work",
+        "quickAction_social",
+        "quickAction_music",
+        "quickAction_settings",
+    ]
+    assert [button.text() for button in buttons] == ["", "", "", "", ""]
+    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "搭子自习室", "音乐", "设置"]
+    assert all(not button.icon().isNull() for button in buttons)
     assert window.quick_panel.music_status.text() == "当前播放：暂无"
     window.close(); window.deleteLater(); app.processEvents()
 

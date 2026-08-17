@@ -122,6 +122,30 @@ class MusicProviderStatus:
 
 
 @dataclass(frozen=True)
+class MusicState:
+    """UI 唯一订阅的真实媒体状态，不把上一次按钮点击当成播放状态。"""
+
+    player: str = ""
+    playing: bool = False
+    title: str = ""
+    artist: str = ""
+    updated_at: float = 0.0
+    source: str = "platform-media-session"
+
+    @classmethod
+    def from_status(cls, status: MusicProviderStatus, *, source: str = "platform-media-session") -> "MusicState":
+        track = status.track or TrackInfo()
+        return cls(
+            player=MUSIC_SERVICE_LABELS.get(status.provider, status.provider),
+            playing=status.is_playing,
+            title=track.title,
+            artist=track.artist,
+            updated_at=time.time(),
+            source=source,
+        )
+
+
+@dataclass(frozen=True)
 class MusicControlResult:
     """一次基础播放控制的结果，明确说明是否使用了媒体键回退。"""
 
@@ -1484,6 +1508,7 @@ class MusicController(QObject):
 
     result_ready = Signal(object)
     status_changed = Signal(object)
+    state_changed = Signal(object)
     busy_changed = Signal(bool)
 
     def __init__(self, settings: PetSettings, manager: MusicProviderManager, parent=None) -> None:
@@ -1510,6 +1535,11 @@ class MusicController(QObject):
         self.busy_changed.emit(True)
         self._thread.start()
         return True
+
+    def refresh_status(self) -> bool:
+        """后台读取 Windows GSMTC/macOS Apple Events 的当前媒体状态。"""
+
+        return self.perform("status")
 
     def play_song(
         self,
@@ -1540,9 +1570,12 @@ class MusicController(QObject):
     def _completed(self, result: MusicControlResult | SongPlaybackResult) -> None:
         if isinstance(result, MusicControlResult):
             self.status_changed.emit(result.status)
+            self.state_changed.emit(MusicState.from_status(result.status))
         elif result.success and result.provider in SUPPORTED_PROVIDERS:
             # Song Resolver 已把播放器交给 Transport；同步刷新 UI 的真实能力状态。
-            self.status_changed.emit(self.manager.cached_status(result.provider))
+            status = self.manager.cached_status(result.provider)
+            self.status_changed.emit(status)
+            self.state_changed.emit(MusicState.from_status(status, source="lili-selection"))
         self.result_ready.emit(result)
 
     def _finished(self) -> None:
@@ -1558,3 +1591,4 @@ class MusicController(QObject):
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
             self._thread.wait(5500)
+

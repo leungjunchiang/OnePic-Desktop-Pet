@@ -16,6 +16,20 @@ except Exception:
     # release builds do, and the explicit certifi dependency is still loaded.
     pass
 hiddenimports = ["winrt.windows.media.control", "uiautomation"] if sys.platform == "win32" else []
+# These are development/build or optional data-science packages.  Nothing in
+# main.py or the runtime package imports them; excluding them prevents a
+# local dev environment from silently inflating the public artifact.  The
+# application assets remain untouched and are still copied at full quality.
+excludes = [
+    "pytest",
+    "numpy",
+    "IPython",
+    "jupyter",
+    "matplotlib",
+    "pandas",
+    "scipy",
+    "tkinter",
+]
 metadata = Path("pyproject.toml")
 version_match = re.search(r'^version = "([^"]+)"$', metadata.read_text(encoding="utf-8"), re.MULTILINE) if metadata.is_file() else None
 APP_VERSION = os.environ.get("LILI_VERSION") or (version_match.group(1) if version_match else "0.0.0")
@@ -41,7 +55,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
     optimize=0,
 )
@@ -91,3 +105,4 @@ if sys.platform == "darwin":
             "NSAppleEventsUsageDescription": "Lili 需要在您点击音乐控制后操作 Apple Music 或 Spotify 的播放、暂停与切歌。",
         },
     )
+

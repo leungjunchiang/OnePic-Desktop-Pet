@@ -1,3 +1,20 @@
+# Lili v0.22.72
+
+## 认证刷新、菜单与音乐状态收口
+
+- Supabase Direct 与 CloudBase Proxy 共用 `AuthSessionManager`；同一时间只允许一个 refresh 请求，其他首页、自习室同步和后台请求加入同一个刷新结果。
+- 每次刷新同时保存 access token、refresh token、过期时间和 generation；遇到 `refresh_token_already_used` 会先读取最新凭据，无法恢复时只提示“登录状态已失效，请重新登录”，不再把 Supabase JSON 直接显示给用户。
+- “检测自习室网络”固定为轻量健康探针，不主动刷新登录 token；增加并发 single-flight 回归测试和脱敏刷新日志。
+- 六毛右键菜单按高频、设置、系统操作分区；双击快捷口袋改为聊聊、工作、自习室、音乐、设置五个红黄蓝矢量图标，使用悬停说明，不依赖系统 Emoji。
+- Windows GSMTC 与 macOS Apple Events 的真实播放器状态统一为 `MusicState`；区分“暂无播放”“播放中但无 metadata”和已读取曲目，避免实际播放却显示“暂无”。
+- 打包配置只排除确认未使用的开发/数据科学依赖；保留全部公开宠物图片原始清晰度，不删除或有损压缩图片，也不打包 `user_assets`。
+
+## 体积盘点
+
+- 当前公开源素材：`assets/` 约 63.30 MB，其中 `assets/pet/` 约 56.29 MB、`assets/generated/` 约 7.00 MB；最大单个素材约 1.47 MB。
+- v0.22.71 已发布包作为基线：Windows 安装器约 121.03 MB、Windows ZIP 约 146.80 MB、macOS arm64 DMG 约 124.26 MB、macOS x64 DMG 约 129.91 MB。
+- 本次没有通过删除或降低图片质量换取体积数字；Python/PySide6 运行时是安装包的主要固定成本，后续陈楚生知识、音频和新服装仍应继续走 `content-v*` 增量包。
+
 # Lili v0.22.71
 
 ## 统一快捷入口与跨平台菜单

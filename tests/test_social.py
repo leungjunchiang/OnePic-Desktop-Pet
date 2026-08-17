@@ -3,17 +3,68 @@
 import json
 import ssl
 import sys
+import threading
 import time
 from pathlib import Path
 
 from onepic_desktop_pet.social import (
     BackendRouteManager,
+    AuthSessionManager,
     HttpSocialBackend,
     PRESENCE_GRACE_SECONDS,
     SocialClient,
     SocialError,
     SocialSession,
+    social_user_message,
 )
+
+
+def test_auth_session_manager_single_flight_refreshes_once_for_concurrent_callers():
+    manager = AuthSessionManager(
+        service_name="LiliSocialTest",
+        account_name="single-flight",
+        persist_tokens=False,
+    )
+    manager.adopt(SocialSession("old-access", "old-refresh", "user-1", time.time() - 1, 7))
+    calls: list[str] = []
+    barrier = threading.Barrier(5)
+
+    def refresh(current: SocialSession) -> dict:
+        calls.append(current.refresh_token)
+        time.sleep(0.05)
+        return {
+            "access_token": "new-access",
+            "refresh_token": "new-refresh",
+            "expires_in": 3600,
+            "user": {"id": current.user_id},
+        }
+
+    results: list[SocialSession | None] = []
+
+    def worker() -> None:
+        barrier.wait()
+        results.append(manager.get_valid_session(refresh, requested_by="test-worker"))
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert calls == ["old-refresh"]
+    assert len(results) == 4
+    assert {result.refresh_token for result in results if result is not None} == {"new-refresh"}
+
+
+def test_refresh_token_reuse_error_has_user_safe_message():
+    assert social_user_message(
+        SocialError(
+            '{"code":400,"error_code":"refresh_token_already_used"}',
+            kind="auth_refresh_reused",
+            error_code="refresh_token_already_used",
+        )
+    ) == "登录状态已失效，请重新登录。"
 
 
 def test_macos_social_transport_uses_verified_certificate_context(monkeypatch):
@@ -373,3 +424,4 @@ def test_room_shared_state_migrations_are_retained_as_supabase_history():
     migration = (root / "supabase" / "migrations" / "20260813150000_lili_room_shared_state.sql").read_text(encoding="utf-8")
     assert "lili_room_dashboard" in migration
     assert "lili_room_events" in migration
+

@@ -146,7 +146,7 @@ from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
 from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, SocialProfileThread, SocialSyncThread
-from .music_control import MusicControlResult, MusicController, MusicProviderManager
+from .music_control import MusicControlResult, MusicController, MusicProviderManager, MusicState
 from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_work_duration
@@ -492,7 +492,12 @@ class PetWindow(QWidget):
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
-        self.quick_panel.size_requested.connect(self.open_size_control)
+        self.quick_panel.settings_requested.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        self.music_controller.state_changed.connect(self._music_state_changed)
+        self.music_state_timer = QTimer(self)
+        self.music_state_timer.setInterval(5000)
+        self.music_state_timer.timeout.connect(self._refresh_music_state)
+        self.music_state_timer.start()
 
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
@@ -3183,9 +3188,26 @@ class PetWindow(QWidget):
             save_settings(self.settings)
         if track_artist and track_title:
             self.quick_panel.set_music_status(f"当前播放：{track_artist} · {track_title}")
-        elif result.success:
-            self.quick_panel.set_music_status("当前播放：暂无")
+        elif isinstance(result, MusicControlResult) and result.success and result.status.is_playing:
+            self.quick_panel.set_music_status("当前播放：播放中")
         self.show_speech(result.message, 6200)
+
+    def _music_state_changed(self, state: MusicState) -> None:
+        """Render the shared platform media state without guessing from clicks."""
+
+        if state.title:
+            detail = f"{state.artist} · {state.title}" if state.artist else state.title
+            self.quick_panel.set_music_status(f"当前播放：{detail}")
+        elif state.playing:
+            self.quick_panel.set_music_status("当前播放：播放中")
+        else:
+            self.quick_panel.set_music_status("当前播放：暂无")
+
+    def _refresh_music_state(self) -> None:
+        """Poll only while useful; the controller reads the real media session."""
+
+        if self.quick_panel.isVisible() or self.music_provider_manager.active_provider:
+            self.music_controller.refresh_status()
 
     def set_activity(self, activity: str) -> None:
         """手动选择修正版动作表中的任意完整动作。"""
@@ -3257,6 +3279,7 @@ class PetWindow(QWidget):
             self.quick_panel.hide()
             return
         self._refresh_shortcut_state()
+        self._refresh_music_state()
         self._position_floating_panel(self.quick_panel)
         self.quick_panel.show(); self.quick_panel.raise_()
 
@@ -3313,6 +3336,7 @@ class PetWindow(QWidget):
             "chat": lambda _checked=False: self.prompt_dialogue(),
             "work": lambda _checked=False: self._quick_work_action(),
             "social": lambda _checked=False: self.open_social_hub(),
+            "quick_panel": lambda _checked=False: self.show_quick_panel(),
             "music_toggle": lambda _checked=False: self.control_music("toggle"),
             "music_previous": lambda _checked=False: self.control_music("previous"),
             "music_next": lambda _checked=False: self.control_music("next"),

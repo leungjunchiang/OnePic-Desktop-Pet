@@ -2,11 +2,13 @@
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和歌曲状态分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
+快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -51,6 +53,50 @@ class WorkControlBubble(QWidget):
         layout.addWidget(pause); layout.addWidget(finish)
 
 
+def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
+    """Draw a small DPI-independent red/yellow/blue shortcut icon."""
+
+    pixmap = QPixmap(72, 72)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    blue = QColor("#287d9e")
+    red = QColor("#e74a4f")
+    yellow = QColor("#f2c84b")
+    ink = QColor("#24475b")
+    painter.setPen(QPen(blue, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+    if kind == "chat":
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(10, 13, 48, 36, 13, 13)
+        painter.drawPolygon([QPoint(20, 47), QPoint(18, 61), QPoint(34, 49)])
+        painter.setBrush(QBrush(red)); painter.drawEllipse(48, 8, 15, 15)
+    elif kind == "work":
+        painter.drawEllipse(10, 10, 52, 52)
+        painter.setPen(QPen(red, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(36, 36, 36, 20 if active else 24)
+        painter.drawLine(36, 36, 49, 44)
+        painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(30, 30, 12, 12)
+    elif kind == "social":
+        painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(8, 13, 25, 25); painter.drawEllipse(39, 13, 25, 25)
+        painter.setBrush(QBrush(blue)); painter.drawRoundedRect(7, 39, 28, 20, 9, 9); painter.drawRoundedRect(37, 39, 28, 20, 9, 9)
+        painter.setBrush(QBrush(red)); painter.drawEllipse(51, 6, 14, 14)
+    elif kind == "music":
+        painter.setPen(QPen(red, 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(43, 13, 43, 49); painter.drawLine(43, 13, 59, 9); painter.drawEllipse(17, 43, 25, 16); painter.drawEllipse(40, 43, 25, 16)
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(7, 7, 13, 13)
+        painter.setBrush(QBrush(yellow)); painter.drawEllipse(55, 52, 10, 10)
+    else:  # settings
+        painter.setPen(QPen(blue, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for angle in range(0, 360, 45):
+            painter.save(); painter.translate(36, 36); painter.rotate(angle); painter.drawLine(0, -23, 0, -30); painter.restore()
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(15, 15, 42, 42)
+        painter.setBrush(QBrush(yellow)); painter.drawEllipse(27, 27, 18, 18)
+        painter.setBrush(QBrush(red)); painter.drawEllipse(52, 7, 12, 12)
+    painter.setPen(QPen(ink, 1)); painter.end()
+    return QIcon(pixmap)
+
+
 class QuickControlPanel(QWidget):
     """双击宠物才出现的常用入口；选择后或闲置八秒会自动收起。"""
 
@@ -59,7 +105,7 @@ class QuickControlPanel(QWidget):
     social_requested = Signal()
     music_requested = Signal()
     music_control_requested = Signal(str)
-    size_requested = Signal()
+    settings_requested = Signal()
 
     def __init__(self, pet_name: str = "六毛") -> None:
         super().__init__(None)
@@ -71,38 +117,42 @@ class QuickControlPanel(QWidget):
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
-        layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9)
+        layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9); layout.setSpacing(7)
         self.title = QLabel(f"{pet_name}快捷口袋"); self.title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(self.title)
-        chat_button = QPushButton("聊聊")
-        chat_button.clicked.connect(lambda: self._choose(self.chat_requested))
-        layout.addWidget(chat_button)
-
-        self.work_button = QPushButton("开始工作")
-        self.work_button.clicked.connect(lambda: self._choose(self.work_requested))
-        layout.addWidget(self.work_button)
-
-        social_button = QPushButton("搭子自习室")
-        # This panel is intentionally limited to the five high-frequency
-        # entrances; the actual room is opened by the parent window.
-        social_button.clicked.connect(lambda: self._choose(self.social_requested))
-        layout.addWidget(social_button)
-
-        self.music_button = QPushButton("音乐")
+        row = QHBoxLayout(); row.setSpacing(6)
+        self.chat_button = self._button("chat", "聊聊", self.chat_requested)
+        self.work_button = self._button("work", "开始工作", self.work_requested)
+        self.social_button = self._button("social", "搭子自习室", self.social_requested)
+        self.music_button = self._button("music", "音乐", None)
+        self.settings_button = self._button("settings", "设置", self.settings_requested)
         self.music_button.clicked.connect(self._show_music_menu)
-        layout.addWidget(self.music_button)
+        for button in (self.chat_button, self.work_button, self.social_button, self.music_button, self.settings_button):
+            row.addWidget(button)
+        layout.addLayout(row)
         self.music_status = QLabel("当前播放：暂无")
         self.music_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.music_status.setStyleSheet("color: #607487; font-size: 11px;")
         layout.addWidget(self.music_status)
 
-        size_button = QPushButton("调整大小")
-        size_button.clicked.connect(lambda: self._choose(self.size_requested))
-        layout.addWidget(size_button)
+
+    @staticmethod
+    def _button(kind: str, tooltip: str, signal: object | None) -> QPushButton:
+        button = QPushButton()
+        button.setObjectName(f"quickAction_{kind}")
+        button.setIcon(_quick_icon(kind))
+        button.setIconSize(QSize(34, 34))
+        button.setFixedSize(52, 52)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        if signal is not None:
+            button.clicked.connect(lambda: signal.emit())
+        return button
 
     def set_work_action_label(self, label: str) -> None:
         """Refresh the dynamic work action shown in the shortcut panel."""
 
-        self.work_button.setText(label.strip() or "开始工作")
+        self.work_button.setToolTip(label.strip() or "开始工作")
+        self.work_button.setAccessibleName(label.strip() or "开始工作")
 
     def set_music_status(self, text: str) -> None:
         """Show the last confirmed player track as read-only panel state."""

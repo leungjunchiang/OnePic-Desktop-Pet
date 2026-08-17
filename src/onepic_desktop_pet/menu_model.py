@@ -85,10 +85,14 @@ class UnifiedMenuModel:
             item for item in interaction_children if item.command in self._callbacks
         ]
 
-        work_record_children = [
+        todo_children = [
             self._optional("显示待办", "show_todos"),
             self._optional("隐藏待办", "hide_todos"),
             self._optional("添加待办…", "add_todo"),
+        ]
+        todo_children = [item for item in todo_children if item is not None]
+
+        work_record_children = [
             self._optional("我的时光…", "time_memory"),
             self._optional("查看今日累计", "show_work_time"),
             self._optional("查看今日成长", "show_growth"),
@@ -101,8 +105,6 @@ class UnifiedMenuModel:
             self._optional("修改主人称呼…", "rename"),
             self._optional("AI 与陪伴设置…", "settings"),
             self._optional("调整大小", "size"),
-            self._optional("检查补充内容更新", "content_update"),
-            self._optional("检查程序更新", "program_update"),
         ]
         settings_children = [item for item in settings_children if item is not None]
 
@@ -118,24 +120,33 @@ class UnifiedMenuModel:
             entries.append(MenuItemSpec("换装与外观…", "outfit"))
         if work_record_children:
             entries.append(MenuItemSpec("工作记录", children=tuple(work_record_children)))
+        if todo_children:
+            entries.append(MenuItemSpec("待办", children=tuple(todo_children)))
+        if "quick_panel" in self._callbacks:
+            entries.append(MenuItemSpec("六毛快捷口袋", "quick_panel"))
 
         entries.extend(
             (
                 MenuItemSpec.divider(),
-                MenuItemSpec(
-                    "始终置顶（关闭即桌面模式）",
-                    "topmost",
-                    checkable=True,
-                    checked=bool(state.get("always_on_top", False)),
-                ),
             )
         )
-        if settings_children:
-            entries.append(MenuItemSpec("设置", children=tuple(settings_children)))
+        entries.append(MenuItemSpec("设置", children=tuple(settings_children)) if settings_children else MenuItemSpec("设置", "settings"))
+        entries.append(
+            MenuItemSpec(
+                "始终置顶（关闭即桌面模式）",
+                "topmost",
+                checkable=True,
+                checked=bool(state.get("always_on_top", False)),
+            )
+        )
         entries.extend(
             (
                 MenuItemSpec.divider(),
                 MenuItemSpec("隐藏六毛" if visible else "显示六毛", "visibility"),
+                *[item for item in (
+                    self._optional("检查补充内容更新", "content_update"),
+                    self._optional("检查程序更新", "program_update"),
+                ) if item is not None],
                 MenuItemSpec("退出", "quit"),
             )
         )

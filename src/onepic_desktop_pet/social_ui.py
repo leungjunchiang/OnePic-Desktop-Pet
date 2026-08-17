@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
-from .social import SocialClient, SocialError
+from .social import SocialClient, SocialError, social_user_message
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .work_timer import format_work_duration
 
@@ -991,7 +991,7 @@ class SocialHubDialog(QDialog):
             exc.status,
             exc,
         )
-        self._set_status(f"网络检查失败：{exc}", error=True)
+        self._set_status(f"网络检查失败：{social_user_message(exc)}", error=True)
 
     def _health_thread_finished(self, thread: SocialHealthThread) -> None:
         if self._health_thread is thread:
@@ -1048,7 +1048,7 @@ class SocialHubDialog(QDialog):
 
     def _dashboard_failed(self, message: str) -> None:
         self._end_action()
-        self._set_status(f"同步失败：{message}", error=True)
+        self._set_status(f"同步失败：{social_user_message(SocialError(str(message), kind='network'))}", error=True)
 
     def _dashboard_thread_finished(self, thread: SocialDashboardThread) -> None:
         if self._dashboard_thread is thread:
@@ -1076,7 +1076,7 @@ class SocialHubDialog(QDialog):
         thread = SocialEventThread(self.client, event, self)
         self._event_threads.append(thread)
         thread.completed.connect(lambda: self._interaction_sent(nickname, kind))
-        thread.failed.connect(lambda message: self._set_status(f"互动没有送出：{message}", error=True))
+        thread.failed.connect(lambda message: self._set_status(f"互动没有送出：{social_user_message(SocialError(str(message), kind='network'))}", error=True))
         thread.finished.connect(lambda: self._event_thread_finished(thread))
         self._set_status(f"正在向 {nickname} {labels.get(kind, '送出互动')}…")
         thread.start()
@@ -1097,7 +1097,7 @@ class SocialHubDialog(QDialog):
         thread = SocialEventThread(self.client, event, self)
         self._event_threads.append(thread)
         thread.completed.connect(lambda: self._interaction_sent(nickname, "phrase"))
-        thread.failed.connect(lambda message: self._set_status(f"短语没有送出：{message}", error=True))
+        thread.failed.connect(lambda message: self._set_status(f"短语没有送出：{social_user_message(SocialError(str(message), kind='network'))}", error=True))
         thread.finished.connect(lambda: self._event_thread_finished(thread))
         self._set_status(f"正在向 {nickname} 发送“{phrase}”…")
         thread.start()
@@ -1414,7 +1414,7 @@ class SocialHubDialog(QDialog):
             getattr(exc, "status", None),
             raw,
         )
-        message = "共同房间状态保存失败，请稍后重试。" if "ambiguous" in raw.lower() or "room_id" in raw.lower() else raw
+        message = "共同房间状态保存失败，请稍后重试。" if "ambiguous" in raw.lower() or "room_id" in raw.lower() else social_user_message(exc)
         self._set_status(message, error=True)
         QMessageBox.warning(self, "六毛搭子自习室", message)
 
@@ -1752,3 +1752,4 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+
