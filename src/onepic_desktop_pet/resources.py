@@ -19,7 +19,10 @@ from __future__ import annotations
 import sys
 import json
 import os
+import re
 from pathlib import Path
+
+from . import __version__
 
 
 def resource_root() -> Path:
@@ -33,6 +36,25 @@ def resource_root() -> Path:
 
 _content_root_override: Path | None = None
 _active_content_cache: tuple[Path, int, Path | None] | None = None
+
+
+def _release_version(value: object) -> tuple[int, ...] | None:
+    """Return a comparable release tuple for normal vX.Y.Z content versions."""
+
+    match = re.fullmatch(r"v?(\d+)(?:\.(\d+))(?:\.(\d+))?", str(value or "").strip())
+    if not match:
+        return None
+    return tuple(int(part or 0) for part in match.groups())
+
+
+def _overlay_is_stale(payload: object) -> bool:
+    """Never let an older release overlay hide newer bundled resources."""
+
+    if not isinstance(payload, dict):
+        return False
+    active_version = _release_version(payload.get("content_version"))
+    bundled_version = _release_version(__version__)
+    return bool(active_version and bundled_version and active_version < bundled_version)
 
 
 def content_update_root() -> Path:
@@ -68,6 +90,9 @@ def _active_content_root() -> Path | None:
         return _active_content_cache[2]
     try:
         payload = json.loads(pointer.read_text(encoding="utf-8"))
+        if _overlay_is_stale(payload):
+            _active_content_cache = (root, stamp, None)
+            return None
         version_dir_name = str(payload.get("directory", ""))
         if not version_dir_name or Path(version_dir_name).name != version_dir_name:
             raise ValueError("invalid content overlay directory")
@@ -103,3 +128,4 @@ def resource_path(relative_path: str | Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"缺少应用资源：{path}")
     return path
+

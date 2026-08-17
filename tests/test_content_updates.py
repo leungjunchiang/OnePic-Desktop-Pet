@@ -15,6 +15,7 @@ from onepic_desktop_pet.content_updates import (
 from onepic_desktop_pet.resources import (
     clear_content_overlay_cache,
     resource_path,
+    resource_root,
     set_content_update_root,
 )
 
@@ -92,3 +93,22 @@ def test_content_manifest_rejects_paths_outside_content_roots() -> None:
 
     with pytest.raises(ContentUpdateError, match="不允许在线覆盖"):
         ContentManifest.from_mapping(mapping)
+
+
+def test_older_release_overlay_cannot_hide_newer_bundled_resources(tmp_path: Path) -> None:
+    update_root = tmp_path / "content_updates"
+    overlay = update_root / "versions" / "v0.22.79-1" / "assets" / "pet" / "daily-actions"
+    overlay.mkdir(parents=True)
+    (overlay / "22-thermos.png").write_bytes(b"stale-overlay")
+    (update_root / "active.json").write_text(
+        json.dumps({"content_version": "v0.22.79", "directory": "v0.22.79-1"}),
+        encoding="utf-8",
+    )
+    set_content_update_root(update_root)
+    try:
+        resolved = resource_path("assets/pet/daily-actions/22-thermos.png")
+        assert resolved == resource_root() / "assets/pet/daily-actions/22-thermos.png"
+    finally:
+        set_content_update_root(None)
+        clear_content_overlay_cache()
+
