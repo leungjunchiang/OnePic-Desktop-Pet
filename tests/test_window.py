@@ -784,7 +784,7 @@ def test_work_controls_belong_to_pet_and_follow_focus_state() -> None:
 
     app, window = _create_window()
     window.move(300, 180)
-    window._show_deferred_context_menu()
+    window.show_work_controls()
     app.processEvents()
 
     controls = window.work_controls
@@ -902,6 +902,57 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "提醒我休息",
         "查看心情与能量",
     ]
+    menu.close()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_pet_context_menu_only_contains_pet_actions() -> None:
+    """六毛本体右键只负责动作、娃衣、外观和隐藏。"""
+
+    app, window = _create_window()
+    menu = window._build_context_menu()
+    actions = [action for action in menu.actions() if not action.isSeparator()]
+    assert [action.text() for action in actions] == [
+        "换动作",
+        "换娃衣",
+        "换装与外观",
+        "隐藏六毛",
+    ]
+
+    action_menu = actions[0].menu()
+    assert action_menu is not None
+    action_labels = [
+        action.text() for action in action_menu.actions() if not action.isSeparator()
+    ]
+    assert action_labels == [
+        "专注工作",
+        "休息一下",
+        "音乐演出",
+        "爱与庆祝",
+        "出门冒险",
+        "工作搭子",
+        "随机动作",
+    ]
+
+    outfit_menu = actions[1].menu()
+    assert outfit_menu is not None
+    outfit_labels = [
+        action.text() for action in outfit_menu.actions() if not action.isSeparator()
+    ]
+    assert outfit_labels[0] == "默认装"
+    assert "兔兔搭子" in outfit_labels
+    assert "荒野国王" in outfit_labels
+
+    appearance_menu = actions[2].menu()
+    assert appearance_menu is not None
+    assert [
+        action.text() for action in appearance_menu.actions() if not action.isSeparator()
+    ] == ["调整大小", "始终置顶（关闭即桌面模式）"]
+
+    forbidden = ("聊聊", "工作计时", "自习室", "音乐", "待办", "AI", "更新", "退出")
+    assert not any(any(word in action.text() for word in forbidden) for action in actions)
     menu.close()
     window.close()
     window.deleteLater()

@@ -130,6 +130,7 @@ from .diary import DailyCompanionStats, album_directory
 from .focus_analytics import FocusAnalyticsStore, FocusQualityTracker
 from .focus_session import FocusSessionManager
 from .growth import (
+    ACTION_GROUPS,
     ACTION_SPRITES,
     COMPLETE_ACTIONS,
     FOCUS_ACTIONS,
@@ -3254,11 +3255,10 @@ class PetWindow(QWidget):
         dialog.exec()
         save_settings(self.settings)
 
-    def show_outfit_menu(self) -> None:
-        """Open the outfit selector from the shared menu without duplicating menus."""
+    def _populate_outfit_menu(self, menu: QMenu, *, default_label: str) -> None:
+        """Populate an outfit submenu so pet and full menus share one selector."""
 
-        menu = QMenu(self)
-        classic = menu.addAction(f"经典{self._pet_name()}")
+        classic = menu.addAction(default_label)
         classic.setCheckable(True)
         classic.setChecked(not self.settings.equipped_outfit)
         classic.triggered.connect(lambda: self.equip_outfit(""))
@@ -3274,6 +3274,12 @@ class PetWindow(QWidget):
                 action.triggered.connect(
                     lambda _checked=False, key=outfit.key: self.equip_outfit(key)
                 )
+
+    def show_outfit_menu(self) -> None:
+        """Open the outfit selector from the shared menu without duplicating menus."""
+
+        menu = QMenu(self)
+        self._populate_outfit_menu(menu, default_label=f"经典{self._pet_name()}")
         menu.exec(QCursor.pos())
 
     def _position_floating_panel(self, panel: QWidget) -> None:
@@ -3858,12 +3864,44 @@ class PetWindow(QWidget):
         self.set_paused(not self.paused)
 
     def _build_context_menu(self) -> QMenu:
-        """Keep a full-menu helper for diagnostics; pet right-click never opens it."""
+        """Build the small menu for the pet itself, not the full app menu."""
 
-        return self.build_unified_menu(self, "tray")
+        menu = QMenu(self)
+
+        activity_menu = menu.addMenu("换动作")
+        for group_title, activities in ACTION_GROUPS:
+            group_menu = activity_menu.addMenu(group_title)
+            for label, activity in activities:
+                action = group_menu.addAction(label)
+                action.triggered.connect(
+                    lambda _checked=False, value=activity: self.set_activity(value)
+                )
+        activity_menu.addSeparator()
+        random_action = activity_menu.addAction("随机动作")
+        random_action.triggered.connect(
+            lambda _checked=False: self.set_activity(random.choice(RANDOM_ACTIONS))
+        )
+
+        outfit_menu = menu.addMenu("换娃衣")
+        self._populate_outfit_menu(outfit_menu, default_label="默认装")
+
+        appearance_menu = menu.addMenu("换装与外观")
+        size_action = appearance_menu.addAction("调整大小")
+        size_action.triggered.connect(lambda _checked=False: self.open_size_control())
+        topmost_action = appearance_menu.addAction("始终置顶（关闭即桌面模式）")
+        topmost_action.setCheckable(True)
+        topmost_action.setChecked(bool(self.settings.always_on_top))
+        topmost_action.triggered.connect(
+            lambda checked=False: self.set_always_on_top(bool(checked))
+        )
+
+        menu.addSeparator()
+        hide_action = menu.addAction("隐藏六毛")
+        hide_action.triggered.connect(lambda _checked=False: self.hide())
+        return menu
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """稍候显示六毛当前工作控制，为双击右键语音留出判定时间。"""
+        """稍候显示六毛本体菜单，为双击右键语音留出判定时间。"""
 
         self._record_user_interaction()
         if time.monotonic() < self._suppress_context_until:
@@ -3874,13 +3912,11 @@ class PetWindow(QWidget):
         event.accept()
 
     def _show_deferred_context_menu(self) -> None:
-        """确认不是双击后，切换六毛上方的工作控制条。"""
+        """确认不是双击后，打开六毛本体菜单。"""
 
         if time.monotonic() >= self._suppress_context_until:
-            if self.work_controls.isVisible():
-                self.work_controls.hide()
-            else:
-                self._show_work_controls()
+            self.work_controls.hide()
+            self._build_context_menu().exec(self._pending_context_global)
 
     def eventFilter(self, watched, event) -> bool:
         """点击其它 Qt 窗口时收起右键工作条，按钮本身不受影响。"""
