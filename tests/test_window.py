@@ -18,7 +18,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
-from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
@@ -768,6 +768,8 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
     assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "搭子自习室", "音乐", "设置"]
     assert all(not button.icon().isNull() for button in buttons)
     assert not window.quick_panel.title.isVisible()
+    assert window.quick_panel.objectName() == "quickActionDock"
+    assert all(button.size() == QSize(42, 42) for button in buttons)
     assert 50 <= window.quick_panel.sizeHint().height() <= 60
     window.move(300, 200)
     window.show_quick_panel()
@@ -916,6 +918,7 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
     actions = [action for action in menu.actions() if not action.isSeparator()]
     assert [action.text() for action in actions] == [
         "换动作",
+        "六毛互动",
         "换娃衣",
         "换装与外观",
         "隐藏六毛",
@@ -936,7 +939,38 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
         "随机动作",
     ]
 
-    outfit_menu = actions[1].menu()
+    interaction_menu = actions[1].menu()
+    assert interaction_menu is not None
+    interaction_labels = [
+        action.text()
+        for action in interaction_menu.actions()
+        if not action.isSeparator()
+    ]
+    assert interaction_labels == [
+        "给我一个抱抱",
+        "为我加油",
+        "提醒我休息",
+        "喂食与饮品",
+    ]
+    food_action = next(
+        action
+        for action in interaction_menu.actions()
+        if action.text() == "喂食与饮品"
+    )
+    food_menu = food_action.menu()
+    assert food_menu is not None
+    assert [
+        action.text() for action in food_menu.actions() if not action.isSeparator()
+    ] == [
+        "苹果",
+        "小饼干",
+        "热牛奶",
+        "咖啡",
+        "热茶",
+        "查看六毛心情与能量",
+    ]
+
+    outfit_menu = actions[2].menu()
     assert outfit_menu is not None
     outfit_labels = [
         action.text() for action in outfit_menu.actions() if not action.isSeparator()
@@ -945,7 +979,7 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
     assert "兔兔搭子" in outfit_labels
     assert "荒野国王" in outfit_labels
 
-    appearance_menu = actions[2].menu()
+    appearance_menu = actions[3].menu()
     assert appearance_menu is not None
     assert [
         action.text() for action in appearance_menu.actions() if not action.isSeparator()

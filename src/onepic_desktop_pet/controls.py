@@ -11,6 +11,7 @@ from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -25,13 +26,15 @@ CONTROL_STYLE = """
 QWidget#floatingPanel, QDialog#floatingPanel { background: rgba(238, 244, 247, 218); color: #27313d;
 border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
-QWidget#quickActionDock { background: rgba(248, 252, 253, 242); color: #24475b;
-border: 1px solid rgba(40, 125, 158, 118); border-radius: 16px;
+QWidget#quickActionDock { background: rgba(250, 248, 242, 238); color: #24475b;
+border: 1px solid rgba(75, 96, 112, 72); border-radius: 19px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
-QWidget#quickActionDock QPushButton { background: rgba(231, 243, 246, 235); color: #24475b;
-border: 1px solid rgba(40, 125, 158, 75); border-radius: 11px; padding: 0px; }
-QWidget#quickActionDock QPushButton:hover { background: #fff4d8; border: 2px solid #e74a4f; }
-QWidget#quickActionDock QPushButton:pressed { background: #d9eef1; border: 2px solid #287d9e; }
+QWidget#quickActionDock QPushButton { background: rgba(239, 246, 247, 150); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
+QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228);
+border: 1px solid rgba(231, 74, 79, 145); }
+QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
+border: 1px solid rgba(40, 125, 158, 135); }
 QWidget#workControlDock { background: rgba(248, 252, 253, 242); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 118); border-radius: 13px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
@@ -161,10 +164,15 @@ class QuickControlPanel(QWidget):
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(36, 71, 91, 58))
+        self.setGraphicsEffect(shadow)
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
-        layout = QHBoxLayout(self); layout.setContentsMargins(7, 7, 7, 7); layout.setSpacing(5)
+        layout = QHBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9); layout.setSpacing(8)
         self.title = QLabel(f"{pet_name}快捷口袋")
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
@@ -183,8 +191,10 @@ class QuickControlPanel(QWidget):
         button = QPushButton()
         button.setObjectName(f"quickAction_{kind}")
         button.setIcon(_quick_icon(kind))
-        button.setIconSize(QSize(24, 24))
-        button.setFixedSize(40, 40)
+        button.setIconSize(QSize(22, 22))
+        button.setFixedSize(42, 42)
+        button.setAutoDefault(False)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         if signal is not None:

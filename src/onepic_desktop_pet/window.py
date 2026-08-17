@@ -119,6 +119,7 @@ from .companion import (
     APP_DISPLAY_NAME,
     CompanionModel,
     CompanionReply,
+    FOOD_OPTIONS,
 )
 from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
@@ -3282,6 +3283,31 @@ class PetWindow(QWidget):
         self._populate_outfit_menu(menu, default_label=f"经典{self._pet_name()}")
         menu.exec(QCursor.pos())
 
+    def _populate_pet_companion_menu(self, menu: QMenu) -> None:
+        """Populate the pet-only interaction and feeding submenu."""
+
+        for label, action_key in (
+            ("给我一个抱抱", "love"),
+            ("为我加油", "encourage"),
+            ("提醒我休息", "rest"),
+        ):
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, key=action_key: self.perform_companion_action(key)
+            )
+
+        menu.addSeparator()
+        food_menu = menu.addMenu("喂食与饮品")
+        for food in FOOD_OPTIONS:
+            action = food_menu.addAction(food.label)
+            action.triggered.connect(
+                lambda _checked=False, key=food.key: self.feed_pet(key)
+            )
+        status_action = food_menu.addAction("查看六毛心情与能量")
+        status_action.triggered.connect(
+            lambda _checked=False: self.show_companion_status()
+        )
+
     def _position_floating_panel(self, panel: QWidget) -> None:
         """把快捷面板放在宠物旁边并限制在当前屏幕可见区域。"""
 
@@ -3881,6 +3907,9 @@ class PetWindow(QWidget):
         random_action.triggered.connect(
             lambda _checked=False: self.set_activity(random.choice(RANDOM_ACTIONS))
         )
+
+        companion_menu = menu.addMenu("六毛互动")
+        self._populate_pet_companion_menu(companion_menu)
 
         outfit_menu = menu.addMenu("换娃衣")
         self._populate_outfit_menu(outfit_menu, default_label="默认装")
