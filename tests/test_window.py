@@ -768,6 +768,16 @@ def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() ->
     assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "搭子自习室", "音乐", "设置"]
     assert all(not button.icon().isNull() for button in buttons)
     assert window.quick_panel.music_status.text() == "当前播放：暂无"
+    assert not window.quick_panel.title.isVisible()
+    assert not window.quick_panel.music_status.isVisible()
+    assert 50 <= window.quick_panel.sizeHint().height() <= 60
+    window.move(300, 200)
+    window.show_quick_panel()
+    app.processEvents()
+    first_offset = window.quick_panel.pos() - window.pos()
+    window.move(340, 240)
+    app.processEvents()
+    assert window.quick_panel.pos() - window.pos() == first_offset
     window.close(); window.deleteLater(); app.processEvents()
 
 

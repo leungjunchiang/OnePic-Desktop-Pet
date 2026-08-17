@@ -25,6 +25,13 @@ CONTROL_STYLE = """
 QWidget#floatingPanel, QDialog#floatingPanel { background: rgba(238, 244, 247, 218); color: #27313d;
 border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+QWidget#quickActionDock { background: rgba(248, 252, 253, 242); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 118); border-radius: 16px;
+font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+QWidget#quickActionDock QPushButton { background: rgba(231, 243, 246, 235); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 75); border-radius: 11px; padding: 0px; }
+QWidget#quickActionDock QPushButton:hover { background: #fff4d8; border: 2px solid #e74a4f; }
+QWidget#quickActionDock QPushButton:pressed { background: #d9eef1; border: 2px solid #287d9e; }
 QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; border-radius: 10px;
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
@@ -98,7 +105,7 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
 
 
 class QuickControlPanel(QWidget):
-    """双击宠物才出现的常用入口；选择后或闲置八秒会自动收起。"""
+    """跟随六毛移动的五项图标快捷坞；选择后或闲置八秒会自动收起。"""
 
     chat_requested = Signal()
     work_requested = Signal()
@@ -106,33 +113,35 @@ class QuickControlPanel(QWidget):
     music_requested = Signal()
     music_control_requested = Signal(str)
     settings_requested = Signal()
+    size_requested = Signal()
+    rename_requested = Signal()
+    content_update_requested = Signal()
+    program_update_requested = Signal()
 
     def __init__(self, pet_name: str = "六毛") -> None:
         super().__init__(None)
         pet_name = pet_name.strip() or "六毛"
-        self.setObjectName("floatingPanel")
+        self.setObjectName("quickActionDock")
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
-        layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9); layout.setSpacing(7)
-        self.title = QLabel(f"{pet_name}快捷口袋"); self.title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(self.title)
-        row = QHBoxLayout(); row.setSpacing(6)
+        layout = QHBoxLayout(self); layout.setContentsMargins(7, 7, 7, 7); layout.setSpacing(5)
+        self.title = QLabel(f"{pet_name}快捷口袋")
+        self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
-        self.settings_button = self._button("settings", "设置", self.settings_requested)
+        self.settings_button = self._button("settings", "设置", None)
         self.music_button.clicked.connect(self._show_music_menu)
+        self.settings_button.clicked.connect(self._show_settings_menu)
         for button in (self.chat_button, self.work_button, self.social_button, self.music_button, self.settings_button):
-            row.addWidget(button)
-        layout.addLayout(row)
+            layout.addWidget(button)
         self.music_status = QLabel("当前播放：暂无")
-        self.music_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.music_status.setStyleSheet("color: #607487; font-size: 11px;")
-        layout.addWidget(self.music_status)
+        self.music_status.setVisible(False)
 
 
     @staticmethod
@@ -140,8 +149,8 @@ class QuickControlPanel(QWidget):
         button = QPushButton()
         button.setObjectName(f"quickAction_{kind}")
         button.setIcon(_quick_icon(kind))
-        button.setIconSize(QSize(34, 34))
-        button.setFixedSize(52, 52)
+        button.setIconSize(QSize(24, 24))
+        button.setFixedSize(40, 40)
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         if signal is not None:
@@ -151,8 +160,10 @@ class QuickControlPanel(QWidget):
     def set_work_action_label(self, label: str) -> None:
         """Refresh the dynamic work action shown in the shortcut panel."""
 
-        self.work_button.setToolTip(label.strip() or "开始工作")
-        self.work_button.setAccessibleName(label.strip() or "开始工作")
+        label = label.strip() or "开始工作"
+        self.work_button.setToolTip(label)
+        self.work_button.setAccessibleName(label)
+        self.work_button.setIcon(_quick_icon("work", active=label == "暂停工作"))
 
     def set_music_status(self, text: str) -> None:
         """Show the last confirmed player track as read-only panel state."""
@@ -181,6 +192,31 @@ class QuickControlPanel(QWidget):
         status = menu.addAction(self.music_status.text())
         status.setEnabled(False)
         menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
+
+    def _show_settings_menu(self) -> None:
+        """Keep low-frequency settings behind the single gear entry."""
+
+        menu = QMenu(self)
+        for label, signal in (
+            ("调整大小", self.size_requested),
+            ("主人称呼", self.rename_requested),
+            ("AI 与陪伴", self.settings_requested),
+            ("提醒与报时", self.settings_requested),
+            ("音乐设置", self.settings_requested),
+            ("自习室设置", self.settings_requested),
+            ("其他设置", self.settings_requested),
+        ):
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, chosen=signal: self._choose(chosen))
+
+        updates = menu.addMenu("更新与关于")
+        content = updates.addAction("检查补充内容更新")
+        content.triggered.connect(lambda _checked=False: self._choose(self.content_update_requested))
+        program = updates.addAction("检查程序更新")
+        program.triggered.connect(lambda _checked=False: self._choose(self.program_update_requested))
+        version = updates.addAction("当前版本信息")
+        version.setEnabled(False)
+        menu.exec(self.settings_button.mapToGlobal(self.settings_button.rect().bottomLeft()))
 
     def set_pet_name(self, pet_name: str) -> None:
         """昵称保存后同步快捷口袋标题。"""

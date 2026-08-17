@@ -101,10 +101,27 @@ class UnifiedMenuModel:
         ]
         work_record_children = [item for item in work_record_children if item is not None]
 
+        update_children = [
+            self._optional("检查补充内容更新", "content_update"),
+            self._optional("检查程序更新", "program_update"),
+            MenuItemSpec(
+                f"当前程序版本：{str(state.get('program_version') or '未知')}",
+                enabled=False,
+            ),
+            MenuItemSpec(
+                f"当前内容版本：{str(state.get('content_version') or '内置内容')}",
+                enabled=False,
+            ),
+        ]
+        update_children = [item for item in update_children if item is not None]
         settings_children = [
-            self._optional("修改主人称呼…", "rename"),
-            self._optional("AI 与陪伴设置…", "settings"),
+            self._optional("主人称呼", "rename"),
+            self._optional("AI 与陪伴", "settings"),
             self._optional("调整大小", "size"),
+            self._optional("提醒与报时", "settings"),
+            self._optional("音乐设置", "settings"),
+            self._optional("自习室设置", "settings"),
+            MenuItemSpec("更新与关于", children=tuple(update_children)),
         ]
         settings_children = [item for item in settings_children if item is not None]
 
@@ -143,10 +160,6 @@ class UnifiedMenuModel:
             (
                 MenuItemSpec.divider(),
                 MenuItemSpec("隐藏六毛" if visible else "显示六毛", "visibility"),
-                *[item for item in (
-                    self._optional("检查补充内容更新", "content_update"),
-                    self._optional("检查程序更新", "program_update"),
-                ) if item is not None],
                 MenuItemSpec("退出", "quit"),
             )
         )
