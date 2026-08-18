@@ -1456,7 +1456,8 @@ def test_selfie_photo_is_positioned_near_visible_character() -> None:
     visual_gap = character_left - (
         window.photo_bubble.x() + window.photo_bubble.width()
     )
-    assert visual_gap == 8
+    # Windows high-DPI geometry can round the visual edge by one pixel.
+    assert abs(visual_gap - 8) <= 1
     window.photo_bubble.hide()
     window.close()
     window.deleteLater()
