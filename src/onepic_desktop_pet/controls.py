@@ -72,7 +72,14 @@ class WorkControlBubble(QWidget):
     def __init__(self) -> None:
         super().__init__(None)
         self.setObjectName("workControlDock")
-        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
         layout = QHBoxLayout(self)
@@ -85,8 +92,10 @@ class WorkControlBubble(QWidget):
         self.duration_label.setVisible(True)
         self.pause_button = QPushButton("暂停工作")
         self.pause_button.setObjectName("pauseWorkButton")
+        self.pause_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.finish_button = QPushButton("结束工作")
         self.finish_button.setObjectName("finishWorkButton")
+        self.finish_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._session_status = "idle"
         self.pause_button.clicked.connect(self._toggle_session)
         self.finish_button.clicked.connect(self.finish_requested.emit)
@@ -149,6 +158,7 @@ class WorkDurationBubble(QLabel):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -256,7 +266,14 @@ class QuickControlPanel(QWidget):
         super().__init__(None)
         pet_name = pet_name.strip() or "六毛"
         self.setObjectName("quickActionDock")
-        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
         shadow = QGraphicsDropShadowEffect(self)
@@ -472,4 +489,3 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
-
