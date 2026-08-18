@@ -24,6 +24,9 @@ FOCUS_COINS_PER_HOUR = 6
 EARLY_BIRD_START_HOUR = 10
 EARLY_BIRD_MIN_SECONDS = 20 * 60
 
+# Only fully implemented household facilities are available for new purchases.
+ACTIVE_HOUSEHOLD_KEYS = frozenset({"coffee_pot"})
+
 
 ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee": {
@@ -64,7 +67,7 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee_pot": {
         "name": "咖啡壶", "price": 30, "group": "添置家当",
         "kind": "household", "collection": "coffee_pot",
-        "description": "添置后，早鸟生活会留下更完整的咖啡记录。",
+        "description": "每天最多补给 1 杯普通咖啡；使用后进入 30 分钟咖啡开工时刻。",
     },
     "desk_lamp": {
         "name": "小台灯", "price": 35, "group": "添置家当",
@@ -386,6 +389,47 @@ class EconomyLedger:
                 active.pop(key, None)
         return result
 
+    def _grant_household_daily_supply(
+        self,
+        daily: dict[str, Any],
+        day: str,
+        events: list[WalletEvent] | None = None,
+    ) -> bool:
+        """Grant one limited daily household supply without creating a coin faucet."""
+        if not self.has_household("coffee_pot"):
+            return False
+        household_supplies = daily.setdefault("household_supplies", {})
+        source_key = f"household:coffee_pot:{day}"
+        if household_supplies.get("coffee_pot") or self._has_source(source_key):
+            household_supplies["coffee_pot"] = True
+            return False
+        self._add_inventory("coffee", 1)
+        household_supplies["coffee_pot"] = True
+        event = self._append(
+            "supply_reward",
+            0,
+            "咖啡壶每日补给：普通咖啡",
+            source_key,
+            day,
+            source="household_supply",
+            metadata={
+                "item_key": "coffee",
+                "household": "coffee_pot",
+                "daily_limit": 1,
+            },
+        )
+        if events is not None:
+            events.append(event)
+        return True
+
+    def ensure_daily_household_supply(self, day: str | None = None) -> bool:
+        """Materialize today's coffee-pot supply at most once per local calendar day."""
+        target = str(day or self._now().date().isoformat())[:10]
+        daily = self._state.setdefault("daily_focus", {}).setdefault(target, {})
+        return bool(
+            self._atomic(lambda: self._grant_household_daily_supply(daily, target))
+        )
+
     def record_focus(self, seconds: int, *, started_at: datetime | None = None) -> dict[str, Any]:
         """把真实专注片段换成工资和日常补给，不篡改真实工作时间。"""
         seconds = max(0, int(seconds))
@@ -416,6 +460,7 @@ class EconomyLedger:
             added_coins = max(0, total_coins - old_coins)
             daily["focus_coins"] = old_coins + added_coins
             events: list[WalletEvent] = []
+            self._grant_household_daily_supply(daily, day, events)
 
             if added_coins:
                 events.append(self._append(
@@ -481,13 +526,31 @@ class EconomyLedger:
         target = str(day or self._now().date().isoformat())[:10]
         daily = (self._state.get("daily_focus") or {}).get(target) or {}
         claimed = daily.get("supplies") if isinstance(daily.get("supplies"), dict) else {}
+        household_supplies = (
+            daily.get("household_supplies")
+            if isinstance(daily.get("household_supplies"), dict)
+            else {}
+        )
+        coffee_status = {
+            "claimed": bool(claimed.get("coffee")),
+            "rule": "当天第一次正式开工后免费 1 杯",
+        }
+        if self.has_household("coffee_pot"):
+            coffee_status.update(
+                {
+                    "coffee_pot_enabled": True,
+                    "coffee_pot_claimed": bool(household_supplies.get("coffee_pot")),
+                    "coffee_pot_rule": "咖啡壶每天最多再补给 1 杯普通咖啡",
+                }
+            )
         return {
-            "coffee": {"claimed": bool(claimed.get("coffee")), "rule": "当天第一次正式开工后免费 1 杯"},
+            "coffee": coffee_status,
             "expensive_coffee": {"claimed": bool(daily.get("early_bird")), "rule": "首次有效工作从 10:00 前开始，并达到 20 分钟"},
             "milk_tea": {"claimed": bool(claimed.get("milk_tea")), "rule": "一次连续专注达到 40 分钟"},
             "cake": {"claimed": bool(claimed.get("cake")), "rule": "完成一项标记为重要的 Todo"},
             "tea": {"claimed": bool(claimed.get("tea")), "rule": "当天累计专注达到 2 小时；好友敬茶另计"},
         }
+
     def record_income(
         self,
         label: str,
@@ -597,6 +660,8 @@ class EconomyLedger:
     ) -> WalletEvent | None:
         spec = ITEM_CATALOG.get(str(item_key))
         if not spec:
+            return None
+        if spec["kind"] == "household" and item_key not in ACTIVE_HOUSEHOLD_KEYS:
             return None
         if spec["kind"] == "household" and self.has_household(item_key):
             return None
