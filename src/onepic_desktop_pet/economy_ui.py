@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .economy import CATEGORY_LABELS, ITEM_CATALOG, EconomyLedger
+from .economy import ACTIVE_HOUSEHOLD_KEYS, CATEGORY_LABELS, ITEM_CATALOG, EconomyLedger
 
 
 class EconomyDialog(QDialog):
@@ -207,9 +207,10 @@ class EconomyDialog(QDialog):
             self.tabs.setCurrentIndex(index)
 
     def refresh(self) -> None:
+        self.ledger.ensure_daily_household_supply()
         report = self.ledger.month_report()
-        self.balance.setText(f"钱袋余额\n{self.ledger.balance} 毛币")
-        self.income.setText(f"本月创收\n{report['income']} 毛币")
+        self.balance.setText(f"钱袋余额\n{self.ledger.balance} 吉他拨片")
+        self.income.setText(f"本月创收\n{report['income']} 吉他拨片")
         self.identity.setText(f"本月身份\n{report['identity']}")
         inventory = [
             f"{row['name']} × {row['quantity']}"
@@ -221,12 +222,12 @@ class EconomyDialog(QDialog):
         today_events = list(today.get("events") or [])
         if today_events:
             lines = [
-                f"今日工资/收入：{today['income']} 毛币　·　今日消费：{today['expenses']} 毛币",
+                f"今日工资/收入：{today['income']} 吉他拨片　·　今日消费：{today['expenses']} 吉他拨片",
             ]
             for event in today_events[:5]:
                 amount = int(event.get("amount") or 0)
                 sign = "+" if amount > 0 else ""
-                lines.append(f"· {event.get('label') or '生活事件'}　{sign}{amount} 毛币")
+                lines.append(f"· {event.get('label') or '生活事件'}　{sign}{amount} 吉他拨片")
             self.today.setText("\n".join(lines))
         else:
             self.today.setText("今天还没有新的六毛生活记录。先认真开一小会儿工吧。")
@@ -240,15 +241,15 @@ class EconomyDialog(QDialog):
         report = self.ledger.month_report()
         self.salary.setText(
             f"{report['month']} 年 {int(report['month'].split('-')[1])} 月工资条\n\n"
-            f"基础工资　　　　　　　　 +{report['salary']} 毛币\n"
+            f"基础工资　　　　　　　　 +{report['salary']} 吉他拨片\n"
             f"早鸟补贴（免费咖啡）　　 {report['early_bird_count']} 次\n"
-            f"成果 / 外快　　　　　　　+{report['windfall']} 毛币\n"
-            f"任务绩效　　　　　　　　 +{report['performance']} 毛币\n"
-            f"搭子互动 / 特殊奖励　　　+{report['social_reward'] + report['special_reward']} 毛币\n"
+            f"成果 / 外快　　　　　　　+{report['windfall']} 吉他拨片\n"
+            f"任务绩效　　　　　　　　 +{report['performance']} 吉他拨片\n"
+            f"搭子互动 / 特殊奖励　　　+{report['social_reward'] + report['special_reward']} 吉他拨片\n"
             "────────────────────\n"
-            f"本月创收　　　　　　　　 {report['income']} 毛币\n"
-            f"本月花费　　　　　　　　-{report['expenses']} 毛币\n"
-            f"当前钱袋　　　　　　　　 {report['balance']} 毛币"
+            f"本月创收　　　　　　　　 {report['income']} 吉他拨片\n"
+            f"本月花费　　　　　　　　-{report['expenses']} 吉他拨片\n"
+            f"当前钱袋　　　　　　　　 {report['balance']} 吉他拨片"
         )
         self.salary_comment.setText(f"六毛说：{self.ledger.salary_comment()}")
 
@@ -263,7 +264,7 @@ class EconomyDialog(QDialog):
             category = CATEGORY_LABELS.get(event.category, event.category)
             self.events.addItem(
                 f"{event.occurred_on} {stamp}　{category}\n"
-                f"{event.label}　{sign}{amount} 毛币"
+                f"{event.label}　{sign}{amount} 吉他拨片"
             )
         if not self.events.count():
             self.events.addItem("这类账目还没有记录。")
@@ -288,8 +289,10 @@ class EconomyDialog(QDialog):
         for key, spec in ITEM_CATALOG.items():
             if spec["group"] != group:
                 continue
+            if spec["kind"] == "household" and key not in ACTIVE_HOUSEHOLD_KEYS:
+                continue
             owned = self.ledger.has_household(key)
-            button = QPushButton("已添置" if owned else f"购买 {spec['price']} 毛币")
+            button = QPushButton("已添置" if owned else f"购买 {spec['price']} 吉他拨片")
             button.setEnabled(not owned)
             button.clicked.connect(lambda _checked=False, key=key: self._purchase(key))
             text = f"{spec['name']}\n{spec['description']}"
@@ -351,7 +354,7 @@ class EconomyDialog(QDialog):
         name, ok = QInputDialog.getText(self, "登记成果 / 外快", "名称：")
         if not ok or not name.strip():
             return
-        amount, ok = QInputDialog.getInt(self, "登记成果 / 外快", "折算毛币：", 20, 1, 100000)
+        amount, ok = QInputDialog.getInt(self, "登记成果 / 外快", "折算吉他拨片：", 20, 1, 100000)
         if not ok:
             return
         note, ok = QInputDialog.getText(self, "登记成果 / 外快", "备注（可选）：")
@@ -359,7 +362,7 @@ class EconomyDialog(QDialog):
             return
         if QMessageBox.question(
             self, "确认登记",
-            f"确认登记“{name.strip()}”并增加 {amount} 毛币吗？\n这会进入本月创收和荒野账本。",
+            f"确认登记“{name.strip()}”并增加 {amount} 吉他拨片吗？\n这会进入本月创收和荒野账本。",
         ) != QMessageBox.StandardButton.Yes:
             return
         event = self.ledger.register_achievement_income(kind, name, amount, note)
@@ -372,7 +375,7 @@ class EconomyDialog(QDialog):
     def _purchase(self, item_key: str) -> None:
         spec = ITEM_CATALOG.get(item_key) or {}
         if self.ledger.balance < int(spec.get("price") or 0):
-            QMessageBox.information(self, "钱袋有点瘪", "哥们，毛币不够，先去认真开一会儿工吧。")
+            QMessageBox.information(self, "钱袋有点瘪", "哥们，吉他拨片不够，先去认真开一会儿工吧。")
             return
         event = self.ledger.purchase_item(item_key)
         if event is None:
