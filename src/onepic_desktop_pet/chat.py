@@ -1154,7 +1154,8 @@ class AISettingsDialog(QDialog):
         self.program_update_requested.emit()
         self.accept()
 
-    def apply(self) -> None:        self.settings.owner_nickname = self.owner_nickname.text().strip()[:24]
+    def apply(self) -> None:
+        self.settings.owner_nickname = self.owner_nickname.text().strip()[:24]
         self.settings.pet_name = PET_NAME
         provider = str(self.provider.currentData())
         self.settings.ai_provider = provider
