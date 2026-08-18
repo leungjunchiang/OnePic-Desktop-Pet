@@ -15,7 +15,7 @@
 - 在内存中保留最近三十轮完整聊天，并把更早内容滚动压缩为长期摘要；聊天记录由用户控制保存在本机；
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
-- 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
+- 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -92,7 +92,12 @@ except ImportError:
     QAudioOutput = QMediaPlayer = None
 
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
-from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
+from .accessories import (
+    OUTFITS,
+    SPECIAL_LIMITED_ACTIVITY_SPRITES,
+    draw_activity_overlay,
+    unlocked_outfits,
+)
 from .activity import active_application_category, active_application_name, active_window_is_fullscreen
 from .behavior import (
     BehaviorModel,
@@ -160,6 +165,7 @@ from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
 from .compact_todo import CompactTodoPanel
 from .menu_model import UnifiedMenuModel, populate_qmenu
+from .night_limited import night_limited_activity
 from . import __version__
 
 
@@ -427,6 +433,7 @@ class PetWindow(QWidget):
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
+        self._night_limited_activity = ""
         self._activity_transition_from = QPixmap()
         self._activity_transition_step = 0
         self._activity_transition_steps = 8
@@ -572,6 +579,11 @@ class PetWindow(QWidget):
         self.ambient_timer.timeout.connect(self._ambient_tick)
         self._schedule_ambient()
 
+        self.night_limited_timer = QTimer(self)
+        self.night_limited_timer.setInterval(15_000)
+        self.night_limited_timer.timeout.connect(self._night_limited_tick)
+        self.night_limited_timer.start()
+
         self.song_timer = QTimer(self)
         self.song_timer.setSingleShot(True)
         self.song_timer.timeout.connect(self._song_inspiration_tick)
@@ -635,6 +647,7 @@ class PetWindow(QWidget):
 
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
+        self._night_limited_tick()
         self._schedule(self.behavior.initial_idle())
         if should_start_startup_detection():
             QTimer.singleShot(0, self.agent_manager.start_background_check)
@@ -908,7 +921,8 @@ class PetWindow(QWidget):
     def _change_ambient_activity(self, activity: str) -> None:
         """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
 
-        next_activity = activity if activity in ACTION_SPRITES else "none"
+        valid_activities = set(ACTION_SPRITES) | set(SPECIAL_LIMITED_ACTIVITY_SPRITES)
+        next_activity = activity if activity in valid_activities else "none"
         if next_activity == self._ambient_activity:
             self._refresh_pixmap()
             return
@@ -2336,6 +2350,10 @@ class PetWindow(QWidget):
     def _work_activity_tick(self) -> None:
         """在专注动作间轮换，让用户工作时六毛也持续工作。"""
 
+        if night_limited_activity(datetime.now()) is not None:
+            self._night_limited_tick()
+            self._schedule_work_activity()
+            return
         if not self.work_timer.is_running:
             return
         session = self.work_timer.session_seconds()
@@ -2356,6 +2374,9 @@ class PetWindow(QWidget):
     def _activity_timeout(self) -> None:
         """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
 
+        if night_limited_activity(datetime.now()) is not None:
+            self._night_limited_tick()
+            return
         self._change_ambient_activity(
             random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
         )
@@ -3641,10 +3662,33 @@ class PetWindow(QWidget):
         if self.settings.automatic_grumbling:
             self.ambient_timer.start(random.randint(8 * 60_000, 18 * 60_000))
 
+    def _night_limited_tick(self) -> None:
+        """在本地 00:30–06:30 显示当天限定造型，06:30 到点恢复普通状态。"""
+
+        selected = night_limited_activity(datetime.now())
+        if selected is None:
+            previous = self._night_limited_activity
+            self._night_limited_activity = ""
+            if previous and self._ambient_activity == previous:
+                self.activity_timer.stop()
+                self._manual_activity_until = 0.0
+                self._change_ambient_activity(
+                    random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+                )
+            return
+        self._night_limited_activity = selected
+        if time.monotonic() < self._manual_activity_until:
+            return
+        self.activity_timer.stop()
+        self._change_ambient_activity(selected)
+
     def _ambient_tick(self) -> None:
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
         try:
+            if night_limited_activity(datetime.now()) is not None:
+                self._night_limited_tick()
+                return
             busy = self.chat_manager.busy
             if self.isVisible() and not self.dragging and not busy:
                 idle_seconds = time.monotonic() - self._last_user_interaction

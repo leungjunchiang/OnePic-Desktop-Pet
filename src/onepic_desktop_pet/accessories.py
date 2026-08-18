@@ -43,6 +43,10 @@ SPECIAL_ACTIVITY_SPRITES = {
     for key, filename in ACTION_SPRITES.items()
 }
 
+SPECIAL_LIMITED_ACTIVITY_SPRITES = {
+    "night-study-limited": "assets/pet/night-limited/00-night-study.png",
+}
+
 SPECIAL_OUTFIT_SPRITES = {
     f"hour-{hour:02d}": f"assets/pet/hourly-outfits/{hour:02d}-hour.png"
     for hour in range(1, 13)
@@ -63,6 +67,8 @@ def draw_activity_overlay(
 ) -> QPixmap:
     """返回叠加活动物件和娃衣配饰后的新像素图。"""
 
+    if activity in SPECIAL_LIMITED_ACTIVITY_SPRITES:
+        return _full_sprite(source, SPECIAL_LIMITED_ACTIVITY_SPRITES[activity])
     if activity in SPECIAL_ACTIVITY_SPRITES:
         return _full_sprite(source, SPECIAL_ACTIVITY_SPRITES[activity])
     if outfit in SPECIAL_OUTFIT_SPRITES:

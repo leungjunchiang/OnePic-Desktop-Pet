@@ -38,3 +38,13 @@ def test_complete_sprite_keeps_full_bounds_on_200_percent_display() -> None:
     assert bbox is not None
     assert bbox[0] > 0 and bbox[1] > 0
     assert bbox[2] < result.width() and bbox[3] < result.height()
+
+
+def test_night_limited_activity_uses_the_dedicated_transparent_sprite() -> None:
+    """夜间限定造型走完整素材映射，不改变永久娃衣装备。"""
+
+    from onepic_desktop_pet.accessories import SPECIAL_LIMITED_ACTIVITY_SPRITES
+
+    assert SPECIAL_LIMITED_ACTIVITY_SPRITES["night-study-limited"] == (
+        "assets/pet/night-limited/00-night-study.png"
+    )

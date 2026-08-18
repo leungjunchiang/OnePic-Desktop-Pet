@@ -221,6 +221,22 @@ def test_daily_action_library_is_transparent_consistent_and_uncropped() -> None:
             assert bbox[2] <= 990 and bbox[3] <= 990, path.name
 
 
+def test_night_limited_sprite_is_transparent_and_normalized() -> None:
+    """夜间限定素材必须是完整透明画布，不能带生成图的背景方块。"""
+
+    path = PROJECT_ROOT / "assets" / "pet" / "night-limited" / "00-night-study.png"
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        bbox = alpha.getbbox()
+        assert rgba.size == (1024, 1024)
+        assert rgba.mode == "RGBA"
+        assert alpha.getextrema()[0] == 0
+        assert bbox is not None
+        assert bbox[0] >= 34 and bbox[1] >= 34
+        assert bbox[2] <= 990 and bbox[3] <= 990
+
+
 def test_hourly_outfit_library_is_transparent_consistent_and_uncropped() -> None:
     """1–12 小时娃衣必须完整、高清、透明且不贴边。"""
 
