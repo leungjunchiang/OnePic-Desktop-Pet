@@ -133,7 +133,7 @@ from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .economy import EconomyLedger
 from .economy_ui import EconomyDialog
 from .food_scene_ui import FoodSceneDialog
-from .input_activity import system_session_state
+from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report

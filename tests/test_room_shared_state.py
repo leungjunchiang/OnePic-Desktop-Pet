@@ -127,103 +127,37 @@ def test_social_card_prefers_explicit_owner_nickname_and_marks_stale_presence_of
     widget.deleteLater(); app.processEvents()
 
 
-def test_idle_input_pauses_focus_without_resuming_automatically(monkeypatch, tmp_path):
+def test_input_silence_never_pauses_focus(monkeypatch, tmp_path):
+    """Reading, thinking, or switching apps must never stop the timer."""
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     window = PetWindow(PetSettings(idle_pause_seconds=600))
-    readings = iter((599.0, 599.0, 600.0, 601.0, 601.0))
     monkeypatch.setattr(
-        "onepic_desktop_pet.window.system_idle_seconds",
-        lambda: next(readings, 600.0),
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
     )
     window.start_work_timer()
-    window._check_input_idle()
+    for _ in range(5):
+        window._check_input_idle()
     assert window.work_timer.is_running
-    window._check_input_idle()
-    assert window.work_timer.is_running
-    # Two samples crossing ten minutes pause the session, but no excess time
-    # has been recorded yet.
-    window._check_input_idle()
-    assert window.work_timer.is_running
-    window._check_input_idle()
-    assert window.work_timer.is_running
+    assert window._auto_paused_for_idle is False
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_verified_sleep_pauses_focus_without_idle_recovery(monkeypatch, tmp_path):
+    """Only a verified sleep signal may pause a running session automatically."""
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    window = PetWindow(PetSettings(idle_pause_seconds=600))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": True},
+    )
+    window.start_work_timer()
     window._check_input_idle()
     assert not window.work_timer.is_running
-    assert window._auto_paused_for_idle is True
-    assert "暂停" in window.speech_bubble.text()
-    window.close(); window.deleteLater(); app.processEvents()
-
-
-def test_idle_recovery_uses_one_reusable_window_and_resolves_once(monkeypatch, tmp_path):
-    app = QApplication.instance() or QApplication([])
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    window = PetWindow(PetSettings(idle_pause_seconds=600))
-    # Keep this test deterministic across desktop runners.  CI may report its
-    # hidden test host as a locked/fullscreen desktop, which is intentionally a
-    # high-confidence automatic rest decision and therefore has no hint.
-    monkeypatch.setattr(
-        window,
-        "_capture_idle_context",
-        lambda: IdleEvidence(app_name="unknown-test-host", app_category="other"),
-    )
-    readings = iter((601.0, 601.0, 0.0, 0.0, 0.0))
-    monkeypatch.setattr(
-        "onepic_desktop_pet.window.system_idle_seconds",
-        lambda: next(readings, 0.0),
-    )
-    window.start_work_timer()
-    window._check_input_idle()
-    window._check_input_idle()
-    assert window._auto_paused_for_idle is True
-    window._check_input_idle()
-    window._ask_idle_recovery()
-    dialog = window._idle_recovery_dialog
-    assert dialog is not None and dialog.isVisible()
-    assert "1 秒" in dialog.summary_label.text()
-
-    # More return samples reuse the same window and never create another one.
-    window._check_input_idle()
-    window._ask_idle_recovery()
-    assert window._idle_recovery_dialog is dialog
-    dialog.focus_button.click()
-    app.processEvents()
-    assert window._idle_recovery_resolved is True
-    assert not dialog.isVisible()
-
-    # The resolved episode is one-shot even if the OS counter stays active.
-    window._check_input_idle()
-    window._ask_idle_recovery()
-    assert not dialog.isVisible()
-    window.close(); window.deleteLater(); app.processEvents()
-
-
-def test_idle_recovery_duration_keeps_growing_after_threshold(monkeypatch, tmp_path):
-    app = QApplication.instance() or QApplication([])
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    window = PetWindow(PetSettings(idle_pause_seconds=600))
-    monkeypatch.setattr(
-        window,
-        "_capture_idle_context",
-        lambda: IdleEvidence(app_name="unknown-test-host", app_category="other"),
-    )
-    readings = iter((601.0, 601.0, 0.0))
-    monkeypatch.setattr(
-        "onepic_desktop_pet.window.system_idle_seconds",
-        lambda: next(readings, 0.0),
-    )
-    window.start_work_timer()
-    window._check_input_idle()
-    window._check_input_idle()
-    assert window._auto_paused_for_idle is True
-
-    # Simulate remaining away for 15 minutes after the ten-minute grace
-    # period.  The hint must show the excess duration, not the trigger.
-    window._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=901)
-    window._check_input_idle()
-    window._ask_idle_recovery()
-    assert window._idle_recovery_dialog is not None
-    summary = window._idle_recovery_dialog.summary_label.text()
-    assert "15" in summary and "01" in summary
+    assert window._auto_paused_for_idle is False
+    assert "睡眠" in window.speech_bubble.text()
     window.close(); window.deleteLater(); app.processEvents()
 
 
