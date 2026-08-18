@@ -55,7 +55,7 @@ class FocusSessionManager(QObject):
         super().__init__(parent)
         self.timer = timer
         self._room_id: str | None = None
-        self._resting = bool(timer.today_seconds() and not timer.is_running)
+        self._resting = bool(timer.has_active_session and not timer.is_running)
 
     @property
     def room_id(self) -> str | None:

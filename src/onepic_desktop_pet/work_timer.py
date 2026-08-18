@@ -52,6 +52,17 @@ def format_work_duration(seconds: int) -> str:
     return f"{minutes}分钟"
 
 
+def format_elapsed_clock(seconds: int) -> str:
+    """Format a live session duration as mm:ss or h:mm:ss."""
+
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
 class WorkTimerModel:
     """维护单个用户的今日累计时长和当前连续工作时段。"""
 
@@ -69,6 +80,7 @@ class WorkTimerModel:
         self._lifetime_seconds = 0
         self._notified_outfit_count = 0
         self._session_accumulated_seconds = 0
+        self._session_active = False
         self._running_since: float | None = None
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key: str | None = None
@@ -86,6 +98,12 @@ class WorkTimerModel:
         """Whether the last saved state was running and has just been resumed."""
 
         return self._recovered_active_session
+
+    @property
+    def has_active_session(self) -> bool:
+        """Whether a started work session is paused or currently running."""
+
+        return self._session_active
 
     def _today_key(self) -> str:
         """返回本地日期键。"""
@@ -108,10 +126,14 @@ class WorkTimerModel:
                 if same_date else 0
             )
             saved_running = bool(data.get("running", False)) and same_date
+            saved_session_active = bool(
+                data.get("session_active", saved_running or session_seconds > 0)
+            ) and same_date
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return
         self._accumulated_seconds = max(0, seconds)
         self._session_accumulated_seconds = session_seconds
+        self._session_active = saved_session_active
         if saved_running:
             # Monotonic clocks are process-local. Resume from the last
             # checkpoint instead of counting the period while the app was down.
@@ -130,6 +152,7 @@ class WorkTimerModel:
         self._date_key = today
         self._accumulated_seconds = 0
         self._session_accumulated_seconds = 0
+        self._session_active = False
         self._running_since = self._monotonic() if was_running else None
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key = None
@@ -150,7 +173,7 @@ class WorkTimerModel:
         return self._accumulated_seconds + self._current_elapsed()
 
     def session_seconds(self) -> int:
-        """返回本次连续工作段秒数，暂停后归零。"""
+        """返回本轮工作 Session 秒数，暂停/继续期间保持累计。"""
 
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
@@ -182,8 +205,11 @@ class WorkTimerModel:
         if self.is_running:
             return False
         now = self._monotonic()
+        if not self._session_active:
+            self._session_accumulated_seconds = 0
+            self._last_reminder_key = None
+        self._session_active = True
         self._running_since = now
-        self._session_accumulated_seconds = 0
         self._last_checkpoint = now
         self._last_reminder_key = None
         self._recovered_active_session = False
@@ -199,7 +225,7 @@ class WorkTimerModel:
         elapsed = self._current_elapsed()
         self._accumulated_seconds += elapsed
         self._lifetime_seconds += elapsed
-        self._session_accumulated_seconds = 0
+        self._session_active = True
         self._running_since = None
         self._last_reminder_key = None
         self._recovered_active_session = False
@@ -209,8 +235,14 @@ class WorkTimerModel:
     def finish(self) -> int:
         """完成当前工作段并返回今天累计秒数。"""
 
-        self.pause()
-        return self.today_seconds()
+        if self.is_running:
+            self.pause()
+        total = self.today_seconds()
+        self._session_active = False
+        self._session_accumulated_seconds = 0
+        self._last_reminder_key = None
+        self._save()
+        return total
 
     def checkpoint(self, minimum_interval_seconds: int = 60) -> bool:
         """运行中按最小间隔保存进度，避免频繁写盘。"""
@@ -269,6 +301,7 @@ class WorkTimerModel:
             "lifetime_seconds": max(0, int(self._lifetime_seconds)),
             "notified_outfit_count": max(0, int(self._notified_outfit_count)),
             "running": self.is_running,
+            "session_active": self._session_active,
             "session_accumulated_seconds": max(0, int(self._session_accumulated_seconds)),
         }
         temporary.write_text(

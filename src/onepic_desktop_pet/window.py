@@ -129,7 +129,12 @@ from .companion import (
     FOOD_OPTIONS,
 )
 from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
-from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
+from .controls import (
+    QuickControlPanel,
+    SizeControlDialog,
+    WorkControlBubble,
+    WorkDurationBubble,
+)
 from .economy import EconomyLedger
 from .economy_ui import EconomyDialog
 from .food_scene_ui import FoodSceneDialog
@@ -161,7 +166,7 @@ from .social_ui import BuddyVisitWindow, SocialEventThread, SocialHubDialog, Soc
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .music_playback import SongPlaybackResult
 from .wellness import WellnessReminderModel
-from .work_timer import WorkTimerModel, format_work_duration
+from .work_timer import WorkTimerModel, format_elapsed_clock, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
 from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
@@ -506,6 +511,7 @@ class PetWindow(QWidget):
         )
 
         self.work_controls = WorkControlBubble()
+        self.work_duration_bubble = WorkDurationBubble()
         self._qt_application = QApplication.instance()
         if self._qt_application is not None:
             self._qt_application.installEventFilter(self)
@@ -1054,6 +1060,7 @@ class PetWindow(QWidget):
             handle.screenChanged.connect(self._on_screen_changed)
             self._screen_change_connected = True
         self._on_screen_changed(handle.screen() if handle else None)
+        self._update_work_duration_bubble()
         if self._compact_todo_panel is not None:
             if self._restore_compact_todos_after_show:
                 self._compact_todo_panel.show()
@@ -1185,6 +1192,7 @@ class PetWindow(QWidget):
         self.photo_bubble.hide()
         self.speech_bubble.hide()
         self.work_controls.hide()
+        self.work_duration_bubble.hide()
         self.quick_panel.hide()
         if self._compact_todo_panel is not None:
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
@@ -1203,6 +1211,7 @@ class PetWindow(QWidget):
         self.music_controller.shutdown()
         self.photo_bubble.close()
         self.speech_bubble.close()
+        self.work_duration_bubble.close()
         self._buddy_visit_window.close()
         if self._today_note_window is not None:
             self._today_note_window.close()
@@ -2357,6 +2366,8 @@ class PetWindow(QWidget):
             self._position_quick_panel()
         if hasattr(self, "work_controls") and self.work_controls.isVisible():
             self._position_work_controls()
+        if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
+            self._position_work_duration_bubble()
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
             self._position_compact_todos()
         self._position_sticky_note()
@@ -2610,6 +2621,7 @@ class PetWindow(QWidget):
         self._check_local_reminders()
         self.work_timer.checkpoint()
         snapshot = self.focus_session.refresh()
+        self._update_work_duration_bubble(snapshot)
         if self.work_controls.isVisible():
             self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
             self.work_controls.set_session_duration(
@@ -3241,6 +3253,7 @@ class PetWindow(QWidget):
 
     def _focus_snapshot_changed(self, snapshot: object) -> None:
         self._refresh_shortcut_state()
+        self._update_work_duration_bubble(snapshot)
         if self.work_controls.isVisible():
             status = str(getattr(snapshot, "status", "idle"))
             seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
@@ -3498,6 +3511,7 @@ class PetWindow(QWidget):
         self.settings.show_work_duration = bool(enabled)
         save_settings(self.settings)
         self.work_controls.set_duration_visible(self.settings.show_work_duration)
+        self._update_work_duration_bubble()
         self.show_speech(
             "本轮工作时长显示已开启。" if enabled else "本轮工作时长显示已关闭。",
             3000,
@@ -3770,6 +3784,63 @@ class PetWindow(QWidget):
             chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
         panel.move(chosen.topLeft())
 
+    def _position_work_duration_bubble(self) -> None:
+        """Keep the live duration label by the pet's feet with edge fallback."""
+
+        bubble = self.work_duration_bubble
+        bubble.adjustSize()
+        area = self._screen_geometry()
+        gap = 5
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        blocked = [pet_rect]
+        for accessory in (
+            self._compact_todo_panel,
+            self.speech_bubble,
+            self.quick_panel,
+            self.work_controls,
+        ):
+            if accessory is not None and accessory.isVisible():
+                blocked.append(accessory.geometry())
+        center_x = self.x() + (self.width() - bubble.width()) // 2
+        candidates = [
+            (center_x, self.y() + self.height() + gap),
+            (center_x, self.y() - bubble.height() - gap),
+            (self.x() - bubble.width() - gap, self.y() + self.height() - bubble.height()),
+            (self.x() + self.width() + gap, self.y() + self.height() - bubble.height()),
+        ]
+        chosen = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, bubble.width(), bubble.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if any(candidate.intersects(item) for item in blocked):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            candidate_x, candidate_y = candidates[0]
+            if area is not None:
+                candidate_x = min(max(candidate_x, area.left()), area.right() - bubble.width() + 1)
+                candidate_y = min(max(candidate_y, area.top()), area.bottom() - bubble.height() + 1)
+            chosen = QRect(candidate_x, candidate_y, bubble.width(), bubble.height())
+        bubble.move(chosen.topLeft())
+
+    def _update_work_duration_bubble(self, snapshot=None) -> None:
+        """Render the shared focus snapshot without creating a second timer."""
+
+        if not hasattr(self, "work_duration_bubble"):
+            return
+        current = snapshot or self.focus_session.snapshot()
+        show_duration = bool(getattr(self.settings, "show_work_duration", True))
+        self.work_duration_bubble.set_session(
+            str(getattr(current, "status", "idle")),
+            int(getattr(current, "session_seconds", 0) or 0),
+            show_duration,
+        )
+        if self.work_duration_bubble.isVisible():
+            self._position_work_duration_bubble()
+            self.work_duration_bubble.raise_()
+
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""
 
@@ -3789,6 +3860,7 @@ class PetWindow(QWidget):
         """Show the work dock above the pet using the shared focus state."""
 
         snapshot = self.focus_session.snapshot()
+        self._update_work_duration_bubble(snapshot)
         self.work_controls.set_session_status(snapshot.status)
         self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
         duration = format_work_duration(snapshot.session_seconds)

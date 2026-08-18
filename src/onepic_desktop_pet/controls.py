@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from .work_timer import format_elapsed_clock
+
 from PySide6.QtWidgets import (
     QDialog,
     QGraphicsDropShadowEffect,
@@ -51,6 +53,11 @@ QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; b
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
 QLabel { border: none; background: transparent; }
+QLabel#workDurationHint { background: rgba(246, 251, 251, 235); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 86); border-radius: 10px;
+padding: 3px 8px; font-size: 11px; }
+QLabel#workDurationHint[paused="true"] { background: rgba(255, 240, 238, 242); color: #b94b51;
+border: 1px solid rgba(231, 74, 79, 155); }
 """
 
 
@@ -71,9 +78,11 @@ class WorkControlBubble(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(5)
+        self._duration_visible = True
         self.duration_label = QLabel("本轮未开始")
         self.duration_label.setObjectName("workDurationLabel")
-        self.duration_label.setMinimumWidth(74)
+        self.duration_label.setMinimumWidth(110)
+        self.duration_label.setVisible(True)
         self.pause_button = QPushButton("暂停工作")
         self.pause_button.setObjectName("pauseWorkButton")
         self.finish_button = QPushButton("结束工作")
@@ -98,6 +107,7 @@ class WorkControlBubble(QWidget):
             }[self._session_status]
         )
         self.finish_button.setVisible(self._session_status != "idle")
+        self.duration_label.setVisible(self._duration_visible)
         if self._session_status == "idle":
             self.duration_label.setText("本轮未开始")
         self.adjustSize()
@@ -108,13 +118,15 @@ class WorkControlBubble(QWidget):
         clean = str(text or "").strip() or "本轮未开始"
         self.duration_label.setText(clean)
         self.duration_label.setToolTip(clean)
+        self.duration_label.setVisible(self._duration_visible)
         self.adjustSize()
 
     def set_duration_visible(self, visible: bool) -> None:
         """Show or hide the optional live duration without changing timer state."""
 
-        self.duration_label.setVisible(bool(visible))
-        if not visible:
+        self._duration_visible = bool(visible)
+        self.duration_label.setVisible(self._duration_visible)
+        if not self._duration_visible:
             self.duration_label.setToolTip("")
         self.adjustSize()
 
@@ -125,6 +137,48 @@ class WorkControlBubble(QWidget):
             self.resume_requested.emit()
         else:
             self.pause_requested.emit()
+
+
+class WorkDurationBubble(QLabel):
+    """跟随六毛脚边显示真实工作 Session 时长的轻量状态标签。"""
+
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.setObjectName("workDurationHint")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumWidth(100)
+        self.setStyleSheet(CONTROL_STYLE)
+        self.setProperty("paused", False)
+        self.hide()
+
+    def set_session(self, status: str, seconds: int, visible: bool) -> None:
+        """Project the shared FocusSession snapshot; never owns a timer."""
+
+        normalized = status if status in {"focus", "rest"} else "idle"
+        active = bool(visible) and normalized in {"focus", "rest"}
+        if active:
+            paused = normalized == "rest"
+            self.setProperty("paused", paused)
+            text = f"已工作 {format_elapsed_clock(seconds)}"
+            if paused:
+                text += " · 已暂停"
+            self.setText(text)
+            self.setToolTip("当前工作计时" + ("已暂停" if paused else "正在计时"))
+        else:
+            self.setText("")
+            self.setToolTip("")
+        self.setVisible(active)
+        self.adjustSize()
+        if active:
+            self.style().unpolish(self)
+            self.style().polish(self)
 
 
 def _quick_icon(kind: str, *, active: bool = False) -> QIcon:

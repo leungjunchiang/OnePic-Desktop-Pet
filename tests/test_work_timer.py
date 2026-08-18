@@ -6,7 +6,11 @@
 
 from datetime import datetime, timedelta
 
-from onepic_desktop_pet.work_timer import WorkTimerModel, format_work_duration
+from onepic_desktop_pet.work_timer import (
+    WorkTimerModel,
+    format_elapsed_clock,
+    format_work_duration,
+)
 
 
 class FakeClock:
@@ -45,6 +49,8 @@ def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> No
     reloaded = _timer(tmp_path, clock)
     assert reloaded.today_seconds() == 100
     assert reloaded.lifetime_seconds() == 100
+    assert reloaded.session_seconds() == 100
+    assert reloaded.has_active_session
     assert not reloaded.is_running
 
 
@@ -78,7 +84,14 @@ def test_work_timer_does_not_double_start_or_count_offline_time(tmp_path) -> Non
 
     reloaded = _timer(tmp_path, clock)
     assert reloaded.today_seconds() == 90
+    assert reloaded.session_seconds() == 90
+    assert reloaded.has_active_session
+    assert reloaded.start()
+    clock.advance(30)
+    assert reloaded.session_seconds() == 120
+    reloaded.finish()
     assert reloaded.session_seconds() == 0
+    assert not reloaded.has_active_session
 
 
 def test_new_date_resets_today_total(tmp_path) -> None:
@@ -120,3 +133,6 @@ def test_duration_formatting_is_compact_and_readable() -> None:
     assert format_work_duration(30) == "不足1分钟"
     assert format_work_duration(25 * 60) == "25分钟"
     assert format_work_duration(65 * 60) == "1小时5分钟"
+    assert format_elapsed_clock(0) == "00:00"
+    assert format_elapsed_clock(25 * 60 + 7) == "25:07"
+    assert format_elapsed_clock(65 * 60 + 2) == "1:05:02"
