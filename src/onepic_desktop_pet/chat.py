@@ -718,6 +718,8 @@ class ChatHistoryDialog(QDialog):
 class AISettingsDialog(QDialog):
     """编辑非敏感连接设置并把新令牌交给凭据库。"""
 
+    program_update_requested = Signal()
+
     def __init__(
         self,
         settings: PetSettings,
@@ -805,15 +807,22 @@ class AISettingsDialog(QDialog):
         layout.addWidget(self.content_updates)
 
         self.program_updates = QCheckBox(
-            "自动检查程序更新（下载前会询问，安装包会先校验）"
+            "启动时自动检查程序更新（发现新版后可直接更新）"
         )
         self.program_updates.setChecked(
             getattr(settings, "program_updates_enabled", True)
         )
         self.program_updates.setToolTip(
-            "开启后启动时自动检查新版程序；不会静默安装，必须由你确认。Windows 会启动安装器，macOS 会打开 DMG。"
+            "开启后启动时自动检查新版程序；不会静默安装，发现新版后仍会先由你确认。Windows 会启动安装器，macOS 会打开 DMG。"
         )
         layout.addWidget(self.program_updates)
+        self.program_update_button = QPushButton("立即检查并更新到最新版本…")
+        self.program_update_button.setObjectName("softButton")
+        self.program_update_button.setToolTip(
+            "立即检查 GitHub Releases 的最新版本；发现新版后先确认，再下载、校验并启动安装。"
+        )
+        self.program_update_button.clicked.connect(self._request_program_update)
+        layout.addWidget(self.program_update_button)
 
         self.version_label = QLabel(
             f"程序版本：{__version__} · 补充内容更新与程序更新分开"
@@ -1139,8 +1148,13 @@ class AISettingsDialog(QDialog):
         if thread is not None:
             thread.deleteLater()
 
-    def apply(self) -> None:
-        self.settings.owner_nickname = self.owner_nickname.text().strip()[:24]
+    def _request_program_update(self) -> None:
+        """Close settings before the app-level updater shows its own UI."""
+
+        self.program_update_requested.emit()
+        self.accept()
+
+    def apply(self) -> None:        self.settings.owner_nickname = self.owner_nickname.text().strip()[:24]
         self.settings.pet_name = PET_NAME
         provider = str(self.provider.currentData())
         self.settings.ai_provider = provider

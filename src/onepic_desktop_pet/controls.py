@@ -331,7 +331,7 @@ class QuickControlPanel(QWidget):
         updates = menu.addMenu("更新与关于")
         content = updates.addAction("检查补充内容更新")
         content.triggered.connect(lambda _checked=False: self._choose(self.content_update_requested))
-        program = updates.addAction("检查程序更新")
+        program = updates.addAction("更新到最新版本…")
         program.triggered.connect(lambda _checked=False: self._choose(self.program_update_requested))
         version = updates.addAction("当前版本信息")
         version.setEnabled(False)

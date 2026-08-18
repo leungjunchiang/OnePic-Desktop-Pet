@@ -102,7 +102,7 @@ class UnifiedMenuModel:
 
         update_children = [
             self._optional("检查补充内容更新", "content_update"),
-            self._optional("检查程序更新", "program_update"),
+            self._optional("更新到最新版本…", "program_update"),
             MenuItemSpec(
                 f"当前程序版本：{str(state.get('program_version') or '未知')}",
                 enabled=False,

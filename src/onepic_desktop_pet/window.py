@@ -3162,6 +3162,9 @@ class PetWindow(QWidget):
             agent_manager=self.agent_manager,
             music_manager=self.music_provider_manager,
         )
+        dialog.program_update_requested.connect(
+            lambda: self._invoke_menu_external("program_update")
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return True
         previous_always_on_top = self.settings.always_on_top
