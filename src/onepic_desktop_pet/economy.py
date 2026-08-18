@@ -65,7 +65,7 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
         "description": "六毛家的第一件家当；为以后叫醒和开工提醒预留位置。",
     },
     "coffee_pot": {
-        "name": "咖啡壶", "price": 30, "group": "添置家当",
+        "name": "咖啡壶", "price": 100, "group": "添置家当",
         "kind": "household", "collection": "coffee_pot",
         "description": "每天最多补给 1 杯普通咖啡；使用后进入 30 分钟咖啡开工时刻。",
     },
