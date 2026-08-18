@@ -35,8 +35,8 @@ def test_income_spend_and_payroll_keep_income_separate_from_balance(tmp_path):
     report = ledger.month_report("2026-08")
     assert report["income"] == 106
     assert report["expenses"] == 4
-    assert report["balance"] == 105
-    assert report["net"] == 105
+    assert report["balance"] == 102
+    assert report["net"] == 102
     assert report["identity"] == "靠作品吃饭"
 
 
