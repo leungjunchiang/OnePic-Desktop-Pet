@@ -66,7 +66,7 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     settings_titles = [item.title for item in settings.children]
     assert settings_titles[:3] == ["主人称呼", "AI 与陪伴", "调整大小"]
     updates = next(item for item in settings.children if item.title == "更新与关于")
-    assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "检查程序更新"]
+    assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "更新到最新版本…"]
     music = next(item for item in model.items() if item.title == "音乐")
     assert [item.title for item in music.children] == [
         "播放 / 暂停",
