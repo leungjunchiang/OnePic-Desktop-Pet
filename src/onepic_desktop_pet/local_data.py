@@ -18,6 +18,9 @@ def platform_app_data_root() -> Path:
     """Return the stable per-user application-data root for this platform."""
 
     if sys.platform == "darwin":
+        explicit = os.environ.get("LOCALAPPDATA")
+        if explicit:
+            return Path(explicit)
         return Path.home() / "Library" / "Application Support"
     if os.name == "nt":
         value = os.environ.get("LOCALAPPDATA")
