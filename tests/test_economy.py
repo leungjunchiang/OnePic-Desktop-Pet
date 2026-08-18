@@ -66,6 +66,7 @@ def test_purchase_use_and_life_collection_are_separate_operations(tmp_path):
 def test_households_are_permanent_and_do_not_touch_skin_system(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     ledger.record_income("论文稿费", 100, source_key="paper:2")
+    assert ledger.catalog()["coffee_pot"]["price"] == 100
 
     assert ledger.purchase_item("coffee_pot") is not None
     assert ledger.has_household("coffee_pot")
