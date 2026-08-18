@@ -225,6 +225,7 @@ class WorkTimerModel:
         elapsed = self._current_elapsed()
         self._accumulated_seconds += elapsed
         self._lifetime_seconds += elapsed
+        self._session_accumulated_seconds += elapsed
         self._session_active = True
         self._running_since = None
         self._last_reminder_key = None
