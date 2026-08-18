@@ -212,6 +212,16 @@ class SocialDashboardThread(QThread):
                 # Keep small offline/test backends compatible with the room
                 # scoped dashboard while the real request stays off the GUI.
                 data = self.client.dashboard()
+            leaderboard = getattr(self.client, "economy_leaderboard", None)
+            if callable(leaderboard) and getattr(self.client, "signed_in", True):
+                try:
+                    data = dict(data or {})
+                    data["leaderboard"] = leaderboard(period="month")
+                except (SocialError, TypeError):
+                    # Older deployments can run without the economy migration.
+                    # The room dashboard remains usable while the migration is
+                    # rolled out.
+                    pass
             self.completed.emit(dict(data or {}))
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -772,6 +782,15 @@ class SocialHubDialog(QDialog):
         self.buddies.customContextMenuRequested.connect(self._buddy_context_menu)
         buddies_layout.addWidget(self.buddies)
         layout.addWidget(buddies_card)
+        wealth_card, wealth_layout = self._card(
+            "荒野王国富豪榜",
+            "只展示已接受搭子且主动参与的好友；按月结算，不按挂机时长无限发钱。",
+        )
+        self.wealth_leaderboard = QListWidget()
+        self.wealth_leaderboard.setMinimumHeight(52)
+        self.wealth_leaderboard.setMaximumHeight(210)
+        wealth_layout.addWidget(self.wealth_leaderboard)
+        layout.addWidget(wealth_card)
         layout.addStretch()
         return self._scroll_page(page)
 
@@ -1243,6 +1262,26 @@ class SocialHubDialog(QDialog):
         if self.room_activity.count() == 0:
             self.room_activity.addItem("房间动态会显示开始专注、完成一轮和六毛互动。")
 
+    def _render_wealth_leaderboard(self, rows: list[Any]) -> None:
+        if not hasattr(self, "wealth_leaderboard"):
+            return
+        self.wealth_leaderboard.clear()
+        for index, row in enumerate(rows[:20], 1):
+            if not isinstance(row, dict):
+                continue
+            nickname = social_pet_label(
+                row.get("private_note_name") or row.get("nickname") or row.get("owner_nickname") or "搭子"
+            )
+            wealth = int(row.get("net_worth") or row.get("wealth") or 0)
+            income = int(row.get("period_income") or row.get("month_income") or 0)
+            windfall = int(row.get("windfall") or 0)
+            self.wealth_leaderboard.addItem(
+                f"{index}. {nickname}　净资产 {wealth} 毛币　·　本月收入 {income}"
+                + (f"　·　稿费 {windfall}" if windfall else "")
+            )
+        if self.wealth_leaderboard.count() == 0:
+            self.wealth_leaderboard.addItem("登录并邀请搭子参与后，这里会出现荒野王国榜单。")
+
     def _refresh_room_goal_text(self) -> None:
         if not hasattr(self, "room_goal"):
             return
@@ -1370,7 +1409,8 @@ class SocialHubDialog(QDialog):
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
-        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed)
+        self.wealth_opt_in = QCheckBox("参与荒野王国富豪榜（仅已接受搭子可见）")
+        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
         save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile); layout.addWidget(save)
         logout = QPushButton("退出账号"); logout.clicked.connect(self._logout); layout.addWidget(logout)
         layout.addStretch()
@@ -1415,6 +1455,8 @@ class SocialHubDialog(QDialog):
             self._render_room_people([])
         if hasattr(self, "room_activity"):
             self._render_room_activity([])
+        if hasattr(self, "wealth_leaderboard"):
+            self._render_wealth_leaderboard([])
 
     def _error(self, exc: Exception) -> None:
         self._end_action()
@@ -1473,13 +1515,14 @@ class SocialHubDialog(QDialog):
 
         previous_data = self.data
         self.data = dict(data or {})
+        self._render_wealth_leaderboard(list(self.data.get("leaderboard") or []))
         me=self.data.get("me") or {}
         if not self.owner_nickname:
             self.owner_nickname = clean_owner_nickname(me.get("owner_nickname") or me.get("nickname"))
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
         self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
-        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True)))
+        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(bool(me.get("wealth_leaderboard_enabled", False)))
         self.buddies.clear()
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
         seen=set()
@@ -1703,7 +1746,7 @@ class SocialHubDialog(QDialog):
         if not self._require_login(): return
         self._begin_action("正在保存隐私设置…")
         try:
-            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key); self.refresh()
+            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked()); self.refresh()
         except SocialError as exc: self._error(exc)
 
     def _set_subscription(self, buddy: dict[str, Any], enabled: bool) -> None:
