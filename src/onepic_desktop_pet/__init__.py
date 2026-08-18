@@ -5,5 +5,7 @@
 包初始化只暴露版本信息，不启动界面、不读写配置，也不产生其他副作用。
 """
 
-__version__ = "0.22.94"
+from ._build_version import BUILD_VERSION
+
+__version__ = BUILD_VERSION
 

@@ -23,7 +23,12 @@ jobs:
         run: |
           python -m venv .venv
           .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-      - name: Run tests
+      - name: Set release version
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^release/', '' -replace '^v', ''
+          "BUILD_VERSION = `"$version`"" | Set-Content -Encoding utf8 .\src\onepic_desktop_pet\_build_version.py
+          "LILI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append      - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: .\.venv\Scripts\python.exe -m pytest
@@ -73,7 +78,12 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
-      - name: Run tests
+      - name: Set release version
+        run: |
+          release_tag="${GITHUB_REF_NAME#release/}"
+          release_tag="${release_tag#v}"
+          printf 'BUILD_VERSION = "%s"\n' "$release_tag" > src/onepic_desktop_pet/_build_version.py
+          echo "LILI_VERSION=$release_tag" >> "$GITHUB_ENV"      - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest
