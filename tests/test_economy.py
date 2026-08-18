@@ -65,8 +65,8 @@ def test_purchase_use_and_life_collection_are_separate_operations(tmp_path):
 
 def test_households_are_permanent_and_do_not_touch_skin_system(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
-    ledger.record_income("论文稿费", 100, source_key="paper:2")
-    assert ledger.catalog()["coffee_pot"]["price"] == 100
+    ledger.record_income("论文稿费", 144, source_key="paper:2")
+    assert ledger.catalog()["coffee_pot"]["price"] == 144
 
     assert ledger.purchase_item("coffee_pot") is not None
     assert ledger.has_household("coffee_pot")
@@ -135,7 +135,7 @@ def test_coffee_pot_grants_one_limited_supply_per_day(tmp_path):
         tmp_path / "economy.json",
         now_provider=lambda: current[0],
     )
-    ledger.record_income("咖啡壶测试资金", 100, source_key="coffee-pot-test")
+    ledger.record_income("咖啡壶测试资金", 144, source_key="coffee-pot-test")
     assert ledger.purchase_item("coffee_pot") is not None
 
     assert ledger.ensure_daily_household_supply() is True
@@ -151,3 +151,33 @@ def test_coffee_pot_grants_one_limited_supply_per_day(tmp_path):
     current[0] = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
     assert ledger.ensure_daily_household_supply() is True
     assert ledger.inventory_count("coffee") == 3
+
+
+def test_legacy_food_inventory_aliases_can_be_used(tmp_path):
+    path = tmp_path / "economy.json"
+    path.write_text(
+        '{"version": 3, "balance": 0, "events": [], "daily_focus": {}, '
+        '"inventory": {"普通咖啡": 1, "奶茶": 1, "小蛋糕": 1, "茶": 1}}',
+        encoding="utf-8",
+    )
+    ledger = EconomyLedger(path, now_provider=_now)
+
+    assert ledger.inventory_count("coffee") == 1
+    assert ledger.start_food_scene("coffee", duration_minutes=30) is not None
+    assert ledger.inventory_count("coffee") == 0
+
+    # The old Chinese keys are normalized after a mutation, so the next use
+    # cannot disagree with what the warehouse displayed.
+    assert ledger.inventory_count("milk_tea") == 1
+    assert ledger.active_food_scene()["item_key"] == "coffee"
+
+
+def test_food_scene_start_error_distinguishes_inventory_and_active_scene(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    assert ledger.food_scene_start_error("coffee") == "inventory"
+
+    ledger.record_income("补给测试资金", 12, source_key="food-error-test")
+    assert ledger.purchase_item("coffee") is not None
+    assert ledger.food_scene_start_error("coffee") is None
+    assert ledger.start_food_scene("coffee", duration_minutes=30) is not None
+    assert ledger.food_scene_start_error("milk_tea", consume_inventory=False) == "active_scene"
