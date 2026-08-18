@@ -39,8 +39,11 @@ DEFAULT_RELEASE_PAGE_URL = (
     "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/latest"
 )
 _VERSION_PATTERN = re.compile(r"\d+")
+# GitHub release tags in this project use zero-padded components as well
+# (for example, v0.23.00).  Compare numeric components with version_key()
+# below, but accept both padded and ordinary SemVer-shaped release tags.
 _SEMVER_PATTERN = re.compile(
-    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"^\d+\.\d+\.\d+"
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
 _SHA256_PATTERN = re.compile(r"\b([0-9a-fA-F]{64})\b")
