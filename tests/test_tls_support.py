@@ -1,6 +1,7 @@
 """Tests for the verified CA handling used by frozen macOS builds."""
 
 import ssl
+from types import SimpleNamespace
 from pathlib import Path
 
 import onepic_desktop_pet.tls_support as tls_support
@@ -41,6 +42,7 @@ def test_certifi_bundle_is_preferred_when_available(monkeypatch, tmp_path: Path)
 
 def test_certifi_remains_fallback_when_system_bundle_is_missing(monkeypatch):
     monkeypatch.setattr(tls_support, "SYSTEM_CA_BUNDLE_CANDIDATES", (tls_support.Path("/path/that/does/not/exist"),))
+    monkeypatch.setattr(tls_support.ssl, "get_default_verify_paths", lambda: SimpleNamespace(cafile=None))
     fallback = tls_support.certifi_bundle_path()
 
     assert tls_support.system_ca_bundle_path() is None
