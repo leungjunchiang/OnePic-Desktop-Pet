@@ -12,7 +12,7 @@ from typing import Any
 from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QMenu,
     QVBoxLayout, QWidget, QSizePolicy,
@@ -310,6 +310,7 @@ class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
     interaction_requested = Signal(dict, str)
+    food_interaction_requested = Signal(dict, str)
     interaction_blocked = Signal(str)
     subscription_requested = Signal(dict, bool)
 
@@ -319,6 +320,7 @@ class BuddyCardWidget(QWidget):
         self._cooldown_seconds = 15
         self._cooldown_until: dict[str, float] = {}
         self._buttons: dict[str, QPushButton] = {}
+        self._food_buttons: dict[str, QPushButton] = {}
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 8, 12, 8)
@@ -383,11 +385,43 @@ class BuddyCardWidget(QWidget):
             self._buttons[kind] = button
             actions.addWidget(button)
         root.addLayout(actions)
+        food_actions = QHBoxLayout()
+        for kind, label in (
+            ("food_coffee", "请咖啡"),
+            ("food_milk_tea", "请奶茶"),
+            ("food_tea", "敬茶"),
+            ("food_cake", "请蛋糕"),
+        ):
+            button = QPushButton(label)
+            button.setMinimumHeight(30)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            button.clicked.connect(lambda _checked=False, action=kind: self._request_food(action))
+            if is_self:
+                button.setEnabled(False)
+                button.setToolTip("互动按钮只对房间里的其他搭子开放")
+            self._food_buttons[kind] = button
+            food_actions.addWidget(button)
+        root.addLayout(food_actions)
         if not is_self:
             subscribe = QCheckBox("订阅开工/下班提醒")
             subscribe.setChecked(bool(buddy.get("subscribed")))
             subscribe.stateChanged.connect(lambda state: self.subscription_requested.emit(self.buddy, bool(state)))
             root.addWidget(subscribe)
+
+    def _request_food(self, kind: str) -> None:
+        now = time.monotonic()
+        key = f"food:{kind}"
+        remaining = self._cooldown_until.get(key, 0.0) - now
+        if remaining > 0:
+            self.interaction_blocked.emit(f"互动冷却中，请 {int(remaining) + 1} 秒后再试。")
+            return
+        self._cooldown_until[key] = now + self._cooldown_seconds
+        button = self._food_buttons.get(kind)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(f"已发送 ({self._cooldown_seconds}s)")
+            QTimer.singleShot(self._cooldown_seconds * 1000, lambda: self._restore_button(kind))
+        self.food_interaction_requested.emit(self.buddy, kind)
 
     def _request_interaction(self, kind: str) -> None:
         now = time.monotonic()
@@ -404,10 +438,14 @@ class BuddyCardWidget(QWidget):
         self.interaction_requested.emit(self.buddy, kind)
 
     def _restore_button(self, kind: str) -> None:
-        button = self._buttons.get(kind)
+        button = self._buttons.get(kind) or self._food_buttons.get(kind)
         if button is None:
             return
-        labels = {"poke": "戳一下", "cheer": "加油", "drink": "递奶茶"}
+        labels = {
+            "poke": "戳一下", "cheer": "加油", "drink": "递奶茶",
+            "food_coffee": "请咖啡", "food_milk_tea": "请奶茶",
+            "food_tea": "敬茶", "food_cake": "请蛋糕",
+        }
         button.setText(labels.get(kind, "互动"))
         if not bool(self.buddy.get("is_self")):
             button.setEnabled(True)
@@ -538,6 +576,8 @@ class SocialHubDialog(QDialog):
     room_ritual_due = Signal(str)
     buddy_subscription_notice = Signal(str)
     quick_action_requested = Signal(str)
+    food_interaction_requested = Signal(dict, str)
+    food_interaction_accepted = Signal(dict)
 
     def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -553,6 +593,7 @@ class SocialHubDialog(QDialog):
         self._room_schedule_state: dict[str, Any] = {}
         self._room_challenge_state: dict[str, Any] = {}
         self._seen_room_event_ids: set[str] = set()
+        self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
         self._last_ritual_notice = ""
         self._initial_refresh_timer = QTimer(self)
@@ -1120,6 +1161,41 @@ class SocialHubDialog(QDialog):
         self._set_status(f"正在向 {nickname} {labels.get(kind, '送出互动')}…")
         thread.start()
 
+    def _auto_accept_light_food_interactions(self) -> None:
+        """欢迎互动时自动接下茶/蛋糕；专注优先只在本地空闲时接下。"""
+        me = self.data.get("me") or {}
+        mode = str(me.get("buddy_interaction_mode") or "focus_priority")
+        if mode == "do_not_disturb":
+            return
+        snapshot = self._focus_snapshot
+        if isinstance(snapshot, dict):
+            working = str(snapshot.get("status") or "") == "focus"
+        else:
+            working = bool(getattr(snapshot, "is_running", False))
+        if mode == "focus_priority" and working:
+            return
+        for visit in self.data.get("visits") or []:
+            kind = str(visit.get("kind") or "")
+            if kind not in {"food_tea", "food_cake"}:
+                continue
+            event_id = str(visit.get("id") or "")
+            if not event_id or event_id in self._auto_accepting_food:
+                continue
+            self._auto_accepting_food.add(event_id)
+            try:
+                self.client.rpc("lili_respond_visit", {"event_id": event_id, "accept": True})
+                self.food_interaction_accepted.emit(visit)
+            except SocialError as exc:
+                self._auto_accepting_food.discard(event_id)
+                self._error(exc)
+                continue
+            self.refresh()
+
+    def _send_food_interaction(self, buddy: dict[str, Any], kind: str) -> None:
+        if not self._require_login():
+            return
+        self.food_interaction_requested.emit(buddy, kind)
+
     def _send_phrase(self, phrase: str) -> None:
         """Send one short room phrase to a selected/first peer."""
 
@@ -1226,6 +1302,7 @@ class SocialHubDialog(QDialog):
             item = QListWidgetItem()
             widget = BuddyCardWidget(buddy, self.room_members)
             widget.interaction_requested.connect(self._send_interaction)
+            widget.food_interaction_requested.connect(self._send_food_interaction)
             widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
             widget.subscription_requested.connect(self._set_subscription)
             item.setData(Qt.ItemDataRole.UserRole, buddy)
@@ -1424,6 +1501,13 @@ class SocialHubDialog(QDialog):
         self.visits_allowed = QCheckBox("允许搭子串门")
         self.wealth_opt_in = QCheckBox("参与荒野王国富豪榜（仅已接受搭子可见）")
         layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
+        layout.addWidget(QLabel("搭子互动："))
+        self.interaction_mode = QComboBox()
+        self.interaction_mode.addItem("欢迎互动", "welcome")
+        self.interaction_mode.addItem("专注优先（推荐）", "focus_priority")
+        self.interaction_mode.addItem("免打扰", "do_not_disturb")
+        self.interaction_mode.setToolTip("决定好友敬茶、请吃蛋糕、请奶茶或邀请开工时如何到达你的六毛。")
+        layout.addWidget(self.interaction_mode)
         save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile); layout.addWidget(save)
         logout = QPushButton("退出账号"); logout.clicked.connect(self._logout); layout.addWidget(logout)
         layout.addStretch()
@@ -1548,6 +1632,9 @@ class SocialHubDialog(QDialog):
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
         self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
         self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(bool(me.get("wealth_leaderboard_enabled", False)))
+        mode = str(me.get("buddy_interaction_mode") or "focus_priority")
+        mode_index = self.interaction_mode.findData(mode)
+        self.interaction_mode.setCurrentIndex(mode_index if mode_index >= 0 else 1)
         self.buddies.clear()
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
         seen=set()
@@ -1576,6 +1663,7 @@ class SocialHubDialog(QDialog):
             item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
             buddy_widget = BuddyCardWidget(buddy, self.buddies)
             buddy_widget.interaction_requested.connect(self._send_interaction)
+            buddy_widget.food_interaction_requested.connect(self._send_food_interaction)
             buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
             buddy_widget.subscription_requested.connect(self._set_subscription)
             self.buddies.setItemWidget(item, buddy_widget)
@@ -1594,10 +1682,20 @@ class SocialHubDialog(QDialog):
         for request in self.data.get("requests") or []:
             item=QListWidgetItem(f"搭子申请：{_owner_label(request)}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
         for visit in self.data.get("visits") or []:
-            item=QListWidgetItem(f"串门邀请：{_owner_label(visit)}"); item.setData(Qt.ItemDataRole.UserRole,("visit",visit)); self.inbox.addItem(item)
+            visit_kind = str(visit.get("kind") or "visit")
+            labels = {
+                "food_coffee": "☕ 一起开工邀请",
+                "food_milk_tea": "🧋 一起休息邀请",
+                "food_tea": "🍵 敬茶",
+                "food_cake": "🍰 庆祝邀请",
+            }
+            label = labels.get(visit_kind, "串门邀请")
+            inbox_kind = "food" if visit_kind.startswith("food_") else "visit"
+            item=QListWidgetItem(f"{label}：{_owner_label(visit)}"); item.setData(Qt.ItemDataRole.UserRole,(inbox_kind,visit)); self.inbox.addItem(item)
         if self.inbox.count() == 0:
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
+        QTimer.singleShot(0, self._auto_accept_light_food_interactions)
         rooms = list(self.data.get("rooms") or [])
         previous_room_id = self.current_room_id
         room_was_selected = bool(previous_room_id)
@@ -1771,7 +1869,10 @@ class SocialHubDialog(QDialog):
         if not self._require_login(): return
         self._begin_action("正在保存隐私设置…")
         try:
-            me=self.data.get("me") or {}; self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked()); self.refresh()
+            me=self.data.get("me") or {}
+            self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked())
+            self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": str(self.interaction_mode.currentData() or "focus_priority")})
+            self.refresh()
         except SocialError as exc: self._error(exc)
 
     def _set_subscription(self, buddy: dict[str, Any], enabled: bool) -> None:
@@ -1897,8 +1998,12 @@ class SocialHubDialog(QDialog):
         kind,data=item.data(Qt.ItemDataRole.UserRole)
         self._begin_action("正在处理选中的申请…")
         try:
-            if kind=="buddy": self.client.rpc("lili_respond_buddy",{"request_id":data["id"],"accept":True})
-            else: self.client.rpc("lili_respond_visit",{"event_id":data["id"],"accept":True})
+            if kind=="buddy":
+                self.client.rpc("lili_respond_buddy",{"request_id":data["id"],"accept":True})
+            else:
+                self.client.rpc("lili_respond_visit",{"event_id":data["id"],"accept":True})
+                if kind == "food":
+                    self.food_interaction_accepted.emit(data)
             self.refresh()
         except SocialError as exc: self._error(exc)
     def _create_room(self) -> None:

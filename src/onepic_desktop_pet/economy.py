@@ -29,22 +29,32 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee": {
         "name": "普通咖啡", "price": 2, "group": "吃点喝点",
         "kind": "consumable", "state": "coffee", "collection": "coffee",
-        "description": "普通工作陪伴道具，六毛喝完会记在今天的生活里。",
+        "scene_type": "focus", "scene_minutes": 30,
+        "description": "喝杯咖啡，选件事情和六毛干半小时。",
     },
     "expensive_coffee": {
         "name": "昂贵咖啡", "price": 5, "group": "吃点喝点",
         "kind": "consumable", "state": "expensive_coffee", "collection": "expensive_coffee",
-        "description": "今天喝贵的；早鸟开工仍可按原规则免费获得。",
+        "scene_type": "deep_focus", "scene_minutes": 60,
+        "description": "喝贵的，开一局 60 分钟深度工作。",
     },
     "milk_tea": {
         "name": "奶茶", "price": 4, "group": "吃点喝点",
         "kind": "consumable", "state": "milk_tea_break", "collection": "milk_tea",
-        "description": "休息类消费，不增加体力或工作效率。",
+        "scene_type": "rest", "scene_minutes": 10,
+        "description": "正式歇一会儿，选择 10 或 15 分钟。",
     },
     "cake": {
         "name": "小蛋糕", "price": 6, "group": "吃点喝点",
         "kind": "consumable", "state": "celebrating", "collection": "cake",
+        "scene_type": "celebrate", "scene_minutes": 0,
         "description": "给完成重要事情的今天留一点庆祝。",
+    },
+    "tea": {
+        "name": "茶", "price": 2, "group": "吃点喝点",
+        "kind": "consumable", "state": "tea", "collection": "tea",
+        "scene_type": "companion", "scene_minutes": 0,
+        "description": "不赶时间，六毛陪你慢慢待一会儿。",
     },
     "alarm_clock": {
         "name": "小闹钟", "price": 15, "group": "添置家当",
@@ -175,6 +185,7 @@ class EconomyLedger:
             "titles": [],
             "active_states": {},
             "daily_life": {},
+            "food_scene": None,
         }
         if self._persist:
             self._load()
@@ -247,6 +258,9 @@ class EconomyLedger:
         self._state["daily_life"] = (
             data.get("daily_life")
             if isinstance(data.get("daily_life"), dict) else {}
+        )
+        self._state["food_scene"] = (
+            data.get("food_scene") if isinstance(data.get("food_scene"), dict) else None
         )
         self._state["balance"] = max(0, int(data.get("balance") or 0))
         self._refresh_titles()
@@ -534,6 +548,155 @@ class EconomyLedger:
 
         return self._atomic(apply)
 
+
+    def active_food_scene(self) -> dict[str, Any] | None:
+        """Return the current food-led scene without creating a second state machine."""
+        scene = self._state.get("food_scene")
+        if not isinstance(scene, dict):
+            return None
+        result = copy.deepcopy(scene)
+        ends_at = str(result.get("ends_at") or "")
+        if ends_at:
+            try:
+                result["expired"] = datetime.fromisoformat(ends_at) <= self._now()
+            except (TypeError, ValueError):
+                result["expired"] = False
+        else:
+            result["expired"] = False
+        return result
+
+    def food_scene_status(self) -> dict[str, Any] | None:
+        scene = self.active_food_scene()
+        if scene is None:
+            return None
+        ends_at = str(scene.get("ends_at") or "")
+        remaining = None
+        if ends_at and not scene.get("expired"):
+            try:
+                remaining = max(0, int((datetime.fromisoformat(ends_at) - self._now()).total_seconds()))
+            except (TypeError, ValueError):
+                remaining = None
+        scene["remaining_seconds"] = remaining
+        return scene
+
+    def start_food_scene(
+        self,
+        item_key: str,
+        *,
+        duration_minutes: int | None = None,
+        todo_id: str = "",
+        todo_title: str = "",
+        operation_key: str = "",
+        consume_inventory: bool = True,
+        source: str = "food_scene",
+        scene_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Consume/receive one food and start its meaningful desktop scenario.
+
+        This records a scene, not hunger, fullness or a numeric buff. A remote
+        buddy event can set consume_inventory=False: the receiver experiences
+        the scene but cannot turn a gift into leaderboard income.
+        """
+        item_key = str(item_key).strip()
+        spec = ITEM_CATALOG.get(item_key)
+        if not spec or spec.get("kind") != "consumable":
+            return None
+        current = self.active_food_scene()
+        if current and not current.get("expired"):
+            return None
+        if consume_inventory and self.inventory_count(item_key) <= 0:
+            return None
+
+        default_minutes = spec.get("scene_minutes")
+        minutes = default_minutes if duration_minutes is None else max(0, int(duration_minutes))
+        now = self._now()
+        ends_at = (
+            (now + timedelta(minutes=minutes)).isoformat()
+            if minutes and minutes > 0
+            else ""
+        )
+        scene_id = uuid.uuid4().hex
+        clean_todo = str(todo_title or "").strip()[:120]
+        clean_source = str(source or "food_scene").strip()[:50]
+        operation_source = (
+            f"food-scene:{operation_key}" if str(operation_key).strip()
+            else f"food-scene:{scene_id}"
+        )
+
+        def apply() -> dict[str, Any]:
+            if current and current.get("expired"):
+                self._state["food_scene"] = None
+            if consume_inventory:
+                self._add_inventory(item_key, -1)
+            self._set_state(str(spec.get("state") or item_key), max(1, int(minutes or 1)))
+            collection_key = str(spec.get("collection") or item_key)
+            self._record_life(collection_key)
+            scene = {
+                "id": scene_id,
+                "item_key": item_key,
+                "name": str(spec.get("name") or item_key),
+                "state": str(spec.get("state") or item_key),
+                "scene_type": str(spec.get("scene_type") or "companion"),
+                "started_at": now.isoformat(),
+                "ends_at": ends_at,
+                "duration_minutes": int(minutes or 0),
+                "todo_id": str(todo_id or "")[:120],
+                "todo_title": clean_todo,
+                "deep_focus": item_key == "expensive_coffee",
+                "source": clean_source,
+                "metadata": {
+                    str(key): value
+                    for key, value in (scene_metadata or {}).items()
+                    if str(key)[:40] and isinstance(key, str)
+                },
+            }
+            self._state["food_scene"] = scene
+            event = self._append(
+                "item_use" if consume_inventory else "food_scene_received",
+                0,
+                f"{'使用' if consume_inventory else '收到'}{spec['name']}场景",
+                operation_source,
+                now.date().isoformat(),
+                source=clean_source,
+                metadata={
+                    "item_key": item_key,
+                    "scene_id": scene_id,
+                    "scene_type": scene["scene_type"],
+                    "duration_minutes": int(minutes or 0),
+                    "todo_id": str(todo_id or "")[:120],
+                    "todo_title": clean_todo,
+                    "consume_inventory": bool(consume_inventory),
+                },
+            )
+            return {
+                "scene": copy.deepcopy(scene),
+                "event": event.as_dict(),
+                "item_key": item_key,
+                "name": scene["name"],
+                "feedback": {
+                    "coffee": "喝都喝了，干半小时？",
+                    "expensive_coffee": "今天喝贵的，认真干一场。",
+                    "milk_tea": "歇会儿，工钱又不会跑。",
+                    "cake": "这件事值得庆祝一下。",
+                    "tea": "坐下来待一会儿，今天不用赶。",
+                }.get(item_key, "六毛把这段生活记下来了。"),
+            }
+
+        return self._atomic(apply)
+
+    def finish_food_scene(self, reason: str = "completed") -> dict[str, Any] | None:
+        """Finish only the food scene; real focus seconds remain owned by FocusSession."""
+        current = self.active_food_scene()
+        if current is None:
+            return None
+
+        def apply() -> dict[str, Any]:
+            scene = self._state.get("food_scene")
+            self._state["food_scene"] = None
+            return {**(copy.deepcopy(scene) if isinstance(scene, dict) else {}), "finish_reason": str(reason)[:40]}
+
+        return self._atomic(apply)
+
     def use_item(self, item_key: str) -> dict[str, Any] | None:
         spec = ITEM_CATALOG.get(str(item_key))
         if not spec or spec["kind"] != "consumable":
@@ -612,6 +775,41 @@ class EconomyLedger:
             )
 
         return self._atomic(apply)
+
+
+    def record_food_gift_sent(
+        self,
+        recipient_id: str,
+        recipient_label: str,
+        item_key: str,
+        *,
+        operation_key: str = "",
+    ) -> WalletEvent | None:
+        """Charge the sender for a social food scene; gifts never count as income."""
+        item_key = str(item_key).strip()
+        spec = ITEM_CATALOG.get(item_key)
+        if not spec or spec.get("kind") != "consumable":
+            return None
+        recipient_id = str(recipient_id).strip()[:80]
+        recipient_label = str(recipient_label).strip()[:80] or "搭子"
+        if not recipient_id:
+            return None
+        price = max(0, int(spec.get("price") or 0))
+        source_key = (
+            f"food-gift:{operation_key}" if str(operation_key).strip()
+            else f"food-gift:{recipient_id}:{item_key}:{uuid.uuid4().hex}"
+        )
+        return self.spend(
+            f"请{recipient_label}家的六毛{spec['name']}",
+            price,
+            category="gift_sent",
+            source_key=source_key,
+            metadata={
+                "recipient_id": recipient_id,
+                "gift_item": item_key,
+                "leaderboard_income": False,
+            },
+        )
 
     def delete_manual_income(self, event_id: str) -> bool:
         """删除用户误登记的成果收入；系统工资、消费和礼物不可删除。"""

@@ -967,6 +967,7 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
     assert [action.text() for action in actions] == [
         "换动作",
         "六毛互动",
+        "喂食…",
         "换娃衣",
         "换装与外观",
         "隐藏六毛",
@@ -998,27 +999,13 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
         "给我一个抱抱",
         "为我加油",
         "提醒我休息",
-        "喂食与饮品",
-    ]
-    food_action = next(
-        action
-        for action in interaction_menu.actions()
-        if action.text() == "喂食与饮品"
-    )
-    food_menu = food_action.menu()
-    assert food_menu is not None
-    assert [
-        action.text() for action in food_menu.actions() if not action.isSeparator()
-    ] == [
-        "苹果",
-        "小饼干",
-        "热牛奶",
-        "咖啡",
-        "热茶",
-        "查看六毛心情与能量",
     ]
 
-    outfit_menu = actions[2].menu()
+    food_action = actions[2]
+    assert food_action.text() == "喂食…"
+    assert food_action.menu() is None
+
+    outfit_menu = actions[3].menu()
     assert outfit_menu is not None
     outfit_labels = [
         action.text() for action in outfit_menu.actions() if not action.isSeparator()
@@ -1027,7 +1014,7 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
     assert "兔兔搭子" in outfit_labels
     assert "荒野国王" in outfit_labels
 
-    appearance_menu = actions[3].menu()
+    appearance_menu = actions[4].menu()
     assert appearance_menu is not None
     assert [
         action.text() for action in appearance_menu.actions() if not action.isSeparator()

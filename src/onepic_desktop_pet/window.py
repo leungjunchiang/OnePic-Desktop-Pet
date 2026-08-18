@@ -46,6 +46,7 @@ import random
 import sys
 import threading
 import time
+import uuid
 from collections import OrderedDict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -131,6 +132,7 @@ from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, 
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .economy import EconomyLedger
 from .economy_ui import EconomyDialog
+from .food_scene_ui import FoodSceneDialog
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
@@ -598,6 +600,10 @@ class PetWindow(QWidget):
         self.activity_timer = QTimer(self)
         self.activity_timer.setSingleShot(True)
         self.activity_timer.timeout.connect(self._activity_timeout)
+
+        self.food_scene_timer = QTimer(self)
+        self.food_scene_timer.setSingleShot(True)
+        self.food_scene_timer.timeout.connect(self._food_scene_timeout)
 
         self.activity_transition_timer = QTimer(self)
         self.activity_transition_timer.setInterval(35)
@@ -1787,6 +1793,210 @@ class PetWindow(QWidget):
         )
         return reply
 
+
+    def _todo_choices_for_food(self) -> list[dict[str, object]]:
+        """Expose the existing Todo store to food scenes without duplicating Todo data."""
+        result: list[dict[str, object]] = []
+        try:
+            today = self.time_memory.todos.today()
+        except Exception:
+            today = []
+        items = getattr(today, "items", today)
+        if callable(items):
+            items = items()
+        if isinstance(items, dict):
+            items = list(items.values())
+        for task in items or []:
+            title = str(getattr(task, "title", "") or "").strip()
+            if not title:
+                continue
+            result.append({
+                "id": str(getattr(task, "id", "") or ""),
+                "title": title,
+                "completed": bool(getattr(task, "completed", False)),
+            })
+        return result
+
+    def show_food_scene_dialog(self) -> None:
+        """Open the scenario picker used by the pet's right-click 喂食 entry."""
+        self._record_user_interaction()
+        dialog = FoodSceneDialog(self.economy, self._todo_choices_for_food(), self)
+        dialog.scene_requested.connect(self._start_food_scene)
+        dialog.exec()
+
+    def _start_food_scene(
+        self,
+        item_key: str,
+        duration_minutes: int,
+        todo_id: str,
+        todo_title: str,
+        *,
+        consume_inventory: bool = True,
+        source: str = "food_scene",
+    ) -> bool:
+        """Turn a food item into a real focus/rest/companion scene."""
+        item_key = str(item_key or "").strip()
+        snapshot = self.focus_session.snapshot()
+        status = str(getattr(snapshot, "status", "") or "")
+        if status == "focus" and item_key in {"coffee", "expensive_coffee"}:
+            self.show_speech("先把这一局收好，再开下一杯咖啡。", 4200)
+            return False
+        resume_after_rest = item_key == "milk_tea" and status == "focus"
+        if resume_after_rest:
+            self.pause_work_timer(reason="food")
+        result = self.economy.start_food_scene(
+            item_key,
+            duration_minutes=int(duration_minutes) if int(duration_minutes or 0) > 0 else None,
+            todo_id=todo_id,
+            todo_title=todo_title,
+            consume_inventory=consume_inventory,
+            source=source,
+            scene_metadata={"resume_work": resume_after_rest} if item_key == "milk_tea" else None,
+        )
+        if result is None:
+            if resume_after_rest:
+                self.start_work_timer()
+            self.show_speech("仓库里没有这件东西，或六毛已经在另一个场景里。", 4800)
+            return False
+        scene = dict(result.get("scene") or {})
+        self._sync_economy_events([dict(result.get("event") or {})])
+        if item_key in {"coffee", "expensive_coffee"}:
+            if todo_title:
+                self._set_focus_task(todo_title, 0)
+            self.start_work_timer()
+            activity = "deep-focus" if item_key == "expensive_coffee" else "work-study"
+            minutes = int(scene.get("duration_minutes") or (60 if item_key == "expensive_coffee" else 30))
+            self._set_temporary_activity(activity, minutes * 60 * 1000)
+            self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
+            label = "☕ 喝贵的 · 深度工作中" if item_key == "expensive_coffee" else "☕ 咖啡开工"
+            detail = f"\n{todo_title[:80]}" if todo_title else "\n无任务开工"
+            self.show_speech(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
+        elif item_key == "milk_tea":
+            minutes = int(scene.get("duration_minutes") or 10)
+            self._set_temporary_activity("milk-tea", minutes * 60 * 1000)
+            self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
+            self.show_speech(f"🧋 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
+        elif item_key == "cake":
+            self._set_temporary_activity("feast", 20_000)
+            self.food_scene_timer.start(20_000)
+            title = todo_title or "今天完成的一件事"
+            self.show_speech(f"🍰 今天庆祝过\n{title[:100]}", 6200)
+        else:
+            self._set_temporary_activity("tea", 60_000)
+            self.show_speech("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
+        self._refresh_pixmap()
+        return True
+
+    def _food_scene_timeout(self) -> None:
+        scene = self.economy.active_food_scene()
+        if not scene:
+            return
+        item_key = str(scene.get("item_key") or "")
+        if item_key in {"coffee", "expensive_coffee"}:
+            before = self.work_timer.session_seconds()
+            self.finish_work_timer()
+            self.show_speech(f"这杯咖啡没白喝。\n实际专注 {format_work_duration(before)}。", 5600)
+            return
+        finished = self.economy.finish_food_scene("timer")
+        if not finished:
+            return
+        if item_key == "milk_tea":
+            if bool(scene.get("resume_work")) and not self.work_timer.is_running:
+                self.start_work_timer()
+            else:
+                self.show_speech("奶茶喝完了。\n要不要回来继续？", 5200)
+        elif item_key == "cake":
+            self.show_speech("庆祝结束，今天这件事已经被六毛记下来了。", 4200)
+
+    def _send_food_interaction(self, buddy: dict, kind: str) -> None:
+        """Send a food scene invitation; gifts are charged locally and never create income."""
+        if not self.social_client.signed_in:
+            self.show_speech("先登录搭子自习室，才能给搭子送吃的。", 4200)
+            return
+        target = str(buddy.get("user_id") or buddy.get("id") or "").strip()
+        if not target:
+            self.show_speech("没找到这位搭子的账号。", 4200)
+            return
+        item_key = {
+            "food_coffee": "coffee",
+            "food_milk_tea": "milk_tea",
+            "food_tea": "tea",
+            "food_cake": "cake",
+        }.get(str(kind))
+        if not item_key:
+            return
+        catalog = self.economy.catalog().get(item_key) or {}
+        price = int(catalog.get("price") or 0)
+        if self.economy.balance < price:
+            self.show_speech("哥们，钱袋有点瘪。", 4200)
+            return
+        recipient_label = str(
+            buddy.get("private_note_name")
+            or buddy.get("owner_nickname")
+            or buddy.get("nickname")
+            or "搭子"
+        )[:80]
+        duration = {"coffee": 30, "milk_tea": 10, "tea": 0, "cake": 0}.get(item_key, 0)
+        operation_key = uuid.uuid4().hex
+        payload = {
+            "item_key": item_key,
+            "duration_minutes": duration,
+            "operation_key": operation_key,
+            "message": {
+                "coffee": "要不要一起干 30 分钟？",
+                "milk_tea": "一起歇会儿？",
+                "tea": "过来坐会儿？",
+                "cake": "这件事值得庆祝一下。",
+            }.get(item_key, ""),
+        }
+        try:
+            self.social_client.rpc(
+                "lili_send_food_interaction",
+                {"p_target": target, "p_kind": str(kind), "p_payload": payload},
+            )
+        except Exception as exc:
+            self.show_speech(f"没送出去：{str(exc)[:120]}", 5200)
+            return
+        event = self.economy.record_food_gift_sent(
+            target,
+            recipient_label,
+            item_key,
+            operation_key=operation_key,
+        )
+        if event is None:
+            self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
+            return
+        self._sync_economy_events([event.as_dict()])
+        text = {
+            "coffee": f"☕ 已邀请 {recipient_label} 一起开工 30 分钟。",
+            "milk_tea": f"🧋 已邀请 {recipient_label} 一起歇会儿。",
+            "tea": f"🍵 已给 {recipient_label} 敬茶。",
+            "cake": f"🍰 已请 {recipient_label} 庆祝一下。",
+        }.get(item_key, "互动已经送出。")
+        self.show_speech(text, 5200)
+
+    def _handle_food_interaction_accepted(self, event: dict) -> None:
+        kind = str(event.get("kind") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        item_key = {
+            "food_coffee": "coffee",
+            "food_milk_tea": "milk_tea",
+            "food_tea": "tea",
+            "food_cake": "cake",
+        }.get(kind)
+        if not item_key:
+            return
+        duration = int(payload.get("duration_minutes") or 0)
+        todo_title = str(payload.get("todo_title") or "")
+        self._start_food_scene(
+            item_key,
+            duration,
+            "",
+            todo_title,
+            consume_inventory=False,
+            source="buddy_food_received",
+        )
+
     def talk_to_pet(self, message: str) -> CompanionReply:
         """在本地处理一条对话，并显示 Lili 的回复。"""
 
@@ -1959,6 +2169,10 @@ class PetWindow(QWidget):
         self._generate_daily_report(show_dialog=False)
         if room_id:
             self._record_social_room_event(room_id, "focus_finish")
+        food_scene = self.economy.active_food_scene()
+        if food_scene and str(food_scene.get("scene_type") or "") in {"focus", "deep_focus"}:
+            self.economy.finish_food_scene("work_finished")
+            self.food_scene_timer.stop()
         return reply
 
     def show_today_note(self) -> None:
@@ -2416,7 +2630,9 @@ class PetWindow(QWidget):
         self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
         quiet = detect_quiet_mode()
-        wellness_kind = None if quiet.blocked else self.wellness.take_due(
+        food_scene = self.economy.active_food_scene() or {}
+        deep_food_scene = bool(food_scene.get("deep_focus"))
+        wellness_kind = None if quiet.blocked or deep_food_scene else self.wellness.take_due(
             self.settings.water_reminder_enabled,
             self.settings.stand_reminder_enabled,
             self.settings.water_interval_minutes,
@@ -2428,7 +2644,7 @@ class PetWindow(QWidget):
         elif wellness_kind == "stand":
             self._set_temporary_activity("football", 35_000)
             self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
-        reminder_kind = None if quiet.blocked else self.work_timer.take_due_reminder()
+        reminder_kind = None if quiet.blocked or deep_food_scene else self.work_timer.take_due_reminder()
         if reminder_kind is None:
             return
         duration = format_work_duration(self.work_timer.session_seconds())
@@ -2439,7 +2655,7 @@ class PetWindow(QWidget):
     def _check_local_reminders(self) -> None:
         """Run the local reminder queue once per existing one-second timer."""
 
-        if detect_quiet_mode().blocked:
+        if detect_quiet_mode().blocked or bool((self.economy.active_food_scene() or {}).get("deep_focus")):
             return
         for reminder in self.time_memory.reminders.due()[:3]:
             self.time_memory.reminders.mark_notified(reminder.id)
@@ -2994,6 +3210,8 @@ class PetWindow(QWidget):
                 None,
             )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
+            self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
             self._social_dialog.room_event_received.connect(self._room_event_received)
             self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
             self._social_dialog.finished.connect(self._social_dialog_finished)
@@ -3413,7 +3631,7 @@ class PetWindow(QWidget):
         menu.exec(QCursor.pos())
 
     def _populate_pet_companion_menu(self, menu: QMenu) -> None:
-        """Populate the pet-only interaction and feeding submenu."""
+        """Keep direct affection actions here; food is a separate scenario entry."""
 
         for label, action_key in (
             ("给我一个抱抱", "love"),
@@ -3424,18 +3642,6 @@ class PetWindow(QWidget):
             action.triggered.connect(
                 lambda _checked=False, key=action_key: self.perform_companion_action(key)
             )
-
-        menu.addSeparator()
-        food_menu = menu.addMenu("喂食与饮品")
-        for food in FOOD_OPTIONS:
-            action = food_menu.addAction(food.label)
-            action.triggered.connect(
-                lambda _checked=False, key=food.key: self.feed_pet(key)
-            )
-        status_action = food_menu.addAction("查看六毛心情与能量")
-        status_action.triggered.connect(
-            lambda _checked=False: self.show_companion_status()
-        )
 
     def _position_floating_panel(self, panel: QWidget) -> None:
         """把快捷面板放在宠物旁边并限制在当前屏幕可见区域。"""
@@ -4075,6 +4281,9 @@ class PetWindow(QWidget):
 
         companion_menu = menu.addMenu("六毛互动")
         self._populate_pet_companion_menu(companion_menu)
+
+        food_action = menu.addAction("喂食…")
+        food_action.triggered.connect(lambda _checked=False: self.show_food_scene_dialog())
 
         outfit_menu = menu.addMenu("换娃衣")
         self._populate_outfit_menu(outfit_menu, default_label="默认装")

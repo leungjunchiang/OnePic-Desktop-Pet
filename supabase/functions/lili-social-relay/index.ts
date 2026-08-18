@@ -11,6 +11,8 @@ const RPC_ALLOWLIST = new Set([
   "lili_room_dashboard",
   "lili_record_room_event",
   "lili_send_interaction",
+  "lili_send_food_interaction",
+  "lili_set_buddy_interaction_mode",
   "lili_set_room_goal",
   "lili_set_room_schedule",
   "lili_set_room_challenge",
@@ -34,6 +36,8 @@ const ROUTE_TO_RPC = new Map([
   ["/rooms/challenge", "lili_set_room_challenge"],
   ["/rooms/leave", "lili_leave_room"],
   ["/rooms/interaction", "lili_send_interaction"],
+  ["/rooms/food-interaction", "lili_send_food_interaction"],
+  ["/profile/interaction-mode", "lili_set_buddy_interaction_mode"],
   ["/rooms/events", "lili_record_room_event"],
 ]);
 
