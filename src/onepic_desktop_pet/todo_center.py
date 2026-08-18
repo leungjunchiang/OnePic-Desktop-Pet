@@ -273,7 +273,7 @@ class TodoCenterWindow(QDialog):
         heading.setStyleSheet("font-size:24px;font-weight:700;color:#183c4c;")
         root.addWidget(heading)
         subtitle = QLabel(
-            "今天、未来事项、倒计时和纪念日都在这里；桌面小待办与本页共用同一份数据。"
+            "今天和近期事项按时间显示；倒计时、纪念日集中在“重要日期”管理。"
         )
         subtitle.setObjectName("subtitle")
         root.addWidget(subtitle)
@@ -282,7 +282,7 @@ class TodoCenterWindow(QDialog):
         for label, key in (
             ("今天", "today"),
             ("即将到来", "upcoming"),
-            ("倒计时·纪念日", "events"),
+            ("重要日期", "events"),
             ("已完成", "completed"),
         ):
             listing = QListWidget(self)
@@ -363,21 +363,46 @@ class TodoCenterWindow(QDialog):
             )
         return result
 
+    def _event_in_reminder_window(self, item: CenterItem) -> bool:
+        """Return whether an event is close enough for the time-line view."""
+        if item.source_type == "countdown":
+            source = self.memory.countdowns.get(item.source_id)
+            if source is None:
+                return False
+            remaining = self.memory.countdowns.remaining_days(source)
+        elif item.source_type == "anniversary":
+            source = self.memory.anniversaries.get(item.source_id)
+            if source is None:
+                return False
+            remaining = self.memory.anniversaries.remaining_days(source)
+        else:
+            return False
+        window = max(0, int(getattr(source, "show_before_days", 7) or 0))
+        return 0 < remaining <= window
+
     def _partition(self, item: CenterItem, view: str) -> bool:
         try:
             item_day = date.fromisoformat(item.date_text[:10])
         except ValueError:
             item_day = self.memory.now().date()
         today = self.memory.now().date()
+        is_event = item.source_type in {"countdown", "anniversary"}
+
+        # Important dates is a management view: keep every saved event here,
+        # including one whose one-off occurrence has already been acknowledged.
+        if view == "events":
+            return is_event
         if view == "completed":
-            return item.completed
+            return item.source_type in {"todo", "reminder"} and item.completed
         if item.completed:
             return False
         if view == "today":
             return item_day <= today
         if view == "upcoming":
+            if is_event:
+                return item_day > today and self._event_in_reminder_window(item)
             return item_day > today
-        return item.source_type in {"countdown", "anniversary"}
+        return False
 
     def _label(self, item: CenterItem) -> str:
         if item.source_type in {"todo", "reminder"}:
@@ -409,10 +434,13 @@ class TodoCenterWindow(QDialog):
                 row = QListWidgetItem(self._label(item), listing)
                 row.setData(Qt.ItemDataRole.UserRole, item.id)
                 row.setData(Qt.ItemDataRole.UserRole + 1, item)
-                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                row.setCheckState(
-                    Qt.CheckState.Checked if item.completed else Qt.CheckState.Unchecked
-                )
+                if item.source_type in {"todo", "reminder"}:
+                    row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    row.setCheckState(
+                        Qt.CheckState.Checked if item.completed else Qt.CheckState.Unchecked
+                    )
+                else:
+                    row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                 row.setToolTip("双击编辑；右键或下方按钮删除")
             if not rows:
                 empty = QListWidgetItem(

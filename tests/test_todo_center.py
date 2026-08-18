@@ -12,7 +12,7 @@ def _qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def test_todo_center_uses_one_shared_store_and_four_views(tmp_path) -> None:
+def test_todo_center_separates_timeline_from_important_dates(tmp_path) -> None:
     app = _qt_app()
     memory = TimeMemory(
         tmp_path,
@@ -20,7 +20,8 @@ def test_todo_center_uses_one_shared_store_and_four_views(tmp_path) -> None:
     )
     today = memory.todos.add("今天写论文")
     future = memory.todos.add("明天发材料", date="2026-08-16")
-    countdown = memory.countdowns.add("答辩", "2026-09-01")
+    near = memory.countdowns.add("Codex重置", "2026-08-20", show_before_days=7)
+    far = memory.countdowns.add("开学", "2026-09-01", show_before_days=7)
     anniversary = memory.anniversaries.add("六毛纪念日", "2026-08-20")
     center = TodoCenterWindow(memory)
 
@@ -28,20 +29,19 @@ def test_todo_center_uses_one_shared_store_and_four_views(tmp_path) -> None:
     assert {item.id for item in items} >= {
         today.id,
         future.id,
-        f"countdown:{countdown.id}",
+        f"countdown:{near.id}",
+        f"countdown:{far.id}",
         f"anniversary:{anniversary.id}",
     }
     assert len(memory.todos.items) == 2
-    assert center._partition(next(item for item in items if item.id == today.id), "today")
-    assert center._partition(next(item for item in items if item.id == future.id), "upcoming")
-    assert center._partition(
-        next(item for item in items if item.id == f"countdown:{countdown.id}"),
-        "events",
-    )
-    assert not center._partition(
-        next(item for item in items if item.id == f"countdown:{countdown.id}"),
-        "today",
-    )
+    by_id = {item.id: item for item in items}
+    assert center._partition(by_id[today.id], "today")
+    assert center._partition(by_id[future.id], "upcoming")
+    assert center._partition(by_id[f"countdown:{near.id}"], "upcoming")
+    assert not center._partition(by_id[f"countdown:{far.id}"], "upcoming")
+    assert center._partition(by_id[f"countdown:{far.id}"], "events")
+    assert center._partition(by_id[f"anniversary:{anniversary.id}"], "events")
+    assert not center._partition(by_id[f"countdown:{far.id}"], "today")
     center.close()
     center.deleteLater()
     app.processEvents()
