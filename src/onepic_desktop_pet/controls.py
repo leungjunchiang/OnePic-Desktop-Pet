@@ -138,6 +138,18 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
         painter.drawLine(43, 13, 43, 49); painter.drawLine(43, 13, 59, 9); painter.drawEllipse(17, 43, 25, 16); painter.drawEllipse(40, 43, 25, 16)
         painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(7, 7, 13, 13)
         painter.setBrush(QBrush(yellow)); painter.drawEllipse(55, 52, 10, 10)
+    elif kind == "todo":
+        painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawRoundedRect(12, 9, 48, 55, 10, 10)
+        painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(21, 19, 10, 10, 3, 3)
+        painter.drawRoundedRect(21, 35, 10, 10, 3, 3)
+        painter.setPen(QPen(red, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawLine(38, 24, 54, 24)
+        painter.drawLine(38, 40, 54, 40)
+        painter.drawLine(22, 53, 28, 59)
+        painter.drawLine(28, 59, 39, 48)
     else:  # settings
         painter.setPen(QPen(blue, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         for angle in range(0, 360, 45):
@@ -150,10 +162,11 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
 
 
 class QuickControlPanel(QWidget):
-    """跟随六毛移动的五项图标快捷坞；选择后或闲置八秒会自动收起。"""
+    """跟随六毛移动的六项图标快捷坞；选择后或闲置八秒会自动收起。"""
 
     chat_requested = Signal()
     work_requested = Signal()
+    todo_requested = Signal()
     social_requested = Signal()
     music_requested = Signal()
     music_control_requested = Signal(str)
@@ -197,6 +210,7 @@ class QuickControlPanel(QWidget):
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
+        self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
         self.settings_button = self._button("settings", "设置", None)
@@ -205,6 +219,7 @@ class QuickControlPanel(QWidget):
         self._quick_buttons = (
             self.chat_button,
             self.work_button,
+            self.todo_button,
             self.social_button,
             self.music_button,
             self.settings_button,
