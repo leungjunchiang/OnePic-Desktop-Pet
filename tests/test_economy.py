@@ -67,10 +67,12 @@ def test_households_are_permanent_and_do_not_touch_skin_system(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     ledger.record_income("论文稿费", 100, source_key="paper:2")
 
-    assert ledger.purchase_item("desk_lamp") is not None
-    assert ledger.has_household("desk_lamp")
+    assert ledger.purchase_item("coffee_pot") is not None
+    assert ledger.has_household("coffee_pot")
+    assert ledger.purchase_item("coffee_pot") is None
+    assert "coffee_pot" not in ledger.inventory
     assert ledger.purchase_item("desk_lamp") is None
-    assert "desk_lamp" not in ledger.inventory
+    assert not ledger.has_household("desk_lamp")
     assert all(
         "皮肤" not in str(row) and "娃衣" not in str(row)
         for row in ledger.catalog().values()
@@ -125,3 +127,26 @@ def test_important_todo_grants_one_daily_cake(tmp_path):
     assert second is not None
     assert ledger.inventory_count("cake") == 1
     assert ledger.monthly_income() == 0
+
+def test_coffee_pot_grants_one_limited_supply_per_day(tmp_path):
+    current = [_now()]
+    ledger = EconomyLedger(
+        tmp_path / "economy.json",
+        now_provider=lambda: current[0],
+    )
+    ledger.record_income("咖啡壶测试资金", 100, source_key="coffee-pot-test")
+    assert ledger.purchase_item("coffee_pot") is not None
+
+    assert ledger.ensure_daily_household_supply() is True
+    assert ledger.inventory_count("coffee") == 1
+    assert ledger.ensure_daily_household_supply() is False
+    assert ledger.inventory_count("coffee") == 1
+    assert ledger.daily_supply_status()["coffee"]["coffee_pot_claimed"] is True
+
+    # The existing first-work supply remains separate from the coffee-pot supply.
+    ledger.record_focus(60, started_at=current[0])
+    assert ledger.inventory_count("coffee") == 2
+
+    current[0] = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
+    assert ledger.ensure_daily_household_supply() is True
+    assert ledger.inventory_count("coffee") == 3
