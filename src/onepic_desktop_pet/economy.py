@@ -575,15 +575,24 @@ class EconomyLedger:
         """记录请搭子喝咖啡；这是支出，不增加任何人的排行榜收入。"""
         recipient_id = str(recipient_id).strip()[:80]
         recipient_label = str(recipient_label).strip()[:80] or "搭子"
-        if not recipient_id:
+        price = max(0, int(price))
+        if not recipient_id or price <= 0 or self.balance < price:
             return None
-        return self.spend(
-            f"请{recipient_label}家的六毛喝咖啡",
-            price,
-            category="gift_sent",
-            source_key=f"gift-sent:{recipient_id}:{self._now().date().isoformat()}:{uuid.uuid4().hex}",
-            metadata={"recipient_id": recipient_id, "gift_item": "coffee"},
-        )
+
+        def apply() -> WalletEvent:
+            event = self._append(
+                "gift_sent",
+                -price,
+                f"请{recipient_label}家的六毛喝咖啡",
+                f"gift-sent:{recipient_id}:{self._now().date().isoformat()}:{uuid.uuid4().hex}",
+                self._now().date().isoformat(),
+                source="buddy_gift",
+                metadata={"recipient_id": recipient_id, "gift_item": "coffee"},
+            )
+            self._record_life("gift_sent")
+            return event
+
+        return self._atomic(apply)
 
     def record_gift_received(self, sender_id: str, sender_label: str) -> WalletEvent | None:
         """收到礼物只进库存，不增加余额或本月创收。"""

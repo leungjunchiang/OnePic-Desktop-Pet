@@ -131,6 +131,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - Compact Todo + automatic program updates" \
+            --title "Lili $release_tag - 六毛钱袋生活经济重构" \
             --generate-notes \
-            --notes "Compact Todo now keeps the action column visible; the app can check, verify, download, and launch the matching GitHub installer after confirmation. Content-only updates remain user-controllable."
+            --notes "六毛钱袋生活经济重构：实时工资、钱包、工资条、荒野账本、日常消费、六毛家当、生活图鉴与按本月创收统计的荒野国王富豪榜。保持现有皮肤成长系统不变，不新增皮肤素材。"

@@ -293,7 +293,7 @@ class EconomyDialog(QDialog):
             button.setEnabled(not owned)
             button.clicked.connect(lambda _checked=False, key=key: self._purchase(key))
             text = f"{spec['name']}\n{spec['description']}"
-            item = QListWidgetItem(self.shop_list)
+            item = QListWidgetItem()
             item.setSizeHint(self._row_widget(text, button).sizeHint())
             self.shop_list.addItem(item)
             self.shop_list.setItemWidget(item, self._row_widget(text, button))
@@ -313,7 +313,7 @@ class EconomyDialog(QDialog):
                 button.setEnabled(quantity > 0)
                 button.clicked.connect(lambda _checked=False, key=row["item_key"]: self._use(key))
             widget = self._row_widget(text, button)
-            item = QListWidgetItem(self.inventory_list)
+            item = QListWidgetItem()
             item.setSizeHint(widget.sizeHint())
             self.inventory_list.addItem(item)
             self.inventory_list.setItemWidget(item, widget)
