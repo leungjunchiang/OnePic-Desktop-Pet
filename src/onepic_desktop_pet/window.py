@@ -163,6 +163,7 @@ from .work_timer import WorkTimerModel, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
 from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
+from .todo_center import TodoCenterWindow
 from .compact_todo import CompactTodoPanel
 from .menu_model import UnifiedMenuModel, populate_qmenu
 from .night_limited import night_limited_activity
@@ -322,6 +323,7 @@ class PetWindow(QWidget):
         self._compact_todo_panel: CompactTodoPanel | None = None
         self._restore_compact_todos_after_show = False
         self._time_memory_window: TimeMemoryWindow | None = None
+        self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
@@ -511,7 +513,7 @@ class PetWindow(QWidget):
         self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
-        self.quick_panel.todo_requested.connect(self.show_today_note)
+        self.quick_panel.todo_requested.connect(self.show_todo_center)
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
@@ -1185,6 +1187,8 @@ class PetWindow(QWidget):
             self._compact_todo_panel.close()
         if self._time_memory_window is not None:
             self._time_memory_window.close()
+        if self._todo_center_window is not None:
+            self._todo_center_window.close()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
@@ -2191,13 +2195,18 @@ class PetWindow(QWidget):
                 # turn rather than waiting for the next pet movement.
                 self._position_compact_todos()
 
+        if self._todo_center_window is not None:
+            self._todo_center_window.refresh()
+
     def _chat_action_executed(self, result: object) -> None:
         """Refresh every Todo surface after a real chat-side local write."""
 
         action = str(getattr(result, "action", "") or "")
         if action in {
             "create_todo", "update_todo", "complete_todo", "delete_todo",
-            "move_pending_to_today",
+            "create_countdown", "update_countdown", "delete_countdown",
+            "complete_countdown", "create_anniversary", "update_anniversary",
+            "delete_anniversary", "move_pending_to_today",
         }:
             self._refresh_todo_surfaces()
             # Respect an intentionally hidden panel.  If compact mode is the
@@ -2289,6 +2298,21 @@ class PetWindow(QWidget):
         self.show_speech("行，那今天不算旷工。", 4200)
         if self._today_note_window is not None:
             self._today_note_window.refresh()
+
+    def show_todo_center(self) -> None:
+        """Open the full TodoCenter while keeping CompactTodo as the light view."""
+
+        self._record_user_interaction()
+        if self._todo_center_window is None:
+            self._todo_center_window = TodoCenterWindow(self.time_memory)
+            self._todo_center_window.changed.connect(self._refresh_todo_surfaces)
+        self._todo_center_window.refresh()
+        if self._todo_center_window.isMinimized():
+            self._todo_center_window.showNormal()
+        else:
+            self._todo_center_window.show()
+        self._todo_center_window.raise_()
+        self._todo_center_window.activateWindow()
 
     def show_time_memory(self) -> None:
         if self._time_memory_window is None:
