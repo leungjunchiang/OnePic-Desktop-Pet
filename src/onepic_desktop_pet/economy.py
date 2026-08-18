@@ -27,31 +27,31 @@ EARLY_BIRD_MIN_SECONDS = 20 * 60
 
 ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee": {
-        $160, "group": "吃点喝点",
+        "name": "普通咖啡", "price": 12, "group": "吃点喝点",
         "kind": "consumable", "state": "coffee", "collection": "coffee",
         "scene_type": "focus", "scene_minutes": 30,
         "description": "喝杯咖啡，选件事情和六毛干半小时。",
     },
     "expensive_coffee": {
-        $160, "group": "吃点喝点",
+        "name": "昂贵咖啡", "price": 60, "group": "吃点喝点",
         "kind": "consumable", "state": "expensive_coffee", "collection": "expensive_coffee",
         "scene_type": "deep_focus", "scene_minutes": 60,
         "description": "喝贵的，开一局 60 分钟深度工作。",
     },
     "milk_tea": {
-        $120, "group": "吃点喝点",
+        "name": "奶茶", "price": 20, "group": "吃点喝点",
         "kind": "consumable", "state": "milk_tea_break", "collection": "milk_tea",
         "scene_type": "rest", "scene_minutes": 10,
         "description": "正式歇一会儿，选择 10 或 15 分钟。",
     },
     "cake": {
-        $132, "group": "吃点喝点",
+        "name": "小蛋糕", "price": 32, "group": "吃点喝点",
         "kind": "consumable", "state": "celebrating", "collection": "cake",
         "scene_type": "celebrate", "scene_minutes": 0,
         "description": "给完成重要事情的今天留一点庆祝。",
     },
     "tea": {
-        $110, "group": "吃点喝点",
+        "name": "茶", "price": 10, "group": "吃点喝点",
         "kind": "consumable", "state": "tea", "collection": "tea",
         "scene_type": "companion", "scene_minutes": 0,
         "description": "不赶时间，六毛陪你慢慢待一会儿。",
