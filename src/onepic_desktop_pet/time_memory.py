@@ -15,6 +15,7 @@ from .sticky_note_manager import StickyNoteManager
 from .timeline_manager import TimelineManager
 from .todo_manager import TodoManager
 from .todo_view import TodoViewItem, collect_todo_view
+from .time_service import parse_datetime
 from .work_session_manager import WorkSessionManager
 
 
@@ -41,6 +42,10 @@ class TimeMemory:
         self.actions = LocalActionExecutor(self.todos, self.countdowns, self.anniversaries, self.timeline, self.summary, self.reminders)
         self.current_task_id: str | None = None
         self._now = now_provider
+        # Migrate legacy due-time reminders to the Todo's persisted lead time
+        # and repair the real notification queue on startup.
+        for item in self.todos.items:
+            self.sync_todo_reminder(item)
 
     def now(self) -> datetime:
         """Return the same clock used by every local time-memory store."""
@@ -51,31 +56,57 @@ class TimeMemory:
     def select_task(self, task_id: str | None) -> None:
         self.current_task_id = str(task_id) if task_id else None
 
+    def sync_todo_reminder(self, item: object) -> None:
+        """Keep the real local reminder queue aligned with one Todo record."""
+
+        item_id = str(getattr(item, "id", "") or "")
+        if not item_id:
+            return
+        if bool(getattr(item, "completed", False)):
+            self.reminders.complete_for_source(item_id)
+            return
+        if not bool(getattr(item, "reminder", False)):
+            self.reminders.remove_for_source(item_id)
+            return
+        due = getattr(item, "remind_at", None) or getattr(item, "due_at", None)
+        if due:
+            try:
+                self.reminders.upsert_for_source(
+                    str(getattr(item, "title", "待办")), due, source_id=item_id
+                )
+            except (TypeError, ValueError):
+                # A malformed legacy time must not prevent the desktop pet
+                # from starting.  The Todo remains visible for manual repair.
+                self.reminders.remove_for_source(item_id)
+        else:
+            # A date-only sticky note may remain visible forever, but it has no
+            # clock time at which a notification could be delivered.
+            self.reminders.remove_for_source(item_id)
+
     def todo_view_today(self) -> list[TodoViewItem]:
-        """Return ordinary Todos plus near-term countdowns/anniversaries."""
+        """Return today's sticky notes plus near-term countdowns/anniversaries.
+
+        A timed note remains visible for 24 hours after its due time.  An
+        untimed note is intentionally carried across calendar days until the
+        user completes or manually marks it as read.
+        """
+
+        today = self.now().date()
+        scheduled = self._visible_todos_until(today)
 
         return collect_todo_view(
-            self.todos.today(), self.countdowns.items, self.anniversaries.items,
+            scheduled, self.countdowns.items, self.anniversaries.items,
             countdown_remaining=self.countdowns.remaining_days,
             anniversary_remaining=self.anniversaries.remaining_days,
             anniversary_next_date=self.anniversaries.next_date,
         )
 
     def todo_view_upcoming(self, days: int = 7) -> list[TodoViewItem]:
-        """Return today plus near-term scheduled todos for the compact strip."""
+        """Return the compact sticky-note window, including recent overdue work."""
 
         today = self.now().date()
         latest = today + timedelta(days=max(0, int(days)))
-        scheduled = []
-        for item in self.todos.items:
-            if item.completed:
-                continue
-            try:
-                item_date = date.fromisoformat(str(item.date)[:10])
-            except (TypeError, ValueError):
-                continue
-            if today <= item_date <= latest:
-                scheduled.append(item)
+        scheduled = self._visible_todos_until(latest)
         return collect_todo_view(
             scheduled, self.countdowns.items, self.anniversaries.items,
             countdown_remaining=self.countdowns.remaining_days,
@@ -84,6 +115,40 @@ class TimeMemory:
             today_date=today.isoformat(),
             show_future_dates=True,
         )
+
+    def _visible_todos_until(self, latest: date) -> list[object]:
+        """Select durable Todo records for desktop/center time views.
+
+        The old implementation filtered by ``item.date >= today``.  That
+        made a sticky note disappear at midnight even when it was still an
+        unfinished task.  Date-only notes now remain until explicitly read;
+        timed notes remain through the 24-hour grace period after due time.
+        """
+
+        current = self.now()
+        result: list[object] = []
+        for item in self.todos.items:
+            if item.completed or item.read or self.todos.auto_hidden(item, now=current):
+                continue
+            try:
+                item_date = date.fromisoformat(str(item.date)[:10])
+            except (TypeError, ValueError):
+                continue
+            if item.time or item.due_at:
+                due_text = item.due_at or f"{item.date}T{item.time}:00"
+                try:
+                    due = parse_datetime(due_text, self._now)
+                except (TypeError, ValueError):
+                    due = None
+                if due is not None and due.date() <= latest:
+                    result.append(item)
+                elif due is None and item_date <= latest:
+                    result.append(item)
+            elif item_date <= latest:
+                # No exact time means a true sticky note: it does not expire
+                # just because its calendar date has passed.
+                result.append(item)
+        return result
 
     def get_todo_view_item(self, item_id: str) -> TodoViewItem | None:
         return next((item for item in self.todo_view_upcoming() if item.id == str(item_id)), None)
@@ -108,6 +173,24 @@ class TimeMemory:
             self.anniversaries.acknowledge(item.source_id)
             return True
         return False
+
+    def read_todo_view_item(self, item_id: str, read: bool = True) -> bool:
+        """Mark an ordinary sticky Todo as read without completing it."""
+
+        item = self.get_todo_view_item(item_id)
+        if item is None or item.source_type != "todo":
+            return False
+        self.todos.mark_read(item.source_id, read)
+        return True
+
+    def read_todo(self, item_id: str, read: bool = True) -> bool:
+        """Direct counterpart used by Todo Center's read-notes view."""
+
+        item = self.todos.get(item_id)
+        if item is None:
+            return False
+        self.todos.mark_read(item.id, read)
+        return True
 
     def delete_todo_view_item(self, item_id: str) -> bool:
         item = self.get_todo_view_item(item_id)
@@ -135,6 +218,10 @@ class TimeMemory:
 
     def complete_task(self, task_id: str) -> bool:
         item = self.todos.complete(task_id)
+        if item.completed:
+            self.reminders.complete_for_source(item.id)
+        else:
+            self.sync_todo_reminder(item)
         self.summary.refresh_tasks()
         if item.important:
             key = f"important:{item.id}"
