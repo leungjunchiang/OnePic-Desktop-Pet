@@ -9,17 +9,27 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
+
+
+def platform_app_data_root() -> Path:
+    """Return the stable per-user application-data root for this platform."""
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    if os.name == "nt":
+        value = os.environ.get("LOCALAPPDATA")
+        return Path(value) if value else Path.home() / "AppData" / "Local"
+    value = os.environ.get("XDG_CONFIG_HOME")
+    return Path(value) if value else Path.home() / ".config"
 
 
 def app_data_dir(base: str | Path | None = None) -> Path:
     """Return Lili's writable per-user data directory."""
 
-    if base is not None:
-        root = Path(base)
-    else:
-        root = Path(os.environ.get("LOCALAPPDATA", "")) if os.environ.get("LOCALAPPDATA") else Path.home() / ".desktop_pet"
+    root = Path(base) if base is not None else platform_app_data_root()
     return root / "Lili"
 
 

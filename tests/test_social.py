@@ -1,6 +1,7 @@
 """Tests for Supabase-first routing and the CloudBase proxy fallback."""
 
 import json
+import pytest
 import ssl
 import sys
 import threading
@@ -474,3 +475,25 @@ def test_room_shared_state_migrations_are_retained_as_supabase_history():
     assert "lili_room_dashboard" in migration
     assert "lili_room_events" in migration
 
+
+
+def test_refresh_token_reuse_keeps_last_session_and_requests_relogin():
+    manager = AuthSessionManager(
+        service_name="LiliSocialTest",
+        account_name="reuse-recovery",
+        persist_tokens=False,
+    )
+    manager.adopt(SocialSession("old-access", "old-refresh", "user-1", time.time() - 1, 12))
+
+    def refresh(_current: SocialSession) -> dict:
+        raise SocialError(
+            "Invalid Refresh Token: Already Used",
+            kind="auth_refresh_reused",
+            error_code="refresh_token_already_used",
+        )
+
+    with pytest.raises(SocialError):
+        manager.get_valid_session(refresh, requested_by="test")
+    assert manager.current() is not None
+    assert manager.current().refresh_token == "old-refresh"
+    assert manager.requires_relogin

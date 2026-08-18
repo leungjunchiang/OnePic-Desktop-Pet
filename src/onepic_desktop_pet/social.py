@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from .local_data import app_data_dir
 from .resources import resource_path
 from .tls_support import tls_diagnostics, verified_ssl_context
 
@@ -104,8 +106,8 @@ def social_user_message(error: BaseException) -> str:
     kind = str(getattr(error, "kind", "") or "").casefold()
     raw = str(error or "")
     lowered = raw.casefold()
-    if code == "refresh_token_already_used" or kind == "auth_refresh_reused" or (
-        "refresh token" in lowered and "already used" in lowered
+    if code == "refresh_token_already_used" or kind in {"auth_refresh", "auth_refresh_reused"} or (
+        "refresh token" in lowered and ("already used" in lowered or "invalid" in lowered)
     ):
         return "登录状态已失效，请重新登录。"
     if raw.lstrip().startswith("{") and ("error_code" in lowered or '"code"' in lowered):
@@ -211,7 +213,7 @@ def _network_error(exc: BaseException, base_url: str) -> SocialError:
             tls_diagnostics(),
             exc_info=True,
         )
-        return SocialError(f"TLS/证书连接失败：无法安全连接自习室服务器（{host}）。", kind="tls", endpoint=host)
+        return SocialError(f"TLS/证书连接失败：无法安全连接自习室服务器（{host}）。", kind="tls", endpoint=host, retryable=True)
     return SocialError(f"网络不可达：无法连接自习室服务器（{host}）。", kind="network", endpoint=host, retryable=True)
 
 
@@ -259,6 +261,7 @@ class _AuthState:
     loaded: bool = False
     refreshing: bool = False
     last_error: SocialError | None = None
+    storage_error: str = ""
     generation: int = 0
 
 
@@ -290,6 +293,35 @@ class AuthSessionManager:
         import keyring
         return keyring
 
+    @property
+    def storage_label(self) -> str:
+        if sys.platform == "darwin":
+            return f"macOS Keychain:{self.service_name}/{self.account_name}"
+        if os.name == "nt":
+            return f"Windows Credential Manager:{self.service_name}/{self.account_name}"
+        return f"OS credential store:{self.service_name}/{self.account_name}"
+
+    def diagnostics(self) -> dict[str, Any]:
+        with self._state.condition:
+            session = self._state.session
+            return {
+                "auth_state": "relogin_required" if self.requires_relogin else ("signed_in" if session else "signed_out"),
+                "session_exists": bool(session),
+                "session_expires_at": round(session.expires_at) if session else None,
+                "refresh_in_progress": self._state.refreshing,
+                "token_generation": session.generation if session else self._state.generation,
+                "storage": self.storage_label,
+                "storage_error": self._state.storage_error,
+            }
+
+    @property
+    def requires_relogin(self) -> bool:
+        error = self._state.last_error
+        return bool(error and (
+            error.kind in {"auth", "auth_refresh", "auth_refresh_reused"}
+            or error.error_code in {"invalid_refresh_token", "refresh_token_already_used", "invalid_grant", "refresh_failed"}
+        ) and not error.retryable)
+
     def _read_store(self) -> SocialSession | None:
         if not self.persist_tokens:
             return self._state.session
@@ -305,7 +337,13 @@ class AuthSessionManager:
                 float(data.get("expires_at", 0)),
                 int(data.get("generation", 0) or 0),
             )
-        except Exception:
+        except Exception as exc:
+            self._state.storage_error = type(exc).__name__
+            LOGGER.warning(
+                "auth session read failed storage=%s reason=%s",
+                self.storage_label,
+                type(exc).__name__,
+            )
             return None
 
     def _load_latest(self) -> SocialSession | None:
@@ -315,6 +353,7 @@ class AuthSessionManager:
                 self._state.session = session
                 self._state.generation = max(self._state.generation, session.generation)
             self._state.loaded = True
+            LOGGER.info("auth state loaded %s", self.diagnostics())
             return self._state.session
 
     def current(self) -> SocialSession | None:
@@ -351,11 +390,23 @@ class AuthSessionManager:
                         ensure_ascii=False,
                         separators=(",", ":"),
                     )
-                    # A single keyring record is the atomic persistence unit;
-                    # no token is ever logged or written in separate fields.
-                    self._keyring().set_password(self.service_name, self.account_name, payload)
+                    try:
+                        self._keyring().set_password(self.service_name, self.account_name, payload)
+                        self._state.storage_error = ""
+                    except Exception as exc:
+                        self._state.storage_error = type(exc).__name__
+                        LOGGER.warning(
+                            "auth session persist failed storage=%s reason=%s",
+                            self.storage_label,
+                            type(exc).__name__,
+                        )
+                        raise SocialError(
+                            "登录状态暂时无法保存，稍后会自动重试。",
+                            kind="auth_storage",
+                            retryable=True,
+                        ) from exc
                     if log:
-                        LOGGER.info("session persisted token_generation=%s", session.generation)
+                        LOGGER.info("session persisted storage=%s token_generation=%s", self.storage_label, session.generation)
 
     def accept_auth(self, data: dict[str, Any] | None) -> SocialSession | None:
         if not data or not data.get("access_token"):
@@ -390,6 +441,41 @@ class AuthSessionManager:
         message = str(exc).casefold()
         return code == "refresh_token_already_used" or "refresh token" in message and "already used" in message
 
+    @contextmanager
+    def _refresh_file_lock(self):
+        """Serialize refresh-token rotation across simultaneously running apps."""
+        if not self.persist_tokens:
+            yield
+            return
+        lock_path = app_data_dir() / "auth-session-refresh.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                if handle.tell() == 0:
+                    handle.write(b"0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            handle.close()
+
     def get_valid_session(
         self,
         refresh: Callable[[SocialSession], dict[str, Any] | None],
@@ -397,8 +483,7 @@ class AuthSessionManager:
         requested_by: str,
         safety_seconds: float = 90,
     ) -> SocialSession | None:
-        """返回有效 session；并发调用只发送一次 refresh 请求。"""
-
+        """Return a usable session; only one process may rotate the token."""
         with self._state.condition:
             latest = self._read_store() if self.persist_tokens else self._state.session
             if latest is not None:
@@ -408,7 +493,11 @@ class AuthSessionManager:
             if session is None or session.expires_at > time.time() + safety_seconds:
                 return session
             if self._state.refreshing:
-                LOGGER.info("refresh joined existing request requested_by=%s token_generation=%s", requested_by, session.generation)
+                LOGGER.info(
+                    "refresh joined existing request requested_by=%s token_generation=%s",
+                    requested_by,
+                    session.generation,
+                )
                 while self._state.refreshing:
                     self._state.condition.wait()
                 latest = self._read_store() if self.persist_tokens else self._state.session
@@ -424,23 +513,48 @@ class AuthSessionManager:
             LOGGER.info("refresh requested by=%s token_generation=%s", requested_by, candidate.generation)
 
         try:
-            LOGGER.info("refresh started requested_by=%s token_generation=%s", requested_by, candidate.generation)
-            data = refresh(candidate)
-            if data and not data.get("refresh_token"):
-                # Keep the prior rotation value only when the transport did
-                # not include a replacement at all; never replace a new
-                # server-issued refresh token with an empty string.
-                data = {**data, "refresh_token": candidate.refresh_token}
-            refreshed = self.accept_auth(data)
-            if refreshed is None:
-                raise SocialError("登录状态已失效，请重新登录。", kind="auth_refresh", error_code="refresh_failed")
-            LOGGER.info("refresh success requested_by=%s token_generation=%s", requested_by, refreshed.generation)
-            return refreshed
+            with self._refresh_file_lock():
+                latest = self._read_store() if self.persist_tokens else self._state.session
+                if latest is not None and latest.expires_at > time.time() + safety_seconds:
+                    with self._state.condition:
+                        self._state.session = latest
+                        self._state.generation = max(self._state.generation, latest.generation)
+                    LOGGER.info(
+                        "refresh joined existing request requested_by=%s token_generation=%s shared_store=true",
+                        requested_by,
+                        latest.generation,
+                    )
+                    return latest
+                if latest is not None:
+                    candidate = latest
+                if not candidate.refresh_token:
+                    raise SocialError(
+                        "登录状态已失效，请重新登录。",
+                        kind="auth_refresh",
+                        error_code="invalid_refresh_token",
+                    )
+                LOGGER.info("refresh started requested_by=%s token_generation=%s", requested_by, candidate.generation)
+                data = refresh(candidate)
+                if data and not data.get("refresh_token"):
+                    data = {**data, "refresh_token": candidate.refresh_token}
+                refreshed = self.accept_auth(data)
+                if refreshed is None:
+                    raise SocialError(
+                        "登录状态已失效，请重新登录。",
+                        kind="auth_refresh",
+                        error_code="refresh_failed",
+                    )
+                LOGGER.info("refresh success requested_by=%s token_generation=%s", requested_by, refreshed.generation)
+                return refreshed
         except SocialError as exc:
             if self._is_reuse_error(exc):
                 latest = self._load_latest()
                 if latest is not None and latest.generation > candidate.generation and latest.expires_at > time.time() + safety_seconds:
-                    LOGGER.info("refresh success requested_by=%s token_generation=%s recovered_from_shared_store=true", requested_by, latest.generation)
+                    LOGGER.info(
+                        "refresh success requested_by=%s token_generation=%s recovered_from_shared_store=true",
+                        requested_by,
+                        latest.generation,
+                    )
                     return latest
                 exc = SocialError(
                     "登录状态已失效，请重新登录。",
@@ -449,14 +563,23 @@ class AuthSessionManager:
                     status=getattr(exc, "status", 400),
                     error_code="refresh_token_already_used",
                 )
-                self.clear()
             with self._state.condition:
                 self._state.last_error = exc
             raise exc
+        except (OSError, RuntimeError) as exc:
+            retryable = SocialError(
+                "登录状态暂时无法恢复，网络恢复后会自动重试。",
+                kind="auth_storage",
+                retryable=True,
+            )
+            with self._state.condition:
+                self._state.last_error = retryable
+            raise retryable from exc
         finally:
             with self._state.condition:
                 self._state.refreshing = False
                 self._state.condition.notify_all()
+
 
 
 class SocialBackend(Protocol):
@@ -512,7 +635,7 @@ class HttpSocialBackend:
 
     @property
     def signed_in(self) -> bool:
-        return self.session is not None or self.auth_manager.current() is not None
+        return (self.session is not None or self.auth_manager.current() is not None) and not self.auth_manager.requires_relogin
 
     @staticmethod
     def _keyring():
@@ -574,10 +697,14 @@ class HttpSocialBackend:
                 error_code = ""
                 message = raw or str(exc)
             status = int(exc.code)
-            kind = "auth" if status in (401, 403) else "server" if status >= 500 else "http"
-            if error_code == "refresh_token_already_used" or "invalid refresh token" in str(message).casefold() and "already used" in str(message).casefold():
+            is_refresh_endpoint = "/auth/v1/token" in path or path.rstrip("/") == "/auth/refresh"
+            kind = "auth_refresh" if is_refresh_endpoint else "auth" if status in (401, 403) else "server" if status >= 500 else "http"
+            if error_code in {"refresh_token_already_used", "invalid_refresh_token", "invalid_grant"} or (
+                "invalid refresh token" in str(message).casefold()
+                or ("refresh token" in str(message).casefold() and "already used" in str(message).casefold())
+            ):
                 message = "登录状态已失效，请重新登录。"
-                kind = "auth_refresh_reused"
+                kind = "auth_refresh_reused" if error_code == "refresh_token_already_used" else "auth_refresh"
             raise SocialError(
                 str(message)[:300],
                 kind=kind,
@@ -890,12 +1017,13 @@ class LegacyDirectSocialClient:
             "last_failure_at": self.connection.last_failure_at,
             "data_source": (result or {}).get("data_source", self.connection.data_source),
             "error_kind": exc.kind if exc else "",
+            "auth_diagnostics": self.auth_manager.diagnostics() if hasattr(self, "auth_manager") else {},
         }
         LOGGER.info("study_room_diagnostic %s", json.dumps(entry, ensure_ascii=False, sort_keys=True))
 
     @property
     def signed_in(self) -> bool:
-        return self._http_backend.signed_in if self._http_backend is not None else self.auth_manager.current() is not None
+        return self._http_backend.signed_in if self._http_backend is not None else (self.auth_manager.current() is not None and not self.auth_manager.requires_relogin)
 
     @staticmethod
     def _keyring():
@@ -916,8 +1044,7 @@ class LegacyDirectSocialClient:
         """Return a local cache path that contains no access tokens."""
 
         base = os.environ.get("LOCALAPPDATA")
-        root = Path(base) if base else Path.home() / ".desktop_pet"
-        return root / "Lili" / "social-dashboard-cache.json"
+        return app_data_dir() / "social-dashboard-cache.json"
 
     def _load_dashboard_cache(self) -> None:
         if not self.persist_tokens:
@@ -1087,10 +1214,14 @@ class LegacyDirectSocialClient:
                 message = raw or str(exc)
                 error_code = ""
             status = int(exc.code)
-            kind = "auth" if status in (401, 403) else "server" if status >= 500 else "http"
-            if error_code == "refresh_token_already_used" or "invalid refresh token" in str(message).casefold() and "already used" in str(message).casefold():
+            is_refresh_endpoint = "/auth/v1/token" in path or path.rstrip("/") == "/auth/refresh"
+            kind = "auth_refresh" if is_refresh_endpoint else "auth" if status in (401, 403) else "server" if status >= 500 else "http"
+            if error_code in {"refresh_token_already_used", "invalid_refresh_token", "invalid_grant"} or (
+                "invalid refresh token" in str(message).casefold()
+                or ("refresh token" in str(message).casefold() and "already used" in str(message).casefold())
+            ):
                 message = "登录状态已失效，请重新登录。"
-                kind = "auth_refresh_reused"
+                kind = "auth_refresh_reused" if error_code == "refresh_token_already_used" else "auth_refresh"
             raise SocialError(
                 str(message)[:300],
                 kind=kind,
@@ -1315,8 +1446,7 @@ class DashboardCacheClientBase:
 
     def _dashboard_cache_path(self) -> Path:
         base = os.environ.get("LOCALAPPDATA")
-        root = Path(base) if base else Path.home() / ".desktop_pet"
-        return root / "Lili" / "social-dashboard-cache.json"
+        return app_data_dir() / "social-dashboard-cache.json"
 
     def _load_dashboard_cache(self) -> None:
         if not self.persist_tokens:
@@ -1529,7 +1659,7 @@ class BackendRouteManager:
     @property
     def signed_in(self) -> bool:
         manager = getattr(self.direct, "auth_manager", None)
-        return bool(manager.current() if isinstance(manager, AuthSessionManager) else (self.direct.session or self.proxy.session))
+        return bool((manager.current() if isinstance(manager, AuthSessionManager) else (self.direct.session or self.proxy.session)) and not (manager.requires_relogin if isinstance(manager, AuthSessionManager) else False))
 
     @property
     def active(self) -> HttpSocialBackend:

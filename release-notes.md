@@ -1,3 +1,13 @@
+# Lili v0.22.89
+
+## macOS 自习室登录恢复
+
+- macOS Lili.app 的本地运行状态统一使用 ~/Library/Application Support/Lili；Session 凭据继续只保存在系统 Keychain。
+- Supabase Session 刷新改为进程内 single-flight，并增加跨进程刷新锁；刷新前重读完整 Session，刷新成功后原子写回 access token、refresh token、过期时间和 generation。
+- 临时网络、TLS 或 Keychain 读取异常不会直接清空登录凭据；只有确认不可恢复的认证失败才显示“重新登录”入口。
+- 自习室认证错误只保留顶部状态条和“重新登录”按钮，不再同时弹出重复系统窗口。
+- 增加脱敏认证诊断日志，不记录任何 access token 或 refresh token。
+
 # Lili v0.22.88
 
 ## 夜间限定造型

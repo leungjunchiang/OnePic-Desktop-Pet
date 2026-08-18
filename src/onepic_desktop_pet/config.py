@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from .resources import resource_path
+from .local_data import platform_app_data_root
 
 
 PET_NAME = "六毛"
@@ -126,17 +127,13 @@ class PetSettings:
 def user_settings_path() -> Path:
     """返回当前用户可写的设置文件路径。"""
 
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "Lili" / "settings.json"
+    return platform_app_data_root() / "Lili" / "settings.json"
 
 
 def legacy_settings_path() -> Path:
     """返回六毛工作搭子旧版本的设置路径，供一次性兼容读取。"""
 
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "SixHairWorkmate" / "settings.json"
+    return platform_app_data_root() / "SixHairWorkmate" / "settings.json"
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -197,7 +197,7 @@ class SocialDashboardThread(QThread):
     """Fetch one dashboard without blocking the Qt GUI thread."""
 
     completed = Signal(dict)
-    failed = Signal(str)
+    failed = Signal(object)
 
     def __init__(self, client: SocialClient, room_id: str | None, parent=None) -> None:
         super().__init__(parent)
@@ -229,7 +229,7 @@ class SocialDashboardThread(QThread):
             if cached is not None:
                 self.completed.emit(cached)
             else:
-                self.failed.emit(str(exc))
+                self.failed.emit(exc)
 
 
 class SocialHealthThread(QThread):
@@ -613,9 +613,15 @@ class SocialHubDialog(QDialog):
         subtitle = QLabel("一起聊天、专注和串门；未登录时，六毛仍可完整离线陪伴。")
         subtitle.setObjectName("muted")
         root.addWidget(subtitle)
+        status_row = QHBoxLayout()
         self.status_label = QLabel("页面已准备好")
         self.status_label.setObjectName("status")
-        root.addWidget(self.status_label)
+        status_row.addWidget(self.status_label, 1)
+        self.relogin_button = QPushButton("重新登录")
+        self.relogin_button.setVisible(False)
+        self.relogin_button.clicked.connect(self._open_relogin)
+        status_row.addWidget(self.relogin_button)
+        root.addLayout(status_row)
         self.tabs = QTabWidget()
         self.tabs.tabBar().setExpanding(True)
         self.tabs.tabBar().setUsesScrollButtons(False)
@@ -1072,9 +1078,16 @@ class SocialHubDialog(QDialog):
             return
         self.apply_dashboard(data)
 
-    def _dashboard_failed(self, message: str) -> None:
+    def _dashboard_failed(self, error: object) -> None:
         self._end_action()
-        self._set_status(f"同步失败：{social_user_message(SocialError(str(message), kind='network'))}", error=True)
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        kind = str(getattr(exc, "kind", "") or "")
+        is_auth = kind.startswith("auth") or bool(getattr(exc, "error_code", ""))
+        self._set_status(
+            f"同步失败：{social_user_message(exc)}",
+            error=True,
+            relogin=is_auth,
+        )
 
     def _dashboard_thread_finished(self, thread: SocialDashboardThread) -> None:
         if self._dashboard_thread is thread:
@@ -1416,11 +1429,17 @@ class SocialHubDialog(QDialog):
         layout.addStretch()
         return card
 
-    def _set_status(self, message: str, *, error: bool = False) -> None:
+    def _open_relogin(self) -> None:
+        self.tabs.setCurrentIndex(3)
+        if hasattr(self, "login_email"):
+            self.login_email.setFocus()
+
+    def _set_status(self, message: str, *, error: bool = False, relogin: bool = False) -> None:
         self.status_label.setText(message)
         color = "#a33a3a" if error else "#087f74"
         background = "#f7e5e5" if error else "#e1efec"
         self.status_label.setStyleSheet(f"background:{background};color:{color};border-radius:9px;padding:7px 10px;")
+        self.relogin_button.setVisible(bool(relogin))
 
     def _begin_action(self, message: str) -> None:
         self._set_status(message)
@@ -1461,15 +1480,21 @@ class SocialHubDialog(QDialog):
     def _error(self, exc: Exception) -> None:
         self._end_action()
         raw = str(exc)
+        kind = str(getattr(exc, "kind", "") or "").casefold()
+        retryable = bool(getattr(exc, "retryable", False))
+        is_auth = kind.startswith("auth") or bool(getattr(exc, "error_code", ""))
         LOGGER.warning(
-            "social room operation failed kind=%s endpoint=%s status=%s: %s",
+            "social room operation failed kind=%s endpoint=%s status=%s retryable=%s: %s",
             getattr(exc, "kind", "unknown"),
             getattr(exc, "endpoint", ""),
             getattr(exc, "status", None),
+            retryable,
             raw,
         )
         message = "共同房间状态保存失败，请稍后重试。" if "ambiguous" in raw.lower() or "room_id" in raw.lower() else social_user_message(exc)
-        self._set_status(message, error=True)
+        self._set_status(message, error=True, relogin=is_auth)
+        if is_auth or retryable:
+            return
         QMessageBox.warning(self, "六毛搭子自习室", message)
 
     def _signup(self) -> None:
