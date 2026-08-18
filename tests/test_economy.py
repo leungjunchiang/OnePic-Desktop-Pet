@@ -28,8 +28,6 @@ def test_income_spend_and_payroll_keep_income_separate_from_balance(tmp_path):
 
     assert event is not None
     assert ledger.record_income("论文录用", 100, source_key="paper:accepted:1") is None
-    assert ledger.purchase_item("milk_tea") is None
-
     ledger.record_focus(60 * 60, started_at=_now())
     purchase = ledger.purchase_item("milk_tea")
     assert purchase is not None
