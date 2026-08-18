@@ -52,6 +52,51 @@ def test_upcoming_todo_view_shows_tomorrow_with_a_date_label(tmp_path) -> None:
     assert memory.get_todo_view_item(task.id).display_text == item.display_text
 
 
+def test_sticky_todo_survives_midnight_and_untimed_notes_need_manual_read(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 18, 0, 5))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    untimed = memory.todos.add("跨天也要留着", date="2026-08-17")
+    timed = memory.todos.add("昨天的定时事项", date="2026-08-17", time="23:30")
+
+    ids = {item.id for item in memory.todo_view_upcoming()}
+    assert untimed.id in ids
+    assert timed.id in ids  # within the 24-hour post-due grace period
+
+    memory.read_todo_view_item(untimed.id)
+    assert untimed.id not in {item.id for item in memory.todo_view_upcoming()}
+    assert memory.todos.get(untimed.id).completed is False
+
+    clock.value = datetime(2026, 8, 19, 0, 0)
+    assert timed.id not in {item.id for item in memory.todo_view_upcoming()}
+
+
+def test_timed_todo_is_kept_for_24_hours_after_due(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 18, 23, 29))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    task = memory.todos.add("保留一天", date="2026-08-18", time="23:30")
+    assert task.id in {item.id for item in memory.todo_view_upcoming()}
+    clock.value = datetime(2026, 8, 19, 23, 29)
+    assert task.id in {item.id for item in memory.todo_view_upcoming()}
+    clock.value = datetime(2026, 8, 19, 23, 31)
+    assert task.id not in {item.id for item in memory.todo_view_upcoming()}
+
+
+def test_todo_priority_and_default_reminder_lead_time_persist(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 18, 9, 0))
+    manager = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    task = manager.add(
+        "提前提醒",
+        date="2026-08-18",
+        time="15:00",
+        reminder=True,
+        priority=1,
+    )
+    assert task.priority == 1
+    assert task.remind_at[11:16] == "14:50"
+    reloaded = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    assert reloaded.get(task.id).reminder_minutes_before == 10
+
+
 def test_create_todo_has_required_fields_and_persists(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 15, 9, 42))
     manager = TodoManager(tmp_path / "todos.json", now_provider=clock)

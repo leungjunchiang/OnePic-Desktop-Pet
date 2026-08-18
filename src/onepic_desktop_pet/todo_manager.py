@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 from typing import Any, Callable, Iterable
 from uuid import uuid4
@@ -26,6 +26,15 @@ class TodoItem:
     work_seconds: int = 0
     due_at: str | None = None
     remind_at: str | None = None
+    # ``priority`` is intentionally optional: ``None`` keeps the old
+    # time-based ordering.  1/2/3 mean high/medium/low when the user chooses
+    # an explicit priority.
+    priority: int | None = None
+    # ``read`` is separate from ``completed``.  A sticky note can be read and
+    # dismissed without falsely claiming that the work is finished.
+    read: bool = False
+    read_at: str | None = None
+    reminder_minutes_before: int = 10
     source: str = "local"
 
     @classmethod
@@ -34,6 +43,19 @@ class TodoItem:
         time_value = str(value.get("time") or "").strip()[:5] or None
         due_value = str(value.get("due_at") or "").strip() or None
         remind_value = str(value.get("remind_at") or "").strip() or None
+        raw_priority = value.get("priority")
+        try:
+            priority = int(raw_priority) if raw_priority is not None else None
+        except (TypeError, ValueError):
+            priority = None
+        if priority not in {1, 2, 3}:
+            priority = None
+        try:
+            reminder_minutes = max(
+                0, min(24 * 60, int(value.get("reminder_minutes_before", 10) or 0))
+            )
+        except (TypeError, ValueError):
+            reminder_minutes = 10
         # Older task files only had date/time.  Keep them fully usable and
         # materialize the new explicit timestamps when enough information is
         # available, without changing the visible legacy fields.
@@ -41,6 +63,25 @@ class TodoItem:
             due_value = f"{date_value}T{time_value}:00"
         if not remind_value and bool(value.get("reminder", False)) and time_value:
             remind_value = due_value
+        # Releases before the configurable lead-time field stored reminders at
+        # the due time.  Migrate that exact legacy shape to the new default of
+        # ten minutes before, while preserving an explicitly earlier reminder.
+        if bool(value.get("reminder", False)) and due_value:
+            try:
+                due_dt = datetime.fromisoformat(due_value.replace("Z", "+00:00"))
+                if due_dt.tzinfo is None:
+                    due_dt = due_dt.astimezone()
+                remind_dt = (
+                    datetime.fromisoformat(remind_value.replace("Z", "+00:00"))
+                    if remind_value
+                    else None
+                )
+                if remind_dt is not None and remind_dt.tzinfo is None:
+                    remind_dt = remind_dt.astimezone()
+                if remind_dt is None or remind_dt == due_dt:
+                    remind_value = (due_dt - timedelta(minutes=reminder_minutes)).isoformat()
+            except (TypeError, ValueError, OverflowError):
+                pass
         return cls(
             id=str(value.get("id") or uuid4().hex),
             title=str(value.get("title") or "未命名事项").strip()[:240],
@@ -54,6 +95,10 @@ class TodoItem:
             work_seconds=max(0, int(value.get("work_seconds", 0) or 0)),
             due_at=due_value,
             remind_at=remind_value,
+            priority=priority,
+            read=bool(value.get("read", value.get("dismissed", False))),
+            read_at=str(value.get("read_at") or "") or None,
+            reminder_minutes_before=reminder_minutes,
             source=str(value.get("source") or "local")[:40],
         )
 
@@ -100,6 +145,8 @@ class TodoManager:
         item_id: str | None = None,
         due_at: str | None = None,
         remind_at: str | None = None,
+        priority: int | None = None,
+        reminder_minutes_before: int = 10,
         source: str = "local",
     ) -> TodoItem:
         title = " ".join(str(title).split())[:240]
@@ -109,6 +156,16 @@ class TodoManager:
         clean_time = str(time or "").strip()[:5] or None
         parsed_due = parse_datetime(due_at, self._now) if due_at else None
         parsed_remind = parse_datetime(remind_at, self._now) if remind_at else None
+        try:
+            clean_priority = int(priority) if priority is not None else None
+        except (TypeError, ValueError):
+            clean_priority = None
+        if clean_priority not in {1, 2, 3}:
+            clean_priority = None
+        try:
+            clean_reminder_minutes = max(0, min(24 * 60, int(reminder_minutes_before)))
+        except (TypeError, ValueError):
+            clean_reminder_minutes = 10
         # A reminder with no separate due time is still shown in the Todo
         # strip, so a request like “明天9:30提醒我改论文” is immediately
         # visible instead of living only in reminders.json.
@@ -122,9 +179,15 @@ class TodoManager:
         due_value = parsed_due.isoformat() if parsed_due else (
             f"{parsed_date}T{display_time}:00" if display_time else None
         )
-        remind_value = parsed_remind.isoformat() if parsed_remind else (
-            due_value if reminder and display_time else None
-        )
+        remind_value = parsed_remind.isoformat() if parsed_remind else None
+        if remind_value is None and reminder and due_value:
+            try:
+                reminder_due = parse_datetime(due_value, self._now)
+                remind_value = (
+                    reminder_due - timedelta(minutes=clean_reminder_minutes)
+                ).isoformat()
+            except (TypeError, ValueError):
+                remind_value = None
         item = TodoItem(
             id=item_id or uuid4().hex,
             title=title,
@@ -135,6 +198,8 @@ class TodoManager:
             created_at=now_local(self._now).isoformat(),
             due_at=due_value,
             remind_at=remind_value,
+            priority=clean_priority,
+            reminder_minutes_before=clean_reminder_minutes,
             source=str(source or "local")[:40],
         )
         self._items.append(item)
@@ -197,7 +262,8 @@ class TodoManager:
             raise KeyError(item_id)
         allowed = {
             "title", "date", "time", "important", "completed", "reminder",
-            "work_seconds", "due_at", "remind_at", "source",
+            "work_seconds", "due_at", "remind_at", "priority", "read",
+            "read_at", "reminder_minutes_before", "source",
         }
         changed_date_or_time = False
         explicit_due = "due_at" in changes
@@ -215,6 +281,22 @@ class TodoManager:
                 changed_date_or_time = True
             elif key in {"important", "completed", "reminder"}:
                 value = bool(value)
+            elif key == "priority":
+                try:
+                    value = int(value) if value is not None else None
+                except (TypeError, ValueError):
+                    value = None
+                if value not in {1, 2, 3}:
+                    value = None
+            elif key == "read":
+                value = bool(value)
+            elif key == "read_at":
+                value = now_local(self._now).isoformat() if value else None
+            elif key == "reminder_minutes_before":
+                try:
+                    value = max(0, min(24 * 60, int(value)))
+                except (TypeError, ValueError):
+                    value = 10
             elif key == "work_seconds":
                 value = max(0, int(value))
             elif key in {"due_at", "remind_at"}:
@@ -224,19 +306,56 @@ class TodoManager:
             setattr(item, key, value)
         if changed_date_or_time and not explicit_due:
             item.due_at = f"{item.date}T{item.time}:00" if item.time else None
-        if item.reminder and not explicit_remind and changed_date_or_time:
-            item.remind_at = item.due_at
+        if item.reminder and not explicit_remind and (
+            changed_date_or_time or "reminder_minutes_before" in changes or "reminder" in changes
+        ):
+            if item.due_at:
+                due = parse_datetime(item.due_at, self._now)
+                item.remind_at = (
+                    due - timedelta(minutes=item.reminder_minutes_before)
+                ).isoformat()
+            else:
+                item.remind_at = None
         if not item.reminder:
             item.remind_at = None
         if item.completed and not item.completed_at:
             item.completed_at = now_local(self._now).isoformat()
         if not item.completed:
             item.completed_at = None
+        if item.read and not item.read_at:
+            item.read_at = now_local(self._now).isoformat()
+        if not item.read:
+            item.read_at = None
         self._save()
         return item
 
     def complete(self, item_id: str, completed: bool = True) -> TodoItem:
         return self.update(item_id, completed=completed)
+
+    def mark_read(self, item_id: str, read: bool = True) -> TodoItem:
+        """Dismiss a sticky note without changing its completion state."""
+
+        return self.update(item_id, read=read, read_at=(now_local(self._now).isoformat() if read else None))
+
+    def auto_hidden(self, item: TodoItem, *, now: datetime | None = None) -> bool:
+        """Whether a timed note passed its due time by more than 24 hours.
+
+        Untimed notes intentionally never expire automatically.  The record is
+        retained even after it stops being rendered so the user can recover it
+        from the Todo Center instead of losing data at midnight.
+        """
+
+        if not item.time and not item.due_at:
+            return False
+        due_text = item.due_at or f"{item.date}T{item.time}:00"
+        try:
+            due = parse_datetime(due_text, self._now)
+        except (TypeError, ValueError):
+            return False
+        current = now_local(self._now) if now is None else now
+        if current.tzinfo is None:
+            current = current.astimezone()
+        return current > due + timedelta(hours=24)
 
     def delete(self, item_id: str) -> bool:
         before = len(self._items)
@@ -277,7 +396,13 @@ class TodoManager:
                 item.date = target
                 item.due_at = f"{target}T{item.time}:00" if item.time else None
                 if item.reminder:
-                    item.remind_at = item.due_at
+                    if item.due_at:
+                        due = parse_datetime(item.due_at, self._now)
+                        item.remind_at = (
+                            due - timedelta(minutes=item.reminder_minutes_before)
+                        ).isoformat()
+                item.read = False
+                item.read_at = None
                 moved.append(item)
         if moved:
             self._save()

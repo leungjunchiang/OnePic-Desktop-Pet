@@ -50,7 +50,17 @@ def system_ca_bundle_path() -> Path | None:
     user-controlled URL or request header.
     """
 
-    for candidate in SYSTEM_CA_BUNDLE_CANDIDATES:
+    candidates = list(SYSTEM_CA_BUNDLE_CANDIDATES)
+    # Python distributions on macOS often ship their own OpenSSL CA file
+    # outside /etc.  It is still a normal PEM trust store, so use it when the
+    # explicit OS paths are unavailable.
+    try:
+        default_cafile = ssl.get_default_verify_paths().cafile
+    except AttributeError:
+        default_cafile = None
+    if default_cafile:
+        candidates.append(Path(default_cafile))
+    for candidate in candidates:
         try:
             if candidate.is_file():
                 return candidate
@@ -60,35 +70,42 @@ def system_ca_bundle_path() -> Path | None:
 
 
 def verified_ca_bundle_path() -> Path | None:
-    """Choose a verified CA bundle, preferring the OS trust store."""
+    """Choose a CA bundle that is reliable in Finder-launched frozen apps.
 
-    return system_ca_bundle_path() or certifi_bundle_path()
+    The Python runtime inside a macOS ``.app`` can see ``/etc/ssl/cert.pem``
+    while still receiving an incomplete or stale trust store.  The packaged
+    certifi bundle is deterministic and contains GitHub's public chain, so it
+    is preferred for HTTPS update checks; the OS bundle remains the fallback
+    for environments that intentionally install their own trust roots.
+    """
+
+    return certifi_bundle_path() or system_ca_bundle_path()
 
 
 def verified_ssl_context() -> ssl.SSLContext:
     """Create a normal certificate-verifying context.
 
-    The operating system trust store is preferred so corporate/device trust
-    and the normal macOS certificate chain keep working.  The application-
-    bundled certifi file is the safe fallback for frozen builds whose Python
-    runtime cannot see the system bundle.  This function never uses
-    ``CERT_NONE`` and never disables hostname checking.
+    The application-bundled certifi file is loaded first for a deterministic
+    public CA set in frozen builds; the operating system trust store is then
+    added so corporate/device roots and normal macOS certificate chains keep
+    working.  This function never uses ``CERT_NONE`` and never disables
+    hostname checking.
     """
 
-    bundle = verified_ca_bundle_path()
-    if bundle is not None:
+    # Start with the normal verifying context, then load trusted bundles in
+    # priority order.  This keeps CERT_REQUIRED/check_hostname enabled while
+    # allowing an enterprise/macOS root from the OS bundle to coexist with
+    # the deterministic certifi bundle shipped inside the application.
+    context = ssl.create_default_context()
+    candidates = (certifi_bundle_path(), system_ca_bundle_path())
+    for bundle in candidates:
+        if bundle is None:
+            continue
         try:
-            return ssl.create_default_context(cafile=str(bundle))
+            context.load_verify_locations(cafile=str(bundle))
         except (OSError, ssl.SSLError):
-            # A stale or incompatible system bundle must not prevent the
-            # bundled certifi fallback from being tried.
-            fallback = certifi_bundle_path()
-            if fallback is not None and fallback != bundle:
-                try:
-                    return ssl.create_default_context(cafile=str(fallback))
-                except (OSError, ssl.SSLError):
-                    pass
-    return ssl.create_default_context()
+            continue
+    return context
 
 
 def tls_diagnostics() -> dict[str, Any]:
