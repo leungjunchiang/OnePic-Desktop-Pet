@@ -95,6 +95,7 @@ class UnifiedMenuModel:
             self._optional("查看今日累计", "show_work_time"),
             self._optional("查看今日成长", "show_growth"),
             self._optional("查看陪伴报告", "show_report"),
+            self._optional("六毛钱包与工资条…", "economy"),
             self._optional(f"打开{self.pet_name}相册", "open_album"),
         ]
         work_record_children = [item for item in work_record_children if item is not None]
