@@ -2344,6 +2344,7 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         if self._economy_dialog is None:
             self._economy_dialog = EconomyDialog(self.economy, None)
+            self._economy_dialog.changed.connect(self._on_economy_changed)
         self._economy_dialog.refresh()
         if self._economy_dialog.isMinimized():
             self._economy_dialog.showNormal()
@@ -2500,6 +2501,12 @@ class PetWindow(QWidget):
         )
         if event is not None:
             self._sync_economy_events([event.as_dict()])
+
+    def _on_economy_changed(self) -> None:
+        """同步钱袋新增/消费事件；服务端按 source_key 幂等去重。"""
+        self._sync_economy_events(
+            [event.as_dict() for event in self.economy.events]
+        )
 
     def _sync_economy_events(self, events: list[dict]) -> None:
         if not events or not getattr(self.social_client, "signed_in", False):

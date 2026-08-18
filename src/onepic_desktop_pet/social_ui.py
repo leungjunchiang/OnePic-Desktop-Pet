@@ -790,7 +790,7 @@ class SocialHubDialog(QDialog):
         layout.addWidget(buddies_card)
         wealth_card, wealth_layout = self._card(
             "荒野王国富豪榜",
-            "只展示已接受搭子且主动参与的好友；按月结算，不按挂机时长无限发钱。",
+            "只展示已接受搭子且主动参与的好友；按本月创收排名，不按余额。",
         )
         self.wealth_leaderboard = QListWidget()
         self.wealth_leaderboard.setMinimumHeight(52)
@@ -1289,7 +1289,7 @@ class SocialHubDialog(QDialog):
             income = int(row.get("period_income") or row.get("month_income") or 0)
             windfall = int(row.get("windfall") or 0)
             self.wealth_leaderboard.addItem(
-                f"{index}. {nickname}　净资产 {wealth} 毛币　·　本月收入 {income}"
+                f"{index}. {nickname}　本月创收 {income} 毛币"
                 + (f"　·　稿费 {windfall}" if windfall else "")
             )
         if self.wealth_leaderboard.count() == 0:
