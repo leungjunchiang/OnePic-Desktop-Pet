@@ -44,6 +44,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
 from collections import OrderedDict, deque
 from datetime import datetime, timedelta
@@ -123,6 +124,8 @@ from .companion import (
 )
 from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
 from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
+from .economy import EconomyLedger
+from .economy_ui import EconomyDialog
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
@@ -306,10 +309,14 @@ class PetWindow(QWidget):
         self.time_memory = TimeMemory(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.economy = EconomyLedger(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
         self._today_note_window: TodayNoteWindow | None = None
         self._compact_todo_panel: CompactTodoPanel | None = None
         self._restore_compact_todos_after_show = False
         self._time_memory_window: TimeMemoryWindow | None = None
+        self._economy_dialog: EconomyDialog | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -497,6 +504,7 @@ class PetWindow(QWidget):
         self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
+        self.quick_panel.todo_requested.connect(self.show_today_note)
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
@@ -1163,6 +1171,8 @@ class PetWindow(QWidget):
             self._compact_todo_panel.close()
         if self._time_memory_window is not None:
             self._time_memory_window.close()
+        if self._economy_dialog is not None:
+            self._economy_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
             self._social_thread.wait(2500)
         if self._media_player is not None:
@@ -1843,11 +1853,13 @@ class PetWindow(QWidget):
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause()
         if was_running:
+            started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
             self.time_memory.record_focus(
                 session_seconds,
                 completed_session=False,
-                started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
+                started_at=started_at,
             )
+            self._record_economy_focus(session_seconds, started_at)
             self._last_focus_quality = self.focus_analytics.record_session(
                 session_seconds,
                 started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
@@ -1895,11 +1907,13 @@ class PetWindow(QWidget):
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
+        started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
         self.time_memory.record_focus(
             session_seconds,
             completed_session=True,
-            started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
+            started_at=started_at,
         )
+        self._record_economy_focus(session_seconds, started_at)
         self._award_focus_rewards()
         self._last_focus_quality = self.focus_analytics.record_session(
             session_seconds,
@@ -2195,8 +2209,12 @@ class PetWindow(QWidget):
             self.start_work_timer()
 
     def _complete_todo_from_note(self, task_id: str) -> None:
+        task = self.time_memory.get_todo_view_item(task_id)
+        was_open = task is not None and not bool(getattr(task, "completed", False))
         if not self.time_memory.complete_todo_view_item(task_id, True):
             return
+        if was_open and task is not None:
+            self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
         if self._today_note_window is not None:
             self._today_note_window.refresh()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
@@ -2207,7 +2225,10 @@ class PetWindow(QWidget):
         if task is None:
             return
         if completed:
+            was_open = not bool(getattr(task, "completed", False))
             self.time_memory.complete_todo_view_item(task_id, True)
+            if was_open:
+                self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
             self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
             self.show_speech("这项做完了，给你记上。", 4200)
         else:
@@ -2223,7 +2244,10 @@ class PetWindow(QWidget):
         if task is None:
             return
         if completed:
+            was_open = not bool(getattr(task, "completed", False))
             self.time_memory.complete_todo_view_item(task_id, True)
+            if was_open:
+                self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
             self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
             self.show_speech("这项做完了，给你记上。", 4200)
         else:
@@ -2275,6 +2299,20 @@ class PetWindow(QWidget):
             f"六毛心情：{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
         )
         self.show_speech(text, 6800)
+
+    def show_economy(self) -> None:
+        """Open the local wallet and month-end salary slip."""
+
+        self._record_user_interaction()
+        if self._economy_dialog is None:
+            self._economy_dialog = EconomyDialog(self.economy, None)
+        self._economy_dialog.refresh()
+        if self._economy_dialog.isMinimized():
+            self._economy_dialog.showNormal()
+        else:
+            self._economy_dialog.show()
+        self._economy_dialog.raise_()
+        self._economy_dialog.activateWindow()
 
     def show_daily_growth(self) -> None:
         """显示今天 0–8 小时成长节点和下一个可见奖励。"""
@@ -2403,6 +2441,44 @@ class PetWindow(QWidget):
             self.mood.receive_focus_reward(new_blocks)
             self._rewarded_focus_blocks = completed_blocks
 
+    def _record_economy_focus(self, seconds: int, started_at: datetime) -> None:
+        """Credit a real focus segment locally and sync only its safe ledger rows."""
+
+        result = self.economy.record_focus(seconds, started_at=started_at)
+        events = list(result.get("events") or [])
+        self._sync_economy_events(events)
+
+    def _record_economy_performance(self, title: str, task_id: str) -> None:
+        event = self.economy.record_performance(
+            f"任务绩效：{title[:90]}",
+            source_key=f"todo:{task_id}:{datetime.now().date().isoformat()}",
+        )
+        if event is not None:
+            self._sync_economy_events([event.as_dict()])
+
+    def _sync_economy_events(self, events: list[dict]) -> None:
+        if not events or not getattr(self.social_client, "signed_in", False):
+            return
+        recorder = getattr(self.social_client, "record_economy_event", None)
+        if not callable(recorder):
+            return
+
+        def sync() -> None:
+            for event in events:
+                try:
+                    recorder(
+                        event_id=str(event.get("event_id") or ""),
+                        category=str(event.get("category") or "other"),
+                        amount=int(event.get("amount") or 0),
+                        label=str(event.get("label") or "")[:120],
+                        source_key=str(event.get("source_key") or "")[:160],
+                        occurred_on=str(event.get("occurred_on") or "")[:10],
+                    )
+                except Exception:
+                    LOGGER.info("economy event sync deferred", exc_info=True)
+
+        threading.Thread(target=sync, name="lili-economy-sync", daemon=True).start()
+
     def shutdown_work_timer(self) -> None:
         """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
 
@@ -2420,6 +2496,7 @@ class PetWindow(QWidget):
                     completed_session=False,
                     started_at=started_at,
                 )
+                self._record_economy_focus(session_seconds, started_at)
                 self.daily_stats.record_focus(session_seconds)
             self.focus_session.pause()
             if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
@@ -3513,6 +3590,7 @@ class PetWindow(QWidget):
             "add_todo": lambda _checked=False: self.add_compact_todo(),
             "time_memory": lambda _checked=False: self.show_time_memory(),
             "show_work_time": lambda _checked=False: self.show_work_time(),
+            "economy": lambda _checked=False: self.show_economy(),
             "show_growth": lambda _checked=False: self.show_daily_growth(),
             "show_report": lambda _checked=False: self.show_daily_report(),
             "open_album": lambda _checked=False: self.open_daily_album(),
