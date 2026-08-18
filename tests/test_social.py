@@ -497,3 +497,12 @@ def test_refresh_token_reuse_keeps_last_session_and_requests_relogin():
     assert manager.current() is not None
     assert manager.current().refresh_token == "old-refresh"
     assert manager.requires_relogin
+
+def test_presence_transitions_are_not_persisted_as_room_history():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260818000400_lili_presence_event_retention.sql").read_text(encoding="utf-8")
+    assert "drop trigger if exists lili_presence_room_event" in migration
+    assert "where kind in ('join','leave','focus_start','focus_pause')" in migration
+    assert "create trigger lili_presence_room_event" not in migration
+    assert "focus_finish" in migration
+    assert "challenge_complete" in migration
