@@ -475,11 +475,13 @@ class SocialBackend(Protocol):
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: ...
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = False) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
+    def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
+    def economy_leaderboard(self, *, period: str = "month") -> list[dict[str, Any]]: ...
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None: ...
     def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None: ...
     def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None: ...
@@ -665,11 +667,13 @@ class HttpSocialBackend:
             "lili_leave_room": "/rooms/leave",
             "lili_send_interaction": "/rooms/interaction",
             "lili_record_room_event": "/rooms/events",
+            "lili_record_economy_event": "/economy/events",
+            "lili_economy_leaderboard": "/economy/leaderboard",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None:
-        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60]}
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = False) -> None:
+        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled)}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
@@ -736,6 +740,23 @@ class HttpSocialBackend:
 
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None:
         self.rpc("lili_record_room_event", {"p_room_id": room_id, "p_kind": kind, "p_target_id": target_id, "p_message": message})
+
+    def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None:
+        self.rpc(
+            "lili_record_economy_event",
+            {
+                "p_event_id": event_id,
+                "p_category": category,
+                "p_amount": int(amount),
+                "p_label": label,
+                "p_source_key": source_key,
+                "p_occurred_on": occurred_on,
+            },
+        )
+
+    def economy_leaderboard(self, *, period: str = "month") -> list[dict[str, Any]]:
+        result = self.rpc("lili_economy_leaderboard", {"p_period": period})
+        return list(result or []) if isinstance(result, list) else []
 
 
 # Kept as a compatibility implementation for older integrations.  The
@@ -1182,14 +1203,14 @@ class LegacyDirectSocialClient:
             return self._http_backend.rpc(name, body)
         return self._raw("POST", f"/rest/v1/rpc/{name}", body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = False) -> None:
         if self._http_backend is not None:
-            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key)
+            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled)
         if not self.session:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if self._http_backend is not None:
@@ -1420,11 +1441,13 @@ class DashboardCacheClientBase:
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._require_backend().rpc(name, body)
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "") -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key)
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = False) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled)
     def update_owner_nickname(self, nickname: str) -> None: self._require_backend().update_owner_nickname(nickname)
     def heartbeat(self, **kwargs: Any) -> None: self._require_backend().heartbeat(**kwargs)
     def send_interaction(self, **kwargs: Any) -> None: self._require_backend().send_interaction(**kwargs)
     def record_room_event(self, **kwargs: Any) -> None: self._require_backend().record_room_event(**kwargs)
+    def record_economy_event(self, **kwargs: Any) -> None: self._require_backend().record_economy_event(**kwargs)
+    def economy_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return self._require_backend().economy_leaderboard(**kwargs)
     def set_room_goal(self, **kwargs: Any) -> None: self._require_backend().set_room_goal(**kwargs)
     def set_room_schedule(self, **kwargs: Any) -> None: self._require_backend().set_room_schedule(**kwargs)
     def set_room_challenge(self, **kwargs: Any) -> None: self._require_backend().set_room_challenge(**kwargs)
@@ -1439,7 +1462,7 @@ class BackendRouteManager:
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
     AUTH_METHODS = {"sign_in", "sign_up"}
-    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in"}
+    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend, *, persist_state: bool = True) -> None:
@@ -1810,6 +1833,8 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     def heartbeat(self, **kwargs: Any) -> None: self._manager.request("heartbeat", **kwargs)
     def send_interaction(self, **kwargs: Any) -> None: self._manager.request("send_interaction", **kwargs)
     def record_room_event(self, **kwargs: Any) -> None: self._manager.request("record_room_event", **kwargs)
+    def record_economy_event(self, **kwargs: Any) -> None: self._manager.request("record_economy_event", **kwargs)
+    def economy_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return list(self._manager.request("economy_leaderboard", **kwargs) or [])
     def set_room_goal(self, **kwargs: Any) -> None: self._manager.request("set_room_goal", **kwargs)
     def set_room_schedule(self, **kwargs: Any) -> None: self._manager.request("set_room_schedule", **kwargs)
     def set_room_challenge(self, **kwargs: Any) -> None: self._manager.request("set_room_challenge", **kwargs)
