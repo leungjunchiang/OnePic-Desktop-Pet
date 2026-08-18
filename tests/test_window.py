@@ -1152,6 +1152,19 @@ def test_verified_sleep_can_pause_work_timer(monkeypatch) -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_verified_lock_screen_can_pause_work_timer(monkeypatch) -> None:
+    """Locking the computer pauses the timer; ordinary input silence does not."""
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": True, "sleeping": False},
+    )
+    window.start_work_timer()
+    window._check_input_idle()
+    assert not window.work_timer.is_running
+    assert "锁屏" in window.speech_bubble.text()
+    window.close(); window.deleteLater(); app.processEvents()
+
 def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     """工作计时应显示今日累计，并在连续工作过久时劝用户休息。"""
 

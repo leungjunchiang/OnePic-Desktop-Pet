@@ -23,6 +23,30 @@ def system_session_state() -> dict[str, bool]:
     """
 
     state = {"locked": False, "sleeping": False}
+    if sys.platform == "darwin":
+        try:
+            import Quartz  # type: ignore
+
+            session = Quartz.CGSessionCopyCurrentDictionary() or {}
+            # Different macOS releases expose one of these names.  The
+            # explicit locked flag is preferred; leaving the console is a
+            # conservative fallback for the secure lock screen/fast switch.
+            for key in (
+                "CGSSessionScreenIsLocked",
+                "CGSSessionScreenIsLockedKey",
+                "kCGSessionScreenIsLocked",
+            ):
+                if bool(session.get(key)):
+                    state["locked"] = True
+                    return state
+            for key in ("kCGSessionOnConsoleKey", "CGSSessionOnConsoleKey"):
+                if key in session and session.get(key) is False:
+                    state["locked"] = True
+                    return state
+        except Exception:
+            # If the optional native probe is unavailable, never guess.
+            pass
+        return state
     if sys.platform != "win32":
         return state
     try:

@@ -81,6 +81,8 @@ class PetSettings:
     ai_model: str = ""
     automatic_grumbling: bool = True
     hourly_announcement: bool = False
+    # Show the current work-session duration in the pet work-control bubble.
+    show_work_duration: bool = True
     app_awareness: bool = True
     voice_enabled: bool = True
     lyric_inspiration_enabled: bool = True
@@ -193,6 +195,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.ai_model = str(settings.ai_model).strip()[:120]
     settings.automatic_grumbling = bool(settings.automatic_grumbling)
     settings.hourly_announcement = bool(settings.hourly_announcement)
+    settings.show_work_duration = bool(settings.show_work_duration)
     settings.app_awareness = bool(settings.app_awareness)
     settings.voice_enabled = bool(settings.voice_enabled)
     settings.lyric_inspiration_enabled = bool(settings.lyric_inspiration_enabled)
@@ -296,6 +299,7 @@ def load_settings(
                 "ai_model",
                 "automatic_grumbling",
                 "hourly_announcement",
+                "show_work_duration",
                 "app_awareness",
                 "voice_enabled",
                 "lyric_inspiration_enabled",
@@ -359,6 +363,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "ai_model": settings.ai_model,
         "automatic_grumbling": settings.automatic_grumbling,
         "hourly_announcement": settings.hourly_announcement,
+        "show_work_duration": settings.show_work_duration,
         "app_awareness": settings.app_awareness,
         "voice_enabled": settings.voice_enabled,
         "lyric_inspiration_enabled": settings.lyric_inspiration_enabled,

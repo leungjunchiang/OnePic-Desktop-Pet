@@ -104,3 +104,16 @@ def test_unified_menu_model_exposes_end_work_for_focus_and_paused_sessions() -> 
         assert [child.title for child in item.children] == expected
         assert all(child.enabled for child in item.children)
 
+
+
+def test_unified_menu_model_exposes_optional_duration_setting() -> None:
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {"show_work_duration": False},
+        callbacks={"show_work_duration": lambda checked=False: None},
+    )
+    settings = next(item for item in model.items() if item.title == "设置")
+    duration = next(item for item in settings.children if item.command == "show_work_duration")
+    assert duration.title == "显示本轮工作时长"
+    assert duration.checkable is True
+    assert duration.checked is False

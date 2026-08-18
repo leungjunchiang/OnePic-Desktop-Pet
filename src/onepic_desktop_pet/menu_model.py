@@ -117,6 +117,7 @@ class UnifiedMenuModel:
             self._optional("主人称呼", "rename"),
             self._optional("AI 与陪伴", "settings"),
             self._optional("调整大小", "size"),
+            MenuItemSpec("显示本轮工作时长", "show_work_duration", checkable=True, checked=bool(state.get("show_work_duration", True))),
             self._optional("提醒与报时", "settings"),
             self._optional("音乐设置", "settings"),
             self._optional("自习室设置", "settings"),

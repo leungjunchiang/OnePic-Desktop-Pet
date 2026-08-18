@@ -878,6 +878,21 @@ class PetWindow(QWidget):
             self._effect_phase,
         )
         activity = self._ambient_activity
+        food_scene = self.economy.active_food_scene() or {}
+        scene_activity = {
+            "coffee": "work-study",
+            "expensive_coffee": "deep-focus",
+            "milk_tea": "milk-tea",
+            "cake": "feast",
+            "tea": "tea",
+        }.get(str(food_scene.get("item_key") or ""))
+        food_scene_active = False
+        if scene_activity and not bool(food_scene.get("expired")):
+            # Tea is intentionally a short companion animation; its stored
+            # scene remains a diary event but does not pin the sprite forever.
+            if str(food_scene.get("item_key") or "") != "tea" or activity == "tea":
+                activity = scene_activity
+                food_scene_active = True
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
         composed = draw_activity_overlay(
@@ -885,11 +900,12 @@ class PetWindow(QWidget):
             activity,
             self.settings.equipped_outfit,
             self._effect_phase,
+            food_scene=food_scene_active,
         )
         visible = self._blend_activity_transition(composed)
         self.label.setPixmap(visible)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
-        overlay_key = hash((activity, self.settings.equipped_outfit, self._effect_phase % 2))
+        overlay_key = hash((activity, self.settings.equipped_outfit, food_scene_active, self._effect_phase % 2))
         self._refresh_window_mask(display_state, visible, direction_key, effect_key ^ overlay_key)
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
@@ -1431,13 +1447,14 @@ class PetWindow(QWidget):
         if not self.work_timer.is_running:
             return
         session = system_session_state()
-        # Locking is deliberately not treated as sleep: the user may be
-        # reading, in a meeting, or returning shortly. Only a verified sleep
-        # signal may pause the timer automatically.
-        if not bool(session.get("sleeping")):
+        # Input silence is never enough to pause. A verified lock or sleep
+        # transition is an explicit system boundary and pauses this session.
+        locked = bool(session.get("locked"))
+        sleeping = bool(session.get("sleeping"))
+        if not locked and not sleeping:
             return
         self._focus_quality_tracker.note_away()
-        self.pause_work_timer(reason="sleep")
+        self.pause_work_timer(reason="sleep" if sleeping else "lock")
 
     def _ask_idle_recovery(self) -> None:
         """Automatically classify once; show a single hint only if uncertain."""
@@ -2068,9 +2085,10 @@ class PetWindow(QWidget):
         self.work_activity_timer.stop()
         self._set_temporary_activity("tea", 25_000)
         duration = format_work_duration(self.work_timer.today_seconds())
-        if was_running and reason == "sleep":
+        if was_running and reason in {"sleep", "lock"}:
+            system_event = "电脑已锁屏" if reason == "lock" else "电脑进入睡眠"
             reply = CompanionReply(
-                "电脑进入睡眠，六毛已暂停这轮计时；回来后点继续工作就好。",
+                f"{system_event}，六毛已暂停这轮计时；回来后点继续工作就好。",
                 PetState.SLEEPY,
             )
         elif was_running:
@@ -2593,6 +2611,7 @@ class PetWindow(QWidget):
         self.work_timer.checkpoint()
         snapshot = self.focus_session.refresh()
         if self.work_controls.isVisible():
+            self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
             self.work_controls.set_session_duration(
                 "本轮 " + format_work_duration(snapshot.session_seconds)
                 if snapshot.status in {"focus", "rest"} else "本轮未开始"
@@ -3226,6 +3245,7 @@ class PetWindow(QWidget):
             status = str(getattr(snapshot, "status", "idle"))
             seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
             self.work_controls.set_session_status(status)
+            self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
             self.work_controls.set_session_duration(
                 "本轮 " + format_work_duration(seconds)
                 if status in {"focus", "rest"} else "本轮未开始"
@@ -3471,6 +3491,17 @@ class PetWindow(QWidget):
         save_settings(self.settings)
         self._schedule_ambient()
         self.show_speech("偶尔发牢骚已开启。" if enabled else "偶尔发牢骚已关闭。", 3000)
+
+    def set_work_duration_display(self, enabled: bool) -> None:
+        """Persist whether the floating work-control bubble shows live duration."""
+
+        self.settings.show_work_duration = bool(enabled)
+        save_settings(self.settings)
+        self.work_controls.set_duration_visible(self.settings.show_work_duration)
+        self.show_speech(
+            "本轮工作时长显示已开启。" if enabled else "本轮工作时长显示已关闭。",
+            3000,
+        )
 
     def set_hourly_announcement(self, enabled: bool) -> None:
         """启用或停用整点报时。"""
@@ -3759,6 +3790,7 @@ class PetWindow(QWidget):
 
         snapshot = self.focus_session.snapshot()
         self.work_controls.set_session_status(snapshot.status)
+        self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
         duration = format_work_duration(snapshot.session_seconds)
         self.work_controls.set_session_duration(
             "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
@@ -3822,6 +3854,7 @@ class PetWindow(QWidget):
             "work_status": snapshot.status,
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
+            "show_work_duration": bool(self.settings.show_work_duration),
             "program_version": __version__,
             "content_version": "内置内容",
         }
@@ -3848,6 +3881,7 @@ class PetWindow(QWidget):
             "outfit": lambda _checked=False: self.show_outfit_menu(),
             "rename": lambda _checked=False: self.rename_pet(),
             "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),
+            "show_work_duration": lambda checked=False: self.set_work_duration_display(checked),
             "size": lambda _checked=False: self.open_size_control(),
             "show_todos": lambda _checked=False: self.show_compact_todos(),
             "hide_todos": lambda _checked=False: self.hide_compact_todos(),

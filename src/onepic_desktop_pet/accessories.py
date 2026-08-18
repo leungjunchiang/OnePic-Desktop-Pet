@@ -64,16 +64,21 @@ def draw_activity_overlay(
     activity: str = "none",
     outfit: str = "",
     phase: int = 0,
+    *,
+    food_scene: bool = False,
 ) -> QPixmap:
-    """返回叠加活动物件和娃衣配饰后的新像素图。"""
+    """返回活动/食物场景和永久娃衣合成后的新像素图。"""
 
     # A limited night scene is intentionally temporary and takes precedence.
     if activity in SPECIAL_LIMITED_ACTIVITY_SPRITES:
         return _full_sprite(source, SPECIAL_LIMITED_ACTIVITY_SPRITES[activity])
-    # A manually selected outfit must remain visible while a transient action
-    # (thermos, guitar, work-study, etc.) is being displayed. The old order
-    # returned the transient full sprite first, making outfit clicks appear to
-    # do nothing until that action timed out.
+    # Food scenes are temporary life moments, not wardrobe items. They must
+    # be visible even when a permanent hourly outfit is equipped.
+    if food_scene and activity in SPECIAL_ACTIVITY_SPRITES:
+        return _full_sprite(source, SPECIAL_ACTIVITY_SPRITES[activity])
+
+    # A manually selected outfit remains visible during ordinary transient
+    # actions (thermos, guitar, work-study, etc.).
     if outfit in SPECIAL_OUTFIT_SPRITES:
         source = _full_sprite(source, SPECIAL_OUTFIT_SPRITES[outfit])
         outfit = ""

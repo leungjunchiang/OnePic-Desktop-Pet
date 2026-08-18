@@ -110,6 +110,14 @@ class WorkControlBubble(QWidget):
         self.duration_label.setToolTip(clean)
         self.adjustSize()
 
+    def set_duration_visible(self, visible: bool) -> None:
+        """Show or hide the optional live duration without changing timer state."""
+
+        self.duration_label.setVisible(bool(visible))
+        if not visible:
+            self.duration_label.setToolTip("")
+        self.adjustSize()
+
     def _toggle_session(self) -> None:
         if self._session_status == "idle":
             self.start_requested.emit()
