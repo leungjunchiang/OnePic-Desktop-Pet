@@ -88,7 +88,8 @@ class PetSettings:
     stand_reminder_enabled: bool = False
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
-    # Legacy compatibility only; work never pauses on input silence.\n    auto_pause_on_idle: bool = False
+    # Legacy compatibility only; work never pauses on input silence.
+    auto_pause_on_idle: bool = False
     idle_pause_seconds: int = 600
     # Per-application corrections for automatic idle classification.  Values
     # are deliberately small and local-only: ``rest`` or ``focus``.

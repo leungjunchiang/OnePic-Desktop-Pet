@@ -35,7 +35,7 @@ QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228)
 border: 1px solid rgba(231, 74, 79, 145); }
 QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
 border: 1px solid rgba(40, 125, 158, 135); }
-QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;\n
+QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;
 border: 1px solid rgba(75, 96, 112, 95); border-radius: 8px;
 padding: 4px 9px; font-size: 11px; }
 QWidget#workControlDock { background: rgba(248, 252, 253, 242); color: #24475b;
