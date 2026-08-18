@@ -47,6 +47,32 @@ class RedirectResponse(Response):
 def test_program_version_comparison_is_numeric() -> None:
     assert version_key("v0.22.10") > version_key("0.22.9")
     assert version_key("0.22.45") == (0, 22, 45)
+def test_zero_padded_release_tag_is_accepted(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+    payload = {
+        "tag_name": "v0.23.00",
+        "html_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.23.00",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "Lili-Windows-x64-Setup.exe",
+                "browser_download_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/download/v0.23.00/Lili-Windows-x64-Setup.exe",
+                "size": 12,
+            }
+        ],
+    }
+
+    def opener(request, timeout=0):
+        return Response(json.dumps(payload).encode("utf-8"))
+
+    result = ProgramUpdateManager(app_version="0.22.98", opener=opener).check_latest()
+    assert result.latest_version == "0.23.00"
+    assert result.release is not None
+    assert result.release.version == "0.23.00"
+
 
 
 def test_default_updater_opener_uses_verified_ssl_context(monkeypatch) -> None:
