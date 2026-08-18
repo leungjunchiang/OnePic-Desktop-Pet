@@ -62,6 +62,7 @@ class FoodSceneDialog(QDialog):
             "QLabel#balance { color:#0b756f; font-size:18px; font-weight:700; }"
             "QFrame#sceneCard { background:#ffffff; border:1px solid #cbdde4; border-radius:14px; }"
             "QLabel#cardTitle { color:#203847; font-size:18px; font-weight:700; }"
+            "QLabel#rules { color:#557681; font-size:12px; background:#f3f8f8; border-radius:7px; padding:6px 8px; }"
             "QLabel#source { color:#557681; font-size:12px; background:#f3f8f8; border-radius:7px; padding:4px 7px; }"
             "QPushButton { background:#d7ece8; color:#204c4a; border:0; border-radius:9px; padding:8px 12px; }"
             "QPushButton:hover { background:#c2e2dd; }"
@@ -83,8 +84,15 @@ class FoodSceneDialog(QDialog):
         subtitle = QLabel("食物不是喂养指标；每一张卡都会启动一段六毛生活。")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(subtitle)
-        currency_hint = QLabel("吉他拨片获得方式：有效专注工资、早鸟补贴、真实成果 / 外快和系统奖励；消费不会增加本月创收。")
-        currency_hint.setObjectName("source")
+        currency_hint = QLabel(
+            "吉他拨片规则（当前标准）：\n"
+            "• 有效专注工资：每小时 6 个；每天最多计薪 8 小时，即每天最多 48 个。\n"
+            "• 早鸟补贴：首次有效工作在 10:00 前开始并达到 20 分钟，送昂贵咖啡 ×1，不额外发拨片。\n"
+            "• 完成 Todo：任务绩效 +2 个；重要 Todo 另送小蛋糕 ×1（每日一次）。\n"
+            "• 成果 / 外快：登记时填写 1–100000 个，确认后入账；消费不会增加本月创收。\n"
+            "• 咖啡壶：售价 144 个 = 48 个/天 × 3 天正常学习；添置后每天最多免费补给普通咖啡 ×1。"
+        )
+        currency_hint.setObjectName("rules")
         currency_hint.setWordWrap(True)
         title_box.addWidget(currency_hint)
         header.addLayout(title_box, 1)
@@ -325,14 +333,12 @@ class FoodSceneDialog(QDialog):
     def _use_from_inventory(self, item_key: str) -> None:
         if item_key not in ITEM_CATALOG or ITEM_CATALOG[item_key]["kind"] != "consumable":
             return
-        if self.ledger.inventory_count(item_key) <= 0:
-            return
+        # Do not reject based on a stale button snapshot. The economy core
+        # resolves legacy/canonical inventory aliases atomically and the main
+        # window returns a precise reason if another window changed the state.
         self._request(item_key, None)
 
     def _request(self, key: str, selector: QComboBox | None) -> None:
-        if self.ledger.inventory_count(key) <= 0:
-            QMessageBox.information(self, "六毛补给站", "仓库里没有这件补给，先去吉他拨片商店买一点吧。")
-            return
         duration = 0
         todo_id = ""
         todo_title = ""

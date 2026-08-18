@@ -1828,6 +1828,36 @@ class PetWindow(QWidget):
         item_key = str(item_key or "").strip()
         snapshot = self.focus_session.snapshot()
         status = str(getattr(snapshot, "status", "") or "")
+        start_error = self.economy.food_scene_start_error(
+            item_key, consume_inventory=consume_inventory,
+        )
+        if start_error == "inventory":
+            spec = self.economy.catalog().get(item_key) or {}
+            name = str(spec.get("name") or item_key)
+            self.show_speech(
+                f"仓库里没有「{name}」。补给站已经按最新库存刷新，请先购买或等待补给。",
+                5200,
+            )
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        if start_error == "active_scene":
+            current = self.economy.active_food_scene() or {}
+            current_name = str(current.get("name") or "上一段补给场景")
+            self.show_speech(
+                f"六毛正在{current_name}场景里，先等这一段结束再用新的补给。",
+                5200,
+            )
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        if start_error == "invalid_item":
+            self.show_speech("这个补给暂时不能使用。", 4200)
+            return False
         if status == "focus" and item_key in {"coffee", "expensive_coffee"}:
             self.show_speech("先把这一局收好，再开下一杯咖啡。", 4200)
             return False
@@ -1846,7 +1876,11 @@ class PetWindow(QWidget):
         if result is None:
             if resume_after_rest:
                 self.start_work_timer()
-            self.show_speech("仓库里没有这件东西，或六毛已经在另一个场景里。", 4800)
+            self.show_speech("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
             return False
         scene = dict(result.get("scene") or {})
         self._sync_economy_events([dict(result.get("event") or {})])
@@ -4540,4 +4574,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-

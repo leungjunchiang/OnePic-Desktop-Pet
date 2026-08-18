@@ -74,6 +74,18 @@ def test_tea_is_companion_scene_without_hunger_or_fullness_values() -> None:
     assert "fullness" not in scene
 
 
+def test_open_tea_scene_does_not_block_future_food_after_restart() -> None:
+    now = [datetime(2026, 8, 18, 20, tzinfo=timezone.utc)]
+    ledger = _ledger(now)
+    _buy(ledger, "tea")
+    _buy(ledger, "coffee")
+
+    assert ledger.start_food_scene("tea", duration_minutes=0) is not None
+    now[0] += timedelta(seconds=61)
+    assert ledger.active_food_scene()["expired"] is True
+    assert ledger.start_food_scene("coffee", duration_minutes=30) is not None
+
+
 def test_received_food_scene_is_not_an_inventory_item_or_leaderboard_income() -> None:
     now = [datetime(2026, 8, 18, 20, tzinfo=timezone.utc)]
     ledger = _ledger(now)

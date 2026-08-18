@@ -23,6 +23,9 @@ FOCUS_DAILY_CAP_SECONDS = 8 * 60 * 60
 FOCUS_COINS_PER_HOUR = 6
 EARLY_BIRD_START_HOUR = 10
 EARLY_BIRD_MIN_SECONDS = 20 * 60
+# A companion scene without an explicit duration (currently tea) must not
+# permanently block the next scene after an app restart.
+OPEN_FOOD_SCENE_LIFETIME_SECONDS = 60
 
 # Only fully implemented household facilities are available for new purchases.
 ACTIVE_HOUSEHOLD_KEYS = frozenset({"coffee_pot"})
@@ -65,9 +68,9 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
         "description": "六毛家的第一件家当；为以后叫醒和开工提醒预留位置。",
     },
     "coffee_pot": {
-        "name": "咖啡壶", "price": 100, "group": "添置家当",
+        "name": "咖啡壶", "price": 144, "group": "添置家当",
         "kind": "household", "collection": "coffee_pot",
-        "description": "每天最多补给 1 杯普通咖啡；使用后进入 30 分钟咖啡开工时刻。",
+        "description": "144 个拨片：按每小时 6 个、每天最多 8 小时计算，约等于 3 天正常学习；每天最多补给 1 杯普通咖啡。",
     },
     "desk_lamp": {
         "name": "小台灯", "price": 35, "group": "添置家当",
@@ -99,6 +102,17 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
         "kind": "household", "collection": "wild_bank",
         "description": "长期攒钱的里程碑，不改变富豪榜统计。",
     },
+}
+
+# Older releases persisted some food counts under their Chinese display name,
+# while newer releases use the stable item key. Treat both as the same slot so
+# a visible warehouse item can always be consumed after an upgrade.
+INVENTORY_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "coffee": ("coffee", "普通咖啡"),
+    "expensive_coffee": ("expensive_coffee", "昂贵咖啡"),
+    "milk_tea": ("milk_tea", "奶茶"),
+    "cake": ("cake", "小蛋糕"),
+    "tea": ("tea", "茶"),
 }
 
 
@@ -346,17 +360,25 @@ class EconomyLedger:
 
     def _inventory_count(self, item_key: str) -> int:
         raw = self._state.setdefault("inventory", {})
-        if item_key == "expensive_coffee":
-            return max(0, int(raw.get("expensive_coffee", raw.get("昂贵咖啡", 0)) or 0))
-        return max(0, int(raw.get(item_key, 0) or 0))
+        aliases = INVENTORY_KEY_ALIASES.get(item_key, (item_key,))
+        # Alias values can coexist after an upgrade. They describe one slot,
+        # not two stacks; use the largest value and canonicalize on the next
+        # mutation rather than double-counting legacy data.
+        return max(
+            (max(0, int(raw.get(alias, 0) or 0)) for alias in aliases),
+            default=0,
+        )
 
     def _add_inventory(self, item_key: str, delta: int) -> None:
         raw = self._state.setdefault("inventory", {})
-        if item_key == "expensive_coffee" and "昂贵咖啡" in raw and "expensive_coffee" not in raw:
-            key = "昂贵咖啡"
-        else:
-            key = item_key
-        raw[key] = max(0, int(raw.get(key, 0) or 0) + int(delta))
+        aliases = INVENTORY_KEY_ALIASES.get(item_key, (item_key,))
+        current = self._inventory_count(item_key)
+        raw[item_key] = max(0, current + int(delta))
+        # Remove only legacy aliases for this same item after the canonical
+        # value has been written. This preserves old users' inventory exactly
+        # while ensuring future reads and writes use one key.
+        for alias in aliases[1:]:
+            raw.pop(alias, None)
 
     def inventory_count(self, item_key: str) -> int:
         return self._inventory_count(str(item_key))
@@ -700,10 +722,45 @@ class EconomyLedger:
             try:
                 result["expired"] = datetime.fromisoformat(ends_at) <= self._now()
             except (TypeError, ValueError):
-                result["expired"] = False
+                # A malformed persisted timestamp must never lock the
+                # warehouse forever; treat the stale scene as finished.
+                result["expired"] = True
         else:
-            result["expired"] = False
+            # Tea/companion scenes are intentionally open-ended in the data
+            # model, but they still need a short visual lifetime. Without this
+            # fallback, a crashed or restarted app could leave an old tea
+            # scene active forever and make every warehouse item appear
+            # unusable.
+            try:
+                started_at = datetime.fromisoformat(str(result.get("started_at") or ""))
+                result["expired"] = (
+                    started_at + timedelta(seconds=OPEN_FOOD_SCENE_LIFETIME_SECONDS)
+                    <= self._now()
+                )
+            except (TypeError, ValueError):
+                result["expired"] = True
         return result
+
+    def food_scene_start_error(
+        self, item_key: str, *, consume_inventory: bool = True,
+    ) -> str | None:
+        """Return a stable reason before starting a food scene.
+
+        The UI used to collapse both missing inventory and an active scene into
+        one misleading message. Keeping this check in the economy core also
+        makes the result consistent for the warehouse, supply cards and remote
+        food events.
+        """
+        item_key = str(item_key).strip()
+        spec = ITEM_CATALOG.get(item_key)
+        if not spec or spec.get("kind") != "consumable":
+            return "invalid_item"
+        if consume_inventory and self.inventory_count(item_key) <= 0:
+            return "inventory"
+        current = self.active_food_scene()
+        if current and not current.get("expired"):
+            return "active_scene"
+        return None
 
     def food_scene_status(self) -> dict[str, Any] | None:
         scene = self.active_food_scene()
@@ -741,11 +798,9 @@ class EconomyLedger:
         spec = ITEM_CATALOG.get(item_key)
         if not spec or spec.get("kind") != "consumable":
             return None
+        if self.food_scene_start_error(item_key, consume_inventory=consume_inventory) is not None:
+            return None
         current = self.active_food_scene()
-        if current and not current.get("expired"):
-            return None
-        if consume_inventory and self.inventory_count(item_key) <= 0:
-            return None
 
         default_minutes = spec.get("scene_minutes")
         minutes = default_minutes if duration_minutes is None else max(0, int(duration_minutes))
