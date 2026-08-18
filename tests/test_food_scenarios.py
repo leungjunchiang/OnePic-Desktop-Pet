@@ -33,7 +33,7 @@ def test_coffee_starts_a_real_focus_scene_without_fake_income() -> None:
     assert result is not None
     assert ledger.inventory_count("coffee") == 0
     assert ledger.balance == 98
-    assert ledger.month_income() == 100
+    assert ledger.monthly_income() == 100
     scene = ledger.active_food_scene()
     assert scene is not None
     assert scene["scene_type"] == "focus"
@@ -57,7 +57,7 @@ def test_milk_tea_is_a_timed_rest_and_does_not_add_focus_time() -> None:
     finished = ledger.finish_food_scene("timer")
     assert finished is not None
     assert ledger.active_food_scene() is None
-    assert ledger.month_income() == 100
+    assert ledger.monthly_income() == 100
 
 
 def test_tea_is_companion_scene_without_hunger_or_fullness_values() -> None:
@@ -87,7 +87,7 @@ def test_received_food_scene_is_not_an_inventory_item_or_leaderboard_income() ->
     assert result is not None
     assert ledger.inventory_count("tea") == 0
     assert ledger.balance == 100
-    assert ledger.month_income() == 100
+    assert ledger.monthly_income() == 100
     assert result["event"]["category"] == "food_scene_received"
 
 
