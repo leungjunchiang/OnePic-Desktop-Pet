@@ -1,0 +1,99 @@
+{
+  "character_id": "six-hair-doll",
+  "display_name": "六毛公仔",
+  "sources": [
+    "Public six-hair character action set approved by the repository owner"
+  ],
+  "canvas_size": [
+    560,
+    500
+  ],
+  "target_standing_height": 450,
+  "walk_phases": [
+    "contact_right",
+    "down_right",
+    "passing_left",
+    "up_left",
+    "contact_left",
+    "down_left",
+    "passing_right",
+    "up_right"
+  ],
+  "walk_motion_factors": [
+    0.45,
+    0.7,
+    1.2,
+    1.65,
+    0.45,
+    0.7,
+    1.2,
+    1.65
+  ],
+  "animations": {
+    "wave": [
+      "interact/wave_01.png"
+    ],
+    "happy": [
+      "expressions/happy_01.png"
+    ],
+    "idle": [
+      "idle/idle_01.png",
+      "idle/idle_02.png",
+      "idle/idle_03.png",
+      "idle/idle_04.png",
+      "idle/idle_05.png",
+      "idle/idle_06.png"
+    ],
+    "shy": [
+      "expressions/shy_01.png"
+    ],
+    "surprised": [
+      "expressions/surprised_01.png"
+    ],
+    "annoyed": [
+      "expressions/annoyed_01.png"
+    ],
+    "sleepy": [
+      "expressions/sleepy_01.png"
+    ],
+    "curious": [
+      "expressions/curious_01.png"
+    ],
+    "sit": [
+      "sit/sit_01.png",
+      "sit/sit_02.png",
+      "sit/sit_03.png",
+      "sit/sit_04.png",
+      "sit/sit_05.png"
+    ],
+    "sleep": [
+      "sleep/sleep_01.png",
+      "sleep/sleep_02.png",
+      "sleep/sleep_03.png",
+      "sleep/sleep_04.png",
+      "sleep/sleep_05.png"
+    ],
+    "walk": [
+      "walk/walk_01.png",
+      "walk/walk_02.png",
+      "walk/walk_03.png",
+      "walk/walk_04.png",
+      "walk/walk_05.png",
+      "walk/walk_06.png",
+      "walk/walk_07.png",
+      "walk/walk_08.png"
+    ],
+    "drag": [
+      "interact/drag_01.png",
+      "interact/drag_02.png",
+      "interact/drag_03.png"
+    ],
+    "selfie": [
+      "interact/selfie_01.png",
+      "interact/selfie_02.png",
+      "interact/selfie_03.png",
+      "interact/selfie_04.png"
+    ]
+  },
+  "icon": "icon.png"
+}

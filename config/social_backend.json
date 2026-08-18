@@ -1,0 +1,9 @@
+{
+  "social_api_base_url": "https://lilipet-d0g7yhape72730290-1340860245.ap-shanghai.app.tcloudbase.com/lili-social-relay-v2",
+  "supabase_url": "https://zkgctfntrioffpifiggk.supabase.co",
+  "supabase_publishable_key": "sb_publishable_NDLwrZ6ikXYZP8hPpxthNw_OlU5cXq4",
+  "social_backend": "direct_with_cloudbase_fallback",
+  "cloudbase_env_id": "lilipet-d0g7yhape72730290",
+  "email_redirect_to": "https://github.com/leungjunchiang/OnePic-Desktop-Pet",
+  "privacy_note": "仅同步昵称、六毛外观、在线和工作状态、自习室与互动事件。"
+}
