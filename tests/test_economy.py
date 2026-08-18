@@ -34,8 +34,8 @@ def test_income_spend_and_payroll_keep_income_separate_from_balance(tmp_path):
 
     report = ledger.month_report("2026-08")
     assert report["income"] == 106
-    assert report["expenses"] == 4
-    assert report["balance"] == 102
+    assert report["expenses"] == 20
+    assert report["balance"] == 86
     assert report["net"] == 102
     assert report["identity"] == "靠作品吃饭"
 
@@ -47,13 +47,13 @@ def test_purchase_use_and_life_collection_are_separate_operations(tmp_path):
     purchased = ledger.purchase_item("coffee", operation_key="button-1")
     assert purchased is not None
     assert ledger.inventory_count("coffee") == 1
-    assert ledger.month_report()["expenses"] == 2
+    assert ledger.month_report()["expenses"] == 12
 
     retry = ledger.purchase_item("coffee", operation_key="button-1")
     assert retry is not None
     assert retry.event_id == purchased.event_id
     assert ledger.inventory_count("coffee") == 1
-    assert ledger.balance == 18
+    assert ledger.balance == 88
 
     used = ledger.use_item("coffee")
     assert used is not None
@@ -85,8 +85,8 @@ def test_gifts_are_expenses_or_inventory_events_not_leaderboard_income(tmp_path)
     assert sent is not None
     report = ledger.month_report()
     assert report["income"] == 20
-    assert report["expenses"] == 5
-    assert ledger.balance == 15
+    assert report["expenses"] == 12
+    assert ledger.balance == 8
 
     received = ledger.record_gift_received("buddy-2", "绵绵")
     assert received is not None
@@ -105,3 +105,23 @@ def test_old_expensive_coffee_inventory_is_preserved(tmp_path):
     assert ledger.balance == 7
     assert ledger.inventory_count("expensive_coffee") == 3
     assert ledger.inventory["昂贵咖啡"] == 3
+
+def test_focus_grants_daily_supply_without_changing_income(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    result = ledger.record_focus(40 * 60, started_at=_now())
+    assert result["coins"] == 4
+    assert ledger.inventory_count("coffee") == 1
+    assert ledger.inventory_count("milk_tea") == 1
+    assert ledger.inventory_count("tea") == 0
+    assert ledger.monthly_income() == 4
+    assert ledger.daily_supply_status()["coffee"]["claimed"] is True
+
+
+def test_important_todo_grants_one_daily_cake(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    first = ledger.record_important_todo_completion("todo-1", "论文机制")
+    second = ledger.record_important_todo_completion("todo-1", "论文机制")
+    assert first is not None
+    assert second is not None
+    assert ledger.inventory_count("cake") == 1
+    assert ledger.monthly_income() == 0

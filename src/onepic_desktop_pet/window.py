@@ -327,6 +327,7 @@ class PetWindow(QWidget):
         self._time_memory_window: TimeMemoryWindow | None = None
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
+        self._food_scene_dialog: FoodSceneDialog | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -1818,11 +1819,19 @@ class PetWindow(QWidget):
         return result
 
     def show_food_scene_dialog(self) -> None:
-        """Open the scenario picker used by the pet's right-click 喂食 entry."""
+        """Open/reuse the taskbar-capable 六毛补给站 window."""
         self._record_user_interaction()
-        dialog = FoodSceneDialog(self.economy, self._todo_choices_for_food(), self)
-        dialog.scene_requested.connect(self._start_food_scene)
-        dialog.exec()
+        if self._food_scene_dialog is None:
+            self._food_scene_dialog = FoodSceneDialog(self.economy, self._todo_choices_for_food())
+            self._food_scene_dialog.scene_requested.connect(self._start_food_scene)
+        else:
+            self._food_scene_dialog.todo_choices = self._todo_choices_for_food()
+        self._food_scene_dialog.refresh()
+        if self._food_scene_dialog.isMinimized():
+            self._food_scene_dialog.showNormal()
+        self._food_scene_dialog.show()
+        self._food_scene_dialog.raise_()
+        self._food_scene_dialog.activateWindow()
 
     def _start_food_scene(
         self,
@@ -2711,12 +2720,21 @@ class PetWindow(QWidget):
         self._sync_economy_events(events)
 
     def _record_economy_performance(self, title: str, task_id: str) -> None:
+        events = []
         event = self.economy.record_performance(
             f"任务绩效：{title[:90]}",
             source_key=f"todo:{task_id}:{datetime.now().date().isoformat()}",
         )
         if event is not None:
-            self._sync_economy_events([event.as_dict()])
+            events.append(event.as_dict())
+        task = self.time_memory.get_todo_view_item(task_id)
+        if bool(getattr(task, "important", False)):
+            cake = self.economy.record_important_todo_completion(task_id, title)
+            if cake is not None:
+                events.append(cake.as_dict())
+        self._sync_economy_events(events)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
 
     def _on_economy_changed(self) -> None:
         """同步钱袋新增/消费事件；服务端按 source_key 幂等去重。"""

@@ -22,36 +22,36 @@ from .local_data import local_data_path, read_json, write_json_atomic
 FOCUS_DAILY_CAP_SECONDS = 8 * 60 * 60
 FOCUS_COINS_PER_HOUR = 6
 EARLY_BIRD_START_HOUR = 10
-EARLY_BIRD_MIN_SECONDS = 30 * 60
+EARLY_BIRD_MIN_SECONDS = 20 * 60
 
 
 ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee": {
-        "name": "普通咖啡", "price": 2, "group": "吃点喝点",
+        $160, "group": "吃点喝点",
         "kind": "consumable", "state": "coffee", "collection": "coffee",
         "scene_type": "focus", "scene_minutes": 30,
         "description": "喝杯咖啡，选件事情和六毛干半小时。",
     },
     "expensive_coffee": {
-        "name": "昂贵咖啡", "price": 5, "group": "吃点喝点",
+        $160, "group": "吃点喝点",
         "kind": "consumable", "state": "expensive_coffee", "collection": "expensive_coffee",
         "scene_type": "deep_focus", "scene_minutes": 60,
         "description": "喝贵的，开一局 60 分钟深度工作。",
     },
     "milk_tea": {
-        "name": "奶茶", "price": 4, "group": "吃点喝点",
+        $120, "group": "吃点喝点",
         "kind": "consumable", "state": "milk_tea_break", "collection": "milk_tea",
         "scene_type": "rest", "scene_minutes": 10,
         "description": "正式歇一会儿，选择 10 或 15 分钟。",
     },
     "cake": {
-        "name": "小蛋糕", "price": 6, "group": "吃点喝点",
+        $132, "group": "吃点喝点",
         "kind": "consumable", "state": "celebrating", "collection": "cake",
         "scene_type": "celebrate", "scene_minutes": 0,
         "description": "给完成重要事情的今天留一点庆祝。",
     },
     "tea": {
-        "name": "茶", "price": 2, "group": "吃点喝点",
+        $110, "group": "吃点喝点",
         "kind": "consumable", "state": "tea", "collection": "tea",
         "scene_type": "companion", "scene_minutes": 0,
         "description": "不赶时间，六毛陪你慢慢待一会儿。",
@@ -115,6 +115,7 @@ CATEGORY_LABELS = {
     "gift_sent": "请搭子",
     "gift_received": "收到搭子礼物",
     "item_use": "使用道具",
+    "supply_reward": "每日补给",
     "other": "其他",
 }
 INCOME_CATEGORIES = {
@@ -386,25 +387,36 @@ class EconomyLedger:
         return result
 
     def record_focus(self, seconds: int, *, started_at: datetime | None = None) -> dict[str, Any]:
-        """把真实专注片段换成工资，保留每日上限和早鸟咖啡规则。"""
+        """把真实专注片段换成工资和日常补给，不篡改真实工作时间。"""
         seconds = max(0, int(seconds))
         now = self._now()
-        day = (started_at or now).date().isoformat()
+        start = started_at or now
+        day = start.date().isoformat()
 
         def apply() -> dict[str, Any]:
             daily = self._state.setdefault("daily_focus", {}).setdefault(
-                day, {"focus_seconds": 0, "focus_coins": 0, "early_bird": False}
+                day,
+                {
+                    "focus_seconds": 0,
+                    "focus_coins": 0,
+                    "early_bird": False,
+                    "first_started_at": "",
+                    "supplies": {},
+                },
             )
+            supplies = daily.setdefault("supplies", {})
             old_seconds = max(0, int(daily.get("focus_seconds") or 0))
-            credited_seconds = min(
-                seconds, max(0, FOCUS_DAILY_CAP_SECONDS - old_seconds)
-            )
+            credited_seconds = min(seconds, max(0, FOCUS_DAILY_CAP_SECONDS - old_seconds))
             daily["focus_seconds"] = old_seconds + credited_seconds
+            if credited_seconds > 0 and not daily.get("first_started_at"):
+                daily["first_started_at"] = start.isoformat()
+
             old_coins = max(0, int(daily.get("focus_coins") or 0))
             total_coins = (daily["focus_seconds"] * FOCUS_COINS_PER_HOUR) // 3600
             added_coins = max(0, total_coins - old_coins)
             daily["focus_coins"] = old_coins + added_coins
             events: list[WalletEvent] = []
+
             if added_coins:
                 events.append(self._append(
                     "salary", added_coins, "有效专注工资",
@@ -412,33 +424,70 @@ class EconomyLedger:
                     source="focus_wage",
                     metadata={"focus_seconds": credited_seconds},
                 ))
+
+            def grant_supply(item_key: str, label: str, source_key: str, rule: str) -> None:
+                if supplies.get(item_key):
+                    return
+                self._add_inventory(item_key, 1)
+                supplies[item_key] = True
+                events.append(self._append(
+                    "supply_reward", 0, label, source_key, day,
+                    source="daily_supply",
+                    metadata={"item_key": item_key, "rule": rule, "free": True},
+                ))
+
+            if credited_seconds > 0:
+                grant_supply("coffee", "开工补给：普通咖啡", f"supply:coffee:{day}", "first_formal_work")
+            if seconds >= 40 * 60:
+                grant_supply("milk_tea", "专注补给：奶茶", f"supply:milk-tea:{day}:{daily['focus_seconds']}", "continuous_focus_40m")
+            if daily["focus_seconds"] >= 2 * 60 * 60:
+                grant_supply("tea", "专注补给：茶", f"supply:tea:{day}", "daily_focus_2h")
+
             early_bird = False
-            start = started_at or now
+            first_started_at = str(daily.get("first_started_at") or "")
+            try:
+                first_start = datetime.fromisoformat(first_started_at) if first_started_at else start
+            except (TypeError, ValueError):
+                first_start = start
             if (
-                int(start.hour) < EARLY_BIRD_START_HOUR
-                and seconds >= EARLY_BIRD_MIN_SECONDS
+                int(first_start.hour) < EARLY_BIRD_START_HOUR
+                and daily["focus_seconds"] >= EARLY_BIRD_MIN_SECONDS
                 and not bool(daily.get("early_bird"))
             ):
                 daily["early_bird"] = True
                 self._add_inventory("expensive_coffee", 1)
                 early_bird = True
                 events.append(self._append(
-                    "early_bird", 0, "早鸟补贴：昂贵咖啡",
+                    "early_bird", 0, "早鸟补给：昂贵咖啡",
                     f"early-bird:{day}", day,
                     source="early_bird_bonus",
-                    metadata={"item_key": "expensive_coffee"},
+                    metadata={"item_key": "expensive_coffee", "min_focus_seconds": EARLY_BIRD_MIN_SECONDS},
                 ))
                 self._record_life("early_bird")
+
             return {
                 "events": [event.as_dict() for event in events],
                 "coins": added_coins,
                 "credited_seconds": credited_seconds,
                 "early_bird": early_bird,
                 "coffee_count": self.inventory_count("expensive_coffee"),
+                "daily_supply": dict(supplies),
             }
 
         return self._atomic(apply)
 
+    def daily_supply_status(self, day: str | None = None) -> dict[str, dict[str, Any]]:
+        """Return today's free-supply checklist without treating food as hunger."""
+        target = str(day or self._now().date().isoformat())[:10]
+        daily = (self._state.get("daily_focus") or {}).get(target) or {}
+        claimed = daily.get("supplies") if isinstance(daily.get("supplies"), dict) else {}
+        return {
+            "coffee": {"claimed": bool(claimed.get("coffee")), "rule": "当天第一次正式开工后免费 1 杯"},
+            "expensive_coffee": {"claimed": bool(daily.get("early_bird")), "rule": "首次有效工作从 10:00 前开始，并达到 20 分钟"},
+            "milk_tea": {"claimed": bool(claimed.get("milk_tea")), "rule": "一次连续专注达到 40 分钟"},
+            "cake": {"claimed": bool(claimed.get("cake")), "rule": "完成一项标记为重要的 Todo"},
+            "tea": {"claimed": bool(claimed.get("tea")), "rule": "当天累计专注达到 2 小时；好友敬茶另计"},
+        }
     def record_income(
         self,
         label: str,
@@ -487,6 +536,32 @@ class EconomyLedger:
             label, amount, category="performance", source_key=clean_source,
         )
 
+    def record_important_todo_completion(self, task_id: str, title: str) -> WalletEvent | None:
+        """Give one daily cake for a real important-Todo completion."""
+        task_id = str(task_id).strip()[:120]
+        title = str(title).strip()[:120] or "重要任务"
+        day = self._now().date().isoformat()
+        source_key = f"supply:cake:{day}:{task_id or title}"
+        if self._has_source(source_key):
+            return self._find_source(source_key)
+
+        def apply() -> WalletEvent:
+            daily = self._state.setdefault("daily_focus", {}).setdefault(day, {})
+            supplies = daily.setdefault("supplies", {})
+            if supplies.get("cake"):
+                return self._find_source(source_key) or self._append(
+                    "supply_reward", 0, "重要任务补给：小蛋糕", source_key, day,
+                    source="daily_supply", metadata={"item_key": "cake", "free": True},
+                )
+            self._add_inventory("cake", 1)
+            supplies["cake"] = True
+            return self._append(
+                "supply_reward", 0, f"重要任务补给：小蛋糕 · {title}", source_key, day,
+                source="daily_supply",
+                metadata={"item_key": "cake", "todo_id": task_id, "todo_title": title, "free": True},
+            )
+
+        return self._atomic(apply)
     def spend(
         self,
         label: str,
@@ -734,7 +809,7 @@ class EconomyLedger:
 
         return self._atomic(apply)
 
-    def record_gift_sent(self, recipient_id: str, recipient_label: str, *, price: int = 5) -> WalletEvent | None:
+    def record_gift_sent(self, recipient_id: str, recipient_label: str, *, price: int = 12) -> WalletEvent | None:
         """记录请搭子喝咖啡；这是支出，不增加任何人的排行榜收入。"""
         recipient_id = str(recipient_id).strip()[:80]
         recipient_label = str(recipient_label).strip()[:80] or "搭子"
