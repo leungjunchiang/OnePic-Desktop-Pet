@@ -367,6 +367,19 @@ def test_private_buddy_note_migration_is_owner_scoped_and_proxy_allowlisted():
         source = path.read_text(encoding="utf-8")
         assert "lili_buddy_private_notes" in source
         assert "lili_set_buddy_private_note" in source
+
+
+def test_economy_migration_is_rls_scoped_and_friend_opt_in():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260818000100_lili_economy_wallet.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.lili_economy_events" in migration
+    assert "alter table public.lili_economy_events enable row level security" in migration
+    assert "user_id = auth.uid()" in migration
+    assert "wealth_leaderboard_enabled" in migration
+    assert "public.lili_are_buddies(auth.uid(), p.user_id)" in migration
+    assert "lili_economy_leaderboard" in migration
+
+
 def test_room_dashboard_exposes_today_and_cumulative_focus_metrics():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260816000100_lili_room_focus_today_total.sql").read_text(encoding="utf-8")
