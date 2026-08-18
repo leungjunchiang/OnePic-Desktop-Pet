@@ -2718,6 +2718,8 @@ class PetWindow(QWidget):
         result = self.economy.record_focus(seconds, started_at=started_at)
         events = list(result.get("events") or [])
         self._sync_economy_events(events)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
 
     def _record_economy_performance(self, title: str, task_id: str) -> None:
         events = []
