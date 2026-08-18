@@ -752,20 +752,21 @@ def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
-def test_quick_panel_has_five_high_frequency_entries_and_dynamic_work_label() -> None:
-    """快捷面板使用五个红黄蓝图标入口和悬停说明。"""
+def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> None:
+    """快捷面板使用六个红黄蓝图标入口和悬停说明。"""
 
     app, window = _create_window()
     buttons = window.quick_panel.findChildren(QPushButton)
     assert [button.objectName() for button in buttons] == [
         "quickAction_chat",
         "quickAction_work",
+        "quickAction_todo",
         "quickAction_social",
         "quickAction_music",
         "quickAction_settings",
     ]
-    assert [button.text() for button in buttons] == ["", "", "", "", ""]
-    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "搭子自习室", "音乐", "设置"]
+    assert [button.text() for button in buttons] == ["", "", "", "", "", ""]
+    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "待办", "搭子自习室", "音乐", "设置"]
     assert all(not button.icon().isNull() for button in buttons)
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
