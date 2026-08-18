@@ -601,12 +601,12 @@ class EconomyLedger:
         if spec["kind"] == "household" and self.has_household(item_key):
             return None
         price = int(spec["price"])
-        if price > self.balance:
-            return None
         source_key = f"purchase:{operation_key}" if operation_key else f"purchase:{uuid.uuid4().hex}"
         existing = self._find_source(source_key)
         if existing is not None:
             return existing
+        if price > self.balance:
+            return None
 
         def apply() -> WalletEvent:
             event = self._append(

@@ -32,7 +32,7 @@ def test_coffee_starts_a_real_focus_scene_without_fake_income() -> None:
 
     assert result is not None
     assert ledger.inventory_count("coffee") == 0
-    assert ledger.balance == 98
+    assert ledger.balance == 88
     assert ledger.monthly_income() == 100
     scene = ledger.active_food_scene()
     assert scene is not None

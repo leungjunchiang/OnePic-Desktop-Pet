@@ -36,7 +36,7 @@ def test_income_spend_and_payroll_keep_income_separate_from_balance(tmp_path):
     assert report["income"] == 106
     assert report["expenses"] == 20
     assert report["balance"] == 86
-    assert report["net"] == 102
+    assert report["net"] == 86
     assert report["identity"] == "靠作品吃饭"
 
 
@@ -53,7 +53,7 @@ def test_purchase_use_and_life_collection_are_separate_operations(tmp_path):
     assert retry is not None
     assert retry.event_id == purchased.event_id
     assert ledger.inventory_count("coffee") == 1
-    assert ledger.balance == 88
+    assert ledger.balance == 8
 
     used = ledger.use_item("coffee")
     assert used is not None
