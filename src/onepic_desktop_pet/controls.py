@@ -35,7 +35,7 @@ QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228)
 border: 1px solid rgba(231, 74, 79, 145); }
 QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
 border: 1px solid rgba(40, 125, 158, 135); }
-QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;
+QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;\n
 border: 1px solid rgba(75, 96, 112, 95); border-radius: 8px;
 padding: 4px 9px; font-size: 11px; }
 QWidget#workControlDock { background: rgba(248, 252, 253, 242); color: #24475b;
@@ -71,6 +71,9 @@ class WorkControlBubble(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(5)
+        self.duration_label = QLabel("本轮未开始")
+        self.duration_label.setObjectName("workDurationLabel")
+        self.duration_label.setMinimumWidth(74)
         self.pause_button = QPushButton("暂停工作")
         self.pause_button.setObjectName("pauseWorkButton")
         self.finish_button = QPushButton("结束工作")
@@ -78,6 +81,7 @@ class WorkControlBubble(QWidget):
         self._session_status = "idle"
         self.pause_button.clicked.connect(self._toggle_session)
         self.finish_button.clicked.connect(self.finish_requested.emit)
+        layout.addWidget(self.duration_label)
         layout.addWidget(self.pause_button)
         layout.addWidget(self.finish_button)
         self.set_session_status("idle")
@@ -94,6 +98,16 @@ class WorkControlBubble(QWidget):
             }[self._session_status]
         )
         self.finish_button.setVisible(self._session_status != "idle")
+        if self._session_status == "idle":
+            self.duration_label.setText("本轮未开始")
+        self.adjustSize()
+
+    def set_session_duration(self, text: str) -> None:
+        """Show the live duration so the current work session is never opaque."""
+
+        clean = str(text or "").strip() or "本轮未开始"
+        self.duration_label.setText(clean)
+        self.duration_label.setToolTip(clean)
         self.adjustSize()
 
     def _toggle_session(self) -> None:

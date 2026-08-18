@@ -133,7 +133,7 @@ from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
 from .economy import EconomyLedger
 from .economy_ui import EconomyDialog
 from .food_scene_ui import FoodSceneDialog
-from .input_activity import system_idle_seconds, system_session_state
+from .input_activity import system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
@@ -643,9 +643,9 @@ class PetWindow(QWidget):
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
 
-        # The focus timer follows real keyboard/mouse activity instead of
-        # continuing forever while the user has stepped away.  This timer
-        # only reads the OS-level idle duration; it never records input data.
+        # Keep a low-frequency session probe only for verified system sleep.
+        # Keyboard/mouse silence, app switching, minimising, hiding, reading,
+        # and thinking are never evidence that the user stopped working.
         self.input_idle_timer = QTimer(self)
         self.input_idle_timer.setInterval(5_000)
         self.input_idle_timer.timeout.connect(self._check_input_idle)
@@ -1423,66 +1423,21 @@ class PetWindow(QWidget):
         self._idle_pause_started_at = None
 
     def _check_input_idle(self) -> None:
-        """Pause only after the grace period and classify the excess interval."""
+        """Never infer a pause from input silence; only observe real sleep."""
 
-        if not getattr(self.settings, "auto_pause_on_idle", True):
-            self._idle_above_threshold_samples = 0
-            return
-        threshold = max(300, int(getattr(self.settings, "idle_pause_seconds", 600)))
-        idle_seconds = max(0.0, float(system_idle_seconds()))
-        if self._auto_paused_for_idle:
-            effective_idle = max(0, int(idle_seconds) - threshold)
-            if self._idle_pause_started_at is not None:
-                elapsed_seconds = max(
-                    0,
-                    int(
-                        (
-                            datetime.now().astimezone()
-                            - self._idle_pause_started_at
-                        ).total_seconds()
-                    ),
-                )
-                self._pending_idle_seconds = max(
-                    self._pending_idle_seconds,
-                    elapsed_seconds,
-                )
-            # While the OS still reports idle, retain the larger of the native
-            # reading and the wall-clock episode duration.  This also handles
-            # platforms whose idle counter has a wraparound or coarse sample.
-            self._pending_idle_seconds = max(self._pending_idle_seconds, effective_idle)
-            # The OS idle counter drops as soon as the user returns.  Defer
-            # classification to the event loop so the first input is never
-            # blocked by a dialog.  Once resolved, do not ask again.
-            if (
-                not self._idle_recovery_resolved
-                and idle_seconds < max(1, threshold - 1)
-                and not self._idle_prompt_pending
-            ):
-                self._idle_prompt_pending = True
-                self.idle_recovery_timer.start(0)
-            return
+        # Clear the legacy idle episode state so old settings or an upgraded
+        # process cannot surface the old recovery popup after this release.
+        self._reset_idle_episode()
         if not self.work_timer.is_running:
-            self._idle_above_threshold_samples = 0
             return
-        # Exactly the grace boundary is still ignored.  The episode must
-        # exceed ten minutes before the timer is paused or a record is made.
-        if idle_seconds <= threshold:
-            self._idle_above_threshold_samples = 0
+        session = system_session_state()
+        # Locking is deliberately not treated as sleep: the user may be
+        # reading, in a meeting, or returning shortly. Only a verified sleep
+        # signal may pause the timer automatically.
+        if not bool(session.get("sleeping")):
             return
-        # Require two consecutive OS samples.  This filters a single bad
-        # native reading without adding another setting or recording input.
-        self._idle_above_threshold_samples += 1
-        if self._idle_above_threshold_samples < 2:
-            return
-        self._idle_above_threshold_samples = 0
-        self._auto_paused_for_idle = True
-        self._idle_recovery_resolved = False
-        effective_idle = max(0, int(idle_seconds) - threshold)
-        self._idle_pause_started_at = datetime.now().astimezone() - timedelta(seconds=effective_idle)
-        self._pending_idle_seconds = effective_idle
-        self._idle_context = self._capture_idle_context()
         self._focus_quality_tracker.note_away()
-        self.pause_work_timer(reason="idle")
+        self.pause_work_timer(reason="sleep")
 
     def _ask_idle_recovery(self) -> None:
         """Automatically classify once; show a single hint only if uncertain."""
@@ -2085,8 +2040,10 @@ class PetWindow(QWidget):
         """暂停工作计时并显示当天累计与休息建议。"""
 
         self._record_user_interaction()
-        if reason != "idle":
-            self._reset_idle_episode()
+        self._reset_idle_episode()
+        if reason == "idle":
+            LOGGER.warning("忽略旧的 idle 自动暂停请求；工作计时只接受显式操作或真实睡眠")
+            return CompanionReply("六毛不会因为没有键鼠操作而自动暂停，继续按你的节奏工作。", PetState.CURIOUS)
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause()
         if was_running:
@@ -2111,10 +2068,10 @@ class PetWindow(QWidget):
         self.work_activity_timer.stop()
         self._set_temporary_activity("tea", 25_000)
         duration = format_work_duration(self.work_timer.today_seconds())
-        if was_running and reason == "idle":
+        if was_running and reason == "sleep":
             reply = CompanionReply(
-                "检测到一段时间没有键鼠操作，六毛先帮你暂停计时；回来后会自动判断，只有不确定时轻轻问一次。",
-                PetState.CURIOUS,
+                "电脑进入睡眠，六毛已暂停这轮计时；回来后点继续工作就好。",
+                PetState.SLEEPY,
             )
         elif was_running:
             reply = self.companion.work_paused(duration)
@@ -2634,7 +2591,12 @@ class PetWindow(QWidget):
 
         self._check_local_reminders()
         self.work_timer.checkpoint()
-        self.focus_session.refresh()
+        snapshot = self.focus_session.refresh()
+        if self.work_controls.isVisible():
+            self.work_controls.set_session_duration(
+                "本轮 " + format_work_duration(snapshot.session_seconds)
+                if snapshot.status in {"focus", "rest"} else "本轮未开始"
+            )
         self._award_focus_rewards()
         self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
@@ -3260,6 +3222,14 @@ class PetWindow(QWidget):
 
     def _focus_snapshot_changed(self, snapshot: object) -> None:
         self._refresh_shortcut_state()
+        if self.work_controls.isVisible():
+            status = str(getattr(snapshot, "status", "idle"))
+            seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
+            self.work_controls.set_session_status(status)
+            self.work_controls.set_session_duration(
+                "本轮 " + format_work_duration(seconds)
+                if status in {"focus", "rest"} else "本轮未开始"
+            )
         if self._social_dialog is not None:
             self._social_dialog.set_focus_snapshot(snapshot)
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
@@ -3616,7 +3586,14 @@ class PetWindow(QWidget):
             return
         self.settings.equipped_outfit = outfit_key
         save_settings(self.settings)
-        self._mask_cache.clear(); self._refresh_pixmap()
+        # Cancel a half-finished action cross-fade so the newly selected outfit
+        # is visible immediately, even while a transient work action is ending.
+        self.activity_transition_timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_step = self._activity_transition_steps
+        self._mask_cache.clear()
+        self._refresh_pixmap()
+        self.update()
         label = next((item.name for item in OUTFITS if item.key == outfit_key), "经典六毛")
         self.show_speech(f"已换上：{label}。", 3200)
 
@@ -3782,6 +3759,10 @@ class PetWindow(QWidget):
 
         snapshot = self.focus_session.snapshot()
         self.work_controls.set_session_status(snapshot.status)
+        duration = format_work_duration(snapshot.session_seconds)
+        self.work_controls.set_session_duration(
+            "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
+        )
         self._position_work_controls()
         self.work_controls.show(); self.work_controls.raise_()
 

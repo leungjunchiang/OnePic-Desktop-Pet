@@ -48,6 +48,24 @@ def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> No
     assert not reloaded.is_running
 
 
+def test_running_work_timer_recovers_last_checkpoint_after_restart(tmp_path) -> None:
+    """A crash/restart keeps the saved running session without counting downtime."""
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    clock.advance(65)
+    assert timer.checkpoint()
+    clock.advance(3600)
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.is_running
+    assert reloaded.recovered_active_session
+    assert reloaded.session_seconds() == 65
+    clock.advance(30)
+    assert reloaded.session_seconds() == 95
+    reloaded.pause()
+
+
 def test_work_timer_does_not_double_start_or_count_offline_time(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)

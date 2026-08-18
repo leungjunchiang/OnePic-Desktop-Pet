@@ -1124,6 +1124,34 @@ def test_hourly_announcement_can_be_disabled_and_deduplicates() -> None:
     window.deleteLater()
     app.processEvents()
 
+def test_input_silence_never_pauses_explicit_work_timer(monkeypatch) -> None:
+    """Reading/thinking or switching apps must not stop a running session."""
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
+    )
+    window.settings.auto_pause_on_idle = True
+    window.start_work_timer()
+    window._check_input_idle()
+    assert window.work_timer.is_running
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_verified_sleep_can_pause_work_timer(monkeypatch) -> None:
+    """Only the explicit OS sleep signal may trigger an automatic pause."""
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": True},
+    )
+    window.start_work_timer()
+    window._check_input_idle()
+    assert not window.work_timer.is_running
+    assert "睡眠" in window.speech_bubble.text()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     """工作计时应显示今日累计，并在连续工作过久时劝用户休息。"""
 

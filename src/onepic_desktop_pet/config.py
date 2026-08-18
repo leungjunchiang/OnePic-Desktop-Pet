@@ -88,7 +88,7 @@ class PetSettings:
     stand_reminder_enabled: bool = False
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
-    auto_pause_on_idle: bool = True
+    # Legacy compatibility only; work never pauses on input silence.\n    auto_pause_on_idle: bool = False
     idle_pause_seconds: int = 600
     # Per-application corrections for automatic idle classification.  Values
     # are deliberately small and local-only: ``rest`` or ``focus``.
@@ -199,9 +199,10 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
-    settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
-    # Ten minutes is the safe default.  Keep five minutes as the lower bound
-    # so short reading pauses never become an automatic away episode.
+    # Keep legacy fields readable for old settings files, but never enable
+    # heuristic input-idle pausing again. Only an explicit user action (or a
+    # verified system sleep event) may stop a focus timer.
+    settings.auto_pause_on_idle = False
     settings.idle_pause_seconds = min(7200, max(300, int(settings.idle_pause_seconds)))
     rules: dict[str, str] = {}
     if isinstance(settings.idle_classification_rules, dict):
