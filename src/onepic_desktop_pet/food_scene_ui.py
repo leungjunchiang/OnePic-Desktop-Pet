@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .economy import CATEGORY_LABELS, EconomyLedger, ITEM_CATALOG
+from .economy import ACTIVE_HOUSEHOLD_KEYS, CATEGORY_LABELS, EconomyLedger, ITEM_CATALOG
 
 
 class FoodSceneDialog(QDialog):
@@ -136,7 +136,7 @@ class FoodSceneDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         row = QHBoxLayout()
-        row.addWidget(QLabel("毛币商店"))
+        row.addWidget(QLabel("吉他拨片商店"))
         self.shop_group = QComboBox(page)
         self.shop_group.addItems(("吃点喝点", "添置家当"))
         self.shop_group.currentTextChanged.connect(self.refresh_shop)
@@ -146,7 +146,7 @@ class FoodSceneDialog(QDialog):
         layout.addWidget(QLabel("价格统一从六毛钱袋读取；这里不展示皮肤或娃衣。"))
         self.shop_list = QListWidget(page)
         layout.addWidget(self.shop_list, 1)
-        self.tabs.addTab(page, "毛币商店")
+        self.tabs.addTab(page, "吉他拨片商店")
 
     def _build_ledger_tab(self) -> None:
         page = QWidget()
@@ -177,7 +177,18 @@ class FoodSceneDialog(QDialog):
 
     def _source_text(self, key: str) -> str:
         status = self.ledger.daily_supply_status().get(key) or {}
-        text = str(status.get("rule") or "可在毛币商店购买")
+        if key == "coffee" and status.get("coffee_pot_enabled"):
+            text = (
+                "当天第一次正式开工后免费 1 杯；"
+                + str(status.get("coffee_pot_rule") or "咖啡壶每天最多补给 1 杯普通咖啡")
+            )
+            marks = []
+            if status.get("claimed"):
+                marks.append("开工补给已领取")
+            if status.get("coffee_pot_claimed"):
+                marks.append("咖啡壶今日已补给")
+            return text + (f" · {' · '.join(marks)} ✓" if marks else "")
+        text = str(status.get("rule") or "可在吉他拨片商店购买")
         return f"{text} · 今日已获得 ✓" if status.get("claimed") else text
 
     def _card(self, key: str) -> QWidget:
@@ -208,7 +219,7 @@ class FoodSceneDialog(QDialog):
             controls.addWidget(selector, 1)
         button = QPushButton(self._SCENE_BUTTONS[key])
         button.setEnabled(self.ledger.inventory_count(key) > 0)
-        button.setToolTip("库存不足时请切换到“毛币商店”购买。")
+        button.setToolTip("库存不足时请切换到“吉他拨片商店”购买。")
         button.clicked.connect(lambda _checked=False, item_key=key, box=selector: self._request(item_key, box))
         controls.addWidget(button)
         layout.addLayout(controls)
@@ -259,9 +270,11 @@ class FoodSceneDialog(QDialog):
         for key, spec in ITEM_CATALOG.items():
             if spec["group"] != group:
                 continue
+            if spec["kind"] == "household" and key not in ACTIVE_HOUSEHOLD_KEYS:
+                continue
             owned = self.ledger.has_household(key)
             quantity = self.ledger.inventory_count(key) if spec["kind"] == "consumable" else int(owned)
-            label = "已添置" if owned else f"购买 {spec['price']} 毛币"
+            label = "已添置" if owned else f"购买 {spec['price']} 吉他拨片"
             button = QPushButton(label)
             button.setEnabled(not owned)
             button.clicked.connect(lambda _checked=False, item_key=key: self._purchase(item_key))
@@ -279,14 +292,15 @@ class FoodSceneDialog(QDialog):
             sign = "+" if amount > 0 else ""
             stamp = event.created_at[11:16] if len(event.created_at) >= 16 else ""
             category = CATEGORY_LABELS.get(event.category, event.category)
-            self.ledger_list.addItem(f"{event.occurred_on} {stamp} · {category}\n{event.label}  {sign}{amount} 毛币")
+            self.ledger_list.addItem(f"{event.occurred_on} {stamp} · {category}\n{event.label}  {sign}{amount} 吉他拨片")
         if not self.ledger_list.count():
             self.ledger_list.addItem("还没有收支记录。先认真开工，六毛会把每一笔记下来。")
 
     def refresh(self) -> None:
+        self.ledger.ensure_daily_household_supply()
         report = self.ledger.month_report()
         today = self.ledger.today_summary()
-        self.balance_label.setText(f"🪙 {self.ledger.balance} 毛币")
+        self.balance_label.setText(f"🎸 {self.ledger.balance} 吉他拨片")
         self.today_label.setText(f"今日收入 +{today['income']} · 本月创收 {report['income']}")
         self.refresh_today()
         self.refresh_inventory()
@@ -296,7 +310,7 @@ class FoodSceneDialog(QDialog):
     def _purchase(self, item_key: str) -> None:
         spec = ITEM_CATALOG.get(item_key) or {}
         if self.ledger.balance < int(spec.get("price") or 0):
-            QMessageBox.information(self, "钱袋有点瘪", "哥们，毛币不够，先去认真开一会儿工吧。")
+            QMessageBox.information(self, "钱袋有点瘪", "哥们，吉他拨片不够，先去认真开一会儿工吧。")
             return
         event = self.ledger.purchase_item(item_key)
         if event is None:
@@ -313,7 +327,7 @@ class FoodSceneDialog(QDialog):
 
     def _request(self, key: str, selector: QComboBox | None) -> None:
         if self.ledger.inventory_count(key) <= 0:
-            QMessageBox.information(self, "六毛补给站", "仓库里没有这件补给，先去毛币商店买一点吧。")
+            QMessageBox.information(self, "六毛补给站", "仓库里没有这件补给，先去吉他拨片商店买一点吧。")
             return
         duration = 0
         todo_id = ""
