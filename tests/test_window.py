@@ -899,6 +899,9 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     """任务栏/Dock 完整菜单继续使用统一的高频入口和动态状态。"""
 
     app, window = _create_window()
+    # Arrange the dynamic menu test in IDLE even if an earlier test left a
+    # shared focus session paused.
+    window.finish_work_timer()
     menu = window.build_unified_menu(None, "tray")
     assert menu.parent() is None
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
