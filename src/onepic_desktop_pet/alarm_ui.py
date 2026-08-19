@@ -505,6 +505,8 @@ class AlarmEditDialog(QDialog):
                     check.setChecked(check.property("weekday_index") in selected_days)
         else:
             self.weekday_checks[datetime.now().astimezone().weekday()].setChecked(True)
+        self.enabled = QCheckBox("启用此闹钟", self)
+        self.enabled.setChecked(bool(alarm.enabled) if alarm else True)
         self.sound = QCheckBox("到点播放提示音", self)
         self.sound.setChecked(bool(alarm.sound_enabled) if alarm else True)
         self.sound_selector = AlarmSoundSelector(
@@ -535,6 +537,7 @@ class AlarmEditDialog(QDialog):
         form.addRow("时间", self.trigger)
         form.addRow("重复", self.repeat)
         form.addRow("星期", self.weekdays)
+        form.addRow("", self.enabled)
         form.addRow("稍后默认", self.snooze)
         form.addRow("关联待办", self.linked_todo)
         form.addRow("", self.sound)
@@ -566,6 +569,7 @@ class AlarmEditDialog(QDialog):
             "title": self.title.text().strip() or "六毛闹钟",
             "trigger_at": self.trigger.dateTime().toString("yyyy-MM-ddTHH:mm:ss"),
             "repeat_rule": repeat_rule,
+            "enabled": self.enabled.isChecked(),
             "sound_enabled": self.sound.isChecked(),
             "sound_id": self.sound_selector.current_sound_id(),
             "volume": self.volume.value(),
