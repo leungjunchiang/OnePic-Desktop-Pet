@@ -385,3 +385,19 @@ def test_forced_release_check_bypasses_cached_result(monkeypatch) -> None:
     assert refreshed.latest_version == "0.23.8"
     assert calls == 2
 
+
+
+def test_program_update_worker_keeps_force_flag_and_passes_it_to_manager() -> None:
+    from onepic_desktop_pet.update_worker import ProgramUpdateCheckWorker
+
+    calls = []
+
+    class Manager:
+        def check_app_update(self, *, force: bool = False):
+            calls.append(force)
+            return object()
+
+    worker = ProgramUpdateCheckWorker(Manager(), force=True)
+    assert worker.force is True
+    worker.run()
+    assert calls == [True]
