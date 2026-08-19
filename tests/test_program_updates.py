@@ -401,3 +401,10 @@ def test_program_update_worker_keeps_force_flag_and_passes_it_to_manager() -> No
     assert worker.force is True
     worker.run()
     assert calls == [True]
+
+def test_desktop_pet_application_is_a_qt_object_for_worker_callbacks() -> None:
+    from PySide6.QtCore import QObject
+
+    from onepic_desktop_pet.app import DesktopPetApplication
+
+    assert issubclass(DesktopPetApplication, QObject)
