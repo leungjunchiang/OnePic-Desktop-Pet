@@ -22,6 +22,7 @@ REMINDER_NONE = "none"
 REMINDER_PET = "pet"
 REMINDER_ALARM = "alarm"
 REMINDER_MODES = {REMINDER_NONE, REMINDER_PET, REMINDER_ALARM}
+MAX_ACTIVE_TODOS = 10
 
 
 def normalize_reminder_mode(value: Any, *, legacy_reminder: bool = False) -> str:
@@ -118,9 +119,9 @@ class TodoItem:
     # time-based ordering.  1/2/3 mean high/medium/low when the user chooses
     # an explicit priority.
     priority: int | None = None
-    # Explicit position in the user's current work queue.  Unlike the legacy
-    # high/medium/low priority, this is a strict 1..5 order; None means the
-    # item remains in the normal date-sorted list.
+    # Explicit position in the user's current sticky-note order.  The value is
+    # internal ordering data only; the UI deliberately does not render a
+    # number.  None is retained for legacy/overflow records.
     queue_position: int | None = None
     # ``read`` is separate from ``completed``.  A sticky note can be read and
     # dismissed without falsely claiming that the work is finished.
@@ -154,7 +155,7 @@ class TodoItem:
             queue_position = int(raw_queue_position) if raw_queue_position is not None else None
         except (TypeError, ValueError):
             queue_position = None
-        if queue_position not in {1, 2, 3, 4, 5}:
+        if queue_position not in set(range(1, MAX_ACTIVE_TODOS + 1)):
             queue_position = None
         try:
             reminder_minutes = max(
@@ -263,6 +264,9 @@ class TodoManager:
         if isinstance(raw, dict):
             raw = raw.get("tasks", [])
         self._items = [TodoItem.from_dict(item) for item in raw if isinstance(item, dict)]
+        # Upgrade the old five-item queue into one continuous sticky-note
+        # order. Existing dates and completion/read state remain untouched.
+        self._normalize_current_order(save=False)
 
     @property
     def items(self) -> tuple[TodoItem, ...]:
@@ -296,6 +300,8 @@ class TodoManager:
         title = " ".join(str(title).split())[:240]
         if not title:
             raise ValueError("任务标题不能为空")
+        if sum(1 for item in self._items if not item.completed) >= MAX_ACTIVE_TODOS:
+            raise ValueError(f"当前待办已经有{MAX_ACTIVE_TODOS}件了。先做掉一件，或者删除/完成一件再加。")
         parsed_date = parse_date(date, self._now).isoformat()
         clean_time = str(time or "").strip()[:5] or None
         parsed_due = parse_datetime(due_at, self._now) if due_at else None
@@ -310,7 +316,7 @@ class TodoManager:
             clean_queue_position = int(queue_position) if queue_position is not None else None
         except (TypeError, ValueError):
             clean_queue_position = None
-        if clean_queue_position not in {1, 2, 3, 4, 5}:
+        if clean_queue_position not in set(range(1, MAX_ACTIVE_TODOS + 1)):
             clean_queue_position = None
         clean_mode = normalize_reminder_mode(reminder_mode, legacy_reminder=bool(reminder))
         try:
@@ -351,7 +357,10 @@ class TodoManager:
             due_at=due_value,
             remind_at=remind_value,
             priority=clean_priority,
-            queue_position=None,
+            # New tasks are always appended. The editor no longer exposes a
+            # "第几" selector, but this default also protects chat-created
+            # tasks from silently falling outside the sticky-note order.
+            queue_position=self._next_current_position(),
             reminder_minutes_before=clean_reminder_minutes,
             reminder_mode=clean_mode,
             alarm_sound_id=str(alarm_sound_id or "system")[:40],
@@ -364,6 +373,8 @@ class TodoManager:
         self._save()
         if clean_queue_position is not None:
             self.set_queue_position(item.id, clean_queue_position)
+        else:
+            self._normalize_current_order(save=True)
         return item
 
     def get(self, item_id: str) -> TodoItem | None:
@@ -457,7 +468,7 @@ class TodoManager:
                     value = int(value) if value is not None else None
                 except (TypeError, ValueError):
                     value = None
-                if value not in {1, 2, 3, 4, 5}:
+                if value not in set(range(1, MAX_ACTIVE_TODOS + 1)):
                     value = None
             elif key == "read":
                 value = bool(value)
@@ -529,6 +540,12 @@ class TodoManager:
         self._save()
         if "queue_position" in changes and not item.completed:
             return self.set_queue_position(item.id, item.queue_position)
+        if "completed" in changes or "read" in changes:
+            # Completing/dismissing/restoring a sticky note must immediately
+            # close any gap and append a restored note at the end.  The
+            # desktop strip and TodoCenter therefore never disagree about
+            # which note is first.
+            self.normalize_queue()
         return item
 
     def complete(self, item_id: str, completed: bool = True) -> TodoItem:
@@ -537,44 +554,61 @@ class TodoManager:
             self.normalize_queue()
         return item
 
-    def _explicit_queue_items(self) -> list[TodoItem]:
-        """Return the active, explicitly queued items in stable order."""
+    def _current_order_items(self) -> list[TodoItem]:
+        """Return the visible, unfinished sticky notes in one stable order."""
 
-        candidates = [
-            item
-            for item in self._items
-            if not item.completed
-            and not item.read
-            and item.queue_position in {1, 2, 3, 4, 5}
-        ]
         return sorted(
-            candidates,
+            (item for item in self._items if not item.completed and not item.read),
             key=lambda item: (
                 int(item.queue_position or 99),
                 item.date,
                 item.time or "99:99",
                 item.created_at,
+                item.id,
             ),
         )
 
+    def _next_current_position(self) -> int | None:
+        current = self._current_order_items()
+        return len(current) + 1 if len(current) < MAX_ACTIVE_TODOS else None
+
+    def _normalize_current_order(self, *, save: bool = True) -> tuple[TodoItem, ...]:
+        """Make the current sticky-note order continuous without changing dates."""
+
+        ordered = self._current_order_items()
+        for index, item in enumerate(ordered[:MAX_ACTIVE_TODOS], start=1):
+            item.queue_position = index
+        # Preserve overflow records instead of silently deleting them. New
+        # records are blocked at MAX_ACTIVE_TODOS until the user clears one.
+        for item in ordered[MAX_ACTIVE_TODOS:]:
+            item.queue_position = None
+        if save:
+            self._save()
+        return tuple(ordered)
+
+    def _explicit_queue_items(self) -> list[TodoItem]:
+        """Return the current sticky-note list in stable order."""
+
+        return self._current_order_items()
+
     def queued_items(self) -> tuple[TodoItem, ...]:
-        """Return the current 1..5 queue without exposing mutable internals."""
+        """Return the current sticky-note order without exposing internals."""
 
         return tuple(self._explicit_queue_items())
 
     def set_queue_position(self, item_id: str, position: int | None) -> TodoItem:
-        """Insert/remove one pending Todo in the strict five-item queue."""
+        """Move one pending Todo in the unified ten-item sticky-note list."""
 
         item = self.get(item_id)
         if item is None:
             raise KeyError(item_id)
         current = [queued for queued in self._explicit_queue_items() if queued.id != item.id]
-        if position in {1, 2, 3, 4, 5} and not item.completed and not item.read:
+        if position in set(range(1, MAX_ACTIVE_TODOS + 1)) and not item.completed and not item.read:
             index = min(int(position) - 1, len(current))
             current.insert(index, item)
         for candidate in self._items:
             candidate.queue_position = None
-        for index, candidate in enumerate(current[:5], start=1):
+        for index, candidate in enumerate(current[:MAX_ACTIVE_TODOS], start=1):
             candidate.queue_position = index
         self._save()
         return item
@@ -589,10 +623,10 @@ class TodoManager:
                 ordered.append(candidate)
         for candidate in self._items:
             candidate.queue_position = None
-        for index, candidate in enumerate(ordered[:5], start=1):
+        for index, candidate in enumerate(ordered[:MAX_ACTIVE_TODOS], start=1):
             candidate.queue_position = index
         self._save()
-        return tuple(ordered[:5])
+        return tuple(ordered[:MAX_ACTIVE_TODOS])
 
     def normalize_queue(self) -> tuple[TodoItem, ...]:
         """Compact positions after completion, deletion, or read dismissal."""
