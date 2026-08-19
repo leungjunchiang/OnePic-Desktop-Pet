@@ -95,6 +95,15 @@ def active_window_is_fullscreen() -> bool:
     safely report ``False``.
     """
 
+    # Qt's offscreen platform has no real frontmost window or display.  On
+    # macOS CI it can nevertheless expose a synthetic window whose bounds
+    # happen to match the synthetic screen, which would make the privacy
+    # guards incorrectly treat every test as fullscreen.  Fail closed here:
+    # real desktop builds never use the offscreen platform, and the input-idle
+    # policy remains the correct fallback when geometry is unavailable.
+    if os.environ.get("QT_QPA_PLATFORM", "").casefold() == "offscreen":
+        return False
+
     if sys.platform == "darwin":
         # Use only coarse native window geometry.  If Quartz/AppKit is not
         # available, fail closed: browser/PDF fullscreen must not be treated
