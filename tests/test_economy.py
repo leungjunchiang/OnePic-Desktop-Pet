@@ -120,29 +120,34 @@ def test_focus_grants_daily_supply_without_changing_income(tmp_path):
     assert ledger.daily_supply_status()["coffee"]["claimed"] is True
 
 
-def test_important_todo_grants_one_daily_cake(tmp_path):
+def test_important_todo_no_longer_grants_cake(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     first = ledger.record_important_todo_completion("todo-1", "论文机制")
     second = ledger.record_important_todo_completion("todo-1", "论文机制")
-    assert first is not None
-    assert second is not None
-    assert ledger.inventory_count("cake") == 1
+    assert first is None
+    assert second is None
+    assert ledger.inventory_count("cake") == 0
     assert ledger.monthly_income() == 0
 
-def test_coffee_pot_grants_three_finite_activation_coffees(tmp_path):
+def test_coffee_pot_grants_one_coffee_per_day(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     ledger.record_income("咖啡壶测试资金", 144, source_key="coffee-pot-test")
     assert ledger.purchase_item("coffee_pot") is not None
 
     assert ledger.ensure_daily_household_supply() is False
-    assert ledger.inventory_count("coffee") == 3
+    assert ledger.inventory_count("coffee") == 1
     assert ledger.ensure_daily_household_supply() is False
-    assert ledger.inventory_count("coffee") == 3
+    assert ledger.inventory_count("coffee") == 1
     assert ledger.daily_supply_status()["coffee"]["coffee_pot_claimed"] is True
 
-    # The existing first-work supply remains separate from the finite pot grant.
+    # The existing first-work allowance is the same daily coffee allowance.
     ledger.record_focus(60, started_at=_now())
-    assert ledger.inventory_count("coffee") == 4
+    assert ledger.inventory_count("coffee") == 1
+
+    next_day = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
+    ledger._now = lambda: next_day
+    assert ledger.ensure_daily_household_supply() is True
+    assert ledger.inventory_count("coffee") == 2
 
 
 def test_achievement_income_requires_two_distinct_witnesses_and_monthly_cap(tmp_path):
@@ -161,9 +166,9 @@ def test_achievement_income_requires_two_distinct_witnesses_and_monthly_cap(tmp_
 
     settled = ledger.confirm_achievement(submitted["id"], "buddy-2", "小苗")
     assert settled is not None and settled["status"] == "settled"
-    assert settled["event"]["amount"] == 80
-    assert ledger.balance == 80
-    assert ledger.monthly_income() == 80
+    assert settled["event"]["amount"] == 50
+    assert ledger.balance == 50
+    assert ledger.monthly_income() == 50
 
     assert ledger.register_achievement_income("项目", "成果2", 1) is not None
     assert ledger.register_achievement_income("项目", "成果3", 1) is not None
