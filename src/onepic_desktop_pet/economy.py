@@ -26,6 +26,7 @@ EARLY_BIRD_MIN_SECONDS = 20 * 60
 MAX_ACHIEVEMENT_AMOUNT = 100
 MAX_MONTHLY_ACHIEVEMENTS = 3
 REQUIRED_ACHIEVEMENT_WITNESSES = 2
+ACHIEVEMENT_REWARD = 50
 # A companion scene without an explicit duration (currently tea) must not
 # permanently block the next scene after an app restart.
 OPEN_FOOD_SCENE_LIFETIME_SECONDS = 60
@@ -57,7 +58,7 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
         "name": "小蛋糕", "price": 32, "group": "吃点喝点",
         "kind": "consumable", "state": "celebrating", "collection": "cake",
         "scene_type": "celebrate", "scene_minutes": 0,
-        "description": "给完成重要事情的今天留一点庆祝。",
+        "description": "想庆祝就吃；六毛会把这段开心记下来。",
     },
     "tea": {
         "name": "茶", "price": 10, "group": "吃点喝点",
@@ -73,8 +74,8 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee_pot": {
         "name": "咖啡壶", "price": 144, "group": "添置家当",
         "kind": "household", "collection": "coffee_pot",
-        "description": "激活后一次性补给普通咖啡 ×3；每杯可开启 30 分钟咖啡工作场景。",
-        "effect": {"grant_inventory": {"coffee": 3}, "uses": 3},
+        "description": "每天补给普通咖啡 ×1，每天最多一杯；每杯开启 30 分钟咖啡工作场景。",
+        "effect": {"daily_inventory": {"coffee": 1}, "daily_limit": 1},
     },
     "desk_lamp": {
         "name": "小台灯", "price": 35, "group": "添置家当",
@@ -126,8 +127,8 @@ CATEGORY_LABELS = {
     "early_bird": "早鸟补贴",
     "early_bird_bonus": "早鸟补贴",
     "performance": "任务绩效",
-    "windfall": "成果 / 外快",
-    "achievement_income": "成果 / 外快",
+    "windfall": "成果见证",
+    "achievement_income": "成果见证",
     "social_reward": "搭子互动奖励",
     "special_reward": "特殊奖励",
     "reward": "奖励",
@@ -373,6 +374,7 @@ class EconomyLedger:
         return event
 
     def _inventory_count(self, item_key: str) -> int:
+        item_key = self._canonical_item_key(item_key)
         raw = self._state.setdefault("inventory", {})
         aliases = INVENTORY_KEY_ALIASES.get(item_key, (item_key,))
         # Alias values can coexist after an upgrade. They describe one slot,
@@ -384,6 +386,7 @@ class EconomyLedger:
         )
 
     def _add_inventory(self, item_key: str, delta: int) -> None:
+        item_key = self._canonical_item_key(item_key)
         raw = self._state.setdefault("inventory", {})
         aliases = INVENTORY_KEY_ALIASES.get(item_key, (item_key,))
         current = self._inventory_count(item_key)
@@ -396,6 +399,16 @@ class EconomyLedger:
 
     def inventory_count(self, item_key: str) -> int:
         return self._inventory_count(str(item_key))
+
+    @staticmethod
+    def _canonical_item_key(item_key: str) -> str:
+        candidate = str(item_key or "").strip()
+        if candidate in ITEM_CATALOG:
+            return candidate
+        for canonical, aliases in INVENTORY_KEY_ALIASES.items():
+            if candidate in aliases:
+                return canonical
+        return candidate
 
     def has_household(self, item_key: str) -> bool:
         return str(item_key) in self.owned_households
@@ -425,33 +438,41 @@ class EconomyLedger:
                 active.pop(key, None)
         return result
 
-    def _grant_household_initial_supply(
+    def _grant_household_daily_supply(
         self,
         day: str,
         events: list[WalletEvent] | None = None,
     ) -> bool:
-        """Grant the coffee-pot's finite activation benefit exactly once."""
+        """Grant one coffee-pot coffee per day, without changing real income."""
         if not self.has_household("coffee_pot"):
             return False
-        grants = self._state.setdefault("household_grants", {})
-        source_key = "household:coffee_pot:initial"
-        if grants.get("coffee_pot") or self._has_source(source_key):
-            grants["coffee_pot"] = True
+        daily = self._state.setdefault("daily_focus", {}).setdefault(day, {})
+        supplies = daily.setdefault("supplies", {})
+        household_supplies = daily.setdefault("household_supplies", {})
+        source_key = f"household:coffee_pot:daily:{day}"
+        if household_supplies.get("coffee_pot") or self._has_source(source_key):
+            household_supplies["coffee_pot"] = True
             return False
-        self._add_inventory("coffee", 3)
-        grants["coffee_pot"] = True
+        # The ordinary first-work coffee and the coffee-pot coffee are one
+        # daily coffee allowance, not two simultaneous free coffees.
+        if supplies.get("coffee"):
+            household_supplies["coffee_pot"] = True
+            return False
+        self._add_inventory("coffee", 1)
+        supplies["coffee"] = True
+        household_supplies["coffee_pot"] = True
         event = self._append(
             "supply_reward",
             0,
-            "咖啡壶激活补给：普通咖啡 ×3",
+            "咖啡壶每日补给：普通咖啡 ×1",
             source_key,
             day,
             source="household_supply",
             metadata={
                 "item_key": "coffee",
                 "household": "coffee_pot",
-                "grant_quantity": 3,
-                "finite": True,
+                "grant_quantity": 1,
+                "daily_limit": 1,
             },
         )
         if events is not None:
@@ -459,9 +480,9 @@ class EconomyLedger:
         return True
 
     def ensure_daily_household_supply(self, day: str | None = None) -> bool:
-        """Compatibility entry point for the one-time coffee-pot grant."""
+        """Ensure today's coffee-pot allowance exists, at most once."""
         target = str(day or self._now().date().isoformat())[:10]
-        return bool(self._atomic(lambda: self._grant_household_initial_supply(target)))
+        return bool(self._atomic(lambda: self._grant_household_daily_supply(target)))
 
     def record_focus(self, seconds: int, *, started_at: datetime | None = None) -> dict[str, Any]:
         """把真实专注片段换成工资和日常补给，不篡改真实工作时间。"""
@@ -493,7 +514,7 @@ class EconomyLedger:
             added_coins = max(0, total_coins - old_coins)
             daily["focus_coins"] = old_coins + added_coins
             events: list[WalletEvent] = []
-            self._grant_household_initial_supply(day, events)
+            self._grant_household_daily_supply(day, events)
 
             if added_coins:
                 events.append(self._append(
@@ -572,15 +593,18 @@ class EconomyLedger:
             coffee_status.update(
                 {
                     "coffee_pot_enabled": True,
-                    "coffee_pot_claimed": bool((self._state.get("household_grants") or {}).get("coffee_pot")),
-                    "coffee_pot_rule": "咖啡壶激活后一次性补给普通咖啡 ×3",
+                    "coffee_pot_claimed": bool(
+                        ((daily.get("household_supplies") or {}).get("coffee_pot"))
+                        or self._has_source(f"household:coffee_pot:daily:{target}")
+                    ),
+                    "coffee_pot_rule": "每天补给普通咖啡 ×1，每天最多一杯",
                 }
             )
         return {
             "coffee": coffee_status,
             "expensive_coffee": {"claimed": bool(daily.get("early_bird")), "rule": "首次有效工作从 10:00 前开始，并达到 20 分钟"},
             "milk_tea": {"claimed": bool(claimed.get("milk_tea")), "rule": "一次连续专注达到 40 分钟"},
-            "cake": {"claimed": bool(claimed.get("cake")), "rule": "完成一项标记为重要的 Todo"},
+            "cake": {"claimed": False, "rule": "想庆祝就使用；不需要完成特定 Todo"},
             "tea": {"claimed": bool(claimed.get("tea")), "rule": "当天累计专注达到 2 小时；好友敬茶另计"},
         }
 
@@ -627,16 +651,15 @@ class EconomyLedger:
         )
 
     def register_achievement_income(
-        self, kind: str, name: str, amount: int, note: str = "",
+        self, kind: str, name: str, amount: int | None = None, note: str = "",
     ) -> dict[str, Any] | None:
-        """Submit a result for buddy witnessing; never credits immediately."""
+        """Submit a result for buddy witnessing; reward is fixed at 50 picks."""
         clean_kind = str(kind).strip()[:30] or "其他成果"
         clean_name = str(name).strip()[:90]
-        try:
-            clean_amount = int(amount)
-        except (TypeError, ValueError):
-            clean_amount = 0
-        if not clean_name or not 1 <= clean_amount <= MAX_ACHIEVEMENT_AMOUNT:
+        # Keep the old positional argument for local-data compatibility, but
+        # no longer let the submitter choose an arbitrary reward.
+        clean_amount = ACHIEVEMENT_REWARD
+        if not clean_name:
             return None
         month = self._now().date().isoformat()[:7]
 
@@ -734,31 +757,9 @@ class EconomyLedger:
         )
 
     def record_important_todo_completion(self, task_id: str, title: str) -> WalletEvent | None:
-        """Give one daily cake for a real important-Todo completion."""
-        task_id = str(task_id).strip()[:120]
-        title = str(title).strip()[:120] or "重要任务"
-        day = self._now().date().isoformat()
-        source_key = f"supply:cake:{day}:{task_id or title}"
-        if self._has_source(source_key):
-            return self._find_source(source_key)
-
-        def apply() -> WalletEvent:
-            daily = self._state.setdefault("daily_focus", {}).setdefault(day, {})
-            supplies = daily.setdefault("supplies", {})
-            if supplies.get("cake"):
-                return self._find_source(source_key) or self._append(
-                    "supply_reward", 0, "重要任务补给：小蛋糕", source_key, day,
-                    source="daily_supply", metadata={"item_key": "cake", "free": True},
-                )
-            self._add_inventory("cake", 1)
-            supplies["cake"] = True
-            return self._append(
-                "supply_reward", 0, f"重要任务补给：小蛋糕 · {title}", source_key, day,
-                source="daily_supply",
-                metadata={"item_key": "cake", "todo_id": task_id, "todo_title": title, "free": True},
-            )
-
-        return self._atomic(apply)
+        """Deprecated compatibility hook; cake is now a free-use food."""
+        del task_id, title
+        return None
     def spend(
         self,
         label: str,
@@ -817,7 +818,7 @@ class EconomyLedger:
             if spec["kind"] == "household":
                 self._state.setdefault("owned_households", []).append(item_key)
                 if item_key == "coffee_pot":
-                    self._grant_household_initial_supply(self._now().date().isoformat())
+                    self._grant_household_daily_supply(self._now().date().isoformat())
             else:
                 self._add_inventory(item_key, 1)
             return event
@@ -865,7 +866,7 @@ class EconomyLedger:
         makes the result consistent for the warehouse, supply cards and remote
         food events.
         """
-        item_key = str(item_key).strip()
+        item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(item_key)
         if not spec or spec.get("kind") != "consumable":
             return "invalid_item"
@@ -908,7 +909,7 @@ class EconomyLedger:
         buddy event can set consume_inventory=False: the receiver experiences
         the scene but cannot turn a gift into leaderboard income.
         """
-        item_key = str(item_key).strip()
+        item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(item_key)
         if not spec or spec.get("kind") != "consumable":
             return None
@@ -1007,6 +1008,7 @@ class EconomyLedger:
         return self._atomic(apply)
 
     def use_item(self, item_key: str) -> dict[str, Any] | None:
+        item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(str(item_key))
         if not spec or spec["kind"] != "consumable":
             return None
