@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QDateTime, QEvent, QUrl, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QKeySequence
+from PySide6.QtGui import QColor, QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSpinBox,
-    QShortcut,
     QVBoxLayout,
     QWidget,
 )
