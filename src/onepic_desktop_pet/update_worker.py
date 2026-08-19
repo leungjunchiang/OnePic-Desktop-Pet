@@ -89,4 +89,3 @@ class ProgramUpdateDownloadWorker(QThread):
         else:
             LOGGER.info("[Update] installer download completed: %r", result)
             self.completed.emit(result)
-

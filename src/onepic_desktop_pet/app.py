@@ -145,7 +145,12 @@ class DesktopPetApplication(QObject):
         """显示宠物但不夺走用户正在输入文字的窗口焦点。"""
 
         self.window.show()
-        self.window._ensure_on_top()
+        # PetWindow.showEvent schedules the one-time native macOS panel
+        # configuration.  Calling it synchronously as well can make AppKit
+        # re-apply the floating level during a user-initiated show and has
+        # been observed to reactivate Lili on some macOS/Qt combinations.
+        if sys.platform != "darwin":
+            self.window._ensure_on_top()
 
     def start(self, smoke_test_ms: int | None = None) -> int:
         """显示应用并进入事件循环；可选定时退出用于自动验证。"""
@@ -158,7 +163,10 @@ class DesktopPetApplication(QObject):
             paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
         ) or bool(getattr(self.settings, "today_note_autoshow", False))
         if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
-            QTimer.singleShot(300, self.window.show_today_note)
+            # A pending note may be shown at startup, but startup UI must
+            # never steal the user's current editor/browser focus.  Explicit
+            # user actions still open the normal interactive note window.
+            QTimer.singleShot(300, lambda: self.window.show_today_note(passive=True))
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         if not self._content_updates_disabled():
@@ -480,5 +488,4 @@ def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
     return DesktopPetApplication().start(smoke_test_ms=smoke_test_ms)
-
 

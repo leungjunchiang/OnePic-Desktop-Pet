@@ -523,4 +523,3 @@ def test_presence_transitions_are_not_persisted_as_room_history():
     assert "create trigger lili_presence_room_event" not in migration
     assert "focus_finish" in migration
     assert "challenge_complete" in migration
-

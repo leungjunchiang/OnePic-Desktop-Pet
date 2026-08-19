@@ -114,4 +114,3 @@ def test_reminder_editor_preserves_selected_audible_alarm(tmp_path) -> None:
     center.close()
     center.deleteLater()
     app.processEvents()
-

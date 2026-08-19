@@ -156,4 +156,3 @@ def test_new_timed_todo_defaults_to_quiet_pet_reminder_and_can_disable(tmp_path)
     task = todos.update(task.id, reminder_mode=REMINDER_NONE)
     assert task.reminder_mode == REMINDER_NONE
     assert task.reminder is False
-

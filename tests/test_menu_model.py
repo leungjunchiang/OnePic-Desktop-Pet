@@ -118,4 +118,3 @@ def test_unified_menu_model_exposes_optional_duration_setting() -> None:
     assert duration.title == "显示本轮工作时长"
     assert duration.checkable is True
     assert duration.checked is False
-

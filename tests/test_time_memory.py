@@ -532,4 +532,3 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     summary = memory.summary.today()
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
-

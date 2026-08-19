@@ -44,4 +44,3 @@ class UpdateManager:
         progress: Callable[[int, int], None] | None = None,
     ) -> ProgramUpdateResult:
         return self.program.download_and_verify(release, progress=progress)
-

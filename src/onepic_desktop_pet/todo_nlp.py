@@ -236,4 +236,3 @@ def parse_explicit_todo_request(
             }
         ],
     }
-

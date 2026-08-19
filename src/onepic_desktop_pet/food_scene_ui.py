@@ -443,4 +443,3 @@ class FoodSceneDialog(QDialog):
     def closeEvent(self, event) -> None:
         event.ignore()
         self.hide()
-

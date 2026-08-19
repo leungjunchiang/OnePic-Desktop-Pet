@@ -1437,4 +1437,3 @@ class EconomyLedger:
     def _safe_now(self) -> datetime:
         value = self._now()
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from .work_timer import format_elapsed_clock
@@ -384,7 +386,10 @@ class QuickControlPanel(QWidget):
                 y = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7)).y()
         self.hover_hint.move(x, y)
         self.hover_hint.show()
-        self.hover_hint.raise_()
+        # A macOS order change for a no-focus hint can still make Lili
+        # frontmost. It is already shown without activation.
+        if sys.platform != "darwin":
+            self.hover_hint.raise_()
 
     def _hide_hint(self) -> None:
         """Hide the hover label when the pointer leaves a shortcut."""
@@ -528,4 +533,3 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
-

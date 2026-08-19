@@ -63,6 +63,34 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     app.processEvents()
 
 
+def test_macos_pet_does_not_poll_native_topmost_layer(monkeypatch) -> None:
+    """macOS must not re-apply the native level while another app is active."""
+
+    monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "darwin")
+    app, window = _create_window()
+    assert not window.topmost_timer.isActive()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_macos_accessory_raise_is_suppressed(monkeypatch) -> None:
+    """macOS accessory refreshes must not reorder the owning application."""
+
+    monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "darwin")
+
+    class RaisingProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def raise_(self) -> None:
+            self.calls += 1
+
+    probe = RaisingProbe()
+    PetWindow._raise_accessory(probe)  # type: ignore[arg-type]
+    assert probe.calls == 0
+
+
 def test_topmost_desktop_mode_switch_preserves_interaction_window(monkeypatch) -> None:
     """切换层级不得丢失位置、动画状态、轮廓穿透或无焦点标志。"""
 
@@ -1553,4 +1581,3 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
-

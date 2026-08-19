@@ -66,4 +66,3 @@ $$;
 
 revoke execute on function public.lili_economy_leaderboard(text) from public, anon;
 grant execute on function public.lili_economy_leaderboard(text) to authenticated;
-

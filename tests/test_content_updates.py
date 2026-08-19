@@ -112,4 +112,3 @@ def test_older_release_overlay_cannot_hide_newer_bundled_resources(tmp_path: Pat
         set_content_update_root(None)
         clear_content_overlay_cache()
 
-

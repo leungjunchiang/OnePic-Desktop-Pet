@@ -84,4 +84,3 @@ def test_plain_ambiguous_chat_is_not_intercepted() -> None:
 
 def test_query_about_todos_is_not_create_action() -> None:
     assert parse_explicit_todo_request("我明天还有什么待办？", now=NOW) is None
-

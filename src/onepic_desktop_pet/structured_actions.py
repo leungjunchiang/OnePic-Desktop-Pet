@@ -240,4 +240,3 @@ class LocalActionExecutor:
                 self.alarms.sync_todo(task, reminder_mode="none")
         elif self.alarms is not None:
             self.alarms.sync_todo(task, reminder_mode="none")
-

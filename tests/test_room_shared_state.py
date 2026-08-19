@@ -173,4 +173,3 @@ def test_room_quick_actions_change_real_focus_state_and_expire_status(tmp_path):
     assert not timer.is_running
     assert window._room_quick_status == "去喝水"
     window.close(); window.deleteLater(); app.processEvents()
-

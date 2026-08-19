@@ -406,4 +406,3 @@ class EconomyDialog(QDialog):
         self.refresh()
         self.changed.emit()
         QMessageBox.information(self, "六毛生活记录", str(result.get("feedback") or "六毛把这件事记下来了。"))
-

@@ -34,4 +34,3 @@ $$;
 
 revoke all on function public.lili_submit_achievement(text, text, integer, text) from public, anon;
 grant execute on function public.lili_submit_achievement(text, text, integer, text) to authenticated;
-

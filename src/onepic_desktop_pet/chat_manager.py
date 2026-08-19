@@ -700,4 +700,3 @@ def should_start_startup_detection() -> bool:
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
 
-

@@ -704,4 +704,3 @@ class AlarmCenterDialog(QDialog):
         self.alarms.delete(alarm.id)
         self.refresh()
         self.changed.emit()
-

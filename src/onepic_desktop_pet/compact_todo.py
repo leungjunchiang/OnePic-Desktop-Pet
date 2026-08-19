@@ -798,4 +798,3 @@ class CompactTodoPanel(QWidget):
         self.memory.sync_todo_reminder(saved)
         self.refresh()
         self.task_changed.emit()
-

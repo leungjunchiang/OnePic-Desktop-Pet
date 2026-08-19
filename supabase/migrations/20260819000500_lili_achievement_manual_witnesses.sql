@@ -280,4 +280,3 @@ revoke all on function public.lili_replace_achievement_witnesses(uuid,uuid[]) fr
 grant execute on function public.lili_replace_achievement_witnesses(uuid,uuid[]) to authenticated;
 revoke all on function public.lili_achievement_witness_inbox() from public, anon;
 grant execute on function public.lili_achievement_witness_inbox() to authenticated;
-

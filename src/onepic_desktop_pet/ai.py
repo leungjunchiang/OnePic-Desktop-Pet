@@ -1455,4 +1455,3 @@ class AIChatService:
         self._closing = True
         self._close_codex_app_server()
 
-

@@ -40,4 +40,3 @@ def test_deleted_or_missing_sound_resolves_to_fallback(tmp_path: Path) -> None:
     assert library.remove(sound.sound_id)
     assert library.resolve_path(sound.sound_id) is None
     assert library.display_name(sound.sound_id).startswith("系统提示音")
-
