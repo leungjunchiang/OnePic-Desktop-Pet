@@ -27,7 +27,7 @@ import os
 import logging
 import sys
 
-from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtCore import QProcess, Qt, QTimer, QObject
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -63,7 +63,7 @@ from .window import PetWindow
 LOGGER = logging.getLogger(__name__)
 
 
-class DesktopPetApplication:
+class DesktopPetApplication(QObject):
     """封装窗口、托盘与持久化状态的桌面宠物应用。"""
 
     def __init__(self, settings: PetSettings | None = None) -> None:
@@ -72,6 +72,11 @@ class DesktopPetApplication:
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
         self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        # Keep this controller in the GUI thread. Worker callbacks are
+        # connected to methods on this object; QObject affinity makes Qt queue
+        # those callbacks back to the main thread before they touch windows,
+        # message boxes, or speech bubbles.
+        super().__init__()
         self.qt_app.setApplicationName(APP_DISPLAY_NAME)
         self.qt_app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.qt_app.setQuitOnLastWindowClosed(False)
