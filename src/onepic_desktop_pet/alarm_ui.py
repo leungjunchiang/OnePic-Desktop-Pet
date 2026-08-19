@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QDateTime, QUrl, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor
+from PySide6.QtCore import QDateTime, QEvent, QUrl, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSpinBox,
+    QShortcut,
     QVBoxLayout,
     QWidget,
 )
@@ -174,12 +175,11 @@ class AlarmSoundSelector(QWidget):
 
 
 class AlarmCard(QDialog):
-    """A normal, movable, non-modal top-level alarm window.
+    """A frameless, movable, non-modal top-level alarm card.
 
-    This intentionally uses the native window frame instead of a Tool/Popup
-    surface.  The native title bar provides the drag handle and standard
-    minimize/close controls, while the absence of WindowStaysOnTopHint means
-    other applications can cover the alarm normally.
+    The card keeps the QuickAction visual language instead of showing a
+    second native title bar.  It is still a normal top-level window: it does
+    not stay on top, does not become modal, and never re-activates itself.
     """
 
     start_requested = Signal(str)
@@ -197,16 +197,14 @@ class AlarmCard(QDialog):
         self.alarm = alarm
         self.sound_library = sound_library
         self._suppress_close_action = False
+        self._drag_offset = None
         self.setObjectName("alarmCard")
         self.setWindowFlags(
             Qt.WindowType.Window
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.FramelessWindowHint
         )
-        self.setWindowTitle("⏰ 六毛闹钟")
         self.setModal(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setStyleSheet(ALARM_STYLE)
         self.setMinimumWidth(420)
         shadow = QGraphicsDropShadowEffect(self)
@@ -224,28 +222,41 @@ class AlarmCard(QDialog):
         trigger = QLabel(self._display_trigger(alarm.trigger_at))
         trigger.setStyleSheet("font-size: 32px; font-weight: 800; color:#24475b;")
         layout.insertWidget(0, trigger)
-        sound_hint = QLabel(
-            f"{self._sound_name(alarm.sound_id)} · 最长{max(0, int(alarm.max_ring_seconds or 0))}秒"
-            if alarm.sound_enabled else "静音闹钟 · 只显示六毛提醒"
+        custom_id = str(alarm.sound_id or "") not in {"", "system", "default"}
+        custom_available = bool(
+            custom_id
+            and self.sound_library is not None
+            and self.sound_library.resolve_path(alarm.sound_id) is not None
         )
+        if not alarm.sound_enabled:
+            sound_text = "静音闹钟 · 只显示六毛提醒"
+        elif custom_available:
+            sound_text = f"🎵 {self._sound_name(alarm.sound_id)} · 单曲循环"
+        elif custom_id:
+            sound_text = "自定义铃声不可用 · 已回退系统提示音 · 最长60秒"
+        else:
+            sound_text = f"🔔 {self._sound_name(alarm.sound_id)} · 最长60秒"
+        sound_hint = QLabel(sound_text)
         sound_hint.setStyleSheet("color:#607985;font-size:11px;")
         layout.addWidget(sound_hint)
         actions = QVBoxLayout()
         actions.setSpacing(6)
         start = QPushButton("开始工作" if alarm.linked_todo_id else "开始30分钟")
         start.setObjectName("primary")
-        start.clicked.connect(lambda: self.start_requested.emit(alarm.id))
+        start.clicked.connect(self._request_start)
         actions.addWidget(start)
         snoozes = QHBoxLayout()
         snoozes.setSpacing(5)
         for minutes in (5, 10, 30):
             button = QPushButton(f"后{minutes}分")
-            button.clicked.connect(lambda _checked=False, value=minutes: self.snooze_requested.emit(alarm.id, value))
+            button.clicked.connect(
+                lambda _checked=False, value=minutes: self._request_snooze(value)
+            )
             snoozes.addWidget(button)
         actions.addLayout(snoozes)
         close = QPushButton("关闭")
         close.setObjectName("quiet")
-        close.clicked.connect(lambda: self.dismiss_requested.emit(alarm.id))
+        close.clicked.connect(self._request_dismiss)
         actions.addWidget(close, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addLayout(actions)
         self._audio_output = QAudioOutput(self) if QAudioOutput is not None else None
@@ -256,21 +267,69 @@ class AlarmCard(QDialog):
             self._audio_output.setVolume(max(0, min(100, int(alarm.volume or 0))) / 100)
             self._media_player.mediaStatusChanged.connect(self._media_status_changed)
             self._media_player.errorOccurred.connect(lambda *_args: self._fallback_to_system())
-        if alarm.sound_enabled:
-            self._sound_timer = QTimer(self)
-            # QApplication.beep uses the platform's own short alert sound.
-            # Repeat it gently instead of hammering the system speaker.
-            self._sound_timer.setInterval(3_000)
-            self._sound_timer.timeout.connect(self._play_system_sound)
-            self._sound_stop_timer = QTimer(self)
-            self._sound_stop_timer.setSingleShot(True)
-            self._sound_stop_timer.setInterval(max(0, int(alarm.max_ring_seconds or 60)) * 1_000)
-            self._sound_stop_timer.timeout.connect(self._stop_sound)
-            self._sound_stop_timer.start()
-            self._start_sound()
-        else:
-            self._sound_timer = None
-            self._sound_stop_timer = None
+        self._sound_timer = None
+        self._sound_stop_timer = None
+        self._custom_audio = False
+        self._configure_sound(alarm)
+
+        # Frameless cards still support the two platform close shortcuts.
+        # Alt+F4 is delivered as a normal closeEvent by the window manager.
+        self._close_shortcuts = []
+        for sequence in ("Ctrl+W", "Meta+W"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(self._request_dismiss)
+            self._close_shortcuts.append(shortcut)
+
+        # Blank card areas and labels are drag handles; controls remain normal
+        # clickable widgets.  This is deliberately local to the card and does
+        # not use a global mouse grab.
+        self._install_drag_filters()
+
+    def _install_drag_filters(self) -> None:
+        self.installEventFilter(self)
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    @staticmethod
+    def _is_interactive_widget(widget: QWidget | None) -> bool:
+        interactive = (QPushButton, QLineEdit, QComboBox, QSpinBox)
+        current = widget
+        while current is not None:
+            if isinstance(current, interactive):
+                return True
+            current = current.parentWidget()
+        return False
+
+    def eventFilter(self, watched: object, event: object) -> bool:
+        event_type = getattr(event, "type", lambda: None)()
+        if event_type == QEvent.Type.MouseButtonPress and getattr(event, "button", lambda: None)() == Qt.MouseButton.LeftButton:
+            widget = watched if isinstance(watched, QWidget) else self
+            if not self._is_interactive_widget(widget):
+                self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                return True
+        elif event_type == QEvent.Type.MouseMove and self._drag_offset is not None:
+            if getattr(event, "buttons", lambda: Qt.MouseButton.NoButton)() & Qt.MouseButton.LeftButton:
+                self.move(event.globalPosition().toPoint() - self._drag_offset)
+                return True
+        elif event_type == QEvent.Type.MouseButtonRelease and self._drag_offset is not None:
+            self._drag_offset = None
+            return True
+        return super().eventFilter(watched, event)
+
+    def _request_start(self) -> None:
+        self._stop_sound()
+        self._suppress_close_action = True
+        self.start_requested.emit(self.alarm.id)
+
+    def _request_snooze(self, minutes: int) -> None:
+        self._stop_sound()
+        self._suppress_close_action = True
+        self.snooze_requested.emit(self.alarm.id, int(minutes))
+
+    def _request_dismiss(self) -> None:
+        self._stop_sound()
+        self._suppress_close_action = True
+        self.dismiss_requested.emit(self.alarm.id)
 
     @staticmethod
     def _display_trigger(value: str) -> str:
@@ -281,7 +340,35 @@ class AlarmCard(QDialog):
             "系统提示音" if sound_id in {"", "system", "default"} else "自定义铃声"
         )
 
+    def _configure_sound(self, alarm: Alarm) -> None:
+        if not alarm.sound_enabled:
+            return
+        path = self.sound_library.resolve_path(alarm.sound_id) if self.sound_library else None
+        is_custom = str(alarm.sound_id or "") not in {"", "system", "default"}
+        if is_custom and path is not None and self._media_player is not None:
+            self._custom_audio = True
+            self._using_system_sound = False
+            self._media_player.setSource(QUrl.fromLocalFile(str(path)))
+            self._media_player.play()
+            return
+        # System/default sounds are short platform alerts.  Missing custom
+        # files intentionally fall back to this same bounded behavior.
+        self._using_system_sound = True
+        self._sound_timer = QTimer(self)
+        self._sound_timer.setInterval(3_000)
+        self._sound_timer.timeout.connect(self._play_system_sound)
+        self._sound_stop_timer = QTimer(self)
+        self._sound_stop_timer.setSingleShot(True)
+        self._sound_stop_timer.setInterval(max(1, int(alarm.max_ring_seconds or 60)) * 1_000)
+        self._sound_stop_timer.timeout.connect(self._stop_sound)
+        self._sound_stop_timer.start()
+        if is_custom and path is None:
+            self._play_system_sound()
+        else:
+            self._play_system_sound()
+
     def _start_sound(self) -> None:
+        """Compatibility entry point for callers from older builds."""
         path = self.sound_library.resolve_path(self.alarm.sound_id) if self.sound_library else None
         if path is not None and self._media_player is not None:
             self._using_system_sound = False
@@ -291,16 +378,27 @@ class AlarmCard(QDialog):
         self._fallback_to_system()
 
     def _media_status_changed(self, status) -> None:
-        if not self._using_system_sound and self._media_player is not None:
+        if self._custom_audio and not self._using_system_sound and self._media_player is not None:
             if status == QMediaPlayer.MediaStatus.EndOfMedia:
                 self._media_player.play()
 
     def _fallback_to_system(self) -> None:
+        if self._custom_audio:
+            self._custom_audio = False
         self._using_system_sound = True
         if self._media_player is not None:
             self._media_player.stop()
-        if self._sound_timer is not None:
-            self._sound_timer.start()
+        if self._sound_timer is None:
+            self._sound_timer = QTimer(self)
+            self._sound_timer.setInterval(3_000)
+            self._sound_timer.timeout.connect(self._play_system_sound)
+        if self._sound_stop_timer is None:
+            self._sound_stop_timer = QTimer(self)
+            self._sound_stop_timer.setSingleShot(True)
+            self._sound_stop_timer.setInterval(60_000)
+            self._sound_stop_timer.timeout.connect(self._stop_sound)
+        self._sound_stop_timer.start()
+        self._sound_timer.start()
         self._play_system_sound()
 
     @staticmethod
@@ -338,18 +436,18 @@ class AlarmCard(QDialog):
     def _stop_sound(self) -> None:
         if self._sound_timer is not None:
             self._sound_timer.stop()
+        if self._sound_stop_timer is not None:
+            self._sound_stop_timer.stop()
         if self._media_player is not None:
             self._media_player.stop()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if self._sound_timer is not None:
-            self._sound_timer.stop()
-        if self._sound_stop_timer is not None:
-            self._sound_stop_timer.stop()
+        # Closing by Alt+F4/Cmd+W or by the window manager must stop both
+        # system beeps and custom looping audio immediately.
+        self._stop_sound()
         if not self._suppress_close_action:
-            # The native title-bar close button means “dismiss this firing”,
-            # not “quit Lili”.  Repeating alarms remain scheduled by the
-            # AlarmManager for their next occurrence.
+            # Closing the frameless card means “dismiss this firing”, not
+            # “quit Lili”. Repeating alarms remain scheduled for next time.
             self._suppress_close_action = True
             self.dismiss_requested.emit(self.alarm.id)
         super().closeEvent(event)
