@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from onepic_desktop_pet.anniversary_manager import AnniversaryManager
 from onepic_desktop_pet.countdown_manager import CountdownManager
 from onepic_desktop_pet.daily_record_manager import AUTO_CHECKIN_SECONDS, DailyRecordManager
@@ -252,13 +254,25 @@ def test_todo_queue_inserts_normalizes_and_persists(tmp_path) -> None:
     assert [item.title for item in manager.queued_items()] == ["事项4", "事项1", "事项3", "事项2"]
     manager.set_queue_position(items[4].id, 5)
     manager.set_queue_position(items[5].id, 5)
-    assert len(manager.queued_items()) == 5
-    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5]
+    assert len(manager.queued_items()) == 6
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5, 6]
 
     manager.complete(items[3].id)
-    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4]
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5]
     reloaded = TodoManager(tmp_path / "todos.json")
-    assert [item.title for item in reloaded.queued_items()] == ["事项1", "事项3", "事项2", "事项6"]
+    assert [item.title for item in reloaded.queued_items()] == ["事项1", "事项3", "事项2", "事项5", "事项6"]
+
+
+def test_todo_queue_caps_new_unfinished_items_at_ten(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    for index in range(10):
+        manager.add(f"第{index + 1}件")
+    with pytest.raises(ValueError, match="10件"):
+        manager.add("第11件")
+    manager.complete(manager.queued_items()[0].id)
+    restored = manager.add("第11件")
+    assert restored.queue_position == 10
+    assert [item.queue_position for item in manager.queued_items()] == list(range(1, 11))
 
 
 def test_completed_todo_remains_available_for_today_note(tmp_path) -> None:
