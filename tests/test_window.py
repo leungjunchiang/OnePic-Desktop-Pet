@@ -766,10 +766,10 @@ def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> 
         "quickAction_todo",
         "quickAction_social",
         "quickAction_music",
-        "quickAction_settings",
+        "quickAction_food",
     ]
     assert [button.text() for button in buttons] == ["", "", "", "", "", ""]
-    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "待办", "搭子自习室", "音乐", "设置"]
+    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "待办", "搭子自习室", "音乐", "喂食"]
     assert all(not button.icon().isNull() for button in buttons)
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
