@@ -81,16 +81,29 @@ class QueueListWidget(QListWidget):
     """The small, reorderable 1..5 work queue shown above today's tasks."""
 
     reordered = Signal(list)
+    external_dropped = Signal(str, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
-        self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
 
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt API
+        source = event.source()
+        if source is not self and isinstance(source, QListWidget):
+            source_item = source.currentItem()
+            if source_item is not None:
+                target_row = self.indexAt(event.position().toPoint()).row()
+                if target_row < 0:
+                    target_row = self.count()
+                item_id = source_item.data(Qt.ItemDataRole.UserRole)
+                if item_id:
+                    self.external_dropped.emit(str(item_id), min(target_row + 1, 5))
+                    event.acceptProposedAction()
+                    return
         super().dropEvent(event)
         self.reordered.emit(
             [
@@ -399,6 +412,8 @@ class TodoCenterWindow(QDialog):
             listing.setProperty("view_key", key)
             listing.itemChanged.connect(self._item_changed)
             listing.itemDoubleClicked.connect(self._edit_row)
+            listing.setDragEnabled(True)
+            listing.setDragDropMode(QListWidget.DragDropMode.DragOnly)
             self._lists.append(listing)
             page = QWidget(self)
             layout = QVBoxLayout(page)
@@ -410,6 +425,7 @@ class TodoCenterWindow(QDialog):
                 self._queue_list.setMaximumHeight(190)
                 self._queue_list.itemDoubleClicked.connect(self._edit_row)
                 self._queue_list.reordered.connect(self._reorder_queue)
+                self._queue_list.external_dropped.connect(self._add_to_queue)
                 layout.addWidget(self._queue_list)
                 other_title = QLabel("其他待办")
                 other_title.setObjectName("subtitle")
@@ -670,6 +686,14 @@ class TodoCenterWindow(QDialog):
         """Persist the queue list's drag order in one manager update."""
 
         self.memory.todos.reorder_queue(item_ids)
+        self.refresh()
+        self.changed.emit()
+
+    def _add_to_queue(self, item_id: str, position: int) -> None:
+        item = self.memory.todos.get(item_id)
+        if item is None or item.completed or item.read:
+            return
+        self.memory.todos.set_queue_position(item_id, position)
         self.refresh()
         self.changed.emit()
 
