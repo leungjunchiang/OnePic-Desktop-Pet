@@ -749,6 +749,10 @@ def codex_detection_message() -> str:
     clear_cache = getattr(find_codex_executable, "cache_clear", None)
     if callable(clear_cache):
         clear_cache()
+    clear_capabilities = globals().get("_codex_cli_capabilities")
+    clear_capabilities = getattr(clear_capabilities, "cache_clear", None)
+    if callable(clear_capabilities):
+        clear_capabilities()
     cli = find_codex_executable()
     if gui_app is not None and cli is not None:
         return "Codex 已连接。"
