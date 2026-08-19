@@ -255,7 +255,9 @@ def test_todo_queue_inserts_normalizes_and_persists(tmp_path) -> None:
     assert [item.queue_position for item in queued] == [1, 2, 3, 4, 5, 6]
 
     manager.set_queue_position(items[3].id, 1)
-    assert [item.title for item in manager.queued_items()] == ["事项4", "事项1", "事项3", "事项2"]
+    assert [item.title for item in manager.queued_items()] == [
+        "事项4", "事项1", "事项3", "事项2", "事项5", "事项6"
+    ]
     manager.set_queue_position(items[4].id, 5)
     manager.set_queue_position(items[5].id, 5)
     assert len(manager.queued_items()) == 6
