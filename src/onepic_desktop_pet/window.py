@@ -1811,7 +1811,12 @@ class PetWindow(QWidget):
         """Open/reuse the taskbar-capable 六毛补给站 window."""
         self._record_user_interaction()
         if self._food_scene_dialog is None:
-            self._food_scene_dialog = FoodSceneDialog(self.economy, self._todo_choices_for_food())
+            self._food_scene_dialog = FoodSceneDialog(
+                self.economy,
+                self._todo_choices_for_food(),
+                witness_choices=self._achievement_witness_choices,
+                achievement_submitter=self._submit_achievement_witness,
+            )
             self._food_scene_dialog.scene_requested.connect(self._start_food_scene)
         else:
             self._food_scene_dialog.todo_choices = self._todo_choices_for_food()
@@ -1821,6 +1826,42 @@ class PetWindow(QWidget):
         self._food_scene_dialog.show()
         self._food_scene_dialog.raise_()
         self._food_scene_dialog.activateWindow()
+
+    def _achievement_witness_choices(self) -> list[dict[str, object]]:
+        """Return the currently synced accepted buddies for manual selection."""
+
+        dialog = self._social_dialog
+        data = (getattr(dialog, "data", {}) or {}) if dialog is not None else {}
+        if not data and getattr(self.social_client, "signed_in", False):
+            try:
+                data = self.social_client.dashboard(allow_cache=True) or {}
+            except Exception:
+                data = {}
+        return [
+            dict(item) for item in (data.get("buddies") or [])
+            if isinstance(item, dict) and not bool(item.get("is_self"))
+        ]
+
+    def _submit_achievement_witness(self, name: str, note: str, witness_ids: list[str]) -> dict[str, object]:
+        """Submit a manually addressed achievement claim to the shared RPC."""
+
+        if not getattr(self.social_client, "signed_in", False):
+            raise ValueError("请先登录搭子自习室，再邀请搭子见证成果。")
+        if len({str(value).strip() for value in witness_ids if str(value).strip()}) != 2:
+            raise ValueError("请选择两名不同的搭子。")
+        result = self.social_client.rpc(
+            "lili_submit_achievement",
+            {
+                "p_kind": "其他成果",
+                "p_name": str(name).strip()[:90],
+                "p_amount": 200,
+                "p_note": str(note).strip()[:160],
+                "p_witness_ids": [str(value).strip() for value in witness_ids],
+            },
+        )
+        if isinstance(result, dict):
+            return result
+        return {"status": "pending"}
 
     def _start_food_scene(
         self,
