@@ -37,6 +37,8 @@ class CodexAppServerClient:
         env: Mapping[str, str] | None = None,
         thread_id: str = "",
         on_thread_id: Callable[[str], None] | None = None,
+        desired_provider: str = "",
+        desired_transport: str = "",
         client_version: str = "0.22.70",
     ) -> None:
         self.command = list(command)
@@ -44,6 +46,8 @@ class CodexAppServerClient:
         self.env = dict(env or os.environ)
         self.thread_id = str(thread_id or "").strip()
         self.on_thread_id = on_thread_id
+        self.desired_provider = str(desired_provider or "").strip()
+        self.desired_transport = str(desired_transport or "").strip()
         self.client_version = client_version
         self._process: subprocess.Popen[str] | None = None
         self._reader_thread: threading.Thread | None = None
@@ -108,6 +112,13 @@ class CodexAppServerClient:
                     on_delta=on_delta,
                     timeout=max(15.0, float(timeout)),
                 )
+            except CodexAppServerError as exc:
+                # A timed-out turn must not leave the persistent process in an
+                # unknown state.  Ask the server to stop it before the service
+                # closes the client and falls back to the isolated CLI path.
+                if "超时" in str(exc):
+                    self.interrupt()
+                raise
             finally:
                 self._active_turn_id = ""
 
@@ -347,10 +358,58 @@ class CodexAppServerClient:
                 # the chat permanently unusable.  Start a fresh persistent thread.
                 self.thread_id = ""
             else:
-                self._accept_thread(result)
-                return
+                if self._thread_matches_desired_provider(result):
+                    self._accept_thread(result)
+                    return
+                LOGGER.warning(
+                    "[AI Codex] discarding resumed thread with provider=%s; desired=%s transport=%s",
+                    self._thread_provider(result) or "unknown",
+                    self.desired_provider or "unknown",
+                    self.desired_transport or "unknown",
+                )
+                # Only forget the local pointer.  The user's Codex history is
+                # intentionally left untouched; a fresh thread is safer than
+                # sending a turn through a stale provider configuration.
+                self.thread_id = ""
         result = self._request("thread/start", common, timeout=20.0)
+        if not self._thread_matches_desired_provider(result):
+            raise CodexAppServerError(
+                "Codex 新 thread 使用了不兼容的 model provider。"
+            )
         self._accept_thread(result)
+
+    def _thread_provider(self, result: dict[str, Any]) -> str:
+        """Read provider metadata across current and older App Server shapes."""
+
+        thread = result.get("thread") or {}
+        candidates: list[Any] = []
+        if isinstance(thread, dict):
+            candidates.extend(
+                thread.get(key)
+                for key in ("modelProvider", "model_provider", "provider")
+            )
+        candidates.extend(
+            result.get(key)
+            for key in ("modelProvider", "model_provider", "provider")
+        )
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                candidate = candidate.get("id") or candidate.get("name") or candidate.get("key")
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _thread_matches_desired_provider(self, result: dict[str, Any]) -> bool:
+        """Reject an explicitly mismatched provider, tolerate older metadata."""
+
+        if not self.desired_provider:
+            return True
+        actual = self._thread_provider(result)
+        # Some older servers omit provider metadata from thread/start and
+        # thread/resume responses.  The local v2 state check still protects
+        # those servers; only an explicit server-side mismatch is fatal.
+        return not actual or actual.casefold() == self.desired_provider.casefold()
 
     def _accept_thread(self, result: dict[str, Any]) -> None:
         thread = result.get("thread") or {}
@@ -433,3 +492,4 @@ class CodexAppServerClient:
         if event_thread and event_thread != self.thread_id:
             return False
         return not event_turn or event_turn == turn_id
+
