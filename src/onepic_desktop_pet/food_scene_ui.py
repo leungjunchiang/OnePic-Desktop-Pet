@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -37,11 +37,22 @@ class FoodSceneDialog(QDialog):
         "tea": "喝会儿茶",
     }
 
-    def __init__(self, ledger: EconomyLedger, todo_choices: Iterable[dict[str, Any]] = (), parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        ledger: EconomyLedger,
+        todo_choices: Iterable[dict[str, Any]] = (),
+        parent: QWidget | None = None,
+        *,
+        witness_choices: Callable[[], Iterable[dict[str, Any]]] | None = None,
+        achievement_submitter: Callable[[str, str, list[str]], Any] | None = None,
+    ) -> None:
         super().__init__(None)
         del parent
         self.ledger = ledger
         self.todo_choices = [dict(item) for item in todo_choices if isinstance(item, dict)]
+        self.witness_choices = witness_choices
+        self.achievement_submitter = achievement_submitter
+        self._remote_achievement_claims: list[dict[str, Any]] = []
         self.setObjectName("foodSupplyStation")
         self.setWindowTitle("给六毛来点什么？ · 六毛补给站")
         self.setWindowFlags(
@@ -88,9 +99,9 @@ class FoodSceneDialog(QDialog):
             "吉他拨片规则（当前标准）：\n"
             "• 有效专注工资：每小时 6 个；每天最多计薪 8 小时，即每天最多 48 个。\n"
             "• 早鸟补贴：首次有效工作在 10:00 前开始并达到 20 分钟，送昂贵咖啡 ×1，不额外发拨片。\n"
-            "• 完成 Todo：任务绩效 +2 个；重要 Todo 另送小蛋糕 ×1（每日一次）。\n"
-            "• 成果 / 外快：登记时填写 1–100000 个，确认后入账；消费不会增加本月创收。\n"
-            "• 咖啡壶：售价 144 个 = 48 个/天 × 3 天正常学习；添置后每天最多免费补给普通咖啡 ×1。"
+            "• 完成 Todo：任务绩效 +2 个；小蛋糕想庆祝就使用，不绑定重要 Todo。\n"
+            "• 成果见证：手动邀请两名不同搭子确认后固定奖励 200 个，每月最多成功 3 次、发起 4 次。\n"
+            "• 咖啡壶：144 个拨片；买下后每天补给普通咖啡 ×1，每天最多一杯。"
         )
         currency_hint.setObjectName("rules")
         currency_hint.setWordWrap(True)
@@ -110,6 +121,7 @@ class FoodSceneDialog(QDialog):
         self._build_today_tab()
         self._build_inventory_tab()
         self._build_shop_tab()
+        self._build_achievement_tab()
         self._build_ledger_tab()
         root.addWidget(self.tabs, 1)
         self.refresh()
@@ -175,6 +187,17 @@ class FoodSceneDialog(QDialog):
         layout.addWidget(self.ledger_list, 1)
         self.tabs.addTab(page, "收支记录")
 
+    def _build_achievement_tab(self) -> None:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("把现实里做成的一件事记下来，手动邀请两位搭子帮你见证。两人同意后固定获得 200 吉他拨片。"))
+        button = QPushButton("＋ 登记成果")
+        button.clicked.connect(self._register_achievement)
+        layout.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.achievement_list = QListWidget(page)
+        layout.addWidget(self.achievement_list, 1)
+        self.tabs.addTab(page, "成果见证")
+
     def _todo_box(self, *, completed: bool = False) -> QComboBox:
         box = QComboBox()
         if not completed:
@@ -190,10 +213,7 @@ class FoodSceneDialog(QDialog):
     def _source_text(self, key: str) -> str:
         status = self.ledger.daily_supply_status().get(key) or {}
         if key == "coffee" and status.get("coffee_pot_enabled"):
-            text = (
-                "当天第一次正式开工后免费 1 杯；"
-                + str(status.get("coffee_pot_rule") or "咖啡壶每天最多补给 1 杯普通咖啡")
-            )
+            text = str(status.get("coffee_pot_rule") or "咖啡壶买下后每天补给普通咖啡 ×1")
             marks = []
             if status.get("claimed"):
                 marks.append("开工补给已领取")
@@ -218,17 +238,13 @@ class FoodSceneDialog(QDialog):
         layout.addWidget(source)
         controls = QHBoxLayout()
         selector: QComboBox | None = None
-        if key in {"coffee", "expensive_coffee"}:
-            selector = self._todo_box()
-            controls.addWidget(selector, 1)
-        elif key == "milk_tea":
+        if key == "milk_tea":
             selector = QComboBox()
             selector.addItem("休息 10 分钟", 10)
             selector.addItem("休息 15 分钟", 15)
             controls.addWidget(selector, 1)
-        elif key == "cake":
-            selector = self._todo_box(completed=True)
-            controls.addWidget(selector, 1)
+        else:
+            controls.addStretch(1)
         button = QPushButton(self._SCENE_BUTTONS[key])
         button.setEnabled(self.ledger.inventory_count(key) > 0)
         button.setToolTip("库存不足时请切换到“吉他拨片商店”购买。")
@@ -308,6 +324,21 @@ class FoodSceneDialog(QDialog):
         if not self.ledger_list.count():
             self.ledger_list.addItem("还没有收支记录。先认真开工，六毛会把每一笔记下来。")
 
+    def refresh_achievements(self) -> None:
+        if not hasattr(self, "achievement_list"):
+            return
+        self.achievement_list.clear()
+        pending = list(self.ledger.pending_achievements()) + list(self._remote_achievement_claims)
+        if pending:
+            for item in pending:
+                witnesses = len(item.get("witnesses") or []) if isinstance(item, dict) else 0
+                self.achievement_list.addItem(
+                    f"{item.get('name') or '未命名成果'}\n"
+                    f"等待搭子见证 · {witnesses}/2 · 通过后固定 +200 吉他拨片"
+                )
+        else:
+            self.achievement_list.addItem("还没有待见证成果。完成一件现实里的事情，就来这里记一笔。")
+
     def refresh(self) -> None:
         self.ledger.ensure_daily_household_supply()
         report = self.ledger.month_report()
@@ -317,6 +348,7 @@ class FoodSceneDialog(QDialog):
         self.refresh_today()
         self.refresh_inventory()
         self.refresh_shop()
+        self.refresh_achievements()
         self.refresh_ledger()
 
     def _purchase(self, item_key: str) -> None:
@@ -342,16 +374,71 @@ class FoodSceneDialog(QDialog):
         duration = 0
         todo_id = ""
         todo_title = ""
-        if key in {"coffee", "expensive_coffee"} and selector is not None:
-            todo_id = str(selector.currentData() or "")
-            todo_title = str(selector.currentText() or "") if todo_id else ""
-        elif key == "milk_tea":
+        if key == "milk_tea":
             duration = int(selector.currentData() if selector is not None else 10)
-        elif key == "cake" and selector is not None:
-            todo_id = str(selector.currentData() or "")
-            todo_title = str(selector.currentText() or "") if todo_id else ""
         self.scene_requested.emit(key, duration, todo_id, todo_title)
         self.hide()
+
+    def _register_achievement(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(self, "登记成果", "成果名称：")
+        if not ok or not name.strip():
+            return
+        note, ok = QInputDialog.getText(self, "登记成果", "备注（可选）：")
+        if not ok:
+            return
+        selected_ids: list[str] = []
+        selected_names: list[str] = []
+        if self.witness_choices is not None:
+            choices = [dict(item) for item in (self.witness_choices() or ()) if isinstance(item, dict)]
+            choices = [item for item in choices if str(item.get("user_id") or item.get("id") or "").strip()]
+            if len(choices) < 2:
+                QMessageBox.information(self, "暂时不能登记", "成果奖励需要 2 名已经建立搭子关系的好友共同见证。")
+                return
+            for slot in range(2):
+                labels = [str(item.get("nickname") or item.get("owner_nickname") or item.get("user_id"))[:60] for item in choices if str(item.get("user_id") or item.get("id")) not in selected_ids]
+                picked, ok = QInputDialog.getItem(
+                    self, "选择成果见证人", f"选择第 {slot + 1} 位搭子：", labels, 0, False
+                )
+                if not ok:
+                    return
+                chosen = next((item for item in choices if str(item.get("nickname") or item.get("owner_nickname") or item.get("user_id"))[:60] == picked and str(item.get("user_id") or item.get("id")) not in selected_ids), None)
+                if chosen is None:
+                    return
+                selected_ids.append(str(chosen.get("user_id") or chosen.get("id")))
+                selected_names.append(str(chosen.get("nickname") or chosen.get("owner_nickname") or "搭子")[:60])
+        try:
+            if self.achievement_submitter is not None:
+                pending = self.achievement_submitter(str(name).strip(), str(note).strip(), selected_ids)
+            else:
+                pending = self.ledger.register_achievement_income(
+                    "其他成果", name, note=note, witness_ids=selected_ids, witness_names=selected_names
+                )
+        except Exception as exc:
+            QMessageBox.warning(self, "暂时不能登记", str(exc))
+            return
+        if pending is None:
+            QMessageBox.information(self, "暂时不能登记", "同月同名成果不能重复提交。")
+            return
+        if self.achievement_submitter is not None and isinstance(pending, dict):
+            pending = dict(pending)
+            pending.update({
+                "name": str(name).strip(),
+                "kind": "其他成果",
+                "note": str(note).strip(),
+                "amount": 200,
+                "witness_slots": [
+                    {"id": value, "name": selected_names[index], "status": "pending"}
+                    for index, value in enumerate(selected_ids)
+                ],
+            })
+            self._remote_achievement_claims.append(pending)
+        self.refresh()
+        if isinstance(pending, dict) and pending.get("status") == "submission_limit":
+            QMessageBox.information(self, "本月申请已达上限", "本月最多发起 4 次成果见证申请，下个月再来。")
+            return
+        QMessageBox.information(self, "等待搭子见证", "已向两名指定搭子发送见证申请；两人同意后固定获得 200 吉他拨片，确认前不会入账。")
 
     def closeEvent(self, event) -> None:
         event.ignore()

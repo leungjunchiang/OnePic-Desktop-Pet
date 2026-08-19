@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from .time_memory import TimeMemory
+from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
 
 
 LOGGER = logging.getLogger(__name__)
@@ -441,8 +442,17 @@ class CompactTodoPanel(QWidget):
             explicit_priority = None
         if explicit_priority not in {1, 2, 3}:
             explicit_priority = None
+        raw_queue = getattr(task, "queue_position", None)
+        try:
+            queue_position = int(raw_queue) if raw_queue is not None else None
+        except (TypeError, ValueError):
+            queue_position = None
+        if queue_position not in set(range(1, 11)):
+            queue_position = None
         return (
             -int(current),
+            0 if queue_position is not None else 1,
+            queue_position if queue_position is not None else 99,
             0 if explicit_priority is not None else (1 if important else 2),
             explicit_priority if explicit_priority is not None else 99,
             max(0, day_value),
@@ -657,7 +667,11 @@ class CompactTodoPanel(QWidget):
         title, ok = QInputDialog.getText(self, "添加待办", "要做什么？")
         if not ok or not title.strip():
             return
-        task = self.memory.todos.add(title.strip())
+        try:
+            task = self.memory.todos.add(title.strip())
+        except ValueError as exc:
+            QMessageBox.information(self, "暂时不能添加", str(exc))
+            return
         self.memory.select_task(task.id)
         self.task_selected.emit(task.id)
         self.refresh()
@@ -735,29 +749,28 @@ class CompactTodoPanel(QWidget):
         time.setPlaceholderText("可选，例如 20:00")
         important = QCheckBox("置顶", dialog)
         important.setChecked(task.important)
-        priority = QComboBox(dialog)
-        priority.addItem("未设置（按时间）", None)
-        priority.addItem("高", 1)
-        priority.addItem("中", 2)
-        priority.addItem("低", 3)
-        priority_index = priority.findData(getattr(task, "priority", None))
-        priority.setCurrentIndex(priority_index if priority_index >= 0 else 0)
-        reminder = QCheckBox("提前提醒", dialog)
-        reminder.setChecked(bool(getattr(task, "reminder", False)))
+        reminder_mode = QComboBox(dialog)
+        reminder_mode.addItem("不提醒", REMINDER_NONE)
+        reminder_mode.addItem("六毛提醒（无声音）", REMINDER_PET)
+        reminder_mode.addItem("六毛闹钟（播放系统提示音）", REMINDER_ALARM)
+        mode = str(getattr(task, "reminder_mode", "") or (REMINDER_PET if getattr(task, "reminder", False) else REMINDER_NONE))
+        mode_index = reminder_mode.findData(mode)
+        reminder_mode.setCurrentIndex(mode_index if mode_index >= 0 else 0)
         reminder_minutes = QSpinBox(dialog)
         reminder_minutes.setRange(0, 24 * 60)
         reminder_minutes.setSuffix(" 分钟前")
         reminder_minutes.setValue(
             max(0, min(24 * 60, int(getattr(task, "reminder_minutes_before", 10) or 0)))
         )
-        reminder_minutes.setEnabled(reminder.isChecked())
-        reminder.toggled.connect(reminder_minutes.setEnabled)
+        reminder_minutes.setEnabled(reminder_mode.currentData() != REMINDER_NONE)
+        reminder_mode.currentIndexChanged.connect(
+            lambda: reminder_minutes.setEnabled(reminder_mode.currentData() != REMINDER_NONE)
+        )
         if not time_only:
             form.addRow("任务", title)
             form.addRow("时间", time)
             form.addRow("", important)
-            form.addRow("优先级", priority)
-            form.addRow("提醒", reminder)
+            form.addRow("提醒方式", reminder_mode)
             form.addRow("提前提醒", reminder_minutes)
         else:
             form.addRow("时间", time)
@@ -777,8 +790,8 @@ class CompactTodoPanel(QWidget):
             changes.update(
                 title=title.text().strip(),
                 important=important.isChecked(),
-                priority=priority.currentData(),
-                reminder=reminder.isChecked(),
+                reminder_mode=reminder_mode.currentData(),
+                reminder=reminder_mode.currentData() != REMINDER_NONE,
                 reminder_minutes_before=reminder_minutes.value(),
             )
         saved = self.memory.todos.update(task.source_id, **changes)

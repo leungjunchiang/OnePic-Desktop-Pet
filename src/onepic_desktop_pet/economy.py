@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .local_data import local_data_path, read_json, write_json_atomic
 
@@ -23,6 +23,11 @@ FOCUS_DAILY_CAP_SECONDS = 8 * 60 * 60
 FOCUS_COINS_PER_HOUR = 6
 EARLY_BIRD_START_HOUR = 10
 EARLY_BIRD_MIN_SECONDS = 20 * 60
+MAX_ACHIEVEMENT_AMOUNT = 100
+MAX_MONTHLY_ACHIEVEMENTS = 3
+MAX_MONTHLY_ACHIEVEMENT_SUBMISSIONS = 4
+REQUIRED_ACHIEVEMENT_WITNESSES = 2
+ACHIEVEMENT_REWARD = 200
 # A companion scene without an explicit duration (currently tea) must not
 # permanently block the next scene after an app restart.
 OPEN_FOOD_SCENE_LIFETIME_SECONDS = 60
@@ -54,7 +59,7 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
         "name": "小蛋糕", "price": 32, "group": "吃点喝点",
         "kind": "consumable", "state": "celebrating", "collection": "cake",
         "scene_type": "celebrate", "scene_minutes": 0,
-        "description": "给完成重要事情的今天留一点庆祝。",
+        "description": "想庆祝就吃；六毛会把这段开心记下来。",
     },
     "tea": {
         "name": "茶", "price": 10, "group": "吃点喝点",
@@ -70,7 +75,8 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "coffee_pot": {
         "name": "咖啡壶", "price": 144, "group": "添置家当",
         "kind": "household", "collection": "coffee_pot",
-        "description": "144 个拨片：按每小时 6 个、每天最多 8 小时计算，约等于 3 天正常学习；每天最多补给 1 杯普通咖啡。",
+        "description": "每天补给普通咖啡 ×1，每天最多一杯；每杯开启 30 分钟咖啡工作场景。",
+        "effect": {"daily_inventory": {"coffee": 1}, "daily_limit": 1},
     },
     "desk_lamp": {
         "name": "小台灯", "price": 35, "group": "添置家当",
@@ -122,8 +128,8 @@ CATEGORY_LABELS = {
     "early_bird": "早鸟补贴",
     "early_bird_bonus": "早鸟补贴",
     "performance": "任务绩效",
-    "windfall": "成果 / 外快",
-    "achievement_income": "成果 / 外快",
+    "windfall": "成果见证",
+    "achievement_income": "成果见证",
     "social_reward": "搭子互动奖励",
     "special_reward": "特殊奖励",
     "reward": "奖励",
@@ -204,6 +210,8 @@ class EconomyLedger:
             "active_states": {},
             "daily_life": {},
             "food_scene": None,
+            "household_grants": {},
+            "pending_achievements": [],
         }
         if self._persist:
             self._load()
@@ -280,6 +288,14 @@ class EconomyLedger:
         self._state["food_scene"] = (
             data.get("food_scene") if isinstance(data.get("food_scene"), dict) else None
         )
+        self._state["household_grants"] = (
+            data.get("household_grants")
+            if isinstance(data.get("household_grants"), dict) else {}
+        )
+        self._state["pending_achievements"] = [
+            dict(item) for item in (data.get("pending_achievements") or [])
+            if isinstance(item, dict)
+        ]
         self._state["balance"] = max(0, int(data.get("balance") or 0))
         self._refresh_titles()
 
@@ -359,6 +375,7 @@ class EconomyLedger:
         return event
 
     def _inventory_count(self, item_key: str) -> int:
+        item_key = self._canonical_item_key(item_key)
         raw = self._state.setdefault("inventory", {})
         aliases = INVENTORY_KEY_ALIASES.get(item_key, (item_key,))
         # Alias values can coexist after an upgrade. They describe one slot,
@@ -370,6 +387,7 @@ class EconomyLedger:
         )
 
     def _add_inventory(self, item_key: str, delta: int) -> None:
+        item_key = self._canonical_item_key(item_key)
         raw = self._state.setdefault("inventory", {})
         aliases = INVENTORY_KEY_ALIASES.get(item_key, (item_key,))
         current = self._inventory_count(item_key)
@@ -382,6 +400,16 @@ class EconomyLedger:
 
     def inventory_count(self, item_key: str) -> int:
         return self._inventory_count(str(item_key))
+
+    @staticmethod
+    def _canonical_item_key(item_key: str) -> str:
+        candidate = str(item_key or "").strip()
+        if candidate in ITEM_CATALOG:
+            return candidate
+        for canonical, aliases in INVENTORY_KEY_ALIASES.items():
+            if candidate in aliases:
+                return canonical
+        return candidate
 
     def has_household(self, item_key: str) -> bool:
         return str(item_key) in self.owned_households
@@ -413,30 +441,38 @@ class EconomyLedger:
 
     def _grant_household_daily_supply(
         self,
-        daily: dict[str, Any],
         day: str,
         events: list[WalletEvent] | None = None,
     ) -> bool:
-        """Grant one limited daily household supply without creating a coin faucet."""
+        """Grant one coffee-pot coffee per day, without changing real income."""
         if not self.has_household("coffee_pot"):
             return False
+        daily = self._state.setdefault("daily_focus", {}).setdefault(day, {})
+        supplies = daily.setdefault("supplies", {})
         household_supplies = daily.setdefault("household_supplies", {})
-        source_key = f"household:coffee_pot:{day}"
+        source_key = f"household:coffee_pot:daily:{day}"
         if household_supplies.get("coffee_pot") or self._has_source(source_key):
             household_supplies["coffee_pot"] = True
             return False
+        # The ordinary first-work coffee and the coffee-pot coffee are one
+        # daily coffee allowance, not two simultaneous free coffees.
+        if supplies.get("coffee"):
+            household_supplies["coffee_pot"] = True
+            return False
         self._add_inventory("coffee", 1)
+        supplies["coffee"] = True
         household_supplies["coffee_pot"] = True
         event = self._append(
             "supply_reward",
             0,
-            "咖啡壶每日补给：普通咖啡",
+            "咖啡壶每日补给：普通咖啡 ×1",
             source_key,
             day,
             source="household_supply",
             metadata={
                 "item_key": "coffee",
                 "household": "coffee_pot",
+                "grant_quantity": 1,
                 "daily_limit": 1,
             },
         )
@@ -445,12 +481,9 @@ class EconomyLedger:
         return True
 
     def ensure_daily_household_supply(self, day: str | None = None) -> bool:
-        """Materialize today's coffee-pot supply at most once per local calendar day."""
+        """Ensure today's coffee-pot allowance exists, at most once."""
         target = str(day or self._now().date().isoformat())[:10]
-        daily = self._state.setdefault("daily_focus", {}).setdefault(target, {})
-        return bool(
-            self._atomic(lambda: self._grant_household_daily_supply(daily, target))
-        )
+        return bool(self._atomic(lambda: self._grant_household_daily_supply(target)))
 
     def record_focus(self, seconds: int, *, started_at: datetime | None = None) -> dict[str, Any]:
         """把真实专注片段换成工资和日常补给，不篡改真实工作时间。"""
@@ -482,7 +515,7 @@ class EconomyLedger:
             added_coins = max(0, total_coins - old_coins)
             daily["focus_coins"] = old_coins + added_coins
             events: list[WalletEvent] = []
-            self._grant_household_daily_supply(daily, day, events)
+            self._grant_household_daily_supply(day, events)
 
             if added_coins:
                 events.append(self._append(
@@ -561,15 +594,18 @@ class EconomyLedger:
             coffee_status.update(
                 {
                     "coffee_pot_enabled": True,
-                    "coffee_pot_claimed": bool(household_supplies.get("coffee_pot")),
-                    "coffee_pot_rule": "咖啡壶每天最多再补给 1 杯普通咖啡",
+                    "coffee_pot_claimed": bool(
+                        ((daily.get("household_supplies") or {}).get("coffee_pot"))
+                        or self._has_source(f"household:coffee_pot:daily:{target}")
+                    ),
+                    "coffee_pot_rule": "每天补给普通咖啡 ×1，每天最多一杯",
                 }
             )
         return {
             "coffee": coffee_status,
             "expensive_coffee": {"claimed": bool(daily.get("early_bird")), "rule": "首次有效工作从 10:00 前开始，并达到 20 分钟"},
             "milk_tea": {"claimed": bool(claimed.get("milk_tea")), "rule": "一次连续专注达到 40 分钟"},
-            "cake": {"claimed": bool(claimed.get("cake")), "rule": "完成一项标记为重要的 Todo"},
+            "cake": {"claimed": False, "rule": "想庆祝就使用；不需要完成特定 Todo"},
             "tea": {"claimed": bool(claimed.get("tea")), "rule": "当天累计专注达到 2 小时；好友敬茶另计"},
         }
 
@@ -599,19 +635,233 @@ class EconomyLedger:
 
         return self._atomic(apply)
 
+    def pending_achievements(self) -> tuple[dict[str, Any], ...]:
+        """Return submitted achievements that still need buddy witnesses."""
+
+        return tuple(copy.deepcopy(item) for item in self._state.get("pending_achievements", []) if isinstance(item, dict))
+
+    def monthly_achievement_count(self, month: str | None = None) -> int:
+        target = str(month or self._now().date().isoformat())[:7]
+        return sum(
+            1
+            for event in self.events
+            if event.occurred_on.startswith(target)
+            and event.category in {"windfall", "achievement_income"}
+            and bool(event.metadata.get("achievement_witnessed"))
+            and event.amount > 0
+        )
+
+    def monthly_achievement_submission_count(self, month: str | None = None) -> int:
+        target = str(month or self._now().date().isoformat())[:7]
+        return sum(
+            1
+            for item in self._state.get("pending_achievements", [])
+            if isinstance(item, dict)
+            and str(item.get("month") or "")[:7] == target
+            and str(item.get("status") or "") != "deleted"
+        )
+
     def register_achievement_income(
-        self, kind: str, name: str, amount: int, note: str = "",
-    ) -> WalletEvent | None:
+        self, kind: str, name: str, amount: int | None = None, note: str = "",
+        *, witness_ids: Iterable[str] = (), witness_names: Iterable[str] = (),
+    ) -> dict[str, Any] | None:
+        """Submit a result for buddy witnessing; reward is fixed at 200 picks.
+
+        ``witness_ids`` is optional for old local-only records. New cloud-backed
+        submissions pass exactly two selected buddy IDs and the server remains
+        authoritative for the actual reward settlement.
+        """
         clean_kind = str(kind).strip()[:30] or "其他成果"
         clean_name = str(name).strip()[:90]
+        # Keep the old positional argument for local-data compatibility, but
+        # no longer let the submitter choose an arbitrary reward.
+        clean_amount = ACHIEVEMENT_REWARD
         if not clean_name:
             return None
-        return self.record_income(
-            f"{clean_kind}：{clean_name}",
-            amount,
-            category="windfall",
-            metadata={"kind": clean_kind, "note": str(note).strip()[:160]},
-        )
+        month = self._now().date().isoformat()[:7]
+        normalized_ids: list[str] = []
+        for value in witness_ids or ():
+            clean_id = str(value or "").strip()[:120]
+            if clean_id and clean_id not in normalized_ids:
+                normalized_ids.append(clean_id)
+        normalized_ids = normalized_ids[:REQUIRED_ACHIEVEMENT_WITNESSES]
+        normalized_names = [str(value or "").strip()[:60] for value in (witness_names or ())]
+
+        def apply() -> dict[str, Any] | None:
+            entries = self._state.setdefault("pending_achievements", [])
+            if self.monthly_achievement_submission_count(month) >= MAX_MONTHLY_ACHIEVEMENT_SUBMISSIONS:
+                return {"status": "submission_limit", "month": month}
+            normalized = clean_name.casefold()
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("month") or "") != month:
+                    continue
+                if str(item.get("name") or "").casefold() == normalized and str(item.get("kind") or "") == clean_kind:
+                    if str(item.get("status") or "pending") in {"pending", "settled"}:
+                        return None
+            record = {
+                "id": uuid.uuid4().hex,
+                "kind": clean_kind,
+                "name": clean_name,
+                "amount": clean_amount,
+                "note": str(note).strip()[:160],
+                "month": month,
+                "status": "pending",
+                "required_witnesses": REQUIRED_ACHIEVEMENT_WITNESSES,
+                "witnesses": [],
+                "witness_slots": [
+                    {
+                        "id": witness_id,
+                        "name": normalized_names[index] if index < len(normalized_names) else "搭子",
+                        "status": "pending",
+                    }
+                    for index, witness_id in enumerate(normalized_ids)
+                ],
+                "replacement_round": 0,
+                "submitted_at": self._now().isoformat(),
+            }
+            entries.append(record)
+            return copy.deepcopy(record)
+
+        return self._atomic(apply)
+
+    def confirm_achievement(
+        self, achievement_id: str, witness_id: str, witness_name: str = "",
+    ) -> dict[str, Any] | None:
+        """Record one invited (or legacy open) buddy witness."""
+        return self.respond_achievement(achievement_id, witness_id, True, witness_name)
+
+    def reject_achievement(
+        self, achievement_id: str, witness_id: str, witness_name: str = "",
+    ) -> dict[str, Any] | None:
+        """Persist a witness rejection without silently treating it as pending."""
+        return self.respond_achievement(achievement_id, witness_id, False, witness_name)
+
+    def respond_achievement(
+        self, achievement_id: str, witness_id: str, accepted: bool,
+        witness_name: str = "",
+    ) -> dict[str, Any] | None:
+        """Apply one witness response and settle exactly once.
+
+        Records created before manual invitations are still accepted through the
+        legacy open-witness path so an upgrade never strands existing claims.
+        New records with ``witness_slots`` only accept the selected IDs.
+        """
+        achievement_id = str(achievement_id).strip()[:80]
+        witness_id = str(witness_id).strip()[:120]
+        if not achievement_id or not witness_id or witness_id.casefold() in {"self", "me", "owner"}:
+            return None
+
+        def apply() -> dict[str, Any] | None:
+            entries = self._state.setdefault("pending_achievements", [])
+            record = next((item for item in entries if str(item.get("id") or "") == achievement_id), None)
+            if not isinstance(record, dict) or str(record.get("status") or "pending") not in {"pending", "need_replacement"}:
+                return None
+            month = str(record.get("month") or self._now().date().isoformat()[:7])[:7]
+            if self.monthly_achievement_count(month) >= MAX_MONTHLY_ACHIEVEMENTS:
+                record["status"] = "monthly_limit"
+                return {"status": "monthly_limit", "achievement": copy.deepcopy(record)}
+            witnesses = record.setdefault("witnesses", [])
+            slots = [slot for slot in record.get("witness_slots", []) if isinstance(slot, dict)]
+            if slots:
+                slot = next((slot for slot in slots if str(slot.get("id") or "") == witness_id), None)
+                if slot is None:
+                    return {"status": "not_invited", "achievement": copy.deepcopy(record)}
+                if str(slot.get("status") or "pending") != "pending":
+                    return {"status": "already_responded", "achievement": copy.deepcopy(record)}
+                slot["status"] = "accepted" if accepted else "rejected"
+                slot["responded_at"] = self._now().isoformat()
+                if witness_name:
+                    slot["name"] = str(witness_name).strip()[:60]
+            elif not accepted:
+                record["last_rejection"] = {"id": witness_id, "name": str(witness_name).strip()[:60] or "搭子"}
+                record["status"] = "need_replacement"
+                return {"status": "rejected", "achievement": copy.deepcopy(record)}
+            if any(str(item.get("id") or "") == witness_id for item in witnesses if isinstance(item, dict)):
+                return {"status": "duplicate_witness", "achievement": copy.deepcopy(record)}
+            if not accepted:
+                if slots and sum(str(slot.get("status")) == "rejected" for slot in slots) >= len(slots):
+                    record["status"] = "need_replacement"
+                elif slots:
+                    record["status"] = "need_replacement"
+                return {"status": "rejected", "achievement": copy.deepcopy(record)}
+            witnesses.append({
+                "id": witness_id,
+                "name": str(witness_name).strip()[:60] or "搭子",
+                "confirmed_at": self._now().isoformat(),
+            })
+            result: dict[str, Any] = {
+                "status": "pending" if len(witnesses) < REQUIRED_ACHIEVEMENT_WITNESSES else "settled",
+                "witness_count": len(witnesses),
+                "achievement": copy.deepcopy(record),
+            }
+            if slots:
+                accepted_count = sum(str(slot.get("status")) == "accepted" for slot in slots)
+                if int(record.get("replacement_round") or 0) > 0:
+                    accepted_count += len(witnesses)
+            else:
+                accepted_count = len(witnesses)
+            if accepted_count >= REQUIRED_ACHIEVEMENT_WITNESSES:
+                source_key = f"achievement:witnessed:{achievement_id}"
+                event = self._append(
+                    "windfall",
+                    int(record.get("amount") or 0),
+                    f"{record.get('kind') or '成果'}：{record.get('name') or '未命名成果'}",
+                    source_key,
+                    self._now().date().isoformat(),
+                    source="achievement_witness",
+                    metadata={
+                        "achievement_id": achievement_id,
+                        "kind": str(record.get("kind") or "其他成果"),
+                        "note": str(record.get("note") or ""),
+                        "witness_ids": [str(item.get("id") or "") for item in witnesses if isinstance(item, dict)],
+                        "achievement_witnessed": True,
+                    },
+                )
+                record["status"] = "settled"
+                record["settled_at"] = self._now().isoformat()
+                record["settled_event_id"] = event.event_id
+                result["event"] = event.as_dict()
+                result["achievement"] = copy.deepcopy(record)
+            return result
+
+        return self._atomic(apply)
+
+    def replace_achievement_witnesses(
+        self, achievement_id: str, witness_ids: Iterable[str], witness_names: Iterable[str] = (),
+    ) -> dict[str, Any] | None:
+        """Use the single allowed replacement round for a local claim."""
+        clean_ids: list[str] = []
+        for value in witness_ids or ():
+            value = str(value or "").strip()[:120]
+            if value and value not in clean_ids:
+                clean_ids.append(value)
+        if not clean_ids or len(clean_ids) > REQUIRED_ACHIEVEMENT_WITNESSES:
+            return None
+        names = [str(value or "").strip()[:60] for value in (witness_names or ())]
+
+        def apply() -> dict[str, Any] | None:
+            record = next((item for item in self._state.setdefault("pending_achievements", [])
+                           if isinstance(item, dict) and str(item.get("id") or "") == str(achievement_id)), None)
+            if not isinstance(record, dict) or int(record.get("replacement_round") or 0) >= 1:
+                return None
+            accepted = {str(item.get("id") or "") for item in record.get("witnesses", []) if isinstance(item, dict)}
+            needed = max(0, REQUIRED_ACHIEVEMENT_WITNESSES - len(accepted))
+            if len(clean_ids) != needed or accepted.intersection(clean_ids):
+                return None
+            previous = {str(slot.get("id") or "") for slot in record.get("witness_slots", []) if isinstance(slot, dict)}
+            if previous.intersection(clean_ids):
+                return None
+            record["witness_slots"] = [
+                {"id": value, "name": names[index] if index < len(names) else "搭子", "status": "pending"}
+                for index, value in enumerate(clean_ids)
+            ]
+            record["replacement_round"] = 1
+            record["status"] = "pending"
+            return copy.deepcopy(record)
+
+        return self._atomic(apply)
 
     def record_performance(
         self, label: str, *, amount: int = 2, source_key: str = "",
@@ -622,31 +872,9 @@ class EconomyLedger:
         )
 
     def record_important_todo_completion(self, task_id: str, title: str) -> WalletEvent | None:
-        """Give one daily cake for a real important-Todo completion."""
-        task_id = str(task_id).strip()[:120]
-        title = str(title).strip()[:120] or "重要任务"
-        day = self._now().date().isoformat()
-        source_key = f"supply:cake:{day}:{task_id or title}"
-        if self._has_source(source_key):
-            return self._find_source(source_key)
-
-        def apply() -> WalletEvent:
-            daily = self._state.setdefault("daily_focus", {}).setdefault(day, {})
-            supplies = daily.setdefault("supplies", {})
-            if supplies.get("cake"):
-                return self._find_source(source_key) or self._append(
-                    "supply_reward", 0, "重要任务补给：小蛋糕", source_key, day,
-                    source="daily_supply", metadata={"item_key": "cake", "free": True},
-                )
-            self._add_inventory("cake", 1)
-            supplies["cake"] = True
-            return self._append(
-                "supply_reward", 0, f"重要任务补给：小蛋糕 · {title}", source_key, day,
-                source="daily_supply",
-                metadata={"item_key": "cake", "todo_id": task_id, "todo_title": title, "free": True},
-            )
-
-        return self._atomic(apply)
+        """Deprecated compatibility hook; cake is now a free-use food."""
+        del task_id, title
+        return None
     def spend(
         self,
         label: str,
@@ -704,6 +932,8 @@ class EconomyLedger:
             )
             if spec["kind"] == "household":
                 self._state.setdefault("owned_households", []).append(item_key)
+                if item_key == "coffee_pot":
+                    self._grant_household_daily_supply(self._now().date().isoformat())
             else:
                 self._add_inventory(item_key, 1)
             return event
@@ -751,7 +981,7 @@ class EconomyLedger:
         makes the result consistent for the warehouse, supply cards and remote
         food events.
         """
-        item_key = str(item_key).strip()
+        item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(item_key)
         if not spec or spec.get("kind") != "consumable":
             return "invalid_item"
@@ -794,7 +1024,7 @@ class EconomyLedger:
         buddy event can set consume_inventory=False: the receiver experiences
         the scene but cannot turn a gift into leaderboard income.
         """
-        item_key = str(item_key).strip()
+        item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(item_key)
         if not spec or spec.get("kind") != "consumable":
             return None
@@ -893,6 +1123,7 @@ class EconomyLedger:
         return self._atomic(apply)
 
     def use_item(self, item_key: str) -> dict[str, Any] | None:
+        item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(str(item_key))
         if not spec or spec["kind"] != "consumable":
             return None
@@ -1020,6 +1251,12 @@ class EconomyLedger:
             if category not in MANUAL_INCOME_CATEGORIES or amount <= 0:
                 return False
             events.remove(target)
+            achievement_id = str((target.get("metadata") or {}).get("achievement_id") or "")
+            if achievement_id:
+                for achievement in self._state.setdefault("pending_achievements", []):
+                    if isinstance(achievement, dict) and str(achievement.get("id") or "") == achievement_id:
+                        achievement["status"] = "deleted"
+                        break
             self._state["balance"] = max(0, self.balance - amount)
             return True
 

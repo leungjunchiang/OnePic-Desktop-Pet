@@ -305,8 +305,14 @@ class ProgramUpdateManager:
             asset_name=asset_name,
         )
 
-    def check_latest(self) -> ProgramUpdateCheckResult:
-        """Return current/latest versions and an optional verified asset plan."""
+    def check_latest(self, *, force: bool = False) -> ProgramUpdateCheckResult:
+        """Return current/latest versions and an optional verified asset plan.
+
+        Automatic checks may reuse the short-lived cache, but an explicit
+        user request must always ask GitHub again.  Otherwise an automatic
+        check made just before a new Release is published can hide that
+        Release from the manual menu for the full cache window.
+        """
 
         asset_name = _asset_name()
         LOGGER.info(
@@ -319,7 +325,7 @@ class ProgramUpdateManager:
             current = str(self.app_version).removeprefix("v")
             return ProgramUpdateCheckResult(current, current, None, status="no_release")
         current_version = str(self.app_version).removeprefix("v")
-        if self._cached_check is not None:
+        if not force and self._cached_check is not None:
             checked_at, cached = self._cached_check
             if self.cache_seconds > 0 and monotonic() - checked_at < self.cache_seconds:
                 LOGGER.info("[Update] returning cached release check result")
@@ -404,10 +410,10 @@ class ProgramUpdateManager:
         self._cached_check = (monotonic(), result)
         return result
 
-    def fetch_latest(self) -> ProgramRelease | None:
+    def fetch_latest(self, *, force: bool = False) -> ProgramRelease | None:
         """Backward-compatible helper returning only a newer release."""
 
-        return self.check_latest().release
+        return self.check_latest(force=force).release
 
     @staticmethod
     def _response_content_length(response: object) -> int:
@@ -512,4 +518,3 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
         return ProgramUpdateResult(release=release, installer_path=final_path)
-

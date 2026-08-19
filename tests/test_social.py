@@ -381,6 +381,23 @@ def test_economy_migration_is_rls_scoped_and_friend_opt_in():
     assert "lili_economy_leaderboard" in migration
 
 
+def test_latest_economy_rules_default_leaderboard_and_witnessed_achievements():
+    root = Path(__file__).resolve().parents[1]
+    leaderboard = (root / "supabase" / "migrations" / "20260819000200_lili_wealth_leaderboard_default_opt_in.sql").read_text(encoding="utf-8")
+    witness_base = (root / "supabase" / "migrations" / "20260819000300_lili_achievement_witnesses.sql").read_text(encoding="utf-8")
+    witness = (root / "supabase" / "migrations" / "20260819000500_lili_achievement_manual_witnesses.sql").read_text(encoding="utf-8")
+    assert "alter column wealth_leaderboard_enabled set default true" in leaderboard
+    assert "where not wealth_leaderboard_preference_set" in leaderboard
+    assert "period_income" in leaderboard
+    assert "create table if not exists public.lili_achievement_claims" in witness_base
+    assert "amount between 1 and 200" in witness
+    assert "lili_respond_achievement_witness" in witness
+    assert "lili_replace_achievement_witnesses" in witness
+    assert "p_witness_ids" in witness
+    assert "fixed_reward" in witness
+    assert "reward', 200" in witness
+
+
 def test_room_dashboard_exposes_today_and_cumulative_focus_metrics():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260816000100_lili_room_focus_today_total.sql").read_text(encoding="utf-8")

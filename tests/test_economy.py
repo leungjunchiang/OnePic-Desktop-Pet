@@ -120,37 +120,85 @@ def test_focus_grants_daily_supply_without_changing_income(tmp_path):
     assert ledger.daily_supply_status()["coffee"]["claimed"] is True
 
 
-def test_important_todo_grants_one_daily_cake(tmp_path):
+def test_important_todo_no_longer_grants_cake(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     first = ledger.record_important_todo_completion("todo-1", "论文机制")
     second = ledger.record_important_todo_completion("todo-1", "论文机制")
-    assert first is not None
-    assert second is not None
-    assert ledger.inventory_count("cake") == 1
+    assert first is None
+    assert second is None
+    assert ledger.inventory_count("cake") == 0
     assert ledger.monthly_income() == 0
 
-def test_coffee_pot_grants_one_limited_supply_per_day(tmp_path):
-    current = [_now()]
-    ledger = EconomyLedger(
-        tmp_path / "economy.json",
-        now_provider=lambda: current[0],
-    )
+def test_coffee_pot_grants_one_coffee_per_day(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     ledger.record_income("咖啡壶测试资金", 144, source_key="coffee-pot-test")
     assert ledger.purchase_item("coffee_pot") is not None
 
-    assert ledger.ensure_daily_household_supply() is True
+    assert ledger.ensure_daily_household_supply() is False
     assert ledger.inventory_count("coffee") == 1
     assert ledger.ensure_daily_household_supply() is False
     assert ledger.inventory_count("coffee") == 1
     assert ledger.daily_supply_status()["coffee"]["coffee_pot_claimed"] is True
 
-    # The existing first-work supply remains separate from the coffee-pot supply.
-    ledger.record_focus(60, started_at=current[0])
+    # The existing first-work allowance is the same daily coffee allowance.
+    ledger.record_focus(60, started_at=_now())
+    assert ledger.inventory_count("coffee") == 1
+
+    next_day = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
+    ledger._now = lambda: next_day
+    assert ledger.ensure_daily_household_supply() is True
     assert ledger.inventory_count("coffee") == 2
 
-    current[0] = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
-    assert ledger.ensure_daily_household_supply() is True
-    assert ledger.inventory_count("coffee") == 3
+
+def test_achievement_income_requires_two_distinct_witnesses_and_monthly_cap(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    submitted = ledger.register_achievement_income("论文 / 稿费", "论文录用", 80)
+    assert submitted is not None
+    assert submitted["status"] == "pending"
+    assert ledger.balance == 0
+    assert ledger.monthly_income() == 0
+
+    first = ledger.confirm_achievement(submitted["id"], "buddy-1", "小梁")
+    assert first is not None and first["status"] == "pending"
+    assert ledger.balance == 0
+    duplicate = ledger.confirm_achievement(submitted["id"], "buddy-1", "小梁")
+    assert duplicate is not None and duplicate["status"] == "duplicate_witness"
+
+    settled = ledger.confirm_achievement(submitted["id"], "buddy-2", "小苗")
+    assert settled is not None and settled["status"] == "settled"
+    assert settled["event"]["amount"] == 200
+    assert ledger.balance == 200
+    assert ledger.monthly_income() == 200
+
+    assert ledger.register_achievement_income("项目", "成果2", 1) is not None
+    assert ledger.register_achievement_income("项目", "成果3", 1) is not None
+    for item in ledger.pending_achievements():
+        ledger.confirm_achievement(item["id"], "buddy-a")
+        ledger.confirm_achievement(item["id"], "buddy-b")
+    assert ledger.monthly_achievement_count() == 3
+    blocked = ledger.register_achievement_income("项目", "成果5", 1)
+    assert blocked is not None
+    limited = ledger.confirm_achievement(blocked["id"], "buddy-c")
+    assert limited is not None and limited["status"] == "monthly_limit"
+
+
+def test_manual_witness_slots_reject_uninvited_and_allow_one_replacement(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    submitted = ledger.register_achievement_income(
+        "作品", "手动见证成果", note="说明",
+        witness_ids=["buddy-a", "buddy-b"], witness_names=["A", "B"],
+    )
+    assert submitted is not None
+    assert len(submitted["witness_slots"]) == 2
+    assert ledger.confirm_achievement(submitted["id"], "buddy-x") ["status"] == "not_invited"
+    assert ledger.reject_achievement(submitted["id"], "buddy-b")["status"] == "rejected"
+    assert ledger.confirm_achievement(submitted["id"], "buddy-a")["status"] == "pending"
+    replaced = ledger.replace_achievement_witnesses(submitted["id"], ["buddy-c"])
+    assert replaced is not None and replaced["replacement_round"] == 1
+    settled = ledger.confirm_achievement(submitted["id"], "buddy-c")
+    assert settled is not None and settled["status"] == "settled"
+    assert settled["event"]["amount"] == 200
+    assert ledger.replace_achievement_witnesses(submitted["id"], ["buddy-d"]) is None
 
 
 def test_legacy_food_inventory_aliases_can_be_used(tmp_path):

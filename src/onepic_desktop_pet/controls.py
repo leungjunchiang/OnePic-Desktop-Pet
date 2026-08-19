@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from .work_timer import format_elapsed_clock
@@ -236,7 +238,21 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
         painter.drawLine(38, 40, 54, 40)
         painter.drawLine(22, 53, 28, 59)
         painter.drawLine(28, 59, 39, 48)
-    else:  # settings
+    elif kind == "food":
+        # Small tray + cup: the same red/yellow/blue line language as the
+        # other shortcut icons, without turning the shortcut into a menu of
+        # every food item.
+        painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QBrush(QColor("#d9eef1")))
+        painter.drawRoundedRect(10, 39, 52, 13, 6, 6)
+        painter.drawArc(18, 39, 36, 16, 0, 180 * 16)
+        painter.setBrush(QBrush(yellow)); painter.setPen(QPen(blue, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawRoundedRect(24, 15, 24, 24, 6, 6)
+        painter.drawArc(44, 20, 16, 14, -90 * 16, 180 * 16)
+        painter.setPen(QPen(red, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(31, 6, 10, 13, 0, 180 * 16)
+        painter.setBrush(QBrush(red)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(51, 8, 11, 11)
+    else:  # settings compatibility icon
         painter.setPen(QPen(blue, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         for angle in range(0, 360, 45):
             painter.save(); painter.translate(36, 36); painter.rotate(angle); painter.drawLine(0, -23, 0, -30); painter.restore()
@@ -256,6 +272,8 @@ class QuickControlPanel(QWidget):
     social_requested = Signal()
     music_requested = Signal()
     music_control_requested = Signal(str)
+    food_requested = Signal(str)
+    supply_requested = Signal()
     settings_requested = Signal()
     size_requested = Signal()
     rename_requested = Signal()
@@ -306,16 +324,16 @@ class QuickControlPanel(QWidget):
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
-        self.settings_button = self._button("settings", "设置", None)
+        self.food_button = self._button("food", "喂食", None)
         self.music_button.clicked.connect(self._show_music_menu)
-        self.settings_button.clicked.connect(self._show_settings_menu)
+        self.food_button.clicked.connect(self._show_food_menu)
         self._quick_buttons = (
             self.chat_button,
             self.work_button,
             self.todo_button,
             self.social_button,
             self.music_button,
-            self.settings_button,
+            self.food_button,
         )
         for button in self._quick_buttons:
             layout.addWidget(button)
@@ -368,7 +386,10 @@ class QuickControlPanel(QWidget):
                 y = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7)).y()
         self.hover_hint.move(x, y)
         self.hover_hint.show()
-        self.hover_hint.raise_()
+        # A macOS order change for a no-focus hint can still make Lili
+        # frontmost. It is already shown without activation.
+        if sys.platform != "darwin":
+            self.hover_hint.raise_()
 
     def _hide_hint(self) -> None:
         """Hide the hover label when the pointer leaves a shortcut."""
@@ -412,11 +433,7 @@ class QuickControlPanel(QWidget):
         for label, signal in (
             ("调整大小", self.size_requested),
             ("主人称呼", self.rename_requested),
-            ("AI 与陪伴", self.settings_requested),
-            ("提醒与报时", self.settings_requested),
-            ("音乐设置", self.settings_requested),
-            ("自习室设置", self.settings_requested),
-            ("其他设置", self.settings_requested),
+            ("设置中心…", self.settings_requested),
         ):
             action = menu.addAction(label)
             action.triggered.connect(lambda _checked=False, chosen=signal: self._choose(chosen))
@@ -428,7 +445,34 @@ class QuickControlPanel(QWidget):
         program.triggered.connect(lambda _checked=False: self._choose(self.program_update_requested))
         version = updates.addAction("当前版本信息")
         version.setEnabled(False)
-        menu.exec(self.settings_button.mapToGlobal(self.settings_button.rect().bottomLeft()))
+        menu.exec(self.food_button.mapToGlobal(self.food_button.rect().bottomLeft()))
+
+    def set_food_inventory(self, inventory: dict[str, int]) -> None:
+        """Refresh the food pocket snapshot used by the next quick click."""
+
+        self._food_inventory = {str(key): max(0, int(value or 0)) for key, value in (inventory or {}).items()}
+
+    def _show_food_menu(self) -> None:
+        """Show a lightweight food pocket; full supply management stays elsewhere."""
+
+        menu = QMenu(self)
+        labels = (
+            ("coffee", "☕ 普通咖啡", "喝了继续干 30 分钟"),
+            ("expensive_coffee", "☕ 昂贵咖啡", "喝了认真干 60 分钟"),
+            ("milk_tea", "🧋 奶茶", "想歇会儿就喝"),
+            ("cake", "🍰 小蛋糕", "想庆祝就吃"),
+            ("tea", "🍵 茶", "坐下来待一会儿"),
+        )
+        for key, label, tip in labels:
+            count = int(getattr(self, "_food_inventory", {}).get(key, 0))
+            action = menu.addAction(f"{label} × {count}")
+            action.setToolTip(tip)
+            action.setEnabled(count > 0)
+            action.triggered.connect(lambda _checked=False, item_key=key: self._choose(self.food_requested, item_key))
+        menu.addSeparator()
+        supply = menu.addAction("去六毛补给站…")
+        supply.triggered.connect(lambda _checked=False: self._choose(self.supply_requested))
+        menu.exec(self.food_button.mapToGlobal(self.food_button.rect().bottomLeft()))
 
     def set_pet_name(self, pet_name: str) -> None:
         """昵称保存后同步快捷口袋标题。"""

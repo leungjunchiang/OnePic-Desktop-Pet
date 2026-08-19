@@ -346,3 +346,49 @@ def test_release_check_is_cached_to_avoid_repeated_api_requests(monkeypatch) -> 
     assert first == second
     assert calls == 1
 
+
+def test_forced_release_check_bypasses_cached_result(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-Windows-x64-Setup.exe")
+    calls = 0
+    payloads = [
+        {
+            "tag_name": "v0.23.7",
+            "draft": False,
+            "prerelease": False,
+            "assets": [],
+        },
+        {
+            "tag_name": "v0.23.8",
+            "draft": False,
+            "prerelease": False,
+            "assets": [{
+                "name": "Lili-Windows-x64-Setup.exe",
+                "browser_download_url": "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/download/v0.23.8/Lili-Windows-x64-Setup.exe",
+                "size": 1,
+            }],
+        },
+    ]
+
+    def opener(request, timeout=0):
+        nonlocal calls
+        payload = payloads[min(calls, len(payloads) - 1)]
+        calls += 1
+        return Response(json.dumps(payload).encode("utf-8"))
+
+    manager = ProgramUpdateManager(app_version="0.23.7", opener=opener, cache_seconds=300)
+    cached = manager.check_latest()
+    refreshed = manager.check_latest(force=True)
+
+    assert cached.latest_version == "0.23.7"
+    assert refreshed.latest_version == "0.23.8"
+    assert calls == 2
+
+
+def test_desktop_pet_application_is_a_qt_object_for_worker_callbacks() -> None:
+    from PySide6.QtCore import QObject
+
+    from onepic_desktop_pet.app import DesktopPetApplication
+
+    assert issubclass(DesktopPetApplication, QObject)

@@ -93,6 +93,7 @@ except ImportError:
     QAudioOutput = QMediaPlayer = None
 
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
+from .alarm_ui import AlarmCard, AlarmCenterDialog
 from .accessories import (
     OUTFITS,
     SPECIAL_LIMITED_ACTIVITY_SPRITES,
@@ -333,6 +334,8 @@ class PetWindow(QWidget):
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
         self._food_scene_dialog: FoodSceneDialog | None = None
+        self._alarm_center_dialog: AlarmCenterDialog | None = None
+        self._alarm_card: AlarmCard | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -375,6 +378,11 @@ class PetWindow(QWidget):
         self._room_quick_status_expires_at: datetime | None = None
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
+        # Native macOS panel configuration is cached per Qt widget/native
+        # handle.  Speech bubbles and quick controls are separate top-level
+        # windows, so they need the same non-activating guard as the pet, but
+        # repeatedly re-applying it would recreate the original focus bug.
+        self._macos_native_window_configs: dict[int, tuple[int, bool]] = {}
         self._pixmaps = self._load_pixmaps()
         self._selfie_photo = self._load_selfie_photo()
         self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
@@ -526,7 +534,8 @@ class PetWindow(QWidget):
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
-        self.quick_panel.settings_requested.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        self.quick_panel.food_requested.connect(self._quick_food_action)
+        self.quick_panel.supply_requested.connect(self.show_food_scene_dialog)
         self.quick_panel.size_requested.connect(self.open_size_control)
         self.quick_panel.rename_requested.connect(self.rename_pet)
         self.quick_panel.content_update_requested.connect(
@@ -633,7 +642,15 @@ class PetWindow(QWidget):
         self.topmost_timer = QTimer(self)
         self.topmost_timer.setInterval(4000)
         self.topmost_timer.timeout.connect(self._ensure_on_top)
-        self.topmost_timer.start()
+        # On macOS, repeatedly touching an NSWindow's level/collection
+        # behavior can cause AppKit to reconsider the owning application as
+        # the active app.  That is especially disruptive for a desktop pet:
+        # the user can click Word or a browser, only for Lili to take the
+        # application focus back a few seconds later.  The native behavior is
+        # applied once after show (and again only when the window flags are
+        # deliberately changed); there is no reason to poll it on macOS.
+        if sys.platform != "darwin":
+            self.topmost_timer.start()
 
         self._last_social_heartbeat_at = 0.0
         self._social_heartbeat_due = True
@@ -1101,11 +1118,41 @@ class PetWindow(QWidget):
         # 其他平台由 WindowStaysOnTopHint 负责。这里不能调用 raise_()，
         # 否则 macOS/部分 Linux 桌面会在用户打字时切换当前应用。
 
-    def _apply_macos_window_behavior(self) -> None:
-        """以 NSWindow 浮动层级跨空间显示；保留人物窗口鼠标互动且不激活。"""
+    @staticmethod
+    def _raise_accessory(widget: QWidget) -> None:
+        """Raise a pet accessory only where it is known to be non-activating.
+
+        On macOS, an order change for a no-focus accessory can still make the
+        owning application frontmost.  The native panel is ordered by its
+        level when shown, so animation and refresh paths must not call
+        ``raise_`` there.
+        """
+
+        if sys.platform != "darwin":
+            widget.raise_()
+
+    def _apply_macos_window_behavior(
+        self,
+        widget: QWidget | None = None,
+        *,
+        always_on_top: bool | None = None,
+    ) -> None:
+        """以非激活的 NSPanel 浮动层级显示桌宠。
+
+        ``WindowDoesNotAcceptFocus`` 是 Qt 层面的保证，但在 macOS 上
+        仍需要把 Qt 创建的原生 NSWindow/NSPanel 标记为
+        ``NSNonactivatingPanelMask``。否则窗口虽然没有键盘焦点，AppKit
+        仍可能在重新设置浮动层级时把 Lili 重新变成前台应用。
+        """
 
         if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
             return
+        target = widget or self
+        topmost = (
+            bool(self.settings.always_on_top)
+            if always_on_top is None
+            else bool(always_on_top)
+        )
         try:
             import ctypes
 
@@ -1114,26 +1161,65 @@ class PetWindow(QWidget):
             objc.sel_registerName.argtypes = [ctypes.c_char_p]
             objc.objc_msgSend.restype = ctypes.c_void_p
             objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            view = ctypes.c_void_p(int(self.winId()))
+            native_handle = int(target.winId())
+            cache_key = id(target)
+            cache_value = (native_handle, topmost)
+            if self._macos_native_window_configs.get(cache_key) == cache_value:
+                return
+            view = ctypes.c_void_p(native_handle)
             window = objc.objc_msgSend(view, objc.sel_registerName(b"window"))
             if not window:
                 return
             send_integer = objc.objc_msgSend
             send_integer.restype = None
             send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_longlong]
-            level = 3 if self.settings.always_on_top else 0  # NSFloatingWindowLevel / normal
+            level = 3 if topmost else 0  # NSFloatingWindowLevel / normal
             send_integer(window, objc.sel_registerName(b"setLevel:"), level)
-            behavior = (1 << 0) | (1 << 8) if self.settings.always_on_top else 0
+            behavior = (1 << 0) | (1 << 8) if topmost else 0
             send_integer(
                 window,
                 objc.sel_registerName(b"setCollectionBehavior:"),
                 behavior,
+            )
+            # Qt::Tool normally creates an NSPanel on macOS.  Explicitly add
+            # the non-activating panel style so clicking another application
+            # cannot be undone by AppKit's panel activation rules.  This is a
+            # style-mask operation only; it never calls activate/raise/front.
+            send_integer.restype = ctypes.c_ulonglong
+            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            style_mask = int(
+                send_integer(window, objc.sel_registerName(b"styleMask"))
+                or 0
+            )
+            send_integer.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_ulonglong,
+            ]
+            send_integer(
+                window,
+                objc.sel_registerName(b"setStyleMask:"),
+                style_mask | (1 << 7),  # NSWindowStyleMaskNonactivatingPanel
             )
             send_bool = objc.objc_msgSend
             send_bool.restype = None
             send_bool.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
             send_bool(window, objc.sel_registerName(b"setHidesOnDeactivate:"), False)
             send_bool(window, objc.sel_registerName(b"setIgnoresMouseEvents:"), False)
+            # NSPanel exposes this selector.  Guard it so the fallback still
+            # works if a future Qt build gives us a plain NSWindow instead.
+            send_pointer = objc.objc_msgSend
+            send_pointer.restype = ctypes.c_void_p
+            send_pointer.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            ]
+            selector = objc.sel_registerName(b"setBecomesKeyOnlyIfNeeded:")
+            responds = objc.sel_registerName(b"respondsToSelector:")
+            if send_pointer(window, responds, selector):
+                send_bool(window, selector, True)
+            self._macos_native_window_configs[cache_key] = cache_value
         except (AttributeError, OSError, TypeError, ValueError):
             return
 
@@ -1159,6 +1245,18 @@ class PetWindow(QWidget):
             self._compact_todo_panel.set_companion_topmost(enabled)
             if self._compact_todo_panel.isVisible():
                 self._position_compact_todos()
+                if sys.platform == "darwin":
+                    self._apply_macos_window_behavior(
+                        self._compact_todo_panel,
+                        always_on_top=enabled or bool(
+                            getattr(self.settings, "today_note_always_on_top", False)
+                        ),
+                    )
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(
+                self.work_duration_bubble,
+                always_on_top=enabled,
+            )
         if was_visible:
             self.show()
             target_position = QPoint(position)
@@ -1221,6 +1319,10 @@ class PetWindow(QWidget):
             self._time_memory_window.close()
         if self._todo_center_window is not None:
             self._todo_center_window.close()
+        if self._alarm_center_dialog is not None:
+            self._alarm_center_dialog.close()
+        if self._alarm_card is not None:
+            self._close_alarm_card()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
@@ -1750,6 +1852,8 @@ class PetWindow(QWidget):
         self.speech_bubble.setText(text)
         self.speech_bubble.adjustSize()
         self.speech_bubble.show()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.speech_bubble)
         self._position_speech_bubble()
         self.speech_timer.start(max(1200, duration_ms))
 
@@ -1803,7 +1907,12 @@ class PetWindow(QWidget):
         """Open/reuse the taskbar-capable 六毛补给站 window."""
         self._record_user_interaction()
         if self._food_scene_dialog is None:
-            self._food_scene_dialog = FoodSceneDialog(self.economy, self._todo_choices_for_food())
+            self._food_scene_dialog = FoodSceneDialog(
+                self.economy,
+                self._todo_choices_for_food(),
+                witness_choices=self._achievement_witness_choices,
+                achievement_submitter=self._submit_achievement_witness,
+            )
             self._food_scene_dialog.scene_requested.connect(self._start_food_scene)
         else:
             self._food_scene_dialog.todo_choices = self._todo_choices_for_food()
@@ -1813,6 +1922,42 @@ class PetWindow(QWidget):
         self._food_scene_dialog.show()
         self._food_scene_dialog.raise_()
         self._food_scene_dialog.activateWindow()
+
+    def _achievement_witness_choices(self) -> list[dict[str, object]]:
+        """Return the currently synced accepted buddies for manual selection."""
+
+        dialog = self._social_dialog
+        data = (getattr(dialog, "data", {}) or {}) if dialog is not None else {}
+        if not data and getattr(self.social_client, "signed_in", False):
+            try:
+                data = self.social_client.dashboard(allow_cache=True) or {}
+            except Exception:
+                data = {}
+        return [
+            dict(item) for item in (data.get("buddies") or [])
+            if isinstance(item, dict) and not bool(item.get("is_self"))
+        ]
+
+    def _submit_achievement_witness(self, name: str, note: str, witness_ids: list[str]) -> dict[str, object]:
+        """Submit a manually addressed achievement claim to the shared RPC."""
+
+        if not getattr(self.social_client, "signed_in", False):
+            raise ValueError("请先登录搭子自习室，再邀请搭子见证成果。")
+        if len({str(value).strip() for value in witness_ids if str(value).strip()}) != 2:
+            raise ValueError("请选择两名不同的搭子。")
+        result = self.social_client.rpc(
+            "lili_submit_achievement",
+            {
+                "p_kind": "其他成果",
+                "p_name": str(name).strip()[:90],
+                "p_amount": 200,
+                "p_note": str(note).strip()[:160],
+                "p_witness_ids": [str(value).strip() for value in witness_ids],
+            },
+        )
+        if isinstance(result, dict):
+            return result
+        return {"status": "pending"}
 
     def _start_food_scene(
         self,
@@ -1857,9 +2002,6 @@ class PetWindow(QWidget):
             return False
         if start_error == "invalid_item":
             self.show_speech("这个补给暂时不能使用。", 4200)
-            return False
-        if status == "focus" and item_key in {"coffee", "expensive_coffee"}:
-            self.show_speech("先把这一局收好，再开下一杯咖啡。", 4200)
             return False
         resume_after_rest = item_key == "milk_tea" and status == "focus"
         if resume_after_rest:
@@ -2202,18 +2344,19 @@ class PetWindow(QWidget):
             self.food_scene_timer.stop()
         return reply
 
-    def show_today_note(self) -> None:
-        """Open the configured surface: attached Todos or the standalone 便利贴."""
+    def show_today_note(self, *, passive: bool = False) -> None:
+        """Open the configured surface without stealing focus when passive."""
 
         if str(getattr(self.settings, "today_note_mode", "detailed")) == "compact":
             self.show_compact_todos()
         else:
-            self.show_sticky_note()
+            self.show_sticky_note(passive=passive)
 
-    def show_sticky_note(self) -> None:
+    def show_sticky_note(self, *, passive: bool = False) -> None:
         """Open the independent free-form 便利贴 window in detailed mode."""
 
-        self._record_user_interaction()
+        if not passive:
+            self._record_user_interaction()
         if self._compact_todo_panel is not None:
             self._restore_compact_todos_after_show = False
             self._compact_todo_panel.hide()
@@ -2236,6 +2379,14 @@ class PetWindow(QWidget):
             self._today_note_window.memory_requested.connect(self.show_time_memory)
         self._today_note_window.set_mode("detailed", persist=False)
         self._today_note_window.refresh()
+        self._today_note_window.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            bool(passive),
+        )
+        if passive:
+            self._today_note_window.show()
+            self._position_sticky_note()
+            return
         if self._today_note_window.isMinimized():
             self._today_note_window.showNormal()
         else:
@@ -2265,12 +2416,20 @@ class PetWindow(QWidget):
             )
         self._compact_todo_panel.refresh()
         self._compact_todo_panel.show()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(
+                self._compact_todo_panel,
+                always_on_top=bool(
+                    self.settings.always_on_top
+                    or getattr(self.settings, "today_note_always_on_top", False)
+                ),
+            )
         self._position_compact_todos()
         # The pet and the compact panel are separate native windows.  Raise
         # the panel after positioning so a transient pet repaint cannot cover
         # the label or the trailing menu button.  The panel itself never
         # accepts focus, so this does not steal keyboard input.
-        self._compact_todo_panel.raise_()
+        self._raise_accessory(self._compact_todo_panel)
 
     def _position_compact_todos(self) -> None:
         """Keep the Todo strip close to the pet, preferring its left side.
@@ -2354,7 +2513,7 @@ class PetWindow(QWidget):
         x = max(available.left(), min(x, available.right() - panel_width + 1))
         y = max(available.top(), min(y, available.bottom() - panel_height + 1))
         panel.move(x, y)
-        panel.raise_()
+        self._raise_accessory(panel)
         LOGGER.debug(
             "[TodoLayout] host=(x=%s,y=%s,w=%s,h=%s) panel=(x=%s,y=%s,w=%s,h=%s) "
             "available=(x=%s,y=%s,w=%s,h=%s) pet_bounds=(left=%s,top=%s,right=%s,bottom=%s)",
@@ -2557,6 +2716,28 @@ class PetWindow(QWidget):
         self._todo_center_window.raise_()
         self._todo_center_window.activateWindow()
 
+    def show_alarm_center(self) -> None:
+        """Open the local alarm editor without creating a second reminder system."""
+
+        self._record_user_interaction()
+        todos = list(self.time_memory.todos.items)
+        if self._alarm_center_dialog is None:
+            self._alarm_center_dialog = AlarmCenterDialog(
+                self.time_memory.alarms,
+                todos,
+                parent=None,
+                sound_library=self.time_memory.alarm_sounds,
+            )
+        else:
+            self._alarm_center_dialog.todos = todos
+            self._alarm_center_dialog.refresh()
+        if self._alarm_center_dialog.isMinimized():
+            self._alarm_center_dialog.showNormal()
+        else:
+            self._alarm_center_dialog.show()
+        self._alarm_center_dialog.raise_()
+        self._alarm_center_dialog.activateWindow()
+
     def show_time_memory(self) -> None:
         if self._time_memory_window is None:
             self._time_memory_window = TimeMemoryWindow(self.time_memory)
@@ -2652,6 +2833,7 @@ class PetWindow(QWidget):
     def _work_timer_tick(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
+        self._check_local_alarms()
         self._check_local_reminders()
         self.work_timer.checkpoint()
         snapshot = self.focus_session.refresh()
@@ -2697,6 +2879,69 @@ class PetWindow(QWidget):
             self.time_memory.reminders.mark_notified(reminder.id)
             self._set_temporary_activity("curious", 12_000)
             self.show_speech(f"提醒：{reminder.title}", 5600)
+
+    def _check_local_alarms(self) -> None:
+        """Present due alarms as a non-modal card, never by stealing focus."""
+
+        quiet = detect_quiet_mode()
+        deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
+        claimed = self.time_memory.alarms.claim_due(
+            allow_during_dnd=not (quiet.blocked or deep_food_scene),
+        )
+        if self._alarm_card is not None and self._alarm_card.isVisible():
+            return
+        candidates = claimed or self.time_memory.alarms.active()
+        if candidates:
+            self._show_alarm_card(candidates[0])
+
+    def _show_alarm_card(self, alarm) -> None:
+        """Show one normal alarm window; queued alarms remain persisted/local."""
+
+        if self._alarm_card is not None:
+            self._close_alarm_card()
+        self._alarm_card = AlarmCard(
+            alarm,
+            sound_library=self.time_memory.alarm_sounds,
+        )
+        self._alarm_card.start_requested.connect(self._start_alarm_work)
+        self._alarm_card.snooze_requested.connect(self._snooze_alarm)
+        self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
+        # Center only once.  After the user drags or minimizes the native
+        # window, accessory reflows must never move it back to the pet.
+        self._alarm_card.center_on_current_screen()
+        self._alarm_card.show()
+
+    def _close_alarm_card(self) -> None:
+        card = self._alarm_card
+        self._alarm_card = None
+        if card is not None:
+            card.close_from_app()
+            card.deleteLater()
+
+    def _start_alarm_work(self, alarm_id: str) -> None:
+        alarm = self.time_memory.alarms.get(alarm_id)
+        if alarm is None:
+            self._close_alarm_card()
+            return
+        self.time_memory.alarms.dismiss(alarm_id)
+        if alarm.linked_todo_id:
+            self.time_memory.select_task(alarm.linked_todo_id)
+        self._close_alarm_card()
+        self.start_work_timer()
+
+    def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
+        try:
+            self.time_memory.alarms.snooze(alarm_id, minutes)
+        except KeyError:
+            pass
+        self._close_alarm_card()
+
+    def _dismiss_alarm(self, alarm_id: str) -> None:
+        try:
+            self.time_memory.alarms.dismiss(alarm_id)
+        except KeyError:
+            pass
+        self._close_alarm_card()
 
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
@@ -3866,6 +4111,7 @@ class PetWindow(QWidget):
             return
         current = snapshot or self.focus_session.snapshot()
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
+        was_visible = self.work_duration_bubble.isVisible()
         self.work_duration_bubble.set_session(
             str(getattr(current, "status", "idle")),
             int(getattr(current, "session_seconds", 0) or 0),
@@ -3873,7 +4119,10 @@ class PetWindow(QWidget):
         )
         if self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
-            self.work_duration_bubble.raise_()
+        if not was_visible and self.work_duration_bubble.isVisible():
+            self._apply_macos_window_behavior(self.work_duration_bubble)
+        if self.work_duration_bubble.isVisible():
+            self._raise_accessory(self.work_duration_bubble)
 
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""
@@ -3882,8 +4131,15 @@ class PetWindow(QWidget):
             self.quick_panel.hide()
             return
         self._refresh_shortcut_state()
+        self.quick_panel.set_food_inventory({
+            key: self.economy.inventory_count(key)
+            for key in ("coffee", "expensive_coffee", "milk_tea", "cake", "tea")
+        })
         self._position_quick_panel()
-        self.quick_panel.show(); self.quick_panel.raise_()
+        self.quick_panel.show()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.quick_panel)
+        self._raise_accessory(self.quick_panel)
 
     def show_work_controls(self) -> None:
         """在六毛上方显示当前状态唯一有效的工作操作。"""
@@ -3902,7 +4158,10 @@ class PetWindow(QWidget):
             "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
         )
         self._position_work_controls()
-        self.work_controls.show(); self.work_controls.raise_()
+        self.work_controls.show()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.work_controls)
+        self._raise_accessory(self.work_controls)
 
     def _start_work_from_control(self) -> None:
         """Start from the IDLE right-click control, then collapse it."""
@@ -3923,6 +4182,20 @@ class PetWindow(QWidget):
             self.pause_work_timer()
         else:
             self.start_work_timer()
+
+    def _quick_food_action(self, item_key: str) -> None:
+        """Use one food directly from the lightweight shortcut pocket."""
+
+        item_key = str(item_key or "").strip()
+        if item_key not in {"coffee", "expensive_coffee", "milk_tea", "cake", "tea"}:
+            return
+        self._start_food_scene(
+            item_key,
+            10 if item_key == "milk_tea" else 0,
+            "",
+            "",
+            source="quick_food",
+        )
 
     def _refresh_shortcut_state(self) -> None:
         """Keep the quick panel's work label aligned with the shared session."""
@@ -3995,6 +4268,7 @@ class PetWindow(QWidget):
             "time_memory": lambda _checked=False: self.show_time_memory(),
             "show_work_time": lambda _checked=False: self.show_work_time(),
             "economy": lambda _checked=False: self.show_economy(),
+            "alarms": lambda _checked=False: self.show_alarm_center(),
             "show_growth": lambda _checked=False: self.show_daily_growth(),
             "show_report": lambda _checked=False: self.show_daily_report(),
             "open_album": lambda _checked=False: self.open_daily_album(),
@@ -4373,6 +4647,8 @@ class PetWindow(QWidget):
         y = self.y() + max(0, (self.height() - self.photo_bubble.height()) // 2)
         self.photo_bubble.move(x, y)
         self.photo_bubble.show()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.photo_bubble)
         self.photo_timer.start(3800)
 
     def _scaled_selfie_photo(self, ratio: float) -> QPixmap:

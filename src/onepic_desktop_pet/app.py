@@ -27,7 +27,7 @@ import os
 import logging
 import sys
 
-from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtCore import QProcess, Qt, QTimer, QObject
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -63,7 +63,7 @@ from .window import PetWindow
 LOGGER = logging.getLogger(__name__)
 
 
-class DesktopPetApplication:
+class DesktopPetApplication(QObject):
     """封装窗口、托盘与持久化状态的桌面宠物应用。"""
 
     def __init__(self, settings: PetSettings | None = None) -> None:
@@ -72,6 +72,11 @@ class DesktopPetApplication:
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
         self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        # Keep this controller in the GUI thread. Worker callbacks are
+        # connected to methods on this object; QObject affinity makes Qt queue
+        # those callbacks back to the main thread before they touch windows,
+        # message boxes, or speech bubbles.
+        super().__init__()
         self.qt_app.setApplicationName(APP_DISPLAY_NAME)
         self.qt_app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.qt_app.setQuitOnLastWindowClosed(False)
@@ -140,7 +145,12 @@ class DesktopPetApplication:
         """显示宠物但不夺走用户正在输入文字的窗口焦点。"""
 
         self.window.show()
-        self.window._ensure_on_top()
+        # PetWindow.showEvent schedules the one-time native macOS panel
+        # configuration.  Calling it synchronously as well can make AppKit
+        # re-apply the floating level during a user-initiated show and has
+        # been observed to reactivate Lili on some macOS/Qt combinations.
+        if sys.platform != "darwin":
+            self.window._ensure_on_top()
 
     def start(self, smoke_test_ms: int | None = None) -> int:
         """显示应用并进入事件循环；可选定时退出用于自动验证。"""
@@ -153,7 +163,10 @@ class DesktopPetApplication:
             paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
         ) or bool(getattr(self.settings, "today_note_autoshow", False))
         if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
-            QTimer.singleShot(300, self.window.show_today_note)
+            # A pending note may be shown at startup, but startup UI must
+            # never steal the user's current editor/browser focus.  Explicit
+            # user actions still open the normal interactive note window.
+            QTimer.singleShot(300, lambda: self.window.show_today_note(passive=True))
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         if not self._content_updates_disabled():
@@ -238,7 +251,19 @@ class DesktopPetApplication:
         if manual:
             self.window.show_speech("正在检查程序更新…", 2400)
         LOGGER.info("[Update] check_app_update started")
-        worker = ProgramUpdateCheckWorker(self.update_manager, self.qt_app)
+        try:
+            worker = ProgramUpdateCheckWorker(
+                self.update_manager,
+                self.qt_app,
+                force=bool(manual),
+            )
+        except Exception as exc:
+            # A constructor/runtime mismatch must not leave the UI stuck in
+            # CHECKING forever without an error or a retry path.
+            LOGGER.exception("[Update] failed to create program update worker")
+            self._program_update_check_worker = None
+            self._program_update_check_failed(str(exc))
+            return
         self._program_update_check_worker = worker
         self._program_update_manual = bool(manual)
         worker.completed.connect(self._program_update_checked)

@@ -17,6 +17,7 @@ from .daily_summary_service import DailySummaryService
 from .timeline_manager import TimelineManager
 from .todo_manager import TodoManager
 from .reminder_manager import ReminderManager
+from .alarm_manager import AlarmManager
 
 
 ACTION_NAMES = {
@@ -66,13 +67,14 @@ def extract_action(text: str) -> dict[str, Any] | None:
 
 
 class LocalActionExecutor:
-    def __init__(self, todos: TodoManager, countdowns: CountdownManager, anniversaries: AnniversaryManager, timeline: TimelineManager, summary: DailySummaryService, reminders: ReminderManager | None = None) -> None:
+    def __init__(self, todos: TodoManager, countdowns: CountdownManager, anniversaries: AnniversaryManager, timeline: TimelineManager, summary: DailySummaryService, reminders: ReminderManager | None = None, alarms: AlarmManager | None = None) -> None:
         self.todos = todos
         self.countdowns = countdowns
         self.anniversaries = anniversaries
         self.timeline = timeline
         self.summary = summary
         self.reminders = reminders
+        self.alarms = alarms
 
     def execute(self, value: dict[str, Any]) -> ActionResult | None:
         action = str(value.get("action") or "")
@@ -92,7 +94,7 @@ class LocalActionExecutor:
                 existing = self.todos.find_similar_pending(title, date)
                 changes = {
                     key: raw[key]
-                    for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "priority", "reminder_minutes_before", "source")
+                    for key in ("title", "date", "time", "important", "reminder", "reminder_mode", "due_at", "remind_at", "priority", "queue_position", "reminder_minutes_before", "alarm_sound_id", "alarm_volume", "alarm_snooze_minutes", "source")
                     if key in raw
                 }
                 if existing is not None and not bool(raw.get("force_new", False)):
@@ -106,6 +108,7 @@ class LocalActionExecutor:
                         date=date,
                         time=raw.get("time"),
                         reminder=bool(raw.get("reminder", bool(raw.get("remind_at") or raw.get("time")))),
+                        reminder_mode=raw.get("reminder_mode", "pet"),
                         important=bool(raw.get("important", False)),
                         due_at=raw.get("due_at"),
                         remind_at=raw.get("remind_at"),
@@ -141,7 +144,7 @@ class LocalActionExecutor:
                 return ActionResult(action, "没找到对应的待办，我没有改动任何东西。", {"saved": False}, False)
             changes = {
                 key: value[key]
-                for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "priority", "reminder_minutes_before", "source")
+                for key in ("title", "date", "time", "important", "reminder", "reminder_mode", "due_at", "remind_at", "priority", "queue_position", "reminder_minutes_before", "alarm_sound_id", "alarm_volume", "alarm_snooze_minutes", "source")
                 if key in value
             }
             if not changes:
@@ -161,6 +164,8 @@ class LocalActionExecutor:
                     self.reminders.complete_for_source(item.id)
                 else:
                     self.reminders.remove_for_source(item.id)
+            if self.alarms is not None:
+                self.alarms.delete(f"todo:{item.id}")
             return ActionResult(action, "处理好了。" if ok else "这项没改动。", {"saved": bool(ok), "id": item.id}, bool(ok))
         if action == "query_today":
             return ActionResult(action, "", self.summary.today())
@@ -214,10 +219,24 @@ class LocalActionExecutor:
         """Keep one real local reminder aligned with the Todo record."""
 
         if self.reminders is None:
+            if self.alarms is not None:
+                self.alarms.sync_todo(task, reminder_mode=getattr(task, "reminder_mode", "none"))
             return
-        if not task.reminder:
+        mode = str(getattr(task, "reminder_mode", "") or ("pet" if task.reminder else "none"))
+        if mode == "alarm":
             self.reminders.remove_for_source(task.id)
+            if self.alarms is not None:
+                self.alarms.sync_todo(task, reminder_mode=mode)
+            return
+        if mode == "none" or not task.reminder:
+            self.reminders.remove_for_source(task.id)
+            if self.alarms is not None:
+                self.alarms.sync_todo(task, reminder_mode="none")
             return
         due = task.remind_at or task.due_at
         if due:
             self.reminders.upsert_for_source(task.title, due, source_id=task.id)
+            if self.alarms is not None:
+                self.alarms.sync_todo(task, reminder_mode="none")
+        elif self.alarms is not None:
+            self.alarms.sync_todo(task, reminder_mode="none")

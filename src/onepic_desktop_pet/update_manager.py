@@ -34,8 +34,8 @@ class UpdateManager:
     def check_content_update(self) -> ContentUpdateResult | None:
         return self.content.check_and_apply()
 
-    def check_app_update(self) -> ProgramUpdateCheckResult:
-        return self.program.check_latest()
+    def check_app_update(self, *, force: bool = False) -> ProgramUpdateCheckResult:
+        return self.program.check_latest(force=force)
 
     def download_app_update(
         self,

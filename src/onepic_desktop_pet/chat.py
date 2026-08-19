@@ -863,31 +863,10 @@ class AISettingsDialog(QDialog):
         self.stand.setChecked(settings.stand_reminder_enabled)
         self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
         form.addRow(self.stand, self.stand_minutes)
-        self.auto_pause_idle = QCheckBox("键鼠无操作时自动暂停专注计时")
-        self.auto_pause_idle.setChecked(settings.auto_pause_on_idle)
-        self.idle_pause_mode = QComboBox()
-        for label, minutes in (("5 分钟", 5), ("10 分钟（推荐）", 10), ("15 分钟", 15), ("20 分钟", 20), ("自定义", 0)):
-            self.idle_pause_mode.addItem(label, minutes)
-        configured_minutes = max(5, min(120, round(settings.idle_pause_seconds / 60)))
-        preset_index = self.idle_pause_mode.findData(configured_minutes)
-        if preset_index < 0:
-            preset_index = self.idle_pause_mode.findData(0)
-        self.idle_pause_mode.setCurrentIndex(max(0, preset_index))
-        self.idle_pause_minutes = QSpinBox()
-        self.idle_pause_minutes.setRange(5, 120)
-        self.idle_pause_minutes.setSuffix(" 分钟")
-        self.idle_pause_minutes.setValue(configured_minutes)
-        self.idle_pause_minutes.setToolTip("少于这个时间的无操作会被忽略；超过后只计算超出宽限时间的部分。")
-        idle_row = QWidget()
-        idle_layout = QHBoxLayout(idle_row)
-        idle_layout.setContentsMargins(0, 0, 0, 0)
-        idle_layout.addWidget(self.idle_pause_mode, 1)
-        idle_layout.addWidget(self.idle_pause_minutes)
-        self.idle_pause_mode.currentIndexChanged.connect(
-            lambda _index: self.idle_pause_minutes.setEnabled(self.idle_pause_mode.currentData() == 0)
-        )
-        self.idle_pause_minutes.setEnabled(self.idle_pause_mode.currentData() == 0)
-        form.addRow(self.auto_pause_idle, idle_row)
+        idle_hint = QLabel("键鼠无操作不会自动暂停专注；阅读、思考和切换到其他软件都会继续计时。电脑睡眠或锁屏时才会暂停。")
+        idle_hint.setWordWrap(True)
+        idle_hint.setObjectName("muted")
+        form.addRow("工作计时", idle_hint)
         self.music_service = QComboBox()
         for label, key in (
             ("自动选择（推荐）", "auto"),
@@ -1174,11 +1153,6 @@ class AISettingsDialog(QDialog):
         self.settings.stand_reminder_enabled = self.stand.isChecked()
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
-        self.settings.auto_pause_on_idle = self.auto_pause_idle.isChecked()
-        selected_minutes = self.idle_pause_mode.currentData()
-        if selected_minutes == 0:
-            selected_minutes = self.idle_pause_minutes.value()
-        self.settings.idle_pause_seconds = int(selected_minutes) * 60
         self.settings.music_service = str(self.music_service.currentData())
         self.settings.qq_music_path = self.qq_music_path.text().strip()
         self.settings.netease_music_path = self.netease_music_path.text().strip()

@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from onepic_desktop_pet.anniversary_manager import AnniversaryManager
 from onepic_desktop_pet.countdown_manager import CountdownManager
 from onepic_desktop_pet.daily_record_manager import AUTO_CHECKIN_SECONDS, DailyRecordManager
@@ -97,6 +99,65 @@ def test_todo_priority_and_default_reminder_lead_time_persist(tmp_path) -> None:
     assert reloaded.get(task.id).reminder_minutes_before == 10
 
 
+def test_todo_views_show_event_time_not_reminder_time(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 18, 9, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    task = memory.todos.add(
+        "贵阳站",
+        date="2026-08-19",
+        time="13:00",
+        reminder=True,
+        reminder_minutes_before=10,
+    )
+
+    view_item = memory.get_todo_view_item(task.id)
+    assert view_item is not None
+    assert view_item.time == "13:00"
+    assert "13:00" in view_item.display_text
+    assert "12:50" not in view_item.display_text
+
+
+def test_reminder_only_todo_does_not_turn_notification_into_event_time(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 18, 9, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    task = memory.todos.add(
+        "只提醒我",
+        date="2026-08-18",
+        remind_at="2026-08-18T09:50:00",
+        reminder=True,
+    )
+
+    assert task.due_at is None
+    assert task.time is None
+    view_item = memory.get_todo_view_item(task.id)
+    assert view_item is not None
+    assert view_item.date == ""
+    assert view_item.time is None
+    assert view_item.display_text == "只提醒我"
+
+
+def test_legacy_inline_event_date_is_recovered_from_title(tmp_path) -> None:
+    from onepic_desktop_pet.todo_manager import TodoItem
+
+    recovered = TodoItem.from_dict(
+        {
+            "id": "legacy-event",
+            "title": "贵阳站 8.19 13:00",
+            "date": "2026-08-18",
+            "time": "13:00",
+            "due_at": "2026-08-18T13:00:00",
+            "remind_at": "2026-08-18T12:50:00",
+            "reminder": True,
+            "created_at": "2026-08-18T09:00:00+08:00",
+        }
+    )
+    assert recovered.title == "贵阳站"
+    assert recovered.date == "2026-08-19"
+    assert recovered.time == "13:00"
+    assert recovered.due_at == "2026-08-19T13:00:00"
+    assert recovered.remind_at == "2026-08-19T12:50:00"
+
+
 def test_create_todo_has_required_fields_and_persists(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 15, 9, 42))
     manager = TodoManager(tmp_path / "todos.json", now_provider=clock)
@@ -121,6 +182,105 @@ def test_complete_todo_sets_completed_at(tmp_path) -> None:
     manager.complete(item.id)
     assert manager.get(item.id).completed
     assert manager.get(item.id).completed_at
+
+
+def test_restore_todo_does_not_replay_an_expired_alarm(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add(
+        "恢复论文",
+        date="2026-08-19",
+        time="10:00",
+        reminder=True,
+        reminder_mode="alarm",
+    )
+    memory.complete_task(item.id)
+
+    assert memory.restore_todo(item.id)
+    restored = memory.todos.get(item.id)
+    assert restored is not None
+    assert restored.completed is False
+    assert restored.reminder_suppressed is True
+    assert memory.alarms.get(f"todo:{item.id}") is None
+
+
+def test_restore_todo_keeps_a_future_alarm_scheduled(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add(
+        "下午论文",
+        date="2026-08-19",
+        time="13:00",
+        reminder=True,
+        reminder_mode="alarm",
+    )
+    memory.complete_task(item.id)
+
+    assert memory.restore_todo(item.id)
+    restored = memory.todos.get(item.id)
+    assert restored is not None
+    assert restored.reminder_suppressed is False
+    alarm = memory.alarms.get(f"todo:{item.id}")
+    assert alarm is not None
+    assert alarm.enabled is True
+
+
+def test_new_todo_accepts_and_persists_reminder_suppressed(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    item = manager.add(
+        "恢复后的事项",
+        date="2026-08-19",
+        time="15:32",
+        reminder_mode="alarm",
+        reminder_suppressed=True,
+    )
+
+    assert item.reminder_suppressed is True
+    reloaded = TodoManager(tmp_path / "todos.json")
+    assert reloaded.get(item.id).reminder_suppressed is True
+
+
+def test_todo_queue_inserts_normalizes_and_persists(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    items = [manager.add(f"事项{index}") for index in range(1, 7)]
+
+    manager.set_queue_position(items[0].id, 1)
+    manager.set_queue_position(items[1].id, 2)
+    manager.set_queue_position(items[2].id, 2)
+    queued = manager.queued_items()
+    assert [item.title for item in queued[:3]] == ["事项1", "事项3", "事项2"]
+    assert [item.title for item in queued] == [
+        "事项1", "事项3", "事项2", "事项4", "事项5", "事项6"
+    ]
+    assert [item.queue_position for item in queued] == [1, 2, 3, 4, 5, 6]
+
+    manager.set_queue_position(items[3].id, 1)
+    assert [item.title for item in manager.queued_items()] == [
+        "事项4", "事项1", "事项3", "事项2", "事项5", "事项6"
+    ]
+    manager.set_queue_position(items[4].id, 5)
+    manager.set_queue_position(items[5].id, 5)
+    assert len(manager.queued_items()) == 6
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5, 6]
+
+    manager.complete(items[3].id)
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5]
+    reloaded = TodoManager(tmp_path / "todos.json")
+    assert [item.title for item in reloaded.queued_items()] == [
+        "事项1", "事项3", "事项2", "事项6", "事项5"
+    ]
+
+
+def test_todo_queue_caps_new_unfinished_items_at_ten(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    for index in range(10):
+        manager.add(f"第{index + 1}件")
+    with pytest.raises(ValueError, match="10件"):
+        manager.add("第11件")
+    manager.complete(manager.queued_items()[0].id)
+    restored = manager.add("第11件")
+    assert restored.queue_position == 10
+    assert [item.queue_position for item in manager.queued_items()] == list(range(1, 11))
 
 
 def test_completed_todo_remains_available_for_today_note(tmp_path) -> None:

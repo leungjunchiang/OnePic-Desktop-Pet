@@ -107,7 +107,7 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     dialog = SocialHubDialog(SignedOutClient())
 
     assert [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())] == [
-        "首页", "聊天", "专注", "我的"
+        "首页", "互动", "专注", "我的"
     ]
     auth_tabs = [tab for tab in dialog.findChildren(QTabWidget) if tab is not dialog.tabs]
     assert any(
