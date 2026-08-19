@@ -122,7 +122,7 @@ class EconomyDialog(QDialog):
             ("本月工资条", "payroll"),
             ("荒野账本", "ledger"),
             ("生活图鉴", "collection"),
-            ("登记成果 / 外快", "income"),
+            ("成果见证", "income"),
             ("我的小仓库", "inventory"),
         )
         for index, (label, action) in enumerate(buttons):
@@ -345,32 +345,49 @@ class EconomyDialog(QDialog):
             self.collection_list.addItem(f"「{title}」")
         if not self.ledger.titles:
             self.collection_list.addItem("完成真实生活事件后，称号会慢慢留下来。")
+        pending = self.ledger.pending_achievements()
+        self.collection_list.addItem("")
+        self.collection_list.addItem("等待搭子见证的成果")
+        if pending:
+            for item in pending:
+                witness_count = len(item.get("witnesses") or []) if isinstance(item, dict) else 0
+                self.collection_list.addItem(
+                    f"· {item.get('name') or '未命名成果'}　"
+                    f"{witness_count}/2 名搭子已确认　（不计入余额）"
+                )
+        else:
+            self.collection_list.addItem("暂时没有等待见证的成果。")
 
     def _record_income(self) -> None:
         kinds = ("论文 / 稿费", "项目", "比赛", "作品", "其他成果")
-        kind, ok = QInputDialog.getItem(self, "登记成果 / 外快", "类型：", kinds, 0, False)
+        kind, ok = QInputDialog.getItem(self, "成果见证", "类型：", kinds, 0, False)
         if not ok:
             return
-        name, ok = QInputDialog.getText(self, "登记成果 / 外快", "名称：")
+        name, ok = QInputDialog.getText(self, "成果见证", "名称：")
         if not ok or not name.strip():
             return
-        amount, ok = QInputDialog.getInt(self, "登记成果 / 外快", "折算吉他拨片：", 20, 1, 100000)
+        amount, ok = QInputDialog.getInt(self, "成果见证", "奖励吉他拨片（1–100）：", 20, 1, 100)
         if not ok:
             return
-        note, ok = QInputDialog.getText(self, "登记成果 / 外快", "备注（可选）：")
+        note, ok = QInputDialog.getText(self, "成果见证", "备注（可选）：")
         if not ok:
             return
         if QMessageBox.question(
-            self, "确认登记",
-            f"确认登记“{name.strip()}”并增加 {amount} 吉他拨片吗？\n这会进入本月创收和荒野账本。",
+            self, "提交成果见证",
+            f"确认提交“{name.strip()}”，奖励 {amount} 吉他拨片吗？\n提交后需 2 名不同搭子确认，确认前不会入账。",
         ) != QMessageBox.StandardButton.Yes:
             return
-        event = self.ledger.register_achievement_income(kind, name, amount, note)
-        if event is None:
-            QMessageBox.warning(self, "登记失败", "这笔成果没有成功记入账本。")
+        pending = self.ledger.register_achievement_income(kind, name, amount, note)
+        if pending is None:
+            QMessageBox.warning(self, "提交失败", "奖励必须为 1–100 个，且同月同一成果不能重复提交。")
             return
         self.refresh()
         self.changed.emit()
+        QMessageBox.information(
+            self,
+            "等待搭子见证",
+            "成果已保存为“等待见证”。\n需要 2 名不同搭子确认后，吉他拨片才会入账；本月最多成立 3 次。",
+        )
 
     def _purchase(self, item_key: str) -> None:
         spec = ITEM_CATALOG.get(item_key) or {}
@@ -392,3 +409,4 @@ class EconomyDialog(QDialog):
         self.refresh()
         self.changed.emit()
         QMessageBox.information(self, "六毛生活记录", str(result.get("feedback") or "六毛把这件事记下来了。"))
+
