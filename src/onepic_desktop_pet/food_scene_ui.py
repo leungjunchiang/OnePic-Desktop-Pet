@@ -89,8 +89,8 @@ class FoodSceneDialog(QDialog):
             "• 有效专注工资：每小时 6 个；每天最多计薪 8 小时，即每天最多 48 个。\n"
             "• 早鸟补贴：首次有效工作在 10:00 前开始并达到 20 分钟，送昂贵咖啡 ×1，不额外发拨片。\n"
             "• 完成 Todo：任务绩效 +2 个；重要 Todo 另送小蛋糕 ×1（每日一次）。\n"
-            "• 成果 / 外快：登记时填写 1–100000 个，确认后入账；消费不会增加本月创收。\n"
-            "• 咖啡壶：售价 144 个 = 48 个/天 × 3 天正常学习；添置后每天最多免费补给普通咖啡 ×1。"
+            "• 成果见证：每项奖励 1–100 个，须 2 名不同搭子确认；每月最多成立 3 次。\n"
+            "• 咖啡壶：144 个拨片；激活后一次性补给普通咖啡 ×3。"
         )
         currency_hint.setObjectName("rules")
         currency_hint.setWordWrap(True)
@@ -192,7 +192,7 @@ class FoodSceneDialog(QDialog):
         if key == "coffee" and status.get("coffee_pot_enabled"):
             text = (
                 "当天第一次正式开工后免费 1 杯；"
-                + str(status.get("coffee_pot_rule") or "咖啡壶每天最多补给 1 杯普通咖啡")
+                + str(status.get("coffee_pot_rule") or "咖啡壶激活后一次性补给普通咖啡 ×3")
             )
             marks = []
             if status.get("claimed"):
