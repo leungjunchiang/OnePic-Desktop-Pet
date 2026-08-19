@@ -1,3 +1,11 @@
+## v0.23.25 — Codex CLI 能力探测与 Mac 在线连接修复
+
+- App Server 改为使用最小启动命令 `codex app-server`，不再把 exec 专属参数、MCP/provider 覆盖或隔离参数传给 App Server。
+- `codex exec` 改为根据当前安装版本的 `codex exec --help` 能力动态组装参数；不再硬编码 `--ignore-user-config`、`--ignore-rules` 等容易造成版本不兼容的参数。
+- 启动时分别探测 `codex --version`、`codex exec --help` 和 `codex app-server --help`，诊断日志会记录版本、命令模式和不支持的参数，不记录令牌或用户提示词。
+- 默认优先使用 Codex 原生登录/传输；只有用户明确设置 `LILI_CODEX_TRANSPORT=https` 时才使用 HTTPS 回退。
+- 旧版 CLI 不支持 JSON 输出时自动读取普通 stdout，避免在线请求成功却被误判为无效回复。
+
 ## v0.23.24 — 修复 Mac Codex 启动与咖啡场景结束逻辑
 
 - 修正 macOS/Windows Codex CLI 命令构造：`app-server` 不再接收 `exec` 专属参数，`codex exec` 参数改为放在子命令之后。

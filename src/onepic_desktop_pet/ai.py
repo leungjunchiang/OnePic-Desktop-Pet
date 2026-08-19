@@ -107,6 +107,25 @@ class ProviderPreset:
     needs_token: bool
 
 
+@dataclass(frozen=True)
+class CodexCliCapabilities:
+    """Capabilities discovered from the exact Codex CLI installed by the user."""
+
+    version: str = ""
+    exec_options: frozenset[str] = frozenset()
+    app_server_options: frozenset[str] = frozenset()
+    exec_probe_ok: bool = False
+    app_server_probe_ok: bool = False
+    exec_probe_error: str = ""
+    app_server_probe_error: str = ""
+
+    def supports_exec(self, option: str) -> bool:
+        return option in self.exec_options
+
+    def supports_app_server(self, option: str) -> bool:
+        return option in self.app_server_options
+
+
 PROVIDER_PRESETS = {
     "offline": ProviderPreset("offline", "纯离线", "", "", False),
     "codex": ProviderPreset("codex", "Codex（使用本机登录）", "", "", False),
@@ -777,6 +796,95 @@ def _cli_command(executable: Path, *arguments: str) -> list[str]:
     return [str(executable), *arguments]
 
 
+def _extract_cli_options(output: str) -> frozenset[str]:
+    """Extract only long options from a CLI help page."""
+
+    return frozenset(re.findall(r"(?<!\w)--[A-Za-z0-9][A-Za-z0-9-]*", output or ""))
+
+
+def _probe_codex_help(executable: Path, subcommand: str) -> tuple[bool, str, str]:
+    """Read one Codex subcommand's help without changing user configuration."""
+
+    startupinfo = None
+    creationflags = 0
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+    try:
+        completed = subprocess.run(
+            _cli_command(executable, subcommand, "--help"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            env=_cli_environment(executable),
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, "", str(exc)
+    output = "\n".join((completed.stdout or "", completed.stderr or "")).strip()
+    return completed.returncode == 0, output, "" if completed.returncode == 0 else output
+
+
+@lru_cache(maxsize=4)
+def _codex_cli_capabilities(executable_text: str) -> CodexCliCapabilities:
+    """Probe the installed Codex CLI once and cache its independent capabilities."""
+
+    executable = Path(executable_text)
+    startupinfo = None
+    creationflags = 0
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    version = ""
+    try:
+        version_result = subprocess.run(
+            _cli_command(executable, "--version"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            env=_cli_environment(executable),
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+        version = " ".join(
+            (version_result.stdout or version_result.stderr or "").split()
+        )[:160]
+    except (OSError, subprocess.TimeoutExpired):
+        version = ""
+
+    exec_ok, exec_help, exec_error = _probe_codex_help(executable, "exec")
+    app_ok, app_help, app_error = _probe_codex_help(executable, "app-server")
+    capabilities = CodexCliCapabilities(
+        version=version,
+        exec_options=_extract_cli_options(exec_help),
+        app_server_options=_extract_cli_options(app_help),
+        exec_probe_ok=exec_ok,
+        app_server_probe_ok=app_ok,
+        exec_probe_error=exec_error[:240],
+        app_server_probe_error=app_error[:240],
+    )
+    LOGGER.info(
+        "[AI Codex] CLI capabilities: version=%s exec_probe=%s app_server_probe=%s "
+        "exec_options=%s app_server_options=%s",
+        capabilities.version or "unknown",
+        capabilities.exec_probe_ok,
+        capabilities.app_server_probe_ok,
+        sorted(capabilities.exec_options),
+        sorted(capabilities.app_server_options),
+    )
+    return capabilities
+
+
 def _codex_model_override() -> str:
     """Return Lili's per-process Codex model choice.
 
@@ -870,28 +978,12 @@ def _codex_http_config_overrides_for_transport(transport: str | None) -> tuple[s
 
 
 def _codex_transport_variants() -> tuple[str, ...]:
-    """Return safe transport attempts for the local Codex child process.
-
-    Windows keeps its established HTTPS-first behaviour.  macOS gets one
-    additional native-profile attempt because the same account may work from
-    Terminal while the Finder-launched app cannot use the forced provider
-    override (proxy, certificate, or CLI-version differences are common
-    causes).  The fallback is still local and never opens ChatGPT.app.
-    """
+    """Return the user's explicit transport choice, defaulting to native Codex."""
 
     configured = os.environ.get("LILI_CODEX_TRANSPORT", "").strip().casefold()
-    if configured in {"default", "auto", "off", "websocket", "ws"}:
-        return ("default",)
     if configured in {"https", "lili_http"}:
-        if sys.platform == "darwin":
-            return ("https", "default")
         return ("https",)
-    if sys.platform == "darwin":
-        # Prefer the user's native Codex profile on macOS.  This is the same
-        # transport that succeeds in Terminal and avoids delaying every chat
-        # turn behind a provider override that may not match the local CLI.
-        return ("default", "https")
-    return ("https",)
+    return ("default",)
 
 
 def _codex_app_server_command(
@@ -899,20 +991,10 @@ def _codex_app_server_command(
     *,
     transport: str | None = None,
 ) -> list[str]:
-    """Build the cross-platform stdio App Server command for Lili only."""
+    """Build the minimum App Server command accepted by current Codex CLIs."""
 
-    # The chat prompt does not expose tools.  Keep user authentication and
-    # CODEX_HOME, but override the MCP map for this child so unrelated user
-    # servers/plugins cannot delay or break the chat session.
-    arguments = [
-        "app-server",
-        "--listen",
-        "stdio://",
-        "--config",
-        "mcp_servers={}",
-        *_codex_http_config_overrides_for_transport(transport),
-    ]
-    return _cli_command(executable, *arguments)
+    del transport
+    return _cli_command(executable, "app-server")
 
 
 def _codex_thread_state_path() -> Path:
@@ -963,31 +1045,26 @@ def _codex_exec_command(
     *,
     model: str | None = None,
     transport: str | None = None,
+    capabilities: CodexCliCapabilities | None = None,
 ) -> list[str]:
-    """Build one isolated, non-interactive Codex command for Lili."""
+    """Build one capability-safe, non-interactive Codex command for Lili."""
 
+    del transport
+    capabilities = capabilities or CodexCliCapabilities()
     selected_model = _codex_model_override() if model is None else model
-    arguments = [
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--config",
-        "mcp_servers={}",
-        *_codex_http_config_overrides_for_transport(transport),
-        "--config",
-        'model_reasoning_effort="low"',
-    ]
-    if selected_model:
-        arguments.extend(("--config", f'model="{selected_model.replace(chr(34), "")}"'))
-    arguments.extend((
-        "--sandbox",
-        "read-only",
-        "--json",
-        # ``codex exec`` accepts the task as the final positional argument.
-        prompt,
-    ))
+    arguments = ["exec"]
+    if capabilities.supports_exec("--ephemeral"):
+        arguments.append("--ephemeral")
+    if capabilities.supports_exec("--skip-git-repo-check"):
+        arguments.append("--skip-git-repo-check")
+    if capabilities.supports_exec("--sandbox"):
+        arguments.extend(("--sandbox", "read-only"))
+    if capabilities.supports_exec("--json"):
+        arguments.append("--json")
+    if selected_model and capabilities.supports_exec("--model"):
+        arguments.extend(("--model", selected_model.replace(chr(34), "")))
+    # codex exec accepts the task as the final positional argument.
+    arguments.append(prompt)
     return _cli_command(executable, *arguments)
 
 
@@ -1037,7 +1114,8 @@ def _codex_failure_message(stderr: str, returncode: int | None = None) -> str:
 
     detail = _compact_codex_error(stderr, returncode)
     lowered = detail.casefold()
-    if any(
+    unsupported = _codex_unsupported_argument(detail)
+    if unsupported or any(
         marker in lowered
         for marker in (
             "unexpected argument",
@@ -1047,13 +1125,25 @@ def _codex_failure_message(stderr: str, returncode: int | None = None) -> str:
             "usage: codex",
         )
     ):
-        return "Codex 启动失败：当前 CLI 参数不兼容。已临时切换到离线陪伴。"
+        suffix = f"不支持参数 {unsupported}" if unsupported else "参数集合不兼容"
+        return f"Codex CLI 版本不兼容：{suffix}。已临时切换到离线陪伴。"
     if any(marker in lowered for marker in ("not logged in", "login required", "unauthorized", "authentication")):
         return f"Codex 尚未登录或连接失败：Codex CLI 登录状态无效（{detail}）。"
     if any(marker in lowered for marker in ("ssl", "certificate", "tls", "websocket", "network", "connection")):
         platform_label = "macOS" if sys.platform == "darwin" else "Windows" if os.name == "nt" else sys.platform
         return f"Codex 尚未登录或连接失败：{platform_label} 与 Codex 服务连接失败（{detail}）。"
     return f"Codex 尚未登录或连接失败：{detail}。"
+
+
+def _codex_unsupported_argument(stderr: str) -> str:
+    """Extract the rejected flag for a concise, actionable diagnostic."""
+
+    match = re.search(
+        r"""(?:unexpected|unrecognized|unknown)\s+(?:argument|option)\s+(?:["'])(--[A-Za-z0-9-]+)""",
+        stderr or "",
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else ""
 
 
 def _conversation_text(
@@ -1148,6 +1238,7 @@ def ask_codex(
     executable = find_codex_executable()
     if executable is None:
         raise AIConnectionError("没有找到 Codex，已切回离线回答。")
+    capabilities = _codex_cli_capabilities(str(executable))
     working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
     working_root.mkdir(parents=True, exist_ok=True)
     prompt = _conversation_text(message, entries, local_context)
@@ -1190,6 +1281,7 @@ def ask_codex(
             prompt,
             model=selected_model,
             transport=transport,
+            capabilities=capabilities,
         )
         try:
             completed = run_command(command)
@@ -1220,7 +1312,13 @@ def ask_codex(
             )
             try:
                 completed = run_command(
-                    _codex_exec_command(executable, prompt, model="", transport=transport)
+                    _codex_exec_command(
+                        executable,
+                        prompt,
+                        model="",
+                        transport=transport,
+                        capabilities=capabilities,
+                    )
                 )
                 stderr = " ".join((completed.stderr or "").split())
                 last_completed = completed
@@ -1236,14 +1334,19 @@ def ask_codex(
                 continue
 
         answer = _parse_codex_jsonl(completed.stdout)
+        if completed.returncode == 0 and not answer and not capabilities.supports_exec("--json"):
+            answer = (completed.stdout or "").strip()
         if completed.returncode == 0 and answer:
             return postprocess_ai_answer(answer, classify_intent(message, entries))
 
         LOGGER.warning(
-            "[AI Codex] exec failed: transport=%s returncode=%s elapsed=%.1fs stderr=%s stdout_bytes=%s",
+            "[AI Codex] exec failed: codex_version=%s transport=%s returncode=%s "
+            "elapsed=%.1fs unsupported_argument=%s stderr=%s stdout_bytes=%s",
+            capabilities.version or "unknown",
             transport,
             completed.returncode,
             time.monotonic() - started_at,
+            _codex_unsupported_argument(stderr) or "-",
             _compact_codex_error(stderr)[:800],
             len(completed.stdout or ""),
         )
@@ -1579,9 +1682,15 @@ class AIChatService:
         executable = find_codex_executable()
         if executable is None:
             raise CodexAppServerError("没有找到 Codex，已切回离线回答。")
+        capabilities = _codex_cli_capabilities(str(executable))
+        if not capabilities.app_server_probe_ok:
+            detail = capabilities.app_server_probe_error or "无法读取 app-server --help"
+            raise CodexAppServerError(
+                f"当前 Codex CLI 不支持或无法启动 app-server：{_compact_codex_error(detail)}"
+            )
         working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
         self._codex_app_server = CodexAppServerClient(
-            _codex_app_server_command(executable, transport=_codex_transport_variants()[0]),
+            _codex_app_server_command(executable),
             cwd=working_root,
             env=_cli_environment(executable),
             thread_id=_read_codex_thread_id(),

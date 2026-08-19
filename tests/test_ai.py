@@ -14,6 +14,7 @@ import pytest
 from onepic_desktop_pet.ai import (
     AIChatService,
     AIConnectionError,
+    CodexCliCapabilities,
     PROVIDER_PRESETS,
     _chat_endpoint,
     _parse_codex_jsonl,
@@ -28,6 +29,7 @@ from onepic_desktop_pet.ai import (
     _cli_command,
     _cli_environment,
     _codex_app_server_command,
+    _codex_cli_capabilities,
     _codex_exec_command,
     _macos_login_shell_path_value,
     _codex_model_override,
@@ -129,7 +131,37 @@ def test_codex_jsonl_parser_takes_last_agent_message() -> None:
     assert _parse_codex_jsonl(output) == "最终回复"
 
 
-def test_codex_uses_ephemeral_read_only_session_and_prompt_argument(monkeypatch) -> None:
+def test_codex_cli_capabilities_are_probed_per_subcommand(monkeypatch) -> None:
+    def fake_run(command, **_kwargs):
+        if command[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="codex-cli 1.2.3", stderr="")
+        if command[1:3] == ["exec", "--help"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="Usage: codex exec [OPTIONS]\n--json\n--sandbox\n--model",
+                stderr="",
+            )
+        if command[1:3] == ["app-server", "--help"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="Usage: codex app-server",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    _codex_cli_capabilities.cache_clear()
+    capabilities = _codex_cli_capabilities("codex")
+
+    assert capabilities.version == "codex-cli 1.2.3"
+    assert capabilities.supports_exec("--json")
+    assert capabilities.supports_exec("--model")
+    assert not capabilities.supports_exec("--ignore-user-config")
+    assert capabilities.app_server_probe_ok
+    _codex_cli_capabilities.cache_clear()
+
+
+def test_codex_uses_capability_safe_command_and_prompt_argument(monkeypatch) -> None:
     captured = {}
 
     def fake_run(command, **kwargs):
@@ -151,15 +183,16 @@ def test_codex_uses_ephemeral_read_only_session_and_prompt_argument(monkeypatch)
 
     assert ask_codex("这句话不能出现在命令参数里", []) == "联动正常"
     command = captured["command"]
-    assert "--ephemeral" in command
-    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[command.index("exec")] == "exec"
+    assert "--ignore-user-config" not in command
+    assert "--ignore-rules" not in command
     assert command[-1] != "-"
     assert "这句话不能出现在命令参数里" in command[-1]
     assert captured["kwargs"].get("input") is None
 
 
-def test_macos_codex_exec_falls_back_to_native_transport(monkeypatch) -> None:
-    """Finder-launched macOS chat retries the user's working Codex transport."""
+def test_macos_codex_exec_uses_native_minimal_transport(monkeypatch) -> None:
+    """Finder-launched macOS chat does not force a provider override by default."""
 
     calls = []
     output = json.dumps(
@@ -170,22 +203,27 @@ def test_macos_codex_exec_falls_back_to_native_transport(monkeypatch) -> None:
     )
 
     def fake_run(command, **_kwargs):
+        if command[0] == "/bin/zsh":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[0] != "/bin/zsh":
             calls.append(command)
-        if any("model_provider=\"lili_http\"" in str(part) for part in command):
-            return SimpleNamespace(returncode=1, stdout="", stderr="TLS handshake failed")
+        if command[-1] == "--help" or command[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="codex test", stderr="")
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("/usr/local/bin/codex"))
     monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
-    monkeypatch.setenv("LILI_CODEX_TRANSPORT", "https")
+    monkeypatch.delenv("LILI_CODEX_TRANSPORT", raising=False)
     monkeypatch.setattr("onepic_desktop_pet.ai._conversation_text", lambda *args: "test prompt")
 
     assert ask_codex("测试 macOS 回退", []) == "Mac 联动正常"
-    assert len(calls) == 2
-    assert any("model_provider=\"lili_http\"" in str(part) for part in calls[0])
-    assert not any("model_provider=\"lili_http\"" in str(part) for part in calls[1])
+    exec_commands = [
+        command for command in calls
+        if "exec" in command and command[-1] != "--help"
+    ]
+    assert len(exec_commands) == 1
+    assert not any("model_provider" in str(part) for part in exec_commands[0])
 
 
 def test_codex_failure_keeps_sanitized_runtime_diagnostic(monkeypatch) -> None:
@@ -214,13 +252,20 @@ def test_macos_lili_codex_call_is_isolated_and_uses_low_latency_model(monkeypatc
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
     monkeypatch.delenv("LILI_CODEX_TIMEOUT_SECONDS", raising=False)
-    command = _codex_exec_command(Path("/usr/local/bin/codex"), "测试消息")
+    capabilities = CodexCliCapabilities(
+        exec_options=frozenset({"--ephemeral", "--sandbox", "--json", "--model"})
+    )
+    command = _codex_exec_command(
+        Path("/usr/local/bin/codex"),
+        "测试消息",
+        capabilities=capabilities,
+    )
 
-    assert command.index("exec") < command.index("--ignore-user-config")
-    assert "--ignore-user-config" in command
+    assert command.index("exec") < command.index("--ephemeral")
+    assert "--ignore-user-config" not in command
+    assert "--ignore-rules" not in command
     assert "--ephemeral" in command
-    assert 'model="gpt-5.6-luna"' in command
-    assert 'model_reasoning_effort="low"' in command
+    assert command[command.index("--model") + 1] == "gpt-5.6-luna"
     assert command[-1] == "测试消息"
     assert _codex_model_override() == "gpt-5.6-luna"
     assert _codex_timeout_seconds() == 45
@@ -229,39 +274,35 @@ def test_macos_lili_codex_call_is_isolated_and_uses_low_latency_model(monkeypatc
 def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
-    command = _codex_exec_command(Path("codex.exe"), "测试消息")
+    capabilities = CodexCliCapabilities(
+        exec_options=frozenset(
+            {"--ephemeral", "--skip-git-repo-check", "--sandbox", "--json", "--model"}
+        )
+    )
+    command = _codex_exec_command(
+        Path("codex.exe"),
+        "测试消息",
+        capabilities=capabilities,
+    )
 
-    assert command.index("exec") < command.index("--ignore-user-config")
-    assert "--ignore-user-config" in command
+    assert command.index("exec") < command.index("--ephemeral")
+    assert "--ignore-user-config" not in command
+    assert "--ignore-rules" not in command
     assert "--ephemeral" in command
-    assert 'model_provider="lili_http"' in command
-    assert any(part.endswith("supports_websockets=false") for part in command)
-    assert 'model="gpt-5.6-luna"' in command
-    assert 'model_reasoning_effort="low"' in command
+    assert "--skip-git-repo-check" in command
+    assert command[command.index("--model") + 1] == "gpt-5.6-luna"
     assert _codex_model_override() == "gpt-5.6-luna"
 
 
-def test_app_server_command_uses_cross_platform_stdio_transport(monkeypatch) -> None:
+def test_app_server_command_uses_minimal_cross_platform_command(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
     command = _codex_app_server_command(Path("codex.exe"))
-    assert command[command.index("app-server") : command.index("app-server") + 3] == [
-        "app-server",
-        "--listen",
-        "stdio://",
-    ]
-    assert "mcp_servers={}" in command
+    assert command == ["codex.exe", "app-server"]
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     command = _codex_app_server_command(Path("/usr/local/bin/codex"))
-    assert command[command.index("app-server") : command.index("app-server") + 3] == [
-        "app-server",
-        "--listen",
-        "stdio://",
-    ]
-    assert "--config" in command
+    assert command == ["/usr/local/bin/codex", "app-server"]
     assert "--ignore-user-config" not in command
-    assert command.index("app-server") < command.index("--config")
-    assert any(part.endswith("supports_websockets=false") for part in command)
 
 
 def test_codex_cli_argument_error_is_short_and_actionable() -> None:
@@ -270,7 +311,7 @@ def test_codex_cli_argument_error_is_short_and_actionable() -> None:
     message = _codex_failure_message(
         "error: unexpected argument '--ignore-user-config' found\nUsage: codex [OPTIONS]"
     )
-    assert message == "Codex 启动失败：当前 CLI 参数不兼容。已临时切换到离线陪伴。"
+    assert message == "Codex CLI 版本不兼容：不支持参数 --ignore-user-config。已临时切换到离线陪伴。"
 
 
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:
