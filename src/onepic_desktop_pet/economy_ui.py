@@ -371,7 +371,7 @@ class EconomyDialog(QDialog):
             return
         if QMessageBox.question(
             self, "提交成果见证",
-            f"确认提交“{name.strip()}”吗？\n提交后需 2 名不同搭子确认，确认后固定获得 50 吉他拨片，确认前不会入账。",
+            f"确认提交“{name.strip()}”吗？\n提交后需 2 名不同搭子确认，确认后固定获得 200 吉他拨片，确认前不会入账。",
         ) != QMessageBox.StandardButton.Yes:
             return
         pending = self.ledger.register_achievement_income(kind, name, note=note)
