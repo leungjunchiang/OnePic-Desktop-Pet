@@ -182,6 +182,85 @@ def test_complete_todo_sets_completed_at(tmp_path) -> None:
     assert manager.get(item.id).completed_at
 
 
+def test_restore_todo_does_not_replay_an_expired_alarm(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add(
+        "恢复论文",
+        date="2026-08-19",
+        time="10:00",
+        reminder=True,
+        reminder_mode="alarm",
+    )
+    memory.complete_task(item.id)
+
+    assert memory.restore_todo(item.id)
+    restored = memory.todos.get(item.id)
+    assert restored is not None
+    assert restored.completed is False
+    assert restored.reminder_suppressed is True
+    assert memory.alarms.get(f"todo:{item.id}") is None
+
+
+def test_restore_todo_keeps_a_future_alarm_scheduled(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add(
+        "下午论文",
+        date="2026-08-19",
+        time="13:00",
+        reminder=True,
+        reminder_mode="alarm",
+    )
+    memory.complete_task(item.id)
+
+    assert memory.restore_todo(item.id)
+    restored = memory.todos.get(item.id)
+    assert restored is not None
+    assert restored.reminder_suppressed is False
+    alarm = memory.alarms.get(f"todo:{item.id}")
+    assert alarm is not None
+    assert alarm.enabled is True
+
+
+def test_new_todo_accepts_and_persists_reminder_suppressed(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    item = manager.add(
+        "恢复后的事项",
+        date="2026-08-19",
+        time="15:32",
+        reminder_mode="alarm",
+        reminder_suppressed=True,
+    )
+
+    assert item.reminder_suppressed is True
+    reloaded = TodoManager(tmp_path / "todos.json")
+    assert reloaded.get(item.id).reminder_suppressed is True
+
+
+def test_todo_queue_inserts_normalizes_and_persists(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    items = [manager.add(f"事项{index}") for index in range(1, 7)]
+
+    manager.set_queue_position(items[0].id, 1)
+    manager.set_queue_position(items[1].id, 2)
+    manager.set_queue_position(items[2].id, 2)
+    assert [item.title for item in manager.queued_items()] == ["事项1", "事项3", "事项2"]
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3]
+
+    manager.set_queue_position(items[3].id, 1)
+    assert [item.title for item in manager.queued_items()] == ["事项4", "事项1", "事项3", "事项2"]
+    manager.set_queue_position(items[4].id, 5)
+    manager.set_queue_position(items[5].id, 5)
+    assert len(manager.queued_items()) == 5
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5]
+
+    manager.complete(items[3].id)
+    assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4]
+    reloaded = TodoManager(tmp_path / "todos.json")
+    assert [item.title for item in reloaded.queued_items()] == ["事项1", "事项3", "事项2", "事项6"]
+
+
 def test_completed_todo_remains_available_for_today_note(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 15, 9, 42))
     memory = TimeMemory(tmp_path, now_provider=clock)
@@ -432,16 +511,3 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
 
-def test_new_todo_accepts_and_persists_reminder_suppressed(tmp_path) -> None:
-    manager = TodoManager(tmp_path / "todos.json")
-    item = manager.add(
-        "恢复后的事项",
-        date="2026-08-19",
-        time="15:32",
-        reminder_mode="alarm",
-        reminder_suppressed=True,
-    )
-
-    assert item.reminder_suppressed is True
-    reloaded = TodoManager(tmp_path / "todos.json")
-    assert reloaded.get(item.id).reminder_suppressed is True
