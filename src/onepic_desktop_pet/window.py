@@ -2574,6 +2574,7 @@ class PetWindow(QWidget):
                 self.time_memory.alarms,
                 todos,
                 parent=None,
+                sound_library=self.time_memory.alarm_sounds,
             )
         else:
             self._alarm_center_dialog.todos = todos
@@ -2746,7 +2747,10 @@ class PetWindow(QWidget):
 
         if self._alarm_card is not None:
             self._close_alarm_card()
-        self._alarm_card = AlarmCard(alarm)
+        self._alarm_card = AlarmCard(
+            alarm,
+            sound_library=self.time_memory.alarm_sounds,
+        )
         self._alarm_card.start_requested.connect(self._start_alarm_work)
         self._alarm_card.snooze_requested.connect(self._snooze_alarm)
         self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
