@@ -38,13 +38,19 @@ class _FakeStdin:
             self.owner.emit({"id": request_id, "result": {"userAgent": "fake"}})
         elif method == "thread/start":
             self.owner.thread_id = "thr_fake"
+            thread = {"id": "thr_fake"}
+            if self.owner.start_provider:
+                thread["modelProvider"] = self.owner.start_provider
             self.owner.emit(
-                {"id": request_id, "result": {"thread": {"id": "thr_fake"}}}
+                {"id": request_id, "result": {"thread": thread}}
             )
         elif method == "thread/resume":
             self.owner.thread_id = "thr_saved"
+            thread = {"id": "thr_saved"}
+            if self.owner.resume_provider:
+                thread["modelProvider"] = self.owner.resume_provider
             self.owner.emit(
-                {"id": request_id, "result": {"thread": {"id": "thr_saved"}}}
+                {"id": request_id, "result": {"thread": thread}}
             )
         elif method == "turn/start":
             self.owner.emit(
@@ -94,6 +100,8 @@ class _FakeProcess:
         self.stdin = _FakeStdin(self)
         self.messages: list[dict] = []
         self.thread_id = ""
+        self.resume_provider = ""
+        self.start_provider = ""
         self.returncode = None
 
     def emit(self, message: dict) -> None:
@@ -155,3 +163,31 @@ def test_app_server_can_resume_saved_thread(monkeypatch, tmp_path: Path) -> None
     assert "thread/resume" in methods
     assert "thread/start" not in methods
     client.close()
+
+
+def test_app_server_replaces_resumed_thread_when_provider_changed(monkeypatch, tmp_path: Path) -> None:
+    process = _FakeProcess()
+    process.resume_provider = "openai"
+    process.start_provider = "lili_http"
+    monkeypatch.setattr(
+        "onepic_desktop_pet.codex_app_server.subprocess.Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    saved: list[str] = []
+    client = CodexAppServerClient(
+        ["codex", "app-server"],
+        cwd=tmp_path,
+        thread_id="thr_saved",
+        on_thread_id=saved.append,
+        desired_provider="lili_http",
+        desired_transport="https",
+    )
+
+    assert client.stream_turn("恢复", on_delta=lambda _delta: None) == "首字完整回复"
+    methods = [message.get("method") for message in process.messages]
+    assert methods.count("thread/resume") == 1
+    assert methods.count("thread/start") == 1
+    assert saved == ["thr_fake"]
+    assert client.thread_id == "thr_fake"
+    client.close()
+
