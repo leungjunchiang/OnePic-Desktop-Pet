@@ -905,13 +905,12 @@ def _codex_app_server_command(
     # CODEX_HOME, but override the MCP map for this child so unrelated user
     # servers/plugins cannot delay or break the chat session.
     arguments = [
-        "--ignore-user-config",
-        "--config",
-        "mcp_servers={}",
-        *_codex_http_config_overrides_for_transport(transport),
         "app-server",
         "--listen",
         "stdio://",
+        "--config",
+        "mcp_servers={}",
+        *_codex_http_config_overrides_for_transport(transport),
     ]
     return _cli_command(executable, *arguments)
 
@@ -969,16 +968,16 @@ def _codex_exec_command(
 
     selected_model = _codex_model_override() if model is None else model
     arguments = [
-        "--ignore-user-config",
+        "exec",
         "--ephemeral",
         "--skip-git-repo-check",
+        "--ignore-user-config",
         "--ignore-rules",
         "--config",
         "mcp_servers={}",
         *_codex_http_config_overrides_for_transport(transport),
         "--config",
         'model_reasoning_effort="low"',
-        "exec",
     ]
     if selected_model:
         arguments.extend(("--config", f'model="{selected_model.replace(chr(34), "")}"'))
@@ -1038,6 +1037,17 @@ def _codex_failure_message(stderr: str, returncode: int | None = None) -> str:
 
     detail = _compact_codex_error(stderr, returncode)
     lowered = detail.casefold()
+    if any(
+        marker in lowered
+        for marker in (
+            "unexpected argument",
+            "unrecognized argument",
+            "unknown option",
+            "unknown argument",
+            "usage: codex",
+        )
+    ):
+        return "Codex 启动失败：当前 CLI 参数不兼容。已临时切换到离线陪伴。"
     if any(marker in lowered for marker in ("not logged in", "login required", "unauthorized", "authentication")):
         return f"Codex 尚未登录或连接失败：Codex CLI 登录状态无效（{detail}）。"
     if any(marker in lowered for marker in ("ssl", "certificate", "tls", "websocket", "network", "connection")):

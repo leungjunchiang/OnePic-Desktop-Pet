@@ -43,6 +43,24 @@ def test_coffee_starts_a_real_focus_scene_without_fake_income() -> None:
     assert result["event"]["amount"] == 0
 
 
+def test_coffee_scene_persists_whether_it_started_the_work_timer() -> None:
+    now = [datetime(2026, 8, 18, 9, tzinfo=timezone.utc)]
+    ledger = _ledger(now)
+    _buy(ledger, "coffee")
+
+    result = ledger.start_food_scene(
+        "coffee",
+        duration_minutes=30,
+        consume_inventory=True,
+        scene_metadata={"coffee_scene_started_work_timer": True},
+    )
+
+    assert result is not None
+    assert ledger.active_food_scene()["metadata"]["coffee_scene_started_work_timer"] is True
+    assert ledger.finish_food_scene("timer") is not None
+    assert ledger.active_food_scene() is None
+
+
 def test_milk_tea_is_a_timed_rest_and_does_not_add_focus_time() -> None:
     now = [datetime(2026, 8, 18, 14, tzinfo=timezone.utc)]
     ledger = _ledger(now)

@@ -193,6 +193,52 @@ class WorkDurationBubble(QLabel):
             self.style().polish(self)
 
 
+class CoffeeScenePrompt(QWidget):
+    """Non-modal coffee timeout prompt that never decides work for the user."""
+
+    continue_requested = Signal()
+    finish_requested = Signal()
+
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.setObjectName("workControlDock")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet(CONTROL_STYLE)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        self.message = QLabel("咖啡喝完啦，半小时到了。")
+        self.message.setWordWrap(True)
+        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message.setStyleSheet("QLabel { color: #24475b; padding: 2px 4px; }")
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        continue_button = QPushButton("继续工作")
+        finish_button = QPushButton("结束工作")
+        continue_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        finish_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        finish_button.setObjectName("finishWorkButton")
+        continue_button.clicked.connect(self.continue_requested.emit)
+        finish_button.clicked.connect(self.finish_requested.emit)
+        buttons.addWidget(continue_button)
+        buttons.addWidget(finish_button)
+        layout.addWidget(self.message)
+        layout.addLayout(buttons)
+        self.hide()
+
+    def set_message(self, text: str) -> None:
+        self.message.setText(str(text or "咖啡喝完啦，半小时到了。"))
+        self.adjustSize()
+
+
 def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
     """Draw a small DPI-independent red/yellow/blue shortcut icon."""
 

@@ -136,6 +136,7 @@ from .companion import (
 )
 from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
 from .controls import (
+    CoffeeScenePrompt,
     QuickControlPanel,
     SizeControlDialog,
     WorkControlBubble,
@@ -530,6 +531,7 @@ class PetWindow(QWidget):
         )
 
         self.work_controls = WorkControlBubble()
+        self.coffee_scene_prompt = CoffeeScenePrompt()
         self.work_duration_bubble = WorkDurationBubble()
         self._qt_application = QApplication.instance()
         if self._qt_application is not None:
@@ -538,6 +540,8 @@ class PetWindow(QWidget):
         self.work_controls.pause_requested.connect(self.pause_work_timer)
         self.work_controls.resume_requested.connect(self._resume_work_from_control)
         self.work_controls.finish_requested.connect(self.finish_work_timer)
+        self.coffee_scene_prompt.continue_requested.connect(self._continue_after_coffee_scene)
+        self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
         self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
@@ -1302,6 +1306,7 @@ class PetWindow(QWidget):
         self.photo_bubble.hide()
         self.speech_bubble.hide()
         self.work_controls.hide()
+        self.coffee_scene_prompt.hide()
         self.work_duration_bubble.hide()
         self.quick_panel.hide()
         if self._compact_todo_panel is not None:
@@ -1321,6 +1326,7 @@ class PetWindow(QWidget):
         self.music_controller.shutdown()
         self.photo_bubble.close()
         self.speech_bubble.close()
+        self.coffee_scene_prompt.close()
         self.work_duration_bubble.close()
         self._buddy_visit_window.close()
         if self._today_note_window is not None:
@@ -2051,6 +2057,26 @@ class PetWindow(QWidget):
         resume_after_rest = item_key == "milk_tea" and status == "focus"
         if resume_after_rest:
             self.pause_work_timer(reason="food")
+        coffee_scene_started_work_timer = bool(
+            item_key in {"coffee", "expensive_coffee"}
+            and not self.work_timer.is_running
+        )
+        scene_metadata: dict[str, object] | None = None
+        if item_key == "milk_tea":
+            scene_metadata = {"resume_work": resume_after_rest}
+        elif item_key in {"coffee", "expensive_coffee"}:
+            scene_metadata = {
+                "coffee_scene_started_work_timer": coffee_scene_started_work_timer,
+            }
+            if item_key == "expensive_coffee":
+                # If coffee starts a new work episode, a previously paused
+                # episode must not be inherited. When the user is already
+                # working, count the threshold from the moment it is used.
+                scene_metadata["work_episode_seconds_at_start"] = (
+                    self.work_timer.episode_seconds()
+                    if self.work_timer.is_running
+                    else 0
+                )
         result = self.economy.start_food_scene(
             item_key,
             duration_minutes=int(duration_minutes) if int(duration_minutes or 0) > 0 else None,
@@ -2058,25 +2084,7 @@ class PetWindow(QWidget):
             todo_title=todo_title,
             consume_inventory=consume_inventory,
             source=source,
-            scene_metadata=(
-                {
-                    "resume_work": resume_after_rest,
-                }
-                if item_key == "milk_tea"
-                else {
-                    # If coffee starts a new work episode, a previously
-                    # paused episode must not be inherited.  When the user is
-                    # already working, count the two-hour threshold from the
-                    # moment the expensive coffee is used.
-                    "work_episode_seconds_at_start": (
-                        self.work_timer.episode_seconds()
-                        if self.work_timer.is_running
-                        else 0
-                    ),
-                }
-                if item_key == "expensive_coffee"
-                else None
-            ),
+            scene_metadata=scene_metadata,
         )
         if result is None:
             if resume_after_rest:
@@ -2122,16 +2130,21 @@ class PetWindow(QWidget):
             return
         item_key = str(scene.get("item_key") or "")
         if item_key in {"coffee", "expensive_coffee"}:
-            if not self.work_timer.is_running:
-                # A paused work session must not be silently converted into
-                # a finished session just because the visual coffee window
-                # reached its wall-clock end.
-                self.economy.finish_food_scene("timer_while_paused")
-                self.show_speech("咖啡场景结束了，工作还保持暂停。要继续时请手动点继续工作。", 5600)
+            metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+            # This flag is intentionally read from the persisted scene for
+            # auditing and future receipts. It does not grant the timeout
+            # permission to finish a shared Work Session.
+            _started_by_coffee = bool(metadata.get("coffee_scene_started_work_timer"))
+            if not self.economy.finish_food_scene("timer"):
                 return
-            before = self.work_timer.session_seconds()
-            self.finish_work_timer()
-            self.show_speech(f"这杯咖啡没白喝。\n实际专注 {format_work_duration(before)}。", 5600)
+            self.food_scene_timer.stop()
+            if self.work_timer.is_running:
+                message = "咖啡喝完啦，半小时到了。\n要继续工作，还是结束这一轮？"
+            elif self.work_timer.has_active_session:
+                message = "咖啡喝完啦，半小时到了。\n当前工作还暂停着，要继续还是结束这一轮？"
+            else:
+                message = "咖啡喝完啦，半小时到了。\n要开始工作，还是结束这一轮？"
+            self._show_coffee_scene_prompt(message)
             return
         finished = self.economy.finish_food_scene("timer")
         if not finished:
@@ -2142,6 +2155,28 @@ class PetWindow(QWidget):
             self.show_speech("奶茶喝完了。\n工作还暂停着，要继续时点‘继续工作’。", 5200)
         elif item_key == "cake":
             self.show_speech("庆祝结束，今天这件事已经被六毛记下来了。", 4200)
+
+    def _show_coffee_scene_prompt(self, message: str) -> None:
+        """Ask what to do next without changing the user's work decision."""
+
+        self.coffee_scene_prompt.set_message(message)
+        self._position_coffee_scene_prompt()
+        self.coffee_scene_prompt.show()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.coffee_scene_prompt)
+        self._raise_accessory(self.coffee_scene_prompt)
+
+    def _continue_after_coffee_scene(self) -> None:
+        self.coffee_scene_prompt.hide()
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+        else:
+            self.show_speech("好，继续工作。", 3200)
+
+    def _finish_after_coffee_scene(self) -> None:
+        self.coffee_scene_prompt.hide()
+        if self.work_timer.has_active_session:
+            self.finish_work_timer()
 
     def _send_food_interaction(self, buddy: dict, kind: str) -> None:
         """Send a food scene invitation; gifts are charged locally and never create income."""
@@ -2642,6 +2677,8 @@ class PetWindow(QWidget):
             self._position_quick_panel()
         if hasattr(self, "work_controls") and self.work_controls.isVisible():
             self._position_work_controls()
+        if hasattr(self, "coffee_scene_prompt") and self.coffee_scene_prompt.isVisible():
+            self._position_coffee_scene_prompt()
         if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
@@ -4213,6 +4250,42 @@ class PetWindow(QWidget):
             chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
         panel.move(chosen.topLeft())
 
+    def _position_coffee_scene_prompt(self) -> None:
+        """Place the coffee completion prompt near the pet without stealing focus."""
+
+        panel = self.coffee_scene_prompt
+        panel.adjustSize()
+        area = self._screen_geometry()
+        gap = 10
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        blocked = [pet_rect]
+        for accessory in (self._compact_todo_panel, self.speech_bubble, self.quick_panel, self.work_controls):
+            if accessory is not None and accessory.isVisible():
+                blocked.append(accessory.geometry())
+        center_x = self.x() + (self.width() - panel.width()) // 2
+        candidates = [
+            (center_x, self.y() - panel.height() - gap),
+            (center_x, self.y() + self.height() + gap),
+            (self.x() - panel.width() - gap, self.y() + self.height() - panel.height()),
+            (self.x() + self.width() + gap, self.y() + self.height() - panel.height()),
+        ]
+        chosen = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if any(candidate.intersects(item) for item in blocked):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            candidate_x, candidate_y = candidates[0]
+            if area is not None:
+                candidate_x = min(max(candidate_x, area.left()), area.right() - panel.width() + 1)
+                candidate_y = min(max(candidate_y, area.top()), area.bottom() - panel.height() + 1)
+            chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+        panel.move(chosen.topLeft())
+
     def _position_work_duration_bubble(self) -> None:
         """Keep the live duration label by the pet's feet with edge fallback."""
 
@@ -4906,6 +4979,7 @@ class PetWindow(QWidget):
                 self,
                 self.quick_panel,
                 self.work_controls,
+                self.coffee_scene_prompt,
                 self.work_duration_bubble,
                 self.speech_bubble,
                 self.photo_bubble,

@@ -216,6 +216,7 @@ def test_macos_lili_codex_call_is_isolated_and_uses_low_latency_model(monkeypatc
     monkeypatch.delenv("LILI_CODEX_TIMEOUT_SECONDS", raising=False)
     command = _codex_exec_command(Path("/usr/local/bin/codex"), "测试消息")
 
+    assert command.index("exec") < command.index("--ignore-user-config")
     assert "--ignore-user-config" in command
     assert "--ephemeral" in command
     assert 'model="gpt-5.6-luna"' in command
@@ -230,6 +231,7 @@ def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
     command = _codex_exec_command(Path("codex.exe"), "测试消息")
 
+    assert command.index("exec") < command.index("--ignore-user-config")
     assert "--ignore-user-config" in command
     assert "--ephemeral" in command
     assert 'model_provider="lili_http"' in command
@@ -242,15 +244,33 @@ def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
 def test_app_server_command_uses_cross_platform_stdio_transport(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
     command = _codex_app_server_command(Path("codex.exe"))
-    assert command[-2:] == ["--listen", "stdio://"]
+    assert command[command.index("app-server") : command.index("app-server") + 3] == [
+        "app-server",
+        "--listen",
+        "stdio://",
+    ]
     assert "mcp_servers={}" in command
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     command = _codex_app_server_command(Path("/usr/local/bin/codex"))
-    assert command[-2:] == ["--listen", "stdio://"]
+    assert command[command.index("app-server") : command.index("app-server") + 3] == [
+        "app-server",
+        "--listen",
+        "stdio://",
+    ]
     assert "--config" in command
-    assert "--ignore-user-config" in command
+    assert "--ignore-user-config" not in command
+    assert command.index("app-server") < command.index("--config")
     assert any(part.endswith("supports_websockets=false") for part in command)
+
+
+def test_codex_cli_argument_error_is_short_and_actionable() -> None:
+    from onepic_desktop_pet.ai import _codex_failure_message
+
+    message = _codex_failure_message(
+        "error: unexpected argument '--ignore-user-config' found\nUsage: codex [OPTIONS]"
+    )
+    assert message == "Codex 启动失败：当前 CLI 参数不兼容。已临时切换到离线陪伴。"
 
 
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:

@@ -37,6 +37,9 @@ def test_positive_mood_never_punishes_a_quiet_day() -> None:
 def test_time_of_day_and_corrected_action_assets() -> None:
     assert time_of_day_activity(datetime(2026, 8, 10, 2, 0), True)[0] == "sleep"
     assert time_of_day_activity(datetime(2026, 8, 10, 12, 0), True)[0] == "feast"
+    _, sleep_message = time_of_day_activity(datetime(2026, 8, 10, 23, 30), False)
+    assert "穿好睡衣" in sleep_message
+    assert "穿好睡意" not in sleep_message
     assert ACTION_SPRITES["headphones"] == "03-headphones.png"
     assert ACTION_SPRITES["wild-king"] == "27-wild-king.png"
     assert len(set(ACTION_SPRITES.values())) == 46

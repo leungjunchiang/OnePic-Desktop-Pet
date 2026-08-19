@@ -150,4 +150,4 @@ def time_of_day_activity(now: datetime, work_running: bool) -> tuple[str, str]:
         return ("thermos" if work_running else "tea"), "下午容易犯困，喝口水，肩膀也松一松。"
     if hour < 22:
         return "night-reading", "晚上适合慢慢收尾，不用把所有明天都塞进今天。"
-    return "sleep", "六毛已经穿好睡意了。今天做到这里，也很完整。"
+    return "sleep", "六毛已经穿好睡衣了。今天做到这里，也很完整。"
