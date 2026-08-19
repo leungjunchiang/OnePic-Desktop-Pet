@@ -170,6 +170,9 @@ class TodoRow(QWidget):
 
     def set_task(self, task: Any) -> None:
         text = str(getattr(task, "display_text", "") or task.title).replace("\n", " ")
+        queue_position = getattr(task, "queue_position", None)
+        if queue_position in {1, 2, 3, 4, 5}:
+            text = f"{('①', '②', '③', '④', '⑤')[int(queue_position) - 1]} {text}"
         self._full_text = text
         self._completed = bool(task.completed)
         self.label.setToolTip(text)
@@ -442,8 +445,17 @@ class CompactTodoPanel(QWidget):
             explicit_priority = None
         if explicit_priority not in {1, 2, 3}:
             explicit_priority = None
+        raw_queue = getattr(task, "queue_position", None)
+        try:
+            queue_position = int(raw_queue) if raw_queue is not None else None
+        except (TypeError, ValueError):
+            queue_position = None
+        if queue_position not in {1, 2, 3, 4, 5}:
+            queue_position = None
         return (
             -int(current),
+            0 if queue_position is not None else 1,
+            queue_position if queue_position is not None else 99,
             0 if explicit_priority is not None else (1 if important else 2),
             explicit_priority if explicit_priority is not None else 99,
             max(0, day_value),
@@ -736,13 +748,12 @@ class CompactTodoPanel(QWidget):
         time.setPlaceholderText("可选，例如 20:00")
         important = QCheckBox("置顶", dialog)
         important.setChecked(task.important)
-        priority = QComboBox(dialog)
-        priority.addItem("未设置（按时间）", None)
-        priority.addItem("高", 1)
-        priority.addItem("中", 2)
-        priority.addItem("低", 3)
-        priority_index = priority.findData(getattr(task, "priority", None))
-        priority.setCurrentIndex(priority_index if priority_index >= 0 else 0)
+        queue_position = QComboBox(dialog)
+        queue_position.addItem("未排顺位（按时间）", None)
+        for position, label in enumerate(("第1", "第2", "第3", "第4", "第5"), start=1):
+            queue_position.addItem(label, position)
+        queue_index = queue_position.findData(getattr(task, "queue_position", None))
+        queue_position.setCurrentIndex(queue_index if queue_index >= 0 else 0)
         reminder_mode = QComboBox(dialog)
         reminder_mode.addItem("不提醒", REMINDER_NONE)
         reminder_mode.addItem("六毛提醒（无声音）", REMINDER_PET)
@@ -764,7 +775,7 @@ class CompactTodoPanel(QWidget):
             form.addRow("任务", title)
             form.addRow("时间", time)
             form.addRow("", important)
-            form.addRow("优先级", priority)
+            form.addRow("任务顺位", queue_position)
             form.addRow("提醒方式", reminder_mode)
             form.addRow("提前提醒", reminder_minutes)
         else:
@@ -785,7 +796,7 @@ class CompactTodoPanel(QWidget):
             changes.update(
                 title=title.text().strip(),
                 important=important.isChecked(),
-                priority=priority.currentData(),
+                queue_position=queue_position.currentData(),
                 reminder_mode=reminder_mode.currentData(),
                 reminder=reminder_mode.currentData() != REMINDER_NONE,
                 reminder_minutes_before=reminder_minutes.value(),
