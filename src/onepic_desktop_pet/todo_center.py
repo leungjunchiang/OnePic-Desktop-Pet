@@ -612,7 +612,7 @@ class TodoCenterWindow(QDialog):
                 )
                 row.setData(Qt.ItemDataRole.UserRole, item.id)
                 row.setData(Qt.ItemDataRole.UserRole + 1, item)
-                row.setToolTip("拖动调整当前顺位；双击编辑")
+                row.setToolTip("拖动调整顺序；双击编辑")
             if not queue_rows:
                 empty = QListWidgetItem("这里还没有待办。点击“＋ 新建”添加。", self._queue_list)
                 empty.setFlags(Qt.ItemFlag.ItemIsEnabled)
