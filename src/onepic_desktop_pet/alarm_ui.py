@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QDateTime, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtCore import QDateTime, QUrl, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (
     QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,18 +29,148 @@ from PySide6.QtWidgets import (
 )
 
 from .alarm_manager import Alarm, AlarmManager, REPEAT_DAILY, REPEAT_ONCE, REPEAT_WEEKDAYS
+from .alarm_sounds import AlarmSoundLibrary
+
+try:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+except ImportError:  # pragma: no cover - depends on the bundled Qt runtime
+    QAudioOutput = QMediaPlayer = None
 
 
 ALARM_STYLE = """
 QDialog#alarmCenter, QDialog#alarmEditor { background: #eef5f8; color: #24475b; }
-QDialog#alarmCard { background: #fff9e6; color: #27313d;
-    border: 2px solid #e7a84d; border-radius: 14px; }
+QDialog#alarmCard { background: #f4fafc; color: #24475b;
+    border: 1px solid #9fc2cd; border-radius: 18px; }
 QDialog#alarmCard QLabel { background: transparent; border: none; }
 QDialog#alarmCard QPushButton { background: #e7f3f6; color: #24475b;
-    border: 1px solid #8dbbc7; border-radius: 9px; padding: 5px 9px; }
-QDialog#alarmCard QPushButton:hover { background: #fff0c8; border-color: #e74a4f; }
+    border: 1px solid #9fcbd5; border-radius: 10px; padding: 7px 12px; }
+QDialog#alarmCard QPushButton:hover { background: #d8edf1; border-color: #e46d70; }
+QDialog#alarmCard QPushButton#primary { background: #d0e9ef; font-weight: 700; }
+QDialog#alarmCard QPushButton#quiet { background: transparent; border-color: transparent; color: #607985; }
 QListWidget { background: rgba(255,255,255,210); border: 1px solid #b4ccd5; border-radius: 10px; }
 """
+
+
+class AlarmSoundSelector(QWidget):
+    """Shared sound picker used by standalone alarms and Todo alarms."""
+
+    changed = Signal(str)
+
+    def __init__(
+        self,
+        library: AlarmSoundLibrary | None,
+        selected_id: str = "system",
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.library = library or AlarmSoundLibrary(persist=False)
+        self.combo = QComboBox(self)
+        self.import_button = QPushButton("导入…", self)
+        self.preview_button = QPushButton("试听", self)
+        self.stop_button = QPushButton("停止", self)
+        self.delete_button = QPushButton("删除", self)
+        self.import_button.clicked.connect(self._import)
+        self.preview_button.clicked.connect(self.preview)
+        self.stop_button.clicked.connect(self.stop_preview)
+        self.delete_button.clicked.connect(self._delete)
+        self.combo.currentIndexChanged.connect(self._changed_once)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
+        row.addWidget(self.combo, 1)
+        row.addWidget(self.import_button)
+        row.addWidget(self.preview_button)
+        row.addWidget(self.stop_button)
+        row.addWidget(self.delete_button)
+        self._preview_output = QAudioOutput(self) if QAudioOutput is not None else None
+        self._preview_player = QMediaPlayer(self) if QMediaPlayer is not None else None
+        if self._preview_player is not None and self._preview_output is not None:
+            self._preview_player.setAudioOutput(self._preview_output)
+            self._preview_player.errorOccurred.connect(lambda *_args: self.stop_preview())
+        self.refresh(selected_id)
+
+    def refresh(self, selected_id: str | None = None) -> None:
+        selected = str(selected_id or self.current_sound_id() or "system")
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        self.combo.addItem("系统提示音", "system")
+        self.combo.addItem("六毛默认铃声（无内置音频时使用系统音）", "default")
+        for sound in self.library.items:
+            self.combo.addItem(sound.display_name, sound.sound_id)
+        index = self.combo.findData(selected)
+        self.combo.setCurrentIndex(index if index >= 0 else 0)
+        self.combo.blockSignals(False)
+        self.delete_button.setEnabled(self.combo.currentData() not in {"system", "default", None})
+
+    def _changed_once(self, _index: int) -> None:
+        self.changed.emit(self.current_sound_id())
+
+    def current_sound_id(self) -> str:
+        return str(self.combo.currentData() or "system")
+
+    def _import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入六毛闹钟铃声",
+            "",
+            "音频 (*.mp3 *.wav *.m4a *.aac);;所有文件 (*)",
+        )
+        if not path:
+            return
+        try:
+            sound = self.library.import_file(path)
+        except (OSError, ValueError) as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "无法导入铃声", str(exc))
+            return
+        self.refresh(sound.sound_id)
+        self.changed.emit(sound.sound_id)
+
+    def _delete(self) -> None:
+        sound_id = self.current_sound_id()
+        if sound_id in {"system", "default"}:
+            return
+        sound = self.library.get(sound_id)
+        if sound is None:
+            return
+        from PySide6.QtWidgets import QMessageBox
+        answer = QMessageBox.question(
+            self,
+            "删除自定义铃声",
+            f"删除“{sound.display_name}”？引用它的闹钟会自动回退到系统提示音。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.stop_preview()
+        self.library.remove(sound_id)
+        self.refresh("system")
+        self.changed.emit("system")
+
+    def preview(self) -> None:
+        self.stop_preview()
+        sound_id = self.current_sound_id()
+        path = self.library.resolve_path(sound_id)
+        if path is None:
+            QApplication.beep()
+            return
+        if self._preview_player is None:
+            QApplication.beep()
+            return
+        if self._preview_output is not None:
+            self._preview_output.setVolume(0.7)
+        self._preview_player.setSource(QUrl.fromLocalFile(str(path)))
+        self._preview_player.play()
+        QTimer.singleShot(15_000, self.stop_preview)
+
+    def stop_preview(self) -> None:
+        if self._preview_player is not None:
+            self._preview_player.stop()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.stop_preview()
+        super().closeEvent(event)
 
 
 class AlarmCard(QDialog):
@@ -54,9 +186,16 @@ class AlarmCard(QDialog):
     snooze_requested = Signal(str, int)
     dismiss_requested = Signal(str)
 
-    def __init__(self, alarm: Alarm, parent=None) -> None:
+    def __init__(
+        self,
+        alarm: Alarm,
+        parent=None,
+        *,
+        sound_library: AlarmSoundLibrary | None = None,
+    ) -> None:
         super().__init__(None)
         self.alarm = alarm
+        self.sound_library = sound_library
         self._suppress_close_action = False
         self.setObjectName("alarmCard")
         self.setWindowFlags(
@@ -70,48 +209,103 @@ class AlarmCard(QDialog):
         self.setModal(False)
         self.setStyleSheet(ALARM_STYLE)
         self.setMinimumWidth(420)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(22)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor("#9bb5bf"))
+        self.setGraphicsEffect(shadow)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(7)
         title = QLabel(str(alarm.title))
         title.setWordWrap(True)
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title.setStyleSheet("font-size: 18px; font-weight: 700;")
         layout.addWidget(title)
+        trigger = QLabel(self._display_trigger(alarm.trigger_at))
+        trigger.setStyleSheet("font-size: 32px; font-weight: 800; color:#24475b;")
+        layout.insertWidget(0, trigger)
         sound_hint = QLabel(
-            f"系统提示音 · 最长{max(0, int(alarm.max_ring_seconds or 0))}秒"
+            f"{self._sound_name(alarm.sound_id)} · 最长{max(0, int(alarm.max_ring_seconds or 0))}秒"
             if alarm.sound_enabled else "静音闹钟 · 只显示六毛提醒"
         )
         sound_hint.setStyleSheet("color:#607985;font-size:11px;")
         layout.addWidget(sound_hint)
-        actions = QHBoxLayout()
-        actions.setSpacing(5)
+        actions = QVBoxLayout()
+        actions.setSpacing(6)
         start = QPushButton("开始工作" if alarm.linked_todo_id else "开始30分钟")
+        start.setObjectName("primary")
         start.clicked.connect(lambda: self.start_requested.emit(alarm.id))
         actions.addWidget(start)
+        snoozes = QHBoxLayout()
+        snoozes.setSpacing(5)
         for minutes in (5, 10, 30):
             button = QPushButton(f"后{minutes}分")
             button.clicked.connect(lambda _checked=False, value=minutes: self.snooze_requested.emit(alarm.id, value))
-            actions.addWidget(button)
+            snoozes.addWidget(button)
+        actions.addLayout(snoozes)
         close = QPushButton("关闭")
+        close.setObjectName("quiet")
         close.clicked.connect(lambda: self.dismiss_requested.emit(alarm.id))
-        actions.addWidget(close)
+        actions.addWidget(close, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addLayout(actions)
+        self._audio_output = QAudioOutput(self) if QAudioOutput is not None else None
+        self._media_player = QMediaPlayer(self) if QMediaPlayer is not None else None
+        self._using_system_sound = True
+        if self._media_player is not None and self._audio_output is not None:
+            self._media_player.setAudioOutput(self._audio_output)
+            self._audio_output.setVolume(max(0, min(100, int(alarm.volume or 0))) / 100)
+            self._media_player.mediaStatusChanged.connect(self._media_status_changed)
+            self._media_player.errorOccurred.connect(lambda *_args: self._fallback_to_system())
         if alarm.sound_enabled:
             self._sound_timer = QTimer(self)
             # QApplication.beep uses the platform's own short alert sound.
             # Repeat it gently instead of hammering the system speaker.
             self._sound_timer.setInterval(3_000)
-            self._sound_timer.timeout.connect(QApplication.beep)
-            self._sound_timer.start()
-            QTimer.singleShot(0, QApplication.beep)
+            self._sound_timer.timeout.connect(self._play_system_sound)
             self._sound_stop_timer = QTimer(self)
             self._sound_stop_timer.setSingleShot(True)
             self._sound_stop_timer.setInterval(max(0, int(alarm.max_ring_seconds or 60)) * 1_000)
             self._sound_stop_timer.timeout.connect(self._stop_sound)
             self._sound_stop_timer.start()
+            self._start_sound()
         else:
             self._sound_timer = None
             self._sound_stop_timer = None
+
+    @staticmethod
+    def _display_trigger(value: str) -> str:
+        return str(value or "")[:16].replace("T", " ").split(" ", 1)[1] if " " in str(value or "") else "⏰"
+
+    def _sound_name(self, sound_id: str) -> str:
+        return self.sound_library.display_name(sound_id) if self.sound_library else (
+            "系统提示音" if sound_id in {"", "system", "default"} else "自定义铃声"
+        )
+
+    def _start_sound(self) -> None:
+        path = self.sound_library.resolve_path(self.alarm.sound_id) if self.sound_library else None
+        if path is not None and self._media_player is not None:
+            self._using_system_sound = False
+            self._media_player.setSource(QUrl.fromLocalFile(str(path)))
+            self._media_player.play()
+            return
+        self._fallback_to_system()
+
+    def _media_status_changed(self, status) -> None:
+        if not self._using_system_sound and self._media_player is not None:
+            if status == QMediaPlayer.MediaStatus.EndOfMedia:
+                self._media_player.play()
+
+    def _fallback_to_system(self) -> None:
+        self._using_system_sound = True
+        if self._media_player is not None:
+            self._media_player.stop()
+        if self._sound_timer is not None:
+            self._sound_timer.start()
+        self._play_system_sound()
+
+    @staticmethod
+    def _play_system_sound() -> None:
+        QApplication.beep()
 
     def center_on_current_screen(self) -> None:
         """Center once on the screen the user is currently using.
@@ -144,6 +338,8 @@ class AlarmCard(QDialog):
     def _stop_sound(self) -> None:
         if self._sound_timer is not None:
             self._sound_timer.stop()
+        if self._media_player is not None:
+            self._media_player.stop()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._sound_timer is not None:
@@ -160,7 +356,14 @@ class AlarmCard(QDialog):
 
 
 class AlarmEditDialog(QDialog):
-    def __init__(self, todos: list[Any], alarm: Alarm | None = None, parent=None) -> None:
+    def __init__(
+        self,
+        todos: list[Any],
+        alarm: Alarm | None = None,
+        parent=None,
+        *,
+        sound_library: AlarmSoundLibrary | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("alarmEditor")
         self.setWindowTitle("六毛闹钟")
@@ -208,12 +411,11 @@ class AlarmEditDialog(QDialog):
             self.weekday_checks[datetime.now().astimezone().weekday()].setChecked(True)
         self.sound = QCheckBox("到点播放提示音", self)
         self.sound.setChecked(bool(alarm.sound_enabled) if alarm else True)
-        self.sound_id = QComboBox(self)
-        self.sound_id.addItem("系统提示音", "system")
-        if alarm:
-            sound_index = self.sound_id.findData(alarm.sound_id)
-            if sound_index >= 0:
-                self.sound_id.setCurrentIndex(sound_index)
+        self.sound_selector = AlarmSoundSelector(
+            sound_library,
+            str(alarm.sound_id if alarm else "system"),
+            self,
+        )
         self.volume = QSpinBox(self)
         self.volume.setRange(0, 100)
         self.volume.setSuffix("%（系统提示音音量由系统设置控制）")
@@ -240,7 +442,7 @@ class AlarmEditDialog(QDialog):
         form.addRow("稍后默认", self.snooze)
         form.addRow("关联待办", self.linked_todo)
         form.addRow("", self.sound)
-        form.addRow("铃声", self.sound_id)
+        form.addRow("铃声", self.sound_selector)
         form.addRow("音量", self.volume)
         form.addRow("", self.allow_dnd)
         buttons = QDialogButtonBox(
@@ -269,7 +471,7 @@ class AlarmEditDialog(QDialog):
             "trigger_at": self.trigger.dateTime().toString("yyyy-MM-ddTHH:mm:ss"),
             "repeat_rule": repeat_rule,
             "sound_enabled": self.sound.isChecked(),
-            "sound_id": self.sound_id.currentData() or "system",
+            "sound_id": self.sound_selector.current_sound_id(),
             "volume": self.volume.value(),
             "max_ring_seconds": 60,
             "allow_during_dnd": self.allow_dnd.isChecked(),
@@ -283,10 +485,18 @@ class AlarmCenterDialog(QDialog):
 
     changed = Signal()
 
-    def __init__(self, alarms: AlarmManager, todos: list[Any], parent=None) -> None:
+    def __init__(
+        self,
+        alarms: AlarmManager,
+        todos: list[Any],
+        parent=None,
+        *,
+        sound_library: AlarmSoundLibrary | None = None,
+    ) -> None:
         super().__init__(parent)
         self.alarms = alarms
         self.todos = todos
+        self.sound_library = sound_library
         self.setObjectName("alarmCenter")
         self.setWindowTitle("六毛闹钟")
         self.setMinimumSize(520, 390)
@@ -324,7 +534,7 @@ class AlarmCenterDialog(QDialog):
         return self.alarms.get(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
     def _add(self) -> None:
-        dialog = AlarmEditDialog(list(self.todos), parent=self)
+        dialog = AlarmEditDialog(list(self.todos), parent=self, sound_library=self.sound_library)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.alarms.add(**dialog.values())
@@ -335,7 +545,9 @@ class AlarmCenterDialog(QDialog):
         alarm = self._selected()
         if alarm is None:
             return
-        dialog = AlarmEditDialog(list(self.todos), alarm=alarm, parent=self)
+        dialog = AlarmEditDialog(
+            list(self.todos), alarm=alarm, parent=self, sound_library=self.sound_library
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.alarms.update(alarm.id, **dialog.values())
