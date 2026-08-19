@@ -366,20 +366,17 @@ class EconomyDialog(QDialog):
         name, ok = QInputDialog.getText(self, "成果见证", "名称：")
         if not ok or not name.strip():
             return
-        amount, ok = QInputDialog.getInt(self, "成果见证", "奖励吉他拨片（1–100）：", 20, 1, 100)
-        if not ok:
-            return
         note, ok = QInputDialog.getText(self, "成果见证", "备注（可选）：")
         if not ok:
             return
         if QMessageBox.question(
             self, "提交成果见证",
-            f"确认提交“{name.strip()}”，奖励 {amount} 吉他拨片吗？\n提交后需 2 名不同搭子确认，确认前不会入账。",
+            f"确认提交“{name.strip()}”吗？\n提交后需 2 名不同搭子确认，确认后固定获得 50 吉他拨片，确认前不会入账。",
         ) != QMessageBox.StandardButton.Yes:
             return
-        pending = self.ledger.register_achievement_income(kind, name, amount, note)
+        pending = self.ledger.register_achievement_income(kind, name, note=note)
         if pending is None:
-            QMessageBox.warning(self, "提交失败", "奖励必须为 1–100 个，且同月同一成果不能重复提交。")
+            QMessageBox.warning(self, "提交失败", "同月同一成果不能重复提交。")
             return
         self.refresh()
         self.changed.emit()
