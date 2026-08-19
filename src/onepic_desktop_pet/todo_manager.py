@@ -277,6 +277,7 @@ class TodoManager:
         alarm_sound_id: str = "system",
         alarm_volume: int = 60,
         alarm_snooze_minutes: int = 10,
+        reminder_suppressed: bool = False,
         source: str = "local",
     ) -> TodoItem:
         title = " ".join(str(title).split())[:240]
@@ -336,6 +337,7 @@ class TodoManager:
             alarm_sound_id=str(alarm_sound_id or "system")[:40],
             alarm_volume=max(0, min(100, int(alarm_volume or 0))),
             alarm_snooze_minutes=max(1, min(120, int(alarm_snooze_minutes or 10))),
+            reminder_suppressed=bool(reminder_suppressed),
             source=str(source or "local")[:40],
         )
         self._items.append(item)
