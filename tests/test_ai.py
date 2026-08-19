@@ -486,3 +486,4 @@ def test_macos_gui_launch_uses_open_a_chatgpt(monkeypatch) -> None:
     assert launch_codex_gui() is True
     assert calls[0][0] == ["open", "-a", "ChatGPT"]
 
+
