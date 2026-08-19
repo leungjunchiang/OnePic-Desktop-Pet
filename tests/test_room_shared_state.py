@@ -92,7 +92,7 @@ def test_first_open_does_not_enter_any_room_implicitly():
 def test_interaction_button_has_a_visible_cooldown():
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"user_id": "peer", "nickname": "搭子", "online": True, "working": True})
-    button = widget._buttons["poke"]
+    button = widget._buttons["visit"]
     button.click()
     app.processEvents()
     assert not button.isEnabled()
@@ -173,3 +173,4 @@ def test_room_quick_actions_change_real_focus_state_and_expire_status(tmp_path):
     assert not timer.is_running
     assert window._room_quick_status == "去喝水"
     window.close(); window.deleteLater(); app.processEvents()
+
