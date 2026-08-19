@@ -93,6 +93,7 @@ except ImportError:
     QAudioOutput = QMediaPlayer = None
 
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
+from .alarm_ui import AlarmCard, AlarmCenterDialog
 from .accessories import (
     OUTFITS,
     SPECIAL_LIMITED_ACTIVITY_SPRITES,
@@ -333,6 +334,8 @@ class PetWindow(QWidget):
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
         self._food_scene_dialog: FoodSceneDialog | None = None
+        self._alarm_center_dialog: AlarmCenterDialog | None = None
+        self._alarm_card: AlarmCard | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -1221,6 +1224,10 @@ class PetWindow(QWidget):
             self._time_memory_window.close()
         if self._todo_center_window is not None:
             self._todo_center_window.close()
+        if self._alarm_center_dialog is not None:
+            self._alarm_center_dialog.close()
+        if self._alarm_card is not None:
+            self._alarm_card.close()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
@@ -2402,6 +2409,8 @@ class PetWindow(QWidget):
             self._position_work_controls()
         if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
+        if hasattr(self, "_alarm_card") and self._alarm_card is not None and self._alarm_card.isVisible():
+            self._position_alarm_card()
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
             self._position_compact_todos()
         self._position_sticky_note()
@@ -2557,6 +2566,27 @@ class PetWindow(QWidget):
         self._todo_center_window.raise_()
         self._todo_center_window.activateWindow()
 
+    def show_alarm_center(self) -> None:
+        """Open the local alarm editor without creating a second reminder system."""
+
+        self._record_user_interaction()
+        todos = list(self.time_memory.todos.items)
+        if self._alarm_center_dialog is None:
+            self._alarm_center_dialog = AlarmCenterDialog(
+                self.time_memory.alarms,
+                todos,
+                parent=None,
+            )
+        else:
+            self._alarm_center_dialog.todos = todos
+            self._alarm_center_dialog.refresh()
+        if self._alarm_center_dialog.isMinimized():
+            self._alarm_center_dialog.showNormal()
+        else:
+            self._alarm_center_dialog.show()
+        self._alarm_center_dialog.raise_()
+        self._alarm_center_dialog.activateWindow()
+
     def show_time_memory(self) -> None:
         if self._time_memory_window is None:
             self._time_memory_window = TimeMemoryWindow(self.time_memory)
@@ -2652,6 +2682,7 @@ class PetWindow(QWidget):
     def _work_timer_tick(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
+        self._check_local_alarms()
         self._check_local_reminders()
         self.work_timer.checkpoint()
         snapshot = self.focus_session.refresh()
@@ -2697,6 +2728,65 @@ class PetWindow(QWidget):
             self.time_memory.reminders.mark_notified(reminder.id)
             self._set_temporary_activity("curious", 12_000)
             self.show_speech(f"提醒：{reminder.title}", 5600)
+
+    def _check_local_alarms(self) -> None:
+        """Present due alarms as a non-modal card, never by stealing focus."""
+
+        quiet = detect_quiet_mode()
+        deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
+        claimed = self.time_memory.alarms.claim_due(
+            allow_during_dnd=not (quiet.blocked or deep_food_scene),
+        )
+        if self._alarm_card is not None and self._alarm_card.isVisible():
+            return
+        candidates = claimed or self.time_memory.alarms.active()
+        if candidates:
+            self._show_alarm_card(candidates[0])
+
+    def _show_alarm_card(self, alarm) -> None:
+        """Show one alarm at a time; queued alarms remain persisted and local."""
+
+        if self._alarm_card is not None:
+            self._alarm_card.close()
+        self._alarm_card = AlarmCard(alarm)
+        self._alarm_card.start_requested.connect(self._start_alarm_work)
+        self._alarm_card.snooze_requested.connect(self._snooze_alarm)
+        self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
+        self._position_alarm_card()
+        self._alarm_card.show()
+        self._alarm_card.raise_()
+
+    def _close_alarm_card(self) -> None:
+        card = self._alarm_card
+        self._alarm_card = None
+        if card is not None:
+            card.close()
+            card.deleteLater()
+
+    def _start_alarm_work(self, alarm_id: str) -> None:
+        alarm = self.time_memory.alarms.get(alarm_id)
+        if alarm is None:
+            self._close_alarm_card()
+            return
+        self.time_memory.alarms.dismiss(alarm_id)
+        if alarm.linked_todo_id:
+            self.time_memory.select_task(alarm.linked_todo_id)
+        self._close_alarm_card()
+        self.start_work_timer()
+
+    def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
+        try:
+            self.time_memory.alarms.snooze(alarm_id, minutes)
+        except KeyError:
+            pass
+        self._close_alarm_card()
+
+    def _dismiss_alarm(self, alarm_id: str) -> None:
+        try:
+            self.time_memory.alarms.dismiss(alarm_id)
+        except KeyError:
+            pass
+        self._close_alarm_card()
 
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
@@ -3859,6 +3949,39 @@ class PetWindow(QWidget):
             chosen = QRect(candidate_x, candidate_y, bubble.width(), bubble.height())
         bubble.move(chosen.topLeft())
 
+    def _position_alarm_card(self) -> None:
+        """Place the alarm card near the pet without making it an active window."""
+
+        card = self._alarm_card
+        if card is None:
+            return
+        card.adjustSize()
+        area = self._screen_geometry()
+        gap = 12
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        candidates = [
+            (self.x() + (self.width() - card.width()) // 2, self.y() - card.height() - gap),
+            (self.x() + self.width() + gap, self.y()),
+            (self.x() - card.width() - gap, self.y()),
+            (self.x() + (self.width() - card.width()) // 2, self.y() + self.height() + gap),
+        ]
+        chosen = None
+        for x, y in candidates:
+            candidate = QRect(x, y, card.width(), card.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if candidate.intersects(pet_rect):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            x, y = candidates[0]
+            if area is not None:
+                x = min(max(x, area.left()), area.right() - card.width() + 1)
+                y = min(max(y, area.top()), area.bottom() - card.height() + 1)
+            chosen = QRect(x, y, card.width(), card.height())
+        card.move(chosen.topLeft())
+
     def _update_work_duration_bubble(self, snapshot=None) -> None:
         """Render the shared focus snapshot without creating a second timer."""
 
@@ -3874,6 +3997,8 @@ class PetWindow(QWidget):
         if self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
             self.work_duration_bubble.raise_()
+        if self._alarm_card is not None and self._alarm_card.isVisible():
+            self._position_alarm_card()
 
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""
@@ -3995,6 +4120,7 @@ class PetWindow(QWidget):
             "time_memory": lambda _checked=False: self.show_time_memory(),
             "show_work_time": lambda _checked=False: self.show_work_time(),
             "economy": lambda _checked=False: self.show_economy(),
+            "alarms": lambda _checked=False: self.show_alarm_center(),
             "show_growth": lambda _checked=False: self.show_daily_growth(),
             "show_report": lambda _checked=False: self.show_daily_report(),
             "open_album": lambda _checked=False: self.open_daily_album(),

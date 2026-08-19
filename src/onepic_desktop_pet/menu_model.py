@@ -119,6 +119,7 @@ class UnifiedMenuModel:
             self._optional("调整大小", "size"),
             MenuItemSpec("显示本轮工作时长", "show_work_duration", checkable=True, checked=bool(state.get("show_work_duration", True))),
             self._optional("提醒与报时", "settings"),
+            self._optional("六毛闹钟…", "alarms"),
             self._optional("音乐设置", "settings"),
             self._optional("自习室设置", "settings"),
             MenuItemSpec("更新与关于", children=tuple(update_children)),

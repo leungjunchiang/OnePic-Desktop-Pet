@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 
 from .anniversary_manager import AnniversaryManager
+from .alarm_manager import AlarmManager
 from .countdown_manager import CountdownManager
 from .daily_record_manager import DailyRecordManager
 from .daily_summary_service import DailySummaryService
@@ -34,6 +35,7 @@ class TimeMemory:
         self.records = DailyRecordManager(path("daily_records.json"), now_provider=now_provider, persist=persist)
         self.sessions = WorkSessionManager(path("work_sessions.json"), now_provider=now_provider, persist=persist)
         self.reminders = ReminderManager(path("reminders.json"), now_provider=now_provider, persist=persist)
+        self.alarms = AlarmManager(path("alarms.json"), now_provider=now_provider, persist=persist)
         self.sticky_note = StickyNoteManager(path("sticky_note.json"), now_provider=now_provider, persist=persist)
         self.countdowns = CountdownManager(path("countdowns.json"), now_provider=now_provider, persist=persist)
         self.anniversaries = AnniversaryManager(path("anniversaries.json"), now_provider=now_provider, persist=persist)
