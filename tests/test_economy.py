@@ -166,9 +166,9 @@ def test_achievement_income_requires_two_distinct_witnesses_and_monthly_cap(tmp_
 
     settled = ledger.confirm_achievement(submitted["id"], "buddy-2", "小苗")
     assert settled is not None and settled["status"] == "settled"
-    assert settled["event"]["amount"] == 50
-    assert ledger.balance == 50
-    assert ledger.monthly_income() == 50
+    assert settled["event"]["amount"] == 200
+    assert ledger.balance == 200
+    assert ledger.monthly_income() == 200
 
     assert ledger.register_achievement_income("项目", "成果2", 1) is not None
     assert ledger.register_achievement_income("项目", "成果3", 1) is not None
@@ -180,6 +180,25 @@ def test_achievement_income_requires_two_distinct_witnesses_and_monthly_cap(tmp_
     assert blocked is not None
     limited = ledger.confirm_achievement(blocked["id"], "buddy-c")
     assert limited is not None and limited["status"] == "monthly_limit"
+
+
+def test_manual_witness_slots_reject_uninvited_and_allow_one_replacement(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    submitted = ledger.register_achievement_income(
+        "作品", "手动见证成果", note="说明",
+        witness_ids=["buddy-a", "buddy-b"], witness_names=["A", "B"],
+    )
+    assert submitted is not None
+    assert len(submitted["witness_slots"]) == 2
+    assert ledger.confirm_achievement(submitted["id"], "buddy-x") ["status"] == "not_invited"
+    assert ledger.reject_achievement(submitted["id"], "buddy-b")["status"] == "rejected"
+    assert ledger.confirm_achievement(submitted["id"], "buddy-a")["status"] == "pending"
+    replaced = ledger.replace_achievement_witnesses(submitted["id"], ["buddy-c"])
+    assert replaced is not None and replaced["replacement_round"] == 1
+    settled = ledger.confirm_achievement(submitted["id"], "buddy-c")
+    assert settled is not None and settled["status"] == "settled"
+    assert settled["event"]["amount"] == 200
+    assert ledger.replace_achievement_witnesses(submitted["id"], ["buddy-d"]) is None
 
 
 def test_legacy_food_inventory_aliases_can_be_used(tmp_path):
