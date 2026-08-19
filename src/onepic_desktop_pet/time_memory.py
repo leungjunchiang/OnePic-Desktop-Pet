@@ -18,7 +18,7 @@ from .sticky_note_manager import StickyNoteManager
 from .timeline_manager import TimelineManager
 from .todo_manager import TodoManager
 from .todo_view import TodoViewItem, collect_todo_view
-from .time_service import parse_datetime
+from .time_service import now_local, parse_datetime
 from .work_session_manager import WorkSessionManager
 
 
@@ -61,8 +61,11 @@ class TimeMemory:
     def now(self) -> datetime:
         """Return the same clock used by every local time-memory store."""
 
-        value = self._now() if self._now is not None else datetime.now().astimezone()
-        return value
+        # Keep the composition root on the same aware-local datetime contract
+        # as the managers it coordinates.  Test clocks and legacy callers may
+        # return naive datetimes; normalising here prevents comparisons with
+        # parsed due/reminder timestamps from silently falling back.
+        return now_local(self._now)
 
     def select_task(self, task_id: str | None) -> None:
         self.current_task_id = str(task_id) if task_id else None
@@ -82,7 +85,7 @@ class TimeMemory:
             return
         if bool(getattr(item, "reminder_suppressed", False)):
             # A restored item whose original reminder time has already passed
-            # must not replay an old alert immediately. Editing its reminder
+            # must not replay an old alert immediately.  Editing its reminder
             # clears this flag and schedules the newly chosen time.
             self.reminders.remove_for_source(item_id)
             self.alarms.sync_todo(item, reminder_mode="none")
