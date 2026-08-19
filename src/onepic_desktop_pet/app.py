@@ -238,11 +238,19 @@ class DesktopPetApplication:
         if manual:
             self.window.show_speech("正在检查程序更新…", 2400)
         LOGGER.info("[Update] check_app_update started")
-        worker = ProgramUpdateCheckWorker(
-            self.update_manager,
-            self.qt_app,
-            force=bool(manual),
-        )
+        try:
+            worker = ProgramUpdateCheckWorker(
+                self.update_manager,
+                self.qt_app,
+                force=bool(manual),
+            )
+        except Exception as exc:
+            # A constructor/runtime mismatch must not leave the UI stuck in
+            # CHECKING forever without an error or a retry path.
+            LOGGER.exception("[Update] failed to create program update worker")
+            self._program_update_check_worker = None
+            self._program_update_check_failed(str(exc))
+            return
         self._program_update_check_worker = worker
         self._program_update_manual = bool(manual)
         worker.completed.connect(self._program_update_checked)
