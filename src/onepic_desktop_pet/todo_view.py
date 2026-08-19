@@ -29,6 +29,7 @@ class TodoViewItem:
     display_text: str
     remaining_days: int | None = None
     priority: int | None = None
+    queue_position: int | None = None
     read: bool = False
     due_at: str | None = None
     reminder: bool = False
@@ -122,6 +123,7 @@ def collect_todo_view(
                 work_seconds=max(0, int(getattr(item, "work_seconds", 0) or 0)),
                 source_type="todo", source_id=str(item.id), display_text=text,
                 priority=getattr(item, "priority", None),
+                queue_position=getattr(item, "queue_position", None),
                 read=bool(getattr(item, "read", False)),
                 due_at=getattr(item, "due_at", None),
                 reminder=bool(getattr(item, "reminder", False)),
