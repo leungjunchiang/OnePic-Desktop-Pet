@@ -65,6 +65,7 @@ class CenterItem:
     completed: bool = False
     detail: str = ""
     priority: int | None = None
+    queue_position: int | None = None
     read: bool = False
     due_at: str | None = None
     reminder: bool = False
@@ -74,6 +75,30 @@ class CenterItem:
     alarm_volume: int = 60
     alarm_snooze_minutes: int = 10
     reminder_suppressed: bool = False
+
+
+class QueueListWidget(QListWidget):
+    """The small, reorderable 1..5 work queue shown above today's tasks."""
+
+    reordered = Signal(list)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().dropEvent(event)
+        self.reordered.emit(
+            [
+                str(self.item(index).data(Qt.ItemDataRole.UserRole))
+                for index in range(self.count())
+                if self.item(index).data(Qt.ItemDataRole.UserRole)
+            ]
+        )
 
 
 def _remaining_label(days: int) -> str:
@@ -139,11 +164,10 @@ class _ItemEditor(QDialog):
             "system",
             self,
         )
-        self.priority = QComboBox(self)
-        self.priority.addItem("未设置（按时间）", None)
-        self.priority.addItem("高", 1)
-        self.priority.addItem("中", 2)
-        self.priority.addItem("低", 3)
+        self.queue_position = QComboBox(self)
+        self.queue_position.addItem("未排顺位（按时间）", None)
+        for position, label in enumerate(("第1", "第2", "第3", "第4", "第5"), start=1):
+            self.queue_position.addItem(label, position)
         self.show_before = QLineEdit(self)
         self.show_before.setPlaceholderText("默认 7 天")
         self.note = QLineEdit(self)
@@ -152,7 +176,7 @@ class _ItemEditor(QDialog):
         form.addRow("标题", self.title)
         form.addRow("日期", self.date)
         form.addRow("时间", self.time)
-        form.addRow("优先级", self.priority)
+        form.addRow("任务顺位", self.queue_position)
         form.addRow("重复", self.repeat)
         form.addRow("提醒方式", self.reminder_mode)
         form.addRow("提前提醒", self.reminder_minutes_before)
@@ -214,9 +238,11 @@ class _ItemEditor(QDialog):
                 self.reminder_minutes_before.setValue(
                     max(0, min(24 * 60, int(getattr(source, "reminder_minutes_before", 10) or 0)))
                 )
-                priority_index = self.priority.findData(getattr(source, "priority", None))
-                if priority_index >= 0:
-                    self.priority.setCurrentIndex(priority_index)
+                queue_index = self.queue_position.findData(
+                    getattr(source, "queue_position", None)
+                )
+                if queue_index >= 0:
+                    self.queue_position.setCurrentIndex(queue_index)
                 self.alarm_volume.setValue(max(0, min(100, int(getattr(source, "alarm_volume", 60) or 0))))
                 self.alarm_snooze_minutes.setValue(max(1, min(120, int(getattr(source, "alarm_snooze_minutes", 10) or 10))))
                 self.alarm_sound.refresh(str(getattr(source, "alarm_sound_id", "system") or "system"))
@@ -234,7 +260,7 @@ class _ItemEditor(QDialog):
         kind = str(self.kind.currentData())
         is_event = kind in {"countdown", "anniversary"}
         self._set_row_visible(self.time, not is_event)
-        self._set_row_visible(self.priority, not is_event)
+        self._set_row_visible(self.queue_position, not is_event)
         self._set_row_visible(self.repeat, kind == "anniversary")
         self._set_row_visible(self.reminder_mode, not is_event)
         self._set_row_visible(self.reminder_minutes_before, not is_event)
@@ -264,7 +290,7 @@ class _ItemEditor(QDialog):
                 # never scheduled by AlarmManager.
                 "reminder_mode": self.reminder_mode.currentData(),
                 "reminder": self.reminder_mode.currentData() != REMINDER_NONE,
-                "priority": self.priority.currentData(),
+                "queue_position": self.queue_position.currentData(),
                 "reminder_minutes_before": self.reminder_minutes_before.value(),
                 "alarm_volume": self.alarm_volume.value(),
                 "alarm_snooze_minutes": self.alarm_snooze_minutes.value(),
@@ -355,12 +381,13 @@ class TodoCenterWindow(QDialog):
         root.addWidget(heading)
         subtitle = QLabel(
             "待办像便利贴：有时间的事项到点后保留24小时；没有具体时间的事项不会自动消失，需手动标为已读。"
-            " 可设置优先级和提前提醒。"
+            " 可设置任务顺位和提前提醒。"
         )
         subtitle.setObjectName("subtitle")
         root.addWidget(subtitle)
         self.tabs = QTabWidget(self)
         self._lists: list[QListWidget] = []
+        self._queue_list: QueueListWidget | None = None
         for label, key in (
             ("今天", "today"),
             ("即将到来", "upcoming"),
@@ -375,6 +402,18 @@ class TodoCenterWindow(QDialog):
             self._lists.append(listing)
             page = QWidget(self)
             layout = QVBoxLayout(page)
+            if key == "today":
+                queue_title = QLabel("当前顺位（最多5项） · 拖动调整顺序")
+                queue_title.setObjectName("subtitle")
+                layout.addWidget(queue_title)
+                self._queue_list = QueueListWidget(page)
+                self._queue_list.setMaximumHeight(190)
+                self._queue_list.itemDoubleClicked.connect(self._edit_row)
+                self._queue_list.reordered.connect(self._reorder_queue)
+                layout.addWidget(self._queue_list)
+                other_title = QLabel("其他待办")
+                other_title.setObjectName("subtitle")
+                layout.addWidget(other_title)
             layout.addWidget(listing, 1)
             hint = QLabel("双击编辑；勾选可完成或恢复。")
             hint.setObjectName("subtitle")
@@ -422,6 +461,7 @@ class TodoCenterWindow(QDialog):
                     item.completed,
                     detail,
                     getattr(item, "priority", None),
+                    getattr(item, "queue_position", None),
                     bool(getattr(item, "read", False)),
                     getattr(item, "due_at", None),
                     bool(getattr(item, "reminder_mode", "") not in {"", REMINDER_NONE}),
@@ -520,9 +560,8 @@ class TodoCenterWindow(QDialog):
                 status += " · 已完成"
             if item.read:
                 status += " · 已读"
-            priority_label = {1: "高", 2: "中", 3: "低"}.get(item.priority)
-            if priority_label:
-                status += f" · 优先级{priority_label}"
+            if item.queue_position in {1, 2, 3, 4, 5}:
+                status += f" · 当前顺位{item.queue_position}"
             mode_label = {
                 REMINDER_NONE: "无提醒",
                 REMINDER_PET: "六毛提醒",
@@ -543,6 +582,34 @@ class TodoCenterWindow(QDialog):
 
     def refresh(self) -> None:
         all_items = self._all_items()
+        if self._queue_list is not None:
+            self._queue_list.blockSignals(True)
+            self._queue_list.clear()
+            queue_rows = sorted(
+                (
+                    item
+                    for item in all_items
+                    if item.source_type in {"todo", "reminder"}
+                    and not item.completed
+                    and not item.read
+                    and item.queue_position in {1, 2, 3, 4, 5}
+                ),
+                key=lambda item: int(item.queue_position or 99),
+            )
+            for item in queue_rows:
+                row = QListWidgetItem(
+                    f"≡  {('①', '②', '③', '④', '⑤')[int(item.queue_position) - 1]}  {item.title}"
+                    f"\n{item.date_text}{(' · ' + item.time_text) if item.time_text else ''}",
+                    self._queue_list,
+                )
+                row.setData(Qt.ItemDataRole.UserRole, item.id)
+                row.setData(Qt.ItemDataRole.UserRole + 1, item)
+                row.setToolTip("拖动调整当前顺位；双击编辑")
+            if not queue_rows:
+                empty = QListWidgetItem("还没有设置当前顺位；可在编辑里选择第1～第5。", self._queue_list)
+                empty.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                empty.setForeground(Qt.GlobalColor.gray)
+            self._queue_list.blockSignals(False)
         for listing in self._lists:
             view = str(listing.property("view_key"))
             current = (
@@ -553,10 +620,10 @@ class TodoCenterWindow(QDialog):
             listing.blockSignals(True)
             listing.clear()
             rows = [item for item in all_items if self._partition(item, view)]
+            if view == "today":
+                rows = [item for item in rows if item.queue_position not in {1, 2, 3, 4, 5}]
             rows.sort(
                 key=lambda item: (
-                    0 if item.priority is not None else 1,
-                    item.priority if item.priority is not None else 99,
                     item.date_text,
                     item.time_text or "99:99",
                     item.title,
@@ -589,12 +656,22 @@ class TodoCenterWindow(QDialog):
         self._update_buttons()
 
     def _current_row(self) -> QListWidgetItem | None:
+        if self.tabs.currentIndex() == 0 and self._queue_list is not None:
+            if self._queue_list.currentItem() is not None:
+                return self._queue_list.currentItem()
         return self._lists[self.tabs.currentIndex()].currentItem()
 
     def _current_model(self) -> CenterItem | None:
         row = self._current_row()
         value = row.data(Qt.ItemDataRole.UserRole + 1) if row else None
         return value if isinstance(value, CenterItem) else None
+
+    def _reorder_queue(self, item_ids: list[str]) -> None:
+        """Persist the queue list's drag order in one manager update."""
+
+        self.memory.todos.reorder_queue(item_ids)
+        self.refresh()
+        self.changed.emit()
 
     def _update_buttons(self) -> None:
         item = self._current_model()
