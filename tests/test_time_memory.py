@@ -266,7 +266,9 @@ def test_todo_queue_inserts_normalizes_and_persists(tmp_path) -> None:
     manager.complete(items[3].id)
     assert [item.queue_position for item in manager.queued_items()] == [1, 2, 3, 4, 5]
     reloaded = TodoManager(tmp_path / "todos.json")
-    assert [item.title for item in reloaded.queued_items()] == ["事项1", "事项3", "事项2", "事项5", "事项6"]
+    assert [item.title for item in reloaded.queued_items()] == [
+        "事项1", "事项3", "事项2", "事项6", "事项5"
+    ]
 
 
 def test_todo_queue_caps_new_unfinished_items_at_ten(tmp_path) -> None:
