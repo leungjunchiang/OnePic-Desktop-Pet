@@ -1002,31 +1002,99 @@ def _codex_app_server_command(
 
 
 def _codex_thread_state_path() -> Path:
-    """Return the local-only App Server thread id path, never a project file."""
+    """Return the local-only App Server thread state path, never a project file."""
 
     return conversation_memory_path().with_name("codex-app-server-thread.json")
 
 
-def _read_codex_thread_id() -> str:
+def _codex_thread_identity() -> tuple[str, str]:
+    """Return the provider/transport required by the current Lili process.
+
+    The HTTPS override is process-local.  It must therefore be part of the
+    persisted thread identity: an old thread created against the normal
+    ``openai`` provider cannot safely be resumed after Lili switches to the
+    ``lili_http`` provider.
+    """
+
+    configured = os.environ.get("LILI_CODEX_TRANSPORT", "https").strip().casefold()
+    if configured in {"default", "auto", "off", "websocket", "ws"}:
+        return "openai", "native"
+    return "lili_http", "https"
+
+
+def _read_codex_thread_state() -> dict[str, str] | None:
+    """Read only a v2 state proven compatible with the current process.
+
+    Version 1 states intentionally fail closed because they contain no
+    provider or transport information.  Clearing the local pointer is safe:
+    it does not delete the corresponding Codex server-side conversation.
+    """
+
     try:
         payload = json.loads(_codex_thread_state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
-        return ""
-    if not isinstance(payload, dict) or payload.get("version") != 1:
-        return ""
-    return str(payload.get("thread_id") or "").strip()[:200]
+        return None
+    if not isinstance(payload, dict) or payload.get("version") != 2:
+        if isinstance(payload, dict) and payload.get("thread_id"):
+            LOGGER.info("[AI Codex] ignoring legacy or unknown local thread state")
+            _clear_codex_thread_id()
+        return None
+    thread_id = str(payload.get("thread_id") or "").strip()[:200]
+    provider = str(payload.get("provider") or "").strip()[:80]
+    transport = str(payload.get("transport") or "").strip()[:80]
+    desired_provider, desired_transport = _codex_thread_identity()
+    if not thread_id or provider.casefold() != desired_provider.casefold() or transport.casefold() != desired_transport.casefold():
+        LOGGER.info(
+            "[AI Codex] ignoring incompatible local thread state: provider=%s transport=%s desired=%s/%s",
+            provider or "unknown",
+            transport or "unknown",
+            desired_provider,
+            desired_transport,
+        )
+        _clear_codex_thread_id()
+        return None
+    return {
+        "thread_id": thread_id,
+        "provider": provider,
+        "transport": transport,
+        "cli_version": str(payload.get("cli_version") or "").strip()[:160],
+        "created_at": str(payload.get("created_at") or "").strip()[:40],
+    }
 
 
-def _write_codex_thread_id(thread_id: str) -> None:
+def _read_codex_thread_id() -> str:
+    state = _read_codex_thread_state()
+    return state["thread_id"] if state else ""
+
+
+def _write_codex_thread_id(
+    thread_id: str,
+    *,
+    cli_version: str = "",
+) -> None:
+    """Persist a provider-aware v2 pointer without credentials or prompts."""
+
     clean = str(thread_id or "").strip()[:200]
     if not clean:
         return
+    provider, transport = _codex_thread_identity()
     target = _codex_thread_state_path()
     temporary = target.with_suffix(".json.tmp")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(
-            json.dumps({"version": 1, "thread_id": clean}, ensure_ascii=False) + "\n",
+            json.dumps(
+                {
+                    "version": 2,
+                    "thread_id": clean,
+                    "provider": provider,
+                    "transport": transport,
+                    "cli_version": str(cli_version or "").strip()[:160],
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
             encoding="utf-8",
         )
         temporary.replace(target)
@@ -1693,12 +1761,18 @@ class AIChatService:
                 f"当前 Codex CLI 不支持或无法启动 app-server：{_compact_codex_error(detail)}"
             )
         working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
+        desired_provider, desired_transport = _codex_thread_identity()
         self._codex_app_server = CodexAppServerClient(
             _codex_app_server_command(executable),
             cwd=working_root,
             env=_cli_environment(executable),
             thread_id=_read_codex_thread_id(),
-            on_thread_id=_write_codex_thread_id,
+            on_thread_id=lambda thread_id: _write_codex_thread_id(
+                thread_id,
+                cli_version=capabilities.version,
+            ),
+            desired_provider=desired_provider,
+            desired_transport=desired_transport,
         )
         return self._codex_app_server
 
@@ -1735,4 +1809,5 @@ class AIChatService:
 
         self._closing = True
         self._close_codex_app_server()
+
 
