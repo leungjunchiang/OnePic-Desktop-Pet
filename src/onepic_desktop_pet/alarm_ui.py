@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QDateTime, Qt, QTimer, Signal
@@ -124,9 +125,33 @@ class AlarmEditDialog(QDialog):
         self.repeat.addItem("一次性", REPEAT_ONCE)
         self.repeat.addItem("每天", REPEAT_DAILY)
         self.repeat.addItem("工作日", REPEAT_WEEKDAYS)
+        self.repeat.addItem("指定星期", "weekly")
+        self.weekdays = QWidget(self)
+        weekday_layout = QHBoxLayout(self.weekdays)
+        weekday_layout.setContentsMargins(0, 0, 0, 0)
+        weekday_layout.setSpacing(4)
+        self.weekday_checks: list[QCheckBox] = []
+        for index, label in enumerate(("一", "二", "三", "四", "五", "六", "日")):
+            check = QCheckBox(label, self.weekdays)
+            check.setProperty("weekday_index", index)
+            self.weekday_checks.append(check)
+            weekday_layout.addWidget(check)
+        self.repeat.currentIndexChanged.connect(self._toggle_weekdays)
         if alarm:
-            index = self.repeat.findData(alarm.repeat_rule)
+            repeat_value = "weekly" if alarm.repeat_rule.startswith("weekly:") else alarm.repeat_rule
+            index = self.repeat.findData(repeat_value)
             self.repeat.setCurrentIndex(index if index >= 0 else 0)
+            if alarm.repeat_rule.startswith("weekly:"):
+                try:
+                    selected_days = {
+                        int(value) for value in alarm.repeat_rule.split(":", 1)[1].split(",")
+                    }
+                except ValueError:
+                    selected_days = set()
+                for check in self.weekday_checks:
+                    check.setChecked(check.property("weekday_index") in selected_days)
+        else:
+            self.weekday_checks[datetime.now().astimezone().weekday()].setChecked(True)
         self.sound = QCheckBox("到点播放提示音", self)
         self.sound.setChecked(bool(alarm.sound_enabled) if alarm else False)
         self.allow_dnd = QCheckBox("允许穿透免打扰", self)
@@ -147,6 +172,7 @@ class AlarmEditDialog(QDialog):
         form.addRow("内容", self.title)
         form.addRow("时间", self.trigger)
         form.addRow("重复", self.repeat)
+        form.addRow("星期", self.weekdays)
         form.addRow("稍后默认", self.snooze)
         form.addRow("关联待办", self.linked_todo)
         form.addRow("", self.sound)
@@ -158,12 +184,24 @@ class AlarmEditDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        self._toggle_weekdays()
+
+    def _toggle_weekdays(self) -> None:
+        self.weekdays.setEnabled(self.repeat.currentData() == "weekly")
 
     def values(self) -> dict[str, Any]:
+        repeat_rule = self.repeat.currentData()
+        if repeat_rule == "weekly":
+            days = [
+                str(check.property("weekday_index"))
+                for check in self.weekday_checks
+                if check.isChecked()
+            ]
+            repeat_rule = "weekly:" + ",".join(days) if days else REPEAT_ONCE
         return {
             "title": self.title.text().strip() or "六毛闹钟",
             "trigger_at": self.trigger.dateTime().toString("yyyy-MM-ddTHH:mm:ss"),
-            "repeat_rule": self.repeat.currentData(),
+            "repeat_rule": repeat_rule,
             "sound_enabled": self.sound.isChecked(),
             "allow_during_dnd": self.allow_dnd.isChecked(),
             "snooze_minutes": self.snooze.value(),
