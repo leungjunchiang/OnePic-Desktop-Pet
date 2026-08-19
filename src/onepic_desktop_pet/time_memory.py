@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Callable
 
 from .anniversary_manager import AnniversaryManager
 from .alarm_manager import AlarmManager
+from .alarm_sounds import AlarmSoundLibrary
 from .countdown_manager import CountdownManager
 from .daily_record_manager import DailyRecordManager
 from .daily_summary_service import DailySummaryService
@@ -36,6 +38,10 @@ class TimeMemory:
         self.sessions = WorkSessionManager(path("work_sessions.json"), now_provider=now_provider, persist=persist)
         self.reminders = ReminderManager(path("reminders.json"), now_provider=now_provider, persist=persist)
         self.alarms = AlarmManager(path("alarms.json"), now_provider=now_provider, persist=persist)
+        self.alarm_sounds = AlarmSoundLibrary(
+            (Path(base) if base is not None else None),
+            persist=persist,
+        )
         self.sticky_note = StickyNoteManager(path("sticky_note.json"), now_provider=now_provider, persist=persist)
         self.countdowns = CountdownManager(path("countdowns.json"), now_provider=now_provider, persist=persist)
         self.anniversaries = AnniversaryManager(path("anniversaries.json"), now_provider=now_provider, persist=persist)
@@ -72,6 +78,13 @@ class TimeMemory:
             mode = "pet" if bool(getattr(item, "reminder", False)) else "none"
         if bool(getattr(item, "completed", False)):
             self.reminders.complete_for_source(item_id)
+            self.alarms.sync_todo(item, reminder_mode="none")
+            return
+        if bool(getattr(item, "reminder_suppressed", False)):
+            # A restored item whose original reminder time has already passed
+            # must not replay an old alert immediately. Editing its reminder
+            # clears this flag and schedules the newly chosen time.
+            self.reminders.remove_for_source(item_id)
             self.alarms.sync_todo(item, reminder_mode="none")
             return
         if mode == "alarm":
@@ -182,7 +195,7 @@ class TimeMemory:
             if completed:
                 self.complete_task(item.source_id)
             else:
-                self.todos.complete(item.source_id, False)
+                self.restore_todo(item.source_id)
             return True
         if not completed:
             return False
@@ -257,6 +270,31 @@ class TimeMemory:
                     related_task_id=item.id,
                     important=True,
                 )
+        return True
+
+    def restore_todo(self, task_id: str) -> bool:
+        """Restore one completed Todo without replaying an expired alert."""
+
+        item = self.todos.get(task_id)
+        if item is None:
+            return False
+        now = self.now()
+        reminder_at = getattr(item, "remind_at", None) or getattr(item, "due_at", None)
+        reminder_expired = False
+        if reminder_at:
+            try:
+                reminder_expired = parse_datetime(reminder_at, self._now) <= now
+            except (TypeError, ValueError, OverflowError):
+                reminder_expired = False
+        restored = self.todos.update(
+            item.id,
+            completed=False,
+            read=False,
+            read_at=None,
+            reminder_suppressed=reminder_expired,
+        )
+        self.sync_todo_reminder(restored)
+        self.summary.refresh_tasks()
         return True
 
     def finish_today(self, note: str = "") -> dict:
