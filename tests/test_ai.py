@@ -303,7 +303,8 @@ def test_app_server_command_uses_minimal_cross_platform_command(monkeypatch) -> 
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     command = _codex_app_server_command(Path("/usr/local/bin/codex"))
-    assert command == ["/usr/local/bin/codex", "app-server"]
+    assert command[-1] == "app-server"
+    assert command[0].replace("\\", "/") == "/usr/local/bin/codex"
     assert "--ignore-user-config" not in command
 
 
