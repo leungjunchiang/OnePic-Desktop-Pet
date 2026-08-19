@@ -362,10 +362,8 @@ class AlarmCard(QDialog):
         self._sound_stop_timer.setInterval(max(1, int(alarm.max_ring_seconds or 60)) * 1_000)
         self._sound_stop_timer.timeout.connect(self._stop_sound)
         self._sound_stop_timer.start()
-        if is_custom and path is None:
-            self._play_system_sound()
-        else:
-            self._play_system_sound()
+        self._sound_timer.start()
+        self._play_system_sound()
 
     def _start_sound(self) -> None:
         """Compatibility entry point for callers from older builds."""
