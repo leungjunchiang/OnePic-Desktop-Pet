@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .local_data import local_data_path, read_json, write_json_atomic
 
@@ -25,8 +25,9 @@ EARLY_BIRD_START_HOUR = 10
 EARLY_BIRD_MIN_SECONDS = 20 * 60
 MAX_ACHIEVEMENT_AMOUNT = 100
 MAX_MONTHLY_ACHIEVEMENTS = 3
+MAX_MONTHLY_ACHIEVEMENT_SUBMISSIONS = 4
 REQUIRED_ACHIEVEMENT_WITNESSES = 2
-ACHIEVEMENT_REWARD = 50
+ACHIEVEMENT_REWARD = 200
 # A companion scene without an explicit duration (currently tea) must not
 # permanently block the next scene after an app restart.
 OPEN_FOOD_SCENE_LIFETIME_SECONDS = 60
@@ -650,10 +651,26 @@ class EconomyLedger:
             and event.amount > 0
         )
 
+    def monthly_achievement_submission_count(self, month: str | None = None) -> int:
+        target = str(month or self._now().date().isoformat())[:7]
+        return sum(
+            1
+            for item in self._state.get("pending_achievements", [])
+            if isinstance(item, dict)
+            and str(item.get("month") or "")[:7] == target
+            and str(item.get("status") or "") != "deleted"
+        )
+
     def register_achievement_income(
         self, kind: str, name: str, amount: int | None = None, note: str = "",
+        *, witness_ids: Iterable[str] = (), witness_names: Iterable[str] = (),
     ) -> dict[str, Any] | None:
-        """Submit a result for buddy witnessing; reward is fixed at 50 picks."""
+        """Submit a result for buddy witnessing; reward is fixed at 200 picks.
+
+        ``witness_ids`` is optional for old local-only records. New cloud-backed
+        submissions pass exactly two selected buddy IDs and the server remains
+        authoritative for the actual reward settlement.
+        """
         clean_kind = str(kind).strip()[:30] or "其他成果"
         clean_name = str(name).strip()[:90]
         # Keep the old positional argument for local-data compatibility, but
@@ -662,9 +679,18 @@ class EconomyLedger:
         if not clean_name:
             return None
         month = self._now().date().isoformat()[:7]
+        normalized_ids: list[str] = []
+        for value in witness_ids or ():
+            clean_id = str(value or "").strip()[:120]
+            if clean_id and clean_id not in normalized_ids:
+                normalized_ids.append(clean_id)
+        normalized_ids = normalized_ids[:REQUIRED_ACHIEVEMENT_WITNESSES]
+        normalized_names = [str(value or "").strip()[:60] for value in (witness_names or ())]
 
         def apply() -> dict[str, Any] | None:
             entries = self._state.setdefault("pending_achievements", [])
+            if self.monthly_achievement_submission_count(month) >= MAX_MONTHLY_ACHIEVEMENT_SUBMISSIONS:
+                return {"status": "submission_limit", "month": month}
             normalized = clean_name.casefold()
             for item in entries:
                 if not isinstance(item, dict):
@@ -684,6 +710,15 @@ class EconomyLedger:
                 "status": "pending",
                 "required_witnesses": REQUIRED_ACHIEVEMENT_WITNESSES,
                 "witnesses": [],
+                "witness_slots": [
+                    {
+                        "id": witness_id,
+                        "name": normalized_names[index] if index < len(normalized_names) else "搭子",
+                        "status": "pending",
+                    }
+                    for index, witness_id in enumerate(normalized_ids)
+                ],
+                "replacement_round": 0,
                 "submitted_at": self._now().isoformat(),
             }
             entries.append(record)
@@ -694,7 +729,25 @@ class EconomyLedger:
     def confirm_achievement(
         self, achievement_id: str, witness_id: str, witness_name: str = "",
     ) -> dict[str, Any] | None:
-        """Record one distinct buddy witness and settle on the second one."""
+        """Record one invited (or legacy open) buddy witness."""
+        return self.respond_achievement(achievement_id, witness_id, True, witness_name)
+
+    def reject_achievement(
+        self, achievement_id: str, witness_id: str, witness_name: str = "",
+    ) -> dict[str, Any] | None:
+        """Persist a witness rejection without silently treating it as pending."""
+        return self.respond_achievement(achievement_id, witness_id, False, witness_name)
+
+    def respond_achievement(
+        self, achievement_id: str, witness_id: str, accepted: bool,
+        witness_name: str = "",
+    ) -> dict[str, Any] | None:
+        """Apply one witness response and settle exactly once.
+
+        Records created before manual invitations are still accepted through the
+        legacy open-witness path so an upgrade never strands existing claims.
+        New records with ``witness_slots`` only accept the selected IDs.
+        """
         achievement_id = str(achievement_id).strip()[:80]
         witness_id = str(witness_id).strip()[:120]
         if not achievement_id or not witness_id or witness_id.casefold() in {"self", "me", "owner"}:
@@ -703,15 +756,36 @@ class EconomyLedger:
         def apply() -> dict[str, Any] | None:
             entries = self._state.setdefault("pending_achievements", [])
             record = next((item for item in entries if str(item.get("id") or "") == achievement_id), None)
-            if not isinstance(record, dict) or str(record.get("status") or "pending") != "pending":
+            if not isinstance(record, dict) or str(record.get("status") or "pending") not in {"pending", "need_replacement"}:
                 return None
             month = str(record.get("month") or self._now().date().isoformat()[:7])[:7]
             if self.monthly_achievement_count(month) >= MAX_MONTHLY_ACHIEVEMENTS:
                 record["status"] = "monthly_limit"
                 return {"status": "monthly_limit", "achievement": copy.deepcopy(record)}
             witnesses = record.setdefault("witnesses", [])
+            slots = [slot for slot in record.get("witness_slots", []) if isinstance(slot, dict)]
+            if slots:
+                slot = next((slot for slot in slots if str(slot.get("id") or "") == witness_id), None)
+                if slot is None:
+                    return {"status": "not_invited", "achievement": copy.deepcopy(record)}
+                if str(slot.get("status") or "pending") != "pending":
+                    return {"status": "already_responded", "achievement": copy.deepcopy(record)}
+                slot["status"] = "accepted" if accepted else "rejected"
+                slot["responded_at"] = self._now().isoformat()
+                if witness_name:
+                    slot["name"] = str(witness_name).strip()[:60]
+            elif not accepted:
+                record["last_rejection"] = {"id": witness_id, "name": str(witness_name).strip()[:60] or "搭子"}
+                record["status"] = "need_replacement"
+                return {"status": "rejected", "achievement": copy.deepcopy(record)}
             if any(str(item.get("id") or "") == witness_id for item in witnesses if isinstance(item, dict)):
                 return {"status": "duplicate_witness", "achievement": copy.deepcopy(record)}
+            if not accepted:
+                if slots and sum(str(slot.get("status")) == "rejected" for slot in slots) >= len(slots):
+                    record["status"] = "need_replacement"
+                elif slots:
+                    record["status"] = "need_replacement"
+                return {"status": "rejected", "achievement": copy.deepcopy(record)}
             witnesses.append({
                 "id": witness_id,
                 "name": str(witness_name).strip()[:60] or "搭子",
@@ -722,7 +796,13 @@ class EconomyLedger:
                 "witness_count": len(witnesses),
                 "achievement": copy.deepcopy(record),
             }
-            if len(witnesses) >= REQUIRED_ACHIEVEMENT_WITNESSES:
+            if slots:
+                accepted_count = sum(str(slot.get("status")) == "accepted" for slot in slots)
+                if int(record.get("replacement_round") or 0) > 0:
+                    accepted_count += len(witnesses)
+            else:
+                accepted_count = len(witnesses)
+            if accepted_count >= REQUIRED_ACHIEVEMENT_WITNESSES:
                 source_key = f"achievement:witnessed:{achievement_id}"
                 event = self._append(
                     "windfall",
@@ -745,6 +825,41 @@ class EconomyLedger:
                 result["event"] = event.as_dict()
                 result["achievement"] = copy.deepcopy(record)
             return result
+
+        return self._atomic(apply)
+
+    def replace_achievement_witnesses(
+        self, achievement_id: str, witness_ids: Iterable[str], witness_names: Iterable[str] = (),
+    ) -> dict[str, Any] | None:
+        """Use the single allowed replacement round for a local claim."""
+        clean_ids: list[str] = []
+        for value in witness_ids or ():
+            value = str(value or "").strip()[:120]
+            if value and value not in clean_ids:
+                clean_ids.append(value)
+        if not clean_ids or len(clean_ids) > REQUIRED_ACHIEVEMENT_WITNESSES:
+            return None
+        names = [str(value or "").strip()[:60] for value in (witness_names or ())]
+
+        def apply() -> dict[str, Any] | None:
+            record = next((item for item in self._state.setdefault("pending_achievements", [])
+                           if isinstance(item, dict) and str(item.get("id") or "") == str(achievement_id)), None)
+            if not isinstance(record, dict) or int(record.get("replacement_round") or 0) >= 1:
+                return None
+            accepted = {str(item.get("id") or "") for item in record.get("witnesses", []) if isinstance(item, dict)}
+            needed = max(0, REQUIRED_ACHIEVEMENT_WITNESSES - len(accepted))
+            if len(clean_ids) != needed or accepted.intersection(clean_ids):
+                return None
+            previous = {str(slot.get("id") or "") for slot in record.get("witness_slots", []) if isinstance(slot, dict)}
+            if previous.intersection(clean_ids):
+                return None
+            record["witness_slots"] = [
+                {"id": value, "name": names[index] if index < len(names) else "搭子", "status": "pending"}
+                for index, value in enumerate(clean_ids)
+            ]
+            record["replacement_round"] = 1
+            record["status"] = "pending"
+            return copy.deepcopy(record)
 
         return self._atomic(apply)
 
