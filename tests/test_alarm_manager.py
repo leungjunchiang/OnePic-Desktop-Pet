@@ -105,6 +105,24 @@ def test_alarm_state_survives_reload(tmp_path) -> None:
     assert restored.sound_enabled is True
 
 
+def test_alarm_enable_toggle_persists_and_controls_dispatch(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    path = tmp_path / "alarms.json"
+    manager = AlarmManager(path, now_provider=clock)
+    alarm = manager.add("可关闭的闹钟", clock.value, repeat_rule=REPEAT_DAILY)
+
+    manager.set_enabled(alarm.id, False)
+    assert manager.get(alarm.id).enabled is False
+    assert manager.claim_due() == []
+
+    reloaded = AlarmManager(path, now_provider=clock)
+    assert reloaded.get(alarm.id).enabled is False
+
+    reloaded.set_enabled(alarm.id, True)
+    assert reloaded.get(alarm.id).enabled is True
+    assert [item.id for item in reloaded.claim_due()] == [alarm.id]
+
+
 def test_todo_alarm_is_mirrored_without_duplicate_rows(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 19, 9, 0))
     alarms = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
