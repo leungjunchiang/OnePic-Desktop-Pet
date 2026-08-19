@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .time_memory import TimeMemory
-from .alarm_ui import AlarmSoundSelector
+from .alarm_ui import AlarmCenterDialog, AlarmSoundSelector
 from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
 from .todo_view import todo_event_parts
 
@@ -391,6 +391,7 @@ class TodoCenterWindow(QDialog):
         self.tabs = QTabWidget(self)
         self._lists: list[QListWidget] = []
         self._queue_list: QueueListWidget | None = None
+        self._alarm_center: AlarmCenterDialog | None = None
         for label, key in (
             ("今天", "today"),
             ("即将到来", "upcoming"),
@@ -429,6 +430,20 @@ class TodoCenterWindow(QDialog):
             hint.setObjectName("subtitle")
             layout.addWidget(hint)
             self.tabs.addTab(page, label)
+        # The alarm tab uses the same AlarmManager as the system-menu alarm
+        # entry.  It is embedded here for discoverability, not duplicated.
+        alarm_page = QWidget(self)
+        alarm_layout = QVBoxLayout(alarm_page)
+        self._alarm_center = AlarmCenterDialog(
+            self.memory.alarms,
+            list(self.memory.todos.items),
+            parent=alarm_page,
+            sound_library=self.memory.alarm_sounds,
+        )
+        self._alarm_center.setWindowFlags(Qt.WindowType.Widget)
+        self._alarm_center.changed.connect(self.changed.emit)
+        alarm_layout.addWidget(self._alarm_center)
+        self._alarm_tab_index = self.tabs.addTab(alarm_page, "闹钟")
         root.addWidget(self.tabs, 1)
         buttons = QHBoxLayout()
         self.add_button = QPushButton("＋ 新建", self)
@@ -589,6 +604,9 @@ class TodoCenterWindow(QDialog):
         )
 
     def refresh(self) -> None:
+        if self._alarm_center is not None:
+            self._alarm_center.todos = list(self.memory.todos.items)
+            self._alarm_center.refresh()
         all_items = self._all_items()
         if self._queue_list is not None:
             self._queue_list.blockSignals(True)
@@ -666,6 +684,8 @@ class TodoCenterWindow(QDialog):
         self._update_buttons()
 
     def _current_row(self) -> QListWidgetItem | None:
+        if self.tabs.currentIndex() == getattr(self, "_alarm_tab_index", -1):
+            return None
         if self.tabs.currentIndex() == 0 and self._queue_list is not None:
             if self._queue_list.currentItem() is not None:
                 return self._queue_list.currentItem()
