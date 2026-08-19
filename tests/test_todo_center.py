@@ -93,8 +93,24 @@ def test_reminder_editor_preserves_selected_audible_alarm(tmp_path) -> None:
     assert len(mirrored) == 1
     assert mirrored[0].sound_enabled is True
 
+    reloaded = TimeMemory(
+        tmp_path,
+        now_provider=lambda: datetime(2026, 8, 19, 12, 0),
+    )
+    restored = reloaded.todos.get(task.id)
+    assert restored is not None
+    assert restored.reminder_mode == REMINDER_ALARM
+    reopened_center = TodoCenterWindow(reloaded)
+    reopened_item = next(row for row in reopened_center._all_items() if row.id == task.id)
+    reopened_editor = _ItemEditor(reloaded, reopened_item)
+    assert reopened_editor.reminder_mode.currentData() == REMINDER_ALARM
+
     editor.close()
     editor.deleteLater()
+    reopened_editor.close()
+    reopened_editor.deleteLater()
+    reopened_center.close()
+    reopened_center.deleteLater()
     center.close()
     center.deleteLater()
     app.processEvents()
