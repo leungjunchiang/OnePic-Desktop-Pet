@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .time_memory import TimeMemory
+from .alarm_ui import AlarmSoundSelector
 from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
 from .todo_view import todo_event_parts
 
@@ -72,6 +73,7 @@ class CenterItem:
     alarm_sound_id: str = "system"
     alarm_volume: int = 60
     alarm_snooze_minutes: int = 10
+    reminder_suppressed: bool = False
 
 
 def _remaining_label(days: int) -> str:
@@ -132,6 +134,11 @@ class _ItemEditor(QDialog):
         self.alarm_snooze_minutes.setRange(1, 120)
         self.alarm_snooze_minutes.setSuffix(" 分钟")
         self.alarm_snooze_minutes.setValue(10)
+        self.alarm_sound = AlarmSoundSelector(
+            getattr(memory, "alarm_sounds", None),
+            "system",
+            self,
+        )
         self.priority = QComboBox(self)
         self.priority.addItem("未设置（按时间）", None)
         self.priority.addItem("高", 1)
@@ -150,6 +157,7 @@ class _ItemEditor(QDialog):
         form.addRow("提醒方式", self.reminder_mode)
         form.addRow("提前提醒", self.reminder_minutes_before)
         form.addRow("闹钟音量", self.alarm_volume)
+        form.addRow("闹钟铃声", self.alarm_sound)
         form.addRow("稍后默认", self.alarm_snooze_minutes)
         form.addRow("提前天数", self.show_before)
         form.addRow("备注", self.note)
@@ -211,6 +219,7 @@ class _ItemEditor(QDialog):
                     self.priority.setCurrentIndex(priority_index)
                 self.alarm_volume.setValue(max(0, min(100, int(getattr(source, "alarm_volume", 60) or 0))))
                 self.alarm_snooze_minutes.setValue(max(1, min(120, int(getattr(source, "alarm_snooze_minutes", 10) or 10))))
+                self.alarm_sound.refresh(str(getattr(source, "alarm_sound_id", "system") or "system"))
 
     def _source(self):
         if not self.item:
@@ -230,6 +239,7 @@ class _ItemEditor(QDialog):
         self._set_row_visible(self.reminder_mode, not is_event)
         self._set_row_visible(self.reminder_minutes_before, not is_event)
         self._set_row_visible(self.alarm_volume, not is_event and self.reminder_mode.currentData() == REMINDER_ALARM)
+        self._set_row_visible(self.alarm_sound, not is_event and self.reminder_mode.currentData() == REMINDER_ALARM)
         self._set_row_visible(self.alarm_snooze_minutes, not is_event and self.reminder_mode.currentData() == REMINDER_ALARM)
         self._set_row_visible(self.show_before, is_event)
         self._set_row_visible(self.note, is_event)
@@ -258,6 +268,8 @@ class _ItemEditor(QDialog):
                 "reminder_minutes_before": self.reminder_minutes_before.value(),
                 "alarm_volume": self.alarm_volume.value(),
                 "alarm_snooze_minutes": self.alarm_snooze_minutes.value(),
+                "alarm_sound_id": self.alarm_sound.current_sound_id(),
+                "reminder_suppressed": False,
             }
             if self.item and self.item.source_type in {"todo", "reminder"}:
                 saved = self.memory.todos.update(self.item.source_id, **values)
@@ -375,12 +387,15 @@ class TodoCenterWindow(QDialog):
         self.add_button.clicked.connect(self._new_item)
         self.edit_button = QPushButton("编辑", self)
         self.edit_button.clicked.connect(self._edit_current)
+        self.restore_button = QPushButton("恢复待办", self)
+        self.restore_button.clicked.connect(self._restore_current)
         self.delete_button = QPushButton("删除", self)
         self.delete_button.clicked.connect(self._delete_current)
         self.read_button = QPushButton("标为已读", self)
         self.read_button.clicked.connect(self._toggle_read_current)
         buttons.addWidget(self.add_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.restore_button)
         buttons.addWidget(self.read_button)
         buttons.addWidget(self.edit_button)
         buttons.addWidget(self.delete_button)
@@ -415,6 +430,7 @@ class TodoCenterWindow(QDialog):
                     str(getattr(item, "alarm_sound_id", "system") or "system"),
                     max(0, min(100, int(getattr(item, "alarm_volume", 60) or 0))),
                     max(1, min(120, int(getattr(item, "alarm_snooze_minutes", 10) or 10))),
+                    bool(getattr(item, "reminder_suppressed", False)),
                 )
             )
         for item in self.memory.countdowns.items:
@@ -515,6 +531,8 @@ class TodoCenterWindow(QDialog):
             status += f" · {mode_label}"
             if item.reminder and item.time_text and item.reminder_minutes_before:
                 status += f"（提前{item.reminder_minutes_before}分钟）"
+            if item.reminder_suppressed:
+                status += " · 原提醒时间已过，请重新设置"
         else:
             status = item.detail
         time_part = f" · {item.time_text}" if item.time_text else ""
@@ -583,6 +601,13 @@ class TodoCenterWindow(QDialog):
         enabled = item is not None
         self.edit_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled)
+        can_restore = (
+            item is not None
+            and item.source_type in {"todo", "reminder"}
+            and item.completed
+        )
+        self.restore_button.setVisible(can_restore)
+        self.restore_button.setEnabled(can_restore)
         can_read = item is not None and item.source_type in {"todo", "reminder"} and not item.completed
         self.read_button.setEnabled(can_read)
         self.read_button.setText("恢复显示" if can_read and item.read else "标为已读")
@@ -592,6 +617,14 @@ class TodoCenterWindow(QDialog):
         if item is None or item.source_type not in {"todo", "reminder"}:
             return
         if self.memory.read_todo(item.source_id, not item.read):
+            self.refresh()
+            self.changed.emit()
+
+    def _restore_current(self) -> None:
+        item = self._current_model()
+        if item is None or item.source_type not in {"todo", "reminder"} or not item.completed:
+            return
+        if self.memory.restore_todo(item.source_id):
             self.refresh()
             self.changed.emit()
 
@@ -657,11 +690,15 @@ class TodoCenterWindow(QDialog):
         item = row.data(Qt.ItemDataRole.UserRole + 1)
         completed = row.checkState() == Qt.CheckState.Checked
         if item.source_type in {"todo", "reminder"}:
-            saved = self.memory.todos.complete(item.source_id, completed)
-            if completed:
-                self.memory.reminders.complete_for_source(saved.id)
+            if not completed and item.completed:
+                self.memory.restore_todo(item.source_id)
             else:
-                self.memory.sync_todo_reminder(saved)
+                saved = self.memory.todos.complete(item.source_id, completed)
+                if completed:
+                    self.memory.reminders.complete_for_source(saved.id)
+                    self.memory.alarms.sync_todo(saved, reminder_mode="none")
+                else:
+                    self.memory.sync_todo_reminder(saved)
         elif item.source_type == "countdown":
             if completed:
                 self.memory.complete_countdown(item.source_id)
