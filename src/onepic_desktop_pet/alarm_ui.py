@@ -602,7 +602,12 @@ class AlarmCenterDialog(QDialog):
         self.setMinimumSize(520, 390)
         self.setStyleSheet(ALARM_STYLE)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("到点后六毛会来找你；可以开始工作、稍后提醒或关闭。闹钟不会抢其它软件焦点。"))
+        layout.addWidget(
+            QLabel(
+                "到点后六毛会来找你；可以开始工作、稍后提醒或关闭。"
+                "闹钟不会抢其它软件焦点，也可以在列表中直接开启或关闭。"
+            )
+        )
         self.list = QListWidget(self)
         self.list.itemDoubleClicked.connect(self._edit_selected)
         layout.addWidget(self.list)
@@ -624,10 +629,48 @@ class AlarmCenterDialog(QDialog):
         self.list.clear()
         for alarm in self.alarms.items:
             repeat = {REPEAT_ONCE: "一次性", REPEAT_DAILY: "每天", REPEAT_WEEKDAYS: "工作日"}.get(alarm.repeat_rule, "每周")
-            status = "已关闭" if not alarm.enabled else ("响铃中" if alarm.active else "已启用")
-            item = QListWidgetItem(f"{alarm.title} · {alarm.trigger_at[:16].replace('T', ' ')} · {repeat} · {status}")
+            status = "响铃中" if alarm.enabled and alarm.active else ("已启用" if alarm.enabled else "已关闭")
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, alarm.id)
             self.list.addItem(item)
+
+            row = QWidget(self.list)
+            row.setObjectName("alarmRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(8, 5, 8, 5)
+            row_layout.setSpacing(10)
+
+            toggle = QCheckBox("开启" if alarm.enabled else "关闭", row)
+            toggle.setToolTip("开启或关闭这个闹钟；关闭只停用调度，不会删除闹钟")
+            toggle.setChecked(alarm.enabled)
+            toggle.toggled.connect(
+                lambda enabled, alarm_id=alarm.id: self._toggle_enabled(alarm_id, enabled)
+            )
+
+            summary = QLabel(
+                f"{alarm.title} · {alarm.trigger_at[:16].replace('T', ' ')} · {repeat}",
+                row,
+            )
+            summary.setWordWrap(True)
+            summary.setToolTip("双击这一行或点击下方“编辑”修改闹钟")
+
+            status_label = QLabel(status, row)
+            status_label.setObjectName("alarmStatus")
+            row_layout.addWidget(toggle)
+            row_layout.addWidget(summary, 1)
+            row_layout.addWidget(status_label)
+
+            item.setSizeHint(row.sizeHint())
+            self.list.setItemWidget(item, row)
+
+    def _toggle_enabled(self, alarm_id: str, enabled: bool) -> None:
+        """Toggle the persisted alarm state without creating a second source of truth."""
+        alarm = self.alarms.get(alarm_id)
+        if alarm is None or alarm.enabled == enabled:
+            return
+        self.alarms.set_enabled(alarm_id, enabled)
+        self.refresh()
+        self.changed.emit()
 
     def _selected(self) -> Alarm | None:
         item = self.list.currentItem()
