@@ -127,6 +127,9 @@ class TodoItem:
     alarm_sound_id: str = "system"
     alarm_volume: int = 60
     alarm_snooze_minutes: int = 10
+    # Set only when a completed item is restored after its old reminder time.
+    # It preserves the user's reminder choice without replaying stale alerts.
+    reminder_suppressed: bool = False
     source: str = "local"
 
     @classmethod
@@ -221,6 +224,7 @@ class TodoItem:
             alarm_sound_id=str(value.get("alarm_sound_id") or "system")[:40],
             alarm_volume=alarm_volume,
             alarm_snooze_minutes=alarm_snooze,
+            reminder_suppressed=bool(value.get("reminder_suppressed", False)),
             source=str(value.get("source") or "local")[:40],
         )
 
@@ -396,7 +400,7 @@ class TodoManager:
             "title", "date", "time", "important", "completed", "reminder",
             "work_seconds", "due_at", "remind_at", "priority", "read",
             "read_at", "reminder_minutes_before", "reminder_mode", "alarm_sound_id",
-            "alarm_volume", "alarm_snooze_minutes", "source",
+            "alarm_volume", "alarm_snooze_minutes", "reminder_suppressed", "source",
         }
         changed_date_or_time = False
         explicit_due = "due_at" in changes
@@ -442,6 +446,8 @@ class TodoManager:
                     value = max(1, min(120, int(value)))
                 except (TypeError, ValueError):
                     value = 10
+            elif key == "reminder_suppressed":
+                value = bool(value)
             elif key == "work_seconds":
                 value = max(0, int(value))
             elif key in {"due_at", "remind_at"}:
@@ -467,6 +473,17 @@ class TodoManager:
                 item.remind_at = None
         if item.reminder_mode == REMINDER_NONE:
             item.remind_at = None
+            item.reminder_suppressed = False
+        elif any(
+            key in changes
+            for key in (
+                "date", "time", "due_at", "remind_at", "reminder",
+                "reminder_mode", "reminder_minutes_before",
+            )
+        ) and "reminder_suppressed" not in changes:
+            # Editing the schedule is an explicit request to make the
+            # reminder live again.
+            item.reminder_suppressed = False
         if item.completed and not item.completed_at:
             item.completed_at = now_local(self._now).isoformat()
         if not item.completed:
