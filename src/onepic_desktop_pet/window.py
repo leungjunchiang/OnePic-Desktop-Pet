@@ -1227,7 +1227,7 @@ class PetWindow(QWidget):
         if self._alarm_center_dialog is not None:
             self._alarm_center_dialog.close()
         if self._alarm_card is not None:
-            self._alarm_card.close()
+            self._close_alarm_card()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
@@ -2409,8 +2409,6 @@ class PetWindow(QWidget):
             self._position_work_controls()
         if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
-        if hasattr(self, "_alarm_card") and self._alarm_card is not None and self._alarm_card.isVisible():
-            self._position_alarm_card()
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
             self._position_compact_todos()
         self._position_sticky_note()
@@ -2744,23 +2742,24 @@ class PetWindow(QWidget):
             self._show_alarm_card(candidates[0])
 
     def _show_alarm_card(self, alarm) -> None:
-        """Show one alarm at a time; queued alarms remain persisted and local."""
+        """Show one normal alarm window; queued alarms remain persisted/local."""
 
         if self._alarm_card is not None:
-            self._alarm_card.close()
+            self._close_alarm_card()
         self._alarm_card = AlarmCard(alarm)
         self._alarm_card.start_requested.connect(self._start_alarm_work)
         self._alarm_card.snooze_requested.connect(self._snooze_alarm)
         self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
-        self._position_alarm_card()
+        # Center only once. After the user drags or minimizes the native
+        # window, accessory reflows must never move it back to the pet.
+        self._alarm_card.center_on_current_screen()
         self._alarm_card.show()
-        self._alarm_card.raise_()
 
     def _close_alarm_card(self) -> None:
         card = self._alarm_card
         self._alarm_card = None
         if card is not None:
-            card.close()
+            card.close_from_app()
             card.deleteLater()
 
     def _start_alarm_work(self, alarm_id: str) -> None:
@@ -3949,39 +3948,6 @@ class PetWindow(QWidget):
             chosen = QRect(candidate_x, candidate_y, bubble.width(), bubble.height())
         bubble.move(chosen.topLeft())
 
-    def _position_alarm_card(self) -> None:
-        """Place the alarm card near the pet without making it an active window."""
-
-        card = self._alarm_card
-        if card is None:
-            return
-        card.adjustSize()
-        area = self._screen_geometry()
-        gap = 12
-        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
-        candidates = [
-            (self.x() + (self.width() - card.width()) // 2, self.y() - card.height() - gap),
-            (self.x() + self.width() + gap, self.y()),
-            (self.x() - card.width() - gap, self.y()),
-            (self.x() + (self.width() - card.width()) // 2, self.y() + self.height() + gap),
-        ]
-        chosen = None
-        for x, y in candidates:
-            candidate = QRect(x, y, card.width(), card.height())
-            if area is not None and not area.contains(candidate):
-                continue
-            if candidate.intersects(pet_rect):
-                continue
-            chosen = candidate
-            break
-        if chosen is None:
-            x, y = candidates[0]
-            if area is not None:
-                x = min(max(x, area.left()), area.right() - card.width() + 1)
-                y = min(max(y, area.top()), area.bottom() - card.height() + 1)
-            chosen = QRect(x, y, card.width(), card.height())
-        card.move(chosen.topLeft())
-
     def _update_work_duration_bubble(self, snapshot=None) -> None:
         """Render the shared focus snapshot without creating a second timer."""
 
@@ -3997,8 +3963,6 @@ class PetWindow(QWidget):
         if self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
             self.work_duration_bubble.raise_()
-        if self._alarm_card is not None and self._alarm_card.isVisible():
-            self._position_alarm_card()
 
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""
