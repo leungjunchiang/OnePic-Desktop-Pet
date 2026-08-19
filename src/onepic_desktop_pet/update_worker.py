@@ -42,9 +42,10 @@ class ProgramUpdateCheckWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, manager: UpdateManager, parent=None) -> None:
+    def __init__(self, manager: UpdateManager, parent=None, *, force: bool = False) -> None:
         super().__init__(parent)
         self.manager = manager
+        self.force = bool(force)
 
     def run(self) -> None:
         LOGGER.info("[Update] GitHub release request started")
