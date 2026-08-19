@@ -9,7 +9,7 @@ ever activating the pet window.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -30,10 +30,14 @@ class Alarm:
     repeat_rule: str = REPEAT_ONCE
     enabled: bool = True
     sound_enabled: bool = False
+    sound_id: str = "system"
+    volume: int = 60
+    max_ring_seconds: int = 60
     snooze_minutes: int = 10
     linked_todo_id: str | None = None
     pet_action: str = "alarm"
     allow_during_dnd: bool = False
+    source_todo_id: str | None = None
     active: bool = False
     last_triggered_slot: str | None = None
     snooze_until: str | None = None
@@ -47,6 +51,14 @@ class Alarm:
             snooze_minutes = max(1, min(120, int(value.get("snooze_minutes", 10) or 10)))
         except (TypeError, ValueError):
             snooze_minutes = 10
+        try:
+            volume = max(0, min(100, int(value.get("volume", 60) or 0)))
+        except (TypeError, ValueError):
+            volume = 60
+        try:
+            max_ring_seconds = max(0, min(300, int(value.get("max_ring_seconds", 60) or 0)))
+        except (TypeError, ValueError):
+            max_ring_seconds = 60
         return cls(
             id=str(value.get("id") or uuid4().hex),
             title=str(value.get("title") or "六毛闹钟")[:240],
@@ -54,10 +66,14 @@ class Alarm:
             repeat_rule=repeat,
             enabled=bool(value.get("enabled", True)),
             sound_enabled=bool(value.get("sound_enabled", False)),
+            sound_id=str(value.get("sound_id") or "system")[:40],
+            volume=volume,
+            max_ring_seconds=max_ring_seconds,
             snooze_minutes=snooze_minutes,
             linked_todo_id=str(value.get("linked_todo_id") or "") or None,
             pet_action=str(value.get("pet_action") or "alarm")[:40],
             allow_during_dnd=bool(value.get("allow_during_dnd", False)),
+            source_todo_id=str(value.get("source_todo_id") or "") or None,
             active=bool(value.get("active", False)),
             last_triggered_slot=str(value.get("last_triggered_slot") or "") or None,
             snooze_until=str(value.get("snooze_until") or "") or None,
@@ -99,10 +115,14 @@ class AlarmManager:
         *,
         repeat_rule: str = REPEAT_ONCE,
         sound_enabled: bool = False,
+        sound_id: str = "system",
+        volume: int = 60,
+        max_ring_seconds: int = 60,
         snooze_minutes: int = 10,
         linked_todo_id: str | None = None,
         pet_action: str = "alarm",
         allow_during_dnd: bool = False,
+        source_todo_id: str | None = None,
     ) -> Alarm:
         trigger = parse_datetime(trigger_at, self._now).isoformat()
         item = Alarm(
@@ -111,10 +131,14 @@ class AlarmManager:
             trigger_at=trigger,
             repeat_rule=self._normalize_repeat(repeat_rule),
             sound_enabled=bool(sound_enabled),
+            sound_id=str(sound_id or "system")[:40],
+            volume=max(0, min(100, int(volume or 0))),
+            max_ring_seconds=max(0, min(300, int(max_ring_seconds or 0))),
             snooze_minutes=max(1, min(120, int(snooze_minutes))),
             linked_todo_id=str(linked_todo_id or "") or None,
             pet_action=str(pet_action or "alarm")[:40],
             allow_during_dnd=bool(allow_during_dnd),
+            source_todo_id=str(source_todo_id or "") or None,
         )
         self._items.append(item)
         self._save()
@@ -132,12 +156,20 @@ class AlarmManager:
             item.repeat_rule = self._normalize_repeat(changes["repeat_rule"])
         if "sound_enabled" in changes:
             item.sound_enabled = bool(changes["sound_enabled"])
+        if "sound_id" in changes:
+            item.sound_id = str(changes["sound_id"] or "system")[:40]
+        if "volume" in changes:
+            item.volume = max(0, min(100, int(changes["volume"])))
+        if "max_ring_seconds" in changes:
+            item.max_ring_seconds = max(0, min(300, int(changes["max_ring_seconds"])))
         if "snooze_minutes" in changes:
             item.snooze_minutes = max(1, min(120, int(changes["snooze_minutes"])))
         if "linked_todo_id" in changes:
             item.linked_todo_id = str(changes["linked_todo_id"] or "") or None
         if "allow_during_dnd" in changes:
             item.allow_during_dnd = bool(changes["allow_during_dnd"])
+        if "source_todo_id" in changes:
+            item.source_todo_id = str(changes["source_todo_id"] or "") or None
         if "enabled" in changes:
             item.enabled = bool(changes["enabled"])
         item.active = False
@@ -145,6 +177,67 @@ class AlarmManager:
         item.last_triggered_slot = None
         self._save()
         return item
+
+    def sync_todo(self, todo: Any, *, reminder_mode: str) -> None:
+        """Mirror an ALARM Todo into the same persisted alarm scheduler.
+
+        The Todo remains the source of truth for title, event time and
+        reminder mode. The alarm row only stores runtime state such as an
+        active claim or snooze, so editing a Todo cannot create duplicates.
+        """
+
+        todo_id = str(getattr(todo, "id", "") or "")
+        if not todo_id:
+            return
+        alarm_id = f"todo:{todo_id}"
+        item = self.get(alarm_id)
+        mode = str(reminder_mode or "none").strip().lower()
+        due = getattr(todo, "remind_at", None) or getattr(todo, "due_at", None)
+        should_exist = mode == "alarm" and not bool(getattr(todo, "completed", False)) and bool(due)
+        if not should_exist:
+            if item is not None:
+                self.delete(alarm_id)
+            return
+        if item is None:
+            item = Alarm(
+                id=alarm_id,
+                title=str(getattr(todo, "title", "待办"))[:240] or "待办",
+                trigger_at=parse_datetime(due, self._now).isoformat(),
+                sound_enabled=True,
+                sound_id=str(getattr(todo, "alarm_sound_id", "system") or "system")[:40],
+                volume=max(0, min(100, int(getattr(todo, "alarm_volume", 60) or 0))),
+                max_ring_seconds=60,
+                snooze_minutes=max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10))),
+                linked_todo_id=todo_id,
+                source_todo_id=todo_id,
+            )
+            self._items.append(item)
+            self._save()
+            return
+        changed = (
+            not item.enabled
+            or
+            item.title != str(getattr(todo, "title", "待办"))[:240]
+            or item.trigger_at != parse_datetime(due, self._now).isoformat()
+            or item.sound_id != str(getattr(todo, "alarm_sound_id", "system") or "system")[:40]
+            or item.volume != max(0, min(100, int(getattr(todo, "alarm_volume", 60) or 0)))
+            or item.snooze_minutes != max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10)))
+        )
+        item.title = str(getattr(todo, "title", "待办"))[:240] or "待办"
+        item.enabled = True
+        item.trigger_at = parse_datetime(due, self._now).isoformat()
+        item.sound_enabled = True
+        item.sound_id = str(getattr(todo, "alarm_sound_id", "system") or "system")[:40]
+        item.volume = max(0, min(100, int(getattr(todo, "alarm_volume", 60) or 0)))
+        item.max_ring_seconds = 60
+        item.snooze_minutes = max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10)))
+        item.linked_todo_id = todo_id
+        item.source_todo_id = todo_id
+        if changed:
+            item.active = False
+            item.snooze_until = None
+            item.last_triggered_slot = None
+            self._save()
 
     def get(self, alarm_id: str) -> Alarm | None:
         return next((item for item in self._items if item.id == str(alarm_id)), None)

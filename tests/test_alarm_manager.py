@@ -7,6 +7,7 @@ from onepic_desktop_pet.alarm_manager import (
     REPEAT_DAILY,
     REPEAT_WEEKDAYS,
 )
+from onepic_desktop_pet.todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET, TodoManager
 
 
 class Clock:
@@ -102,4 +103,39 @@ def test_alarm_state_survives_reload(tmp_path) -> None:
     assert restored is not None
     assert restored.active is True
     assert restored.sound_enabled is True
+
+
+def test_todo_alarm_is_mirrored_without_duplicate_rows(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    alarms = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    todos = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    task = todos.add(
+        "组会",
+        date="2026-08-19",
+        time="09:00",
+        reminder_mode=REMINDER_ALARM,
+        reminder=True,
+    )
+
+    alarms.sync_todo(task, reminder_mode=task.reminder_mode)
+    alarms.sync_todo(task, reminder_mode=task.reminder_mode)
+    mirrored = [item for item in alarms.items if item.source_todo_id == task.id]
+    assert len(mirrored) == 1
+    assert mirrored[0].sound_enabled is True
+    assert mirrored[0].max_ring_seconds == 60
+
+    task = todos.update(task.id, reminder_mode=REMINDER_PET)
+    alarms.sync_todo(task, reminder_mode=task.reminder_mode)
+    assert not [item for item in alarms.items if item.source_todo_id == task.id]
+
+
+def test_new_timed_todo_defaults_to_quiet_pet_reminder_and_can_disable(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    todos = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    task = todos.add("普通待办", date="2026-08-19", time="10:00")
+    assert task.reminder_mode == REMINDER_PET
+    assert task.reminder is True
+    task = todos.update(task.id, reminder_mode=REMINDER_NONE)
+    assert task.reminder_mode == REMINDER_NONE
+    assert task.reminder is False
 

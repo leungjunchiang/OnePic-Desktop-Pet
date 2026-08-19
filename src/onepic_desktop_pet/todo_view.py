@@ -33,6 +33,7 @@ class TodoViewItem:
     due_at: str | None = None
     reminder: bool = False
     reminder_minutes_before: int = 10
+    reminder_mode: str = "none"
 
 
 def _event_label(remaining_days: int, *, annual: bool = False) -> str:
@@ -126,6 +127,10 @@ def collect_todo_view(
                 reminder=bool(getattr(item, "reminder", False)),
                 reminder_minutes_before=max(
                     0, int(getattr(item, "reminder_minutes_before", 10) or 0)
+                ),
+                reminder_mode=str(
+                    getattr(item, "reminder_mode", "")
+                    or ("pet" if getattr(item, "reminder", False) else "none")
                 ),
             )
         )

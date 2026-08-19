@@ -41,7 +41,10 @@ class TimeMemory:
         self.anniversaries = AnniversaryManager(path("anniversaries.json"), now_provider=now_provider, persist=persist)
         self.timeline = TimelineManager(path("timeline_events.json"), now_provider=now_provider, persist=persist)
         self.summary = DailySummaryService(self.todos, self.records, self.sessions)
-        self.actions = LocalActionExecutor(self.todos, self.countdowns, self.anniversaries, self.timeline, self.summary, self.reminders)
+        self.actions = LocalActionExecutor(
+            self.todos, self.countdowns, self.anniversaries, self.timeline,
+            self.summary, self.reminders, self.alarms,
+        )
         self.current_task_id: str | None = None
         self._now = now_provider
         # Migrate legacy due-time reminders to the Todo's persisted lead time
@@ -59,16 +62,28 @@ class TimeMemory:
         self.current_task_id = str(task_id) if task_id else None
 
     def sync_todo_reminder(self, item: object) -> None:
-        """Keep the real local reminder queue aligned with one Todo record."""
+        """Keep quiet reminders and audible Todo alarms mutually exclusive."""
 
         item_id = str(getattr(item, "id", "") or "")
         if not item_id:
             return
+        mode = str(getattr(item, "reminder_mode", "") or "").strip().lower()
+        if not mode:
+            mode = "pet" if bool(getattr(item, "reminder", False)) else "none"
         if bool(getattr(item, "completed", False)):
             self.reminders.complete_for_source(item_id)
+            self.alarms.sync_todo(item, reminder_mode="none")
             return
-        if not bool(getattr(item, "reminder", False)):
+        if mode == "alarm":
             self.reminders.remove_for_source(item_id)
+            try:
+                self.alarms.sync_todo(item, reminder_mode=mode)
+            except (TypeError, ValueError):
+                self.alarms.sync_todo(item, reminder_mode="none")
+            return
+        if mode == "none" or not bool(getattr(item, "reminder", False)):
+            self.reminders.remove_for_source(item_id)
+            self.alarms.sync_todo(item, reminder_mode="none")
             return
         due = getattr(item, "remind_at", None) or getattr(item, "due_at", None)
         if due:
@@ -78,12 +93,14 @@ class TimeMemory:
                 )
             except (TypeError, ValueError):
                 # A malformed legacy time must not prevent the desktop pet
-                # from starting.  The Todo remains visible for manual repair.
+                # from starting. The Todo remains visible for manual repair.
                 self.reminders.remove_for_source(item_id)
+            self.alarms.sync_todo(item, reminder_mode="none")
         else:
             # A date-only sticky note may remain visible forever, but it has no
             # clock time at which a notification could be delivered.
             self.reminders.remove_for_source(item_id)
+            self.alarms.sync_todo(item, reminder_mode="none")
 
     def todo_view_today(self) -> list[TodoViewItem]:
         """Return today's sticky notes plus near-term countdowns/anniversaries.
@@ -199,7 +216,11 @@ class TimeMemory:
         if item is None:
             return False
         if item.source_type == "todo":
-            return self.todos.delete(item.source_id)
+            deleted = self.todos.delete(item.source_id)
+            if deleted:
+                self.alarms.delete(f"todo:{item.source_id}")
+                self.reminders.remove_for_source(item.source_id)
+            return deleted
         if item.source_type == "countdown":
             return self.countdowns.delete(item.source_id)
         if item.source_type == "anniversary":
@@ -222,6 +243,7 @@ class TimeMemory:
         item = self.todos.complete(task_id)
         if item.completed:
             self.reminders.complete_for_source(item.id)
+            self.alarms.sync_todo(item, reminder_mode="none")
         else:
             self.sync_todo_reminder(item)
         self.summary.refresh_tasks()

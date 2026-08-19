@@ -18,6 +18,26 @@ _LEGACY_INLINE_EVENT_RE = re.compile(
 )
 
 
+REMINDER_NONE = "none"
+REMINDER_PET = "pet"
+REMINDER_ALARM = "alarm"
+REMINDER_MODES = {REMINDER_NONE, REMINDER_PET, REMINDER_ALARM}
+
+
+def normalize_reminder_mode(value: Any, *, legacy_reminder: bool = False) -> str:
+    """Normalize the three user-visible reminder levels.
+
+    Files written before the mode field existed keep their old boolean
+    semantics: ``reminder=True`` becomes a quiet pet reminder and false
+    remains no reminder. New records choose the mode explicitly.
+    """
+
+    text = str(value or "").strip().lower()
+    if text in REMINDER_MODES:
+        return text
+    return REMINDER_PET if legacy_reminder else REMINDER_NONE
+
+
 def _recover_legacy_inline_event(
     title: str,
     *,
@@ -103,6 +123,10 @@ class TodoItem:
     read: bool = False
     read_at: str | None = None
     reminder_minutes_before: int = 10
+    reminder_mode: str = REMINDER_NONE
+    alarm_sound_id: str = "system"
+    alarm_volume: int = 60
+    alarm_snooze_minutes: int = 10
     source: str = "local"
 
     @classmethod
@@ -126,6 +150,17 @@ class TodoItem:
             reminder_minutes = 10
         created_at = str(value.get("created_at") or datetime.now().astimezone().isoformat())
         reminder = bool(value.get("reminder", False))
+        reminder_mode = normalize_reminder_mode(
+            value.get("reminder_mode"), legacy_reminder=reminder
+        )
+        try:
+            alarm_volume = max(0, min(100, int(value.get("alarm_volume", 60) or 0)))
+        except (TypeError, ValueError):
+            alarm_volume = 60
+        try:
+            alarm_snooze = max(1, min(120, int(value.get("alarm_snooze_minutes", 10) or 10)))
+        except (TypeError, ValueError):
+            alarm_snooze = 10
         title_value = str(value.get("title") or "未命名事项").strip()[:240]
         title_value, date_value, time_value, due_value, remind_value = (
             _recover_legacy_inline_event(
@@ -182,6 +217,10 @@ class TodoItem:
             read=bool(value.get("read", value.get("dismissed", False))),
             read_at=str(value.get("read_at") or "") or None,
             reminder_minutes_before=reminder_minutes,
+            reminder_mode=reminder_mode,
+            alarm_sound_id=str(value.get("alarm_sound_id") or "system")[:40],
+            alarm_volume=alarm_volume,
+            alarm_snooze_minutes=alarm_snooze,
             source=str(value.get("source") or "local")[:40],
         )
 
@@ -230,6 +269,10 @@ class TodoManager:
         remind_at: str | None = None,
         priority: int | None = None,
         reminder_minutes_before: int = 10,
+        reminder_mode: str = REMINDER_PET,
+        alarm_sound_id: str = "system",
+        alarm_volume: int = 60,
+        alarm_snooze_minutes: int = 10,
         source: str = "local",
     ) -> TodoItem:
         title = " ".join(str(title).split())[:240]
@@ -245,6 +288,7 @@ class TodoManager:
             clean_priority = None
         if clean_priority not in {1, 2, 3}:
             clean_priority = None
+        clean_mode = normalize_reminder_mode(reminder_mode, legacy_reminder=bool(reminder))
         try:
             clean_reminder_minutes = max(0, min(24 * 60, int(reminder_minutes_before)))
         except (TypeError, ValueError):
@@ -264,7 +308,7 @@ class TodoManager:
             f"{parsed_date}T{display_time}:00" if display_time else None
         )
         remind_value = parsed_remind.isoformat() if parsed_remind else None
-        if remind_value is None and reminder and due_value:
+        if remind_value is None and clean_mode != REMINDER_NONE and due_value:
             try:
                 reminder_due = parse_datetime(due_value, self._now)
                 remind_value = (
@@ -278,12 +322,16 @@ class TodoManager:
             date=parsed_date,
             time=display_time,
             important=bool(important),
-            reminder=bool(reminder),
+            reminder=clean_mode != REMINDER_NONE,
             created_at=now_local(self._now).isoformat(),
             due_at=due_value,
             remind_at=remind_value,
             priority=clean_priority,
             reminder_minutes_before=clean_reminder_minutes,
+            reminder_mode=clean_mode,
+            alarm_sound_id=str(alarm_sound_id or "system")[:40],
+            alarm_volume=max(0, min(100, int(alarm_volume or 0))),
+            alarm_snooze_minutes=max(1, min(120, int(alarm_snooze_minutes or 10))),
             source=str(source or "local")[:40],
         )
         self._items.append(item)
@@ -347,7 +395,8 @@ class TodoManager:
         allowed = {
             "title", "date", "time", "important", "completed", "reminder",
             "work_seconds", "due_at", "remind_at", "priority", "read",
-            "read_at", "reminder_minutes_before", "source",
+            "read_at", "reminder_minutes_before", "reminder_mode", "alarm_sound_id",
+            "alarm_volume", "alarm_snooze_minutes", "source",
         }
         changed_date_or_time = False
         explicit_due = "due_at" in changes
@@ -365,6 +414,8 @@ class TodoManager:
                 changed_date_or_time = True
             elif key in {"important", "completed", "reminder"}:
                 value = bool(value)
+            elif key == "reminder_mode":
+                value = normalize_reminder_mode(value, legacy_reminder=item.reminder)
             elif key == "priority":
                 try:
                     value = int(value) if value is not None else None
@@ -381,6 +432,16 @@ class TodoManager:
                     value = max(0, min(24 * 60, int(value)))
                 except (TypeError, ValueError):
                     value = 10
+            elif key == "alarm_volume":
+                try:
+                    value = max(0, min(100, int(value)))
+                except (TypeError, ValueError):
+                    value = 60
+            elif key == "alarm_snooze_minutes":
+                try:
+                    value = max(1, min(120, int(value)))
+                except (TypeError, ValueError):
+                    value = 10
             elif key == "work_seconds":
                 value = max(0, int(value))
             elif key in {"due_at", "remind_at"}:
@@ -388,9 +449,13 @@ class TodoManager:
             elif key == "source":
                 value = str(value or "local")[:40]
             setattr(item, key, value)
+        if "reminder_mode" in changes:
+            item.reminder = item.reminder_mode != REMINDER_NONE
+        elif "reminder" in changes:
+            item.reminder_mode = REMINDER_PET if item.reminder else REMINDER_NONE
         if changed_date_or_time and not explicit_due:
             item.due_at = f"{item.date}T{item.time}:00" if item.time else None
-        if item.reminder and not explicit_remind and (
+        if item.reminder_mode != REMINDER_NONE and not explicit_remind and (
             changed_date_or_time or "reminder_minutes_before" in changes or "reminder" in changes
         ):
             if item.due_at:
@@ -400,7 +465,7 @@ class TodoManager:
                 ).isoformat()
             else:
                 item.remind_at = None
-        if not item.reminder:
+        if item.reminder_mode == REMINDER_NONE:
             item.remind_at = None
         if item.completed and not item.completed_at:
             item.completed_at = now_local(self._now).isoformat()
@@ -479,7 +544,7 @@ class TodoManager:
             if item and not item.completed:
                 item.date = target
                 item.due_at = f"{target}T{item.time}:00" if item.time else None
-                if item.reminder:
+                if item.reminder_mode != REMINDER_NONE:
                     if item.due_at:
                         due = parse_datetime(item.due_at, self._now)
                         item.remind_at = (

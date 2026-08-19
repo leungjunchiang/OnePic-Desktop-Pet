@@ -75,6 +75,12 @@ class AlarmCard(QFrame):
         title.setStyleSheet("font-size: 14px; font-weight: 600;")
         layout.addWidget(heading)
         layout.addWidget(title)
+        sound_hint = QLabel(
+            f"系统提示音 · 最长{max(0, int(alarm.max_ring_seconds or 0))}秒"
+            if alarm.sound_enabled else "静音闹钟 · 只显示六毛提醒"
+        )
+        sound_hint.setStyleSheet("color:#607985;font-size:11px;")
+        layout.addWidget(sound_hint)
         actions = QHBoxLayout()
         actions.setSpacing(5)
         start = QPushButton("开始工作" if alarm.linked_todo_id else "开始30分钟")
@@ -92,16 +98,30 @@ class AlarmCard(QFrame):
             _no_focus(widget)
         if alarm.sound_enabled:
             self._sound_timer = QTimer(self)
-            self._sound_timer.setInterval(10_000)
+            # QApplication.beep uses the platform's own short alert sound.
+            # Repeat it gently instead of hammering the system speaker.
+            self._sound_timer.setInterval(3_000)
             self._sound_timer.timeout.connect(QApplication.beep)
             self._sound_timer.start()
             QTimer.singleShot(0, QApplication.beep)
+            self._sound_stop_timer = QTimer(self)
+            self._sound_stop_timer.setSingleShot(True)
+            self._sound_stop_timer.setInterval(max(0, int(alarm.max_ring_seconds or 60)) * 1_000)
+            self._sound_stop_timer.timeout.connect(self._stop_sound)
+            self._sound_stop_timer.start()
         else:
             self._sound_timer = None
+            self._sound_stop_timer = None
+
+    def _stop_sound(self) -> None:
+        if self._sound_timer is not None:
+            self._sound_timer.stop()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._sound_timer is not None:
             self._sound_timer.stop()
+        if self._sound_stop_timer is not None:
+            self._sound_stop_timer.stop()
         super().closeEvent(event)
 
 
@@ -153,7 +173,17 @@ class AlarmEditDialog(QDialog):
         else:
             self.weekday_checks[datetime.now().astimezone().weekday()].setChecked(True)
         self.sound = QCheckBox("到点播放提示音", self)
-        self.sound.setChecked(bool(alarm.sound_enabled) if alarm else False)
+        self.sound.setChecked(bool(alarm.sound_enabled) if alarm else True)
+        self.sound_id = QComboBox(self)
+        self.sound_id.addItem("系统提示音", "system")
+        if alarm:
+            sound_index = self.sound_id.findData(alarm.sound_id)
+            if sound_index >= 0:
+                self.sound_id.setCurrentIndex(sound_index)
+        self.volume = QSpinBox(self)
+        self.volume.setRange(0, 100)
+        self.volume.setSuffix("%（系统提示音音量由系统设置控制）")
+        self.volume.setValue(int(alarm.volume) if alarm else 60)
         self.allow_dnd = QCheckBox("允许穿透免打扰", self)
         self.allow_dnd.setChecked(bool(alarm.allow_during_dnd) if alarm else False)
         self.snooze = QSpinBox(self)
@@ -176,6 +206,8 @@ class AlarmEditDialog(QDialog):
         form.addRow("稍后默认", self.snooze)
         form.addRow("关联待办", self.linked_todo)
         form.addRow("", self.sound)
+        form.addRow("铃声", self.sound_id)
+        form.addRow("音量", self.volume)
         form.addRow("", self.allow_dnd)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -203,6 +235,9 @@ class AlarmEditDialog(QDialog):
             "trigger_at": self.trigger.dateTime().toString("yyyy-MM-ddTHH:mm:ss"),
             "repeat_rule": repeat_rule,
             "sound_enabled": self.sound.isChecked(),
+            "sound_id": self.sound_id.currentData() or "system",
+            "volume": self.volume.value(),
+            "max_ring_seconds": 60,
             "allow_during_dnd": self.allow_dnd.isChecked(),
             "snooze_minutes": self.snooze.value(),
             "linked_todo_id": self.linked_todo.currentData() or None,

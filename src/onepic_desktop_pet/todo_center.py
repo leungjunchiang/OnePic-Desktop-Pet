@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .time_memory import TimeMemory
+from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
 from .todo_view import todo_event_parts
 
 
@@ -67,6 +68,10 @@ class CenterItem:
     due_at: str | None = None
     reminder: bool = False
     reminder_minutes_before: int = 10
+    reminder_mode: str = REMINDER_NONE
+    alarm_sound_id: str = "system"
+    alarm_volume: int = 60
+    alarm_snooze_minutes: int = 10
 
 
 def _remaining_label(days: int) -> str:
@@ -110,11 +115,23 @@ class _ItemEditor(QDialog):
         self.repeat = QComboBox(self)
         self.repeat.addItem("一次", "none")
         self.repeat.addItem("每年", "yearly")
-        self.reminder = QCheckBox("进入提醒窗口后显示", self)
+        self.reminder_mode = QComboBox(self)
+        self.reminder_mode.addItem("不提醒", REMINDER_NONE)
+        self.reminder_mode.addItem("六毛提醒（无声音）", REMINDER_PET)
+        self.reminder_mode.addItem("六毛闹钟（播放系统提示音）", REMINDER_ALARM)
+        self.reminder_mode.setCurrentIndex(self.reminder_mode.findData(REMINDER_PET))
         self.reminder_minutes_before = QSpinBox(self)
         self.reminder_minutes_before.setRange(0, 24 * 60)
         self.reminder_minutes_before.setSuffix(" 分钟前")
         self.reminder_minutes_before.setValue(10)
+        self.alarm_volume = QSpinBox(self)
+        self.alarm_volume.setRange(0, 100)
+        self.alarm_volume.setSuffix("%（系统提示音音量由系统设置控制）")
+        self.alarm_volume.setValue(60)
+        self.alarm_snooze_minutes = QSpinBox(self)
+        self.alarm_snooze_minutes.setRange(1, 120)
+        self.alarm_snooze_minutes.setSuffix(" 分钟")
+        self.alarm_snooze_minutes.setValue(10)
         self.priority = QComboBox(self)
         self.priority.addItem("未设置（按时间）", None)
         self.priority.addItem("高", 1)
@@ -130,8 +147,10 @@ class _ItemEditor(QDialog):
         form.addRow("时间", self.time)
         form.addRow("优先级", self.priority)
         form.addRow("重复", self.repeat)
-        form.addRow("提醒", self.reminder)
+        form.addRow("提醒方式", self.reminder_mode)
         form.addRow("提前提醒", self.reminder_minutes_before)
+        form.addRow("闹钟音量", self.alarm_volume)
+        form.addRow("稍后默认", self.alarm_snooze_minutes)
         form.addRow("提前天数", self.show_before)
         form.addRow("备注", self.note)
         buttons = QDialogButtonBox(
@@ -143,7 +162,7 @@ class _ItemEditor(QDialog):
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
         self.kind.currentIndexChanged.connect(self._refresh_fields)
-        self.reminder.toggled.connect(self._refresh_fields)
+        self.reminder_mode.currentIndexChanged.connect(self._refresh_fields)
         if item:
             self.kind.setEnabled(False)
             self._load_item(item)
@@ -152,7 +171,7 @@ class _ItemEditor(QDialog):
             if index >= 0:
                 self.kind.setCurrentIndex(index)
                 if forced_type == "reminder":
-                    self.reminder.setChecked(True)
+                    self.reminder_mode.setCurrentIndex(self.reminder_mode.findData(REMINDER_PET))
         self._refresh_fields()
 
     def _set_row_visible(self, widget: QWidget, visible: bool) -> None:
@@ -179,13 +198,19 @@ class _ItemEditor(QDialog):
                 if repeat_index >= 0:
                     self.repeat.setCurrentIndex(repeat_index)
             elif item.source_type in {"todo", "reminder"}:
-                self.reminder.setChecked(bool(getattr(source, "reminder", False)))
+                mode = str(getattr(source, "reminder_mode", "") or "")
+                if not mode:
+                    mode = REMINDER_PET if bool(getattr(source, "reminder", False)) else REMINDER_NONE
+                mode_index = self.reminder_mode.findData(mode)
+                self.reminder_mode.setCurrentIndex(mode_index if mode_index >= 0 else 0)
                 self.reminder_minutes_before.setValue(
                     max(0, min(24 * 60, int(getattr(source, "reminder_minutes_before", 10) or 0)))
                 )
                 priority_index = self.priority.findData(getattr(source, "priority", None))
                 if priority_index >= 0:
                     self.priority.setCurrentIndex(priority_index)
+                self.alarm_volume.setValue(max(0, min(100, int(getattr(source, "alarm_volume", 60) or 0))))
+                self.alarm_snooze_minutes.setValue(max(1, min(120, int(getattr(source, "alarm_snooze_minutes", 10) or 10))))
 
     def _source(self):
         if not self.item:
@@ -202,11 +227,14 @@ class _ItemEditor(QDialog):
         self._set_row_visible(self.time, not is_event)
         self._set_row_visible(self.priority, not is_event)
         self._set_row_visible(self.repeat, kind == "anniversary")
-        self._set_row_visible(self.reminder, not is_event)
+        self._set_row_visible(self.reminder_mode, not is_event)
         self._set_row_visible(self.reminder_minutes_before, not is_event)
+        self._set_row_visible(self.alarm_volume, not is_event and self.reminder_mode.currentData() == REMINDER_ALARM)
+        self._set_row_visible(self.alarm_snooze_minutes, not is_event and self.reminder_mode.currentData() == REMINDER_ALARM)
         self._set_row_visible(self.show_before, is_event)
         self._set_row_visible(self.note, is_event)
-        self.reminder_minutes_before.setEnabled(self.reminder.isChecked() and not is_event)
+        mode = self.reminder_mode.currentData()
+        self.reminder_minutes_before.setEnabled(mode != REMINDER_NONE and not is_event)
 
     def save(self) -> None:
         kind = str(self.kind.currentData())
@@ -219,9 +247,12 @@ class _ItemEditor(QDialog):
                 "title": title,
                 "date": day,
                 "time": self.time.text().strip() or None,
-                "reminder": kind == "reminder" or self.reminder.isChecked(),
+                "reminder_mode": REMINDER_PET if kind == "reminder" else self.reminder_mode.currentData(),
+                "reminder": (REMINDER_PET if kind == "reminder" else self.reminder_mode.currentData()) != REMINDER_NONE,
                 "priority": self.priority.currentData(),
                 "reminder_minutes_before": self.reminder_minutes_before.value(),
+                "alarm_volume": self.alarm_volume.value(),
+                "alarm_snooze_minutes": self.alarm_snooze_minutes.value(),
             }
             if self.item and self.item.source_type in {"todo", "reminder"}:
                 saved = self.memory.todos.update(self.item.source_id, **values)
@@ -373,8 +404,12 @@ class TodoCenterWindow(QDialog):
                     getattr(item, "priority", None),
                     bool(getattr(item, "read", False)),
                     getattr(item, "due_at", None),
-                    bool(getattr(item, "reminder", False)),
+                    bool(getattr(item, "reminder_mode", "") not in {"", REMINDER_NONE}),
                     max(0, int(getattr(item, "reminder_minutes_before", 10) or 0)),
+                    str(getattr(item, "reminder_mode", "") or (REMINDER_PET if getattr(item, "reminder", False) else REMINDER_NONE)),
+                    str(getattr(item, "alarm_sound_id", "system") or "system"),
+                    max(0, min(100, int(getattr(item, "alarm_volume", 60) or 0))),
+                    max(1, min(120, int(getattr(item, "alarm_snooze_minutes", 10) or 10))),
                 )
             )
         for item in self.memory.countdowns.items:
@@ -467,8 +502,14 @@ class TodoCenterWindow(QDialog):
             priority_label = {1: "高", 2: "中", 3: "低"}.get(item.priority)
             if priority_label:
                 status += f" · 优先级{priority_label}"
-            if item.reminder and item.time_text:
-                status += f" · 提前{item.reminder_minutes_before}分钟"
+            mode_label = {
+                REMINDER_NONE: "无提醒",
+                REMINDER_PET: "六毛提醒",
+                REMINDER_ALARM: "🔊 六毛闹钟",
+            }.get(item.reminder_mode, "六毛提醒" if item.reminder else "无提醒")
+            status += f" · {mode_label}"
+            if item.reminder and item.time_text and item.reminder_minutes_before:
+                status += f"（提前{item.reminder_minutes_before}分钟）"
         else:
             status = item.detail
         time_part = f" · {item.time_text}" if item.time_text else ""
