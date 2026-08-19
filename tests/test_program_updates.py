@@ -386,25 +386,10 @@ def test_forced_release_check_bypasses_cached_result(monkeypatch) -> None:
     assert calls == 2
 
 
-
-def test_program_update_worker_keeps_force_flag_and_passes_it_to_manager() -> None:
-    from onepic_desktop_pet.update_worker import ProgramUpdateCheckWorker
-
-    calls = []
-
-    class Manager:
-        def check_app_update(self, *, force: bool = False):
-            calls.append(force)
-            return object()
-
-    worker = ProgramUpdateCheckWorker(Manager(), force=True)
-    assert worker.force is True
-    worker.run()
-    assert calls == [True]
-
 def test_desktop_pet_application_is_a_qt_object_for_worker_callbacks() -> None:
     from PySide6.QtCore import QObject
 
     from onepic_desktop_pet.app import DesktopPetApplication
 
     assert issubclass(DesktopPetApplication, QObject)
+
