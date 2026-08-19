@@ -118,6 +118,10 @@ class TodoItem:
     # time-based ordering.  1/2/3 mean high/medium/low when the user chooses
     # an explicit priority.
     priority: int | None = None
+    # Explicit position in the user's current work queue.  Unlike the legacy
+    # high/medium/low priority, this is a strict 1..5 order; None means the
+    # item remains in the normal date-sorted list.
+    queue_position: int | None = None
     # ``read`` is separate from ``completed``.  A sticky note can be read and
     # dismissed without falsely claiming that the work is finished.
     read: bool = False
@@ -145,6 +149,13 @@ class TodoItem:
             priority = None
         if priority not in {1, 2, 3}:
             priority = None
+        raw_queue_position = value.get("queue_position")
+        try:
+            queue_position = int(raw_queue_position) if raw_queue_position is not None else None
+        except (TypeError, ValueError):
+            queue_position = None
+        if queue_position not in {1, 2, 3, 4, 5}:
+            queue_position = None
         try:
             reminder_minutes = max(
                 0, min(24 * 60, int(value.get("reminder_minutes_before", 10) or 0))
@@ -217,6 +228,7 @@ class TodoItem:
             due_at=due_value,
             remind_at=remind_value,
             priority=priority,
+            queue_position=queue_position,
             read=bool(value.get("read", value.get("dismissed", False))),
             read_at=str(value.get("read_at") or "") or None,
             reminder_minutes_before=reminder_minutes,
@@ -272,6 +284,7 @@ class TodoManager:
         due_at: str | None = None,
         remind_at: str | None = None,
         priority: int | None = None,
+        queue_position: int | None = None,
         reminder_minutes_before: int = 10,
         reminder_mode: str = REMINDER_PET,
         alarm_sound_id: str = "system",
@@ -293,6 +306,12 @@ class TodoManager:
             clean_priority = None
         if clean_priority not in {1, 2, 3}:
             clean_priority = None
+        try:
+            clean_queue_position = int(queue_position) if queue_position is not None else None
+        except (TypeError, ValueError):
+            clean_queue_position = None
+        if clean_queue_position not in {1, 2, 3, 4, 5}:
+            clean_queue_position = None
         clean_mode = normalize_reminder_mode(reminder_mode, legacy_reminder=bool(reminder))
         try:
             clean_reminder_minutes = max(0, min(24 * 60, int(reminder_minutes_before)))
@@ -332,6 +351,7 @@ class TodoManager:
             due_at=due_value,
             remind_at=remind_value,
             priority=clean_priority,
+            queue_position=None,
             reminder_minutes_before=clean_reminder_minutes,
             reminder_mode=clean_mode,
             alarm_sound_id=str(alarm_sound_id or "system")[:40],
@@ -342,6 +362,8 @@ class TodoManager:
         )
         self._items.append(item)
         self._save()
+        if clean_queue_position is not None:
+            self.set_queue_position(item.id, clean_queue_position)
         return item
 
     def get(self, item_id: str) -> TodoItem | None:
@@ -401,6 +423,7 @@ class TodoManager:
         allowed = {
             "title", "date", "time", "important", "completed", "reminder",
             "work_seconds", "due_at", "remind_at", "priority", "read",
+            "queue_position",
             "read_at", "reminder_minutes_before", "reminder_mode", "alarm_sound_id",
             "alarm_volume", "alarm_snooze_minutes", "reminder_suppressed", "source",
         }
@@ -428,6 +451,13 @@ class TodoManager:
                 except (TypeError, ValueError):
                     value = None
                 if value not in {1, 2, 3}:
+                    value = None
+            elif key == "queue_position":
+                try:
+                    value = int(value) if value is not None else None
+                except (TypeError, ValueError):
+                    value = None
+                if value not in {1, 2, 3, 4, 5}:
                     value = None
             elif key == "read":
                 value = bool(value)
@@ -488,6 +518,8 @@ class TodoManager:
             item.reminder_suppressed = False
         if item.completed and not item.completed_at:
             item.completed_at = now_local(self._now).isoformat()
+        if item.completed:
+            item.queue_position = None
         if not item.completed:
             item.completed_at = None
         if item.read and not item.read_at:
@@ -495,15 +527,85 @@ class TodoManager:
         if not item.read:
             item.read_at = None
         self._save()
+        if "queue_position" in changes and not item.completed:
+            return self.set_queue_position(item.id, item.queue_position)
         return item
 
     def complete(self, item_id: str, completed: bool = True) -> TodoItem:
-        return self.update(item_id, completed=completed)
+        item = self.update(item_id, completed=completed)
+        if item.completed:
+            self.normalize_queue()
+        return item
+
+    def _explicit_queue_items(self) -> list[TodoItem]:
+        """Return the active, explicitly queued items in stable order."""
+
+        candidates = [
+            item
+            for item in self._items
+            if not item.completed
+            and not item.read
+            and item.queue_position in {1, 2, 3, 4, 5}
+        ]
+        return sorted(
+            candidates,
+            key=lambda item: (
+                int(item.queue_position or 99),
+                item.date,
+                item.time or "99:99",
+                item.created_at,
+            ),
+        )
+
+    def queued_items(self) -> tuple[TodoItem, ...]:
+        """Return the current 1..5 queue without exposing mutable internals."""
+
+        return tuple(self._explicit_queue_items())
+
+    def set_queue_position(self, item_id: str, position: int | None) -> TodoItem:
+        """Insert/remove one pending Todo in the strict five-item queue."""
+
+        item = self.get(item_id)
+        if item is None:
+            raise KeyError(item_id)
+        current = [queued for queued in self._explicit_queue_items() if queued.id != item.id]
+        if position in {1, 2, 3, 4, 5} and not item.completed and not item.read:
+            index = min(int(position) - 1, len(current))
+            current.insert(index, item)
+        for candidate in self._items:
+            candidate.queue_position = None
+        for index, candidate in enumerate(current[:5], start=1):
+            candidate.queue_position = index
+        self._save()
+        return item
+
+    def reorder_queue(self, item_ids: list[str]) -> tuple[TodoItem, ...]:
+        """Apply a drag/drop order atomically and normalize positions."""
+
+        by_id = {item.id: item for item in self._explicit_queue_items()}
+        ordered = [by_id[item_id] for item_id in item_ids if item_id in by_id]
+        for candidate in self._explicit_queue_items():
+            if candidate not in ordered:
+                ordered.append(candidate)
+        for candidate in self._items:
+            candidate.queue_position = None
+        for index, candidate in enumerate(ordered[:5], start=1):
+            candidate.queue_position = index
+        self._save()
+        return tuple(ordered[:5])
+
+    def normalize_queue(self) -> tuple[TodoItem, ...]:
+        """Compact positions after completion, deletion, or read dismissal."""
+
+        return self.reorder_queue([item.id for item in self._explicit_queue_items()])
 
     def mark_read(self, item_id: str, read: bool = True) -> TodoItem:
         """Dismiss a sticky note without changing its completion state."""
 
-        return self.update(item_id, read=read, read_at=(now_local(self._now).isoformat() if read else None))
+        item = self.update(item_id, read=read, read_at=(now_local(self._now).isoformat() if read else None))
+        if read:
+            self.normalize_queue()
+        return item
 
     def auto_hidden(self, item: TodoItem, *, now: datetime | None = None) -> bool:
         """Whether a timed note passed its due time by more than 24 hours.
@@ -530,7 +632,7 @@ class TodoManager:
         self._items = [item for item in self._items if item.id != str(item_id)]
         changed = len(self._items) != before
         if changed:
-            self._save()
+            self.normalize_queue()
         return changed
 
     def add_work_seconds(self, item_id: str | None, seconds: int) -> TodoItem | None:
