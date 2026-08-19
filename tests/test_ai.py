@@ -133,6 +133,8 @@ def test_codex_jsonl_parser_takes_last_agent_message() -> None:
 
 def test_codex_cli_capabilities_are_probed_per_subcommand(monkeypatch) -> None:
     def fake_run(command, **_kwargs):
+        if command[0] == "/bin/zsh":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[-1] == "--version":
             return SimpleNamespace(returncode=0, stdout="codex-cli 1.2.3", stderr="")
         if command[1:3] == ["exec", "--help"]:
@@ -598,4 +600,5 @@ def test_macos_gui_launch_uses_open_a_chatgpt(monkeypatch) -> None:
 
     assert launch_codex_gui() is True
     assert calls[0][0] == ["open", "-a", "ChatGPT"]
+
 
