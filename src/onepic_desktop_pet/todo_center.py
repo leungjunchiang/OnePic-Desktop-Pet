@@ -247,8 +247,13 @@ class _ItemEditor(QDialog):
                 "title": title,
                 "date": day,
                 "time": self.time.text().strip() or None,
-                "reminder_mode": REMINDER_PET if kind == "reminder" else self.reminder_mode.currentData(),
-                "reminder": (REMINDER_PET if kind == "reminder" else self.reminder_mode.currentData()) != REMINDER_NONE,
+                # ``提醒`` is a record type, not a reminder level.  Preserve
+                # the user's selected mode here; previously every save of a
+                # reminder record forced it back to the quiet PET mode, so a
+                # selected audible alarm disappeared after reopening and was
+                # never scheduled by AlarmManager.
+                "reminder_mode": self.reminder_mode.currentData(),
+                "reminder": self.reminder_mode.currentData() != REMINDER_NONE,
                 "priority": self.priority.currentData(),
                 "reminder_minutes_before": self.reminder_minutes_before.value(),
                 "alarm_volume": self.alarm_volume.value(),
