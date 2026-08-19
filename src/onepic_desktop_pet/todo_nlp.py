@@ -66,6 +66,11 @@ def _date_value(text: str, current: date) -> str | None:
         except ValueError:
             return None
     match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?", text)
+    if not match:
+        # Accept the compact forms people commonly type in a chat, such as
+        # “8.19 13:00” or “8/19 13:00”.  These are event dates, not the
+        # date on which the Todo was created.
+        match = re.search(r"(\d{1,2})\s*[./-]\s*(\d{1,2})\s*(?:日|号)?", text)
     if match:
         try:
             candidate = date(current.year, int(match.group(1)), int(match.group(2)))
@@ -145,6 +150,7 @@ def _strip_date_time(text: str, current: date) -> str:
     result = text
     result = re.sub(r"20\d{2}\s*[年./-]\s*\d{1,2}\s*[月./-]\s*\d{1,2}\s*[日号]?(?:的)?", " ", result)
     result = re.sub(r"\d{1,2}\s*月\s*\d{1,2}\s*[日号]?(?:的)?", " ", result)
+    result = re.sub(r"\d{1,2}\s*[./-]\s*\d{1,2}\s*(?:日|号)?(?:的)?", " ", result)
     result = re.sub(r"(?:今天|明天|后天)(?:早上|上午|中午|下午|晚上|傍晚)?(?:的)?", " ", result)
     _time, matched = _time_value(result)
     if matched:
@@ -230,3 +236,4 @@ def parse_explicit_todo_request(
             }
         ],
     }
+

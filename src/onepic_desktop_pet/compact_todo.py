@@ -17,6 +17,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -417,7 +419,7 @@ class CompactTodoPanel(QWidget):
         ]
         return sorted(tasks, key=self._task_priority_key)
 
-    def _task_priority_key(self, task: Any) -> tuple[int, int, int, str]:
+    def _task_priority_key(self, task: Any) -> tuple[object, ...]:
         """Return stable priority order for the visible Todo list."""
 
         current = str(getattr(task, "id", "")) == str(self.memory.current_task_id or "")
@@ -432,9 +434,17 @@ class CompactTodoPanel(QWidget):
             time_value = hour * 60 + minute
         except (TypeError, ValueError):
             time_value = 24 * 60 + 1
+        raw_priority = getattr(task, "priority", None)
+        try:
+            explicit_priority = int(raw_priority) if raw_priority is not None else None
+        except (TypeError, ValueError):
+            explicit_priority = None
+        if explicit_priority not in {1, 2, 3}:
+            explicit_priority = None
         return (
             -int(current),
-            -int(important),
+            0 if explicit_priority is not None else (1 if important else 2),
+            explicit_priority if explicit_priority is not None else 99,
             max(0, day_value),
             time_value,
             str(getattr(task, "created_at", "") or ""),
@@ -658,13 +668,14 @@ class CompactTodoPanel(QWidget):
 
         task = self.memory.get_todo_view_item(self.selected_task_id)
         menu = QMenu(self)
-        edit = time_action = pin = None
+        edit = time_action = pin = read_action = None
         complete = delete = None
         if task is not None:
             if task.source_type == "todo":
                 edit = menu.addAction("编辑选中待办")
                 time_action = menu.addAction("修改时间")
                 pin = menu.addAction("取消置顶" if task.important else "置顶")
+                read_action = menu.addAction("标为已读（从桌面贴纸收起）")
             elif task.source_type == "anniversary":
                 menu.addAction("这个日子先不显示").setData("acknowledge")
             complete = menu.addAction("取消完成" if task.completed else "完成")
@@ -683,6 +694,11 @@ class CompactTodoPanel(QWidget):
             self._edit_task(task.id, include_time=True, time_only=True)
         elif task is not None and pin is not None and chosen is pin:
             self.memory.todos.update(task.source_id, important=not task.important)
+            self.refresh()
+            self.task_changed.emit()
+        elif task is not None and read_action is not None and chosen is read_action:
+            self.memory.read_todo_view_item(task.id, True)
+            self.selected_task_id = ""
             self.refresh()
             self.task_changed.emit()
         elif task is not None and chosen is complete:
@@ -719,10 +735,30 @@ class CompactTodoPanel(QWidget):
         time.setPlaceholderText("可选，例如 20:00")
         important = QCheckBox("置顶", dialog)
         important.setChecked(task.important)
+        priority = QComboBox(dialog)
+        priority.addItem("未设置（按时间）", None)
+        priority.addItem("高", 1)
+        priority.addItem("中", 2)
+        priority.addItem("低", 3)
+        priority_index = priority.findData(getattr(task, "priority", None))
+        priority.setCurrentIndex(priority_index if priority_index >= 0 else 0)
+        reminder = QCheckBox("提前提醒", dialog)
+        reminder.setChecked(bool(getattr(task, "reminder", False)))
+        reminder_minutes = QSpinBox(dialog)
+        reminder_minutes.setRange(0, 24 * 60)
+        reminder_minutes.setSuffix(" 分钟前")
+        reminder_minutes.setValue(
+            max(0, min(24 * 60, int(getattr(task, "reminder_minutes_before", 10) or 0)))
+        )
+        reminder_minutes.setEnabled(reminder.isChecked())
+        reminder.toggled.connect(reminder_minutes.setEnabled)
         if not time_only:
             form.addRow("任务", title)
             form.addRow("时间", time)
             form.addRow("", important)
+            form.addRow("优先级", priority)
+            form.addRow("提醒", reminder)
+            form.addRow("提前提醒", reminder_minutes)
         else:
             form.addRow("时间", time)
         buttons = QDialogButtonBox(
@@ -738,7 +774,15 @@ class CompactTodoPanel(QWidget):
             return
         changes: dict[str, Any] = {"time": time.text().strip() or None}
         if not time_only:
-            changes.update(title=title.text().strip(), important=important.isChecked())
-        self.memory.todos.update(task.source_id, **changes)
+            changes.update(
+                title=title.text().strip(),
+                important=important.isChecked(),
+                priority=priority.currentData(),
+                reminder=reminder.isChecked(),
+                reminder_minutes_before=reminder_minutes.value(),
+            )
+        saved = self.memory.todos.update(task.source_id, **changes)
+        self.memory.sync_todo_reminder(saved)
         self.refresh()
         self.task_changed.emit()
+

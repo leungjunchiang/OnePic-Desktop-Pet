@@ -70,6 +70,13 @@ def test_explicit_date_is_preserved() -> None:
     assert task["time"] == "09:00"
 
 
+def test_compact_month_day_event_date_is_not_creation_date() -> None:
+    task = _task("设置贵阳站 8.19 13:00 的待办")
+    assert task["title"] == "贵阳站"
+    assert task["date"] == "2026-08-19"
+    assert task["time"] == "13:00"
+
+
 def test_plain_ambiguous_chat_is_not_intercepted() -> None:
     assert parse_explicit_todo_request("明天怎么样", now=NOW) is None
     assert parse_explicit_todo_request("有没有人告诉你", now=NOW) is None
@@ -77,3 +84,4 @@ def test_plain_ambiguous_chat_is_not_intercepted() -> None:
 
 def test_query_about_todos_is_not_create_action() -> None:
     assert parse_explicit_todo_request("我明天还有什么待办？", now=NOW) is None
+

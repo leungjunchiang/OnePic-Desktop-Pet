@@ -60,7 +60,7 @@ class ReminderManager:
 
         due = parse_datetime(due_at, self._now).isoformat()
         item = next(
-            (candidate for candidate in self._items if candidate.source_id == str(source_id) and not candidate.done),
+            (candidate for candidate in self._items if candidate.source_id == str(source_id)),
             None,
         )
         if item is None:
@@ -69,6 +69,7 @@ class ReminderManager:
         else:
             item.title = str(title).strip()[:240]
             item.due_at = due
+            item.done = False
             item.notified = False
         self._save()
         return item
@@ -126,3 +127,4 @@ class ReminderManager:
         item.done = True
         self._save()
         return True
+

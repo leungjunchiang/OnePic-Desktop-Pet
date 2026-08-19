@@ -56,7 +56,7 @@ from .update_worker import (
     ProgramUpdateDownloadWorker,
 )
 from .update_manager import UpdateManager
-from .macos_dock import install_dock_menu
+from .macos_dock import install_dock_menu, install_status_item
 from .window import PetWindow
 
 
@@ -96,6 +96,7 @@ class DesktopPetApplication:
         )
         self.tray = self._create_tray()
         self._dock_controller = install_dock_menu(self.window.unified_menu_model)
+        self._status_item_controller = install_status_item(self.window.unified_menu_model)
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
     def _create_tray(self) -> QSystemTrayIcon:
@@ -186,6 +187,7 @@ class DesktopPetApplication:
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         finally:
+            self._status_item_controller.close()
             self._dock_controller.close()
             self.tray.hide()
             self.window.close()
@@ -461,4 +463,5 @@ def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
     return DesktopPetApplication().start(smoke_test_ms=smoke_test_ms)
+
 

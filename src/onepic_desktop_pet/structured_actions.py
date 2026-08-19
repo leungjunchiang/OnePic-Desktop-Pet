@@ -92,7 +92,7 @@ class LocalActionExecutor:
                 existing = self.todos.find_similar_pending(title, date)
                 changes = {
                     key: raw[key]
-                    for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "source")
+                    for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "priority", "reminder_minutes_before", "source")
                     if key in raw
                 }
                 if existing is not None and not bool(raw.get("force_new", False)):
@@ -109,6 +109,8 @@ class LocalActionExecutor:
                         important=bool(raw.get("important", False)),
                         due_at=raw.get("due_at"),
                         remind_at=raw.get("remind_at"),
+                        priority=raw.get("priority"),
+                        reminder_minutes_before=raw.get("reminder_minutes_before", 10),
                         source=str(raw.get("source") or "chat"),
                     )
                     created.append(task)
@@ -139,7 +141,7 @@ class LocalActionExecutor:
                 return ActionResult(action, "没找到对应的待办，我没有改动任何东西。", {"saved": False}, False)
             changes = {
                 key: value[key]
-                for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "source")
+                for key in ("title", "date", "time", "important", "reminder", "due_at", "remind_at", "priority", "reminder_minutes_before", "source")
                 if key in value
             }
             if not changes:
@@ -219,3 +221,4 @@ class LocalActionExecutor:
         due = task.remind_at or task.due_at
         if due:
             self.reminders.upsert_for_source(task.title, due, source_id=task.id)
+

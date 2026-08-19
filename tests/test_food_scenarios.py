@@ -108,3 +108,4 @@ def test_buddy_interaction_modes_preserve_focus() -> None:
     assert interaction_mode_action("focus_priority", True) == "queue"
     assert interaction_mode_action("focus_priority", False) == "immediate"
     assert interaction_mode_action("do_not_disturb", False) == "silent"
+

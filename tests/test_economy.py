@@ -181,3 +181,4 @@ def test_food_scene_start_error_distinguishes_inventory_and_active_scene(tmp_pat
     assert ledger.food_scene_start_error("coffee") is None
     assert ledger.start_food_scene("coffee", duration_minutes=30) is not None
     assert ledger.food_scene_start_error("milk_tea", consume_inventory=False) == "active_scene"
+

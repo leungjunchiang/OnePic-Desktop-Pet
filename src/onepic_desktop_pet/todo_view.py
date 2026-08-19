@@ -8,7 +8,7 @@ no duplicate Todo record is created.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Iterable
 
 
@@ -28,6 +28,11 @@ class TodoViewItem:
     source_id: str
     display_text: str
     remaining_days: int | None = None
+    priority: int | None = None
+    read: bool = False
+    due_at: str | None = None
+    reminder: bool = False
+    reminder_minutes_before: int = 10
 
 
 def _event_label(remaining_days: int, *, annual: bool = False) -> str:
@@ -54,6 +59,37 @@ def _todo_date_label(item_date: str, today_date: str) -> str:
     return "今天" if remaining_days == 0 else item_date
 
 
+def todo_event_parts(item: Any) -> tuple[str, str | None]:
+    """Return the event date/time used by Todo views.
+
+    ``due_at`` is the actual event/deadline. ``remind_at`` is deliberately
+    excluded: it is only the internal notification schedule and must never be
+    rendered as if the event itself happened at that time. The legacy
+    ``date``/``time`` fields remain the fallback for old records.
+    """
+
+    due_value = str(getattr(item, "due_at", None) or "").strip()
+    if due_value:
+        try:
+            parsed = datetime.fromisoformat(due_value.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone()
+            return parsed.date().isoformat(), parsed.strftime("%H:%M")
+        except (TypeError, ValueError, OverflowError):
+            # A malformed due_at should not make a legacy Todo disappear.
+            pass
+
+    # A record with only ``remind_at`` has no event date. Its date field can
+    # be the day on which the reminder was configured, so it must not leak
+    # into the sticky-note display as if it were the event date.
+    if getattr(item, "remind_at", None) and not getattr(item, "time", None):
+        return "", None
+
+    date_value = str(getattr(item, "date", "") or "")[:10]
+    time_value = str(getattr(item, "time", None) or "").strip()[:5] or None
+    return date_value, time_value
+
+
 def collect_todo_view(
     todos: Iterable[Any],
     countdowns: Iterable[Any],
@@ -69,20 +105,28 @@ def collect_todo_view(
 
     result: list[TodoViewItem] = []
     for item in todos:
+        event_date, event_time = todo_event_parts(item)
         text = str(item.title)
-        if getattr(item, "time", None):
-            text += f" · {item.time}"
-        if show_future_dates and today_date and str(item.date) != today_date:
-            text = f"{_todo_date_label(str(item.date), today_date)} · {text}"
+        if event_time:
+            text += f" · {event_time}"
+        if show_future_dates and today_date and event_date and event_date != today_date:
+            text = f"{_todo_date_label(event_date, today_date)} · {text}"
         result.append(
             TodoViewItem(
-                id=str(item.id), title=str(item.title), date=str(item.date),
-                time=getattr(item, "time", None),
+                id=str(item.id), title=str(item.title), date=event_date,
+                time=event_time,
                 important=bool(getattr(item, "important", False)),
                 completed=bool(getattr(item, "completed", False)),
                 created_at=str(getattr(item, "created_at", "") or ""),
                 work_seconds=max(0, int(getattr(item, "work_seconds", 0) or 0)),
                 source_type="todo", source_id=str(item.id), display_text=text,
+                priority=getattr(item, "priority", None),
+                read=bool(getattr(item, "read", False)),
+                due_at=getattr(item, "due_at", None),
+                reminder=bool(getattr(item, "reminder", False)),
+                reminder_minutes_before=max(
+                    0, int(getattr(item, "reminder_minutes_before", 10) or 0)
+                ),
             )
         )
 
@@ -125,3 +169,4 @@ def collect_todo_view(
             )
         )
     return result
+

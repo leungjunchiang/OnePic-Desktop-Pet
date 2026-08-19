@@ -4468,7 +4468,34 @@ class PetWindow(QWidget):
             self._build_context_menu().exec(self._pending_context_global)
 
     def eventFilter(self, watched, event) -> bool:
-        """点击其它 Qt 窗口时收起右键工作条，按钮本身不受影响。"""
+        """收起工作条并记录 Lili 窗口焦点变化，绝不主动重新激活。"""
+
+        if event.type() in {
+            QEvent.Type.WindowActivate,
+            QEvent.Type.WindowDeactivate,
+            QEvent.Type.FocusIn,
+            QEvent.Type.FocusOut,
+        }:
+            surfaces = (
+                self,
+                self.quick_panel,
+                self.work_controls,
+                self.work_duration_bubble,
+                self.speech_bubble,
+                self.photo_bubble,
+            )
+            if watched in surfaces:
+                LOGGER.debug(
+                    "LILI_FOCUS_EVENT type=%s object=%s active_window=%s focus_window=%s",
+                    event.type().name,
+                    type(watched).__name__,
+                    type(QApplication.activeWindow()).__name__
+                    if QApplication.activeWindow() is not None
+                    else "None",
+                    type(QApplication.focusWidget()).__name__
+                    if QApplication.focusWidget() is not None
+                    else "None",
+                )
 
         if (
             event.type() == QEvent.Type.MouseButtonPress
@@ -4574,3 +4601,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+

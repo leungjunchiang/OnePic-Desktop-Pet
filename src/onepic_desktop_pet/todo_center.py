@@ -25,12 +25,14 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .time_memory import TimeMemory
+from .todo_view import todo_event_parts
 
 
 TODO_CENTER_STYLE = """
@@ -60,6 +62,11 @@ class CenterItem:
     time_text: str = ""
     completed: bool = False
     detail: str = ""
+    priority: int | None = None
+    read: bool = False
+    due_at: str | None = None
+    reminder: bool = False
+    reminder_minutes_before: int = 10
 
 
 def _remaining_label(days: int) -> str:
@@ -104,6 +111,15 @@ class _ItemEditor(QDialog):
         self.repeat.addItem("一次", "none")
         self.repeat.addItem("每年", "yearly")
         self.reminder = QCheckBox("进入提醒窗口后显示", self)
+        self.reminder_minutes_before = QSpinBox(self)
+        self.reminder_minutes_before.setRange(0, 24 * 60)
+        self.reminder_minutes_before.setSuffix(" 分钟前")
+        self.reminder_minutes_before.setValue(10)
+        self.priority = QComboBox(self)
+        self.priority.addItem("未设置（按时间）", None)
+        self.priority.addItem("高", 1)
+        self.priority.addItem("中", 2)
+        self.priority.addItem("低", 3)
         self.show_before = QLineEdit(self)
         self.show_before.setPlaceholderText("默认 7 天")
         self.note = QLineEdit(self)
@@ -112,8 +128,10 @@ class _ItemEditor(QDialog):
         form.addRow("标题", self.title)
         form.addRow("日期", self.date)
         form.addRow("时间", self.time)
+        form.addRow("优先级", self.priority)
         form.addRow("重复", self.repeat)
         form.addRow("提醒", self.reminder)
+        form.addRow("提前提醒", self.reminder_minutes_before)
         form.addRow("提前天数", self.show_before)
         form.addRow("备注", self.note)
         buttons = QDialogButtonBox(
@@ -125,6 +143,7 @@ class _ItemEditor(QDialog):
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
         self.kind.currentIndexChanged.connect(self._refresh_fields)
+        self.reminder.toggled.connect(self._refresh_fields)
         if item:
             self.kind.setEnabled(False)
             self._load_item(item)
@@ -132,6 +151,8 @@ class _ItemEditor(QDialog):
             index = self.kind.findData(forced_type)
             if index >= 0:
                 self.kind.setCurrentIndex(index)
+                if forced_type == "reminder":
+                    self.reminder.setChecked(True)
         self._refresh_fields()
 
     def _set_row_visible(self, widget: QWidget, visible: bool) -> None:
@@ -159,6 +180,12 @@ class _ItemEditor(QDialog):
                     self.repeat.setCurrentIndex(repeat_index)
             elif item.source_type in {"todo", "reminder"}:
                 self.reminder.setChecked(bool(getattr(source, "reminder", False)))
+                self.reminder_minutes_before.setValue(
+                    max(0, min(24 * 60, int(getattr(source, "reminder_minutes_before", 10) or 0)))
+                )
+                priority_index = self.priority.findData(getattr(source, "priority", None))
+                if priority_index >= 0:
+                    self.priority.setCurrentIndex(priority_index)
 
     def _source(self):
         if not self.item:
@@ -173,10 +200,13 @@ class _ItemEditor(QDialog):
         kind = str(self.kind.currentData())
         is_event = kind in {"countdown", "anniversary"}
         self._set_row_visible(self.time, not is_event)
+        self._set_row_visible(self.priority, not is_event)
         self._set_row_visible(self.repeat, kind == "anniversary")
         self._set_row_visible(self.reminder, not is_event)
+        self._set_row_visible(self.reminder_minutes_before, not is_event)
         self._set_row_visible(self.show_before, is_event)
         self._set_row_visible(self.note, is_event)
+        self.reminder_minutes_before.setEnabled(self.reminder.isChecked() and not is_event)
 
     def save(self) -> None:
         kind = str(self.kind.currentData())
@@ -190,11 +220,14 @@ class _ItemEditor(QDialog):
                 "date": day,
                 "time": self.time.text().strip() or None,
                 "reminder": kind == "reminder" or self.reminder.isChecked(),
+                "priority": self.priority.currentData(),
+                "reminder_minutes_before": self.reminder_minutes_before.value(),
             }
             if self.item and self.item.source_type in {"todo", "reminder"}:
-                self.memory.todos.update(self.item.source_id, **values)
+                saved = self.memory.todos.update(self.item.source_id, **values)
             else:
-                self.memory.todos.add(source="todo_center", **values)
+                saved = self.memory.todos.add(source="todo_center", **values)
+            self.memory.sync_todo_reminder(saved)
             return
         try:
             show_before = max(
@@ -273,7 +306,8 @@ class TodoCenterWindow(QDialog):
         heading.setStyleSheet("font-size:24px;font-weight:700;color:#183c4c;")
         root.addWidget(heading)
         subtitle = QLabel(
-            "今天和近期事项按时间显示；倒计时、纪念日集中在“重要日期”管理。"
+            "待办像便利贴：有时间的事项到点后保留24小时；没有具体时间的事项不会自动消失，需手动标为已读。"
+            " 可设置优先级和提前提醒。"
         )
         subtitle.setObjectName("subtitle")
         root.addWidget(subtitle)
@@ -284,6 +318,7 @@ class TodoCenterWindow(QDialog):
             ("即将到来", "upcoming"),
             ("重要日期", "events"),
             ("已完成", "completed"),
+            ("已读", "read"),
         ):
             listing = QListWidget(self)
             listing.setProperty("view_key", key)
@@ -306,8 +341,11 @@ class TodoCenterWindow(QDialog):
         self.edit_button.clicked.connect(self._edit_current)
         self.delete_button = QPushButton("删除", self)
         self.delete_button.clicked.connect(self._delete_current)
+        self.read_button = QPushButton("标为已读", self)
+        self.read_button.clicked.connect(self._toggle_read_current)
         buttons.addWidget(self.add_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.read_button)
         buttons.addWidget(self.edit_button)
         buttons.addWidget(self.delete_button)
         root.addLayout(buttons)
@@ -320,6 +358,7 @@ class TodoCenterWindow(QDialog):
     def _all_items(self) -> list[CenterItem]:
         result: list[CenterItem] = []
         for item in self.memory.todos.items:
+            event_date, event_time = todo_event_parts(item)
             detail = "提醒" if item.reminder else "待办"
             result.append(
                 CenterItem(
@@ -327,10 +366,15 @@ class TodoCenterWindow(QDialog):
                     "reminder" if item.reminder else "todo",
                     item.id,
                     item.title,
-                    item.date,
-                    item.time or "",
+                    event_date,
+                    event_time or "",
                     item.completed,
                     detail,
+                    getattr(item, "priority", None),
+                    bool(getattr(item, "read", False)),
+                    getattr(item, "due_at", None),
+                    bool(getattr(item, "reminder", False)),
+                    max(0, int(getattr(item, "reminder_minutes_before", 10) or 0)),
                 )
             )
         for item in self.memory.countdowns.items:
@@ -394,10 +438,19 @@ class TodoCenterWindow(QDialog):
             return is_event
         if view == "completed":
             return item.source_type in {"todo", "reminder"} and item.completed
+        if view == "read":
+            return item.source_type in {"todo", "reminder"} and item.read and not item.completed
         if item.completed:
             return False
+        if item.read:
+            return False
         if view == "today":
-            return item_day <= today
+            if is_event:
+                return item_day <= today
+            return any(
+                entry.source_type == "todo" and entry.source_id == item.source_id
+                for entry in self.memory.todo_view_today()
+            )
         if view == "upcoming":
             if is_event:
                 return item_day > today and self._event_in_reminder_window(item)
@@ -409,6 +462,13 @@ class TodoCenterWindow(QDialog):
             status = "提醒" if item.source_type == "reminder" else "待办"
             if item.completed:
                 status += " · 已完成"
+            if item.read:
+                status += " · 已读"
+            priority_label = {1: "高", 2: "中", 3: "低"}.get(item.priority)
+            if priority_label:
+                status += f" · 优先级{priority_label}"
+            if item.reminder and item.time_text:
+                status += f" · 提前{item.reminder_minutes_before}分钟"
         else:
             status = item.detail
         time_part = f" · {item.time_text}" if item.time_text else ""
@@ -429,7 +489,15 @@ class TodoCenterWindow(QDialog):
             listing.blockSignals(True)
             listing.clear()
             rows = [item for item in all_items if self._partition(item, view)]
-            rows.sort(key=lambda item: (item.date_text, item.time_text, item.title))
+            rows.sort(
+                key=lambda item: (
+                    0 if item.priority is not None else 1,
+                    item.priority if item.priority is not None else 99,
+                    item.date_text,
+                    item.time_text or "99:99",
+                    item.title,
+                )
+            )
             for item in rows:
                 row = QListWidgetItem(self._label(item), listing)
                 row.setData(Qt.ItemDataRole.UserRole, item.id)
@@ -465,9 +533,21 @@ class TodoCenterWindow(QDialog):
         return value if isinstance(value, CenterItem) else None
 
     def _update_buttons(self) -> None:
-        enabled = self._current_model() is not None
+        item = self._current_model()
+        enabled = item is not None
         self.edit_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled)
+        can_read = item is not None and item.source_type in {"todo", "reminder"} and not item.completed
+        self.read_button.setEnabled(can_read)
+        self.read_button.setText("恢复显示" if can_read and item.read else "标为已读")
+
+    def _toggle_read_current(self) -> None:
+        item = self._current_model()
+        if item is None or item.source_type not in {"todo", "reminder"}:
+            return
+        if self.memory.read_todo(item.source_id, not item.read):
+            self.refresh()
+            self.changed.emit()
 
     def _new_item(self) -> None:
         menu = QMenu(self)
@@ -531,7 +611,11 @@ class TodoCenterWindow(QDialog):
         item = row.data(Qt.ItemDataRole.UserRole + 1)
         completed = row.checkState() == Qt.CheckState.Checked
         if item.source_type in {"todo", "reminder"}:
-            self.memory.todos.complete(item.source_id, completed)
+            saved = self.memory.todos.complete(item.source_id, completed)
+            if completed:
+                self.memory.reminders.complete_for_source(saved.id)
+            else:
+                self.memory.sync_todo_reminder(saved)
         elif item.source_type == "countdown":
             if completed:
                 self.memory.complete_countdown(item.source_id)
@@ -550,3 +634,4 @@ class TodoCenterWindow(QDialog):
     def closeEvent(self, event) -> None:
         event.ignore()
         self.hide()
+
