@@ -19,9 +19,10 @@ class ContentUpdateWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, manager: UpdateManager, parent=None) -> None:
+    def __init__(self, manager: UpdateManager, parent=None, *, force: bool = False) -> None:
         super().__init__(parent)
         self.manager = manager
+        self.force = bool(force)
 
     def run(self) -> None:
         LOGGER.info("[Update] content check started")
@@ -48,7 +49,7 @@ class ProgramUpdateCheckWorker(QThread):
     def run(self) -> None:
         LOGGER.info("[Update] GitHub release request started")
         try:
-            result = self.manager.check_app_update()
+            result = self.manager.check_app_update(force=self.force)
         except Exception as exc:
             LOGGER.warning("[Update] GitHub release request failed: %s", exc)
             self.failed.emit(str(exc))
@@ -87,3 +88,4 @@ class ProgramUpdateDownloadWorker(QThread):
         else:
             LOGGER.info("[Update] installer download completed: %r", result)
             self.completed.emit(result)
+

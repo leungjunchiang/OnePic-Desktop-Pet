@@ -238,7 +238,11 @@ class DesktopPetApplication:
         if manual:
             self.window.show_speech("正在检查程序更新…", 2400)
         LOGGER.info("[Update] check_app_update started")
-        worker = ProgramUpdateCheckWorker(self.update_manager, self.qt_app)
+        worker = ProgramUpdateCheckWorker(
+            self.update_manager,
+            self.qt_app,
+            force=bool(manual),
+        )
         self._program_update_check_worker = worker
         self._program_update_manual = bool(manual)
         worker.completed.connect(self._program_update_checked)
