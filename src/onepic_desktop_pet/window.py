@@ -529,7 +529,8 @@ class PetWindow(QWidget):
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
-        self.quick_panel.settings_requested.connect(lambda: self.open_settings(SETTINGS_SOURCE_USER_ACTION))
+        self.quick_panel.food_requested.connect(self._quick_food_action)
+        self.quick_panel.supply_requested.connect(self.show_food_scene_dialog)
         self.quick_panel.size_requested.connect(self.open_size_control)
         self.quick_panel.rename_requested.connect(self.rename_pet)
         self.quick_panel.content_update_requested.connect(
@@ -1865,9 +1866,6 @@ class PetWindow(QWidget):
         if start_error == "invalid_item":
             self.show_speech("这个补给暂时不能使用。", 4200)
             return False
-        if status == "focus" and item_key in {"coffee", "expensive_coffee"}:
-            self.show_speech("先把这一局收好，再开下一杯咖啡。", 4200)
-            return False
         resume_after_rest = item_key == "milk_tea" and status == "focus"
         if resume_after_rest:
             self.pause_work_timer(reason="food")
@@ -2754,7 +2752,7 @@ class PetWindow(QWidget):
         self._alarm_card.start_requested.connect(self._start_alarm_work)
         self._alarm_card.snooze_requested.connect(self._snooze_alarm)
         self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
-        # Center only once. After the user drags or minimizes the native
+        # Center only once.  After the user drags or minimizes the native
         # window, accessory reflows must never move it back to the pet.
         self._alarm_card.center_on_current_screen()
         self._alarm_card.show()
@@ -3975,6 +3973,10 @@ class PetWindow(QWidget):
             self.quick_panel.hide()
             return
         self._refresh_shortcut_state()
+        self.quick_panel.set_food_inventory({
+            key: self.economy.inventory_count(key)
+            for key in ("coffee", "expensive_coffee", "milk_tea", "cake", "tea")
+        })
         self._position_quick_panel()
         self.quick_panel.show(); self.quick_panel.raise_()
 
@@ -4016,6 +4018,20 @@ class PetWindow(QWidget):
             self.pause_work_timer()
         else:
             self.start_work_timer()
+
+    def _quick_food_action(self, item_key: str) -> None:
+        """Use one food directly from the lightweight shortcut pocket."""
+
+        item_key = str(item_key or "").strip()
+        if item_key not in {"coffee", "expensive_coffee", "milk_tea", "cake", "tea"}:
+            return
+        self._start_food_scene(
+            item_key,
+            10 if item_key == "milk_tea" else 0,
+            "",
+            "",
+            source="quick_food",
+        )
 
     def _refresh_shortcut_state(self) -> None:
         """Keep the quick panel's work label aligned with the shared session."""
