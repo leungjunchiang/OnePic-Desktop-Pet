@@ -1945,6 +1945,16 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
                     exc.kind,
                     exc.status,
                 )
+            try:
+                witness_payload = self._manager.request("rpc", "lili_achievement_witness_inbox", {})
+                result["achievement_witness_requests"] = (
+                    witness_payload if isinstance(witness_payload, list) else []
+                )
+            except SocialError as exc:
+                # This RPC is introduced by the manual-witness migration. A
+                # client may meet an older backend during rollout; an empty
+                # inbox is safer than breaking the whole social dashboard.
+                LOGGER.info("achievement witness inbox unavailable kind=%s status=%s", exc.kind, exc.status)
             stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
             result.update({"_connection_state": "ONLINE", "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
