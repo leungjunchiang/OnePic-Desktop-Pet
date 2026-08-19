@@ -863,10 +863,26 @@ class AISettingsDialog(QDialog):
         self.stand.setChecked(settings.stand_reminder_enabled)
         self.stand_minutes = QSpinBox(); self.stand_minutes.setRange(10, 240); self.stand_minutes.setSuffix(" 分钟"); self.stand_minutes.setValue(settings.stand_interval_minutes)
         form.addRow(self.stand, self.stand_minutes)
-        idle_hint = QLabel("键鼠无操作不会自动暂停专注；阅读、思考和切换到其他软件都会继续计时。电脑睡眠或锁屏时才会暂停。")
+        self.auto_pause_on_idle = QCheckBox("10分钟无键鼠操作时自动暂停")
+        self.auto_pause_on_idle.setChecked(getattr(settings, "auto_pause_on_idle", True))
+        self.auto_pause_on_idle.setToolTip(
+            "只有键盘和鼠标连续10分钟都没有输入才暂停；回来后不会自动继续，必须点击继续工作。"
+        )
+        form.addRow("工作与计时", self.auto_pause_on_idle)
+        self.auto_pause_on_fullscreen_video = QCheckBox("明确的播放器全屏时自动暂停")
+        self.auto_pause_on_fullscreen_video.setChecked(
+            getattr(settings, "auto_pause_on_fullscreen_video", True)
+        )
+        self.auto_pause_on_fullscreen_video.setToolTip(
+            "只识别 VLC、IINA、mpv 等明确播放器；浏览器、Word、PDF、VS Code 全屏不会误判。"
+        )
+        form.addRow("", self.auto_pause_on_fullscreen_video)
+        idle_hint = QLabel(
+            "锁屏和睡眠会立即暂停。所有自动暂停都不会自动恢复；点击继续工作才会重新计时。"
+        )
         idle_hint.setWordWrap(True)
         idle_hint.setObjectName("muted")
-        form.addRow("工作计时", idle_hint)
+        form.addRow("规则说明", idle_hint)
         self.music_service = QComboBox()
         for label, key in (
             ("自动选择（推荐）", "auto"),
@@ -1151,6 +1167,8 @@ class AISettingsDialog(QDialog):
         self.settings.lyric_inspiration_enabled = self.lyric_inspiration.isChecked()
         self.settings.water_reminder_enabled = self.water.isChecked()
         self.settings.stand_reminder_enabled = self.stand.isChecked()
+        self.settings.auto_pause_on_idle = self.auto_pause_on_idle.isChecked()
+        self.settings.auto_pause_on_fullscreen_video = self.auto_pause_on_fullscreen_video.isChecked()
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
         self.settings.music_service = str(self.music_service.currentData())

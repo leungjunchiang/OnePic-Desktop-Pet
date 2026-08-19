@@ -12,6 +12,20 @@ import sys
 from pathlib import Path
 
 
+KNOWN_VIDEO_PLAYER_TOKENS = (
+    "vlc",
+    "iina",
+    "mpv",
+    "potplayer",
+    "gom player",
+    "gomplayer",
+    "quicktime player",
+    "quicktimeplayer",
+    "windows media player",
+    "wmplayer",
+)
+
+
 def classify_application(name: str) -> str:
     """把进程或应用名称归类，供六毛选择不打扰的陪伴动作。"""
 
@@ -81,6 +95,40 @@ def active_window_is_fullscreen() -> bool:
     safely report ``False``.
     """
 
+    if sys.platform == "darwin":
+        # Use only coarse native window geometry.  If Quartz/AppKit is not
+        # available, fail closed: browser/PDF fullscreen must not be treated
+        # as video and the 10-minute input-idle guard remains the fallback.
+        try:
+            from AppKit import NSScreen, NSWorkspace
+            import Quartz  # type: ignore
+
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            if app is None:
+                return False
+            pid = int(app.processIdentifier())
+            screen = NSScreen.mainScreen()
+            if screen is None:
+                return False
+            frame = screen.frame()
+            info = Quartz.CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly,
+                Quartz.kCGNullWindowID,
+            ) or []
+            for window in info:
+                if int(window.get(Quartz.kCGWindowOwnerPID, -1)) != pid:
+                    continue
+                bounds = window.get(Quartz.kCGWindowBounds) or {}
+                if (
+                    abs(float(bounds.get("X", 0)) - float(frame.origin.x)) <= 3
+                    and abs(float(bounds.get("Y", 0)) - float(frame.origin.y)) <= 3
+                    and abs(float(bounds.get("Width", 0)) - float(frame.size.width)) <= 3
+                    and abs(float(bounds.get("Height", 0)) - float(frame.size.height)) <= 3
+                ):
+                    return True
+        except Exception:
+            return False
+        return False
     if os.name != "nt":
         return False
     try:
@@ -114,3 +162,17 @@ def active_window_is_fullscreen() -> bool:
         )
     except (AttributeError, OSError, TypeError, ValueError):
         return False
+
+
+def active_fullscreen_video() -> bool:
+    """Return true only for a known video player in real fullscreen.
+
+    A maximised Word/PDF/browser/IDE window is intentionally not enough
+    evidence.  This helper is privacy-preserving: it reads only the process
+    name and coarse window geometry, never page content or pixels.
+    """
+
+    name = active_application_name().casefold().strip()
+    if not name or not any(token in name for token in KNOWN_VIDEO_PLAYER_TOKENS):
+        return False
+    return active_window_is_fullscreen()

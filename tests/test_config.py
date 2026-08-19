@@ -125,8 +125,9 @@ def test_program_updates_preference_is_persistent_and_defaults_on(tmp_path) -> N
 
 def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
-    assert settings.auto_pause_on_idle is False
+    assert settings.auto_pause_on_idle is True
     assert settings.idle_pause_seconds == 600
+    assert settings.auto_pause_on_fullscreen_video is True
     settings.idle_pause_seconds = 5
     settings.idle_classification_rules = {"WINWORD.EXE": "focus", "bad": "ignore"}
     path = save_settings(settings, tmp_path / "settings.json")

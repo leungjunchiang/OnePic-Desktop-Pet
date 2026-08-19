@@ -18,7 +18,7 @@ class FoodSceneSpec:
 
 FOOD_SCENES: dict[str, FoodSceneSpec] = {
     "coffee": FoodSceneSpec("coffee", "☕ 咖啡开工", "喝咖啡", "focus", 30, "选件事情，和六毛干半小时。"),
-    "expensive_coffee": FoodSceneSpec("expensive_coffee", "☕ 喝贵的", "昂贵咖啡", "deep_focus", 60, "60 分钟深度工作，减少普通打扰。"),
+    "expensive_coffee": FoodSceneSpec("expensive_coffee", "☕ 喝贵的", "昂贵咖啡", "deep_focus", 150, "最长 150 分钟深度工作，连续专注满 2 小时再得普通咖啡。"),
     "milk_tea": FoodSceneSpec("milk_tea", "🧋 奶茶时间", "奶茶", "rest", 10, "正式休息 10 或 15 分钟。"),
     "cake": FoodSceneSpec("cake", "🍰 庆祝一下", "蛋糕", "celebrate", 0, "给刚刚完成的事情留一个纪念。"),
     "tea": FoodSceneSpec("tea", "🍵 喝会儿茶", "茶", "companion", None, "没有固定倒计时，六毛陪你慢慢待一会儿。"),

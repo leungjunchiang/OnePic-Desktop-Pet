@@ -19,4 +19,5 @@ def test_focus_session_snapshot_tracks_existing_work_timer(tmp_path) -> None:
 
     assert manager.pause() is True
     assert manager.snapshot().status == "rest"
+    assert manager.snapshot().state == "paused_manual"
     assert manager.finish() == manager.snapshot().today_seconds

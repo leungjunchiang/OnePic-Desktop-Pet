@@ -46,8 +46,8 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
     "expensive_coffee": {
         "name": "昂贵咖啡", "price": 60, "group": "吃点喝点",
         "kind": "consumable", "state": "expensive_coffee", "collection": "expensive_coffee",
-        "scene_type": "deep_focus", "scene_minutes": 60,
-        "description": "喝贵的，开一局 60 分钟深度工作。",
+        "scene_type": "deep_focus", "scene_minutes": 150,
+        "description": "喝贵的，开一局最长 150 分钟深度工作；连续专注满 2 小时再得普通咖啡 ×1。",
     },
     "milk_tea": {
         "name": "奶茶", "price": 20, "group": "吃点喝点",
@@ -971,6 +971,31 @@ class EconomyLedger:
                 result["expired"] = True
         return result
 
+    def update_active_food_scene_metadata(self, updates: dict[str, Any]) -> dict[str, Any] | None:
+        """Persist small runtime markers on the current food scene.
+
+        The work timer owns pause/resume state; this helper only lets the
+        scene remember a new episode baseline after an explicit resume.
+        """
+
+        if not isinstance(updates, dict) or not isinstance(self._state.get("food_scene"), dict):
+            return None
+
+        def apply() -> dict[str, Any] | None:
+            scene = self._state.get("food_scene")
+            if not isinstance(scene, dict):
+                return None
+            metadata = scene.setdefault("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+                scene["metadata"] = metadata
+            for key, value in updates.items():
+                if isinstance(key, str) and key[:40]:
+                    metadata[key[:40]] = value
+            return copy.deepcopy(scene)
+
+        return self._atomic(apply)
+
     def food_scene_start_error(
         self, item_key: str, *, consume_inventory: bool = True,
     ) -> str | None:
@@ -1122,6 +1147,44 @@ class EconomyLedger:
 
         return self._atomic(apply)
 
+    def grant_expensive_coffee_focus_reward(
+        self, scene_id: str, *, threshold_seconds: int = 2 * 60 * 60,
+    ) -> WalletEvent | None:
+        """Grant one ordinary coffee after one uninterrupted expensive-coffee episode.
+
+        The reward is a zero-income supply event: it changes inventory and
+        writes an auditable ledger row, but cannot increase the wallet balance
+        or leaderboard income.  The scene id is the idempotency key, so a
+        repeated timer tick can never grant a second coffee.
+        """
+
+        clean_scene_id = str(scene_id or "").strip()[:120]
+        if not clean_scene_id or int(threshold_seconds) <= 0:
+            return None
+        source_key = f"reward:expensive-coffee-2h:{clean_scene_id}"
+
+        def apply() -> WalletEvent | None:
+            if self._has_source(source_key):
+                return None
+            self._add_inventory("coffee", 1)
+            return self._append(
+                "supply_reward",
+                0,
+                "昂贵咖啡连续专注满 2 小时：普通咖啡 ×1",
+                source_key,
+                self._now().date().isoformat(),
+                source="expensive_coffee_focus_reward",
+                metadata={
+                    "item_key": "coffee",
+                    "source_item": "expensive_coffee",
+                    "scene_id": clean_scene_id,
+                    "threshold_seconds": int(threshold_seconds),
+                    "grant_quantity": 1,
+                },
+            )
+
+        return self._atomic(apply)
+
     def use_item(self, item_key: str) -> dict[str, Any] | None:
         item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(str(item_key))
@@ -1133,7 +1196,7 @@ class EconomyLedger:
         def apply() -> dict[str, Any]:
             self._add_inventory(item_key, -1)
             state = str(spec.get("state") or "idle")
-            minutes = 60 if item_key == "expensive_coffee" else 30 if item_key in {"coffee", "milk_tea"} else 20
+            minutes = 150 if item_key == "expensive_coffee" else 30 if item_key in {"coffee", "milk_tea"} else 20
             self._set_state(state, minutes)
             collection_key = str(spec.get("collection") or item_key)
             self._record_life(collection_key)

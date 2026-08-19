@@ -150,6 +150,26 @@ def test_coffee_pot_grants_one_coffee_per_day(tmp_path):
     assert ledger.inventory_count("coffee") == 2
 
 
+def test_expensive_coffee_two_hour_reward_is_one_time_and_not_income(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    ledger.record_income("测试工资", 100, source_key="expensive-two-hour-seed")
+    ledger.purchase_item("expensive_coffee")
+    scene_result = ledger.start_food_scene("expensive_coffee")
+    assert scene_result is not None
+    assert scene_result["scene"]["duration_minutes"] == 150
+    assert ledger.update_active_food_scene_metadata({"work_episode_seconds_at_start": 12}) is not None
+    assert ledger.active_food_scene()["metadata"]["work_episode_seconds_at_start"] == 12
+
+    event = ledger.grant_expensive_coffee_focus_reward("scene-1")
+    assert event is not None
+    assert event.amount == 0
+    assert ledger.inventory_count("coffee") == 1
+    assert ledger.balance == 40
+    assert ledger.monthly_income() == 100
+    assert ledger.grant_expensive_coffee_focus_reward("scene-1") is None
+    assert ledger.inventory_count("coffee") == 1
+
+
 def test_achievement_income_requires_two_distinct_witnesses_and_monthly_cap(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     submitted = ledger.register_achievement_income("论文 / 稿费", "论文录用", 80)

@@ -458,7 +458,7 @@ class QuickControlPanel(QWidget):
         menu = QMenu(self)
         labels = (
             ("coffee", "☕ 普通咖啡", "喝了继续干 30 分钟"),
-            ("expensive_coffee", "☕ 昂贵咖啡", "喝了认真干 60 分钟"),
+            ("expensive_coffee", "☕ 昂贵咖啡", "喝了认真干，满2小时再得普通咖啡"),
             ("milk_tea", "🧋 奶茶", "想歇会儿就喝"),
             ("cake", "🍰 小蛋糕", "想庆祝就吃"),
             ("tea", "🍵 茶", "坐下来待一会儿"),

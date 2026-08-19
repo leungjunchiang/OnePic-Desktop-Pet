@@ -90,9 +90,16 @@ class PetSettings:
     stand_reminder_enabled: bool = False
     water_interval_minutes: int = 45
     stand_interval_minutes: int = 60
-    # Legacy compatibility only; work never pauses on input silence.
-    auto_pause_on_idle: bool = False
+    # Work pauses after a full ten-minute keyboard+mouse idle episode.  This
+    # is a safety net, never an automatic resume mechanism.
+    auto_pause_on_idle: bool = True
     idle_pause_seconds: int = 600
+    # Only a known video player in real fullscreen can trigger this optional
+    # pause. Browser/document fullscreen is deliberately not enough evidence.
+    auto_pause_on_fullscreen_video: bool = True
+    # Distinguishes the new explicit pause-policy choice from the old builds
+    # that persisted a legacy ``auto_pause_on_idle=false`` while ignoring it.
+    work_timer_policy_version: int = 1
     # Per-application corrections for automatic idle classification.  Values
     # are deliberately small and local-only: ``rest`` or ``focus``.
     idle_classification_rules: dict[str, str] = field(default_factory=dict)
@@ -203,11 +210,10 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.stand_reminder_enabled = bool(settings.stand_reminder_enabled)
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
-    # Keep legacy fields readable for old settings files, but never enable
-    # heuristic input-idle pausing again. Only an explicit user action (or a
-    # verified system sleep event) may stop a focus timer.
-    settings.auto_pause_on_idle = False
+    settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
     settings.idle_pause_seconds = min(7200, max(300, int(settings.idle_pause_seconds)))
+    settings.auto_pause_on_fullscreen_video = bool(settings.auto_pause_on_fullscreen_video)
+    settings.work_timer_policy_version = max(1, int(settings.work_timer_policy_version))
     rules: dict[str, str] = {}
     if isinstance(settings.idle_classification_rules, dict):
         for raw_key, raw_value in settings.idle_classification_rules.items():
@@ -309,6 +315,8 @@ def load_settings(
                 "stand_interval_minutes",
                 "auto_pause_on_idle",
                 "idle_pause_seconds",
+                "auto_pause_on_fullscreen_video",
+                "work_timer_policy_version",
                 "idle_classification_rules",
                 "music_service",
                 "music_provider_history",
@@ -341,6 +349,14 @@ def load_settings(
             if legacy_value and legacy_value != PET_NAME:
                 base["owner_nickname"] = legacy_value
                 break
+    # Before this policy existed, ``auto_pause_on_idle`` was forced off in
+    # validation and therefore did not represent an intentional user choice.
+    # Migrate that legacy value to the new default once; later explicit
+    # checkbox choices carry the version marker and are preserved.
+    if "work_timer_policy_version" not in override:
+        base["auto_pause_on_idle"] = True
+        base["auto_pause_on_fullscreen_video"] = True
+        base["work_timer_policy_version"] = 1
     return _validated(base)
 
 
@@ -373,6 +389,8 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "stand_interval_minutes": settings.stand_interval_minutes,
         "auto_pause_on_idle": settings.auto_pause_on_idle,
         "idle_pause_seconds": settings.idle_pause_seconds,
+        "auto_pause_on_fullscreen_video": settings.auto_pause_on_fullscreen_video,
+        "work_timer_policy_version": settings.work_timer_policy_version,
         "idle_classification_rules": settings.idle_classification_rules,
         "music_service": settings.music_service,
         "music_provider_history": settings.music_provider_history,

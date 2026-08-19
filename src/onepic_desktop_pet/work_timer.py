@@ -21,6 +21,28 @@ from datetime import datetime
 from pathlib import Path
 
 
+# Persisted values are intentionally plain strings so older installations can
+# read the file without importing a new enum.  The UI may present a simpler
+# "正在工作 / 已暂停", while these values keep the reason auditable.
+WORK_STATE_IDLE = "idle"
+WORK_STATE_WORKING = "working"
+WORK_STATE_PAUSED_MANUAL = "paused_manual"
+WORK_STATE_PAUSED_IDLE = "paused_idle"
+WORK_STATE_PAUSED_LOCK = "paused_lock"
+WORK_STATE_PAUSED_SLEEP = "paused_sleep"
+WORK_STATE_PAUSED_VIDEO = "paused_video"
+
+_PAUSE_STATE_BY_REASON = {
+    "manual": WORK_STATE_PAUSED_MANUAL,
+    "idle": WORK_STATE_PAUSED_IDLE,
+    "idle_10m": WORK_STATE_PAUSED_IDLE,
+    "lock": WORK_STATE_PAUSED_LOCK,
+    "sleep": WORK_STATE_PAUSED_SLEEP,
+    "fullscreen_video": WORK_STATE_PAUSED_VIDEO,
+    "video": WORK_STATE_PAUSED_VIDEO,
+}
+
+
 def work_timer_path() -> Path:
     """返回当前用户的本地工作计时文件路径。"""
 
@@ -80,8 +102,11 @@ class WorkTimerModel:
         self._lifetime_seconds = 0
         self._notified_outfit_count = 0
         self._session_accumulated_seconds = 0
+        self._episode_accumulated_seconds = 0
         self._session_active = False
         self._running_since: float | None = None
+        self._state = WORK_STATE_IDLE
+        self._pause_reason: str | None = None
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key: str | None = None
         self._recovered_active_session = False
@@ -105,6 +130,22 @@ class WorkTimerModel:
 
         return self._session_active
 
+    @property
+    def state(self) -> str:
+        """Return the durable work state, including why a pause happened."""
+
+        return self._state
+
+    @property
+    def pause_reason(self) -> str | None:
+        """Return the normalized reason for the current pause, if any."""
+
+        return self._pause_reason
+
+    @property
+    def is_paused(self) -> bool:
+        return self._session_active and not self.is_running
+
     def _today_key(self) -> str:
         """返回本地日期键。"""
 
@@ -125,15 +166,39 @@ class WorkTimerModel:
                 max(0, int(data.get("session_accumulated_seconds", 0)))
                 if same_date else 0
             )
+            episode_seconds = (
+                max(0, int(data.get("episode_accumulated_seconds", 0)))
+                if same_date else 0
+            )
             saved_running = bool(data.get("running", False)) and same_date
             saved_session_active = bool(
                 data.get("session_active", saved_running or session_seconds > 0)
             ) and same_date
+            saved_state = str(data.get("state") or "").strip()
+            if saved_running:
+                saved_state = WORK_STATE_WORKING
+            elif saved_session_active and saved_state not in {
+                WORK_STATE_PAUSED_MANUAL,
+                WORK_STATE_PAUSED_IDLE,
+                WORK_STATE_PAUSED_LOCK,
+                WORK_STATE_PAUSED_SLEEP,
+                WORK_STATE_PAUSED_VIDEO,
+            }:
+                # Old files only had session_active/running.  Treat a paused
+                # old session as a manual pause rather than auto-resuming it.
+                saved_state = WORK_STATE_PAUSED_MANUAL
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return
         self._accumulated_seconds = max(0, seconds)
         self._session_accumulated_seconds = session_seconds
+        self._episode_accumulated_seconds = episode_seconds
         self._session_active = saved_session_active
+        self._state = saved_state if same_date else WORK_STATE_IDLE
+        self._pause_reason = (
+            str(data.get("pause_reason") or "manual")
+            if self._state != WORK_STATE_WORKING and self._session_active
+            else None
+        )
         if saved_running:
             # Monotonic clocks are process-local. Resume from the last
             # checkpoint instead of counting the period while the app was down.
@@ -154,6 +219,9 @@ class WorkTimerModel:
         self._session_accumulated_seconds = 0
         self._session_active = False
         self._running_since = self._monotonic() if was_running else None
+        self._episode_accumulated_seconds = 0
+        self._state = WORK_STATE_IDLE
+        self._pause_reason = None
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key = None
         self._recovered_active_session = False
@@ -177,6 +245,12 @@ class WorkTimerModel:
 
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
+
+    def episode_seconds(self) -> int:
+        """Return uninterrupted WORKING seconds since the last pause/resume."""
+
+        self._rollover_if_needed()
+        return self._episode_accumulated_seconds + self._current_elapsed()
 
     def lifetime_seconds(self) -> int:
         """返回累计工作秒数，包括当前尚未落盘的一段。"""
@@ -209,6 +283,12 @@ class WorkTimerModel:
             self._session_accumulated_seconds = 0
             self._last_reminder_key = None
         self._session_active = True
+        self._state = WORK_STATE_WORKING
+        self._pause_reason = None
+        # A resume starts a new uninterrupted work episode.  A newly created
+        # session also starts at zero; crash recovery leaves the saved episode
+        # intact because this method is not called during __init__.
+        self._episode_accumulated_seconds = 0
         self._running_since = now
         self._last_checkpoint = now
         self._last_reminder_key = None
@@ -216,8 +296,8 @@ class WorkTimerModel:
         self._save()
         return True
 
-    def pause(self) -> bool:
-        """暂停计时并保存；未运行时返回 False。"""
+    def pause(self, reason: str = "manual") -> bool:
+        """Pause the current episode and persist the explicit pause reason."""
 
         self._rollover_if_needed()
         if not self.is_running:
@@ -226,8 +306,14 @@ class WorkTimerModel:
         self._accumulated_seconds += elapsed
         self._lifetime_seconds += elapsed
         self._session_accumulated_seconds += elapsed
+        self._episode_accumulated_seconds += elapsed
         self._session_active = True
         self._running_since = None
+        clean_reason = str(reason or "manual").strip().casefold()
+        self._pause_reason = clean_reason or "manual"
+        self._state = _PAUSE_STATE_BY_REASON.get(
+            self._pause_reason, WORK_STATE_PAUSED_MANUAL
+        )
         self._last_reminder_key = None
         self._recovered_active_session = False
         self._save()
@@ -241,6 +327,9 @@ class WorkTimerModel:
         total = self.today_seconds()
         self._session_active = False
         self._session_accumulated_seconds = 0
+        self._episode_accumulated_seconds = 0
+        self._state = WORK_STATE_IDLE
+        self._pause_reason = None
         self._last_reminder_key = None
         self._save()
         return total
@@ -258,6 +347,7 @@ class WorkTimerModel:
         self._accumulated_seconds += elapsed
         self._lifetime_seconds += elapsed
         self._session_accumulated_seconds += elapsed
+        self._episode_accumulated_seconds += elapsed
         self._running_since = now
         self._last_checkpoint = now
         self._save()
@@ -304,6 +394,9 @@ class WorkTimerModel:
             "running": self.is_running,
             "session_active": self._session_active,
             "session_accumulated_seconds": max(0, int(self._session_accumulated_seconds)),
+            "episode_accumulated_seconds": max(0, int(self._episode_accumulated_seconds)),
+            "state": self._state,
+            "pause_reason": self._pause_reason,
         }
         temporary.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n",

@@ -100,7 +100,12 @@ from .accessories import (
     draw_activity_overlay,
     unlocked_outfits,
 )
-from .activity import active_application_category, active_application_name, active_window_is_fullscreen
+from .activity import (
+    active_application_category,
+    active_application_name,
+    active_fullscreen_video,
+    active_window_is_fullscreen,
+)
 from .behavior import (
     BehaviorModel,
     CompanionBehaviorController,
@@ -340,6 +345,9 @@ class PetWindow(QWidget):
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self._focus_quality_tracker = FocusQualityTracker()
+        # session_seconds() is cumulative across pauses/resumes.  This cursor
+        # ensures each WORKING second is credited to wages and statistics once.
+        self._recorded_focus_session_seconds = 0
         self._last_focus_quality = None
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
@@ -373,6 +381,9 @@ class PetWindow(QWidget):
         self._idle_hint_classification: IdleClassification | None = None
         self._idle_hint_record: dict[str, object] | None = None
         self._idle_recovery_dialog: IdleRecoveryDialog | None = None
+        self._last_session_probe = {"locked": False, "sleeping": False}
+        self._fullscreen_video_started_at: float | None = None
+        self._pause_notice_shown = False
         self._sleep_after_sit = False
         self._room_quick_status = ""
         self._room_quick_status_expires_at: datetime | None = None
@@ -666,9 +677,10 @@ class PetWindow(QWidget):
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
 
-        # Keep a low-frequency session probe only for verified system sleep.
-        # Keyboard/mouse silence, app switching, minimising, hiding, reading,
-        # and thinking are never evidence that the user stopped working.
+        # Keep a low-frequency, cross-platform system probe.  It is the one
+        # place that may auto-pause: 10 minutes of aggregate keyboard+mouse
+        # silence, a verified lock/sleep boundary, or a known video player in
+        # real fullscreen.  None of those paths ever auto-resume.
         self.input_idle_timer = QTimer(self)
         self.input_idle_timer.setInterval(5_000)
         self.input_idle_timer.timeout.connect(self._check_input_idle)
@@ -1550,22 +1562,55 @@ class PetWindow(QWidget):
         self._idle_pause_started_at = None
 
     def _check_input_idle(self) -> None:
-        """Never infer a pause from input silence; only observe real sleep."""
+        """Apply the only automatic pause rules; never resume from input."""
 
-        # Clear the legacy idle episode state so old settings or an upgraded
-        # process cannot surface the old recovery popup after this release.
-        self._reset_idle_episode()
-        if not self.work_timer.is_running:
-            return
         session = system_session_state()
-        # Input silence is never enough to pause. A verified lock or sleep
-        # transition is an explicit system boundary and pauses this session.
         locked = bool(session.get("locked"))
         sleeping = bool(session.get("sleeping"))
-        if not locked and not sleeping:
+        self._last_session_probe = {"locked": locked, "sleeping": sleeping}
+
+        if self.work_timer.is_running:
+            if sleeping:
+                self._focus_quality_tracker.note_away()
+                self.pause_work_timer(reason="sleep")
+                return
+            if locked:
+                self._focus_quality_tracker.note_away()
+                self.pause_work_timer(reason="lock")
+                return
+
+            # Browser/document fullscreen is deliberately ignored.  Only a
+            # known media player counts, and it must remain fullscreen for a
+            # few seconds to avoid a false transition while switching apps.
+            if bool(getattr(self.settings, "auto_pause_on_fullscreen_video", True)) and active_fullscreen_video():
+                if self._fullscreen_video_started_at is None:
+                    self._fullscreen_video_started_at = time.monotonic()
+                elif time.monotonic() - self._fullscreen_video_started_at >= 4.0:
+                    self._focus_quality_tracker.note_away()
+                    self.pause_work_timer(reason="fullscreen_video")
+                    self._fullscreen_video_started_at = None
+                    return
+            else:
+                self._fullscreen_video_started_at = None
+
+            threshold = max(300, int(getattr(self.settings, "idle_pause_seconds", 600)))
+            if bool(getattr(self.settings, "auto_pause_on_idle", True)) and system_idle_seconds() >= threshold:
+                self._focus_quality_tracker.note_away()
+                self.pause_work_timer(reason="idle_10m")
+                return
             return
-        self._focus_quality_tracker.note_away()
-        self.pause_work_timer(reason="sleep" if sleeping else "lock")
+
+        # Input only proves that the user is back.  It is never a resume
+        # command.  Show one non-modal hint for an idle pause; the state stays
+        # paused until the user presses the explicit Continue action.
+        if (
+            self.work_timer.has_active_session
+            and self.work_timer.pause_reason == "idle_10m"
+            and system_idle_seconds() < max(300, int(getattr(self.settings, "idle_pause_seconds", 600)))
+            and not self._pause_notice_shown
+        ):
+            self._pause_notice_shown = True
+            self.show_speech("回来啦，刚才十分钟没动，我帮你停表了。点‘继续工作’再开。", 6200)
 
     def _ask_idle_recovery(self) -> None:
         """Automatically classify once; show a single hint only if uncertain."""
@@ -2013,7 +2058,25 @@ class PetWindow(QWidget):
             todo_title=todo_title,
             consume_inventory=consume_inventory,
             source=source,
-            scene_metadata={"resume_work": resume_after_rest} if item_key == "milk_tea" else None,
+            scene_metadata=(
+                {
+                    "resume_work": resume_after_rest,
+                }
+                if item_key == "milk_tea"
+                else {
+                    # If coffee starts a new work episode, a previously
+                    # paused episode must not be inherited.  When the user is
+                    # already working, count the two-hour threshold from the
+                    # moment the expensive coffee is used.
+                    "work_episode_seconds_at_start": (
+                        self.work_timer.episode_seconds()
+                        if self.work_timer.is_running
+                        else 0
+                    ),
+                }
+                if item_key == "expensive_coffee"
+                else None
+            ),
         )
         if result is None:
             if resume_after_rest:
@@ -2031,7 +2094,7 @@ class PetWindow(QWidget):
                 self._set_focus_task(todo_title, 0)
             self.start_work_timer()
             activity = "deep-focus" if item_key == "expensive_coffee" else "work-study"
-            minutes = int(scene.get("duration_minutes") or (60 if item_key == "expensive_coffee" else 30))
+            minutes = int(scene.get("duration_minutes") or (150 if item_key == "expensive_coffee" else 30))
             self._set_temporary_activity(activity, minutes * 60 * 1000)
             self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
             label = "☕ 喝贵的 · 深度工作中" if item_key == "expensive_coffee" else "☕ 咖啡开工"
@@ -2059,6 +2122,13 @@ class PetWindow(QWidget):
             return
         item_key = str(scene.get("item_key") or "")
         if item_key in {"coffee", "expensive_coffee"}:
+            if not self.work_timer.is_running:
+                # A paused work session must not be silently converted into
+                # a finished session just because the visual coffee window
+                # reached its wall-clock end.
+                self.economy.finish_food_scene("timer_while_paused")
+                self.show_speech("咖啡场景结束了，工作还保持暂停。要继续时请手动点继续工作。", 5600)
+                return
             before = self.work_timer.session_seconds()
             self.finish_work_timer()
             self.show_speech(f"这杯咖啡没白喝。\n实际专注 {format_work_duration(before)}。", 5600)
@@ -2067,10 +2137,9 @@ class PetWindow(QWidget):
         if not finished:
             return
         if item_key == "milk_tea":
-            if bool(scene.get("resume_work")) and not self.work_timer.is_running:
-                self.start_work_timer()
-            else:
-                self.show_speech("奶茶喝完了。\n要不要回来继续？", 5200)
+            # Ending a break is not permission to restart the work timer.
+            # The user must explicitly press “继续工作”.
+            self.show_speech("奶茶喝完了。\n工作还暂停着，要继续时点‘继续工作’。", 5200)
         elif item_key == "cake":
             self.show_speech("庆祝结束，今天这件事已经被六毛记下来了。", 4200)
 
@@ -2219,6 +2288,10 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         self._reset_idle_episode()
+        self._pause_notice_shown = False
+        self._fullscreen_video_started_at = None
+        if not self.work_timer.has_active_session:
+            self._recorded_focus_session_seconds = 0
         self._focus_quality_tracker.start(active_application_category())
         # The paper window selects a real Todo; keep the existing focus
         # analytics task for compatibility, but attribute new seconds to the
@@ -2239,33 +2312,20 @@ class PetWindow(QWidget):
         return reply
 
     def pause_work_timer(self, reason: str = "") -> CompanionReply:
-        """暂停工作计时并显示当天累计与休息建议。"""
+        """Pause the shared timer through one path, preserving the reason."""
 
-        self._record_user_interaction()
-        self._reset_idle_episode()
-        if reason == "idle":
-            LOGGER.warning("忽略旧的 idle 自动暂停请求；工作计时只接受显式操作或真实睡眠")
-            return CompanionReply("六毛不会因为没有键鼠操作而自动暂停，继续按你的节奏工作。", PetState.CURIOUS)
+        reason = str(reason or "manual").strip().casefold()
+        automatic_reason = reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}
+        if not automatic_reason:
+            self._record_user_interaction()
+            self._reset_idle_episode()
         session_seconds = self.work_timer.session_seconds()
-        was_running = self.focus_session.pause()
+        was_running = self.focus_session.pause(reason)
         if was_running:
-            started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
-            self.time_memory.record_focus(
-                session_seconds,
-                completed_session=False,
-                started_at=started_at,
-            )
-            self._record_economy_focus(session_seconds, started_at)
-            self._last_focus_quality = self.focus_analytics.record_session(
-                session_seconds,
-                started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
-                completed=False,
-                application_switches=self._focus_quality_tracker.application_switches,
-                away_count=self._focus_quality_tracker.away_count,
-                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
-            )
-            self.focus_analytics.update_current_task_progress(session_seconds)
-            self.daily_stats.record_focus(session_seconds)
+            self._record_focus_segment(session_seconds, completed=False)
+            self._pause_notice_shown = False
+            if automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
+                self._pause_notice_shown = reason != "idle_10m"
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("tea", 25_000)
@@ -2275,6 +2335,16 @@ class PetWindow(QWidget):
             reply = CompanionReply(
                 f"{system_event}，六毛已暂停这轮计时；回来后点继续工作就好。",
                 PetState.SLEEPY,
+            )
+        elif was_running and reason in {"idle", "idle_10m"}:
+            reply = CompanionReply(
+                "十分钟没有键鼠操作，六毛先帮你停表了；回来后点继续工作。",
+                PetState.CURIOUS,
+            )
+        elif was_running and reason in {"fullscreen_video", "video"}:
+            reply = CompanionReply(
+                "检测到播放器全屏，六毛先帮你停表了；看完后点继续工作。",
+                PetState.CURIOUS,
             )
         elif was_running:
             reply = self.companion.work_paused(duration)
@@ -2294,6 +2364,14 @@ class PetWindow(QWidget):
         # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
         self.work_controls.hide()
         self._refresh_pixmap()
+        if was_running and automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
+            # A food-led work scene is an active commitment, not a second
+            # timer.  Once the system has auto-paused, close that scene so its
+            # visual state cannot claim that coffee work is still active.
+            scene = self.economy.active_food_scene()
+            if scene and str(scene.get("item_key") or "") in {"coffee", "expensive_coffee"}:
+                self.economy.finish_food_scene(f"work_paused:{reason}")
+                self.food_scene_timer.stop()
         return reply
 
     def finish_work_timer(self) -> CompanionReply:
@@ -2301,32 +2379,23 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         self._reset_idle_episode()
+        self._pause_notice_shown = False
+        self._fullscreen_video_started_at = None
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
-        started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
-        self.time_memory.record_focus(
-            session_seconds,
-            completed_session=True,
-            started_at=started_at,
-        )
-        self._record_economy_focus(session_seconds, started_at)
+        self._record_focus_segment(session_seconds, completed=True)
         self._award_focus_rewards()
-        self._last_focus_quality = self.focus_analytics.record_session(
-            session_seconds,
-            started_at=datetime.now().astimezone() - timedelta(seconds=session_seconds),
-            completed=True,
-            application_switches=self._focus_quality_tracker.application_switches,
-            away_count=self._focus_quality_tracker.away_count,
-            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
-        )
-        self.focus_analytics.update_current_task_progress(session_seconds)
-        self.daily_stats.record_focus(session_seconds, completed=True)
         self.set_paused(False)
+        self._recorded_focus_session_seconds = 0
         reply = self.companion.work_finished(format_work_duration(total))
         self._show_emotion(reply.state, 3400)
+        quality_text = (
+            f"\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）"
+            if self._last_focus_quality else ""
+        )
         self.show_speech(
-            f"{reply.text}\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）",
+            reply.text + quality_text,
             6200,
         )
         self.work_timer_changed.emit(False)
@@ -2343,6 +2412,20 @@ class PetWindow(QWidget):
             self.economy.finish_food_scene("work_finished")
             self.food_scene_timer.stop()
         return reply
+
+    # Public state-machine commands.  The older *_work_timer names remain as
+    # compatibility entry points for menus and plugins, while all callers
+    # still share the same timer/session implementation above.
+    def pause_work(self, reason: str = "manual") -> CompanionReply:
+        return self.pause_work_timer(reason=reason)
+
+    def resume_work(self, source: str = "user") -> CompanionReply:
+        del source
+        return self.start_work_timer()
+
+    def finish_work(self, source: str = "user") -> CompanionReply:
+        del source
+        return self.finish_work_timer()
 
     def show_today_note(self, *, passive: bool = False) -> None:
         """Open the configured surface without stealing focus when passive."""
@@ -2845,6 +2928,7 @@ class PetWindow(QWidget):
                 if snapshot.status in {"focus", "rest"} else "本轮未开始"
             )
         self._award_focus_rewards()
+        self._check_expensive_coffee_reward()
         self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
         quiet = detect_quiet_mode()
@@ -2869,6 +2953,38 @@ class PetWindow(QWidget):
         reply = self.companion.work_reminder(reminder_kind, duration)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 7200)
+
+    def _check_expensive_coffee_reward(self) -> None:
+        """Reward one ordinary coffee after two real continuous work hours."""
+
+        if not self.work_timer.is_running:
+            return
+        scene = self.economy.active_food_scene() or {}
+        if str(scene.get("item_key") or "") != "expensive_coffee":
+            return
+        metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+        try:
+            baseline = max(0, int(metadata.get("work_episode_seconds_at_start", 0) or 0))
+        except (TypeError, ValueError):
+            baseline = 0
+        episode_seconds = self.work_timer.episode_seconds()
+        if episode_seconds < baseline:
+            # An explicit pause/resume starts a new uninterrupted episode.
+            # Reset the coffee baseline instead of allowing the old episode's
+            # seconds to make the two-hour reward arrive too early.
+            baseline = episode_seconds
+            self.economy.update_active_food_scene_metadata(
+                {"work_episode_seconds_at_start": baseline}
+            )
+        if episode_seconds - baseline < 2 * 60 * 60:
+            return
+        event = self.economy.grant_expensive_coffee_focus_reward(str(scene.get("id") or ""))
+        if event is None:
+            return
+        self._sync_economy_events([event.as_dict()])
+        self.show_speech("☕ 这场深度工作超过 2 小时了。普通咖啡 ×1，六毛给你留着。", 6500)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
 
     def _check_local_reminders(self) -> None:
         """Run the local reminder queue once per existing one-second timer."""
@@ -2993,6 +3109,44 @@ class PetWindow(QWidget):
         if self._food_scene_dialog is not None:
             self._food_scene_dialog.refresh()
 
+    def _record_focus_segment(self, session_seconds: int, *, completed: bool) -> int:
+        """Credit only newly completed WORKING seconds in this session.
+
+        ``WorkTimerModel.session_seconds()`` remains cumulative across a
+        pause/resume cycle.  All wage, daily-stat, and focus-quality sinks
+        must receive the delta since the previous pause/finish checkpoint,
+        otherwise a resumed session would be counted more than once.
+        """
+
+        total = max(0, int(session_seconds))
+        seconds = max(0, total - self._recorded_focus_session_seconds)
+        if seconds <= 0:
+            if completed:
+                # The actual WORKING seconds may already have been credited
+                # at an earlier pause, but finishing the Session still needs
+                # to be represented once in the local daily card.
+                self.daily_stats.record_focus(0, completed=True)
+            return 0
+        started_at = datetime.now().astimezone() - timedelta(seconds=seconds)
+        self.time_memory.record_focus(
+            seconds,
+            completed_session=completed,
+            started_at=started_at,
+        )
+        self._record_economy_focus(seconds, started_at)
+        self._last_focus_quality = self.focus_analytics.record_session(
+            seconds,
+            started_at=started_at,
+            completed=completed,
+            application_switches=self._focus_quality_tracker.application_switches,
+            away_count=self._focus_quality_tracker.away_count,
+            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+        )
+        self.focus_analytics.update_current_task_progress(seconds)
+        self.daily_stats.record_focus(seconds, completed=completed)
+        self._recorded_focus_session_seconds = total
+        return seconds
+
     def _record_economy_performance(self, title: str, task_id: str) -> None:
         events = []
         event = self.economy.record_performance(
@@ -3046,18 +3200,11 @@ class PetWindow(QWidget):
         if hasattr(self, "work_timer"):
             if self.work_timer.is_running:
                 session_seconds = self.work_timer.session_seconds()
-                started_at = datetime.now().astimezone() - timedelta(seconds=session_seconds)
                 # Persist the same final running segment in the local time-memory
                 # store before the shared timer is paused.  Without this, a
                 # normal app close could update the legacy daily card while
                 # losing the Todo attribution and daily check-in record.
-                self.time_memory.record_focus(
-                    session_seconds,
-                    completed_session=False,
-                    started_at=started_at,
-                )
-                self._record_economy_focus(session_seconds, started_at)
-                self.daily_stats.record_focus(session_seconds)
+                self._record_focus_segment(session_seconds, completed=False)
             self.focus_session.pause()
             if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
                 self._generate_daily_report(show_dialog=False)
@@ -3614,6 +3761,9 @@ class PetWindow(QWidget):
         snapshot = self.focus_session.snapshot()
         presence = {
             "working": snapshot.is_running,
+            "session_active": bool(self.work_timer.has_active_session),
+            "work_state": str(getattr(snapshot, "state", "idle") or "idle"),
+            "pause_reason": getattr(snapshot, "pause_reason", None),
             "today_seconds": snapshot.today_seconds,
             "session_started_at": snapshot.session_started_at,
             "outfit_key": self.settings.equipped_outfit,

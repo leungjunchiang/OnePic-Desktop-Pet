@@ -1155,17 +1155,37 @@ def test_hourly_announcement_can_be_disabled_and_deduplicates() -> None:
     window.deleteLater()
     app.processEvents()
 
-def test_input_silence_never_pauses_explicit_work_timer(monkeypatch) -> None:
-    """Reading/thinking or switching apps must not stop a running session."""
+def test_input_idle_under_ten_minutes_keeps_working(monkeypatch) -> None:
+    """The ten-minute grace period does not pause early."""
     app, window = _create_window()
     monkeypatch.setattr(
         "onepic_desktop_pet.window.system_session_state",
         lambda: {"locked": False, "sleeping": False},
     )
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 599)
     window.settings.auto_pause_on_idle = True
     window.start_work_timer()
     window._check_input_idle()
     assert window.work_timer.is_running
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_input_idle_at_ten_minutes_pauses_without_auto_resume(monkeypatch) -> None:
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
+    )
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 600)
+    window.settings.auto_pause_on_idle = True
+    window.start_work_timer()
+    window._check_input_idle()
+    assert not window.work_timer.is_running
+    assert window.work_timer.state == "paused_idle"
+    # Returning input is not a resume command.
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
+    window._check_input_idle()
+    assert not window.work_timer.is_running
     window.close(); window.deleteLater(); app.processEvents()
 
 

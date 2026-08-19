@@ -22,6 +22,8 @@ class FocusSessionSnapshot:
     today_seconds: int
     session_started_at: str | None
     room_id: str | None = None
+    state: str = "idle"
+    pause_reason: str | None = None
 
     @property
     def is_running(self) -> bool:
@@ -42,8 +44,18 @@ class FocusSessionSnapshot:
         if timer.is_running:
             current = now or datetime.now().astimezone()
             started_at = (current - timedelta(seconds=session_seconds)).isoformat()
-        status = "focus" if timer.is_running else ("rest" if resting else "idle")
-        return cls(status, session_seconds, today_seconds, started_at, room_id)
+        status = "focus" if timer.is_running else (
+            "rest" if timer.has_active_session or resting else "idle"
+        )
+        return cls(
+            status,
+            session_seconds,
+            today_seconds,
+            started_at,
+            room_id,
+            timer.state,
+            timer.pause_reason,
+        )
 
 
 class FocusSessionManager(QObject):
@@ -85,12 +97,17 @@ class FocusSessionManager(QObject):
         self.refresh()
         return changed
 
-    def pause(self) -> bool:
-        changed = self.timer.pause()
+    def pause(self, reason: str = "manual") -> bool:
+        changed = self.timer.pause(reason)
         if changed:
             self._resting = True
         self.refresh()
         return changed
+
+    def resume(self) -> bool:
+        """Resume only after an explicit user action."""
+
+        return self.start()
 
     def finish(self) -> int:
         total = self.timer.finish()

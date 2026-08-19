@@ -94,6 +94,44 @@ def test_work_timer_does_not_double_start_or_count_offline_time(tmp_path) -> Non
     assert not reloaded.has_active_session
 
 
+def test_pause_reason_and_uninterrupted_episode_are_persisted(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(120)
+    assert timer.episode_seconds() == 120
+    assert timer.pause("idle_10m")
+    assert timer.state == "paused_idle"
+    assert timer.pause_reason == "idle_10m"
+    assert timer.episode_seconds() == 120
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.has_active_session
+    assert not reloaded.is_running
+    assert reloaded.state == "paused_idle"
+    assert reloaded.pause_reason == "idle_10m"
+    assert reloaded.start()  # explicit user resume only
+    assert reloaded.episode_seconds() == 0
+    clock.advance(30)
+    assert reloaded.episode_seconds() == 30
+
+
+def test_lock_sleep_and_video_have_distinct_pause_states(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    for reason, expected in (
+        ("lock", "paused_lock"),
+        ("sleep", "paused_sleep"),
+        ("fullscreen_video", "paused_video"),
+    ):
+        assert timer.start()
+        assert timer.pause(reason)
+        assert timer.state == expected
+        assert timer.pause_reason == reason
+        assert timer.finish() >= 0
+
+
 def test_new_date_resets_today_total(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)

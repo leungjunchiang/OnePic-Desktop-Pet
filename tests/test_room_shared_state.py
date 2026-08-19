@@ -127,8 +127,8 @@ def test_social_card_prefers_explicit_owner_nickname_and_marks_stale_presence_of
     widget.deleteLater(); app.processEvents()
 
 
-def test_input_silence_never_pauses_focus(monkeypatch, tmp_path):
-    """Reading, thinking, or switching apps must never stop the timer."""
+def test_input_idle_under_threshold_keeps_focus(monkeypatch, tmp_path):
+    """Reading, thinking, or switching apps get the full ten-minute grace."""
     app = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     window = PetWindow(PetSettings(idle_pause_seconds=600))
@@ -136,6 +136,7 @@ def test_input_silence_never_pauses_focus(monkeypatch, tmp_path):
         "onepic_desktop_pet.window.system_session_state",
         lambda: {"locked": False, "sleeping": False},
     )
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 599)
     window.start_work_timer()
     for _ in range(5):
         window._check_input_idle()
