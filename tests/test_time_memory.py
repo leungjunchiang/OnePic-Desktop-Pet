@@ -432,3 +432,45 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
 
+
+
+
+def test_restore_todo_does_not_replay_an_expired_alarm(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add(
+        "恢复论文",
+        date="2026-08-19",
+        time="10:00",
+        reminder=True,
+        reminder_mode="alarm",
+    )
+    memory.complete_task(item.id)
+
+    assert memory.restore_todo(item.id)
+    restored = memory.todos.get(item.id)
+    assert restored is not None
+    assert restored.completed is False
+    assert restored.reminder_suppressed is True
+    assert memory.alarms.get(f"todo:{item.id}") is None
+
+
+def test_restore_todo_keeps_a_future_alarm_scheduled(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    item = memory.todos.add(
+        "下午论文",
+        date="2026-08-19",
+        time="13:00",
+        reminder=True,
+        reminder_mode="alarm",
+    )
+    memory.complete_task(item.id)
+
+    assert memory.restore_todo(item.id)
+    restored = memory.todos.get(item.id)
+    assert restored is not None
+    assert restored.reminder_suppressed is False
+    alarm = memory.alarms.get(f"todo:{item.id}")
+    assert alarm is not None
+    assert alarm.enabled is True
