@@ -227,6 +227,7 @@ class AlarmCard(QDialog):
             custom_id
             and self.sound_library is not None
             and self.sound_library.resolve_path(alarm.sound_id) is not None
+            and QMediaPlayer is not None
         )
         if not alarm.sound_enabled:
             sound_text = "静音闹钟 · 只显示六毛提醒"
