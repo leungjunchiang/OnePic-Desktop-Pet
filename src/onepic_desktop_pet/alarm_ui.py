@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QDateTime, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -14,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -31,22 +31,24 @@ from .alarm_manager import Alarm, AlarmManager, REPEAT_DAILY, REPEAT_ONCE, REPEA
 
 ALARM_STYLE = """
 QDialog#alarmCenter, QDialog#alarmEditor { background: #eef5f8; color: #24475b; }
-QFrame#alarmCard { background: rgba(255, 249, 230, 248); color: #27313d;
+QDialog#alarmCard { background: #fff9e6; color: #27313d;
     border: 2px solid #e7a84d; border-radius: 14px; }
-QFrame#alarmCard QLabel { background: transparent; border: none; }
-QFrame#alarmCard QPushButton { background: #e7f3f6; color: #24475b;
+QDialog#alarmCard QLabel { background: transparent; border: none; }
+QDialog#alarmCard QPushButton { background: #e7f3f6; color: #24475b;
     border: 1px solid #8dbbc7; border-radius: 9px; padding: 5px 9px; }
-QFrame#alarmCard QPushButton:hover { background: #fff0c8; border-color: #e74a4f; }
+QDialog#alarmCard QPushButton:hover { background: #fff0c8; border-color: #e74a4f; }
 QListWidget { background: rgba(255,255,255,210); border: 1px solid #b4ccd5; border-radius: 10px; }
 """
 
 
-def _no_focus(widget: QWidget) -> None:
-    widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+class AlarmCard(QDialog):
+    """A normal, movable, non-modal top-level alarm window.
 
-
-class AlarmCard(QFrame):
-    """A persistent, non-modal alarm surface that never activates Lili."""
+    This intentionally uses the native window frame instead of a Tool/Popup
+    surface.  The native title bar provides the drag handle and standard
+    minimize/close controls, while the absence of WindowStaysOnTopHint means
+    other applications can cover the alarm normally.
+    """
 
     start_requested = Signal(str)
     snooze_requested = Signal(str, int)
@@ -55,25 +57,25 @@ class AlarmCard(QFrame):
     def __init__(self, alarm: Alarm, parent=None) -> None:
         super().__init__(None)
         self.alarm = alarm
+        self._suppress_close_action = False
         self.setObjectName("alarmCard")
         self.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowTitle("⏰ 六毛闹钟")
+        self.setModal(False)
         self.setStyleSheet(ALARM_STYLE)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(7)
-        heading = QLabel("⏰ 六毛闹钟")
-        heading.setStyleSheet("font-size: 16px; font-weight: 700;")
         title = QLabel(str(alarm.title))
         title.setWordWrap(True)
-        title.setStyleSheet("font-size: 14px; font-weight: 600;")
-        layout.addWidget(heading)
+        title.setStyleSheet("font-size: 16px; font-weight: 700;")
         layout.addWidget(title)
         sound_hint = QLabel(
             f"系统提示音 · 最长{max(0, int(alarm.max_ring_seconds or 0))}秒"
@@ -94,8 +96,6 @@ class AlarmCard(QFrame):
         close.clicked.connect(lambda: self.dismiss_requested.emit(alarm.id))
         actions.addWidget(close)
         layout.addLayout(actions)
-        for widget in (start, close):
-            _no_focus(widget)
         if alarm.sound_enabled:
             self._sound_timer = QTimer(self)
             # QApplication.beep uses the platform's own short alert sound.
@@ -113,6 +113,34 @@ class AlarmCard(QFrame):
             self._sound_timer = None
             self._sound_stop_timer = None
 
+    def center_on_current_screen(self) -> None:
+        """Center once on the screen the user is currently using.
+
+        This is called only before the first ``show()``.  After that, native
+        window movement and the user's own drag position are left untouched.
+        """
+
+        self.adjustSize()
+        screen = QApplication.screenAt(QCursor.pos())
+        if screen is None:
+            active_window = QApplication.activeWindow()
+            if active_window is not None:
+                screen = QApplication.screenAt(active_window.frameGeometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        x = area.left() + max(0, (area.width() - self.width()) // 2)
+        y = area.top() + max(0, (area.height() - self.height()) // 2)
+        self.move(x, y)
+
+    def close_from_app(self) -> None:
+        """Close without treating application cleanup as user dismissal."""
+
+        self._suppress_close_action = True
+        self.close()
+
     def _stop_sound(self) -> None:
         if self._sound_timer is not None:
             self._sound_timer.stop()
@@ -122,6 +150,12 @@ class AlarmCard(QFrame):
             self._sound_timer.stop()
         if self._sound_stop_timer is not None:
             self._sound_stop_timer.stop()
+        if not self._suppress_close_action:
+            # The native title-bar close button means “dismiss this firing”,
+            # not “quit Lili”.  Repeating alarms remain scheduled by the
+            # AlarmManager for their next occurrence.
+            self._suppress_close_action = True
+            self.dismiss_requested.emit(self.alarm.id)
         super().closeEvent(event)
 
 
