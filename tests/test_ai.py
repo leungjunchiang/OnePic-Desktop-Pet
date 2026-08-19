@@ -33,6 +33,9 @@ from onepic_desktop_pet.ai import (
     _codex_exec_command,
     _macos_login_shell_path_value,
     _codex_model_override,
+    _codex_thread_identity,
+    _read_codex_thread_id,
+    _write_codex_thread_id,
     _codex_turn_options,
     _codex_timeout_seconds,
     provider_defaults,
@@ -576,6 +579,49 @@ def test_reset_conversation_forgets_persisted_codex_thread_without_touching_serv
     service.reset_conversation()
 
     assert not thread_path.exists()
+
+
+def test_codex_thread_state_v1_is_not_resumed(monkeypatch, tmp_path: Path) -> None:
+    thread_path = tmp_path / "codex-app-server-thread.json"
+    thread_path.write_text(
+        '{"version": 1, "thread_id": "old-thread"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
+
+    assert _read_codex_thread_id() == ""
+    assert not thread_path.exists()
+
+
+def test_codex_thread_state_rejects_provider_mismatch(monkeypatch, tmp_path: Path) -> None:
+    thread_path = tmp_path / "codex-app-server-thread.json"
+    thread_path.write_text(
+        '{"version": 2, "thread_id": "old-thread", "provider": "openai", "transport": "native"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
+    monkeypatch.setenv("LILI_CODEX_TRANSPORT", "https")
+
+    assert _codex_thread_identity() == ("lili_http", "https")
+    assert _read_codex_thread_id() == ""
+    assert not thread_path.exists()
+
+
+def test_codex_thread_state_v2_round_trips_without_credentials(monkeypatch, tmp_path: Path) -> None:
+    thread_path = tmp_path / "codex-app-server-thread.json"
+    monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
+    monkeypatch.setenv("LILI_CODEX_TRANSPORT", "https")
+
+    _write_codex_thread_id("fresh-thread", cli_version="codex-cli 1.2.3")
+    payload = json.loads(thread_path.read_text(encoding="utf-8"))
+
+    assert payload["version"] == 2
+    assert payload["thread_id"] == "fresh-thread"
+    assert payload["provider"] == "lili_http"
+    assert payload["transport"] == "https"
+    assert payload["cli_version"] == "codex-cli 1.2.3"
+    assert "token" not in json.dumps(payload).lower()
+    assert _read_codex_thread_id() == "fresh-thread"
 
 
 def test_chatgpt_without_cli_uses_required_neutral_status(monkeypatch) -> None:
