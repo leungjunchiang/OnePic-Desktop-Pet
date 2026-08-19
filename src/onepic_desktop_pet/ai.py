@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -202,8 +203,10 @@ def check_provider_connection(
                     return "已检测到 ChatGPT（包含 Codex），但未检测到 Codex CLI。"
                 return "已检测到 Codex Desktop，但未检测到 Codex CLI。"
             raise AIConnectionError("未检测到 Codex CLI；当前仍可使用离线陪伴模式。")
-        if not _command_succeeds(_cli_command(executable, "login", "status")):
-            raise AIConnectionError("已检测到 Codex CLI，但当前尚未登录。")
+        try:
+            _run_status_command(_cli_command(executable, "login", "status"))
+        except AIConnectionError as exc:
+            raise AIConnectionError(f"已检测到 Codex CLI，但当前不可用：{exc}") from exc
         return "Codex 已连接。" if gui_app is not None else "Codex CLI 已连接。"
     if provider == "claude":
         executable = find_claude_executable()
@@ -279,7 +282,11 @@ def _run_status_command(command: list[str]) -> str:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise AIConnectionError("连接状态检测没有响应。") from exc
     if completed.returncode != 0:
-        raise AIConnectionError("当前没有检测到有效登录。")
+        detail = _compact_codex_error(
+            completed.stderr or completed.stdout,
+            completed.returncode,
+        )
+        raise AIConnectionError(f"当前没有检测到有效登录：{detail}。")
     return (completed.stdout or completed.stderr).strip()
 
 
@@ -333,7 +340,7 @@ def _cli_search_directories() -> tuple[Path, ...]:
 
 
 @lru_cache(maxsize=1)
-def _macos_login_shell_path_value() -> str:
+def _macos_login_shell_values() -> tuple[str, str]:
     """Read the PATH that a Finder-launched app would otherwise miss.
 
     A macOS ``.app`` normally starts without the user's interactive shell PATH.
@@ -344,7 +351,7 @@ def _macos_login_shell_path_value() -> str:
     """
 
     if sys.platform != "darwin":
-        return ""
+        return "", ""
     shell_environment = dict(os.environ)
     shell_environment["HOME"] = str(Path.home())
     shell_environment["SHELL"] = "/bin/zsh"
@@ -353,7 +360,8 @@ def _macos_login_shell_path_value() -> str:
     script = (
         'for f in "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile"; do '
         '[ -r "$f" ] && source "$f" >/dev/null 2>&1; done; '
-        'printf "__LILI_PATH__%s\\n" "$PATH"'
+        'printf "__LILI_PATH__%s\\n" "$PATH"; '
+        'printf "__LILI_CODEX_HOME__%s\\n" "${CODEX_HOME-}"'
     )
     try:
         completed = subprocess.run(
@@ -367,11 +375,38 @@ def _macos_login_shell_path_value() -> str:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return "", ""
+    path_value = ""
+    codex_home = ""
     for line in reversed(completed.stdout.splitlines()):
         if line.startswith("__LILI_PATH__"):
-            return line.removeprefix("__LILI_PATH__").strip()
-    return ""
+            path_value = line.removeprefix("__LILI_PATH__").strip()
+        elif line.startswith("__LILI_CODEX_HOME__"):
+            codex_home = line.removeprefix("__LILI_CODEX_HOME__").strip()
+    return path_value, codex_home
+
+
+def _macos_login_shell_path_value() -> str:
+    """Return the profile-derived PATH for compatibility with existing callers."""
+
+    return _macos_login_shell_values()[0]
+
+
+def _macos_login_shell_codex_home_value() -> str:
+    """Return a custom CODEX_HOME configured only in the user's shell profile."""
+
+    return _macos_login_shell_values()[1]
+
+
+def _clear_macos_login_shell_cache() -> None:
+    _macos_login_shell_values.cache_clear()
+
+
+# Older tests and callers clear the former cached PATH helper directly.  Keep
+# that small compatibility surface while sharing one shell probe for PATH and
+# CODEX_HOME.
+_macos_login_shell_path_value.cache_clear = _clear_macos_login_shell_cache  # type: ignore[attr-defined]
+_macos_login_shell_codex_home_value.cache_clear = _clear_macos_login_shell_cache  # type: ignore[attr-defined]
 
 
 def _cli_environment(executable: Path | None = None) -> dict[str, str]:
@@ -383,9 +418,11 @@ def _cli_environment(executable: Path | None = None) -> dict[str, str]:
         # omit HOME.  Codex needs it to locate the user's login credentials.
         environment["HOME"] = str(Path.home())
         codex_home = environment.get("CODEX_HOME", "").strip()
+        if sys.platform == "darwin" and not codex_home:
+            codex_home = _macos_login_shell_codex_home_value()
         if not codex_home:
             codex_home = str(Path.home() / ".codex")
-            environment["CODEX_HOME"] = codex_home
+        environment["CODEX_HOME"] = codex_home
         environment.setdefault(
             "CODEX_SQLITE_HOME",
             str(Path(codex_home).expanduser() / "sqlite"),
@@ -801,7 +838,25 @@ def _codex_http_config_overrides() -> tuple[str, ...]:
     diagnostic escape hatch for users who explicitly want the normal profile.
     """
 
-    transport = os.environ.get("LILI_CODEX_TRANSPORT", "https").strip().casefold()
+    return _codex_http_config_overrides_for_transport(None)
+
+
+def _codex_http_config_overrides_for_transport(transport: str | None) -> tuple[str, ...]:
+    """Return the per-process provider override for one transport mode.
+
+    ``None`` preserves the public/default behaviour used by existing callers.
+    The macOS chat path may explicitly request ``default`` for a second attempt
+    so a Finder-launched app can use the same authenticated transport that
+    works in the user's terminal.  This does not modify the user's Codex
+    configuration on disk.
+    """
+
+    configured = (
+        os.environ.get("LILI_CODEX_TRANSPORT", "https")
+        if transport is None
+        else str(transport)
+    )
+    transport = configured.strip().casefold()
     if transport in {"default", "auto", "off", "websocket", "ws"}:
         return ()
     return (
@@ -814,7 +869,36 @@ def _codex_http_config_overrides() -> tuple[str, ...]:
     )
 
 
-def _codex_app_server_command(executable: Path) -> list[str]:
+def _codex_transport_variants() -> tuple[str, ...]:
+    """Return safe transport attempts for the local Codex child process.
+
+    Windows keeps its established HTTPS-first behaviour.  macOS gets one
+    additional native-profile attempt because the same account may work from
+    Terminal while the Finder-launched app cannot use the forced provider
+    override (proxy, certificate, or CLI-version differences are common
+    causes).  The fallback is still local and never opens ChatGPT.app.
+    """
+
+    configured = os.environ.get("LILI_CODEX_TRANSPORT", "").strip().casefold()
+    if configured in {"default", "auto", "off", "websocket", "ws"}:
+        return ("default",)
+    if configured in {"https", "lili_http"}:
+        if sys.platform == "darwin":
+            return ("https", "default")
+        return ("https",)
+    if sys.platform == "darwin":
+        # Prefer the user's native Codex profile on macOS.  This is the same
+        # transport that succeeds in Terminal and avoids delaying every chat
+        # turn behind a provider override that may not match the local CLI.
+        return ("default", "https")
+    return ("https",)
+
+
+def _codex_app_server_command(
+    executable: Path,
+    *,
+    transport: str | None = None,
+) -> list[str]:
     """Build the cross-platform stdio App Server command for Lili only."""
 
     # The chat prompt does not expose tools.  Keep user authentication and
@@ -824,7 +908,7 @@ def _codex_app_server_command(executable: Path) -> list[str]:
         "--ignore-user-config",
         "--config",
         "mcp_servers={}",
-        *_codex_http_config_overrides(),
+        *_codex_http_config_overrides_for_transport(transport),
         "app-server",
         "--listen",
         "stdio://",
@@ -874,7 +958,13 @@ def _clear_codex_thread_id() -> None:
         LOGGER.debug("[AI Codex] failed to clear local thread id", exc_info=True)
 
 
-def _codex_exec_command(executable: Path, prompt: str, *, model: str | None = None) -> list[str]:
+def _codex_exec_command(
+    executable: Path,
+    prompt: str,
+    *,
+    model: str | None = None,
+    transport: str | None = None,
+) -> list[str]:
     """Build one isolated, non-interactive Codex command for Lili."""
 
     selected_model = _codex_model_override() if model is None else model
@@ -885,7 +975,7 @@ def _codex_exec_command(executable: Path, prompt: str, *, model: str | None = No
         "--ignore-rules",
         "--config",
         "mcp_servers={}",
-        *_codex_http_config_overrides(),
+        *_codex_http_config_overrides_for_transport(transport),
         "--config",
         'model_reasoning_effort="low"',
         "exec",
@@ -921,6 +1011,39 @@ def _looks_like_model_rejection(stderr: str) -> bool:
             "not a valid model",
         )
     )
+
+
+def _compact_codex_error(stderr: str, returncode: int | None = None) -> str:
+    """Make a useful, bounded and credential-safe error for the UI.
+
+    The old UI converted every failed ``codex exec`` into the same sentence,
+    which made a missing CLI, a login problem, a TLS failure and an unsupported
+    model indistinguishable.  Keep the diagnostic short and remove common
+    token-shaped values before it leaves the worker thread.
+    """
+
+    text = " ".join(str(stderr or "").split())
+    text = re.sub(
+        r"(?i)(authorization|api[_ -]?key|token|access[_ -]?token)\s*[:=]\s*\S+",
+        r"\1=<redacted>",
+        text,
+    )
+    if not text:
+        return f"退出码 {returncode}" if returncode is not None else "没有返回诊断信息"
+    return text[:420]
+
+
+def _codex_failure_message(stderr: str, returncode: int | None = None) -> str:
+    """Return a Chinese diagnosis while retaining the old searchable prefix."""
+
+    detail = _compact_codex_error(stderr, returncode)
+    lowered = detail.casefold()
+    if any(marker in lowered for marker in ("not logged in", "login required", "unauthorized", "authentication")):
+        return f"Codex 尚未登录或连接失败：Codex CLI 登录状态无效（{detail}）。"
+    if any(marker in lowered for marker in ("ssl", "certificate", "tls", "websocket", "network", "connection")):
+        platform_label = "macOS" if sys.platform == "darwin" else "Windows" if os.name == "nt" else sys.platform
+        return f"Codex 尚未登录或连接失败：{platform_label} 与 Codex 服务连接失败（{detail}）。"
+    return f"Codex 尚未登录或连接失败：{detail}。"
 
 
 def _conversation_text(
@@ -1023,7 +1146,6 @@ def ask_codex(
         if model_override is None
         else str(model_override).strip()[:120]
     )
-    command = _codex_exec_command(executable, prompt, model=selected_model)
     startupinfo = None
     creationflags = 0
     if os.name == "nt":
@@ -1032,6 +1154,10 @@ def ask_codex(
         creationflags = subprocess.CREATE_NO_WINDOW
     timeout = _codex_timeout_seconds()
     started_at = time.monotonic()
+    last_completed = None
+    last_stderr = ""
+    last_transport = ""
+    last_exception: Exception | None = None
 
     def run_command(command_to_run: list[str]):
         return subprocess.run(
@@ -1048,47 +1174,79 @@ def ask_codex(
             check=False,
         )
 
-    try:
-        completed = run_command(command)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        LOGGER.warning(
-            "[AI Codex] exec did not return: elapsed=%.1fs timeout=%ss error=%s",
-            time.monotonic() - started_at,
-            timeout,
-            exc,
+    for transport in _codex_transport_variants():
+        command = _codex_exec_command(
+            executable,
+            prompt,
+            model=selected_model,
+            transport=transport,
         )
-        raise AIConnectionError("Codex 暂时没有回应，已切回离线回答。") from exc
-
-    stderr = " ".join((completed.stderr or "").split())
-    # Some accounts do not have Luna enabled yet.  A single immediate retry
-    # with the normal CLI-selected model keeps chat usable without adding a
-    # second request for ordinary failures.
-    if completed.returncode != 0 and selected_model and _looks_like_model_rejection(stderr):
-        LOGGER.info("[AI Codex] model override rejected; retrying with CLI default")
         try:
-            completed = run_command(_codex_exec_command(executable, prompt, model=""))
-            stderr = " ".join((completed.stderr or "").split())
+            completed = run_command(command)
         except (OSError, subprocess.TimeoutExpired) as exc:
+            last_exception = exc
+            last_transport = transport
             LOGGER.warning(
-                "[AI Codex] fallback exec did not return: elapsed=%.1fs error=%s",
+                "[AI Codex] exec did not return: transport=%s elapsed=%.1fs timeout=%ss error=%s",
+                transport,
                 time.monotonic() - started_at,
+                timeout,
                 exc,
             )
-            raise AIConnectionError("Codex 暂时没有回应，已切回离线回答。") from exc
+            continue
 
-    answer = _parse_codex_jsonl(completed.stdout)
-    if completed.returncode != 0 or not answer:
+        stderr = " ".join((completed.stderr or "").split())
+        last_completed = completed
+        last_stderr = stderr
+        last_transport = transport
+
+        # Some accounts do not have Luna enabled yet.  A single immediate
+        # retry with the normal CLI-selected model keeps chat usable without
+        # adding a second request for ordinary failures.
+        if completed.returncode != 0 and selected_model and _looks_like_model_rejection(stderr):
+            LOGGER.info(
+                "[AI Codex] model override rejected; retrying with CLI default: transport=%s",
+                transport,
+            )
+            try:
+                completed = run_command(
+                    _codex_exec_command(executable, prompt, model="", transport=transport)
+                )
+                stderr = " ".join((completed.stderr or "").split())
+                last_completed = completed
+                last_stderr = stderr
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                last_exception = exc
+                LOGGER.warning(
+                    "[AI Codex] fallback exec did not return: transport=%s elapsed=%.1fs error=%s",
+                    transport,
+                    time.monotonic() - started_at,
+                    exc,
+                )
+                continue
+
+        answer = _parse_codex_jsonl(completed.stdout)
+        if completed.returncode == 0 and answer:
+            return postprocess_ai_answer(answer, classify_intent(message, entries))
+
         LOGGER.warning(
-            "[AI Codex] exec failed: returncode=%s elapsed=%.1fs stderr=%s stdout_bytes=%s",
+            "[AI Codex] exec failed: transport=%s returncode=%s elapsed=%.1fs stderr=%s stdout_bytes=%s",
+            transport,
             completed.returncode,
             time.monotonic() - started_at,
-            stderr[:800],
+            _compact_codex_error(stderr)[:800],
             len(completed.stdout or ""),
         )
-        if completed.returncode == 0:
+
+    if last_completed is not None:
+        if last_completed.returncode == 0:
             raise AIConnectionError("Codex 返回了无法识别的内容，已切回离线回答。")
-        raise AIConnectionError("Codex 尚未登录或连接失败，已切回离线回答。")
-    return postprocess_ai_answer(answer, classify_intent(message, entries))
+        raise AIConnectionError(_codex_failure_message(last_stderr, last_completed.returncode))
+    if last_exception is not None:
+        raise AIConnectionError(
+            f"Codex 暂时没有回应（transport={last_transport}）：{_compact_codex_error(str(last_exception))}。"
+        ) from last_exception
+    raise AIConnectionError("Codex 尚未登录或连接失败：没有可用的 Codex transport。")
 
 
 def ask_claude(message: str, history: Iterable[tuple[str, str]], local_context: str = "") -> str:
@@ -1413,7 +1571,7 @@ class AIChatService:
             raise CodexAppServerError("没有找到 Codex，已切回离线回答。")
         working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
         self._codex_app_server = CodexAppServerClient(
-            _codex_app_server_command(executable),
+            _codex_app_server_command(executable, transport=_codex_transport_variants()[0]),
             cwd=working_root,
             env=_cli_environment(executable),
             thread_id=_read_codex_thread_id(),

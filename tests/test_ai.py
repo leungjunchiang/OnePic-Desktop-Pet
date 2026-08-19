@@ -158,6 +158,58 @@ def test_codex_uses_ephemeral_read_only_session_and_prompt_argument(monkeypatch)
     assert captured["kwargs"].get("input") is None
 
 
+def test_macos_codex_exec_falls_back_to_native_transport(monkeypatch) -> None:
+    """Finder-launched macOS chat retries the user's working Codex transport."""
+
+    calls = []
+    output = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "Mac 联动正常"},
+        }
+    )
+
+    def fake_run(command, **_kwargs):
+        if command[0] != "/bin/zsh":
+            calls.append(command)
+        if any("model_provider=\"lili_http\"" in str(part) for part in command):
+            return SimpleNamespace(returncode=1, stdout="", stderr="TLS handshake failed")
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("/usr/local/bin/codex"))
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    monkeypatch.setenv("LILI_CODEX_TRANSPORT", "https")
+    monkeypatch.setattr("onepic_desktop_pet.ai._conversation_text", lambda *args: "test prompt")
+
+    assert ask_codex("测试 macOS 回退", []) == "Mac 联动正常"
+    assert len(calls) == 2
+    assert any("model_provider=\"lili_http\"" in str(part) for part in calls[0])
+    assert not any("model_provider=\"lili_http\"" in str(part) for part in calls[1])
+
+
+def test_codex_failure_keeps_sanitized_runtime_diagnostic(monkeypatch) -> None:
+    """The chat status must distinguish a transport failure from a bare login error."""
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("/usr/local/bin/codex"))
+
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(
+            returncode=2,
+            stdout="",
+            stderr="TLS certificate failed; Authorization: secret-token",
+        )
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    monkeypatch.setattr("onepic_desktop_pet.ai._conversation_text", lambda *args: "test prompt")
+
+    with pytest.raises(AIConnectionError, match="TLS certificate failed") as error:
+        ask_codex("诊断连接", [])
+    assert "secret-token" not in str(error.value)
+    assert "<redacted>" in str(error.value)
+
+
 def test_macos_lili_codex_call_is_isolated_and_uses_low_latency_model(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)

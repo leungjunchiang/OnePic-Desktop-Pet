@@ -122,8 +122,14 @@ def resource_path(relative_path: str | Path) -> Path:
     overlay = _active_content_root()
     if overlay is not None:
         overlay_path = overlay / relative
-        if overlay_path.exists():
-            return overlay_path
+        try:
+            if overlay_path.exists():
+                return overlay_path
+        except OSError:
+            # A stale or permission-restricted user overlay must never make
+            # bundled resources unusable.  Fall back to the resources shipped
+            # inside the current application instead.
+            pass
     path = resource_root() / relative
     if not path.exists():
         raise FileNotFoundError(f"缺少应用资源：{path}")
