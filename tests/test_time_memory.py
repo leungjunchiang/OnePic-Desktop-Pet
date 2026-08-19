@@ -432,3 +432,16 @@ def test_daily_summary_reports_pending_without_mutating_task_state(tmp_path) -> 
     assert summary["pending_tasks"] == ["还没做"]
     assert memory.todos.find("还没做").completed is False
 
+def test_new_todo_accepts_and_persists_reminder_suppressed(tmp_path) -> None:
+    manager = TodoManager(tmp_path / "todos.json")
+    item = manager.add(
+        "恢复后的事项",
+        date="2026-08-19",
+        time="15:32",
+        reminder_mode="alarm",
+        reminder_suppressed=True,
+    )
+
+    assert item.reminder_suppressed is True
+    reloaded = TodoManager(tmp_path / "todos.json")
+    assert reloaded.get(item.id).reminder_suppressed is True
