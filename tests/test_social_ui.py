@@ -261,3 +261,4 @@ def test_offline_dashboard_does_not_mask_local_focus_when_no_room_is_selected() 
 
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
+
