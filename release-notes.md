@@ -1,3 +1,12 @@
+## v0.23.28 — Todo、Codex transport 与桌宠生命周期修复
+
+- 待办主列表不再把 `created_at` 当作任务日期；历史日期前缀只在与创建日严格匹配时做显示层清理。
+- 聊天 Todo 写入增加本地许可 Gate；回忆问题和日期陈述不会误建待办，明确的待办/提醒请求仍复用原有 TodoService。
+- Codex 增加 Windows executable resolver、`.cmd/.bat` 启动、启动自检和错误分类；WinError 2 不再伪装成超时或额度问题。
+- 在线失败后的普通 UI 与调试信息分离，离线事实问答和记忆回忆不再套用工作任务模板。
+- 应用级单实例锁和多显示器弹窗坐标修复继续复用唯一桌宠、WorkSession 与 PetState。
+- 增加 Todo、Codex、单实例和多显示器回归测试。
+
 ## v0.23.25 — Codex CLI 能力探测与 Mac 在线连接修复
 
 - App Server 改为使用最小启动命令 `codex app-server`，不再把 exec 专属参数、MCP/provider 覆盖或隔离参数传给 App Server。
