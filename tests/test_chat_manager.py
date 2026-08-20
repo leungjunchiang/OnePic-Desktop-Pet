@@ -426,14 +426,17 @@ def test_streaming_chat_renders_small_batches_and_finishes_authoritative_text() 
     dialog.begin_streaming_message("六毛")
     dialog.append_streaming_delta("一二三四五六")
 
-    QTest.qWait(35)
+    # Drive the flush directly so CI timer scheduling cannot make this test
+    # flaky; the production timer still remains the 25ms typewriter batch.
+    dialog._flush_streaming_text()
     app.processEvents()
     visible = dialog.transcript.toPlainText()
     assert "一二三四" in visible
     assert "一二三四五六" not in visible
 
     dialog.finish_streaming_message("一二三四五六")
-    QTest.qWait(70)
+    while dialog._streaming_message_index is not None:
+        dialog._flush_streaming_text()
     app.processEvents()
     assert "一二三四五六" in dialog.transcript.toPlainText()
     assert dialog._streaming_message_index is None
