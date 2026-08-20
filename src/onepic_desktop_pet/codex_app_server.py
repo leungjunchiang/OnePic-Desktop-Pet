@@ -72,6 +72,11 @@ class CodexAppServerClient:
         process = self._process
         return process is not None and process.poll() is None
 
+    def ensure_ready(self) -> None:
+        """Start and handshake the persistent server without generating text."""
+
+        self._ensure_ready()
+
     def stream_turn(
         self,
         text: str,
@@ -502,4 +507,5 @@ class CodexAppServerClient:
         if event_thread and event_thread != self.thread_id:
             return False
         return not event_turn or event_turn == turn_id
+
 
