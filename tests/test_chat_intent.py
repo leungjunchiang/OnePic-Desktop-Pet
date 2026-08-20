@@ -25,8 +25,31 @@ def test_explicit_song_question_is_knowledge_query() -> None:
 def test_broad_profile_gets_large_retrieval_budget() -> None:
     intent = classify_intent("陈楚生的经历如何")
     assert intent.primary_intent == CHEN_PROFILE
-    assert intent.retrieval_limit >= 8
+    assert intent.retrieval_limit <= 5
     assert intent.answer_style == "detailed"
+
+
+def test_bare_life_question_never_becomes_chen_profile() -> None:
+    history = [
+        ("user", "你知道《趋光号》这张专辑吗"),
+        ("assistant", "知道，这是陈楚生的作品。"),
+    ]
+    for message in ("人生的意义是什么", "我最近对人生有点迷茫", "人生为什么这么难"):
+        intent = classify_intent(message, history)
+        assert intent.primary_intent != CHEN_PROFILE
+        assert intent.need_knowledge is False
+        assert retrieve_prompt_context(message, history) == ""
+
+
+def test_explicit_profile_phrase_still_retrieves_chen_cards() -> None:
+    assert classify_intent("陈楚生的人生经历是怎么样的").primary_intent == CHEN_PROFILE
+    assert classify_intent("陈楚生怎么出道的").primary_intent == CHEN_PROFILE
+
+
+def test_structured_chen_cards_are_available_only_for_explicit_profile_queries() -> None:
+    context = retrieve_prompt_context("陈楚生的人生经历是怎么样的")
+    assert context
+    assert "深圳" in context or "快乐男声" in context
 
 
 def test_relation_query_is_not_generic_friends_chat() -> None:
