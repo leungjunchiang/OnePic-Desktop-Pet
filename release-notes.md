@@ -666,3 +666,10 @@
 - App Server 的真实 delta 继续即时转发；CLI/HTTPS 等完整返回的兼容路径也拆成短片段，避免回复一次性整段出现。
 - 聊天窗口改为约 25ms 的小批次刷新，接近逐字显示，同时避免每个 token 都重建全文 HTML。
 - 增加兼容 transport 增量显示和权威最终文本收口测试，不改变原有 Codex fallback、待办、计时和单实例逻辑。
+
+## v0.23.33 — Codex exec 增量读取与常驻连接保持
+
+- 常驻 App Server 继续复用已完成握手的进程和 thread，不在每条消息前重新连接。
+- 兼容 `codex exec --json` 在进程运行期间输出的 assistant JSONL 增量会立即进入聊天窗口；不支持该事件格式的 CLI 自动保留原完整返回路径。
+- 增量读取不改变 macOS 的 Codex executable、CODEX_HOME、登录状态、命令参数或 transport 选择；App Server 失败仍只在当前会话内降级到既有兼容路径。
+- 增加 JSONL snapshot 去重测试，避免流式片段与最终完整答案重复显示。

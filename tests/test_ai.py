@@ -39,6 +39,7 @@ from onepic_desktop_pet.ai import (
     _write_codex_thread_id,
     _codex_turn_options,
     _codex_timeout_seconds,
+    _codex_jsonl_snapshot,
     _conversation_turn_text,
     _emit_text_chunks,
     provider_defaults,
@@ -345,6 +346,35 @@ def test_non_streaming_transport_is_split_into_small_deltas() -> None:
 
     assert chunks == ["中国的首", "都是北京", "。"]
     assert "".join(chunks) == "中国的首都是北京。"
+
+
+def test_codex_exec_jsonl_snapshots_emit_only_new_assistant_suffix() -> None:
+    current = ""
+    current = _codex_jsonl_snapshot(
+        {
+            "type": "item.updated",
+            "item": {"type": "agent_message", "text": "中国的"},
+        },
+        current,
+    )
+    assert current == "中国的"
+    current = _codex_jsonl_snapshot(
+        {
+            "type": "item.updated",
+            "item": {"type": "agent_message", "text": "中国的首都是"},
+        },
+        current,
+    )
+    assert current == "中国的首都是"
+    # A completed event repeats the accumulated snapshot; it must not cause
+    # the UI to append the same answer a second time.
+    assert _codex_jsonl_snapshot(
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "中国的首都是"},
+        },
+        current,
+    ) == current
 
 
 def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
