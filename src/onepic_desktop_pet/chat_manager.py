@@ -335,7 +335,12 @@ class AgentManager(QObject):
         ):
             return False
         self._warmup_thread = AgentWarmupThread(self.ai_service, self)
-        self._warmup_thread.finished.connect(self._warmup_finished)
+        # AgentWarmupThread carries the actual result on ``completed``.
+        # QThread.finished has no arguments and would therefore call
+        # _warmup_finished() with its default ``ok=True`` even when the
+        # warm-up failed. That false-positive made the UI claim “已连接”
+        # until the first real turn exposed the broken App Server.
+        self._warmup_thread.completed.connect(self._warmup_finished)
         self._warmup_thread.start()
         return True
 
@@ -892,3 +897,4 @@ def should_start_startup_detection() -> bool:
     """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+
