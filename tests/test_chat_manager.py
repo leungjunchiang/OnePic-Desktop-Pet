@@ -121,7 +121,6 @@ def test_background_detection_updates_cache_once_without_chat_recheck(monkeypatc
     manager.shutdown()
 
 
-
 def test_agent_manager_schedules_app_server_recovery_after_real_turn_cooldown() -> None:
     """真实 turn 走 exec 后，AgentManager 会后台重新预热 App Server。"""
 
@@ -149,6 +148,33 @@ def test_agent_manager_schedules_app_server_recovery_after_real_turn_cooldown() 
 
     assert service.warm_calls == 1
     agents.shutdown()
+
+
+def test_agent_warmup_failure_is_not_reported_as_connected() -> None:
+    """Warm-up's completed(bool, detail) result must reach the status cache."""
+
+    app = _app()
+
+    class WarmupService:
+        def warm_codex(self) -> bool:
+            return False
+
+        last_error_message = "Codex App Server 启动失败，当前使用离线陪伴。"
+
+    settings = PetSettings(ai_provider="codex")
+    agents = AgentManager(settings, FakeCredentials(), ai_service=WarmupService())
+    assert agents._start_codex_warmup()
+    assert agents._warmup_thread is not None
+    assert agents._warmup_thread.wait(2000)
+    app.processEvents()
+
+    status = agents.status("codex")
+    assert status.state is AgentConnectionState.CONNECTED
+    assert "高速会话不可用" in status.detail
+    assert "启动失败" in status.detail
+    agents.shutdown()
+
+
 def test_chatgpt_gui_without_codex_cli_is_not_routable_as_connected(monkeypatch) -> None:
     """中性 GUI 文案必须保留，但实际聊天不能误调用不存在的 Codex CLI。"""
 
@@ -493,3 +519,4 @@ def test_pressing_enter_ten_times_only_submits_messages() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
+
