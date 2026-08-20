@@ -38,6 +38,7 @@ from onepic_desktop_pet.ai import (
     _write_codex_thread_id,
     _codex_turn_options,
     _codex_timeout_seconds,
+    _conversation_turn_text,
     provider_defaults,
     _models_endpoint,
 )
@@ -330,6 +331,19 @@ def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(
     )
 
 
+def test_codex_turn_prompt_marks_unrelated_topic_boundary() -> None:
+    history = [
+        ("user", "那你知道《趋光号》这张专辑吗"),
+        ("assistant", "知道，这是陈楚生的作品。"),
+    ]
+
+    prompt = _conversation_turn_text("你知道人生的意义是什么吗", history)
+
+    assert "本轮是换话题" in prompt
+    assert "本轮意图：casual_chat" in prompt
+    assert "本轮意图：chen_chusheng_profile" not in prompt
+
+
 def test_codex_exec_failure_is_logged_without_prompt_or_credentials(monkeypatch, caplog) -> None:
     def fake_run(_command, **_kwargs):
         return SimpleNamespace(returncode=2, stdout="", stderr="not logged in")
@@ -593,10 +607,22 @@ def test_codex_thread_state_v1_is_not_resumed(monkeypatch, tmp_path: Path) -> No
     assert not thread_path.exists()
 
 
+def test_codex_thread_state_v2_is_reset_after_prompt_boundary_upgrade(monkeypatch, tmp_path: Path) -> None:
+    thread_path = tmp_path / "codex-app-server-thread.json"
+    thread_path.write_text(
+        '{"version": 2, "thread_id": "stale-topic-thread", "provider": "openai", "transport": "native"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
+
+    assert _read_codex_thread_id() == ""
+    assert not thread_path.exists()
+
+
 def test_codex_thread_state_rejects_provider_mismatch(monkeypatch, tmp_path: Path) -> None:
     thread_path = tmp_path / "codex-app-server-thread.json"
     thread_path.write_text(
-        '{"version": 2, "thread_id": "old-thread", "provider": "openai", "transport": "native"}\n',
+        '{"version": 3, "thread_id": "old-thread", "provider": "openai", "transport": "native"}\n',
         encoding="utf-8",
     )
     monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
@@ -607,7 +633,7 @@ def test_codex_thread_state_rejects_provider_mismatch(monkeypatch, tmp_path: Pat
     assert not thread_path.exists()
 
 
-def test_codex_thread_state_v2_round_trips_without_credentials(monkeypatch, tmp_path: Path) -> None:
+def test_codex_thread_state_v3_round_trips_without_credentials(monkeypatch, tmp_path: Path) -> None:
     thread_path = tmp_path / "codex-app-server-thread.json"
     monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
     monkeypatch.setenv("LILI_CODEX_TRANSPORT", "https")
@@ -615,7 +641,7 @@ def test_codex_thread_state_v2_round_trips_without_credentials(monkeypatch, tmp_
     _write_codex_thread_id("fresh-thread", cli_version="codex-cli 1.2.3")
     payload = json.loads(thread_path.read_text(encoding="utf-8"))
 
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert payload["thread_id"] == "fresh-thread"
     assert payload["provider"] == "lili_http"
     assert payload["transport"] == "https"
@@ -647,5 +673,6 @@ def test_macos_gui_launch_uses_open_a_chatgpt(monkeypatch) -> None:
 
     assert launch_codex_gui() is True
     assert calls[0][0] == ["open", "-a", "ChatGPT"]
+
 
 
