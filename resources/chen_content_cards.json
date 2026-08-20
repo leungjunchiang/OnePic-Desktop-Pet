@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "person_cards": [
+    {
+      "id": "chen_hainan_to_shenzhen",
+      "title": "从海南到深圳",
+      "content": "陈楚生早年离开海南到深圳寻找演出机会，做过普通工作，也经历过酒吧驻唱。这个阶段常被用来理解他的漂泊、练习和慢慢找到方向。",
+      "keywords": ["海南", "三亚", "深圳", "酒吧驻唱", "漂泊", "年轻"],
+      "tags": ["profile", "timeline", "history"]
+    },
+    {
+      "id": "chen_pub_2003",
+      "title": "2003 年的舞台积累",
+      "content": "2003 年前后，他参加过深圳 PUB 歌手大赛并获得关注。长期现场演出和比赛积累，构成了后来走上更大舞台的重要基础。",
+      "keywords": ["2003", "PUB", "歌手大赛", "深圳", "现场"],
+      "tags": ["profile", "timeline", "history"]
+    },
+    {
+      "id": "chen_2007_happy_boy",
+      "title": "2007 快乐男声",
+      "content": "2007 年参加快乐男声并获得全国总冠军，是他职业路径的重要转折。这个节点把多年现场积累和原创表达带到了更大的公众舞台。",
+      "keywords": ["2007", "快乐男声", "冠军", "夺冠", "出道"],
+      "tags": ["profile", "timeline", "facts"]
+    },
+    {
+      "id": "chen_original_songs",
+      "title": "原创与城市经验",
+      "content": "他的作品经常从城市漂泊、距离、出发和自我寻找出发。深圳时期的生活经验与《有没有人告诉你》《白石洲》等作品常被放在同一条创作脉络里讨论。",
+      "keywords": ["原创", "城市", "白石洲", "有没有人告诉你", "距离", "出发"],
+      "tags": ["profile", "songs", "history"]
+    },
+    {
+      "id": "chen_0713_reunion",
+      "title": "0713 与再就业男团",
+      "content": "2022 年以后，0713 相关成员在综艺和舞台上的重新聚合让这段友情被更多人看见。这里更适合回答老朋友、重新开始和团队关系，而不是替用户强行转成百科。",
+      "keywords": ["0713", "再就业男团", "重新聚合", "老朋友", "重新开始"],
+      "tags": ["relations", "timeline", "history"]
+    },
+    {
+      "id": "chen_x_leader",
+      "title": "X-Leader 与团队表达",
+      "content": "在披荆斩棘相关舞台中，X-Leader 和团队合作是常见语境。回答综艺梗时应优先说明出处和语气，不把节目里的玩笑当作现实人物事实。",
+      "keywords": ["X-Leader", "披荆斩棘", "团队", "舞台"],
+      "tags": ["relations", "variety", "facts"]
+    },
+    {
+      "id": "chen_guang_and_wilderness",
+      "title": "趋光与荒芜之境",
+      "content": "《趋光号》和《荒芜之境》可以作为产品世界观里的成长意象：一个偏向寻找光和继续走，一个偏向在荒野里整理自己。除非用户明确问作品或人物，不应把普通的“人生”自动解释成这条线。",
+      "keywords": ["趋光号", "趋光", "荒芜之境", "荒野", "成长", "寻找"],
+      "tags": ["songs", "timeline", "history"]
+    },
+    {
+      "id": "chen_singer_2025",
+      "title": "歌手舞台与阶段性成果",
+      "content": "用户提供的资料把 2025 年歌手舞台视为阶段性成果节点。若回答具体节目或年份，应以已整理的作品卡和时间线为准，不扩写未经证实的私人细节。",
+      "keywords": ["2025", "歌手", "歌王", "阶段性成果"],
+      "tags": ["profile", "timeline", "facts"]
+    }
+  ],
+  "meme_cards": [
+    {
+      "id": "meme_fencun",
+      "title": "相信我们的尺寸",
+      "content": "综艺里把“分寸”说成“尺寸”的口误，后来成为轻松的节目梗。只适合庆祝、玩笑和熟人互动，不用于严肃安慰。",
+      "keywords": ["相信我们的尺寸", "尺寸", "分寸"],
+      "tags": ["variety", "meme"]
+    },
+    {
+      "id": "meme_shui_bi_shui_cha",
+      "title": "谁比谁差",
+      "content": "这是团队竞争和互相撑腰语境里的综艺表达。可以在分数接近或完成挑战时轻轻引用，但要有冷却时间，不能每轮重复。",
+      "keywords": ["谁比谁差", "比谁差", "竞争"],
+      "tags": ["variety", "meme", "relations"]
+    },
+    {
+      "id": "meme_zou_ni_o",
+      "title": "揍你哦",
+      "content": "偏熟人式的调侃语气，只能在明确轻松的玩笑场景使用，用户难过或冲突升级时避免。",
+      "keywords": ["揍你哦", "揍你喔"],
+      "tags": ["variety", "meme"]
+    },
+    {
+      "id": "meme_wangxiangzheng",
+      "title": "妄想症",
+      "content": "综艺语境中的夸张调侃，不是医学判断。不能把它用于给用户或现实人物下诊断。",
+      "keywords": ["妄想症"],
+      "tags": ["variety", "meme", "safety"]
+    }
+  ]
+}
+
