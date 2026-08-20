@@ -3,6 +3,7 @@ from __future__ import annotations
 from onepic_desktop_pet.chat_intent import (
     CASUAL_CHAT,
     CHEN_PROFILE,
+    FACTUAL_QA,
     RELATION_QUERY,
     SONG_QUERY,
     WORK_COMPANION,
@@ -56,6 +57,12 @@ def test_relation_query_is_not_generic_friends_chat() -> None:
     intent = classify_intent("0713是哪六个人？")
     assert intent.primary_intent == RELATION_QUERY
     assert intent.need_knowledge is True
+
+
+def test_short_is_question_is_factual_when_offline() -> None:
+    """“是哪吗”也必须进入知识问题安全降级，而不是陪伴模板。"""
+
+    assert classify_intent("那你知道广东省会是哪吗").primary_intent == FACTUAL_QA
 
 
 def test_work_companion_does_not_request_father_knowledge() -> None:

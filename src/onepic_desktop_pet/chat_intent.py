@@ -72,8 +72,14 @@ _EXPLICIT_PROFILE_PHRASES = (
     "你爹的经历",
 )
 _FACT_MARKERS = (
-    "哪年", "什么时候", "出生", "冠军", "第几", "是什么", "什么意思",
+    "哪年", "什么时候", "出生", "冠军", "第几", "是哪", "哪个", "哪项", "哪一",
+    "是什么", "什么意思",
     "哪位", "是谁", "多少人", "有哪些", "获得", "称号", "日期",
+)
+_GENERAL_FACT_MARKERS = (
+    "哪里", "哪儿", "是哪", "哪个", "哪项", "哪一", "哪位", "哪年",
+    "什么时候", "出生", "冠军", "第几", "多少人", "有哪些", "获得", "称号",
+    "日期",
 )
 _RELATION_MARKERS = (
     "0713", "再就业", "快乐再出发", "蘑菇屋", "什么关系", "都有谁", "哪六个",
@@ -214,7 +220,10 @@ def classify_offline_message(message: str) -> str:
         return EMOTIONAL_CHAT
     if _contains(text, ("你的状态", "你怎么样", "精力", "饱食度", "心情怎么样")):
         return CASUAL_CHAT_MESSAGE
-    if re.search(r"(哪里|哪儿|是什么|什么意思|为什么|怎么|多少|哪位|哪一年|\?|？)", text):
+    # Chinese factual questions often end with “是哪吗/哪个/哪一项” rather
+    # than the longer “哪里/哪儿”.  Keep this deterministic gate broad enough
+    # to classify a knowledge question safely, but never use it for writes.
+    if re.search(r"(哪里|哪儿|是哪|哪个|哪项|哪一|是什么|什么意思|为什么|怎么|多少|哪位|哪年|\?|？)", text):
         return FACTUAL_QUESTION
     if _contains(text, ("待办", "提醒")):
         return TODO_COMMAND
@@ -254,6 +263,12 @@ def classify_intent(
 
     if _has_profile_request(text, family_context=family_context):
         return ChatIntent(CHEN_PROFILE, None, True, ("profile", "timeline", "history"), 0.93, 5, "detailed", False)
+
+    # A complete question about a place, person, date, or choice can change
+    # topic without any Chen/family context.  Do not include broad markers
+    # such as “是什么” here: “人生的意义是什么” remains ordinary chat.
+    if _contains(text, _GENERAL_FACT_MARKERS):
+        return ChatIntent(FACTUAL_QA, None, True, ("facts",), 0.88, 2, "short", False)
 
     if family_context and _contains(text, _FACT_MARKERS):
         return ChatIntent(FACTUAL_QA, None, True, ("facts", "history", "songs", "relations"), 0.88, 3, "short", False)

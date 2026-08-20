@@ -161,13 +161,38 @@ def test_connected_agent_failure_marks_error_and_next_message_skips_ai() -> None
     app.processEvents()
     first = replies[0]
     assert first.mode == "offline"
-    assert "离线模式" in first.text
+    assert "Codex 响应超时" in first.text
+    assert first.show_recovery_actions is True
     assert agents.status("codex").state is AgentConnectionState.ERROR
 
     assert manager.submit("今天工作很多", []) is True
     app.processEvents()
     assert replies[1].mode == "offline"
     assert service.calls == 1
+    manager.shutdown()
+
+
+def test_factual_question_failure_shows_diagnosis_not_companion_echo() -> None:
+    """在线失败时，知识问题不能被替换成无关的离线陪伴话术。"""
+
+    app = _app()
+    settings = PetSettings(ai_provider="codex")
+    agents = AgentManager(settings, FakeCredentials())
+    agents.mark_runtime_success("codex")
+    service = FakeService(error="网络连接异常")
+    manager = ChatManager(settings, service, agents, _offline_manager())
+    replies = []
+    manager.reply_ready.connect(replies.append)
+
+    assert manager.submit("那你知道广东省会是哪吗", []) is True
+    assert manager._thread is not None
+    assert manager._thread.wait(2000)
+    app.processEvents()
+
+    reply = replies[0]
+    assert "网络连接异常" in reply.text
+    assert "我现在是离线陪伴" not in reply.text
+    assert reply.show_recovery_actions is True
     manager.shutdown()
 
 

@@ -436,6 +436,14 @@ class PetWindow(QWidget):
         self._shown_active_visit_ids: set[str] = set()
         self._chat_dialog: ChatDialog | None = None
         self._chat_streaming_active = False
+        # A failed request can finish and re-enable the send button before a
+        # second queued click is delivered.  Keep one short-lived submission
+        # fence at the UI boundary so one user action cannot duplicate a chat
+        # turn or its local history entry.  Intentional repeats remain allowed
+        # after the fence expires.
+        self._last_chat_submission = ""
+        self._last_chat_submission_at = 0.0
+        self._chat_submission_active = False
         self._chat_memory = ConversationMemory(
             max_recent_rounds=30,
             persist_path=conversation_memory_path()
@@ -3465,22 +3473,40 @@ class PetWindow(QWidget):
 
         if self._chat_dialog is None:
             return
+        message = " ".join(str(message or "").split())
+        if not message:
+            return
+        now = time.monotonic()
+        if (
+            message == self._last_chat_submission
+            and (
+                self._chat_submission_active
+                or now - self._last_chat_submission_at < 1.5
+            )
+        ):
+            LOGGER.debug("suppressed duplicate chat submission")
+            return
         self._record_user_interaction()
         if self.chat_manager.busy:
             self._chat_dialog.append_message(self._pet_name(), "上一句话还在路上，稍等我一下。")
             return
+        self._last_chat_submission = message
+        self._last_chat_submission_at = now
+        self._chat_submission_active = True
         self._chat_dialog.append_message("你", message)
         history_before = self._chat_memory.snapshot().as_history()
         self._chat_memory.add("user", message)
         self._chat_history.append("user", message)
         self._chat_dialog.show_recovery_actions(False)
-        self.chat_manager.submit(message, history_before)
+        if not self.chat_manager.submit(message, history_before):
+            self._chat_submission_active = False
 
     def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
         """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
 
         self._chat_memory.add("assistant", reply.text)
         self._chat_history.append("assistant", reply.text)
+        self._chat_submission_active = False
         if self._chat_dialog is not None:
             if self._chat_streaming_active:
                 self._chat_dialog.finish_streaming_message(reply.text)
@@ -3559,6 +3585,9 @@ class PetWindow(QWidget):
         self._chat_memory.clear()
         self._chat_history.start_new_session()
         self._chat_streaming_active = False
+        self._last_chat_submission = ""
+        self._last_chat_submission_at = 0.0
+        self._chat_submission_active = False
         if self._chat_dialog is not None:
             self._chat_dialog.clear_transcript()
             self._chat_dialog.append_message(

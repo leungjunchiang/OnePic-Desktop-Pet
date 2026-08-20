@@ -798,8 +798,32 @@ class ChatManager(QObject):
                 ManagedChatReply("我先停在这里。", PetState.CURIOUS, "interrupted")
             )
             return
-        self.agents.mark_runtime_error(self._pending_provider, error)
-        self.reply_ready.emit(self.offline.reply(self._pending_message, self._pending_history))
+        # ``error`` has already crossed the AIReplyThread boundary through
+        # user_message_for_ai_error().  Keep that classified diagnosis visible
+        # instead of replacing a factual question with a generic companion
+        # template.  A failed online request must never look like an answer.
+        diagnosis = user_message_for_ai_error(error)
+        self.agents.mark_runtime_error(self._pending_provider, diagnosis)
+        offline_reply = self.offline.reply(self._pending_message, self._pending_history)
+        message_type = classify_offline_message(self._pending_message)
+        if message_type in {FACTUAL_QUESTION, MEMORY_RECALL} or offline_reply.show_recovery_actions:
+            text = diagnosis
+        else:
+            text = f"{diagnosis}\n{offline_reply.text}"
+        LOGGER.info(
+            "AI chat failed provider=%s diagnosis=%s fallback_mode=%s",
+            self._pending_provider,
+            diagnosis,
+            offline_reply.mode,
+        )
+        self.reply_ready.emit(
+            ManagedChatReply(
+                text,
+                PetState.CURIOUS,
+                "offline",
+                True,
+            )
+        )
 
     def _thread_finished(self) -> None:
         thread = self._thread

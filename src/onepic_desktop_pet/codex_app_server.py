@@ -29,6 +29,29 @@ class CodexAppServerError(RuntimeError):
     """表示 App Server 没有完成协议握手、请求或 turn。"""
 
 
+def _looks_like_model_rejection(detail: str) -> bool:
+    """Return whether a turn failed only because its model is unavailable."""
+
+    lowered = str(detail or "").casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "unknown model",
+            "model not found",
+            "model_not_found",
+            "unsupported model",
+            "invalid model",
+            "model is not available",
+            "model is unavailable",
+            "model does not exist",
+            "does not support model",
+            "not a valid model",
+            "模型不存在",
+            "模型不可用",
+        )
+    )
+
+
 class CodexAppServerClient:
     """保持一个 Codex App Server 进程，并在同一 thread 上连续发送 turns。"""
 
@@ -110,7 +133,17 @@ class CodexAppServerClient:
                 params["model"] = str(model)[:120]
             if effort:
                 params["effort"] = str(effort)[:20]
-            started = self._request("turn/start", params, timeout=min(timeout, 30.0))
+            try:
+                started = self._request("turn/start", params, timeout=min(timeout, 30.0))
+            except CodexAppServerError as exc:
+                # A model selected by one platform/account may not be exposed
+                # by the installed CLI.  Retry the same warm thread once with
+                # the CLI default.  This does not reconnect, change config, or
+                # affect the macOS HTTPS compatibility path.
+                if not model or not _looks_like_model_rejection(str(exc)):
+                    raise
+                params.pop("model", None)
+                started = self._request("turn/start", params, timeout=min(timeout, 30.0))
             turn = started.get("turn") or {}
             turn_id = str(turn.get("id") or "").strip()
             if not turn_id:

@@ -249,9 +249,9 @@ def user_message_for_ai_error(error: BaseException | str) -> str:
         return "未找到本机 Codex，当前使用离线陪伴。"
     if "permission denied" in text or "access is denied" in text:
         return "Codex 启动失败，当前使用离线陪伴。"
-    if "timeout" in text or "timed out" in text:
+    if "timeout" in text or "timed out" in text or "超时" in raw_text:
         return "Codex 响应超时，当前使用离线陪伴。"
-    if "429" in text or "quota" in text or "rate limit" in text:
+    if "429" in text or "quota" in text or "rate limit" in text or "额度" in raw_text:
         return "Codex 当前额度或调用频率已达到限制，当前使用离线陪伴。"
     if "unauthorized" in text or "authentication" in text or "login required" in text:
         return "Codex 登录状态失效，当前使用离线陪伴。"
