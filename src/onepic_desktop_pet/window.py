@@ -446,7 +446,12 @@ class PetWindow(QWidget):
             else None,
         )
         self._chat_history_dialog: ChatHistoryDialog | None = None
-        self.agent_manager = AgentManager(self.settings, self.credentials, self)
+        self.agent_manager = AgentManager(
+            self.settings,
+            self.credentials,
+            self,
+            ai_service=self.ai_service,
+        )
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
             self.work_timer.status_text,
@@ -5167,3 +5172,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
