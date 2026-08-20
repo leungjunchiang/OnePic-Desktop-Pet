@@ -1,5 +1,6 @@
 """验证 Codex 可执行文件解析、Windows shim 启动与错误分类。"""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,10 @@ from onepic_desktop_pet.ai import (
 
 
 def test_explicit_codex_path_wins_when_gui_path_is_empty(tmp_path, monkeypatch):
-    executable = tmp_path / "codex.cmd"
+    executable = tmp_path / ("codex.cmd" if os.name == "nt" else "codex")
     executable.write_text("@echo off\n", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: None)
     assert resolve_codex_executable(executable) == executable
 
