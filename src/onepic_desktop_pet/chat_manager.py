@@ -143,6 +143,23 @@ class AgentDetectionThread(QThread):
             self.provider_checked.emit(provider, state.value, detail)
 
 
+class AgentWarmupThread(QThread):
+    """Warm one already-authenticated Codex runtime without blocking Qt."""
+
+    completed = Signal(bool)
+
+    def __init__(self, service: AIChatService, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.service = service
+
+    def run(self) -> None:
+        try:
+            self.completed.emit(bool(self.service.warm_codex()))
+        except Exception as exc:
+            LOGGER.info("Codex warm-up skipped error_type=%s", type(exc).__name__)
+            self.completed.emit(False)
+
+
 class AgentManager(QObject):
     """后台检测、缓存并低频刷新所有 Agent 的状态。"""
 
@@ -156,11 +173,15 @@ class AgentManager(QObject):
         settings: PetSettings,
         credentials: CredentialStore,
         parent: QObject | None = None,
+        *,
+        ai_service: AIChatService | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.credentials = credentials
+        self.ai_service = ai_service
         self._thread: AgentDetectionThread | None = None
+        self._warmup_thread: AgentWarmupThread | None = None
         self._statuses: dict[str, AgentStatus] = {
             provider: AgentStatus(
                 provider,
@@ -282,6 +303,25 @@ class AgentManager(QObject):
         if thread is not None:
             thread.deleteLater()
         self.detection_finished.emit()
+        if (
+            self.ai_service is not None
+            and self.settings.ai_provider == "codex"
+            and self.status("codex").state is AgentConnectionState.CONNECTED
+            and not self.warming
+        ):
+            self._warmup_thread = AgentWarmupThread(self.ai_service, self)
+            self._warmup_thread.finished.connect(self._warmup_finished)
+            self._warmup_thread.start()
+
+    @property
+    def warming(self) -> bool:
+        return self._warmup_thread is not None and self._warmup_thread.isRunning()
+
+    def _warmup_finished(self) -> None:
+        thread = self._warmup_thread
+        self._warmup_thread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def shutdown(self) -> None:
         """退出时停止自动重连，并请求检测线程尽快结束。"""
@@ -289,6 +329,9 @@ class AgentManager(QObject):
         self._reconnect_timer.stop()
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
+        if self._warmup_thread is not None and self._warmup_thread.isRunning():
+            self._warmup_thread.requestInterruption()
+            self._warmup_thread.wait(1500)
 
 
 class OfflineDialogueManager:
@@ -760,3 +803,4 @@ def should_start_startup_detection() -> bool:
     """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+
