@@ -1,14 +1,14 @@
 """
-本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
+��ģ���ṩ Lili �ı��ع�����ʱ���º���Ϣ���ѣ����������ڻ�������硣
 
-职责范围：
-- 记录当天和终身累计工作秒数，并在日期变化时自动开始新一天；
-- 支持开始、暂停、完成、状态格式化和运行中定期落盘；
-- 只在本机应用数据目录保存日期与累计秒数，不保存任务名称或聊天内容；
-- 按单次连续工作时长产生 25 分钟鼓励、50 分钟休息和更长时段劝慰提醒。
+ְ��Χ��
+- ��¼����������ۼƹ����������������ڱ仯ʱ�Զ���ʼ��һ�죻
+- ֧�ֿ�ʼ����ͣ����ɡ�״̬��ʽ���������ж������̣�
+- ֻ�ڱ���Ӧ������Ŀ¼�����������ۼ��������������������ƻ��������ݣ�
+- ��������������ʱ������ 25 ���ӹ�����50 ������Ϣ�͸���ʱ��Ȱο���ѡ�
 
-计时使用单调时钟避免系统时间微调造成跳变；开始和自动检查点都会保存“仍在工作”的标记。
-异常退出后下次启动恢复到最近一次已保存的计时点，但不会把应用关闭期间的离线时间误算为工作时间。
+��ʱʹ�õ���ʱ�ӱ���ϵͳʱ��΢��������䣻��ʼ���Զ����㶼�ᱣ�桰���ڹ������ı�ǡ�
+�쳣�˳����´������ָ������һ���ѱ���ļ�ʱ�㣬�������Ӧ�ùر��ڼ������ʱ������Ϊ����ʱ�䡣
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 
 # Persisted values are intentionally plain strings so older installations can
 # read the file without importing a new enum.  The UI may present a simpler
-# "正在工作 / 已暂停", while these values keep the reason auditable.
+# "���ڹ��� / ����ͣ", while these values keep the reason auditable.
 WORK_STATE_IDLE = "idle"
 WORK_STATE_WORKING = "working"
 WORK_STATE_PAUSED_MANUAL = "paused_manual"
@@ -44,7 +44,7 @@ _PAUSE_STATE_BY_REASON = {
 
 
 def work_timer_path() -> Path:
-    """返回当前用户的本地工作计时文件路径。"""
+    """���ص�ǰ�û��ı��ع�����ʱ�ļ�·����"""
 
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
@@ -60,18 +60,18 @@ def work_timer_path() -> Path:
 
 
 def format_work_duration(seconds: int) -> str:
-    """把秒数格式化为适合菜单和气泡显示的中文时长。"""
+    """��������ʽ��Ϊ�ʺϲ˵���������ʾ������ʱ����"""
 
     safe_seconds = max(0, int(seconds))
     if safe_seconds < 60:
-        return "不足1分钟" if safe_seconds else "0分钟"
+        return "����1����" if safe_seconds else "0����"
     total_minutes = safe_seconds // 60
     hours, minutes = divmod(total_minutes, 60)
     if hours and minutes:
-        return f"{hours}小时{minutes}分钟"
+        return f"{hours}Сʱ{minutes}����"
     if hours:
-        return f"{hours}小时"
-    return f"{minutes}分钟"
+        return f"{hours}Сʱ"
+    return f"{minutes}����"
 
 
 def format_elapsed_clock(seconds: int) -> str:
@@ -86,15 +86,20 @@ def format_elapsed_clock(seconds: int) -> str:
 
 
 class WorkTimerModel:
-    """维护单个用户的今日累计时长和当前连续工作时段。"""
+    """ά�������û��Ľ����ۼ�ʱ���͵�ǰ��������ʱ�Ρ�"""
 
     def __init__(
         self,
         path: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
         monotonic_provider: Callable[[], float] | None = None,
+        *,
+        persist: bool = True,
     ) -> None:
-        self.path = path or work_timer_path()
+        # Demo/offscreen windows must not read or mutate the user's real
+        # session.  Production callers keep the historical persistent default.
+        self.persist = bool(persist)
+        self.path = (path or work_timer_path()) if self.persist else None
         self._now = now_provider or datetime.now
         self._monotonic = monotonic_provider or time.monotonic
         self._date_key = self._today_key()
@@ -114,7 +119,7 @@ class WorkTimerModel:
 
     @property
     def is_running(self) -> bool:
-        """返回当前是否正在计时。"""
+        """���ص�ǰ�Ƿ����ڼ�ʱ��"""
 
         return self._running_since is not None
 
@@ -147,13 +152,15 @@ class WorkTimerModel:
         return self._session_active and not self.is_running
 
     def _today_key(self) -> str:
-        """返回本地日期键。"""
+        """���ر������ڼ���"""
 
         return self._now().date().isoformat()
 
     def _load(self) -> None:
-        """读取累计秒数；崩溃后恢复最近保存的运行状态。"""
+        """��ȡ�ۼ�������������ָ�������������״̬��"""
 
+        if self.path is None:
+            return
         if not self.path.is_file():
             return
         try:
@@ -208,7 +215,7 @@ class WorkTimerModel:
             self._recovered_active_session = True
 
     def _rollover_if_needed(self) -> None:
-        """日期变化时清空昨日累计，并保持运行状态从当前时刻重新计时。"""
+        """���ڱ仯ʱ��������ۼƣ�����������״̬�ӵ�ǰʱ�����¼�ʱ��"""
 
         today = self._today_key()
         if today == self._date_key:
@@ -228,20 +235,20 @@ class WorkTimerModel:
         self._save()
 
     def _current_elapsed(self) -> int:
-        """返回当前未落盘工作段的完整秒数。"""
+        """���ص�ǰδ���̹����ε�����������"""
 
         if self._running_since is None:
             return 0
         return max(0, int(self._monotonic() - self._running_since))
 
     def today_seconds(self) -> int:
-        """返回当天累计工作秒数，包括当前运行段。"""
+        """���ص����ۼƹ���������������ǰ���жΡ�"""
 
         self._rollover_if_needed()
         return self._accumulated_seconds + self._current_elapsed()
 
     def session_seconds(self) -> int:
-        """返回本轮工作 Session 秒数，暂停/继续期间保持累计。"""
+        """���ر��ֹ��� Session ��������ͣ/�����ڼ䱣���ۼơ�"""
 
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
@@ -253,17 +260,17 @@ class WorkTimerModel:
         return self._episode_accumulated_seconds + self._current_elapsed()
 
     def lifetime_seconds(self) -> int:
-        """返回累计工作秒数，包括当前尚未落盘的一段。"""
+        """�����ۼƹ���������������ǰ��δ���̵�һ�Ρ�"""
 
         return self._lifetime_seconds + self._current_elapsed()
 
     def unlocked_outfit_count(self) -> int:
-        """每累计一小时解锁一套娃衣，最多十二套。"""
+        """ÿ�ۼ�һСʱ����һ�����£����ʮ���ס�"""
 
         return min(12, self.lifetime_seconds() // 3600)
 
     def take_new_outfit_unlock(self) -> int | None:
-        """首次跨过整小时门槛时返回从一开始的解锁序号。"""
+        """�״ο����Сʱ�ż�ʱ���ش�һ��ʼ�Ľ�����š�"""
 
         count = self.unlocked_outfit_count()
         if count <= self._notified_outfit_count:
@@ -273,7 +280,7 @@ class WorkTimerModel:
         return count
 
     def start(self) -> bool:
-        """开始或继续新的工作段；已运行时返回 False。"""
+        """��ʼ������µĹ����Σ�������ʱ���� False��"""
 
         self._rollover_if_needed()
         if self.is_running:
@@ -320,7 +327,7 @@ class WorkTimerModel:
         return True
 
     def finish(self) -> int:
-        """完成当前工作段并返回今天累计秒数。"""
+        """��ɵ�ǰ�����β����ؽ����ۼ�������"""
 
         if self.is_running:
             self.pause()
@@ -335,7 +342,7 @@ class WorkTimerModel:
         return total
 
     def checkpoint(self, minimum_interval_seconds: int = 60) -> bool:
-        """运行中按最小间隔保存进度，避免频繁写盘。"""
+        """�����а���С���������ȣ�����Ƶ��д�̡�"""
 
         self._rollover_if_needed()
         if not self.is_running:
@@ -354,13 +361,13 @@ class WorkTimerModel:
         return True
 
     def status_text(self) -> str:
-        """返回带运行状态的今日工作时长。"""
+        """���ش�����״̬�Ľ��չ���ʱ����"""
 
-        suffix = " · 正在计时" if self.is_running else " · 已暂停"
-        return f"今日工作 {format_work_duration(self.today_seconds())}{suffix}"
+        suffix = " �� ���ڼ�ʱ" if self.is_running else " �� ����ͣ"
+        return f"���չ��� {format_work_duration(self.today_seconds())}{suffix}"
 
     def take_due_reminder(self) -> str | None:
-        """在连续工作达到提醒阈值时返回一次提醒类型。"""
+        """�����������ﵽ������ֵʱ����һ���������͡�"""
 
         if not self.is_running:
             return None
@@ -382,8 +389,10 @@ class WorkTimerModel:
         return reminder_kind
 
     def _save(self) -> None:
-        """原子保存日期和累计秒数，不写入任何工作内容。"""
+        """ԭ�ӱ������ں��ۼ���������д���κι������ݡ�"""
 
+        if self.path is None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".json.tmp")
         data = {
@@ -403,3 +412,4 @@ class WorkTimerModel:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+
