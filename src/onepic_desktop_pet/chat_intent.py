@@ -55,9 +55,21 @@ _SONG_CONTEXT = (
     "谁唱", "是谁唱", "播放", "放一下", "这首歌", "这首", "歌曲", "歌名",
     "代表作", "专辑", "听听", "听歌", "正在听", "唱的", "歌单",
 )
+# Keep generic words such as “人生” and “后来” out of the profile trigger.
+# They are common in unrelated questions and may only be interpreted as a
+# Chen profile when the current turn supplies an explicit subject or a real
+# anaphoric follow-up.
 _PROFILE_MARKERS = (
-    "经历", "人生经历", "成长", "出道", "以前", "后来", "一路", "职业生涯",
-    "讲讲", "介绍一下", "从哪里", "怎么走过来", "怎么出道",
+    "经历", "成长经历", "出道", "职业生涯", "怎么走过来", "怎么出道",
+)
+_ANAPHORIC_PROFILE_MARKERS = (
+    "后来", "以前", "之前", "一路", "讲讲", "介绍一下", "怎么走过来",
+)
+_EXPLICIT_PROFILE_PHRASES = (
+    "陈楚生的人生", "陈楚生的人生经历", "陈楚生的经历", "陈楚生的成长",
+    "陈楚生的职业生涯", "陈楚生怎么出道", "陈楚生如何出道",
+    "陈楚生怎么一路走来", "我爹的人生", "我爹的经历", "你爹的人生",
+    "你爹的经历",
 )
 _FACT_MARKERS = (
     "哪年", "什么时候", "出生", "冠军", "第几", "是什么", "什么意思",
@@ -117,11 +129,47 @@ def _has_family_context(
     if _contains(text, _FAMILY_MARKERS):
         return True
     recent = _history_text(history)
+    return bool(recent and _contains(recent, _FAMILY_MARKERS) and _is_anaphoric_followup(text))
+
+
+def _is_anaphoric_followup(text: str) -> bool:
+    """Return whether the current turn actually refers to prior context."""
+
+    text = _clean(text)
+    # Standalone discourse words (``刚才``/``前面``) are not enough: accepting
+    # them made an unrelated question inherit the previous subject.
     return bool(
-        recent
-        and _contains(recent, _FAMILY_MARKERS)
-        and _contains(text, _FAMILY_ANAPHORA)
+        re.search(r"(?:那|这个|那个)?他(?:呢|的|后来|以前|之前|怎么|为什么|是谁|在|有|会)", text)
+        or _contains(text, ("这首", "那首", "这张", "那张", "这件事", "那件事", "这个人", "那个人"))
     )
+
+
+def _has_profile_request(text: str, *, family_context: bool) -> bool:
+    """Require an explicit profile phrase, not a broad word like “人生”."""
+
+    if _contains(text, _EXPLICIT_PROFILE_PHRASES):
+        return True
+    if not family_context:
+        return False
+    return (_contains(text, _PROFILE_MARKERS) or _contains(text, _ANAPHORIC_PROFILE_MARKERS)) and (
+        _contains(text, _FAMILY_MARKERS) or _is_anaphoric_followup(text)
+    )
+
+
+def knowledge_retrieval_query(
+    message: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> str:
+    """Build a current-turn-first retrieval query.
+
+    History may resolve a short anaphora, but the previous assistant answer is
+    never appended wholesale to lexical retrieval.
+    """
+
+    text = _clean(message)
+    if _has_family_context(text, tuple(history)) and not _contains(text, _FAMILY_MARKERS):
+        return f"陈楚生 {text}".strip()
+    return text
 
 
 def is_topic_shift(
@@ -204,8 +252,8 @@ def classify_intent(
     ):
         return ChatIntent(RELATION_QUERY, None, True, ("relations", "timeline"), 0.94, 4, "medium", False)
 
-    if family_context and _contains(text, _PROFILE_MARKERS):
-        return ChatIntent(CHEN_PROFILE, None, True, ("profile", "timeline", "history"), 0.93, 8, "detailed", False)
+    if _has_profile_request(text, family_context=family_context):
+        return ChatIntent(CHEN_PROFILE, None, True, ("profile", "timeline", "history"), 0.93, 5, "detailed", False)
 
     if family_context and _contains(text, _FACT_MARKERS):
         return ChatIntent(FACTUAL_QA, None, True, ("facts", "history", "songs", "relations"), 0.88, 3, "short", False)
@@ -224,7 +272,7 @@ def intent_prompt_context(intent: ChatIntent) -> str:
     """Turn routing metadata into a short instruction for the model."""
 
     if intent.primary_intent == CHEN_PROFILE:
-        style = "这是宽泛人物经历问题：按时间线组织 6-10 句，优先讲阶段转折，不要逐段复述资料。"
+        style = "这是人物经历问题：按时间线组织 3-6 句，优先讲阶段转折，不要逐段复述资料。"
     elif intent.primary_intent == RELATION_QUERY:
         style = "这是人物关系问题：先纠正概念，再给名单或关系，控制在 2-4 句。"
     elif intent.primary_intent == SONG_QUERY:
