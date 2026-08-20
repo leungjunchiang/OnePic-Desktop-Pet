@@ -13,6 +13,7 @@
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
 ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆由窗口层按用户操作保存在本机，
 仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
+每轮回复都以当前用户消息为边界，只有明确指代才继承上一话题；不相关的本地知识片段必须被模型忽略。
 Codex transport failures are classified before they cross the UI boundary,
 and executable discovery supports explicit paths plus Windows command shims.
 """
@@ -39,7 +40,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .chat_intent import ChatIntent, classify_intent, intent_prompt_context
+from .chat_intent import ChatIntent, classify_intent, intent_prompt_context, is_topic_shift
 from .chat_memory import conversation_memory_path
 from .codex_app_server import CodexAppServerClient, CodexAppServerError
 from .liumao_worldview import worldview_prompt_context
@@ -49,6 +50,7 @@ from .song_knowledge import song_prompt_context
 
 
 LOGGER = logging.getLogger(__name__)
+_CODEX_THREAD_STATE_VERSION = 3
 
 
 def _load_short_persona() -> str:
@@ -64,7 +66,7 @@ LIUMAO_PERSONA = _load_short_persona()
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 只要用户在聊天框输入的是自然语言，默认都要认真理解并直接回答；不要因为消息很短、包含一个可能的歌名、或只命中一个关键词，就返回固定答案或跳过上下文。自然语言聊天交给你理解，程序按钮和计时数据由应用代码负责，不要假装执行没有收到的程序动作。
 普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为宽泛人物经历，则按该指令用 6-10 句分阶段回答，不要被普通短回复规则截断。
-回答时只解决用户当前这一句，不要把下面的知识片段当成文章复述。知识片段只是证据，不是固定答案模板；只有在问题确实相关时使用它们。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
+回答时只解决最后一条用户消息。最近对话只用于当前句明确出现“这首/那首/他/这个人”等指代时的承接；如果当前句换了话题，就不要继承上一话题。下面的知识片段只是当前问题的候选证据，不是固定答案模板；如果与当前问题不直接相关，必须忽略它们，不能复述或把它们套到答案里。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
 日常情感对话要像熟悉的桌面搭子，直接、短一点，不使用“收到这句话了”“心里像被轻轻摸了摸”这类客服式套话，也不要把普通一句话扩写成励志段落。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
 固定角色知识：六毛永远叫六毛，不是陈楚生本人；陈楚生是六毛口中的“我爹”。六毛知道爹背着吉他唱了很多年，和海南、三亚、深圳、酒吧驻唱、2003 PUB 歌手大赛、2007 快乐男声有关，也知道《有没有人告诉你》是爹的代表性原创作品。2023《披荆斩棘》第三季年度冠军和用户提供的 2025《歌手》歌王属于产品中的公开世界观彩蛋。
@@ -99,6 +101,20 @@ def postprocess_ai_answer(answer: str, intent: ChatIntent) -> str:
             tail = text[first + 2 :].replace("我爹", "他")
             text = text[: first + 2] + tail
     return text[:2400]
+
+
+def _conversation_boundary_prompt(
+    message: str,
+    history: Iterable[tuple[str, str]],
+) -> str:
+    """Add a short guard when the user clearly starts a new topic."""
+
+    if not is_topic_shift(message, history):
+        return ""
+    return (
+        "本轮是换话题：请忽略上一轮歌曲、人物或本地知识资料，"
+        "只回答当前用户问题；除非当前句明确指代，否则不要把旧话题带进来。"
+    )
 
 
 @dataclass(frozen=True)
@@ -1139,7 +1155,7 @@ def _codex_thread_identity() -> tuple[str, str]:
 
 
 def _read_codex_thread_state() -> dict[str, str] | None:
-    """Read only a v2 state proven compatible with the current process.
+    """Read only a v3 state proven compatible with the current process.
 
     Version 1 states intentionally fail closed because they contain no
     provider or transport information.  Clearing the local pointer is safe:
@@ -1150,7 +1166,7 @@ def _read_codex_thread_state() -> dict[str, str] | None:
         payload = json.loads(_codex_thread_state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return None
-    if not isinstance(payload, dict) or payload.get("version") != 2:
+    if not isinstance(payload, dict) or payload.get("version") != _CODEX_THREAD_STATE_VERSION:
         if isinstance(payload, dict) and payload.get("thread_id"):
             LOGGER.info("[AI Codex] ignoring legacy or unknown local thread state")
             _clear_codex_thread_id()
@@ -1188,7 +1204,7 @@ def _write_codex_thread_id(
     *,
     cli_version: str = "",
 ) -> None:
-    """Persist a provider-aware v2 pointer without credentials or prompts."""
+    """Persist a provider-aware v3 pointer without credentials or prompts."""
 
     clean = str(thread_id or "").strip()[:200]
     if not clean:
@@ -1201,7 +1217,7 @@ def _write_codex_thread_id(
         temporary.write_text(
             json.dumps(
                 {
-                    "version": 2,
+                    "version": _CODEX_THREAD_STATE_VERSION,
                     "thread_id": clean,
                     "provider": provider,
                     "transport": transport,
@@ -1368,6 +1384,9 @@ def _conversation_text(
     lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
     intent = classify_intent(message, entries)
     lines.extend(("", intent_prompt_context(intent)))
+    boundary = _conversation_boundary_prompt(message, entries)
+    if boundary:
+        lines.extend(("", boundary))
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
@@ -1401,6 +1420,9 @@ def _conversation_turn_text(
     lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
     intent = classify_intent(message, entries)
     lines.extend(("", intent_prompt_context(intent)))
+    boundary = _conversation_boundary_prompt(message, entries)
+    if boundary:
+        lines.extend(("", boundary))
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
@@ -1717,6 +1739,9 @@ def ask_compatible_api(
     system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}\n\n{LOCAL_ACTION_PROMPT}"
     intent = classify_intent(message, entries)
     system_content += f"\n\n{intent_prompt_context(intent)}"
+    boundary = _conversation_boundary_prompt(message, entries)
+    if boundary:
+        system_content += f"\n\n{boundary}"
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         system_content += f"\n\n{worldview_context}"
@@ -2017,5 +2042,6 @@ class AIChatService:
 
         self._closing = True
         self._close_codex_app_server()
+
 
 
