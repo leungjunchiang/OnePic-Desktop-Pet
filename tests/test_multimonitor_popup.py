@@ -15,3 +15,4 @@ def test_popup_clamp_stays_on_right_monitor():
     available = QRect(2560, 0, 1920, 1080)
     point = clamp_global_popup_position(QPoint(4400, 1000), QSize(400, 300), available)
     assert point == QPoint(4080, 780)
+
