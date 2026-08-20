@@ -6,6 +6,8 @@ It does not answer questions or rewrite facts; it only decides which local
 knowledge and response budget are appropriate.
 Offline message-type classification is kept separate from the existing
 knowledge intent and never performs local writes.
+Family-topic context is carried across turns only when the current message
+contains an explicit anaphoric reference; unrelated questions start fresh.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ _SONG_CONTEXT = (
     "代表作", "专辑", "听听", "听歌", "正在听", "唱的", "歌单",
 )
 _PROFILE_MARKERS = (
-    "经历", "人生", "成长", "出道", "以前", "后来", "一路", "职业生涯",
+    "经历", "人生经历", "成长", "出道", "以前", "后来", "一路", "职业生涯",
     "讲讲", "介绍一下", "从哪里", "怎么走过来", "怎么出道",
 )
 _FACT_MARKERS = (
@@ -75,6 +77,13 @@ _WORK_MARKERS = (
     "工作", "论文", "任务", "代码", "学习", "专注", "交稿", "开工", "收工",
     "写不动", "开始干活", "工作了多久",
 )
+_FAMILY_MARKERS = ("陈楚生", "我爹", "你爹", "他的歌", "陈楚生家的")
+_FAMILY_ANAPHORA = (
+    "他的", "他是", "他在", "他有", "他会", "他怎么", "他为什么", "他是谁", "那他",
+    "这个人", "那个人", "这位", "那位", "这首", "那首", "这张", "那张",
+    "这件事", "那件事", "它是", "它的", "它在", "刚才", "上面", "前面",
+)
+_KNOWLEDGE_INTENTS = frozenset({SONG_QUERY, CHEN_PROFILE, FACTUAL_QA, RELATION_QUERY})
 
 
 def _clean(value: str) -> str:
@@ -91,6 +100,54 @@ def _history_text(history: Iterable[tuple[str, str]]) -> str:
 
 def _contains(text: str, markers: Iterable[str]) -> bool:
     return any(marker in text for marker in markers)
+
+
+def _has_family_context(
+    text: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> bool:
+    """Only carry the Chen/family topic across an explicit anaphoric follow-up.
+
+    A previous mention of a song is not permission to reinterpret an unrelated
+    question such as ``人生的意义是什么`` as a question about Chen Chusheng's
+    biography.  Context is retained for phrases that actually refer back to a
+    person, song, album, or event.
+    """
+
+    if _contains(text, _FAMILY_MARKERS):
+        return True
+    recent = _history_text(history)
+    return bool(
+        recent
+        and _contains(recent, _FAMILY_MARKERS)
+        and _contains(text, _FAMILY_ANAPHORA)
+    )
+
+
+def is_topic_shift(
+    message: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> bool:
+    """Detect a clear switch away from a recent knowledge-heavy topic.
+
+    This is only a prompt-boundary hint.  It does not discard local chat
+    memory, execute actions, or create a second conversation router.
+    """
+
+    entries = tuple(history)
+    if not entries:
+        return False
+    text = _clean(message)
+    if _contains(text, _FAMILY_ANAPHORA) or _contains(text, ("还记得", "记得吗", "继续")):
+        return False
+    if classify_intent(text, entries).primary_intent != CASUAL_CHAT:
+        return False
+    for role, content in reversed(entries[-8:]):
+        if role != "user":
+            continue
+        if classify_intent(str(content or ""), ()).primary_intent in _KNOWLEDGE_INTENTS:
+            return True
+    return False
 
 
 def classify_offline_message(message: str) -> str:
@@ -135,10 +192,8 @@ def classify_intent(
     history: Iterable[tuple[str, str]] = (),
 ) -> ChatIntent:
     text = _clean(message)
-    recent = _history_text(history)
-    family_context = _contains(text, ("陈楚生", "我爹", "你爹", "他的歌")) or _contains(
-        recent, ("陈楚生", "我爹", "你爹", "歌曲", "歌名")
-    )
+    entries = tuple(history)
+    family_context = _has_family_context(text, entries)
 
     if _has_explicit_song_context(text):
         return ChatIntent(SONG_QUERY, None, True, ("songs", "music"), 0.96, 3, "short", False)
@@ -179,8 +234,9 @@ def intent_prompt_context(intent: ChatIntent) -> str:
     elif intent.primary_intent in {EMOTIONAL_SUPPORT, WORK_COMPANION}:
         style = "六毛首先是工作搭子；先处理用户眼前的一小步，除非故事引擎明确命中，不要提陈楚生。"
     else:
-        style = "这是普通聊天；结合最近上下文自然接话。关键词只能作为候选线索，不要把它直接当成歌曲、事实或固定回复。"
+        style = "这是普通聊天；只有当前句明确出现‘他/这首/那张’等指代时才沿用上一话题，否则视为换题，直接回答当前问题。关键词只能作为候选线索，不要把它直接当成歌曲、事实或固定回复。"
     return (
         f"本轮意图：{intent.primary_intent}；置信度 {intent.confidence:.2f}。{style}"
         "事实优先，‘我爹’最多自然出现一次。"
     )
+
