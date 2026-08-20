@@ -33,6 +33,12 @@ def test_explicit_todo_and_reminder_requests_are_create_actions():
     assert remembered["tasks"][0]["title"] == "退票"
 
 
+def test_explicit_todo_without_date_does_not_schedule_creation_day():
+    action = parse_explicit_todo_request("新增待办：整理数据", now=NOW)
+    assert action is not None
+    assert action["tasks"][0]["date"] is None
+
+
 def test_mixed_recall_sentence_only_extracts_explicit_operation():
     action = parse_explicit_todo_request(
         "你还记得经过这首歌吗？顺便把今晚听经过加到待办。",
@@ -57,3 +63,4 @@ def test_write_gate_accepts_explicit_user_authorization():
         {"action": "create_todo", "tasks": [{"title": "开会"}]},
     )
     assert result.allowed is True
+
