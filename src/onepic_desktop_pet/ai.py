@@ -12,7 +12,7 @@
 
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
 ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆由窗口层按用户操作保存在本机，
-仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
+仅包含角色设定、长期摘要、按意图截取的短聊天上下文与少量宠物状态，不读取项目开发上下文。
 每轮回复都以当前用户消息为边界，只有明确指代才继承上一话题；不相关的本地知识片段必须被模型忽略。
 Codex transport failures are classified before they cross the UI boundary,
 and executable discovery supports explicit paths plus Windows command shims.
@@ -40,7 +40,18 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .chat_intent import ChatIntent, classify_intent, intent_prompt_context, is_topic_shift
+from .chat_intent import (
+    CHEN_PROFILE,
+    EMOTIONAL_SUPPORT,
+    FACTUAL_QA,
+    RELATION_QUERY,
+    SONG_QUERY,
+    WORK_COMPANION,
+    ChatIntent,
+    classify_intent,
+    intent_prompt_context,
+    is_topic_shift,
+)
 from .chat_memory import conversation_memory_path
 from .codex_app_server import CodexAppServerClient, CodexAppServerError
 from .liumao_worldview import worldview_prompt_context
@@ -65,13 +76,13 @@ LIUMAO_PERSONA = _load_short_persona()
 
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 只要用户在聊天框输入的是自然语言，默认都要认真理解并直接回答；不要因为消息很短、包含一个可能的歌名、或只命中一个关键词，就返回固定答案或跳过上下文。自然语言聊天交给你理解，程序按钮和计时数据由应用代码负责，不要假装执行没有收到的程序动作。
-普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为宽泛人物经历，则按该指令用 6-10 句分阶段回答，不要被普通短回复规则截断。
+普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为人物经历，则按该指令用 3-6 句分阶段回答，不要被普通短回复规则截断。
 回答时只解决最后一条用户消息。最近对话只用于当前句明确出现“这首/那首/他/这个人”等指代时的承接；如果当前句换了话题，就不要继承上一话题。下面的知识片段只是当前问题的候选证据，不是固定答案模板；如果与当前问题不直接相关，必须忽略它们，不能复述或把它们套到答案里。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
 日常情感对话要像熟悉的桌面搭子，直接、短一点，不使用“收到这句话了”“心里像被轻轻摸了摸”这类客服式套话，也不要把普通一句话扩写成励志段落。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
 固定角色知识：六毛永远叫六毛，不是陈楚生本人；陈楚生是六毛口中的“我爹”。六毛知道爹背着吉他唱了很多年，和海南、三亚、深圳、酒吧驻唱、2003 PUB 歌手大赛、2007 快乐男声有关，也知道《有没有人告诉你》是爹的代表性原创作品。2023《披荆斩棘》第三季年度冠军和用户提供的 2025《歌手》歌王属于产品中的公开世界观彩蛋。
 这些知识只用于自然回答，不要把角色设定说成私人消息，也不要捏造爹当前在哪里、私生活或未公开偏好。对固定事实没有把握时说“不太确定”，不要为了接话随机说“我爹”或“诶”。用户追问歌词后一句时不要续写受版权保护的歌词，可以说这是我爹的歌并改聊感受。
-你只能使用本提示、长期对话摘要、最近三十轮聊天和提示中明确给出的少量当前状态。
+你只能使用本提示、必要时的长期对话摘要、当前消息以及少量与当前问题相关的短上下文。
 不要读取或推断项目代码、开发任务、文件、工作区、窗口内容或其他 Codex 会话上下文。
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
 可以提到陈楚生的歌名并写原创的意象短句，但不要背诵、续写或大量引用任何受版权保护的歌词。
@@ -1369,16 +1380,40 @@ def _codex_unsupported_argument(stderr: str) -> str:
     return match.group(1) if match else ""
 
 
+def _conversation_history_budget(message: str, entries: list[tuple[str, str]]) -> int:
+    """Choose a small context window from the current turn's intent.
+
+    The persistent App Server already owns its short-term thread history. This
+    budget is for the one-shot/HTTPS compatibility path only; it prevents an
+    unrelated question from carrying thirty turns of stale knowledge into a
+    new prompt.
+    """
+
+    text = str(message or "")
+    if re.search(r"还记得|记得我们|之前聊过|上次说过|以前说过|回顾一下", text):
+        return 30
+    intent = classify_intent(text, entries)
+    if intent.primary_intent in {CHEN_PROFILE, SONG_QUERY, FACTUAL_QA, RELATION_QUERY}:
+        return 16
+    if intent.primary_intent in {EMOTIONAL_SUPPORT, WORK_COMPANION}:
+        return 12
+    return 8
+
+
 def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
     local_context: str = "",
 ) -> str:
-    """把长期摘要与最近三十轮原文整理为 Codex 的单次安全输入。"""
+    """把必要的短上下文整理为 Codex 的单次安全输入。"""
 
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
-    recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
+    recent = [
+        (role, content)
+        for role, content in entries
+        if role in {"user", "assistant"}
+    ][-_conversation_history_budget(message, entries):]
     # The short persona is always injected.  The larger knowledge file is
     # retrieved separately and only matching blocks are appended.
     lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
@@ -1399,9 +1434,13 @@ def _conversation_text(
             lines.extend(("", song_context))
     if local_context:
         lines.extend(("", "以下是本地程序读取的真实状态与作品索引，只能据此回答相关问题，不要猜测或改写：", local_context))
+    # The summary is already compressed by ConversationMemory, so it is safe
+    # to retain as a small continuity hint.  Only the expanded history budget
+    # is reserved for explicit memory/previous-conversation requests.
     if summary:
-        lines.extend(("", "更早对话的长期摘要：", summary))
-    lines.extend(("", "以下是最近三十轮以内的完整对话："))
+        lines.extend(("", "更早对话的长期摘要：", str(summary)[:1200]))
+    if recent:
+        lines.extend(("", f"以下是最近 {max(1, len(recent) // 2)} 轮必要对话："))
     for role, content in recent:
         label = "用户" if role == "user" else "六毛"
         lines.append(f"{label}：{content}")
@@ -1884,6 +1923,32 @@ class AIChatService:
         self._codex_app_server_lock = threading.RLock()
         self._closing = False
         self._interrupted = False
+        self._runtime_mode = "unknown"
+
+    @property
+    def runtime_mode(self) -> str:
+        """Return the current Codex mode without exposing transport details in chat."""
+
+        return self._runtime_mode
+
+    def warm_codex(self) -> bool:
+        """Warm the App Server in a background caller without spending a turn.
+
+        HTTPS ``codex exec`` remains the compatibility底座: a failed warm-up
+        only records that the next request should use the existing fallback.
+        """
+
+        try:
+            with self._codex_app_server_lock:
+                client = self._get_codex_app_server()
+                client.ensure_ready()
+            self._runtime_mode = "app_server"
+            return True
+        except (CodexAppServerError, OSError, ValueError) as exc:
+            LOGGER.info("Codex App Server warm-up unavailable kind=%s", type(exc).__name__)
+            self._runtime_mode = "exec_https"
+            self._close_codex_app_server()
+            return False
 
     def reply(
         self,
@@ -1944,6 +2009,23 @@ class AIChatService:
         prompt = _conversation_turn_text(message, entries, local_context)
         selected_model, effort = _codex_turn_options(message)
         self._interrupted = False
+        started_at = time.monotonic()
+        first_delta_at: float | None = None
+
+        def emit_delta(delta: str) -> None:
+            nonlocal first_delta_at
+            if first_delta_at is None:
+                first_delta_at = time.monotonic()
+                LOGGER.info(
+                    "AI chat metrics provider=codex runtime=%s prompt_chars=%d history_turns=%d rag_blocks=%d first_token_ms=%d",
+                    self._runtime_mode,
+                    len(prompt),
+                    len([item for item in entries if item[0] in {"user", "assistant"}]) // 2,
+                    prompt.count("【"),
+                    int((first_delta_at - started_at) * 1000),
+                )
+            if on_delta is not None:
+                on_delta(delta)
         try:
             with self._codex_app_server_lock:
                 client = self._get_codex_app_server()
@@ -1951,8 +2033,15 @@ class AIChatService:
                 prompt,
                 model=selected_model,
                 effort=effort,
-                on_delta=on_delta,
+                on_delta=emit_delta,
                 timeout=float(_codex_timeout_seconds()),
+            )
+            self._runtime_mode = "app_server"
+            LOGGER.info(
+                "AI chat completed provider=codex runtime=%s prompt_chars=%d total_ms=%d fallback_used=false",
+                self._runtime_mode,
+                len(prompt),
+                int((time.monotonic() - started_at) * 1000),
             )
         except (CodexAppServerError, OSError, ValueError) as exc:
             if self._interrupted:
@@ -1964,6 +2053,7 @@ class AIChatService:
             # The fallback is the already existing isolated read-only exec path.
             LOGGER.warning("[AI Codex] app-server failed; falling back to exec: %s", exc)
             self._close_codex_app_server()
+            self._runtime_mode = "exec_https"
             # A model can be available in one Codex account/platform and
             # unavailable in another.  Let the normal CLI-selected model take
             # over instead of sending the same rejected Luna/Terra override a
@@ -1972,6 +2062,12 @@ class AIChatService:
             kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
             answer = ask_codex(
                 message, entries, local_context, model_override=fallback_model, **kwargs
+            )
+            LOGGER.info(
+                "AI chat completed provider=codex runtime=%s prompt_chars=%d total_ms=%d fallback_used=true",
+                self._runtime_mode,
+                len(prompt),
+                int((time.monotonic() - started_at) * 1000),
             )
             if on_delta is not None and answer:
                 # The final UI replaces the partial stream with this answer, so
@@ -2034,6 +2130,7 @@ class AIChatService:
 
         self._interrupted = False
         self._closing = False
+        self._runtime_mode = "unknown"
         self._close_codex_app_server()
         _clear_codex_thread_id()
 
