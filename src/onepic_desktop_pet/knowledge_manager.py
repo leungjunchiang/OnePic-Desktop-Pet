@@ -1,4 +1,4 @@
-"""Small local retrieval layer for Lili's father-related knowledge.
+"""六毛的轻量本地知识检索层；当前消息优先，结构化卡片按需取用。
 
 This is intentionally a keyword/tag index rather than a vector database.  The
 knowledge file is split into titled blocks once at startup, and a request only
@@ -8,19 +8,22 @@ receives the few blocks with the highest lexical score.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
-from .chat_intent import classify_intent
+from .chat_intent import classify_intent, knowledge_retrieval_query
 from .resources import resource_path
 from .story_trigger_engine import StoryMatch, get_story_trigger_engine
 
 
 _SEPARATOR = re.compile(r"\n\s*={10,}\s*\n")
 _METADATA = re.compile(r"^(关键词|關鍵詞|标签|標籤)\s*[:：]\s*(.*)$")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,33 @@ class KnowledgeManager:
                     )
                 )
                 known_ids.add(block_id)
+        # The long user-supplied research files are build-time sources only.
+        # Runtime retrieval uses these short cards so ordinary chat never
+        # scans or injects the raw documents.
+        cards = _read_json(self.resource_dir / "chen_content_cards.json", {})
+        if isinstance(cards, dict):
+            for group_name in ("person_cards", "meme_cards"):
+                group = cards.get(group_name, [])
+                if not isinstance(group, list):
+                    continue
+                for index, item in enumerate(group):
+                    if not isinstance(item, dict):
+                        continue
+                    block_id = str(item.get("id") or _slug(str(item.get("title", "")), index)).strip()
+                    title = str(item.get("title") or "").strip()
+                    content = str(item.get("content") or "").strip()
+                    if not block_id or not title or not content or block_id in known_ids:
+                        continue
+                    blocks.append(
+                        KnowledgeBlock(
+                            block_id=block_id,
+                            title=title,
+                            content=content,
+                            keywords=_as_json_strings(item.get("keywords")),
+                            tags=_as_json_strings(item.get("tags")),
+                        )
+                    )
+                    known_ids.add(block_id)
         return tuple(blocks)
 
     def search(
@@ -136,12 +166,12 @@ class KnowledgeManager:
         limit: int = 3,
         domains: Iterable[str] = (),
     ) -> tuple[KnowledgeHit, ...]:
-        recent = " ".join(
-            str(content or "")
-            for role, content in history
-            if role in {"user", "assistant"}
-        )[-900:]
-        text = f"{recent} {query}".casefold()
+        # Retrieval is current-turn first.  Appending the previous assistant
+        # answer here made one mistaken biography answer reinforce itself on
+        # every later turn.  ``history`` remains in the signature for callers
+        # and compatibility, but only the short resolved query supplied by
+        # ``retrieve_prompt_context`` is searchable.
+        text = str(query or "").casefold()
         wanted_domains = {str(domain).casefold() for domain in domains if str(domain).strip()}
         hits: list[KnowledgeHit] = []
         for block in self.blocks:
@@ -229,22 +259,30 @@ def retrieve_prompt_context(
     intent = classify_intent(message, entries)
     if not intent.need_knowledge:
         return ""
+    retrieval_started = time.monotonic()
     hits = manager.search(
-        message,
-        entries,
+        knowledge_retrieval_query(message, entries),
+        (),
         limit=intent.retrieval_limit,
         domains=intent.knowledge_domains,
+    )
+    LOGGER.info(
+        "AI knowledge metrics intent=%s retrieval_ms=%d rag_blocks=%d",
+        intent.primary_intent,
+        int((time.monotonic() - retrieval_started) * 1000),
+        len(hits),
     )
     # Retrieval must be side-effect free.  The chat manager is the only layer
     # allowed to consume a story cooldown; the model merely receives a hint.
     story = None
     if intent.story_allowed:
         story = get_story_trigger_engine().match(message, entries, mark_used=False)
+    max_chars = 3000 if intent.primary_intent == "chen_chusheng_profile" else 2200
     return _render_context(
         hits,
         story,
-        max_blocks=max(4, intent.retrieval_limit),
-        max_chars=5200 if intent.primary_intent == "chen_chusheng_profile" else 3600,
+        max_blocks=min(5, max(1, intent.retrieval_limit)),
+        max_chars=max_chars,
     )
 
 
@@ -253,3 +291,4 @@ def story_match(
     history: Iterable[tuple[str, str]] = (),
 ) -> StoryMatch | None:
     return get_story_trigger_engine().match(message, history, mark_used=True)
+
