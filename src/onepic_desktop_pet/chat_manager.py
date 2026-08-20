@@ -334,6 +334,7 @@ class AgentManager(QObject):
             or self.checking
         ):
             return False
+        self._dispose_finished_warmup_thread()
         self._warmup_thread = AgentWarmupThread(self.ai_service, self)
         # AgentWarmupThread carries the actual result on ``completed``.
         # QThread.finished has no arguments and would therefore call
@@ -365,10 +366,6 @@ class AgentManager(QObject):
         self._start_codex_warmup()
 
     def _warmup_finished(self, ok: bool = True, detail: str = "") -> None:
-        thread = self._warmup_thread
-        self._warmup_thread = None
-        if thread is not None:
-            thread.deleteLater()
         if not ok and self.settings.ai_provider == "codex":
             # Detection only proved that the CLI/login command works.  Keep
             # the provider routable so stream_reply can use HTTPS exec, but
@@ -384,6 +381,15 @@ class AgentManager(QObject):
         elif ok and self.settings.ai_provider == "codex":
             self._set_status("codex", AgentConnectionState.CONNECTED, "Codex 已连接。")
 
+    def _dispose_finished_warmup_thread(self) -> None:
+        """Release a completed warm-up thread without racing its teardown."""
+
+        thread = self._warmup_thread
+        if thread is None or thread.isRunning():
+            return
+        self._warmup_thread = None
+        thread.deleteLater()
+
     def shutdown(self) -> None:
         """退出时停止自动重连，并请求检测线程尽快结束。"""
 
@@ -394,6 +400,7 @@ class AgentManager(QObject):
         if self._warmup_thread is not None and self._warmup_thread.isRunning():
             self._warmup_thread.requestInterruption()
             self._warmup_thread.wait(1500)
+        self._dispose_finished_warmup_thread()
 
 
 class OfflineDialogueManager:
