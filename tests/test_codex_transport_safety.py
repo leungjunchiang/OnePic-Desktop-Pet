@@ -49,3 +49,4 @@ def test_missing_codex_is_local_executable_error_not_timeout(monkeypatch):
     assert caught.value.kind is AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND
     assert "离线陪伴" in user_message_for_ai_error(caught.value)
     assert "额度" not in user_message_for_ai_error(caught.value)
+
