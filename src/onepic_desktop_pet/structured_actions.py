@@ -109,7 +109,7 @@ class LocalActionExecutor:
                 if not isinstance(raw, dict) or not str(raw.get("title") or "").strip():
                     continue
                 title = str(raw.get("title") or "").strip()
-                date = raw.get("date") or "today"
+                date = raw.get("date")
                 existing = self.todos.find_similar_pending(title, date)
                 changes = {
                     key: raw[key]
@@ -258,3 +258,4 @@ class LocalActionExecutor:
                 self.alarms.sync_todo(task, reminder_mode="none")
         elif self.alarms is not None:
             self.alarms.sync_todo(task, reminder_mode="none")
+
