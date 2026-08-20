@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore, FocusQualityTracker, score_focus_quality
@@ -45,3 +46,30 @@ def test_continuity_summary_and_next_day_review_are_local(tmp_path) -> None:
         persist=True,
     )
     assert tomorrow.today_first_task() == "先完成论文第三节"
+
+
+def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
+    now = datetime(2026, 8, 21, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.record_session(60 * 60, started_at=datetime(2026, 8, 20, 10, 0))
+    store.record_session(2 * 60 * 60, started_at=datetime(2026, 8, 20, 10, 30))
+
+    # 10:00–12:30 is 2.5 hours; the overlapping 10:30–11:00 portion must
+    # not be added twice.
+    assert store._state["days"]["2026-08-20"]["seconds"] == 150 * 60
+    assert len(store._state["records"]) == 2
+
+
+def test_legacy_impossible_day_does_not_report_false_38_hour_difference(tmp_path) -> None:
+    path = tmp_path / "focus.json"
+    path.write_text(
+        json.dumps({"days": {"2026-08-20": {"seconds": 136814}}, "records": []}),
+        encoding="utf-8",
+    )
+    store = FocusAnalyticsStore(path=path, now_provider=lambda: datetime(2026, 8, 21, 12, 0), persist=True)
+
+    summary = store.summary()
+    assert summary.yesterday_seconds is None
+    assert summary.difference_vs_yesterday_seconds is None
+    assert summary.weekly_total_seconds == 0
+
