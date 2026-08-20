@@ -1,4 +1,4 @@
-"""Local, durable tasks behind the compact Todo view."""
+"""本地持久待办及其事项日期语义；兼容旧字段但区分创建时间与事件时间。"""
 
 from __future__ import annotations
 
@@ -106,6 +106,10 @@ class TodoItem:
     id: str
     title: str
     date: str
+    # ``date`` is retained for compatibility with old storage and ordering.
+    # This flag says whether it is a user-specified event date rather than a
+    # legacy/default creation-day placeholder.
+    date_explicit: bool = False
     time: str | None = None
     important: bool = False
     completed: bool = False
@@ -215,10 +219,24 @@ class TodoItem:
                     remind_value = (due_dt - timedelta(minutes=reminder_minutes)).isoformat()
             except (TypeError, ValueError, OverflowError):
                 pass
+        raw_explicit = value.get("date_explicit")
+        if raw_explicit is None:
+            created_day = created_at[:10]
+            # Conservative legacy inference: a non-creation date, a time, or
+            # a real due timestamp is evidence of an event schedule.  A date
+            # equal to created_at with no time/due remains an old placeholder.
+            date_explicit = bool(
+                time_value
+                or due_value
+                or (date_value and created_day and date_value != created_day)
+            )
+        else:
+            date_explicit = bool(raw_explicit)
         return cls(
             id=str(value.get("id") or uuid4().hex),
             title=title_value,
             date=date_value,
+            date_explicit=date_explicit,
             time=time_value,
             important=bool(value.get("important", False)),
             completed=bool(value.get("completed", False)),
@@ -282,6 +300,7 @@ class TodoManager:
         *,
         date: str | None = None,
         time: str | None = None,
+        date_explicit: bool | None = None,
         important: bool = False,
         reminder: bool = False,
         item_id: str | None = None,
@@ -302,7 +321,8 @@ class TodoManager:
             raise ValueError("任务标题不能为空")
         if sum(1 for item in self._items if not item.completed) >= MAX_ACTIVE_TODOS:
             raise ValueError(f"当前待办已经有{MAX_ACTIVE_TODOS}件了。先做掉一件，或者删除/完成一件再加。")
-        parsed_date = parse_date(date, self._now).isoformat()
+        date_text = str(date or "").strip()
+        parsed_date = parse_date(date_text or None, self._now).isoformat()
         clean_time = str(time or "").strip()[:5] or None
         parsed_due = parse_datetime(due_at, self._now) if due_at else None
         parsed_remind = parse_datetime(remind_at, self._now) if remind_at else None
@@ -330,6 +350,11 @@ class TodoManager:
         if parsed_due is not None:
             parsed_date = parsed_due.date().isoformat()
             display_time = parsed_due.strftime("%H:%M")
+        explicit_schedule = (
+            bool(date_explicit)
+            if date_explicit is not None
+            else bool(date_text or clean_time or parsed_due is not None)
+        )
         # A reminder-only record has no event time. Keep its notification
         # timestamp exclusively in ``remind_at``; showing it as ``time``
         # would make the desktop sticky note claim that the event itself is
@@ -350,6 +375,7 @@ class TodoManager:
             id=item_id or uuid4().hex,
             title=title,
             date=parsed_date,
+            date_explicit=explicit_schedule,
             time=display_time,
             important=bool(important),
             reminder=clean_mode != REMINDER_NONE,
@@ -432,7 +458,7 @@ class TodoManager:
         if item is None:
             raise KeyError(item_id)
         allowed = {
-            "title", "date", "time", "important", "completed", "reminder",
+            "title", "date", "date_explicit", "time", "important", "completed", "reminder",
             "work_seconds", "due_at", "remind_at", "priority", "read",
             "queue_position",
             "read_at", "reminder_minutes_before", "reminder_mode", "alarm_sound_id",
@@ -445,12 +471,19 @@ class TodoManager:
             if key not in allowed:
                 continue
             if key == "date":
-                value = parse_date(value, self._now).isoformat()
+                raw_date = str(value or "").strip()
+                value = parse_date(raw_date or None, self._now).isoformat()
+                if "date_explicit" not in changes:
+                    item.date_explicit = bool(raw_date)
                 changed_date_or_time = True
+            elif key == "date_explicit":
+                value = bool(value)
             elif key == "title":
                 value = " ".join(str(value).split())[:240]
             elif key == "time":
                 value = str(value or "").strip()[:5] or None
+                if value and "date_explicit" not in changes:
+                    item.date_explicit = True
                 changed_date_or_time = True
             elif key in {"important", "completed", "reminder"}:
                 value = bool(value)
@@ -495,6 +528,8 @@ class TodoManager:
                 value = max(0, int(value))
             elif key in {"due_at", "remind_at"}:
                 value = parse_datetime(value, self._now).isoformat() if value else None
+                if key == "due_at" and value is not None and "date_explicit" not in changes:
+                    item.date_explicit = True
             elif key == "source":
                 value = str(value or "local")[:40]
             setattr(item, key, value)
@@ -504,6 +539,8 @@ class TodoManager:
             item.reminder_mode = REMINDER_PET if item.reminder else REMINDER_NONE
         if changed_date_or_time and not explicit_due:
             item.due_at = f"{item.date}T{item.time}:00" if item.time else None
+        if "date_explicit" in changes and not item.date_explicit and not item.time:
+            item.due_at = None
         if item.reminder_mode != REMINDER_NONE and not explicit_remind and (
             changed_date_or_time or "reminder_minutes_before" in changes or "reminder" in changes
         ):
@@ -698,6 +735,7 @@ class TodoManager:
             item = self.get(str(item_id))
             if item and not item.completed:
                 item.date = target
+                item.date_explicit = True
                 item.due_at = f"{target}T{item.time}:00" if item.time else None
                 if item.reminder_mode != REMINDER_NONE:
                     if item.due_at:
@@ -711,3 +749,4 @@ class TodoManager:
         if moved:
             self._save()
         return moved
+
