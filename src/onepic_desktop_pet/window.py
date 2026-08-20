@@ -431,6 +431,14 @@ class PetWindow(QWidget):
         self._social_profile_threads: list[SocialProfileThread] = []
         self._owner_nickname_sync_key: tuple[str, str] | None = None
         self._owner_nickname_sync_inflight = False
+        # Economy events are an append-only local ledger.  A complete,
+        # idempotent replay is used when an account becomes available so a
+        # transient offline period cannot leave the leaderboard behind the
+        # local supply-station balance forever.
+        self._economy_sync_lock = threading.Lock()
+        self._economy_sync_inflight = False
+        self._economy_sync_pending = False
+        self._economy_sync_user_id = ""
         self._buddy_visit_window = BuddyVisitWindow()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
@@ -3266,20 +3274,42 @@ class PetWindow(QWidget):
         recorder = getattr(self.social_client, "record_economy_event", None)
         if not callable(recorder):
             return
+        normalized = [
+            dict(event)
+            for event in events
+            if isinstance(event, dict) and int(event.get("amount") or 0) != 0
+        ]
+        if not normalized:
+            return
+        with self._economy_sync_lock:
+            if self._economy_sync_inflight:
+                self._economy_sync_pending = True
+                return
+            self._economy_sync_inflight = True
 
         def sync() -> None:
-            for event in events:
-                try:
-                    recorder(
-                        event_id=str(event.get("event_id") or ""),
-                        category=str(event.get("category") or "other"),
-                        amount=int(event.get("amount") or 0),
-                        label=str(event.get("label") or "")[:120],
-                        source_key=str(event.get("source_key") or "")[:160],
-                        occurred_on=str(event.get("occurred_on") or "")[:10],
+            try:
+                for event in normalized:
+                    try:
+                        recorder(
+                            event_id=str(event.get("event_id") or ""),
+                            category=str(event.get("category") or "other"),
+                            amount=int(event.get("amount") or 0),
+                            label=str(event.get("label") or "")[:120],
+                            source_key=str(event.get("source_key") or "")[:160],
+                            occurred_on=str(event.get("occurred_on") or "")[:10],
+                        )
+                    except Exception:
+                        LOGGER.info("economy event sync deferred", exc_info=True)
+            finally:
+                with self._economy_sync_lock:
+                    rerun = self._economy_sync_pending
+                    self._economy_sync_pending = False
+                    self._economy_sync_inflight = False
+                if rerun and getattr(self.social_client, "signed_in", False):
+                    self._sync_economy_events(
+                        [event.as_dict() for event in self.economy.events]
                     )
-                except Exception:
-                    LOGGER.info("economy event sync deferred", exc_info=True)
 
         threading.Thread(target=sync, name="lili-economy-sync", daemon=True).start()
 
@@ -3775,6 +3805,7 @@ class PetWindow(QWidget):
                 None,
             )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.account_state_changed.connect(self._social_account_state_changed)
             self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
             self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
             self._social_dialog.room_event_received.connect(self._room_event_received)
@@ -3870,8 +3901,18 @@ class PetWindow(QWidget):
     def _social_tick(self) -> None:
         """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
 
-        if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
+        if not self.social_client.signed_in:
+            self._economy_sync_user_id = ""
             return
+        if self._social_thread is not None and self._social_thread.isRunning():
+            return
+        session = getattr(self.social_client, "session", None)
+        user_id = str(getattr(session, "user_id", "") or "")
+        if user_id and user_id != self._economy_sync_user_id:
+            self._economy_sync_user_id = user_id
+            self._sync_economy_events(
+                [event.as_dict() for event in self.economy.events]
+            )
         self._maybe_sync_owner_nickname()
         selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
         # A persisted local room ID is not an invitation to re-enter a room.
@@ -3950,6 +3991,15 @@ class PetWindow(QWidget):
                 self._social_dialog._set_status(
                     "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
                 )
+
+    def _social_account_state_changed(self, signed_in: bool) -> None:
+        """Reset account cursors and reconcile the local ledger after login."""
+
+        if not signed_in:
+            self._economy_sync_user_id = ""
+            return
+        self._economy_sync_user_id = ""
+        self._schedule_social_tick()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""
@@ -5210,3 +5260,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
