@@ -453,9 +453,13 @@ class ChatDialog(QDialog):
             piece = self._streaming_pending_text[:4]
             self._streaming_pending_text = self._streaming_pending_text[4:]
 
-        self._transcript_entries[index] = (role, current + piece)
+        updated = current + piece
+        self._transcript_entries[index] = (role, updated)
         self._render_transcript()
-        if target is not None or self._streaming_pending_text:
+        if target is not None and updated == target:
+            self._streaming_message_index = None
+            self._streaming_final_text = None
+        elif target is not None or self._streaming_pending_text:
             self._stream_flush_timer.start(25)
 
     def _render_transcript(self) -> None:
