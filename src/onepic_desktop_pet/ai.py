@@ -1152,9 +1152,14 @@ def _codex_http_config_overrides_for_transport(transport: str | None) -> tuple[s
 
 
 def _codex_transport_variants() -> tuple[str, ...]:
-    """Return the user's explicit transport choice, defaulting to native Codex."""
+    """Return Lili's process-local transport choice.
 
-    configured = os.environ.get("LILI_CODEX_TRANSPORT", "").strip().casefold()
+    The HTTPS override is the compatibility path already used by Lili on
+    Finder/GUI launches. Keep it as the default for the child Codex process;
+    ``default`` remains an explicit diagnostic escape hatch.
+    """
+
+    configured = os.environ.get("LILI_CODEX_TRANSPORT", "https").strip().casefold()
     if configured in {"https", "lili_http"}:
         return ("https",)
     return ("default",)
@@ -1165,10 +1170,17 @@ def _codex_app_server_command(
     *,
     transport: str | None = None,
 ) -> list[str]:
-    """Build the minimum App Server command accepted by current Codex CLIs."""
+    """Build an App Server command with process-local transport overrides."""
 
-    del transport
-    return _cli_command(executable, "app-server")
+    selected_transport = (
+        str(transport)
+        if transport is not None
+        else os.environ.get("LILI_CODEX_TRANSPORT", "https")
+    ).strip().casefold()
+    arguments = ["app-server"]
+    for override in _codex_http_config_overrides_for_transport(selected_transport):
+        arguments.extend(("-c", override))
+    return _cli_command(executable, *arguments)
 
 
 def _codex_thread_state_path() -> Path:
@@ -1291,9 +1303,13 @@ def _codex_exec_command(
 ) -> list[str]:
     """Build one capability-safe, non-interactive Codex command for Lili."""
 
-    del transport
     capabilities = capabilities or CodexCliCapabilities()
     selected_model = _codex_model_override() if model is None else model
+    selected_transport = (
+        str(transport)
+        if transport is not None
+        else os.environ.get("LILI_CODEX_TRANSPORT", "https")
+    ).strip().casefold()
     arguments = ["exec"]
     if capabilities.supports_exec("--ephemeral"):
         arguments.append("--ephemeral")
@@ -1305,6 +1321,8 @@ def _codex_exec_command(
         arguments.append("--json")
     if selected_model and capabilities.supports_exec("--model"):
         arguments.extend(("--model", selected_model.replace(chr(34), "")))
+    for override in _codex_http_config_overrides_for_transport(selected_transport):
+        arguments.extend(("-c", override))
     # codex exec accepts the task as the final positional argument.
     arguments.append(prompt)
     return _cli_command(executable, *arguments)
@@ -2544,5 +2562,6 @@ class AIChatService:
 
         self._closing = True
         self._close_codex_app_server()
+
 
 
