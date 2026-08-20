@@ -304,7 +304,10 @@ def parse_explicit_todo_request(
     if not permission.allowed:
         return None
     current = (now or (lambda: datetime.now().astimezone()))().date()
-    date_value = _date_value(operation_text, current) or "today"
+    # No date in the user's request means an untimed sticky Todo, not a task
+    # scheduled for the creation day.  TodoManager keeps its legacy date
+    # compatibility field separately via ``date_explicit=False``.
+    date_value = _date_value(operation_text, current)
     title = _extract_title(operation_text, time_match, important, current)
     if not title:
         return None
@@ -321,3 +324,4 @@ def parse_explicit_todo_request(
             }
         ],
     }
+
