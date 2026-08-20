@@ -365,6 +365,30 @@ def test_chat_management_buttons_expose_new_chat_and_history() -> None:
     app.processEvents()
 
 
+def test_streaming_chat_renders_small_batches_and_finishes_authoritative_text() -> None:
+    """聊天流式输出不应等全文，也不应每个 delta 都重排一次 HTML。"""
+
+    app = _app()
+    dialog = ChatDialog()
+    dialog.begin_streaming_message("六毛")
+    dialog.append_streaming_delta("一二三四五六")
+
+    QTest.qWait(35)
+    app.processEvents()
+    visible = dialog.transcript.toPlainText()
+    assert "一二三四" in visible
+    assert "一二三四五六" not in visible
+
+    dialog.finish_streaming_message("一二三四五六")
+    QTest.qWait(70)
+    app.processEvents()
+    assert "一二三四五六" in dialog.transcript.toPlainText()
+    assert dialog._streaming_message_index is None
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
 def test_chat_history_window_has_visible_edit_actions_and_own_window_controls() -> None:
     app = _app()
     history = ChatHistoryStore()

@@ -661,3 +661,8 @@
 - Codex App Server 恢复 thread 时校验 provider/transport；不兼容、恢复失败或新旧 CLI 状态迁移会清除本地旧指针后新建 thread，不删除服务器历史。
 - warm-up 和实际请求失败会保留安全的错误分类与阶段信息；状态栏显示版本不兼容、登录、网络、超时、线程配置等真实原因，不把内部命令、system prompt、令牌或完整异常泄漏到普通界面。
 - 保留现有 HTTPS exec 兼容路径；App Server 不可用时仍可继续尝试兼容连接。
+## v0.23.32 — 聊聊增量显示与兼容连接输出优化
+
+- App Server 的真实 delta 继续即时转发；CLI/HTTPS 等完整返回的兼容路径也拆成短片段，避免回复一次性整段出现。
+- 聊天窗口改为约 25ms 的小批次刷新，接近逐字显示，同时避免每个 token 都重建全文 HTML。
+- 增加兼容 transport 增量显示和权威最终文本收口测试，不改变原有 Codex fallback、待办、计时和单实例逻辑。

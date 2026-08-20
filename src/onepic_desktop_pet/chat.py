@@ -6,6 +6,7 @@
 - 禁止设置类按钮成为 QDialog 默认按钮，确保回车只发送消息，不会误触设置入口；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
+- 对在线回复采用小片段、定时批量渲染，避免等待整段文字或每个字符都重排全文；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
@@ -28,7 +29,7 @@ from html import escape
 if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
-from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QRect, QSize, QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QCloseEvent, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -167,6 +168,11 @@ class ChatDialog(QDialog):
         self.pet_name = PET_NAME
         self._transcript_entries: list[tuple[str, str]] = []
         self._streaming_message_index: int | None = None
+        self._streaming_pending_text = ""
+        self._streaming_final_text: str | None = None
+        self._stream_flush_timer = QTimer(self)
+        self._stream_flush_timer.setSingleShot(True)
+        self._stream_flush_timer.timeout.connect(self._flush_streaming_text)
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -338,6 +344,7 @@ class ChatDialog(QDialog):
         self.recovery_actions.setVisible(bool(visible))
 
     def append_message(self, role: str, text: str) -> None:
+        self._cancel_streaming_flush()
         self._streaming_message_index = None
         self._transcript_entries.append((str(role), str(text)))
         self._render_transcript()
@@ -345,6 +352,7 @@ class ChatDialog(QDialog):
     def load_transcript(self, messages: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> None:
         """加载本机会话记录到当前显示，不改变 AI 连接或待办数据。"""
 
+        self._cancel_streaming_flush()
         self._streaming_message_index = None
         self._transcript_entries = [
             (str(role), str(text)) for role, text in messages if str(text).strip()
@@ -354,6 +362,7 @@ class ChatDialog(QDialog):
     def clear_transcript(self) -> None:
         """只清空窗口显示，不删除本地聊天记录或 AI 上下文。"""
 
+        self._cancel_streaming_flush()
         self._streaming_message_index = None
         self._transcript_entries.clear()
         self._render_transcript()
@@ -361,33 +370,93 @@ class ChatDialog(QDialog):
     def begin_streaming_message(self, role: str) -> None:
         """Create a temporary assistant bubble that can be updated per delta."""
 
+        self._cancel_streaming_flush()
         self._streaming_message_index = len(self._transcript_entries)
+        self._streaming_pending_text = ""
+        self._streaming_final_text = None
         self._transcript_entries.append((str(role), ""))
         self._render_transcript()
 
     def append_streaming_delta(self, delta: str) -> None:
-        """Append one App Server agentMessage/delta to the temporary bubble."""
+        """Queue one delta and render it in a small typewriter-like batch.
+
+        A delta may contain several tokens or characters.  Rendering every
+        signal immediately rebuilds the whole QTextBrowser HTML and makes a
+        fast stream look slower than it is, so the pending text is flushed at
+        most once per short interval.
+        """
 
         if self._streaming_message_index is None:
             self.begin_streaming_message(self.pet_name)
         index = self._streaming_message_index
         if index is None or index >= len(self._transcript_entries):
             return
-        role, current = self._transcript_entries[index]
-        self._transcript_entries[index] = (role, current + str(delta))
-        self._render_transcript()
+        self._streaming_pending_text += str(delta)
+        self._schedule_streaming_flush()
 
     def finish_streaming_message(self, text: str) -> None:
-        """Replace a partial stream with the authoritative final answer."""
+        """Finish with the authoritative answer without duplicating a stream."""
 
         if self._streaming_message_index is None:
             self.append_message(self.pet_name, text)
             return
         index = self._streaming_message_index
-        role = self._transcript_entries[index][0]
-        self._transcript_entries[index] = (role, str(text))
-        self._streaming_message_index = None
+        if index >= len(self._transcript_entries):
+            self._cancel_streaming_flush()
+            self._streaming_message_index = None
+            return
+        self._streaming_pending_text = ""
+        self._streaming_final_text = str(text)
+        self._flush_streaming_text()
+
+    def _schedule_streaming_flush(self) -> None:
+        if not self._stream_flush_timer.isActive():
+            # 25ms is fast enough to feel immediate while avoiding a full HTML
+            # rebuild for every token/character emitted by the transport.
+            self._stream_flush_timer.start(25)
+
+    def _cancel_streaming_flush(self) -> None:
+        if self._stream_flush_timer.isActive():
+            self._stream_flush_timer.stop()
+        self._streaming_pending_text = ""
+        self._streaming_final_text = None
+
+    def _flush_streaming_text(self) -> None:
+        index = self._streaming_message_index
+        if index is None or index >= len(self._transcript_entries):
+            self._cancel_streaming_flush()
+            return
+
+        role, current = self._transcript_entries[index]
+        target = self._streaming_final_text
+        if target is not None:
+            # Once the authoritative answer is known, continue the same small
+            # batches when it extends the visible prefix.  If post-processing
+            # changed the prefix (for example a fallback error), replace it
+            # immediately rather than showing a misleading mixed response.
+            if not target.startswith(current):
+                self._transcript_entries[index] = (role, target)
+                self._streaming_message_index = None
+                self._streaming_final_text = None
+                self._render_transcript()
+                return
+            remaining = target[len(current) :]
+            if not remaining:
+                self._streaming_message_index = None
+                self._streaming_final_text = None
+                self._render_transcript()
+                return
+            piece = remaining[:4]
+        else:
+            if not self._streaming_pending_text:
+                return
+            piece = self._streaming_pending_text[:4]
+            self._streaming_pending_text = self._streaming_pending_text[4:]
+
+        self._transcript_entries[index] = (role, current + piece)
         self._render_transcript()
+        if target is not None or self._streaming_pending_text:
+            self._stream_flush_timer.start(25)
 
     def _render_transcript(self) -> None:
         """Render the bounded in-memory transcript, keeping streaming simple."""

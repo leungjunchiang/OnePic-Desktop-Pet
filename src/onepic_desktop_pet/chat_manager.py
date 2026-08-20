@@ -10,6 +10,8 @@
 - 识别离线下无法可靠完成的复杂问题，并让界面显示手动重连和设置入口。
 
 聊天路由不直接管理聊天记录文件；窗口层会按用户操作保存有限的本地会话。
+能流式返回的 transport 直接转发增量；只返回完整文本的兼容 Provider 也会
+拆成短片段，再由 ChatDialog 低频批量渲染，避免等待整段文字才更新界面。
 API 令牌仍由 CredentialStore 放入系统安全凭据库；本模块不会主动打开任何设置窗口。
 """
 
@@ -494,6 +496,14 @@ class OfflineDialogueManager:
         return len(text) > 220 and any(mark in text for mark in ("？", "?", "怎么", "为什么"))
 
 
+def _emit_reply_chunks(text: str, emit: Callable[[str], None], *, chunk_size: int = 4) -> None:
+    """将仅支持完整返回的 Provider 转成统一的增量事件。"""
+
+    size = max(1, int(chunk_size))
+    for index in range(0, len(text), size):
+        emit(text[index : index + size])
+
+
 class AIReplyThread(QThread):
     """在后台执行一次可能较慢的 AI 请求。"""
 
@@ -547,7 +557,7 @@ class AIReplyThread(QThread):
                     self.local_context,
                 )
                 if answer:
-                    self.delta.emit(answer)
+                    _emit_reply_chunks(answer, self.delta.emit)
         except AIConnectionError as exc:
             LOGGER.debug("AI 请求失败 kind=%s error_type=%s", getattr(exc, "kind", "unknown"), type(exc).__name__)
             self.failed.emit(user_message_for_ai_error(exc))

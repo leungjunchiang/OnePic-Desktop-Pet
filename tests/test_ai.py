@@ -40,6 +40,7 @@ from onepic_desktop_pet.ai import (
     _codex_turn_options,
     _codex_timeout_seconds,
     _conversation_turn_text,
+    _emit_text_chunks,
     provider_defaults,
     user_message_for_ai_error,
     _models_endpoint,
@@ -334,6 +335,16 @@ def test_safe_codex_diagnosis_survives_agent_status_boundary() -> None:
         user_message=message,
     )
     assert user_message_for_ai_error(error) == message
+
+
+def test_non_streaming_transport_is_split_into_small_deltas() -> None:
+    """兼容 transport 返回完整文本时也能交给 UI 做增量显示。"""
+
+    chunks: list[str] = []
+    _emit_text_chunks("中国的首都是北京。", chunks.append, chunk_size=4)
+
+    assert chunks == ["中国的首", "都是北京", "。"]
+    assert "".join(chunks) == "中国的首都是北京。"
 
 
 def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
