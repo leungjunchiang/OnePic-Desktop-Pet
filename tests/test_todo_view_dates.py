@@ -81,4 +81,3 @@ def test_explicit_today_schedule_is_not_hidden_just_because_created_today(tmp_pa
         anniversary_remaining=lambda _item: 0,
         anniversary_next_date=lambda _item: None,
     )[0].display_text == "交材料 · 15:00"
-

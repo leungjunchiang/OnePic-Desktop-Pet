@@ -89,4 +89,3 @@ def test_anaphoric_followup_keeps_previous_family_topic() -> None:
 
     assert intent.primary_intent == CHEN_PROFILE
     assert is_topic_shift("那他的经历呢", history) is False
-

@@ -287,4 +287,3 @@ def intent_prompt_context(intent: ChatIntent) -> str:
         f"本轮意图：{intent.primary_intent}；置信度 {intent.confidence:.2f}。{style}"
         "事实优先，‘我爹’最多自然出现一次。"
     )
-

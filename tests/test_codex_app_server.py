@@ -191,4 +191,3 @@ def test_app_server_replaces_resumed_thread_when_provider_changed(monkeypatch, t
     assert client.thread_id == "thr_fake"
     client.close()
 
-

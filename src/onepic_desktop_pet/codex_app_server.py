@@ -508,4 +508,3 @@ class CodexAppServerClient:
             return False
         return not event_turn or event_turn == turn_id
 
-

@@ -2130,4 +2130,3 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
-

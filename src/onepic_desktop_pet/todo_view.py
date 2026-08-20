@@ -202,4 +202,3 @@ def collect_todo_view(
             )
         )
     return result
-

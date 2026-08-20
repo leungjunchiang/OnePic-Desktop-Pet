@@ -291,4 +291,3 @@ def story_match(
     history: Iterable[tuple[str, str]] = (),
 ) -> StoryMatch | None:
     return get_story_trigger_engine().match(message, history, mark_used=True)
-

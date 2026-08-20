@@ -427,4 +427,3 @@ class AlarmManager:
             if all(0 <= day <= 6 for day in days) and days:
                 return "weekly:" + ",".join(str(day) for day in days)
         return REPEAT_ONCE
-

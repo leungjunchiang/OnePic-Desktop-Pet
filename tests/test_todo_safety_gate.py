@@ -63,4 +63,3 @@ def test_write_gate_accepts_explicit_user_authorization():
         {"action": "create_todo", "tasks": [{"title": "开会"}]},
     )
     assert result.allowed is True
-
