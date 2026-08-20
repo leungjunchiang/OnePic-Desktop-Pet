@@ -1,4 +1,4 @@
-"""The unified local Todo view.
+"""统一本地待办视图；主列表只渲染用户明确指定的事项时间。
 
 Manual Todos remain the source of truth for tasks. Countdown and anniversary
 records are projected into this view while they are close enough to be useful;
@@ -88,6 +88,11 @@ def todo_event_parts(item: Any) -> tuple[str, str | None]:
     # be the day on which the reminder was configured, so it must not leak
     # into the sticky-note display as if it were the event date.
     if getattr(item, "remind_at", None) and not getattr(item, "time", None):
+        return "", None
+
+    # ``date`` is a compatibility field.  It may contain the creation day for
+    # old records even though the user never scheduled an event.
+    if not bool(getattr(item, "date_explicit", False)):
         return "", None
 
     date_value = str(getattr(item, "date", "") or "")[:10]
@@ -197,3 +202,4 @@ def collect_todo_view(
             )
         )
     return result
+
