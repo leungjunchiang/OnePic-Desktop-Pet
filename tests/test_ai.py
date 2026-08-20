@@ -201,8 +201,8 @@ def test_codex_uses_capability_safe_command_and_prompt_argument(monkeypatch) -> 
     assert captured["kwargs"].get("input") is None
 
 
-def test_macos_codex_exec_uses_native_minimal_transport(monkeypatch) -> None:
-    """Finder-launched macOS chat does not force a provider override by default."""
+def test_macos_codex_exec_uses_process_local_https_transport(monkeypatch) -> None:
+    """Finder-launched macOS chat keeps the verified HTTPS provider path."""
 
     calls = []
     output = json.dumps(
@@ -233,7 +233,9 @@ def test_macos_codex_exec_uses_native_minimal_transport(monkeypatch) -> None:
         if "exec" in command and command[-1] != "--help"
     ]
     assert len(exec_commands) == 1
-    assert not any("model_provider" in str(part) for part in exec_commands[0])
+    assert ("-c", 'model_provider="lili_http"') in list(
+        zip(exec_commands[0], exec_commands[0][1:])
+    )
 
 
 def test_codex_failure_keeps_sanitized_runtime_diagnostic(monkeypatch) -> None:
@@ -306,14 +308,35 @@ def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
 
 def test_app_server_command_uses_minimal_cross_platform_command(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
+    monkeypatch.delenv("LILI_CODEX_TRANSPORT", raising=False)
     command = _codex_app_server_command(Path("codex.exe"))
-    assert command == ["codex.exe", "app-server"]
+    assert command[:2] == ["codex.exe", "app-server"]
+    assert ("-c", 'model_provider="lili_http"') in list(zip(command, command[1:]))
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     command = _codex_app_server_command(Path("/usr/local/bin/codex"))
-    assert command[-1] == "app-server"
+    assert command[1] == "app-server"
+    assert ("-c", 'model_provider="lili_http"') in list(zip(command, command[1:]))
     assert command[0].replace("\\", "/") == "/usr/local/bin/codex"
     assert "--ignore-user-config" not in command
+
+
+def test_codex_exec_command_applies_process_local_https_config(monkeypatch) -> None:
+    monkeypatch.delenv("LILI_CODEX_TRANSPORT", raising=False)
+    capabilities = CodexCliCapabilities(
+        exec_options=frozenset({"--ephemeral", "--json", "--model"})
+    )
+    command = _codex_exec_command(
+        Path("codex"),
+        "测试消息",
+        capabilities=capabilities,
+    )
+
+    assert ("-c", 'model_provider="lili_http"') in list(zip(command, command[1:]))
+    assert ("-c", 'model_providers.lili_http.supports_websockets=false') in list(
+        zip(command, command[1:])
+    )
+    assert command[-1] == "测试消息"
 
 
 def test_codex_cli_argument_error_is_short_and_actionable() -> None:
@@ -445,7 +468,6 @@ def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
     assert service.stream_reply("codex", "中国的首都是哪里？", []) == "兼容连接已回复"
 
 
-
 def test_warmup_failure_does_not_disable_first_real_app_server_turn(monkeypatch) -> None:
     """启动预热失败后，真实聊天仍应重新尝试并复用 App Server。"""
 
@@ -480,6 +502,8 @@ def test_warmup_failure_does_not_disable_first_real_app_server_turn(monkeypatch)
     assert service.runtime_mode == "app_server"
     assert service.stream_reply("codex", "第二句话", []) == "App Server 回复 2"
     assert persistent_client.turn_calls == 2
+
+
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
@@ -832,5 +856,6 @@ def test_macos_gui_launch_uses_open_a_chatgpt(monkeypatch) -> None:
 
     assert launch_codex_gui() is True
     assert calls[0][0] == ["open", "-a", "ChatGPT"]
+
 
 
