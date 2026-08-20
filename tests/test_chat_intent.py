@@ -7,7 +7,9 @@ from onepic_desktop_pet.chat_intent import (
     SONG_QUERY,
     WORK_COMPANION,
     classify_intent,
+    is_topic_shift,
 )
+from onepic_desktop_pet.knowledge_manager import retrieve_prompt_context
 
 
 def test_song_title_sentence_ambiguity_prefers_casual_chat() -> None:
@@ -38,3 +40,30 @@ def test_work_companion_does_not_request_father_knowledge() -> None:
     assert intent.primary_intent == WORK_COMPANION
     assert intent.need_knowledge is False
     assert intent.story_allowed is True
+
+
+def test_unrelated_question_does_not_inherit_previous_song_topic() -> None:
+    history = [
+        ("user", "那你知道《趋光号》这张专辑吗"),
+        ("assistant", "知道，这是陈楚生的作品。"),
+    ]
+
+    intent = classify_intent("你知道人生的意义是什么吗", history)
+
+    assert intent.primary_intent == CASUAL_CHAT
+    assert intent.need_knowledge is False
+    assert retrieve_prompt_context("你知道人生的意义是什么吗", history) == ""
+    assert is_topic_shift("你知道人生的意义是什么吗", history) is True
+
+
+def test_anaphoric_followup_keeps_previous_family_topic() -> None:
+    history = [
+        ("user", "你知道陈楚生吗"),
+        ("assistant", "知道，这是六毛的我爹。"),
+    ]
+
+    intent = classify_intent("那他的经历呢", history)
+
+    assert intent.primary_intent == CHEN_PROFILE
+    assert is_topic_shift("那他的经历呢", history) is False
+
