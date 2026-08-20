@@ -377,6 +377,65 @@ def test_codex_exec_jsonl_snapshots_emit_only_new_assistant_suffix() -> None:
     ) == current
 
 
+def test_ask_codex_reads_exec_jsonl_while_process_is_running(monkeypatch) -> None:
+    class FakeStream:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = FakeStream(
+                [
+                    json.dumps({"type": "thread.started"}) + "\n",
+                    json.dumps(
+                        {
+                            "type": "item.updated",
+                            "item": {"type": "agent_message", "text": "首"},
+                        }
+                    ) + "\n",
+                    json.dumps(
+                        {
+                            "type": "item.updated",
+                            "item": {"type": "agent_message", "text": "首字"},
+                        }
+                    ) + "\n",
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "首字"},
+                        }
+                    ) + "\n",
+                ]
+            )
+            self.stderr = FakeStream([])
+            self.returncode = None
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    process = FakeProcess()
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("codex"))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.ai._codex_cli_capabilities",
+        lambda _path: CodexCliCapabilities(exec_options=frozenset({"--json"})),
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.Popen", lambda *_args, **_kwargs: process)
+
+    deltas: list[str] = []
+    assert ask_codex("测试", [], on_delta=deltas.append) == "首字"
+    assert deltas == ["首", "字"]
+
+
 def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
     """After warm-up failure, the session uses the known-compatible exec path."""
 
