@@ -1,9 +1,9 @@
-## v0.23.36 — 恢复 App Server 主通道与预热失败自愈
+## v0.23.37 — Codex 持续连接、专注统计与经济榜单一致性
 
-- 启动期 App Server warm-up 失败只记录为 warmup_failed，不再把整个运行周期永久切换到较慢的 codex exec。
-- 首次真实聊天仍会重新尝试 App Server；成功后继续复用同一个进程和 thread，macOS 原有 executable、登录态与 transport 不变。
-- 只有真实 turn 生命周期失败才进入 60 秒 exec 冷却；冷却结束后由 AgentManager 后台重新预热 App Server。
-- 增加预热失败后首条真实消息成功、后续消息复用同一 App Server，以及后台恢复调度回归测试。
+- 修复 Codex 后台预热失败仍显示“已连接”的问题；现在会保留真实失败分类，首次聊天会再次尝试持久 App Server，只有真实会话失败才临时切换备用通道。
+- App Server 与 exec 使用同一套 Lili HTTPS Responses 配置，macOS 继续优先复用本机 Codex 登录，不因一次启动期波动永久掉入慢通道。
+- 修复重叠的历史计时检查点被重复累加，保留原始数据并按时间区间并集重建每日专注统计，避免出现不可能的“较昨天少 38 小时”。
+- 自习室登录后自动幂等补传本地经济事件；富豪榜与补给站统一按本地合法创收类别统计，离线期间漏掉的收入会在下次联网时补齐。
 
 ## v0.23.25 — Codex CLI 能力探测与 Mac 在线连接修复
 
@@ -668,7 +668,7 @@
 - Codex App Server 恢复 thread 时校验 provider/transport；不兼容、恢复失败或新旧 CLI 状态迁移会清除本地旧指针后新建 thread，不删除服务器历史。
 - warm-up 和实际请求失败会保留安全的错误分类与阶段信息；状态栏显示版本不兼容、登录、网络、超时、线程配置等真实原因，不把内部命令、system prompt、令牌或完整异常泄漏到普通界面。
 - 保留现有 HTTPS exec 兼容路径；App Server 不可用时仍可继续尝试兼容连接。
-## v0.23.35 — 修复 Codex 掉线后的错误降级与重复聊天
+## v0.23.34 — 修复 Codex 掉线后的错误降级与重复聊天
 
 - 事实问题（包括“广东省会是哪吗”）在离线降级时不再套用无关陪伴模板；失败气泡保留脱敏后的连接诊断，并提供重新连接入口。
 - Codex App Server 遇到当前账号不可用的指定模型时，在同一条常驻连接中去掉模型参数重试 CLI 默认模型，不重新连接、不修改 macOS 的 Codex 环境或 transport。
@@ -687,3 +687,10 @@
 - App Server 的真实 delta 继续即时转发；CLI/HTTPS 等完整返回的兼容路径也拆成短片段，避免回复一次性整段出现。
 - 聊天窗口改为约 25ms 的小批次刷新，接近逐字显示，同时避免每个 token 都重建全文 HTML。
 - 增加兼容 transport 增量显示和权威最终文本收口测试，不改变原有 Codex fallback、待办、计时和单实例逻辑。
+## v0.23.36 — 恢复 App Server 主通道与预热失败自愈
+
+- 启动期 App Server warm-up 失败只记录为 `warmup_failed`，不再把整个运行周期永久切换到较慢的 `codex exec`。
+- 首次真实聊天仍会重新尝试 App Server；成功后继续复用同一个进程和 thread，macOS 原有 executable、登录态与 transport 不变。
+- 只有真实 turn 生命周期失败才进入 60 秒 exec 冷却；冷却结束后由 AgentManager 后台重新预热 App Server。
+- 增加预热失败后首条真实消息成功、后续消息复用同一 App Server，以及后台恢复调度回归测试。
+
