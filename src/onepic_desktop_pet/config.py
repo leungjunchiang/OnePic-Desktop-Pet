@@ -423,3 +423,4 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
     )
     temporary.replace(target)
     return target
+
