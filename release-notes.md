@@ -655,3 +655,9 @@
 - 闹钟关闭、错过、Todo 提醒模式变化改为保留并标记状态，只有明确删除才移除记录；跨天和重启后仍可查看。
 - Codex App Server 在后台预热，失败自动回到现有 HTTPS exec 兼容路径；新增不泄露正文的响应性能日志。
 - 自习室首页自己的今日专注优先读取共享本地 FocusSession；后台 payload 缺少 leaderboard 时保留上次榜单，不再误清空。
+## v0.23.31 — 单实例与 Codex 连接诊断收口
+
+- 应用 bootstrap 增加进程内唯一 ownership；聊天信号使用唯一连接，避免重复启动/重复绑定造成第二只六毛或同一消息多次提交。
+- Codex App Server 恢复 thread 时校验 provider/transport；不兼容、恢复失败或新旧 CLI 状态迁移会清除本地旧指针后新建 thread，不删除服务器历史。
+- warm-up 和实际请求失败会保留安全的错误分类与阶段信息；状态栏显示版本不兼容、登录、网络、超时、线程配置等真实原因，不把内部命令、system prompt、令牌或完整异常泄漏到普通界面。
+- 保留现有 HTTPS exec 兼容路径；App Server 不可用时仍可继续尝试兼容连接。

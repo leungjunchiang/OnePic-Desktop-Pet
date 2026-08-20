@@ -40,6 +40,7 @@ class CodexAppServerClient:
         env: Mapping[str, str] | None = None,
         thread_id: str = "",
         on_thread_id: Callable[[str], None] | None = None,
+        on_thread_invalidated: Callable[[], None] | None = None,
         desired_provider: str = "",
         desired_transport: str = "",
         client_version: str = "0.22.70",
@@ -49,6 +50,7 @@ class CodexAppServerClient:
         self.env = dict(env or os.environ)
         self.thread_id = str(thread_id or "").strip()
         self.on_thread_id = on_thread_id
+        self.on_thread_invalidated = on_thread_invalidated
         self.desired_provider = str(desired_provider or "").strip()
         self.desired_transport = str(desired_transport or "").strip()
         self.client_version = client_version
@@ -372,6 +374,7 @@ class CodexAppServerClient:
                 # A deleted, archived, or incompatible saved id should not make
                 # the chat permanently unusable.  Start a fresh persistent thread.
                 self.thread_id = ""
+                self._invalidate_saved_thread()
             else:
                 if self._thread_matches_desired_provider(result):
                     self._accept_thread(result)
@@ -386,6 +389,7 @@ class CodexAppServerClient:
                 # intentionally left untouched; a fresh thread is safer than
                 # sending a turn through a stale provider configuration.
                 self.thread_id = ""
+                self._invalidate_saved_thread()
         result = self._request("thread/start", common, timeout=20.0)
         if not self._thread_matches_desired_provider(result):
             raise CodexAppServerError(
@@ -415,16 +419,61 @@ class CodexAppServerClient:
                 return value
         return ""
 
+    def _thread_transport(self, result: dict[str, Any]) -> str:
+        """Read transport metadata across App Server response versions."""
+
+        thread = result.get("thread") or {}
+        candidates: list[Any] = []
+        if isinstance(thread, dict):
+            candidates.extend(
+                thread.get(key)
+                for key in ("transport", "modelTransport", "model_transport")
+            )
+        candidates.extend(
+            result.get(key)
+            for key in ("transport", "modelTransport", "model_transport")
+        )
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                candidate = candidate.get("id") or candidate.get("name") or candidate.get("key")
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return ""
+
     def _thread_matches_desired_provider(self, result: dict[str, Any]) -> bool:
         """Reject an explicitly mismatched provider, tolerate older metadata."""
 
         if not self.desired_provider:
             return True
         actual = self._thread_provider(result)
+        actual_transport = self._thread_transport(result)
         # Some older servers omit provider metadata from thread/start and
         # thread/resume responses.  The local v2 state check still protects
         # those servers; only an explicit server-side mismatch is fatal.
-        return not actual or actual.casefold() == self.desired_provider.casefold()
+        if actual and actual.casefold() != self.desired_provider.casefold():
+            return False
+        return (
+            not self.desired_transport
+            or not actual_transport
+            or actual_transport.casefold() == self.desired_transport.casefold()
+        )
+
+    def _invalidate_saved_thread(self) -> None:
+        """Forget the persisted pointer before a fresh thread attempt.
+
+        Keeping a bad pointer on disk is what turns a one-time migration issue
+        into a failure on every reconnect.  The server-side Codex history is
+        not deleted; only Lili's resume pointer is cleared.
+        """
+
+        callback = self.on_thread_invalidated
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            LOGGER.debug("[AI Codex] failed to invalidate saved thread", exc_info=True)
 
     def _accept_thread(self, result: dict[str, Any]) -> None:
         thread = result.get("thread") or {}

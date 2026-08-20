@@ -14,6 +14,7 @@ import pytest
 from onepic_desktop_pet.ai import (
     AIChatService,
     AIConnectionError,
+    AIErrorKind,
     CodexCliCapabilities,
     PROVIDER_PRESETS,
     _chat_endpoint,
@@ -40,6 +41,7 @@ from onepic_desktop_pet.ai import (
     _codex_timeout_seconds,
     _conversation_turn_text,
     provider_defaults,
+    user_message_for_ai_error,
     _models_endpoint,
 )
 
@@ -319,6 +321,28 @@ def test_codex_cli_argument_error_is_short_and_actionable() -> None:
         "error: unexpected argument '--ignore-user-config' found\nUsage: codex [OPTIONS]"
     )
     assert message == "Codex CLI 版本不兼容：不支持参数 --ignore-user-config。已临时切换到离线陪伴。"
+
+
+def test_safe_codex_diagnosis_survives_agent_status_boundary() -> None:
+    """A classified reason must not collapse into the generic offline text."""
+
+    message = "Codex CLI 版本不兼容：不支持参数 --ignore-user-config。已临时切换到离线陪伴。"
+    assert user_message_for_ai_error(message) == message
+    error = AIConnectionError(
+        "internal command omitted",
+        kind=AIErrorKind.CLI_INCOMPATIBLE,
+        user_message=message,
+    )
+    assert user_message_for_ai_error(error) == message
+
+
+def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
+    """After warm-up failure, the session uses the known-compatible exec path."""
+
+    service = AIChatService(FakeCredentials())
+    service._app_server_disabled = True
+    monkeypatch.setattr("onepic_desktop_pet.ai.ask_codex", lambda *_args, **_kwargs: "兼容连接已回复")
+    assert service.stream_reply("codex", "中国的首都是哪里？", []) == "兼容连接已回复"
 
 
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:

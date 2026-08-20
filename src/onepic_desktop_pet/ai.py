@@ -194,6 +194,10 @@ class AIErrorKind(str, Enum):
     QUOTA_LIMIT = "quota_limit"
     TIMEOUT = "timeout"
     NETWORK_ERROR = "network_error"
+    CLI_INCOMPATIBLE = "cli_incompatible"
+    THREAD_INCOMPATIBLE = "thread_incompatible"
+    PROCESS_CRASHED = "process_crashed"
+    RESPONSE_PARSE_FAILED = "response_parse_failed"
     UNKNOWN = "unknown"
 
 
@@ -217,7 +221,26 @@ def user_message_for_ai_error(error: BaseException | str) -> str:
 
     if isinstance(error, AIConnectionError):
         return error.user_message
-    text = str(error).casefold()
+    raw_text = " ".join(str(error or "").split())
+    # Worker signals pass the already-sanitized diagnosis as a plain string.
+    # Preserve that useful detail, but never echo arbitrary subprocess
+    # exceptions because argv may contain local paths or the persona prompt.
+    safe_prefixes = (
+        "未找到本机 Codex",
+        "Codex 启动失败",
+        "Codex CLI 版本不兼容",
+        "Codex 尚未登录或连接失败",
+        "Codex 登录状态失效",
+        "Codex 响应超时",
+        "网络连接异常",
+        "Codex 当前额度",
+        "Codex 会话配置不兼容",
+        "Codex App Server",
+        "Codex 已登录，但高速会话不可用",
+    )
+    if raw_text.startswith(safe_prefixes) and "Command [" not in raw_text and len(raw_text) <= 520:
+        return raw_text
+    text = raw_text.casefold()
     if "winerror 2" in text or "no such file" in text or "enoent" in text or "未找到" in text or "未检测到 codex" in text:
         return "未找到本机 Codex，当前使用离线陪伴。"
     if "permission denied" in text or "access is denied" in text:
@@ -1362,11 +1385,36 @@ def classify_codex_failure(stderr: str) -> tuple[AIErrorKind, str]:
         return AIErrorKind.QUOTA_LIMIT, "Codex 当前额度或调用频率已达到限制，当前使用离线陪伴。"
     if any(marker in lowered for marker in ("unauthorized", "authentication required", "login required", "not logged in")):
         return AIErrorKind.AUTH_ERROR, "Codex 登录状态失效，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("unexpected argument", "unrecognized argument", "unknown option", "unknown argument")):
+        return AIErrorKind.CLI_INCOMPATIBLE, "Codex CLI 版本不兼容，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("model provider", "provider mismatch", "thread/resume", "thread is incompatible")):
+        return AIErrorKind.THREAD_INCOMPATIBLE, "Codex 会话配置不兼容，当前使用离线陪伴。"
     if any(marker in lowered for marker in ("timeout", "timed out")):
         return AIErrorKind.TIMEOUT, "Codex 响应超时，当前使用离线陪伴。"
     if any(marker in lowered for marker in ("network", "connection", "ssl", "tls", "websocket")):
         return AIErrorKind.NETWORK_ERROR, "网络连接异常，当前使用离线陪伴。"
     return AIErrorKind.UNKNOWN, "Codex 暂时不可用，当前使用离线陪伴。"
+
+
+def _safe_codex_failure_user_message(detail: str, kind: AIErrorKind) -> str:
+    """Map an App Server failure to one actionable, non-leaking UI sentence."""
+
+    lowered = str(detail or "").casefold()
+    if kind is AIErrorKind.CLI_INCOMPATIBLE or any(
+        marker in lowered for marker in ("unexpected argument", "unknown option", "不支持")
+    ):
+        return "Codex CLI 版本不兼容，当前使用兼容连接；当前仍不可用，已使用离线陪伴。"
+    if kind is AIErrorKind.THREAD_INCOMPATIBLE or any(
+        marker in lowered for marker in ("provider", "thread/resume", "thread is incompatible")
+    ):
+        return "Codex 会话配置不兼容，已切换到兼容连接；当前仍不可用，已使用离线陪伴。"
+    if "timeout" in lowered or "timed out" in lowered or "超时" in lowered:
+        return "Codex 响应超时，当前使用离线陪伴。"
+    if "network" in lowered or "connection" in lowered or "tls" in lowered:
+        return "网络连接异常，当前使用离线陪伴。"
+    if "not found" in lowered or "不存在" in lowered or "没有找到" in lowered:
+        return "未找到本机 Codex，当前使用离线陪伴。"
+    return "Codex 启动失败，当前使用离线陪伴。"
 
 
 def _codex_unsupported_argument(stderr: str) -> str:
@@ -1681,6 +1729,11 @@ def ask_codex(
         if last_completed.returncode == 0:
             raise AIConnectionError("Codex 返回了无法识别的内容，已切回离线回答。")
         failure_kind, user_message = classify_codex_failure(last_stderr)
+        if failure_kind is AIErrorKind.CLI_INCOMPATIBLE:
+            # The rejected flag is safe and materially more useful than a
+            # generic “offline” sentence.  _codex_failure_message has already
+            # removed command/prompt/token-shaped content.
+            user_message = _codex_failure_message(last_stderr, last_completed.returncode)
         raise AIConnectionError(
             _codex_failure_message(last_stderr, last_completed.returncode),
             kind=failure_kind,
@@ -1924,12 +1977,61 @@ class AIChatService:
         self._closing = False
         self._interrupted = False
         self._runtime_mode = "unknown"
+        self._last_error: AIConnectionError | None = None
+        self._last_error_stage = ""
+        self._app_server_disabled = False
 
     @property
     def runtime_mode(self) -> str:
         """Return the current Codex mode without exposing transport details in chat."""
 
         return self._runtime_mode
+
+    @property
+    def last_error_message(self) -> str:
+        """Return the last safe connection diagnosis for the status UI."""
+
+        return user_message_for_ai_error(self._last_error) if self._last_error else ""
+
+    @property
+    def last_error_kind(self) -> AIErrorKind | None:
+        """Return the classified kind without exposing private exception text."""
+
+        return self._last_error.kind if self._last_error else None
+
+    @property
+    def last_error_stage(self) -> str:
+        """Return the bounded internal lifecycle stage for diagnostics."""
+
+        return self._last_error_stage
+
+    def _remember_error(self, error: BaseException, *, stage: str) -> None:
+        """Keep a safe diagnosis while raw details stay in debug logs only."""
+
+        if isinstance(error, AIConnectionError):
+            classified = error
+        else:
+            detail = str(error)
+            lowered = detail.casefold()
+            if "timeout" in lowered or "timed out" in lowered:
+                kind = AIErrorKind.TIMEOUT
+            elif "provider" in lowered or "thread" in lowered:
+                kind = AIErrorKind.THREAD_INCOMPATIBLE
+            elif "network" in lowered or "connection" in lowered or "tls" in lowered:
+                kind = AIErrorKind.NETWORK_ERROR
+            else:
+                kind = AIErrorKind.LAUNCH_FAILED
+            classified = AIConnectionError(
+                detail,
+                kind=kind,
+                user_message=_safe_codex_failure_user_message(detail, kind),
+            )
+        self._last_error = classified
+        self._last_error_stage = str(stage or "unknown")[:40]
+
+    def _clear_error(self) -> None:
+        self._last_error = None
+        self._last_error_stage = ""
 
     def warm_codex(self) -> bool:
         """Warm the App Server in a background caller without spending a turn.
@@ -1938,15 +2040,25 @@ class AIChatService:
         only records that the next request should use the existing fallback.
         """
 
+        # A user-requested reconnect is the explicit permission to retry a
+        # previously failed App Server upgrade.
+        self._app_server_disabled = False
         try:
             with self._codex_app_server_lock:
                 client = self._get_codex_app_server()
                 client.ensure_ready()
             self._runtime_mode = "app_server"
+            self._clear_error()
             return True
         except (CodexAppServerError, OSError, ValueError) as exc:
-            LOGGER.info("Codex App Server warm-up unavailable kind=%s", type(exc).__name__)
+            self._remember_error(exc, stage="app_server_warmup")
+            LOGGER.info(
+                "Codex App Server warm-up unavailable kind=%s user_message=%s",
+                type(exc).__name__,
+                self.last_error_message,
+            )
             self._runtime_mode = "exec_https"
+            self._app_server_disabled = True
             self._close_codex_app_server()
             return False
 
@@ -2026,6 +2138,17 @@ class AIChatService:
                 )
             if on_delta is not None:
                 on_delta(delta)
+
+        if self._app_server_disabled:
+            try:
+                kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
+                answer = ask_codex(message, entries, local_context, **kwargs)
+            except AIConnectionError as exc:
+                self._remember_error(exc, stage="exec_fallback")
+                raise
+            self._clear_error()
+            self._runtime_mode = "exec_https"
+            return postprocess_ai_answer(answer, classify_intent(message, entries))
         try:
             with self._codex_app_server_lock:
                 client = self._get_codex_app_server()
@@ -2052,6 +2175,8 @@ class AIChatService:
             # app-server command, the session is corrupt, or the server exits.
             # The fallback is the already existing isolated read-only exec path.
             LOGGER.warning("[AI Codex] app-server failed; falling back to exec: %s", exc)
+            self._remember_error(exc, stage="app_server_turn")
+            self._app_server_disabled = True
             self._close_codex_app_server()
             self._runtime_mode = "exec_https"
             # A model can be available in one Codex account/platform and
@@ -2060,9 +2185,14 @@ class AIChatService:
             # second time.
             fallback_model = "" if selected_model and _looks_like_model_rejection(str(exc)) else None
             kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
-            answer = ask_codex(
-                message, entries, local_context, model_override=fallback_model, **kwargs
-            )
+            try:
+                answer = ask_codex(
+                    message, entries, local_context, model_override=fallback_model, **kwargs
+                )
+            except AIConnectionError as fallback_exc:
+                self._remember_error(fallback_exc, stage="exec_fallback")
+                raise
+            self._clear_error()
             LOGGER.info(
                 "AI chat completed provider=codex runtime=%s prompt_chars=%d total_ms=%d fallback_used=true",
                 self._runtime_mode,
@@ -2074,7 +2204,11 @@ class AIChatService:
                 # emitting it as another delta would duplicate the fallback.
                 pass
             return answer
+        except AIConnectionError as exc:
+            self._remember_error(exc, stage="exec_fallback")
+            raise
         intent = classify_intent(message, entries)
+        self._clear_error()
         return postprocess_ai_answer(answer, intent)
 
     def _get_codex_app_server(self) -> CodexAppServerClient:
@@ -2100,6 +2234,7 @@ class AIChatService:
                 thread_id,
                 cli_version=capabilities.version,
             ),
+            on_thread_invalidated=_clear_codex_thread_id,
             desired_provider=desired_provider,
             desired_transport=desired_transport,
         )
@@ -2131,6 +2266,8 @@ class AIChatService:
         self._interrupted = False
         self._closing = False
         self._runtime_mode = "unknown"
+        self._app_server_disabled = False
+        self._clear_error()
         self._close_codex_app_server()
         _clear_codex_thread_id()
 

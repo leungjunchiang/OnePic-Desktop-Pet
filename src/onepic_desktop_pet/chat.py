@@ -323,9 +323,12 @@ class ChatDialog(QDialog):
             # AgentManager 的 detail 可能是“Codex 已连接。”，再拼在
             # “Codex（使用本机登录）· 已连接”下面会造成截图中的重复状态。
             # 成功状态只保留一个稳定标签；失败状态才显示诊断原因。
-            if state != AgentConnectionState.CONNECTED.value and detail:
+            degraded_connected = state == AgentConnectionState.CONNECTED.value and any(
+                marker in detail for marker in ("不可用", "失败", "不兼容", "兼容连接")
+            )
+            if (state != AgentConnectionState.CONNECTED.value or degraded_connected) and detail:
                 detail = user_message_for_ai_error(detail)
-            suffix = "" if state == AgentConnectionState.CONNECTED.value else (f"\n{detail}" if detail else "")
+            suffix = "" if not detail or (state == AgentConnectionState.CONNECTED.value and not degraded_connected) else f"\n{detail}"
             detail = f"{preset.label} · {label}{suffix}"
         self.status_label.setText(detail)
 

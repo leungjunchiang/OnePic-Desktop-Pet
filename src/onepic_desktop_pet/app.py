@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import logging
 import sys
+from typing import ClassVar
 
 from PySide6.QtCore import QLockFile, QProcess, Qt, QTimer, QObject
 from PySide6.QtGui import QGuiApplication, QIcon
@@ -68,12 +69,19 @@ LOGGER = logging.getLogger(__name__)
 class DesktopPetApplication(QObject):
     """封装窗口、托盘与持久化状态的桌面宠物应用。"""
 
+    # QLockFile protects separate processes.  This second, process-local
+    # guard protects against a launcher/reconnect path constructing the app
+    # controller twice before Qt's event loop starts.
+    _active_instance: ClassVar["DesktopPetApplication | None"] = None
+
     def __init__(
         self,
         settings: PetSettings | None = None,
         *,
         instance_lock: QLockFile | None = None,
     ) -> None:
+        if type(self)._active_instance is not None:
+            raise RuntimeError("Lili application ownership already exists")
         if QApplication.instance() is None:
             QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -90,6 +98,7 @@ class DesktopPetApplication(QObject):
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
+        type(self)._active_instance = self
         self.window.quit_requested.connect(self.quit)
         self.update_manager = UpdateManager()
         self._content_update_worker: ContentUpdateWorker | None = None
@@ -208,6 +217,8 @@ class DesktopPetApplication(QObject):
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         finally:
+            if type(self)._active_instance is self:
+                type(self)._active_instance = None
             self._status_item_controller.close()
             self._dock_controller.close()
             self.tray.hide()

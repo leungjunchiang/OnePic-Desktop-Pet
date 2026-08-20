@@ -174,11 +174,13 @@ def test_app_server_replaces_resumed_thread_when_provider_changed(monkeypatch, t
         lambda *_args, **_kwargs: process,
     )
     saved: list[str] = []
+    invalidated: list[bool] = []
     client = CodexAppServerClient(
         ["codex", "app-server"],
         cwd=tmp_path,
         thread_id="thr_saved",
         on_thread_id=saved.append,
+        on_thread_invalidated=lambda: invalidated.append(True),
         desired_provider="lili_http",
         desired_transport="https",
     )
@@ -188,6 +190,7 @@ def test_app_server_replaces_resumed_thread_when_provider_changed(monkeypatch, t
     assert methods.count("thread/resume") == 1
     assert methods.count("thread/start") == 1
     assert saved == ["thr_fake"]
+    assert invalidated == [True]
     assert client.thread_id == "thr_fake"
     client.close()
 

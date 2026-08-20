@@ -146,7 +146,7 @@ class AgentDetectionThread(QThread):
 class AgentWarmupThread(QThread):
     """Warm one already-authenticated Codex runtime without blocking Qt."""
 
-    completed = Signal(bool)
+    completed = Signal(bool, str)
 
     def __init__(self, service: AIChatService, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -154,10 +154,11 @@ class AgentWarmupThread(QThread):
 
     def run(self) -> None:
         try:
-            self.completed.emit(bool(self.service.warm_codex()))
+            ok = bool(self.service.warm_codex())
+            self.completed.emit(ok, str(getattr(self.service, "last_error_message", "") or ""))
         except Exception as exc:
             LOGGER.info("Codex warm-up skipped error_type=%s", type(exc).__name__)
-            self.completed.emit(False)
+            self.completed.emit(False, "Codex 启动失败，当前使用离线陪伴。")
 
 
 class AgentManager(QObject):
@@ -317,11 +318,21 @@ class AgentManager(QObject):
     def warming(self) -> bool:
         return self._warmup_thread is not None and self._warmup_thread.isRunning()
 
-    def _warmup_finished(self) -> None:
+    def _warmup_finished(self, ok: bool = True, detail: str = "") -> None:
         thread = self._warmup_thread
         self._warmup_thread = None
         if thread is not None:
             thread.deleteLater()
+        if not ok and self.settings.ai_provider == "codex":
+            # Detection only proved that the CLI/login command works.  Keep
+            # the provider routable so stream_reply can use HTTPS exec, but
+            # expose the App Server failure instead of claiming a clean READY.
+            detail = detail or "Codex App Server 暂时不可用，将尝试兼容连接。"
+            self._set_status(
+                "codex",
+                AgentConnectionState.CONNECTED,
+                f"Codex 已登录，但高速会话不可用：{detail}",
+            )
 
     def shutdown(self) -> None:
         """退出时停止自动重连，并请求检测线程尽快结束。"""

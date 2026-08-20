@@ -3345,7 +3345,14 @@ class PetWindow(QWidget):
             # Keep chat as an independent utility window so it has a normal
             # taskbar/Dock entry and can be minimized without affecting pet.
             self._chat_dialog = ChatDialog(None, self._pet_name())
-            self._chat_dialog.message_submitted.connect(self._submit_chat_message)
+            # Opening the chat repeatedly must not add another signal
+            # connection.  A duplicate connection would submit one user
+            # message multiple times and make every retry look like a second
+            # pet or a second conversation.
+            self._chat_dialog.message_submitted.connect(
+                self._submit_chat_message,
+                Qt.ConnectionType.UniqueConnection,
+            )
             self._chat_dialog.stop_requested.connect(self._interrupt_chat)
             self._chat_dialog.settings_requested.connect(self.open_settings)
             self._chat_dialog.rename_requested.connect(self.rename_pet)
