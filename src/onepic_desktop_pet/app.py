@@ -511,3 +511,4 @@ def run(smoke_test_ms: int | None = None) -> int:
         if instance_lock.isLocked():
             instance_lock.unlock()
         raise
+
