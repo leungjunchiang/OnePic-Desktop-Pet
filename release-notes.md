@@ -1,3 +1,10 @@
+## v0.23.36 — 恢复 App Server 主通道与预热失败自愈
+
+- 启动期 App Server warm-up 失败只记录为 warmup_failed，不再把整个运行周期永久切换到较慢的 codex exec。
+- 首次真实聊天仍会重新尝试 App Server；成功后继续复用同一个进程和 thread，macOS 原有 executable、登录态与 transport 不变。
+- 只有真实 turn 生命周期失败才进入 60 秒 exec 冷却；冷却结束后由 AgentManager 后台重新预热 App Server。
+- 增加预热失败后首条真实消息成功、后续消息复用同一 App Server，以及后台恢复调度回归测试。
+
 ## v0.23.25 — Codex CLI 能力探测与 Mac 在线连接修复
 
 - App Server 改为使用最小启动命令 `codex app-server`，不再把 exec 专属参数、MCP/provider 覆盖或隔离参数传给 App Server。

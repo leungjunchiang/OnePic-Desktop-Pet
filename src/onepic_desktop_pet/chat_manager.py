@@ -170,6 +170,7 @@ class AgentManager(QObject):
     detection_finished = Signal()
 
     RECONNECT_INTERVAL_MS = 5 * 60_000
+    APP_SERVER_RECOVERY_DELAY_MS = 60_000
 
     def __init__(
         self,
@@ -185,6 +186,9 @@ class AgentManager(QObject):
         self.ai_service = ai_service
         self._thread: AgentDetectionThread | None = None
         self._warmup_thread: AgentWarmupThread | None = None
+        self._app_server_recovery_timer = QTimer(self)
+        self._app_server_recovery_timer.setSingleShot(True)
+        self._app_server_recovery_timer.timeout.connect(self._recover_codex_app_server)
         self._statuses: dict[str, AgentStatus] = {
             provider: AgentStatus(
                 provider,
@@ -271,6 +275,7 @@ class AgentManager(QObject):
 
         label = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["offline"]).label
         self._set_status(provider, AgentConnectionState.CONNECTED, f"{label} 已连接。")
+        self._schedule_app_server_recovery(provider)
 
     def mark_runtime_error(self, provider: str, detail: str) -> None:
         """AI 调用失败后缓存 error；只影响后续路由，不弹设置页。"""
@@ -280,6 +285,7 @@ class AgentManager(QObject):
             AgentConnectionState.ERROR,
             detail or "AI 暂时不可用，已自动切回离线陪伴。",
         )
+        self._schedule_app_server_recovery(provider)
 
     def mark_disconnected(self, provider: str, detail: str) -> None:
         """保存明确的缺失或未登录状态，不把中性检测文案误报为已连接。"""
@@ -312,13 +318,46 @@ class AgentManager(QObject):
             and self.status("codex").state is AgentConnectionState.CONNECTED
             and not self.warming
         ):
-            self._warmup_thread = AgentWarmupThread(self.ai_service, self)
-            self._warmup_thread.finished.connect(self._warmup_finished)
-            self._warmup_thread.start()
+            self._start_codex_warmup()
 
     @property
     def warming(self) -> bool:
         return self._warmup_thread is not None and self._warmup_thread.isRunning()
+
+    def _start_codex_warmup(self) -> bool:
+        """Start one background App Server probe without rechecking the CLI."""
+
+        if (
+            self.ai_service is None
+            or self.settings.ai_provider != "codex"
+            or self.warming
+            or self.checking
+        ):
+            return False
+        self._warmup_thread = AgentWarmupThread(self.ai_service, self)
+        self._warmup_thread.finished.connect(self._warmup_finished)
+        self._warmup_thread.start()
+        return True
+
+    def _schedule_app_server_recovery(self, provider: str) -> None:
+        """Retry a real-turn App Server circuit breaker after its cooldown."""
+
+        if provider != "codex" or self.ai_service is None:
+            return
+        if not bool(getattr(self.ai_service, "app_server_cooldown_active", False)):
+            return
+        if not self._app_server_recovery_timer.isActive():
+            self._app_server_recovery_timer.start(self.APP_SERVER_RECOVERY_DELAY_MS)
+
+    def _recover_codex_app_server(self) -> None:
+        """Re-probe the persistent runtime without blocking the chat UI."""
+
+        if self.settings.ai_provider != "codex" or self.ai_service is None:
+            return
+        if self.checking or self.warming:
+            self._app_server_recovery_timer.start(1000)
+            return
+        self._start_codex_warmup()
 
     def _warmup_finished(self, ok: bool = True, detail: str = "") -> None:
         thread = self._warmup_thread
@@ -335,11 +374,16 @@ class AgentManager(QObject):
                 AgentConnectionState.CONNECTED,
                 f"Codex 已登录，但高速会话不可用：{detail}",
             )
+            if not self._app_server_recovery_timer.isActive():
+                self._app_server_recovery_timer.start(self.APP_SERVER_RECOVERY_DELAY_MS)
+        elif ok and self.settings.ai_provider == "codex":
+            self._set_status("codex", AgentConnectionState.CONNECTED, "Codex 已连接。")
 
     def shutdown(self) -> None:
         """退出时停止自动重连，并请求检测线程尽快结束。"""
 
         self._reconnect_timer.stop()
+        self._app_server_recovery_timer.stop()
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
         if self._warmup_thread is not None and self._warmup_thread.isRunning():

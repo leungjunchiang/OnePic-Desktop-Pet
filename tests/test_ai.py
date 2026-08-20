@@ -445,6 +445,41 @@ def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
     assert service.stream_reply("codex", "中国的首都是哪里？", []) == "兼容连接已回复"
 
 
+
+def test_warmup_failure_does_not_disable_first_real_app_server_turn(monkeypatch) -> None:
+    """启动预热失败后，真实聊天仍应重新尝试并复用 App Server。"""
+
+    class FakeAppServer:
+        def __init__(self, *, warmup_fails: bool = False) -> None:
+            self.warmup_fails = warmup_fails
+            self.turn_calls = 0
+            self.is_running = True
+
+        def ensure_ready(self) -> None:
+            if self.warmup_fails:
+                raise OSError("temporary warm-up failure")
+
+        def stream_turn(self, *_args, **_kwargs) -> str:
+            self.turn_calls += 1
+            return f"App Server 回复 {self.turn_calls}"
+
+        def close(self) -> None:
+            self.is_running = False
+
+    warmup_client = FakeAppServer(warmup_fails=True)
+    persistent_client = FakeAppServer()
+    clients = iter((warmup_client, persistent_client, persistent_client))
+    service = AIChatService(FakeCredentials())
+    monkeypatch.setattr(service, "_get_codex_app_server", lambda: next(clients))
+
+    assert service.warm_codex() is False
+    assert service.runtime_mode == "warmup_failed"
+    assert service._app_server_disabled is False
+
+    assert service.stream_reply("codex", "第一句话", []) == "App Server 回复 1"
+    assert service.runtime_mode == "app_server"
+    assert service.stream_reply("codex", "第二句话", []) == "App Server 回复 2"
+    assert persistent_client.turn_calls == 2
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)

@@ -2185,6 +2185,8 @@ def ask_openai_responses(
 class AIChatService:
     """根据当前设置选择后端；在线失败由窗口层决定如何离线回退。"""
 
+    _APP_SERVER_FAILURE_COOLDOWN_SECONDS = 60.0
+
     def __init__(
         self,
         credential_store: CredentialStore | None = None,
@@ -2200,6 +2202,7 @@ class AIChatService:
         self._last_error: AIConnectionError | None = None
         self._last_error_stage = ""
         self._app_server_disabled = False
+        self._app_server_cooldown_until = 0.0
 
     @property
     def runtime_mode(self) -> str:
@@ -2253,16 +2256,54 @@ class AIChatService:
         self._last_error = None
         self._last_error_stage = ""
 
+    @property
+    def app_server_cooldown_active(self) -> bool:
+        """Return whether a real turn failure is temporarily using exec."""
+
+        return self._app_server_disabled_for_turn()
+
+    def _app_server_disabled_for_turn(self) -> bool:
+        """Apply the short real-turn circuit breaker, not warm-up state."""
+
+        if not self._app_server_disabled:
+            return False
+        # Keep compatibility with callers/tests that explicitly set the old
+        # flag. Runtime failures set a concrete expiry below.
+        if self._app_server_cooldown_until <= 0:
+            return True
+        if time.monotonic() < self._app_server_cooldown_until:
+            return True
+        self._app_server_disabled = False
+        self._app_server_cooldown_until = 0.0
+        LOGGER.info("Codex App Server cooldown expired; retrying persistent runtime")
+        return False
+
+    def _clear_app_server_cooldown(self) -> None:
+        self._app_server_disabled = False
+        self._app_server_cooldown_until = 0.0
+
+    def _enter_app_server_cooldown(self) -> None:
+        self._app_server_disabled = True
+        self._app_server_cooldown_until = (
+            time.monotonic() + self._APP_SERVER_FAILURE_COOLDOWN_SECONDS
+        )
+        LOGGER.info(
+            "Codex App Server turn failed; using exec fallback for %.0fs",
+            self._APP_SERVER_FAILURE_COOLDOWN_SECONDS,
+        )
+
     def warm_codex(self) -> bool:
         """Warm the App Server in a background caller without spending a turn.
 
-        HTTPS ``codex exec`` remains the compatibility底座: a failed warm-up
-        only records that the next request should use the existing fallback.
+        A warm-up failure is only a ``warmup_failed`` state. It must not
+        permanently disable the persistent runtime: the first real user turn
+        still gets one normal App Server attempt. HTTPS ``codex exec`` is a
+        fallback only after an actual turn lifecycle failure.
         """
 
         # A user-requested reconnect is the explicit permission to retry a
         # previously failed App Server upgrade.
-        self._app_server_disabled = False
+        self._clear_app_server_cooldown()
         try:
             with self._codex_app_server_lock:
                 client = self._get_codex_app_server()
@@ -2277,8 +2318,9 @@ class AIChatService:
                 type(exc).__name__,
                 self.last_error_message,
             )
-            self._runtime_mode = "exec_https"
-            self._app_server_disabled = True
+            self._runtime_mode = "warmup_failed"
+            # Do not turn a startup probe failure into a session-wide sticky
+            # exec fallback. A real user turn may succeed moments later.
             self._close_codex_app_server()
             return False
 
@@ -2358,7 +2400,7 @@ class AIChatService:
             if on_delta is not None:
                 on_delta(delta)
 
-        if self._app_server_disabled:
+        if self._app_server_disabled_for_turn():
             try:
                 kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
                 answer = ask_codex(
@@ -2401,7 +2443,7 @@ class AIChatService:
             # The fallback is the already existing isolated read-only exec path.
             LOGGER.warning("[AI Codex] app-server failed; falling back to exec: %s", exc)
             self._remember_error(exc, stage="app_server_turn")
-            self._app_server_disabled = True
+            self._enter_app_server_cooldown()
             self._close_codex_app_server()
             self._runtime_mode = "exec_https"
             # A model can be available in one Codex account/platform and
@@ -2492,7 +2534,7 @@ class AIChatService:
         self._interrupted = False
         self._closing = False
         self._runtime_mode = "unknown"
-        self._app_server_disabled = False
+        self._clear_app_server_cooldown()
         self._clear_error()
         self._close_codex_app_server()
         _clear_codex_thread_id()

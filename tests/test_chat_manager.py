@@ -121,6 +121,34 @@ def test_background_detection_updates_cache_once_without_chat_recheck(monkeypatc
     manager.shutdown()
 
 
+
+def test_agent_manager_schedules_app_server_recovery_after_real_turn_cooldown() -> None:
+    """真实 turn 走 exec 后，AgentManager 会后台重新预热 App Server。"""
+
+    class RecoveryService:
+        app_server_cooldown_active = True
+
+        def __init__(self) -> None:
+            self.warm_calls = 0
+
+        def warm_codex(self) -> bool:
+            self.warm_calls += 1
+            return True
+
+    app = _app()
+    settings = PetSettings(ai_provider="codex")
+    service = RecoveryService()
+    agents = AgentManager(settings, FakeCredentials(), ai_service=service)
+    agents.APP_SERVER_RECOVERY_DELAY_MS = 1
+
+    agents.mark_runtime_success("codex")
+    deadline = datetime.now().timestamp() + 2
+    while service.warm_calls == 0 and datetime.now().timestamp() < deadline:
+        app.processEvents()
+        QTest.qWait(10)
+
+    assert service.warm_calls == 1
+    agents.shutdown()
 def test_chatgpt_gui_without_codex_cli_is_not_routable_as_connected(monkeypatch) -> None:
     """中性 GUI 文案必须保留，但实际聊天不能误调用不存在的 Codex CLI。"""
 
