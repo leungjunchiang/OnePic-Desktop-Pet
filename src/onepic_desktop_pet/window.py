@@ -35,6 +35,7 @@ Agent 快速定位：
 本模块启动后只在后台低频检测 Agent；每条聊天不重复完整检测，普通动画、牢骚和报时均不访问网络。
 API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 app.py 在退出时完成。
 `user_assets/` 默认不进入 Git；只有用户主动放入的自拍图片才会在本机显示。
+右键菜单和附属窗口使用宠物所在显示器的 Qt 全局逻辑坐标，不混用物理像素。
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from PySide6.QtGui import (
     QCursor,
     QDesktopServices,
     QFont,
+    QGuiApplication,
     QHideEvent,
     QMouseEvent,
     QMoveEvent,
@@ -178,10 +180,24 @@ from .workflow import WorkflowError, character_is_approved, load_workflow
 from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
 from .todo_center import TodoCenterWindow
+
+
 from .compact_todo import CompactTodoPanel
 from .menu_model import UnifiedMenuModel, populate_qmenu
 from .night_limited import night_limited_activity
 from . import __version__
+
+
+def clamp_global_popup_position(global_pos: QPoint, popup_size: QSize, available: QRect) -> QPoint:
+    """Clamp a Qt logical global popup point to one monitor, including negatives."""
+
+    width = max(1, int(popup_size.width()))
+    height = max(1, int(popup_size.height()))
+    right = available.right() - width + 1
+    bottom = available.bottom() - height + 1
+    x = min(max(global_pos.x(), available.left()), max(available.left(), right))
+    y = min(max(global_pos.y(), available.top()), max(available.top(), bottom))
+    return QPoint(x, y)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -400,7 +416,10 @@ class PetWindow(QWidget):
         self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
         self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
         self.credentials = CredentialStore()
-        self.ai_service = AIChatService(self.credentials)
+        self.ai_service = AIChatService(
+            self.credentials,
+            codex_path=getattr(self.settings, "codex_executable_path", ""),
+        )
         self.social_client = SocialClient(
             persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -444,6 +463,7 @@ class PetWindow(QWidget):
             local_context_provider=self.time_memory.summary.context,
             action_executor=self.time_memory.actions,
             todo_now_provider=self.time_memory.now,
+            local_command_handler=self._handle_chat_local_command,
         )
         self.music_provider_manager = MusicProviderManager(self.settings)
         self.music_controller = MusicController(
@@ -807,7 +827,7 @@ class PetWindow(QWidget):
         return QPixmap()
 
     def place_at_start(self) -> None:
-        """按已保存位置或主屏幕右下角放置窗口。"""
+        """Restore a saved global position, or use the primary-screen default."""
 
         screen = QApplication.primaryScreen()
         if screen is None:
@@ -2346,6 +2366,24 @@ class PetWindow(QWidget):
             self._show_work_controls()
         return reply
 
+    def _handle_chat_local_command(self, message: str) -> ManagedChatReply | None:
+        """Route explicit work controls through the existing shared session."""
+
+        text = " ".join(str(message or "").replace("六毛", "", 1).split())
+        text = text.strip(" ，,。.!！")
+        reply: CompanionReply | None = None
+        if text in {"开始工作", "开工", "开始计时"}:
+            reply = self.start_work_timer()
+        elif text in {"暂停", "暂停工作", "暂停计时"}:
+            reply = self.pause_work_timer()
+        elif text in {"继续", "继续工作", "恢复计时"}:
+            reply = self.resume_work()
+        elif text in {"结束工作", "结束计时", "收工"}:
+            reply = self.finish_work_timer()
+        if reply is None:
+            return None
+        return ManagedChatReply(reply.text, reply.state, "local-action")
+
     def pause_work_timer(self, reason: str = "") -> CompanionReply:
         """Pause the shared timer through one path, preserving the reason."""
 
@@ -3636,6 +3674,9 @@ class PetWindow(QWidget):
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
             return True
+        self.ai_service.codex_path = str(
+            getattr(self.settings, "codex_executable_path", "") or ""
+        ).strip()
         current_pet_name = self._pet_name()
         self.setWindowTitle(f"{APP_DISPLAY_NAME} · {current_pet_name}")
         if self._chat_dialog is not None:
@@ -4955,7 +4996,12 @@ class PetWindow(QWidget):
         if time.monotonic() < self._suppress_context_until:
             event.accept()
             return
-        self._pending_context_global = event.globalPos()
+        global_position = getattr(event, "globalPosition", None)
+        self._pending_context_global = (
+            global_position().toPoint()
+            if callable(global_position)
+            else event.globalPos()
+        )
         self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
         event.accept()
 
@@ -4964,7 +5010,27 @@ class PetWindow(QWidget):
 
         if time.monotonic() >= self._suppress_context_until:
             self.work_controls.hide()
-            self._build_context_menu().exec(self._pending_context_global)
+            menu = self._build_context_menu()
+            if bool(getattr(self.settings, "always_on_top", False)):
+                # Keep the popup above the desktop-mode pet without changing
+                # the ownership or flags of the real pet window.
+                menu.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            menu.ensurePolished()
+            point = self._pending_context_global
+            screen = QGuiApplication.screenAt(point) or self.screen() or QGuiApplication.primaryScreen()
+            if screen is not None:
+                point = clamp_global_popup_position(
+                    point,
+                    menu.sizeHint(),
+                    screen.availableGeometry(),
+                )
+                LOGGER.debug(
+                    "context menu popup: point=%s screen=%s available=%s",
+                    point,
+                    screen.name(),
+                    screen.availableGeometry(),
+                )
+            menu.exec(point)
 
     def eventFilter(self, watched, event) -> bool:
         """收起工作条并记录 Lili 窗口焦点变化，绝不主动重新激活。"""

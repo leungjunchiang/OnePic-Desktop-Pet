@@ -4,6 +4,8 @@
 本模块只负责跨平台 JSONL 传输、一次初始化、thread 生命周期、turn 流式事件
 和中断；模型选择、提示词与失败回退仍由 ai.py 负责。客户端不复制登录令牌，
 认证继续由 Codex CLI 使用本机已有的登录状态完成。
+App Server stderr is bounded and redacted before debug logging; user-facing
+transport failures are classified by the owning AI service.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -286,6 +289,13 @@ class CodexAppServerClient:
                 # Never log prompts, tokens, or the full server output.  This is
                 # only a bounded diagnostic useful when the child exits.
                 compact = " ".join(raw_line.split())
+                compact = re.sub(r"(?i)command\s*\[[^\]]*\]", "Command [REDACTED]", compact)
+                compact = re.sub(r"(?i)(prompt|system\s+prompt)\s*[:=].*$", r"\1=<redacted>", compact)
+                compact = re.sub(
+                    r"(?i)(authorization|api[_ -]?key|token|access[_ -]?token)\s*[:=]\s*\S+",
+                    r"\1=<redacted>",
+                    compact,
+                )
                 if compact:
                     LOGGER.debug("[AI Codex] app-server: %s", compact[:300])
         except (OSError, ValueError):

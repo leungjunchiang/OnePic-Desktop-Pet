@@ -15,6 +15,7 @@
 
 聊天窗口只保留当前显示的渲染内容；有限的聊天会话由窗口层分开保存在本机，
 用户可以清空显示、开始新对话或删除全部聊天记录。待办和提醒不属于聊天记录。
+连接检测只向普通界面传递用户友好错误，不渲染 subprocess 命令或系统提示词。
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ from .ai import (
     find_codex_gui_app,
     launch_codex_gui,
     provider_defaults,
+    user_message_for_ai_error,
 )
 from . import __version__
 from .config import PET_NAME
@@ -117,6 +119,7 @@ class ConnectionCheckThread(QThread):
         credentials: CredentialStore,
         base_url: str,
         token: str,
+        codex_path: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -124,6 +127,7 @@ class ConnectionCheckThread(QThread):
         self.credentials = credentials
         self.base_url = base_url
         self.token = token
+        self.codex_path = codex_path
 
     def run(self) -> None:
         try:
@@ -132,9 +136,10 @@ class ConnectionCheckThread(QThread):
                 self.credentials,
                 self.base_url,
                 self.token,
+                self.codex_path,
             )
         except AIConnectionError as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(user_message_for_ai_error(exc))
         except Exception:
             self.failed.emit("检测遇到意外问题，请稍后重试。")
         else:
@@ -318,6 +323,8 @@ class ChatDialog(QDialog):
             # AgentManager 的 detail 可能是“Codex 已连接。”，再拼在
             # “Codex（使用本机登录）· 已连接”下面会造成截图中的重复状态。
             # 成功状态只保留一个稳定标签；失败状态才显示诊断原因。
+            if state != AgentConnectionState.CONNECTED.value and detail:
+                detail = user_message_for_ai_error(detail)
             suffix = "" if state == AgentConnectionState.CONNECTED.value else (f"\n{detail}" if detail else "")
             detail = f"{preset.label} · {label}{suffix}"
         self.status_label.setText(detail)
@@ -770,6 +777,9 @@ class AISettingsDialog(QDialog):
         form.addRow("API 地址", self.base_url)
         self.model = QLineEdit(settings.ai_model)
         form.addRow("模型", self.model)
+        self.codex_path = QLineEdit(getattr(settings, "codex_executable_path", ""))
+        self.codex_path.setPlaceholderText("留空自动查找；Windows 可填 codex.cmd 的完整路径")
+        form.addRow("Codex 路径", self.codex_path)
         self.token = QLineEdit()
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("留空则保留已安全保存的令牌")
@@ -1106,7 +1116,8 @@ class AISettingsDialog(QDialog):
             self.credentials,
             self.base_url.text().strip(),
             self.token.text().strip(),
-            self,
+            codex_path=self.codex_path.text().strip(),
+            parent=self,
         )
         self._connection_thread.succeeded.connect(self._manual_check_succeeded)
         self._connection_thread.failed.connect(self._manual_check_failed)
@@ -1156,6 +1167,7 @@ class AISettingsDialog(QDialog):
         self.settings.ai_provider = provider
         self.settings.ai_base_url = self.base_url.text().strip()
         self.settings.ai_model = self.model.text().strip()
+        self.settings.codex_executable_path = self.codex_path.text().strip()[:1200]
         self.settings.always_on_top = self.always_on_top.isChecked()
         self.settings.content_updates_enabled = self.content_updates.isChecked()
         self.settings.program_updates_enabled = self.program_updates.isChecked()

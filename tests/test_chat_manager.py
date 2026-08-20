@@ -298,7 +298,8 @@ def test_online_chat_action_writes_todo_and_emits_refresh_signal(tmp_path) -> No
     assert actions.count() == 1
     assert memory.todos.find("修改论文") is not None
     assert len(memory.reminders.items) == 1
-    assert "已经放进待办" in replies.at(0)[0].text
+    assert "放进待办了" in replies.at(0)[0].text
+    assert "新增" not in replies.at(0)[0].text
     assert service.calls == 0
     manager.shutdown()
 

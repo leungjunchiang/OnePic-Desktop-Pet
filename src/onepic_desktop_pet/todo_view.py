@@ -3,6 +3,8 @@
 Manual Todos remain the source of truth for tasks. Countdown and anniversary
 records are projected into this view while they are close enough to be useful;
 no duplicate Todo record is created.
+Creation metadata remains available to detail views but is never used as a
+main-list event date.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable
+import re
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,23 @@ def todo_event_parts(item: Any) -> tuple[str, str | None]:
     return date_value, time_value
 
 
+def display_todo_title(item: Any) -> str:
+    """Return the user title without leaking a legacy creation-date prefix.
+
+    Old builds occasionally prefixed a title in the renderer, and a few
+    records may have persisted that exact prefix.  Only remove it when the
+    date is an exact natural-day match for ``created_at``; user-entered dates
+    remain untouched.  This is display-only and never rewrites storage.
+    """
+
+    title = str(getattr(item, "title", "") or "").strip()
+    created = str(getattr(item, "created_at", "") or "")[:10]
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})\s*[·•]\s*", title)
+    if match and created and match.group(1) == created:
+        return title[match.end():].strip()
+    return title
+
+
 def collect_todo_view(
     todos: Iterable[Any],
     countdowns: Iterable[Any],
@@ -108,14 +128,15 @@ def collect_todo_view(
     result: list[TodoViewItem] = []
     for item in todos:
         event_date, event_time = todo_event_parts(item)
-        text = str(item.title)
+        title = display_todo_title(item)
+        text = title
         if event_time:
             text += f" · {event_time}"
         if show_future_dates and today_date and event_date and event_date != today_date:
             text = f"{_todo_date_label(event_date, today_date)} · {text}"
         result.append(
             TodoViewItem(
-                id=str(item.id), title=str(item.title), date=event_date,
+                id=str(item.id), title=title, date=event_date,
                 time=event_time,
                 important=bool(getattr(item, "important", False)),
                 completed=bool(getattr(item, "completed", False)),

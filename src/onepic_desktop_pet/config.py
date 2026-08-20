@@ -17,6 +17,7 @@ Agent 快速定位：
 输入为 JSON 文件，输出为 PetSettings 实例。保存操作会创建用户配置目录并原子写入
 窗口、AI 提供方与陪伴开关，不会覆盖项目默认配置，也不访问网络。
 Lili 使用独立的本地设置目录，同时兼容读取旧“六毛工作搭子”的尺寸与位置。
+Codex 的可执行路径是非敏感的用户配置；令牌仍只进入系统凭据库。
 """
 
 from __future__ import annotations
@@ -79,6 +80,7 @@ class PetSettings:
     ai_provider: str = "offline"
     ai_base_url: str = ""
     ai_model: str = ""
+    codex_executable_path: str = ""
     automatic_grumbling: bool = True
     hourly_announcement: bool = False
     # Show the current work-session duration in the pet work-control bubble.
@@ -200,6 +202,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.ai_provider = "offline"
     settings.ai_base_url = str(settings.ai_base_url).strip()[:500]
     settings.ai_model = str(settings.ai_model).strip()[:120]
+    settings.codex_executable_path = str(settings.codex_executable_path).replace("\x00", "").strip()[:1200]
     settings.automatic_grumbling = bool(settings.automatic_grumbling)
     settings.hourly_announcement = bool(settings.hourly_announcement)
     settings.show_work_duration = bool(settings.show_work_duration)
@@ -303,6 +306,7 @@ def load_settings(
                 "ai_provider",
                 "ai_base_url",
                 "ai_model",
+                "codex_executable_path",
                 "automatic_grumbling",
                 "hourly_announcement",
                 "show_work_duration",
@@ -377,6 +381,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "ai_provider": settings.ai_provider,
         "ai_base_url": settings.ai_base_url,
         "ai_model": settings.ai_model,
+        "codex_executable_path": settings.codex_executable_path,
         "automatic_grumbling": settings.automatic_grumbling,
         "hourly_announcement": settings.hourly_announcement,
         "show_work_duration": settings.show_work_duration,

@@ -4,11 +4,14 @@ The classifier is deliberately conservative.  A title that can also be a
 normal sentence stays casual unless the user supplies clear song context.
 It does not answer questions or rewrite facts; it only decides which local
 knowledge and response budget are appropriate.
+Offline message-type classification is kept separate from the existing
+knowledge intent and never performs local writes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable
 
 
@@ -19,6 +22,15 @@ SONG_QUERY = "song_query"
 EMOTIONAL_SUPPORT = "emotional_support"
 WORK_COMPANION = "work_companion"
 RELATION_QUERY = "relation_query"
+
+CASUAL_CHAT_MESSAGE = "CASUAL_CHAT"
+FACTUAL_QUESTION = "FACTUAL_QUESTION"
+MEMORY_RECALL = "MEMORY_RECALL"
+TASK_COMMAND = "TASK_COMMAND"
+TODO_COMMAND = "TODO_COMMAND"
+TIMER_COMMAND = "TIMER_COMMAND"
+EMOTIONAL_CHAT = "EMOTIONAL_CHAT"
+UNKNOWN_MESSAGE = "UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -79,6 +91,31 @@ def _history_text(history: Iterable[tuple[str, str]]) -> str:
 
 def _contains(text: str, markers: Iterable[str]) -> bool:
     return any(marker in text for marker in markers)
+
+
+def classify_offline_message(message: str) -> str:
+    """Classify fallback traffic without creating a second Todo router."""
+
+    text = _clean(message)
+    if not text:
+        return UNKNOWN_MESSAGE
+    if re.search(r"^(?:开始工作|开工|开始计时|暂停(?:工作|计时)?|继续工作|恢复计时|结束工作|收工)", text):
+        return TIMER_COMMAND
+    if re.search(r"加到待办|加入待办|放到待办|放进待办|记到待办|创建待办|新增待办|添加待办|提醒我|设置提醒|帮我记", text):
+        return TODO_COMMAND
+    if re.search(r"还记得|记不记得|你.*记得|知不知道|你知道.*吗|记得什么|记得谁", text):
+        return MEMORY_RECALL
+    if _contains(text, ("好累", "很累", "不想干", "好烦", "崩溃", "难过", "想休息")):
+        return EMOTIONAL_CHAT
+    if _contains(text, ("你的状态", "你怎么样", "精力", "饱食度", "心情怎么样")):
+        return CASUAL_CHAT_MESSAGE
+    if re.search(r"(哪里|哪儿|是什么|什么意思|为什么|怎么|多少|哪位|哪一年|\?|？)", text):
+        return FACTUAL_QUESTION
+    if _contains(text, ("待办", "提醒")):
+        return TODO_COMMAND
+    if _contains(text, ("工作", "任务", "论文", "学习", "专注")):
+        return CASUAL_CHAT_MESSAGE
+    return CASUAL_CHAT_MESSAGE
 
 
 def _has_explicit_song_context(text: str) -> bool:

@@ -31,10 +31,18 @@ from .ai import (
     CredentialStore,
     PROVIDER_PRESETS,
     check_provider_connection,
+    user_message_for_ai_error,
 )
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
+from .chat_intent import (
+    EMOTIONAL_CHAT,
+    FACTUAL_QUESTION,
+    MEMORY_RECALL,
+    TIMER_COMMAND,
+    classify_offline_message,
+)
 from .liumao_worldview import story_response, worldview_response
 from .song_knowledge import offline_song_reply, song_prompt_context
 from .structured_actions import ActionResult, LocalActionExecutor, extract_action
@@ -116,9 +124,12 @@ class AgentDetectionThread(QThread):
                     provider,
                     self.credentials,
                     self.settings.ai_base_url if provider == self.settings.ai_provider else "",
+                    codex_path=getattr(self.settings, "codex_executable_path", "")
+                    if provider == "codex" else "",
                 )
             except AIConnectionError as exc:
-                detail = str(exc)
+                LOGGER.debug("AI 检测失败 kind=%s error_type=%s", getattr(exc, "kind", "unknown"), type(exc).__name__)
+                detail = user_message_for_ai_error(exc)
                 state = self._failure_state(detail)
             except Exception:
                 detail = "后台检测遇到意外问题，稍后会自动重试。"
@@ -343,6 +354,27 @@ class OfflineDialogueManager:
             song_reply = None
         if song_reply:
             return ManagedChatReply(song_reply, PetState.CURIOUS, "offline")
+        message_type = classify_offline_message(text)
+        if message_type == FACTUAL_QUESTION:
+            return ManagedChatReply(
+                "在线 AI 这会儿没连上，这个问题六毛不想乱答。等连上以后我再跟你认真说。",
+                PetState.CURIOUS,
+                "offline",
+                True,
+            )
+        if message_type == MEMORY_RECALL:
+            return ManagedChatReply(
+                "我现在是离线陪伴，暂时调不出完整记忆；等在线 AI 连上，我再认真跟你聊。",
+                PetState.CURIOUS,
+                "offline",
+                True,
+            )
+        if message_type == TIMER_COMMAND:
+            return ManagedChatReply(
+                "工作计时请用桌面上的工作控制按钮操作，六毛不会把这句话当成聊天任务。",
+                PetState.CURIOUS,
+                "offline",
+            )
         if self._is_complex(text):
             return ManagedChatReply(
                 "现在是离线模式，等 AI 恢复后再帮你处理。你也可以先告诉我最着急的那一小步，六毛会继续陪你。",
@@ -463,7 +495,8 @@ class AIReplyThread(QThread):
                 if answer:
                     self.delta.emit(answer)
         except AIConnectionError as exc:
-            self.failed.emit(str(exc))
+            LOGGER.debug("AI 请求失败 kind=%s error_type=%s", getattr(exc, "kind", "unknown"), type(exc).__name__)
+            self.failed.emit(user_message_for_ai_error(exc))
         except Exception:
             self.failed.emit("AI 连接遇到意外问题，已自动切回离线陪伴。")
         else:
@@ -491,6 +524,7 @@ class ChatManager(QObject):
         local_context_provider: Callable[[], str] | None = None,
         action_executor: LocalActionExecutor | None = None,
         todo_now_provider: Callable[[], datetime] | None = None,
+        local_command_handler: Callable[[str], ManagedChatReply | None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
@@ -500,6 +534,7 @@ class ChatManager(QObject):
         self.local_context_provider = local_context_provider or (lambda: "")
         self.action_executor = action_executor
         self.todo_now_provider = todo_now_provider
+        self.local_command_handler = local_command_handler
         self._thread: AIReplyThread | None = None
         self._pending_message = ""
         self._pending_history: list[tuple[str, str]] = []
@@ -523,6 +558,15 @@ class ChatManager(QObject):
         if self.busy:
             self.notice.emit("上一句话还在路上，稍等我一下。")
             return False
+        if self.local_command_handler is not None:
+            try:
+                local_reply = self.local_command_handler(message)
+            except Exception as exc:
+                LOGGER.warning("本地聊天动作失败：%s", type(exc).__name__)
+                local_reply = None
+            if local_reply is not None:
+                self.reply_ready.emit(local_reply)
+                return True
         # Explicit date/time plans should not wait for a model.  This is both
         # faster and more reliable: the same local action executor used by an
         # AI JSON action writes the task and reminder before we acknowledge it.
@@ -538,7 +582,7 @@ class ChatManager(QObject):
                 LOGGER.debug("待办快速解析跳过：%s", exc)
                 fast_action = None
             if fast_action is not None:
-                result = self._execute_local_action(fast_action)
+                result = self._execute_local_action(fast_action, user_text=message)
                 if result is not None:
                     self.reply_ready.emit(
                         ManagedChatReply(
@@ -628,11 +672,16 @@ class ChatManager(QObject):
         self.agents.mark_runtime_success(self._pending_provider)
         action = extract_action(answer)
         if action is not None and self.action_executor is not None:
-            result = self._execute_local_action(action)
+            result = self._execute_local_action(action, user_text=self._pending_message)
             if result is not None:
                 # Structured-only responses are replaced with a safe local
                 # confirmation; a normal conversational answer remains intact.
-                if not result.ok:
+                if result.data.get("permission_denied"):
+                    # A model suggestion without explicit user authorization
+                    # is not a user-visible Todo operation.  Keep the normal
+                    # conversational answer and do not expose the gate.
+                    result = None
+                elif not result.ok:
                     answer = result.reply_hint
                 elif answer.lstrip().startswith("{") or "```" in answer:
                     answer = result.reply_hint or "已按本地记录处理。"
@@ -641,13 +690,25 @@ class ChatManager(QObject):
         state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
         self.reply_ready.emit(ManagedChatReply(answer, state, "ai"))
 
-    def _execute_local_action(self, action: dict[str, object]) -> ActionResult | None:
+    def _execute_local_action(
+        self,
+        action: dict[str, object],
+        *,
+        user_text: str | None = None,
+    ) -> ActionResult | None:
         """Run one local action and emit the refresh signal exactly once."""
 
         if self.action_executor is None:
             return None
         try:
-            result = self.action_executor.execute(action)
+            try:
+                result = self.action_executor.execute(action, user_text=user_text)
+            except TypeError as exc:
+                # Keep compatibility with small test/integration executors
+                # that predate the write-side user_text argument.
+                if "user_text" not in str(exc):
+                    raise
+                result = self.action_executor.execute(action)
         except (KeyError, TypeError, ValueError, OSError) as exc:
             LOGGER.warning("本地待办动作执行失败：%s", exc)
             result = ActionResult(
@@ -699,4 +760,3 @@ def should_start_startup_detection() -> bool:
     """自动测试使用演示素材时跳过真实 Agent/网络探测。"""
 
     return os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-
