@@ -14,3 +14,4 @@ def test_app_lock_allows_one_process_only(tmp_path):
         assert not second.tryLock(100)
     finally:
         first.unlock()
+
