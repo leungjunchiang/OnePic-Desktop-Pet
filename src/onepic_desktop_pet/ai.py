@@ -1630,7 +1630,6 @@ def _run_codex_jsonl_streaming(
                 command,
                 cwd=cwd,
                 capture_output=False,
-                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
