@@ -98,6 +98,25 @@ def test_windows_netease_launch_uses_exe_cwd_and_webcmd(tmp_path, monkeypatch) -
     )]
 
 
+def test_windows_single_instance_exit_is_not_treated_as_launch_failure(tmp_path, monkeypatch) -> None:
+    executable = tmp_path / "cloudmusic.exe"
+    executable.write_bytes(b"MZ")
+
+    class Process:
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr("onepic_desktop_pet.music._windows_process_ids", lambda _name: {1234})
+    monkeypatch.setattr("onepic_desktop_pet.music.subprocess.Popen", lambda *_args, **_kwargs: Process())
+
+    assert open_music_url(
+        "orpheus://song/66525/?autoplay=1",
+        platform_name="win32",
+        service="netease",
+        executable=executable,
+    )
+
+
 def test_catalog_default_windows_launcher_uses_configured_netease_exe(tmp_path, monkeypatch) -> None:
     executable = tmp_path / "cloudmusic.exe"
     executable.write_bytes(b"MZ")
