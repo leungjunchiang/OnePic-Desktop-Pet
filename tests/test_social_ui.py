@@ -163,7 +163,7 @@ def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted()
     assert first is not None and last is not None
     assert any("甲家的六毛" in label.text() for label in first.findChildren(QLabel))
     assert any("已离线" in label.text() for label in last.findChildren(QLabel))
-    assert any("本周已专注 20:00" in label.text() for label in first.findChildren(QLabel))
+    assert any("本周已专注 20分钟" in label.text() for label in first.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -176,7 +176,7 @@ def test_homepage_uses_weekly_focus_leaderboard_labels() -> None:
     })
     app.processEvents()
     assert "甲家的六毛" in dialog.wealth_leaderboard.item(0).text()
-    assert "本周专注 1:01:00" in dialog.wealth_leaderboard.item(0).text()
+    assert "本周专注 1小时1分钟" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
