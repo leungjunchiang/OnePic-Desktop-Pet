@@ -2952,7 +2952,14 @@ class PetWindow(QWidget):
         note.move(x, y)
 
     def _position_visit_status_bubble(self) -> None:
-        """Place the compact visitor label at the pet's lower-left side."""
+        """Place the visit label in the lower red-zone beside work duration.
+
+        The compact todo panel occupies the pet's upper-left area.  Putting
+        the visit label at "bottom - height" made it float over those todo
+        rows, especially when the pet was dragged to the lower-right corner.
+        Keep it on the same baseline as the work-duration bubble, immediately
+        to that bubble's left, so both status labels share one reserved row.
+        """
 
         bubble = self.visit_status_bubble
         if not bubble.isVisible():
@@ -2964,11 +2971,17 @@ class PetWindow(QWidget):
         right = self.x() + (bounds.right() + 1 if not bounds.isEmpty() else self.width())
         bottom = self.y() + (bounds.bottom() + 1 if not bounds.isEmpty() else self.height())
         gap = 7
-        x = left - bubble.width() - gap
-        y = bottom - bubble.height() - 16
+        duration_bubble = getattr(self, "work_duration_bubble", None)
+        if duration_bubble is not None and duration_bubble.isVisible():
+            duration_bubble.adjustSize()
+            x = duration_bubble.x() - bubble.width() - gap
+            y = duration_bubble.y()
+        else:
+            x = left - bubble.width() - gap
+            y = bottom + gap
         if area is not None:
             if x < area.left():
-                x = right + gap
+                x = max(area.left(), right + gap)
             x = min(max(x, area.left()), area.right() - bubble.width() + 1)
             y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
         bubble.move(x, y)
