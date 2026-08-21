@@ -45,12 +45,41 @@ MACOS_DESKTOP_SHELL_NAMES = frozenset(
     }
 )
 
+# Windows exposes the wallpaper and desktop icon host as a full-monitor
+# foreground window too.  These class names identify Explorer's shell rather
+# than a video, presentation, or document window.
+WINDOWS_DESKTOP_SHELL_CLASSES = frozenset(
+    {
+        "progman",
+        "workerw",
+        "shell_traywnd",
+        "shell_secondarytraywnd",
+    }
+)
+
 
 def _is_macos_desktop_shell(name: str) -> bool:
     """Return whether *name* is macOS's desktop/compositor, not a document app."""
 
     normalized = " ".join(str(name or "").casefold().split())
     return normalized in MACOS_DESKTOP_SHELL_NAMES
+
+
+def _is_windows_desktop_shell_class(name: str) -> bool:
+    """Return whether a Win32 class belongs to Explorer's desktop shell."""
+
+    return str(name or "").casefold().strip() in WINDOWS_DESKTOP_SHELL_CLASSES
+
+
+def _windows_foreground_is_desktop_shell(user32, hwnd) -> bool:
+    """Check the foreground HWND class without reading window text/content."""
+
+    try:
+        buffer = ctypes.create_unicode_buffer(256)
+        length = int(user32.GetClassNameW(hwnd, buffer, len(buffer)))
+        return length > 0 and _is_windows_desktop_shell_class(buffer.value)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
 
 
 def classify_application(name: str) -> str:
@@ -201,6 +230,11 @@ def active_window_is_fullscreen() -> bool:
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
+            return False
+        # Clicking wallpaper makes Explorer's Progman/WorkerW window the
+        # foreground HWND. It fills the monitor, but it is not real fullscreen
+        # content and must not hide the desktop pet.
+        if _windows_foreground_is_desktop_shell(user32, hwnd):
             return False
 
         class RECT(ctypes.Structure):
