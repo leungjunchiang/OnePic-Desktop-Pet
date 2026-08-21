@@ -1026,6 +1026,18 @@ class MusicProviderManager:
                     artist,
                 )
         if not launch.fallback_used and not activation and not adapter_activation and not used_native_random:
+            web_fallback = self.catalog_music_service.open_song_web_fallback(launch.song)
+            if web_fallback.success:
+                return SongPlaybackResult(
+                    True,
+                    web_fallback.provider,
+                    web_fallback.song.title,
+                    artist,
+                    web_fallback.message,
+                    selected=selected,
+                    play_attempts=1,
+                    outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED,
+                )
             return SongPlaybackResult(
                 False,
                 launch.provider,
