@@ -1966,7 +1966,7 @@ class PetWindow(QWidget):
                 3000,
             )
         else:
-            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "milk-tea"}.get(food_key)
+            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "bunny-carrot"}.get(food_key)
             if food_activity:
                 self._set_temporary_activity(food_activity, 28_000)
             self._show_emotion(reply.state, 2200)
