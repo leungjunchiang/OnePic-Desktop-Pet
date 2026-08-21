@@ -339,7 +339,7 @@ def test_focus_weekly_total_includes_unrecorded_live_today_seconds() -> None:
     })
     app.processEvents()
 
-    assert "本周49小时2分钟" in dialog.focus_insights.text()
+    assert "本周 49小时2分钟" in dialog.focus_insights.text()
     assert "较昨天 多49小时2分钟" in dialog.focus_insights.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
