@@ -2,6 +2,7 @@
 
 import random
 import subprocess
+from urllib.parse import unquote
 
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.music import (
@@ -265,4 +266,34 @@ def test_collection_falls_back_to_web_when_netease_deep_link_fails() -> None:
 def test_artist_collection_deep_link_is_only_defined_for_supported_client() -> None:
     assert artist_collection_deep_link("netease") == "orpheus://artist/2124/?autoplay=1"
     assert artist_collection_deep_link("qq") == ""
+
+def test_collection_explicit_default_does_not_cross_open_another_music_provider() -> None:
+    opened: list[str] = []
+    browser: list[str] = []
+    service = CatalogMusicService(
+        PetSettings(music_service="qq"),
+        opener=lambda url: opened.append(url) or True,
+        browser_opener=lambda url: browser.append(url) or True,
+    )
+
+    assert service.open_artist_collection() is True
+    assert opened == []
+    assert len(browser) == 1
+    assert browser[0].startswith("https://y.qq.com/")
+    assert "陈楚生" in unquote(browser[0])
+    assert service.last_provider == "qq"
+    assert service.last_used_deep_link is False
+
+
+def test_collection_auto_can_try_kugou_after_primary_provider() -> None:
+    browser: list[str] = []
+    service = CatalogMusicService(
+        PetSettings(music_service="auto"),
+        opener=lambda _url: False,
+        browser_opener=lambda url: browser.append(url) or ("kugou.com" in url),
+    )
+
+    assert service.open_artist_collection() is True
+    assert service.last_provider == "kugou"
+    assert any("kugou.com" in url for url in browser)
 
