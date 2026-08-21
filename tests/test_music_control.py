@@ -60,6 +60,10 @@ class FakeCatalogAdapter(FakeRandomAdapter):
     def search(self, title: str, artist: str):
         return (SongCandidate(self.provider, title, artist),)
 
+    def play_song_background(self, title: str, artist: str) -> bool:
+        candidates = tuple(self.search(title, artist))
+        return bool(candidates) and self.play(candidates[0])
+
 
 class FakeNativeRandomAdapter(FakeCatalogAdapter):
     """模拟网易云已有的歌手随机 UI 自动化动作。"""
@@ -67,8 +71,13 @@ class FakeNativeRandomAdapter(FakeCatalogAdapter):
     def __init__(self, provider: str, *, play_success: bool) -> None:
         super().__init__(provider, play_success=play_success)
         self.random_artists: list[str] = []
+        self.interactive_random_artists: list[str] = []
 
     def play_random_artist(self, artist: str) -> bool:
+        self.interactive_random_artists.append(artist)
+        return False
+
+    def play_random_artist_background(self, artist: str) -> bool:
         self.random_artists.append(artist)
         return self.play_success
 
@@ -187,6 +196,7 @@ def test_catalog_artist_collection_uses_target_adapter_without_global_media_key(
     assert manager.open_catalog_artist_collection("陈楚生") is True
 
     assert adapter.random_artists == ["陈楚生"]
+    assert adapter.interactive_random_artists == []
     assert media_keys == []
 
 
