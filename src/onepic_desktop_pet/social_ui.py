@@ -1019,6 +1019,36 @@ class SocialHubDialog(QDialog):
                     current[:start] + marker + format_work_duration(seconds) + current[end:]
                 )
 
+    def _effective_focus_analytics(self) -> dict[str, Any]:
+        """Include today's local seconds that have not reached analytics yet.
+
+        FocusSession publishes its pause/finish snapshot before the owning
+        window writes the just-finished segment into FocusAnalyticsStore.  A
+        render in that small ordering gap otherwise shows an old weekly value
+        even though today's FocusSession total is already current.
+        """
+
+        summary = dict(self._focus_analytics)
+        local_today = self._local_today_seconds()
+        if local_today is None:
+            return summary
+        try:
+            recorded_today = max(0, int(summary.get("today_seconds") or 0))
+            weekly = max(0, int(summary.get("weekly_total_seconds") or 0))
+        except (TypeError, ValueError):
+            return summary
+        unrecorded_today = max(0, int(local_today) - recorded_today)
+        if unrecorded_today <= 0:
+            return summary
+        summary["weekly_total_seconds"] = weekly + unrecorded_today
+        difference = summary.get("difference_vs_yesterday_seconds")
+        if difference is not None:
+            try:
+                summary["difference_vs_yesterday_seconds"] = int(difference) + unrecorded_today
+            except (TypeError, ValueError):
+                pass
+        return summary
+
     def set_room_quick_status(self, status: str, expires_at: datetime | None = None) -> None:
         """Render the local room action immediately, before the next heartbeat."""
 
@@ -1044,7 +1074,7 @@ class SocialHubDialog(QDialog):
         self._focus_analytics = dict(snapshot or {})
         if not hasattr(self, "focus_insights"):
             return
-        summary = self._focus_analytics
+        summary = self._effective_focus_analytics()
         task = summary.get("current_task") or {}
         task_text = "当前任务：未设置"
         if isinstance(task, dict) and task.get("title"):
