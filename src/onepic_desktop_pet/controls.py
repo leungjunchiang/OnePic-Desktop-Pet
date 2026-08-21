@@ -2,6 +2,7 @@
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
+“随机听一首”和“随机电台”分别表示单曲选歌与歌手主页入口，避免把两条音乐路径混在一起。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 """
 
@@ -460,7 +461,7 @@ class QuickControlPanel(QWidget):
             ("播放 / 暂停", "toggle"),
             ("上一首", "previous"),
             ("下一首", "next"),
-            ("随机听陈楚生", "random"),
+            ("随机听一首陈楚生歌曲", "random"),
         ):
             action = menu.addAction(label)
             if command == "random":
@@ -473,7 +474,7 @@ class QuickControlPanel(QWidget):
                         self.music_control_requested, value
                     )
                 )
-        playlist = menu.addAction("\u9648\u695a\u751f\u968f\u673a\u7535\u53f0")
+        playlist = menu.addAction("陈楚生随机电台（歌手主页）")
         playlist.triggered.connect(lambda: self._choose(self.music_playlist_requested))
         menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
 
