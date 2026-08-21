@@ -1,7 +1,8 @@
 """Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
 只发送账号认证、昵称、六毛外观、工作状态、累计秒数、房间与串门事件。密码从不保存；
-刷新令牌保存在系统凭据库。网络失败不会影响离线桌宠、计时、AI 或本地素材。
+刷新令牌保存在系统凭据库。邮箱注册明确区分“已创建、等待确认”和“已登录”，并支持
+重新发送确认邮件；网络失败不会影响离线桌宠、计时、AI 或本地素材。
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
+import unicodedata
 
 from .local_data import app_data_dir
 from .resources import resource_path
@@ -128,6 +130,10 @@ def social_user_message(error: BaseException) -> str:
     kind = str(getattr(error, "kind", "") or "").casefold()
     raw = str(error or "")
     lowered = raw.casefold()
+    if "email address not authorized" in lowered or "email not authorized" in lowered:
+        return "当前 Supabase 邮件服务只允许项目团队邮箱收信，163/学校邮箱不会收到邮件；请为 Supabase Auth 配置自定义 SMTP 后重试。"
+    if "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
+        return "确认邮件发送次数已达到服务限额，请稍后再试；生产环境建议为 Supabase Auth 配置自定义 SMTP。"
     if code == "refresh_token_already_used" or kind in {"auth_refresh", "auth_refresh_reused"} or (
         "refresh token" in lowered and ("already used" in lowered or "invalid" in lowered)
     ):
@@ -135,6 +141,18 @@ def social_user_message(error: BaseException) -> str:
     if raw.lstrip().startswith("{") and ("error_code" in lowered or '"code"' in lowered):
         return "自习室登录状态需要重新验证，请重新登录。"
     return raw[:300] or "自习室连接失败，请稍后重试。"
+
+
+def normalize_email(email: str) -> str:
+    """Normalize copied email addresses without changing the local-part case."""
+
+    value = unicodedata.normalize("NFKC", str(email or ""))
+    value = "".join(char for char in value if unicodedata.category(char) not in {"Cc", "Cf"})
+    value = value.strip()
+    if "@" not in value:
+        return value
+    local, domain = value.rsplit("@", 1)
+    return f"{local}@{domain.casefold()}"
 
 
 def _missing_room_endpoint(error: BaseException) -> bool:
@@ -281,6 +299,27 @@ class SocialSession:
     user_id: str
     expires_at: float
     generation: int = 0
+
+
+@dataclass(frozen=True)
+class SignupResult:
+    """Result of an email signup, including the confirmation-pending state."""
+
+    email: str
+    user_id: str = ""
+    session_active: bool = False
+    confirmation_pending: bool = False
+    confirmation_sent: bool = False
+    redirect_url: str = ""
+
+    @property
+    def created(self) -> bool:
+        return bool(self.user_id or self.session_active)
+
+    def __bool__(self) -> bool:
+        """Keep compatibility with older callers that treated signup as bool."""
+
+        return self.created
 
 
 @dataclass
@@ -623,7 +662,8 @@ class SocialBackend(Protocol):
     @property
     def signed_in(self) -> bool: ...
 
-    def sign_up(self, email: str, password: str, nickname: str) -> bool: ...
+    def sign_up(self, email: str, password: str, nickname: str) -> SignupResult: ...
+    def resend_confirmation(self, email: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
     def sign_out(self) -> None: ...
     def health(self) -> dict[str, Any]: ...
@@ -753,6 +793,21 @@ class HttpSocialBackend:
         self.session = session
         return session is not None
 
+    def _signup_result(self, data: dict[str, Any] | None, email: str) -> SignupResult:
+        session = self.auth_manager.accept_auth(data)
+        self.session = session
+        payload = data if isinstance(data, dict) else {}
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        user_id = str(user.get("id") or payload.get("user_id") or (session.user_id if session else ""))
+        return SignupResult(
+            email=email,
+            user_id=user_id,
+            session_active=session is not None,
+            confirmation_pending=bool(user_id and session is None and not user.get("email_confirmed_at")),
+            confirmation_sent=bool(user.get("confirmation_sent_at")),
+            redirect_url=self.email_redirect_url,
+        )
+
     def _ensure_fresh(self) -> None:
         managed = self.auth_manager.current()
         if self.session is not None and (managed is None or self.session.generation >= managed.generation):
@@ -766,15 +821,30 @@ class HttpSocialBackend:
         )
         self.session = session
 
-    def sign_up(self, email: str, password: str, nickname: str) -> bool:
-        body = {"email": email.strip(), "password": password, "nickname": nickname.strip()[:24] or "搭子", "data": {"nickname": nickname.strip()[:24] or "搭子"}}
+    def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
+        normalized_email = normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        body = {"email": normalized_email, "password": password, "nickname": nickname.strip()[:24] or "搭子", "data": {"nickname": nickname.strip()[:24] or "搭子"}}
         if self.email_redirect_url:
             body["redirect_to"] = self.email_redirect_url
         if self.transport == "direct":
             path = "/auth/v1/signup?" + urllib.parse.urlencode({"redirect_to": self.email_redirect_url}) if self.email_redirect_url else "/auth/v1/signup"
         else:
             path = "/auth/signup"
-        return self._accept_auth(self._raw("POST", path, body if self.transport == "proxy" else {"email": body["email"], "password": body["password"], "data": body["data"]}))
+        data = self._raw("POST", path, body if self.transport == "proxy" else {"email": body["email"], "password": body["password"], "data": body["data"]})
+        return self._signup_result(data, normalized_email)
+
+    def resend_confirmation(self, email: str) -> bool:
+        normalized_email = normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        body: dict[str, Any] = {"type": "signup", "email": normalized_email}
+        if self.email_redirect_url:
+            body["options"] = {"emailRedirectTo": self.email_redirect_url}
+        path = "/auth/v1/resend" if self.transport == "direct" else "/auth/resend"
+        self._raw("POST", path, body)
+        return True
 
     def sign_in(self, email: str, password: str) -> None:
         path = "/auth/v1/token?grant_type=password" if self.transport == "direct" else "/auth/signin"
@@ -1296,6 +1366,21 @@ class LegacyDirectSocialClient:
         self.session = session
         return session is not None
 
+    def _signup_result(self, data: dict[str, Any] | None, email: str) -> SignupResult:
+        session = self.auth_manager.accept_auth(data)
+        self.session = session
+        payload = data if isinstance(data, dict) else {}
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        user_id = str(user.get("id") or payload.get("user_id") or (session.user_id if session else ""))
+        return SignupResult(
+            email=email,
+            user_id=user_id,
+            session_active=session is not None,
+            confirmation_pending=bool(user_id and session is None and not user.get("email_confirmed_at")),
+            confirmation_sent=bool(user.get("confirmation_sent_at")),
+            redirect_url=self.email_redirect_url,
+        )
+
     def _ensure_fresh(self) -> None:
         managed = self.auth_manager.current()
         if self.session is not None and (managed is None or self.session.generation >= managed.generation):
@@ -1308,18 +1393,32 @@ class LegacyDirectSocialClient:
         )
         self.session = session
 
-    def sign_up(self, email: str, password: str, nickname: str) -> bool:
+    def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
         # `redirect_to` is a query parameter for GoTrue's signup endpoint.  It
         # must also be present in Supabase Auth's allow-list; the production
         # project is configured with the same URL.  Passing it explicitly keeps
         # future dashboard changes from silently restoring localhost redirects.
         redirect = urllib.parse.urlencode({"redirect_to": self.email_redirect_url})
+        normalized_email = normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
         data = self._raw(
             "POST",
             f"/auth/v1/signup?{redirect}",
-            {"email": email.strip(), "password": password, "data": {"nickname": nickname.strip()[:24] or "搭子"}},
+            {"email": normalized_email, "password": password, "data": {"nickname": nickname.strip()[:24] or "搭子"}},
         )
-        return self._accept_auth(data)
+        return self._signup_result(data, normalized_email)
+
+    def resend_confirmation(self, email: str) -> bool:
+        normalized_email = normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        self._raw(
+            "POST",
+            "/auth/v1/resend",
+            {"type": "signup", "email": normalized_email, "options": {"emailRedirectTo": self.email_redirect_url}},
+        )
+        return True
 
     def sign_in(self, email: str, password: str) -> None:
         if self._http_backend is not None:
@@ -1608,9 +1707,11 @@ class DashboardCacheClientBase:
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
             return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
 
-    def sign_up(self, email: str, password: str, nickname: str) -> bool:
-        data = self._require_backend().sign_up(email, password, nickname)
-        return bool(data)
+    def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
+        return self._require_backend().sign_up(email, password, nickname)
+
+    def resend_confirmation(self, email: str) -> bool:
+        return self._require_backend().resend_confirmation(email)
 
     def sign_in(self, email: str, password: str) -> None:
         self._require_backend().sign_in(email, password)
@@ -1656,8 +1757,8 @@ class BackendRouteManager:
     DIRECT_SUPABASE = "DIRECT_SUPABASE"
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
-    AUTH_METHODS = {"sign_in", "sign_up"}
-    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in"}
+    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation"}
+    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in", "resend_confirmation"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend, *, persist_state: bool = True) -> None:
@@ -1978,8 +2079,11 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
             return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
 
-    def sign_up(self, email: str, password: str, nickname: str) -> bool:
-        return bool(self._manager.request("sign_up", email, password, nickname))
+    def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
+        return self._manager.request("sign_up", email, password, nickname)
+
+    def resend_confirmation(self, email: str) -> bool:
+        return bool(self._manager.request("resend_confirmation", email))
 
     def sign_in(self, email: str, password: str) -> None:
         # Treat sign-in as an account switch.  Do not let a failed attempt
@@ -2049,3 +2153,4 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
+

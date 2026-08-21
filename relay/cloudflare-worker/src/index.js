@@ -235,6 +235,13 @@ async function handleRequest(request, env) {
     const signup = safeBody(body, ["email", "password", "data"]);
     return jsonResponse(await callSupabase(env, request, `/auth/v1/signup${query}`, { body: signup, authenticated: false }), request, env);
   }
+  if (path === "/auth/resend" && request.method === "POST") {
+    const body = await parseJsonBody(request);
+    return jsonResponse(await callSupabase(env, request, "/auth/v1/resend", {
+      body: safeBody(body, ["type", "email", "options"]),
+      authenticated: false,
+    }), request, env);
+  }
   if (path === "/auth/signin" && request.method === "POST") {
     const body = await parseJsonBody(request);
     return jsonResponse(await callSupabase(env, request, "/auth/v1/token?grant_type=password", { body: safeBody(body, ["email", "password"]), authenticated: false }), request, env);
@@ -287,4 +294,5 @@ export default {
     }
   },
 };
+
 

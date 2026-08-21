@@ -1,4 +1,8 @@
-"""搭子自习室界面、后台同步线程和双六毛本地串门窗口。"""
+"""搭子自习室界面、后台同步线程和双六毛本地串门窗口。
+
+账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
+邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
+"""
 
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
-from .social import SocialClient, SocialError, _heartbeat_payload, social_user_message
+from .social import SignupResult, SocialClient, SocialError, _heartbeat_payload, social_user_message
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .work_timer import format_work_duration
@@ -887,6 +891,7 @@ class SocialHubDialog(QDialog):
         self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
         self._last_ritual_notice = ""
+        self._pending_signup_email = ""
         self._initial_refresh_timer = QTimer(self)
         self._initial_refresh_timer.setSingleShot(True)
         self._initial_refresh_timer.timeout.connect(self.refresh)
@@ -1906,7 +1911,13 @@ class SocialHubDialog(QDialog):
         self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
         register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
         register_layout.addLayout(register_form); signup_button = QPushButton("注册")
-        signup_button.clicked.connect(self._signup); register_layout.addWidget(signup_button); register_layout.addStretch()
+        signup_button.clicked.connect(self._signup); register_layout.addWidget(signup_button)
+        self.signup_resend_button = QPushButton("重新发送确认邮件")
+        self.signup_resend_button.setVisible(False)
+        self.signup_resend_button.clicked.connect(self._resend_confirmation)
+        register_layout.addWidget(self.signup_resend_button)
+        register_layout.addWidget(QLabel("163、学校邮箱未收到时，请先查垃圾邮件/广告邮件；也可点击上面的按钮重发。"))
+        register_layout.addStretch()
         auth_tabs.addTab(login, "登录"); auth_tabs.addTab(register, "注册")
         layout.addWidget(auth_tabs)
         return card
@@ -2008,18 +2019,48 @@ class SocialHubDialog(QDialog):
     def _signup(self) -> None:
         self._begin_action("正在创建账号…")
         try:
-            signed = self.client.sign_up(self.signup_email.text(), self.signup_password.text(), self.signup_nickname.text())
+            result = self.client.sign_up(self.signup_email.text(), self.signup_password.text(), self.signup_nickname.text())
             self._end_action()
-            if signed:
+            if isinstance(result, SignupResult):
+                self._pending_signup_email = result.email
+                self.signup_resend_button.setVisible(result.confirmation_pending)
+                self.login_email.setText(result.email)
+            if isinstance(result, SignupResult) and result.confirmation_pending:
+                self._set_status("注册成功，确认邮件已提交；请点击邮件后回到这里登录。")
+                QMessageBox.information(
+                    self,
+                    "注册成功，请确认邮箱",
+                    f"账号 {result.email} 已创建。\n\n"
+                    "请打开确认邮件中的链接。链接会跳转到六毛项目页面；这表示邮箱确认已完成，"
+                    "不是失败。然后回到 Lili，在“登录”页输入邮箱和密码即可。\n\n"
+                    "如果 163 或学校邮箱暂时没有收到，请检查垃圾邮件/广告邮件，稍后点击“重新发送确认邮件”。",
+                )
+            elif bool(result):
                 self._update_account_state(); self.refresh(); self.account_state_changed.emit(True)
+                self._set_status("注册并登录成功，六毛自习室已准备好。")
             else:
-                self._set_status("注册成功，请到邮箱确认后回来登录。")
+                self._set_status("注册请求已提交，请到邮箱确认后回来登录。")
                 QMessageBox.information(
                     self,
                     "请确认邮箱",
-                    "注册成功。请到邮箱完成确认，然后回到这里登录。\n\n"
+                    "注册请求已提交。请到邮箱完成确认，然后回到这里登录。\n\n"
                     "确认页会打开六毛项目页面，不需要启动 localhost 服务。",
                 )
+        except SocialError as exc:
+            self._error(exc)
+
+    def _resend_confirmation(self) -> None:
+        email = self._pending_signup_email or self.signup_email.text()
+        self._begin_action("正在重新发送确认邮件…")
+        try:
+            self.client.resend_confirmation(email)
+            self._end_action()
+            self._set_status("确认邮件已重新提交，请稍后检查收件箱和垃圾邮件。")
+            QMessageBox.information(
+                self,
+                "确认邮件已重发",
+                "邮件已重新提交。163、学校邮箱可能需要几分钟；如果仍未收到，需要管理员为 Supabase Auth 配置自定义 SMTP。",
+            )
         except SocialError as exc:
             self._error(exc)
 
@@ -2028,6 +2069,7 @@ class SocialHubDialog(QDialog):
         try:
             self.client.sign_in(self.login_email.text(), self.login_password.text())
             self._end_action(); self._update_account_state(); self.tabs.setCurrentIndex(0); self.refresh()
+            self._set_status("登录成功，邮箱确认已完成。")
             self.account_state_changed.emit(True)
         except SocialError as exc:
             self._error(exc)
@@ -2523,3 +2565,4 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+

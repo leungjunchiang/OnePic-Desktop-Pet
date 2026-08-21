@@ -259,6 +259,17 @@ async function handle(request: Request, env: Env): Promise<Response> {
       method: "POST",
     }));
   }
+  if (path === "/auth/resend" && request.method === "POST") {
+    const body = await parseBody(request);
+    return json(request, env, await supabaseFetch(request, env, "/auth/v1/resend", {
+      body: {
+        type: body.type || "signup",
+        email: body.email,
+        options: body.options,
+      },
+      method: "POST",
+    }));
+  }
   if (path === "/auth/signin" && request.method === "POST") {
     const body = await parseBody(request);
     return json(request, env, await supabaseFetch(request, env, "/auth/v1/token?grant_type=password", {
@@ -307,4 +318,5 @@ Deno.serve(async (request: Request) => {
     return json(request, Deno.env.toObject(), { error: message }, status);
   }
 });
+
 

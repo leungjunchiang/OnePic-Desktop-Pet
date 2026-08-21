@@ -16,8 +16,10 @@ from onepic_desktop_pet.social import (
     SocialClient,
     SocialError,
     SocialSession,
+    SignupResult,
     _apply_buddy_private_notes,
     _heartbeat_payload,
+    normalize_email,
     social_user_message,
 )
 
@@ -341,6 +343,73 @@ def test_http_backend_uses_direct_supabase_paths():
     assert heartbeat_call[4] == {"Prefer": "resolution=merge-duplicates,return=minimal"}
 
 
+def test_email_normalization_removes_copied_invisible_characters_and_normalizes_domain():
+    assert normalize_email("  Alice@EXAMPLE.COM\u200b ") == "Alice@example.com"
+
+
+def test_signup_reports_confirmation_pending_without_fabricating_a_session():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+                email_redirect_url="https://github.com/leungjunchiang/OnePic-Desktop-Pet",
+            )
+            self.calls = []
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+            self.calls.append((method, path, body, authenticated, extra_headers))
+            if path.startswith("/auth/v1/signup"):
+                return {
+                    "access_token": "",
+                    "user": {
+                        "id": "pending-user",
+                        "email": "Alice@example.com",
+                        "email_confirmed_at": None,
+                        "confirmation_sent_at": "2026-08-22T00:00:00Z",
+                    },
+                }
+            return {}
+
+    backend = Recording()
+    result = backend.sign_up(" Alice@EXAMPLE.COM\u200b ", "secret123", "搭子")
+
+    assert isinstance(result, SignupResult)
+    assert result.created is True
+    assert result.confirmation_pending is True
+    assert result.session_active is False
+    assert backend.signed_in is False
+    assert backend.calls[0][1] == "/auth/v1/signup?redirect_to=https%3A%2F%2Fgithub.com%2Fleungjunchiang%2FOnePic-Desktop-Pet"
+
+
+def test_resend_confirmation_uses_supabase_resend_endpoint_and_redirect():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+                email_redirect_url="https://github.com/leungjunchiang/OnePic-Desktop-Pet",
+            )
+            self.call = None
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+            self.call = (method, path, body, authenticated, extra_headers)
+            return {}
+
+    backend = Recording()
+    assert backend.resend_confirmation("Alice@EXAMPLE.COM") is True
+    assert backend.call[0:2] == ("POST", "/auth/v1/resend")
+    assert backend.call[2] == {
+        "type": "signup",
+        "email": "Alice@example.com",
+        "options": {"emailRedirectTo": "https://github.com/leungjunchiang/OnePic-Desktop-Pet"},
+    }
+
+
 def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
     class Recording(HttpSocialBackend):
         def __init__(self):
@@ -590,3 +659,4 @@ def test_presence_transitions_are_not_persisted_as_room_history():
     assert "create trigger lili_presence_room_event" not in migration
     assert "focus_finish" in migration
     assert "challenge_complete" in migration
+

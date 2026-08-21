@@ -145,6 +145,7 @@ async function handleRequest(event, env) {
     return response(event, env, { ok: true, service: "lili-social-relay", backend: "supabase-via-cloudbase", route: "CLOUDBASE_PROXY", source_of_truth: "supabase", realtime: "supabase-direct-preferred" });
   }
   if (path === "/auth/signup" && method === "POST") { const body = bodyOf(event); const query = body.redirect_to ? `?redirect_to=${encodeURIComponent(String(body.redirect_to))}` : ""; return response(event, env, await supabaseFetch(env, event, `/auth/v1/signup${query}`, { body: { email: body.email, password: body.password, data: body.data }, authenticated: false })); }
+  if (path === "/auth/resend" && method === "POST") { const body = bodyOf(event); return response(event, env, await supabaseFetch(env, event, "/auth/v1/resend", { body: { type: body.type || "signup", email: body.email, options: body.options }, authenticated: false })); }
   if (path === "/auth/signin" && method === "POST") { const body = bodyOf(event); return response(event, env, await supabaseFetch(env, event, "/auth/v1/token?grant_type=password", { body: { email: body.email, password: body.password }, authenticated: false })); }
   if (path === "/auth/refresh" && method === "POST") { const body = bodyOf(event); return response(event, env, await supabaseFetch(env, event, "/auth/v1/token?grant_type=refresh_token", { body: { refresh_token: body.refresh_token }, authenticated: false })); }
   if (path === "/dashboard" && method === "GET") return response(event, env, await handleDashboard(env, event, queryOf(event, "room_id").trim()));
@@ -169,4 +170,5 @@ async function main(event, context) {
 }
 
 module.exports = { main, handleRequest, RelayError, pathOf, queryOf };
+
 
