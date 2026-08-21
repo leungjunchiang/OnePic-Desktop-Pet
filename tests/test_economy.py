@@ -109,6 +109,36 @@ def test_old_expensive_coffee_inventory_is_preserved(tmp_path):
     assert ledger.inventory_count("expensive_coffee") == 3
     assert ledger.inventory["昂贵咖啡"] == 3
 
+
+def test_ledger_keeps_only_the_latest_31_days_of_events(tmp_path):
+    path = tmp_path / "economy.json"
+    path.write_text(
+        '{"version": 3, "balance": 17, "events": ['
+        '{"event_id":"old-event","category":"salary","amount":5,"label":"旧记录",'
+        '"source_key":"old","occurred_on":"2026-07-30","created_at":"2026-07-30T09:00:00+00:00"},'
+        '{"event_id":"boundary-event","category":"salary","amount":6,"label":"边界记录",'
+        '"source_key":"boundary","occurred_on":"2026-07-31","created_at":"2026-07-31T09:00:00+00:00"},'
+        '{"event_id":"new-event","category":"salary","amount":6,"label":"新记录",'
+        '"source_key":"new","occurred_on":"2026-08-31","created_at":"2026-08-31T09:00:00+00:00"}'
+        ']}',
+        encoding="utf-8",
+    )
+    ledger = EconomyLedger(
+        path,
+        now_provider=lambda: datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc),
+    )
+    assert [event.event_id for event in ledger.events] == ["boundary-event", "new-event"]
+    assert ledger.balance == 17
+
+
+def test_pending_achievement_can_be_deleted_before_witnessing(tmp_path):
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
+    submitted = ledger.register_achievement_income("作品", "撤回的申请")
+    assert submitted is not None
+    assert ledger.delete_pending_achievement(submitted["id"]) is True
+    assert ledger.pending_achievements() == ()
+    assert ledger.delete_pending_achievement(submitted["id"]) is False
+
 def test_focus_grants_daily_supply_without_changing_income(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)
     result = ledger.record_focus(40 * 60, started_at=_now())

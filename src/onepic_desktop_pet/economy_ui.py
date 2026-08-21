@@ -351,12 +351,38 @@ class EconomyDialog(QDialog):
         if pending:
             for item in pending:
                 witness_count = len(item.get("witnesses") or []) if isinstance(item, dict) else 0
-                self.collection_list.addItem(
+                text = (
                     f"· {item.get('name') or '未命名成果'}　"
                     f"{witness_count}/2 名搭子已确认　（不计入余额）"
                 )
+                delete_button = QPushButton("删除")
+                delete_button.setToolTip("取消这条成果见证申请")
+                delete_button.clicked.connect(
+                    lambda _checked=False, achievement_id=str(item.get("id") or ""):
+                    self._delete_pending_achievement(achievement_id)
+                )
+                row = QListWidgetItem()
+                widget = self._row_widget(text, delete_button)
+                row.setSizeHint(widget.sizeHint())
+                self.collection_list.addItem(row)
+                self.collection_list.setItemWidget(row, widget)
         else:
             self.collection_list.addItem("暂时没有等待见证的成果。")
+
+    def _delete_pending_achievement(self, achievement_id: str) -> None:
+        if QMessageBox.question(
+            self,
+            "删除成果见证申请",
+            "确定取消这条成果见证申请吗？取消后需要重新提交，已结算的奖励不会受影响。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        if not self.ledger.delete_pending_achievement(achievement_id):
+            QMessageBox.information(self, "无法删除", "这条申请可能已经被处理或删除。")
+            return
+        self.refresh()
+        self.changed.emit()
 
     def _record_income(self) -> None:
         kinds = ("论文 / 稿费", "项目", "比赛", "作品", "其他成果")

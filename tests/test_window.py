@@ -1069,7 +1069,7 @@ def test_pet_context_menu_only_contains_pet_actions() -> None:
     ]
     assert outfit_labels[0] == "默认装"
     assert "兔兔搭子" in outfit_labels
-    assert "荒野国王" in outfit_labels
+    assert "陈楚生歌王" in outfit_labels
 
     appearance_menu = actions[4].menu()
     assert appearance_menu is not None

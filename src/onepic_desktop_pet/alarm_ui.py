@@ -65,7 +65,7 @@ class AlarmSoundSelector(QWidget):
         super().__init__(parent)
         self.library = library or AlarmSoundLibrary(persist=False)
         self.combo = QComboBox(self)
-        self.import_button = QPushButton("导入…", self)
+        self.import_button = QPushButton("导入自定义音频…", self)
         self.preview_button = QPushButton("试听", self)
         self.stop_button = QPushButton("停止", self)
         self.delete_button = QPushButton("删除", self)
@@ -111,9 +111,9 @@ class AlarmSoundSelector(QWidget):
     def _import(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "导入六毛闹钟铃声",
+            "导入自定义闹钟音频",
             "",
-            "音频 (*.mp3 *.wav *.m4a *.aac);;所有文件 (*)",
+            "音频文件 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg);;所有文件 (*)",
         )
         if not path:
             return
@@ -121,7 +121,7 @@ class AlarmSoundSelector(QWidget):
             sound = self.library.import_file(path)
         except (OSError, ValueError) as exc:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "无法导入铃声", str(exc))
+            QMessageBox.warning(self, "无法导入自定义音频", str(exc))
             return
         self.refresh(sound.sound_id)
         self.changed.emit(sound.sound_id)
@@ -136,7 +136,7 @@ class AlarmSoundSelector(QWidget):
         from PySide6.QtWidgets import QMessageBox
         answer = QMessageBox.question(
             self,
-            "删除自定义铃声",
+            "删除自定义音频",
             f"删除“{sound.display_name}”？引用它的闹钟会自动回退到系统提示音。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -233,7 +233,7 @@ class AlarmCard(QDialog):
         elif custom_available:
             sound_text = f"🎵 {self._sound_name(alarm.sound_id)} · 单曲循环"
         elif custom_id:
-            sound_text = "自定义铃声不可用 · 已回退系统提示音 · 最长60秒"
+            sound_text = "自定义音频不可用 · 已回退系统提示音 · 最长60秒"
         else:
             sound_text = f"🔔 {self._sound_name(alarm.sound_id)} · 最长60秒"
         sound_hint = QLabel(sound_text)
@@ -337,7 +337,7 @@ class AlarmCard(QDialog):
 
     def _sound_name(self, sound_id: str) -> str:
         return self.sound_library.display_name(sound_id) if self.sound_library else (
-            "系统提示音" if sound_id in {"", "system", "default"} else "自定义铃声"
+            "系统提示音" if sound_id in {"", "system", "default"} else "自定义音频"
         )
 
     def _configure_sound(self, alarm: Alarm) -> None:

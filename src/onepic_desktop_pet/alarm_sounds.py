@@ -41,7 +41,7 @@ class AlarmSound:
             duration = None
         return cls(
             sound_id=sound_id[:80],
-            display_name=str(value.get("display_name") or value.get("original_filename") or "自定义铃声")[:160],
+            display_name=str(value.get("display_name") or value.get("original_filename") or "自定义音频")[:160],
             imported_path=imported_path,
             original_filename=str(value.get("original_filename") or "")[:240],
             duration=duration,
@@ -86,7 +86,7 @@ class AlarmSoundLibrary:
         if key == "default":
             return "六毛默认铃声"
         sound = self.get(key)
-        return sound.display_name if sound is not None else "系统提示音（自定义铃声不可用）"
+        return sound.display_name if sound is not None else "系统提示音（自定义音频不可用）"
 
     def resolve_path(self, sound_id: str | None) -> Path | None:
         sound = self.get(sound_id)
@@ -107,7 +107,7 @@ class AlarmSoundLibrary:
         shutil.copy2(source_path, target)
         sound = AlarmSound(
             sound_id=sound_id,
-            display_name=(display_name or source_path.stem).strip()[:160] or "自定义铃声",
+            display_name=(display_name or source_path.stem).strip()[:160] or "自定义音频",
             imported_path=str(target),
             original_filename=source_path.name[:240],
             created_at=datetime.now().astimezone().isoformat(),

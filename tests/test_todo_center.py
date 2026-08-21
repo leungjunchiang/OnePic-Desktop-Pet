@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.time_memory import TimeMemory
@@ -113,4 +114,26 @@ def test_reminder_editor_preserves_selected_audible_alarm(tmp_path) -> None:
     reopened_center.deleteLater()
     center.close()
     center.deleteLater()
+    app.processEvents()
+
+
+def test_item_editor_uses_wheel_date_time_controls_and_round_trips_values(tmp_path) -> None:
+    app = _qt_app()
+    memory = TimeMemory(
+        tmp_path,
+        now_provider=lambda: datetime(2026, 8, 19, 12, 0),
+    )
+    editor = _ItemEditor(memory, forced_type="todo")
+    editor.title.setText("统一格式的待办")
+    editor.no_date.setChecked(False)
+    editor.date.setDate(QDate(2026, 8, 21))
+    editor.no_time.setChecked(False)
+    editor.time.setTime(QTime(16, 0))
+    editor.save()
+
+    saved = memory.todos.items[-1]
+    assert saved.date == "2026-08-21"
+    assert saved.time == "16:00"
+    editor.close()
+    editor.deleteLater()
     app.processEvents()

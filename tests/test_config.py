@@ -97,14 +97,15 @@ def test_autonomous_walk_is_off_by_default_and_persistable(tmp_path) -> None:
 
 def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
-    assert settings.today_note_mode == "detailed"
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
     settings.today_note_mode = "compact"
     path = save_settings(settings, tmp_path / "settings.json")
     assert load_settings(override_path=path).today_note_mode == "compact"
 
     invalid = tmp_path / "invalid.json"
     invalid.write_text(json.dumps({"today_note_mode": "giant-task-manager"}), encoding="utf-8")
-    assert load_settings(override_path=invalid).today_note_mode == "detailed"
+    assert load_settings(override_path=invalid).today_note_mode == "compact"
 
 
 def test_content_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:

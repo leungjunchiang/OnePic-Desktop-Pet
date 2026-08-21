@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QDate, QTime, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,8 +25,10 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QDateEdit,
     QSpinBox,
     QTabWidget,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -150,10 +152,29 @@ class _ItemEditor(QDialog):
         self.kind.addItem("倒计时", "countdown")
         self.kind.addItem("纪念日", "anniversary")
         self.title = QLineEdit(self)
-        self.date = QLineEdit(self)
-        self.date.setPlaceholderText("YYYY-MM-DD")
-        self.time = QLineEdit(self)
-        self.time.setPlaceholderText("可选，例如 20:00")
+        self.date = QDateEdit(self)
+        self.date.setCalendarPopup(True)
+        self.date.setDisplayFormat("yyyy-MM-dd")
+        self.date.setKeyboardTracking(False)
+        self.date.setDate(QDate.currentDate())
+        self.no_date = QCheckBox("不设日期", self)
+        self.no_date.toggled.connect(self.date.setDisabled)
+        self.date_row = QWidget(self)
+        date_layout = QHBoxLayout(self.date_row)
+        date_layout.setContentsMargins(0, 0, 0, 0)
+        date_layout.addWidget(self.date, 1)
+        date_layout.addWidget(self.no_date)
+        self.time = QTimeEdit(self)
+        self.time.setDisplayFormat("HH:mm")
+        self.time.setKeyboardTracking(False)
+        self.time.setTime(QTime(20, 0))
+        self.no_time = QCheckBox("不设时间", self)
+        self.no_time.toggled.connect(self.time.setDisabled)
+        self.time_row = QWidget(self)
+        time_layout = QHBoxLayout(self.time_row)
+        time_layout.setContentsMargins(0, 0, 0, 0)
+        time_layout.addWidget(self.time, 1)
+        time_layout.addWidget(self.no_time)
         self.repeat = QComboBox(self)
         self.repeat.addItem("一次", "none")
         self.repeat.addItem("每年", "yearly")
@@ -183,10 +204,12 @@ class _ItemEditor(QDialog):
         self.show_before.setPlaceholderText("默认 7 天")
         self.note = QLineEdit(self)
         self.note.setPlaceholderText("可选备注")
+        self.no_date.setChecked(True)
+        self.no_time.setChecked(True)
         form.addRow("类型", self.kind)
         form.addRow("标题", self.title)
-        form.addRow("日期", self.date)
-        form.addRow("时间", self.time)
+        form.addRow("日期", self.date_row)
+        form.addRow("时间", self.time_row)
         form.addRow("重复", self.repeat)
         form.addRow("提醒方式", self.reminder_mode)
         form.addRow("提前提醒", self.reminder_minutes_before)
@@ -227,8 +250,14 @@ class _ItemEditor(QDialog):
         if index >= 0:
             self.kind.setCurrentIndex(index)
         self.title.setText(item.title)
-        self.date.setText(item.date_text)
-        self.time.setText(item.time_text)
+        parsed_date = QDate.fromString(item.date_text[:10], Qt.DateFormat.ISODate)
+        if parsed_date.isValid():
+            self.date.setDate(parsed_date)
+        self.no_date.setChecked(not bool(item.date_text.strip()))
+        parsed_time = QTime.fromString(item.time_text[:5], "HH:mm")
+        if parsed_time.isValid():
+            self.time.setTime(parsed_time)
+        self.no_time.setChecked(not bool(item.time_text.strip()))
         source = self._source()
         if source is not None:
             self.note.setText(str(getattr(source, "note", "") or ""))
@@ -264,7 +293,11 @@ class _ItemEditor(QDialog):
     def _refresh_fields(self) -> None:
         kind = str(self.kind.currentData())
         is_event = kind in {"countdown", "anniversary"}
-        self._set_row_visible(self.time, not is_event)
+        if is_event:
+            self.no_date.setChecked(False)
+        self.no_date.setVisible(not is_event)
+        self.date.setEnabled(not self.no_date.isChecked())
+        self._set_row_visible(self.time_row, not is_event)
         self._set_row_visible(self.repeat, kind == "anniversary")
         self._set_row_visible(self.reminder_mode, not is_event)
         self._set_row_visible(self.reminder_minutes_before, not is_event)
@@ -276,6 +309,22 @@ class _ItemEditor(QDialog):
         mode = self.reminder_mode.currentData()
         self.reminder_minutes_before.setEnabled(mode != REMINDER_NONE and not is_event)
 
+    def _date_text(self) -> str:
+        if not self.kind.currentData() in {"countdown", "anniversary"} and self.no_date.isChecked():
+            return ""
+        value = self.date.date()
+        if not value.isValid():
+            raise ValueError("请选择有效日期")
+        return value.toString(Qt.DateFormat.ISODate)
+
+    def _time_text(self) -> str | None:
+        if self.no_time.isChecked():
+            return None
+        value = self.time.time()
+        if not value.isValid():
+            raise ValueError("请选择有效时间")
+        return value.toString("HH:mm")
+
     def save(self) -> None:
         kind = str(self.kind.currentData())
         title = self.title.text().strip()
@@ -284,12 +333,12 @@ class _ItemEditor(QDialog):
         # An empty date means “no scheduled date” for a Todo.  TodoManager
         # keeps its legacy compatibility date internally, but the semantic
         # ``date_explicit`` flag prevents that placeholder reaching the UI.
-        day = self.date.text().strip()
+        day = self._date_text()
         if kind in {"todo", "reminder"}:
             values = {
                 "title": title,
                 "date": day,
-                "time": self.time.text().strip() or None,
+                "time": self._time_text(),
                 # ``提醒`` is a record type, not a reminder level.  Preserve
                 # the user's selected mode here; previously every save of a
                 # reminder record forced it back to the quiet PET mode, so a

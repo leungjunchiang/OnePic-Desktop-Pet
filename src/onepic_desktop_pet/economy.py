@@ -28,6 +28,9 @@ MAX_MONTHLY_ACHIEVEMENTS = 3
 MAX_MONTHLY_ACHIEVEMENT_SUBMISSIONS = 4
 REQUIRED_ACHIEVEMENT_WITNESSES = 2
 ACHIEVEMENT_REWARD = 200
+# The ledger is a recent activity record, not an unlimited accounting archive.
+# Balance and long-term life/title counters remain separate from this window.
+LEDGER_RETENTION_DAYS = 31
 # A companion scene without an explicit duration (currently tea) must not
 # permanently block the next scene after an app restart.
 OPEN_FOOD_SCENE_LIFETIME_SECONDS = 60
@@ -240,6 +243,8 @@ class EconomyLedger:
 
     @property
     def events(self) -> tuple[WalletEvent, ...]:
+        if self._prune_old_events():
+            self._save()
         return tuple(
             self._event_from_dict(item)
             for item in self._state.get("events", [])
@@ -297,11 +302,45 @@ class EconomyLedger:
             if isinstance(item, dict)
         ]
         self._state["balance"] = max(0, int(data.get("balance") or 0))
+        if self._prune_old_events():
+            self._save()
         self._refresh_titles()
 
     def _save(self) -> None:
         if self._persist:
             write_json_atomic(self.path, self._state)
+
+    def _prune_old_events(self) -> bool:
+        """Keep at most the latest 31 days of ledger records.
+
+        Invalid legacy dates are retained rather than silently deleting data.
+        The wallet balance and life collection are intentionally not reduced:
+        this only limits the visible/auditable transaction window.
+        """
+
+        cutoff = self._safe_now().date() - timedelta(days=LEDGER_RETENTION_DAYS)
+        events = self._state.get("events")
+        if not isinstance(events, list):
+            self._state["events"] = []
+            return False
+        kept: list[dict[str, Any]] = []
+        changed = False
+        for item in events:
+            if not isinstance(item, dict):
+                changed = True
+                continue
+            try:
+                occurred_on = date.fromisoformat(str(item.get("occurred_on") or "")[:10])
+            except ValueError:
+                kept.append(item)
+                continue
+            if occurred_on < cutoff:
+                changed = True
+                continue
+            kept.append(item)
+        if changed:
+            self._state["events"] = kept
+        return changed
 
     def _atomic(self, action: Callable[[], Any]) -> Any:
         snapshot = copy.deepcopy(self._state)
@@ -638,7 +677,37 @@ class EconomyLedger:
     def pending_achievements(self) -> tuple[dict[str, Any], ...]:
         """Return submitted achievements that still need buddy witnesses."""
 
-        return tuple(copy.deepcopy(item) for item in self._state.get("pending_achievements", []) if isinstance(item, dict))
+        return tuple(
+            copy.deepcopy(item)
+            for item in self._state.get("pending_achievements", [])
+            if isinstance(item, dict)
+            and str(item.get("status") or "pending") in {"pending", "need_replacement"}
+        )
+
+    def delete_pending_achievement(self, achievement_id: str) -> bool:
+        """Cancel a local witness request before it is settled."""
+
+        clean_id = str(achievement_id or "").strip()[:80]
+        if not clean_id:
+            return False
+
+        def apply() -> bool:
+            record = next(
+                (
+                    item for item in self._state.setdefault("pending_achievements", [])
+                    if isinstance(item, dict) and str(item.get("id") or "") == clean_id
+                ),
+                None,
+            )
+            if not isinstance(record, dict):
+                return False
+            if str(record.get("status") or "pending") not in {"pending", "need_replacement"}:
+                return False
+            record["status"] = "deleted"
+            record["deleted_at"] = self._now().isoformat()
+            return True
+
+        return bool(self._atomic(apply))
 
     def monthly_achievement_count(self, month: str | None = None) -> int:
         target = str(month or self._now().date().isoformat())[:7]

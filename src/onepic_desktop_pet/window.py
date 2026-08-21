@@ -2546,7 +2546,7 @@ class PetWindow(QWidget):
     def show_today_note(self, *, passive: bool = False) -> None:
         """Open the configured surface without stealing focus when passive."""
 
-        if str(getattr(self.settings, "today_note_mode", "detailed")) == "compact":
+        if str(getattr(self.settings, "today_note_mode", "compact")) == "compact":
             self.show_compact_todos()
         else:
             self.show_sticky_note(passive=passive)
@@ -2817,8 +2817,8 @@ class PetWindow(QWidget):
             # becomes visible without requiring a manual refresh.
             if (
                 self._compact_todo_panel is None
-                and str(getattr(self.settings, "today_note_mode", "detailed")) == "compact"
-                and str(getattr(self.settings, "today_note_display_mode", "pending")) != "hidden"
+                and str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
+                and str(getattr(self.settings, "today_note_display_mode", "always")) != "hidden"
             ):
                 self.show_compact_todos()
 

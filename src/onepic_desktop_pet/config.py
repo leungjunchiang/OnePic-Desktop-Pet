@@ -119,8 +119,10 @@ class PetSettings:
     local_lyrics_path: str = ""
     lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
-    today_note_display_mode: str = "pending"
-    today_note_mode: str = "detailed"
+    # Keep the Todo strip visible by default so a fresh install has one
+    # predictable, lightweight task surface on both Windows and macOS.
+    today_note_display_mode: str = "always"
+    today_note_mode: str = "compact"
     today_note_always_on_top: bool = False
     today_note_autoshow: bool = False
     today_note_folded: bool = False
@@ -276,9 +278,9 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.lyric_interval_minutes = min(120, max(2, int(settings.lyric_interval_minutes)))
     settings.equipped_outfit = str(settings.equipped_outfit)[:60]
     if settings.today_note_display_mode not in {"always", "pending", "hidden"}:
-        settings.today_note_display_mode = "pending"
+        settings.today_note_display_mode = "always"
     if settings.today_note_mode not in {"detailed", "compact", "hidden"}:
-        settings.today_note_mode = "detailed"
+        settings.today_note_mode = "compact"
     settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
     settings.today_note_folded = bool(settings.today_note_folded)

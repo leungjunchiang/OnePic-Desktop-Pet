@@ -192,8 +192,8 @@ class DesktopPetApplication(QObject):
 
         self.window.place_at_start()
         self.show_window()
-        paper_mode = getattr(self.settings, "today_note_display_mode", "pending")
-        note_style = getattr(self.settings, "today_note_mode", "detailed")
+        paper_mode = getattr(self.settings, "today_note_display_mode", "always")
+        note_style = getattr(self.settings, "today_note_mode", "compact")
         should_show_paper = paper_mode == "always" or (
             paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
         ) or bool(getattr(self.settings, "today_note_autoshow", False))
