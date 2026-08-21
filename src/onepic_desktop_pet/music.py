@@ -312,13 +312,23 @@ def open_music_url(
                 creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
                 if creationflags:
                     kwargs["creationflags"] = creationflags
+                existing_client = False
+                if client.name:
+                    try:
+                        # 网易云采用单实例：新的 webcmd 启动器可能把请求交给
+                        # 已有进程后立即退出。已有同名进程时不能把这个退出码
+                        # 当成“客户端不存在”，否则会错误打开官网回退页。
+                        existing_client = bool(_windows_process_ids(client.name))
+                    except (AttributeError, OSError, TypeError, ValueError):
+                        existing_client = False
                 process = runner(args, **kwargs)
                 # Loader/initialization error 可能表现为“进程已创建后立刻退出”，
-                # 这时立刻走 HTTPS 回退，不把启动失败误报成播放成功。
+                # 且没有已有实例时才走 HTTPS 回退；单实例客户端的正常转交
+                # 不应被误判为启动失败。
                 poll = getattr(process, "poll", None)
                 if callable(poll):
                     exit_code = poll()
-                    if exit_code not in (None, 0):
+                    if exit_code not in (None, 0) and not existing_client:
                         return False
                 return True
             launcher = startfile or getattr(os, "startfile")
