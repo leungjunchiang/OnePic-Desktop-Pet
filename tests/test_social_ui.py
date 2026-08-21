@@ -200,7 +200,7 @@ def test_incoming_visit_notice_has_direct_accept_reject_and_later_actions() -> N
         {"id": "visit-1", "nickname": "论文搭子", "kind": "food_milk_tea"}
     )
     labels = [button.text() for button in notice.findChildren(QPushButton)]
-    assert "论文搭子家的六毛请你喝奶茶" in [label.text() for label in notice.findChildren(QLabel)]
+    assert "论文搭子家的六毛🧋 请你喝奶茶" in [label.text() for label in notice.findChildren(QLabel)]
     assert {"接受", "拒绝", "稍后处理"} <= set(labels)
     notice.close_without_notice(); notice.deleteLater(); app.processEvents()
 
