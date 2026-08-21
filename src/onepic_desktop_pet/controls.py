@@ -15,6 +15,7 @@ from PySide6.QtGui import QBrush, QColor, QCursor, QGuiApplication, QIcon, QPain
 from .work_timer import format_elapsed_clock
 
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -428,6 +429,13 @@ class QuickControlPanel(QWidget):
             button.installEventFilter(self)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        # A non-activating macOS Tool window may not deliver child Enter/Leave
+        # events until it has been clicked.  Observe application mouse moves
+        # as well so merely passing over a button is enough to update the
+        # label; the timer below remains a fallback for native event gaps.
+        application = QApplication.instance()
+        if application is not None:
+            application.installEventFilter(self)
 
 
     @staticmethod
@@ -482,9 +490,12 @@ class QuickControlPanel(QWidget):
             if y + self.hover_hint.height() > area.bottom() - 4:
                 y = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7)).y()
         self.hover_hint.move(x, y)
-        self.hover_hint.show()
+        # Configure the native window before showing it.  Reconfiguring a
+        # visible macOS Tool/ToolTip window can make AppKit hide the first
+        # hover hint, which made the label appear only after a click.
         if sys.platform == "darwin" and self._window_behavior_callback is not None:
             self._window_behavior_callback(self.hover_hint, always_on_top=True)
+        self.hover_hint.show()
         # The hint is a separate top-level window. Raise it after applying
         # the native non-activating style so it stays above the shortcut dock
         # on macOS as well as Windows without taking keyboard focus.
@@ -508,27 +519,43 @@ class QuickControlPanel(QWidget):
                 return button
         return None
 
+    @staticmethod
+    def _event_global_position(event) -> QPoint:
+        """Read a mouse event's global position across Qt 5/6 event APIs."""
+
+        global_position = getattr(event, "globalPosition", None)
+        if callable(global_position):
+            return global_position().toPoint()
+        global_pos = getattr(event, "globalPos", None)
+        if callable(global_pos):
+            return global_pos()
+        return QCursor.pos()
+
+    def _set_hover_button(self, button: QPushButton | None) -> None:
+        """Keep exactly one hover label in sync with the pointer."""
+
+        if button is None:
+            if self._hint_button is not None:
+                self._hide_hint()
+            return
+        if self._hint_button is not button or not self.hover_hint.isVisible():
+            self._show_hint(button)
+
     def _poll_hover_button(self) -> None:
         """Repair missing native hover events without changing focus."""
 
-        button = self._button_at_global_pos(QCursor.pos())
-        if button is not None:
-            if self._hint_button is not button or not self.hover_hint.isVisible():
-                self._show_hint(button)
-        elif self._hint_button is not None:
-            self._hide_hint()
-
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
-        super().showEvent(event)
-        self._hover_poll_timer.start()
-        QTimer.singleShot(0, self._poll_hover_button)
-
-    def hideEvent(self, event) -> None:  # noqa: N802 - Qt API
-        self._hover_poll_timer.stop()
-        self._hide_hint()
-        super().hideEvent(event)
+        self._set_hover_button(self._button_at_global_pos(QCursor.pos()))
 
     def eventFilter(self, watched, event) -> bool:
+        if self.isVisible() and event.type() in {
+            QEvent.Type.MouseMove,
+            QEvent.Type.HoverMove,
+        }:
+            # This branch also handles events delivered to the application
+            # filter, where watched is not one of our six buttons.
+            self._set_hover_button(
+                self._button_at_global_pos(self._event_global_position(event))
+            )
         if watched in getattr(self, "_quick_buttons", ()):
             if event.type() in {
                 QEvent.Type.Enter,
@@ -631,6 +658,8 @@ class QuickControlPanel(QWidget):
         """每次显示重新开始八秒自动收起计时。"""
 
         super().showEvent(event)
+        self._hover_poll_timer.start()
+        QTimer.singleShot(0, self._poll_hover_button)
         # Native/offscreen Qt may synthesize an enterEvent while a newly
         # positioned top-level panel is being shown. Do not interpret that
         # synthetic event as active mouse use; real pointer entry after the
@@ -646,6 +675,7 @@ class QuickControlPanel(QWidget):
         self._ignore_initial_enter = False
 
     def hideEvent(self, event) -> None:
+        self._hover_poll_timer.stop()
         self._hide_hint()
         super().hideEvent(event)
 
