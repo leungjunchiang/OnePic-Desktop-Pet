@@ -179,6 +179,11 @@ class DesktopPetApplication(QObject):
     def show_window(self) -> None:
         """显示宠物但不夺走用户正在输入文字的窗口焦点。"""
 
+        if sys.platform == "darwin":
+            # Configure the NSPanel before its first show.  Showing first and
+            # fixing the style in showEvent can briefly activate Lili and
+            # steal a ChatGPT/Codex text field.
+            self.window._apply_macos_window_behavior()
         self.window.show()
         # PetWindow.showEvent schedules the one-time native macOS panel
         # configuration.  Calling it synchronously as well can make AppKit
