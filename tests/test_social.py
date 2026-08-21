@@ -342,6 +342,14 @@ def test_presence_freshness_is_server_authoritative_in_all_relays():
     assert "String(body.last_seen || now)" not in cloudbase + edge + worker
 
 
+def test_cloudbase_presence_and_profile_proxy_preserve_upsert_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cloudbase = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8")
+    assert 'Prefer: "resolution=merge-duplicates,return=minimal"' in cloudbase
+    assert "wealth_leaderboard_enabled" in cloudbase
+    assert "wealth_leaderboard_preference_set" in cloudbase
+
+
 def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000200_lili_room_focus_ledger.sql").read_text(encoding="utf-8")

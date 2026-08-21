@@ -5,9 +5,9 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QTabWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget
 
-from onepic_desktop_pet.social_ui import BuddyVisitWindow, SocialHubDialog
+from onepic_desktop_pet.social_ui import BuddyCardWidget, BuddyVisitWindow, SocialHubDialog
 
 
 class SignedOutClient:
@@ -161,6 +161,42 @@ def test_social_hub_is_minimizable_and_signed_in_room_refresh_works() -> None:
     assert dialog.isMinimized()
     dialog.showNormal()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_wealth_leaderboard_is_on_by_default_but_preserves_explicit_opt_out() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard(dialog.client.dashboard())
+    assert dialog.wealth_opt_in.isChecked()
+
+    data = dialog.client.dashboard()
+    data["me"].update(
+        {"wealth_leaderboard_enabled": False, "wealth_leaderboard_preference_set": True}
+    )
+    dialog.apply_dashboard(data)
+    assert not dialog.wealth_opt_in.isChecked()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_supply_actions_are_large_inline_buttons() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
+    buttons = {button.text() for button in widget.findChildren(QPushButton)}
+    assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= buttons
+    assert "送补给 ▼" not in buttons
+    assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton) if button.text() in buttons)
+    widget.close(); widget.deleteLater(); app.processEvents()
+
+
+def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = BuddyCardWidget(
+        {"nickname": "搭子", "online": False, "working": True, "status": "focus"}
+    )
+    labels = [label.text() for label in widget.findChildren(QLabel)]
+    assert any("已离线" in text for text in labels)
+    assert all("正在工作" not in text for text in labels)
+    widget.close(); widget.deleteLater(); app.processEvents()
 
 
 def test_buddy_visit_is_a_normal_minimizable_taskbar_window() -> None:

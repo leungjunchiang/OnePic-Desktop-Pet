@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QMenu,
-    QToolButton, QVBoxLayout, QWidget, QSizePolicy,
+    QVBoxLayout, QWidget, QSizePolicy,
 )
 
 from .resources import resource_path
@@ -108,12 +108,33 @@ def _presence_status(presence: dict[str, Any]) -> str:
         return "unknown"
     if bool(presence.get("stale_presence")):
         return "offline"
+    # Some older dashboard payloads can retain ``working`` or ``status``
+    # after the server has already marked the user offline.  The explicit
+    # online flag is authoritative in that case, otherwise the UI shows a
+    # grey dot together with the contradictory “正在工作” label.
+    if presence.get("online") is False:
+        return "offline"
     status = str(presence.get("status") or "").strip().casefold()
     if status in {"offline", "离线"}:
         return "offline"
     if _presence_working(presence):
         return "focus"
     return "rest"
+
+
+def _wealth_leaderboard_enabled(profile: dict[str, Any] | None) -> bool:
+    """Keep the leaderboard opt-in default for legacy profiles.
+
+    ``wealth_leaderboard_preference_set`` distinguishes an old row that has
+    never made an explicit choice from a deliberate opt-out. This lets the
+    UI remain enabled by default without undoing a user's saved opt-out.
+    """
+
+    if not isinstance(profile, dict):
+        return True
+    if not bool(profile.get("wealth_leaderboard_preference_set", False)):
+        return True
+    return bool(profile.get("wealth_leaderboard_enabled", True))
 
 
 def _owner_nickname(record: dict[str, Any] | None) -> str:
@@ -174,8 +195,17 @@ class SocialSyncThread(QThread):
 
     def run(self) -> None:
         try:
+            heartbeat_error = ""
             if self.send_heartbeat:
-                self.client.heartbeat(**self.presence)
+                try:
+                    self.client.heartbeat(**self.presence)
+                except SocialError as exc:
+                    # A transient write failure must not prevent the same
+                    # cycle's dashboard read. Otherwise one platform can
+                    # disappear from the other simply because its heartbeat
+                    # proxy is briefly unavailable.
+                    heartbeat_error = str(exc)
+                    LOGGER.warning("social presence heartbeat failed: %s", exc)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -192,6 +222,9 @@ class SocialSyncThread(QThread):
                     # A missing/temporarily unavailable economy RPC must not
                     # make the room heartbeat fail or clear the cached rows.
                     pass
+            if heartbeat_error:
+                data = dict(data or {})
+                data["_presence_heartbeat_error"] = heartbeat_error
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -335,11 +368,10 @@ class BuddyCardWidget(QWidget):
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(5)
         uncertain = bool(buddy.get("presence_uncertain"))
-        online = bool(buddy.get("online")) and not bool(buddy.get("stale_presence")) and not uncertain
-        working = _presence_working(buddy)
+        status = _presence_status(buddy)
+        online = status != "offline" and bool(buddy.get("online")) and not bool(buddy.get("stale_presence")) and not uncertain
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
-        status = _presence_status(buddy)
         if status == "unknown":
             if bool(buddy.get("online")) and bool(buddy.get("working")):
                 status_text = "正在工作（同步恢复中）"
@@ -394,27 +426,25 @@ class BuddyCardWidget(QWidget):
             self._buttons[kind] = button
             actions.addWidget(button)
         root.addLayout(actions)
-        food_actions = QHBoxLayout()
-        supply = QToolButton()
-        supply.setText("送补给 ▼")
-        supply.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        supply_menu = QMenu(supply)
+        food_actions = QGridLayout()
+        food_actions.setHorizontalSpacing(5)
+        food_actions.setVerticalSpacing(5)
         for kind, label in (
             ("food_coffee", "请咖啡"),
             ("food_milk_tea", "请奶茶"),
             ("food_tea", "敬茶"),
             ("food_cake", "请蛋糕"),
         ):
-            action = supply_menu.addAction(label)
-            action.triggered.connect(lambda _checked=False, action_kind=kind: self._request_food(action_kind))
+            button = QPushButton(label)
+            button.setMinimumHeight(32)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            button.clicked.connect(lambda _checked=False, action_kind=kind: self._request_food(action_kind))
             if is_self:
-                action.setEnabled(False)
-            self._food_buttons[kind] = supply
-        supply.setMenu(supply_menu)
-        supply.setMinimumHeight(32)
-        supply.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        supply.setToolTip("送补给：请咖啡、请奶茶、敬茶或请蛋糕")
-        food_actions.addWidget(supply)
+                button.setEnabled(False)
+                button.setToolTip("补给按钮只对房间里的其他搭子开放")
+            self._food_buttons[kind] = button
+            index = len(self._food_buttons) - 1
+            food_actions.addWidget(button, index // 2, index % 2)
         root.addLayout(food_actions)
         if not is_self:
             subscribe = QCheckBox("订阅开工/下班提醒")
@@ -504,7 +534,7 @@ class BuddyVisitWindow(QWidget):
         self._mine_outfit = ""
         self._peer_outfit = ""
         self._mine_actions = ("02-office.png", "22-thermos.png", "04-guitar.png")
-        self._peer_actions = ("09-night-reading.png", "03-headphones.png", "19-tea.png")
+        self._peer_actions = ("09-night-reading.png", "03-headphones.png", "42-daydream.png")
         self.timer = QTimer(self); self.timer.timeout.connect(self._tick); self.timer.start(1000)
         self.resize(520, 430)
         self.active_visit_id = ""
@@ -879,7 +909,7 @@ class SocialHubDialog(QDialog):
         network_row.addWidget(network_check)
         welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "绿色表示两分钟内在线；每张搭子卡都可以直接串门或送补给。")
+        buddies_card, buddies_layout = self._card("我的搭子", "绿色表示最近两分钟内有心跳；灰色表示已离线。每张搭子卡都可以直接串门或送补给。")
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
         self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
@@ -1576,6 +1606,7 @@ class SocialHubDialog(QDialog):
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
         self.wealth_opt_in = QCheckBox("在荒野王国富豪榜中显示我")
+        self.wealth_opt_in.setChecked(True)
         self.wealth_opt_in.setToolTip("默认参加；仅已接受的搭子可见，可随时关闭。")
         layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
         layout.addWidget(QLabel("搭子互动："))
@@ -1719,7 +1750,7 @@ class SocialHubDialog(QDialog):
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
         self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
-        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(bool(me.get("wealth_leaderboard_enabled", True)))
+        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
         mode = str(me.get("buddy_interaction_mode") or "focus_priority")
         mode_index = self.interaction_mode.findData(mode)
         self.interaction_mode.setCurrentIndex(mode_index if mode_index >= 0 else 1)
@@ -1738,14 +1769,14 @@ class SocialHubDialog(QDialog):
                     if isinstance(item, dict)
                 }
                 previous = previous_buddies.get(str(buddy.get("user_id")))
-                if previous is not None and bool(previous.get("working")) != bool(buddy.get("working")):
-                    state_text = "开始专注" if buddy.get("working") else "结束专注"
+                if previous is not None and _presence_status(previous) != _presence_status(buddy):
+                    state_text = "开始专注" if _presence_status(buddy) == "focus" else "结束专注"
                     self.buddy_subscription_notice.emit(f"{_owner_label(buddy)} {state_text}了。")
             is_stale = bool(buddy.get("stale_presence"))
             is_uncertain = bool(buddy.get("presence_uncertain"))
             # A transport outage must not turn the last peer state into an
             # offline event, but it also must not inflate current room totals.
-            working_count += int(bool(buddy.get("working")) and not is_stale and not is_uncertain)
+            working_count += int(_presence_status(buddy) == "focus")
             duration = None if is_stale or is_uncertain else buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
             item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)

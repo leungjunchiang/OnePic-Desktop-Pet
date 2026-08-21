@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
@@ -360,9 +361,11 @@ class QuickControlPanel(QWidget):
         self.hover_hint.setStyleSheet(CONTROL_STYLE)
         self.hover_hint.hide()
         self._hint_button: QPushButton | None = None
+        self._window_behavior_callback: Callable[..., object] | None = None
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
+        self.hide_timer.timeout.connect(self._hide_hint)
         layout = QHBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9); layout.setSpacing(8)
         self.title = QLabel(f"{pet_name}快捷口袋")
         self.title.setVisible(False)
@@ -394,6 +397,8 @@ class QuickControlPanel(QWidget):
         button.setIcon(_quick_icon(kind))
         button.setIconSize(QSize(22, 22))
         button.setFixedSize(42, 42)
+        button.setFlat(True)
+        button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         button.setAutoDefault(False)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         button.setToolTip(tooltip)
@@ -401,6 +406,11 @@ class QuickControlPanel(QWidget):
         if signal is not None:
             button.clicked.connect(lambda: signal.emit())
         return button
+
+    def set_window_behavior_callback(self, callback: Callable[..., object] | None) -> None:
+        """Let the owning window apply the same non-activating native panel rules."""
+
+        self._window_behavior_callback = callback
 
     def set_work_action_label(self, label: str) -> None:
         """Refresh the dynamic work action shown in the shortcut panel."""
@@ -433,10 +443,12 @@ class QuickControlPanel(QWidget):
                 y = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7)).y()
         self.hover_hint.move(x, y)
         self.hover_hint.show()
-        # A macOS order change for a no-focus hint can still make Lili
-        # frontmost. It is already shown without activation.
-        if sys.platform != "darwin":
-            self.hover_hint.raise_()
+        if sys.platform == "darwin" and self._window_behavior_callback is not None:
+            self._window_behavior_callback(self.hover_hint, always_on_top=True)
+        # The hint is a separate top-level window. Raise it after applying
+        # the native non-activating style so it stays above the shortcut dock
+        # on macOS as well as Windows without taking keyboard focus.
+        self.hover_hint.raise_()
 
     def _hide_hint(self) -> None:
         """Hide the hover label when the pointer leaves a shortcut."""

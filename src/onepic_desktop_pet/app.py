@@ -4,7 +4,7 @@
 职责范围：
 - 创建或复用 QApplication；
 - 在创建应用前启用适合不同显示器缩放比例的高 DPI 舍入策略；
-- 创建 PetWindow 和精简 QSystemTrayIcon；
+- 创建 PetWindow 和精简系统状态入口；macOS 使用原生状态栏图标，其他平台使用 QSystemTrayIcon；
 - 托盘只保留显示、快捷口袋、聊天、设置与退出，主要互动直接在六毛窗口完成；
 - 托盘设置动作显式标记为 ``user_action``，其他来源无法创建连接与陪伴窗口；
 - 托盘提供“始终置顶/桌面模式”开关，并与宠物右键菜单和设置页保持同步；
@@ -68,6 +68,17 @@ from .window import PetWindow
 LOGGER = logging.getLogger(__name__)
 
 
+def _uses_qt_system_tray() -> bool:
+    """Return whether Qt should create the platform tray icon.
+
+    macOS has a native ``NSStatusItem`` installed below. Creating a second
+    ``QSystemTrayIcon`` there produces two Lili menu-bar entries and one can
+    appear restricted by macOS while the other remains usable.
+    """
+
+    return sys.platform != "darwin"
+
+
 class DesktopPetApplication(QObject):
     """封装窗口、托盘与持久化状态的桌面宠物应用。"""
 
@@ -118,7 +129,11 @@ class DesktopPetApplication(QObject):
                 "quit": lambda _checked=False: self.quit(),
             }
         )
-        self.tray = self._create_tray()
+        self.tray: QSystemTrayIcon | None = (
+            self._create_tray() if _uses_qt_system_tray() else None
+        )
+        if self.tray is None:
+            self.tray_menu = None
         self._dock_controller = install_dock_menu(self.window.unified_menu_model)
         self._status_item_controller = install_status_item(self.window.unified_menu_model)
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
@@ -140,7 +155,7 @@ class DesktopPetApplication(QObject):
     def _refresh_tray_menu(self) -> None:
         """Re-render dynamic work, visibility, music, and topmost state."""
 
-        if not hasattr(self, "tray") or not hasattr(self, "tray_menu"):
+        if self.tray is None or self.tray_menu is None:
             return
         # Keep the same standalone menu object attached to the status item;
         # only its dynamic action tree needs refreshing.
@@ -149,7 +164,8 @@ class DesktopPetApplication(QObject):
     def _owner_nickname_changed(self, _owner_nickname: str) -> None:
         """Keep the pet identity fixed while refreshing the rename entry."""
 
-        self.tray.setToolTip(f"Lili · {PET_NAME}")
+        if self.tray is not None:
+            self.tray.setToolTip(f"Lili · {PET_NAME}")
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
@@ -186,7 +202,7 @@ class DesktopPetApplication(QObject):
             # never steal the user's current editor/browser focus.  Explicit
             # user actions still open the normal interactive note window.
             QTimer.singleShot(300, lambda: self.window.show_today_note(passive=True))
-        if QSystemTrayIcon.isSystemTrayAvailable():
+        if self.tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         if not self._content_updates_disabled():
             # The startup check is deliberately delayed and silent.  It only
@@ -223,7 +239,8 @@ class DesktopPetApplication(QObject):
                 type(self)._active_instance = None
             self._status_item_controller.close()
             self._dock_controller.close()
-            self.tray.hide()
+            if self.tray is not None:
+                self.tray.hide()
             self.window.close()
             if self._instance_lock is not None and self._instance_lock.isLocked():
                 self._instance_lock.unlock()

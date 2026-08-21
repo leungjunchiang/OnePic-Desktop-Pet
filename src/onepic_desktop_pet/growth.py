@@ -84,19 +84,24 @@ ACTION_SPRITES = {
     "overwhelmed": "46-overwhelmed.png",
 }
 
+# These sprites are reserved for explicit inventory/interaction scenes. They
+# stay in ACTION_SPRITES so a consumed item can render its own visual, but are
+# intentionally excluded from ambient random actions and the regular picker.
+FOOD_LIMITED_ACTIVITIES = frozenset({"tea", "milk-tea", "feast", "work-study", "deep-focus"})
+
 
 ACTION_GROUPS = (
     ("专注工作", (("默认站姿", "stand"), ("办公室工作", "office"), ("夜读", "night-reading"), ("指着说", "pointing"), ("拿保温杯", "thermos"))),
-    ("休息一下", (("海边椰子", "coconut"), ("日光浴", "sunbath"), ("兔子胡萝卜", "bunny-carrot"), ("巴布达", "babuda"), ("睡觉", "sleep"), ("看金鱼", "aquarium"), ("喝茶", "tea"), ("看电影", "movie"), ("喝奶茶", "milk-tea"), ("饕餮一餐", "feast"))),
+    ("休息一下", (("海边椰子", "coconut"), ("日光浴", "sunbath"), ("兔子胡萝卜", "bunny-carrot"), ("巴布达", "babuda"), ("睡觉", "sleep"), ("看金鱼", "aquarium"), ("看电影", "movie"))),
     ("音乐演出", (("戴耳机", "headphones"), ("弹吉他", "guitar"), ("打鼓", "drums"), ("唱歌", "singing"), ("弹钢琴", "piano"))),
     ("爱与庆祝", (("爱心比心", "love"), ("头顶比心", "overhead-heart"), ("送花", "flowers"), ("合影", "group-photo"), ("荒野国王", "wild-king"))),
     ("出门冒险", (("登山", "climbing"), ("骑摩托", "motorcycle"), ("UFO 悬挂", "ufo"), ("打网球", "tennis"), ("与海豚游泳", "dolphin"), ("钓螃蟹", "fishing"), ("与海鸥", "seagull"), ("捡贝壳", "shells"), ("踢足球", "football"), ("乘鲸云游", "whale"), ("恶魔毛毛", "demon"))),
-    ("工作搭子", (("花环舞步", "flower-dance"), ("开心开工", "work-cheer"), ("埋头读写", "work-study"), ("工作流转", "work-flow"), ("趴桌小睡", "desk-nap"), ("摸鱼走神", "daydream"), ("深度专注", "deep-focus"), ("完成挥手", "work-complete"), ("夜间加班", "overtime"), ("忙到转圈", "overwhelmed"))),
+    ("工作搭子", (("花环舞步", "flower-dance"), ("开心开工", "work-cheer"), ("工作流转", "work-flow"), ("趴桌小睡", "desk-nap"), ("摸鱼走神", "daydream"), ("完成挥手", "work-complete"), ("夜间加班", "overtime"), ("忙到转圈", "overwhelmed"))),
 )
 
 
-FOCUS_ACTIONS = ("office", "work-cheer", "work-study", "deep-focus", "night-reading", "thermos")
-REST_ACTIONS = ("tea", "coconut", "sunbath", "sleep", "desk-nap", "daydream", "movie", "headphones")
+FOCUS_ACTIONS = ("office", "work-cheer", "night-reading", "thermos", "work-flow")
+REST_ACTIONS = ("coconut", "sunbath", "sleep", "desk-nap", "daydream", "movie", "headphones")
 COMPLETE_ACTIONS = ("love", "overhead-heart", "work-complete", "guitar", "drums", "flower-dance", "flowers", "group-photo")
 RANDOM_ACTIONS = ("fishing", "seagull", "football", "aquarium", "singing", "ufo", "whale")
 
@@ -145,9 +150,9 @@ def time_of_day_activity(now: datetime, work_running: bool) -> tuple[str, str]:
     if hour < 10:
         return "babuda", "早上好，巴布达。先喝口水，再开始第一件事。"
     if hour < 13:
-        return "feast", "到饭点啦，工作可以等一会儿，肚子不应该一直等。"
+        return "daydream", "到午间啦，工作可以先松一口气，六毛陪你缓一缓。"
     if hour < 17:
-        return ("thermos" if work_running else "tea"), "下午容易犯困，喝口水，肩膀也松一松。"
+        return ("thermos" if work_running else "daydream"), "下午容易犯困，喝口水，肩膀也松一松。"
     if hour < 22:
         return "night-reading", "晚上适合慢慢收尾，不用把所有明天都塞进今天。"
     return "sleep", "六毛已经穿好睡衣了。今天做到这里，也很完整。"

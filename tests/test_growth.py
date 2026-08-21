@@ -5,7 +5,11 @@ from pathlib import Path
 
 from onepic_desktop_pet.growth import (
     ACTION_SPRITES,
+    ACTION_GROUPS,
     DAILY_GROWTH,
+    FOOD_LIMITED_ACTIVITIES,
+    FOCUS_ACTIONS,
+    REST_ACTIONS,
     growth_progress_text,
     positive_mood,
     stage_for_seconds,
@@ -36,7 +40,7 @@ def test_positive_mood_never_punishes_a_quiet_day() -> None:
 
 def test_time_of_day_and_corrected_action_assets() -> None:
     assert time_of_day_activity(datetime(2026, 8, 10, 2, 0), True)[0] == "sleep"
-    assert time_of_day_activity(datetime(2026, 8, 10, 12, 0), True)[0] == "feast"
+    assert time_of_day_activity(datetime(2026, 8, 10, 12, 0), True)[0] == "daydream"
     _, sleep_message = time_of_day_activity(datetime(2026, 8, 10, 23, 30), False)
     assert "穿好睡衣" in sleep_message
     assert "穿好睡意" not in sleep_message
@@ -47,3 +51,10 @@ def test_time_of_day_and_corrected_action_assets() -> None:
     assert all((root / filename).is_file() for filename in set(ACTION_SPRITES.values()))
     assert ACTION_SPRITES["deep-focus"] == "43-deep-focus.png"
     assert ACTION_SPRITES["work-complete"] == "44-work-complete.png"
+
+
+def test_food_visuals_are_not_regular_random_or_picker_actions() -> None:
+    listed = {activity for _group, items in ACTION_GROUPS for _label, activity in items}
+    assert FOOD_LIMITED_ACTIVITIES.isdisjoint(listed)
+    assert FOOD_LIMITED_ACTIVITIES.isdisjoint(FOCUS_ACTIONS)
+    assert FOOD_LIMITED_ACTIVITIES.isdisjoint(REST_ACTIONS)

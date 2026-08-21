@@ -1,3 +1,11 @@
+## v0.23.40 — 修复 macOS 双托盘、跨平台在线状态与自习室交互界面
+
+- macOS 只创建原生状态栏入口，避免 Qt 托盘图标与 NSStatusItem 同时出现两个 Lili。
+- 修复 CloudBase Presence upsert 缺少 PostgREST 合并头导致 Windows/macOS 状态不同步的问题；心跳单次失败也不会阻塞同一轮状态读取。
+- 修复离线用户仍携带旧 working 标记时显示灰点却“正在工作”的矛盾；排行榜旧账号默认显示，明确关闭仍然有效。
+- 咖啡、昂贵咖啡、奶茶、蛋糕和茶的造型仅在对应物品/互动触发时出现，不再进入普通随机动作；送补给改为统一的大按钮。
+- 统一快捷栏按钮外观，并让 macOS 悬停时也显示快捷项黑色文字标签。
+
 ## v0.23.39 — 修复 macOS Codex 本机登录发现与首次启动单实例锁
 
 - macOS 连接检测现在会识别登录 shell、常见用户级 CLI 目录，以及 `/Applications/ChatGPT.app/Contents/Resources/codex` 和用户级 ChatGPT.app 中的内置 Codex CLI；找到后始终使用绝对路径运行 `codex login status`、`exec` 和 `app-server`。

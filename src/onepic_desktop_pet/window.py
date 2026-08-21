@@ -586,6 +586,7 @@ class PetWindow(QWidget):
         self.coffee_scene_prompt.continue_requested.connect(self._continue_after_coffee_scene)
         self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
         self.quick_panel = QuickControlPanel(self._pet_name())
+        self.quick_panel.set_window_behavior_callback(self._apply_macos_window_behavior)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
         self.quick_panel.todo_requested.connect(self.show_todo_center)
@@ -1958,7 +1959,8 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         reply = self.companion.feed(food_key)
         if food_key in {"coffee", "tea"}:
-            self._set_temporary_activity("tea", 28_000)
+            food_activity = {"coffee": "work-study", "tea": "tea"}[food_key]
+            self._set_temporary_activity(food_activity, 28_000)
             self._play_action_sequence(
                 (PetState.SIT, PetState.HAPPY, PetState.SIT),
                 3000,
@@ -2425,7 +2427,7 @@ class PetWindow(QWidget):
                 self._pause_notice_shown = reason != "idle_10m"
         self._award_focus_rewards()
         self.work_activity_timer.stop()
-        self._set_temporary_activity("tea", 25_000)
+        self._set_temporary_activity("thermos", 25_000)
         duration = format_work_duration(self.work_timer.today_seconds())
         if was_running and reason in {"sleep", "lock"}:
             system_event = "电脑已锁屏" if reason == "lock" else "电脑进入睡眠"
@@ -2878,7 +2880,7 @@ class PetWindow(QWidget):
 
     def rest_today(self) -> None:
         self.time_memory.records.set_rest_day(True)
-        self._set_temporary_activity("tea", 20_000)
+        self._set_temporary_activity("daydream", 20_000)
         self.show_speech("行，那今天不算旷工。", 4200)
         if self._today_note_window is not None:
             self._today_note_window.refresh()
@@ -2990,7 +2992,7 @@ class PetWindow(QWidget):
         session = self.work_timer.session_seconds()
         choices = FOCUS_ACTIONS
         if session >= 45 * 60 and random.random() < 0.35:
-            choices = ("thermos", "tea", "sleep")
+            choices = ("thermos", "sleep", "daydream")
         self._change_ambient_activity(random.choice(choices))
         self._manual_activity_until = time.monotonic() + 120
         self._schedule_work_activity()
@@ -4142,7 +4144,7 @@ class PetWindow(QWidget):
         if category == self._last_app_category:
             return
         self._last_app_category = category
-        mapping = {"music": "headphones", "office": "work-study", "coding": "deep-focus", "reading": "night-reading"}
+        mapping = {"music": "headphones", "office": "computer", "coding": "computer", "reading": "night-reading"}
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
