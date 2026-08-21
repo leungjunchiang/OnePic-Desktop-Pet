@@ -163,6 +163,7 @@ from .growth import (
     ACTION_GROUPS,
     ACTION_SPRITES,
     COMPLETE_ACTIONS,
+    FOOD_LIMITED_ACTIVITIES,
     FOCUS_ACTIONS,
     RANDOM_ACTIONS,
     REST_ACTIONS,
@@ -401,6 +402,10 @@ class PetWindow(QWidget):
         self._frame_index = 0
         self._animation_direction = 1
         self._animation_finished: Callable[[], None] | None = None
+        # Social food is a temporary shared visual moment.  Keep its expiry
+        # separate from the local inventory scene so accepting a buddy's
+        # drink/cake never pauses or rewrites the local focus session.
+        self._social_food_activity_until = 0.0
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
         self._auto_paused_for_idle = False
@@ -1010,6 +1015,15 @@ class PetWindow(QWidget):
             if str(food_scene.get("item_key") or "") != "tea" or activity == "tea":
                 activity = scene_activity
                 food_scene_active = True
+        # A social food interaction is not stored in the local food-scene
+        # ledger: it belongs to both users and must not affect inventory or
+        # focus accounting.  It still needs the same rendering precedence so
+        # a permanent hourly outfit cannot hide the food-only sprite.
+        if (
+            activity in FOOD_LIMITED_ACTIVITIES
+            and time.monotonic() < self._social_food_activity_until
+        ):
+            food_scene_active = True
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
         composed = draw_activity_overlay(
@@ -2221,6 +2235,10 @@ class PetWindow(QWidget):
         if consumed is None:
             raise ValueError("蛋糕分享已送达，但本机库存状态没有完成扣除，请重新同步钱袋。")
         self._sync_economy_events([dict(consumed.get("event") or {})])
+        # The host joins the same celebration immediately.  This is a social
+        # pose only: it must not create a second local food scene or pause
+        # focus, even when the host is currently working.
+        self._set_social_food_activity("cake", 0)
         self.show_speech(f"🍰 已请 {len(ids)} 位搭子吃蛋糕。\n{str(message or '').strip()[:100] or '今天值得庆祝一下。'}", 6200)
         return result
 
@@ -2470,16 +2488,23 @@ class PetWindow(QWidget):
     def _set_social_food_activity(self, item_key: str, duration_minutes: int = 0) -> None:
         """Show a food-interaction pose without pausing or starting focus."""
 
+        item_key = str(item_key or "")
         activity = {
             "coffee": "work-study",
             "milk_tea": "milk-tea",
             "tea": "tea",
-        }.get(str(item_key or ""))
+            "cake": "feast",
+        }.get(item_key)
         if not activity:
             return
-        default_minutes = {"coffee": 30, "milk_tea": 10, "tea": 1}
-        minutes = max(1, int(duration_minutes or default_minutes.get(item_key, 1)))
-        self._set_temporary_activity(activity, minutes * 60 * 1000)
+        if item_key == "cake" and not duration_minutes:
+            duration_ms = 20_000
+        else:
+            default_minutes = {"coffee": 30, "milk_tea": 10, "tea": 1}
+            minutes = max(1, int(duration_minutes or default_minutes.get(item_key, 1)))
+            duration_ms = minutes * 60 * 1000
+        self._social_food_activity_until = time.monotonic() + duration_ms / 1000
+        self._set_temporary_activity(activity, duration_ms)
         self._refresh_pixmap()
 
     def _handle_food_interaction_accepted(self, event: dict) -> None:
@@ -2495,24 +2520,17 @@ class PetWindow(QWidget):
         if not item_key:
             return
         duration = int(payload.get("duration_minutes") or 0)
-        todo_title = str(payload.get("todo_title") or "")
-        if kind in {"food_coffee", "food_milk_tea", "food_tea"}:
-            self._set_social_food_activity(item_key, duration)
-            labels = {
-                "coffee": "☕ 一起喝咖啡",
-                "milk_tea": "🧋 一起喝奶茶",
-                "tea": "🍵 一起喝茶",
-            }
-            self.show_speech(f"{labels[item_key]}，六毛继续陪你专注。", 4800)
-            return
-        self._start_food_scene(
-            item_key,
-            duration,
-            "",
-            todo_title,
-            consume_inventory=False,
-            source="buddy_food_received",
-        )
+        # Accepted social food is always a shared visual moment.  Do not
+        # start a local inventory scene here: that would pause focus for some
+        # items and could make an incoming cake look like local inventory.
+        self._set_social_food_activity(item_key, duration)
+        labels = {
+            "coffee": "☕ 一起喝咖啡",
+            "milk_tea": "🧋 一起喝奶茶",
+            "tea": "🍵 一起喝茶",
+            "cake": "🍰 一起吃蛋糕",
+        }
+        self.show_speech(f"{labels[item_key]}，六毛继续陪你专注。", 4800)
 
     def talk_to_pet(self, message: str) -> CompanionReply:
         """在本地处理一条对话，并显示 Lili 的回复。"""
@@ -3208,6 +3226,11 @@ class PetWindow(QWidget):
     def _work_activity_tick(self) -> None:
         """在专注动作间轮换，让用户工作时六毛也持续工作。"""
 
+        # A shared drink or cake takes precedence over the normal focus
+        # animation rotation until its visual moment expires.
+        if time.monotonic() < self._social_food_activity_until:
+            self._schedule_work_activity()
+            return
         if night_limited_activity(datetime.now()) is not None:
             self._night_limited_tick()
             self._schedule_work_activity()
@@ -3232,6 +3255,7 @@ class PetWindow(QWidget):
     def _activity_timeout(self) -> None:
         """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
 
+        self._social_food_activity_until = 0.0
         if night_limited_activity(datetime.now()) is not None:
             self._night_limited_tick()
             return
