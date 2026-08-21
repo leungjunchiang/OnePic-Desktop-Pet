@@ -8,6 +8,13 @@ on:
     branches:
       - "release/v*"
 
+# A release branch is updated as one logical publication.  If several
+# intermediate sync commits arrive together, keep only the newest complete
+# build in the macOS runner queue.
+concurrency:
+  group: lili-release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -26,12 +33,7 @@ jobs:
       - name: Set release version
         shell: powershell
         run: |
-          $refName = $env:GITHUB_REF_NAME
-          if ($refName -match '^codex/release-v(.+)-complete$') {
-            $version = $Matches[1]
-          } else {
-            $version = $refName -replace '^release/', '' -replace '^v', ''
-          }
+          $version = $env:GITHUB_REF_NAME -replace '^release/', '' -replace '^v', ''
           "BUILD_VERSION = `"$version`"" | Set-Content -Encoding utf8 .\src\onepic_desktop_pet\_build_version.py
           "LILI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run tests
@@ -57,12 +59,7 @@ jobs:
       - name: Build Windows installer
         shell: powershell
         run: |
-          $refName = $env:GITHUB_REF_NAME
-          if ($refName -match '^codex/release-v(.+)-complete$') {
-            $version = $Matches[1]
-          } else {
-            $version = $refName -replace '^release/', '' -replace '^v', ''
-          }
+          $version = $env:GITHUB_REF_NAME -replace '^release/', '' -replace '^v', ''
           powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version $version
       - name: Create Windows portable ZIP and checksums
         shell: powershell
@@ -101,12 +98,8 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Set release version
         run: |
-          if [[ "$GITHUB_REF_NAME" =~ ^codex/release-v(.+)-complete$ ]]; then
-            release_tag="${BASH_REMATCH[1]}"
-          else
-            release_tag="${GITHUB_REF_NAME#release/}"
-            release_tag="${release_tag#v}"
-          fi
+          release_tag="${GITHUB_REF_NAME#release/}"
+          release_tag="${release_tag#v}"
           printf 'BUILD_VERSION = "%s"\n' "$release_tag" > src/onepic_desktop_pet/_build_version.py
           echo "LILI_VERSION=$release_tag" >> "$GITHUB_ENV"
       - name: Run tests
@@ -144,12 +137,7 @@ jobs:
       - name: Build content update manifest
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_NAME" =~ ^codex/release-v(.+)-complete$ ]]; then
-            release_tag="${BASH_REMATCH[1]}"
-          else
-            release_tag="${GITHUB_REF_NAME#release/}"
-            release_tag="${release_tag#v}"
-          fi
+          release_tag="${GITHUB_REF_NAME#release/}"
           python tools/build_content_manifest.py \
             --root . \
             --version "$release_tag" \
@@ -161,12 +149,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "$GITHUB_REF_NAME" =~ ^codex/release-v(.+)-complete$ ]]; then
-            release_tag="${BASH_REMATCH[1]}"
-          else
-            release_tag="${GITHUB_REF_NAME#release/}"
-            release_tag="${release_tag#v}"
-          fi
+          release_tag="${GITHUB_REF_NAME#release/}"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Removing stale release $release_tag before publishing the verified artifacts."
             gh release delete "$release_tag" \
