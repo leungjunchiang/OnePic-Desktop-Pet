@@ -1240,6 +1240,14 @@ class PetWindow(QWidget):
         native handle first makes every passive surface display-only.
         """
 
+        # A focus/session refresh can request a passive surface after the
+        # fullscreen poll has already hidden it (the duration bubble is
+        # refreshed every timer tick).  Do not let that refresh punch through
+        # a video or presentation fullscreen window.
+        if getattr(self, "_fullscreen_hidden", False) and widget in self._fullscreen_surfaces():
+            widget.hide()
+            return
+
         if sys.platform == "darwin":
             self._apply_macos_window_behavior(widget, always_on_top=always_on_top)
         widget.show()
@@ -1441,14 +1449,17 @@ class PetWindow(QWidget):
 
         fullscreen = bool(active_window_is_fullscreen())
         if fullscreen:
-            if self._fullscreen_hidden:
-                return
-            self._fullscreen_restore_visible = {
-                widget: bool(widget.isVisible())
-                for widget in self._fullscreen_surfaces()
-            }
-            self._fullscreen_hidden = True
-            for widget in self._fullscreen_restore_visible:
+            if not self._fullscreen_hidden:
+                self._fullscreen_restore_visible = {
+                    widget: bool(widget.isVisible())
+                    for widget in self._fullscreen_surfaces()
+                }
+                self._fullscreen_hidden = True
+            # Re-hide on every poll as a defensive measure. Some passive
+            # widgets (especially WorkDurationBubble) update their own
+            # visibility from a live FocusSession snapshot after the first
+            # fullscreen transition.
+            for widget in self._fullscreen_surfaces():
                 if widget.isVisible():
                     widget.hide()
             return
@@ -4969,6 +4980,10 @@ class PetWindow(QWidget):
             int(getattr(current, "session_seconds", 0) or 0),
             show_duration,
         )
+        if getattr(self, "_fullscreen_hidden", False):
+            # set_session() intentionally owns the normal visible/hidden
+            # state, so enforce fullscreen's temporary override afterwards.
+            self.work_duration_bubble.hide()
         if self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
         if not was_visible and self.work_duration_bubble.isVisible() and sys.platform != "darwin":
