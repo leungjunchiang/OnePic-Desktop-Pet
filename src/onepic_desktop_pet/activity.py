@@ -25,6 +25,33 @@ KNOWN_VIDEO_PLAYER_TOKENS = (
     "wmplayer",
 )
 
+# Finder's desktop is exposed by Quartz as a screen-sized window.  Treating
+# that window as fullscreen makes a click on an empty desktop area hide Lili;
+# opening a normal browser window then appears to "restore" it.  These are
+# desktop/compositor shells, not user content that should receive fullscreen
+# priority.  Keep the list narrow and compare normalized localized names.
+MACOS_DESKTOP_SHELL_NAMES = frozenset(
+    {
+        "finder",
+        "访达",
+        "dock",
+        "程序坞",
+        "systemuiserver",
+        "control center",
+        "控制中心",
+        "notification center",
+        "通知中心",
+        "windowserver",
+    }
+)
+
+
+def _is_macos_desktop_shell(name: str) -> bool:
+    """Return whether *name* is macOS's desktop/compositor, not a document app."""
+
+    normalized = " ".join(str(name or "").casefold().split())
+    return normalized in MACOS_DESKTOP_SHELL_NAMES
+
 
 def classify_application(name: str) -> str:
     """把进程或应用名称归类，供六毛选择不打扰的陪伴动作。"""
@@ -114,6 +141,14 @@ def active_window_is_fullscreen() -> bool:
 
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
             if app is None:
+                return False
+            # Finder owns a screen-sized desktop window.  It is the normal
+            # foreground shell after the user clicks the wallpaper, not a
+            # presentation/video fullscreen surface.  Exclude it before the
+            # geometry check so desktop-mode pets remain visible and still
+            # yield to genuine fullscreen content.
+            app_name = str(app.localizedName() or "")
+            if _is_macos_desktop_shell(app_name):
                 return False
             pid = int(app.processIdentifier())
             info = Quartz.CGWindowListCopyWindowInfo(
