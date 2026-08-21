@@ -952,7 +952,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
-    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听陈楚生"]
+    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听一首陈楚生歌曲"]
     interaction = next(action for action in menu.actions() if action.text() == "六毛互动")
     assert [action.text() for action in interaction.menu().actions()] == [
         "给我一个抱抱",
