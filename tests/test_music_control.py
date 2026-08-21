@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from onepic_desktop_pet.config import PetSettings
+from onepic_desktop_pet.music import CatalogMusicService, SongEntry
 from onepic_desktop_pet.music_control import (
     MusicControlState,
     MusicProviderManager,
@@ -82,6 +83,35 @@ def test_windows_uses_matching_system_media_session_before_fallback() -> None:
     assert result.status.track == session.track
     assert bridge.commands == [(session.source_id, "toggle")]
     assert fallback == []
+
+
+def test_catalog_deep_link_is_followed_by_idempotent_play_activation() -> None:
+    session = WindowsSessionSnapshot(
+        "cloudmusic.exe",
+        TrackInfo("白石洲", "陈楚生", playback_status="playing"),
+        frozenset({"play"}),
+    )
+    bridge = FakeWindowsBridge((session,))
+    manager = MusicProviderManager(
+        PetSettings(music_service="netease"),
+        platform_name="win32",
+        windows_bridge=bridge,
+        client_finder=_client_finder,
+        process_checker=lambda _name: True,
+        catalog_playback_delay=0,
+    )
+    manager.catalog_music_service = CatalogMusicService(
+        manager.settings,
+        songs=(SongEntry("song-1", "白石洲", netease_song_id="2112804681"),),
+        opener=lambda _url: True,
+        platform_name="win32",
+    )
+
+    result = manager.play_catalog_random_song("陈楚生")
+
+    assert result.success is True
+    assert bridge.commands == [(session.source_id, "play")]
+    assert manager.active_provider == "netease"
 
 
 def test_managed_provider_exposes_unified_detection_and_track_api() -> None:
@@ -506,3 +536,4 @@ def test_song_selection_failure_does_not_misreport_transport_as_disconnected() -
     assert "自动选歌失败" in result.message
     assert "播放/暂停" in result.message
     assert "连接失败" not in result.message
+
