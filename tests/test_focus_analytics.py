@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore, FocusQualityTracker, score_focus_quality
 
@@ -72,3 +72,32 @@ def test_legacy_impossible_day_does_not_report_false_38_hour_difference(tmp_path
     assert summary.yesterday_seconds is None
     assert summary.difference_vs_yesterday_seconds is None
     assert summary.weekly_total_seconds == 0
+
+
+def test_focus_day_boundary_is_beijing_midnight(tmp_path) -> None:
+    # 16:00 UTC is 00:00 the next day in Beijing.
+    now = datetime(2026, 8, 20, 16, 30, tzinfo=timezone.utc)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.record_session(
+        30 * 60,
+        started_at=datetime(2026, 8, 20, 16, 0, tzinfo=timezone.utc),
+        completed=True,
+    )
+
+    summary = store.summary()
+    assert summary.date == "2026-08-21"
+    assert summary.weekly_total_seconds == 30 * 60
+    assert summary.yesterday_seconds == 0
+
+
+def test_pause_longer_than_ten_minutes_is_the_only_interruption(tmp_path) -> None:
+    now = datetime(2026, 8, 21, 9, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.begin_focus_session(at=now)
+    store.pause_focus_session(at=now + timedelta(minutes=5))
+    store.begin_focus_session(at=now + timedelta(minutes=14))
+    assert store.snapshot()["current_interruptions"] == 0
+    store.pause_focus_session(at=now + timedelta(minutes=20))
+    store.begin_focus_session(at=now + timedelta(minutes=31))
+    assert store.snapshot()["current_interruptions"] == 1
+    assert store.snapshot()["today_interruptions"] == 1
