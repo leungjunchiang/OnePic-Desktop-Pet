@@ -26,7 +26,8 @@ jobs:
       - name: Set release version
         shell: powershell
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^release/', '' -replace '^v', ''
+          $refName = $env:GITHUB_REF_NAME
+          if ($refName -match '^codex/release-v(.+)-complete
           "BUILD_VERSION = `"$version`"" | Set-Content -Encoding utf8 .\src\onepic_desktop_pet\_build_version.py
           "LILI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run tests
@@ -53,6 +54,263 @@ jobs:
         shell: powershell
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^release/', '' -replace '^v', ''
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version $version
+      - name: Create Windows portable ZIP and checksums
+        shell: powershell
+        run: |
+          Compress-Archive -Path .\dist\Lili\* -DestinationPath .\dist\Lili-Windows-x64.zip -Force
+          foreach ($name in @("Lili-Windows-x64-Setup.exe", "Lili-Windows-x64.zip")) {
+            $hash = (Get-FileHash -Algorithm SHA256 (Join-Path ".\dist" $name)).Hash.ToLowerInvariant()
+            "$hash  $name" | Set-Content -Encoding ascii (Join-Path ".\dist" "$name.sha256")
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            dist/Lili-Windows-x64.zip
+            dist/Lili-Windows-x64.zip.sha256
+            dist/Lili-Windows-x64-Setup.exe
+            dist/Lili-Windows-x64-Setup.exe.sha256
+          if-no-files-found: error
+
+  macos-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Set release version
+        run: |
+          if [[ "$GITHUB_REF_NAME" =~ ^codex/release-v(.+)-complete$ ]]; then
+            release_tag="${BASH_REMATCH[1]}"
+          else
+            release_tag="${GITHUB_REF_NAME#release/}"
+            release_tag="${release_tag#v}"
+          fi
+          printf 'BUILD_VERSION = "%s"\n' "$release_tag" > src/onepic_desktop_pet/_build_version.py
+          echo "LILI_VERSION=$release_tag" >> "$GITHUB_ENV"
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest
+      - name: Build unsigned macOS DMG
+        env:
+          ONEPIC_MAC_ARCH: ${{ matrix.arch }}
+        run: bash scripts/build_macos.sh
+      - name: Create macOS checksum
+        run: |
+          cd dist
+          shasum -a 256 "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" > "Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-release
+          path: |
+            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg
+            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256
+          if-no-files-found: error
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
+    needs:
+      - windows-build
+      - macos-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Build content update manifest
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_NAME" =~ ^codex/release-v(.+)-complete$ ]]; then
+            release_tag="${BASH_REMATCH[1]}"
+          else
+            if [[ "$GITHUB_REF_NAME" =~ ^codex/release-v(.+)-complete$ ]]; then
+            release_tag="${BASH_REMATCH[1]}"
+          else
+            release_tag="${GITHUB_REF_NAME#release/}"
+            release_tag="${release_tag#v}"
+          fi
+            release_tag="${release_tag#v}"
+          fi
+          python tools/build_content_manifest.py \
+            --root . \
+            --version "$release_tag" \
+            --min-app-version "0.22.55" \
+            --ref "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output release-assets/content-manifest.json
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="${GITHUB_REF_NAME#release/}"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Removing stale release $release_tag before publishing the verified artifacts."
+            gh release delete "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes \
+              --cleanup-tag
+          fi
+          gh release create "$release_tag" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Lili $release_tag - 六毛补给站与生活场景" \
+            --generate-notes \
+            --notes "六毛补给站：仓库、吉他拨片商店、免费补给规则与食物场景联动。保持现有皮肤成长系统不变，不新增皮肤素材。"
+) {
+            $version = $Matches[1]
+          } else {
+            $version = $refName -replace '^release/', '' -replace '^v', ''
+          }
+          "BUILD_VERSION = `"$version`"" | Set-Content -Encoding utf8 .\src\onepic_desktop_pet\_build_version.py
+          "LILI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: powershell
+        run: |
+          # Keep each Qt-heavy test module in its own Python process. This
+          # prevents a Windows runner's native Qt state from leaking between
+          # modules while still running the complete test suite.
+          $files = Get-ChildItem -Path tests -Filter 'test_*.py' | Sort-Object FullName
+          foreach ($file in $files) {
+            Write-Host "=== Running $($file.FullName) ==="
+            .\.venv\Scripts\python.exe -m pytest --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)" $file.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Build public Windows package
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+      - name: Install Windows installer compiler
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+      - name: Build Windows installer
+        shell: powershell
+        run: |
+          $refName = $env:GITHUB_REF_NAME
+          if ($refName -match '^codex/release-v(.+)-complete
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version $version
+      - name: Create Windows portable ZIP and checksums
+        shell: powershell
+        run: |
+          Compress-Archive -Path .\dist\Lili\* -DestinationPath .\dist\Lili-Windows-x64.zip -Force
+          foreach ($name in @("Lili-Windows-x64-Setup.exe", "Lili-Windows-x64.zip")) {
+            $hash = (Get-FileHash -Algorithm SHA256 (Join-Path ".\dist" $name)).Hash.ToLowerInvariant()
+            "$hash  $name" | Set-Content -Encoding ascii (Join-Path ".\dist" "$name.sha256")
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            dist/Lili-Windows-x64.zip
+            dist/Lili-Windows-x64.zip.sha256
+            dist/Lili-Windows-x64-Setup.exe
+            dist/Lili-Windows-x64-Setup.exe.sha256
+          if-no-files-found: error
+
+  macos-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Set release version
+        run: |
+          release_tag="${GITHUB_REF_NAME#release/}"
+          release_tag="${release_tag#v}"
+          printf 'BUILD_VERSION = "%s"\n' "$release_tag" > src/onepic_desktop_pet/_build_version.py
+          echo "LILI_VERSION=$release_tag" >> "$GITHUB_ENV"
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest
+      - name: Build unsigned macOS DMG
+        env:
+          ONEPIC_MAC_ARCH: ${{ matrix.arch }}
+        run: bash scripts/build_macos.sh
+      - name: Create macOS checksum
+        run: |
+          cd dist
+          shasum -a 256 "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" > "Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-release
+          path: |
+            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg
+            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256
+          if-no-files-found: error
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
+    needs:
+      - windows-build
+      - macos-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Build content update manifest
+        shell: bash
+        run: |
+          release_tag="${GITHUB_REF_NAME#release/}"
+          python tools/build_content_manifest.py \
+            --root . \
+            --version "$release_tag" \
+            --min-app-version "0.22.55" \
+            --ref "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output release-assets/content-manifest.json
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="${GITHUB_REF_NAME#release/}"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Removing stale release $release_tag before publishing the verified artifacts."
+            gh release delete "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes \
+              --cleanup-tag
+          fi
+          gh release create "$release_tag" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Lili $release_tag - 六毛补给站与生活场景" \
+            --generate-notes \
+            --notes "六毛补给站：仓库、吉他拨片商店、免费补给规则与食物场景联动。保持现有皮肤成长系统不变，不新增皮肤素材。"
+) {
+            $version = $Matches[1]
+          } else {
+            $version = $refName -replace '^release/', '' -replace '^v', ''
+          }
           powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version $version
       - name: Create Windows portable ZIP and checksums
         shell: powershell
