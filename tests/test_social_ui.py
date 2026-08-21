@@ -322,6 +322,28 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_focus_weekly_total_includes_unrecorded_live_today_seconds() -> None:
+    """The focus page must match the room while a pause write is settling."""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.set_focus_snapshot({
+        "status": "rest",
+        "session_seconds": 9 * 3600 + 53 * 60,
+        "today_seconds": 9 * 3600 + 54 * 60,
+    })
+    dialog.set_focus_analytics({
+        "today_seconds": 0,
+        "weekly_total_seconds": 39 * 3600 + 8 * 60,
+        "difference_vs_yesterday_seconds": 39 * 3600 + 8 * 60,
+    })
+    app.processEvents()
+
+    assert "本周49小时2分钟" in dialog.focus_insights.text()
+    assert "较昨天 多49小时2分钟" in dialog.focus_insights.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_recent_cached_presence_is_not_rendered_as_peer_offline() -> None:
     app = QApplication.instance() or QApplication([])
     client = UncertainRoomClient()
