@@ -1,3 +1,3 @@
 """Build-time version written by the release workflow."""
 
-BUILD_VERSION = "0.23.55"
+BUILD_VERSION = "0.23.56"
