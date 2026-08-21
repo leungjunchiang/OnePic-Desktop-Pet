@@ -322,8 +322,8 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
-def test_focus_weekly_total_includes_unrecorded_live_today_seconds() -> None:
-    """The focus page must match the room while a pause write is settling."""
+def test_focus_weekly_total_does_not_become_yesterday_difference() -> None:
+    """Live weekly reconciliation must not reuse the weekly value as a day delta."""
 
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())
@@ -335,12 +335,16 @@ def test_focus_weekly_total_includes_unrecorded_live_today_seconds() -> None:
     dialog.set_focus_analytics({
         "today_seconds": 0,
         "weekly_total_seconds": 39 * 3600 + 8 * 60,
+        "yesterday_seconds": 0,
+        # Deliberately stale/invalid: this used to leak into the UI as a
+        # 49-hour “较昨天” comparison after the live weekly supplement.
         "difference_vs_yesterday_seconds": 39 * 3600 + 8 * 60,
     })
     app.processEvents()
 
     assert "本周 49小时2分钟" in dialog.focus_insights.text()
-    assert "较昨天 多 49小时2分钟" in dialog.focus_insights.text()
+    assert "较昨天 多 9小时54分钟" in dialog.focus_insights.text()
+    assert "较昨天 多 49小时2分钟" not in dialog.focus_insights.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
