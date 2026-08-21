@@ -16,7 +16,6 @@ from .work_timer import format_elapsed_clock
 
 from PySide6.QtWidgets import (
     QDialog,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -342,11 +341,6 @@ class QuickControlPanel(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QColor(36, 71, 91, 58))
-        self.setGraphicsEffect(shadow)
         self.hover_hint = QLabel(None)
         self.hover_hint.setObjectName("quickActionHint")
         self.hover_hint.setWindowFlags(

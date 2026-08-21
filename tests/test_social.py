@@ -17,8 +17,37 @@ from onepic_desktop_pet.social import (
     SocialError,
     SocialSession,
     _apply_buddy_private_notes,
+    _heartbeat_payload,
     social_user_message,
 )
+
+
+def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
+    payload = _heartbeat_payload(
+        {
+            "working": True,
+            "today_seconds": 120,
+            "session_started_at": "2026-08-21T08:00:00+08:00",
+            "outfit_key": "hour-01",
+            "room_id": "room-1",
+            "quick_status": "再卷30分钟",
+            "quick_status_expires_at": None,
+            "session_active": True,
+            "work_state": "working",
+            "pause_reason": None,
+            "personal_state": {"today_seconds": 120},
+        }
+    )
+
+    assert payload == {
+        "working": True,
+        "today_seconds": 120,
+        "session_started_at": "2026-08-21T08:00:00+08:00",
+        "outfit_key": "hour-01",
+        "room_id": "room-1",
+        "quick_status": "再卷30分钟",
+        "quick_status_expires_at": None,
+    }
 
 
 def test_auth_session_manager_single_flight_refreshes_once_for_concurrent_callers():

@@ -4392,11 +4392,11 @@ class PetWindow(QWidget):
     def _position_quick_panel(self) -> None:
         """Place the icon dock at a fixed point above the pet's head.
 
-        Accessories must not negotiate their positions with one another: at
-        the lower-right screen edge that made the timer alternate between the
-        top and bottom candidates on macOS.  The pet rectangle is the only
-        anchor, so animation frames and other popups cannot make this dock
-        jump.
+        Keep the dock horizontally centered on the pet. Side placement made
+        the shortcut icons cover unrelated desktop content, especially on
+        macOS at the lower-right screen edge. Only switch to below-the-head
+        placement when the top edge genuinely has no room; never choose a
+        left/right candidate based on another accessory's geometry.
         """
 
         panel = self.quick_panel
@@ -4406,27 +4406,27 @@ class PetWindow(QWidget):
         pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
         center_x = self.x() + (self.width() - panel.width()) // 2
         upper_y = self.y() - panel.height() - gap
-        candidates = [
-            (center_x, upper_y),
-            (self.x() + self.width() + gap, self.y() - panel.height() // 2),
-            (self.x() - panel.width() - gap, self.y() - panel.height() // 2),
-            (center_x, self.y() + self.height() + gap),
-        ]
-        chosen = None
-        for candidate_x, candidate_y in candidates:
-            candidate = QRect(candidate_x, candidate_y, panel.width(), panel.height())
-            if area is not None and not area.contains(candidate):
-                continue
-            if candidate.intersects(pet_rect):
-                continue
-            chosen = candidate
-            break
-        if chosen is None:
-            candidate_x, candidate_y = candidates[0]
-            if area is not None:
-                candidate_x = min(max(candidate_x, area.left()), area.right() - panel.width() + 1)
-                candidate_y = min(max(candidate_y, area.top()), area.bottom() - panel.height() + 1)
-            chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+        below_y = self.y() + self.height() + gap
+        candidates = (
+            QRect(center_x, upper_y, panel.width(), panel.height()),
+            QRect(center_x, below_y, panel.width(), panel.height()),
+        )
+        chosen = next(
+            (
+                candidate
+                for candidate in candidates
+                if (area is None or area.contains(candidate))
+                and not candidate.intersects(pet_rect)
+            ),
+            candidates[0],
+        )
+        if area is not None:
+            chosen = QRect(
+                min(max(chosen.x(), area.left()), area.right() - panel.width() + 1),
+                min(max(chosen.y(), area.top()), area.bottom() - panel.height() + 1),
+                panel.width(),
+                panel.height(),
+            )
         panel.move(chosen.topLeft())
 
     def _position_work_controls(self) -> None:
@@ -4557,6 +4557,11 @@ class PetWindow(QWidget):
         if self.quick_panel.isVisible():
             self.quick_panel.hide()
             return
+        # The double-click is an explicit request for the head shortcut dock;
+        # dismiss the transient speech/working popups so they do not cover
+        # the pet's body or compete with the dock.
+        self.speech_bubble.hide()
+        self.work_controls.hide()
         self._refresh_shortcut_state()
         self.quick_panel.set_food_inventory({
             key: self.economy.inventory_count(key)

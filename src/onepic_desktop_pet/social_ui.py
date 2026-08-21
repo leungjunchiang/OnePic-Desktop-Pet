@@ -32,6 +32,28 @@ LOGGER = logging.getLogger(__name__)
 # timeline.  A fixed UTC+8 offset is sufficient for Beijing (no DST).
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
+# The local focus snapshot contains extra fields used by room UI and local
+# diagnostics. Presence storage accepts only these durable fields; passing
+# the whole snapshot used to raise TypeError before the heartbeat request was
+# sent, so both Windows and macOS stayed offline.
+HEARTBEAT_FIELDS = frozenset(
+    {
+        "working",
+        "today_seconds",
+        "session_started_at",
+        "outfit_key",
+        "room_id",
+        "quick_status",
+        "quick_status_expires_at",
+    }
+)
+
+
+def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
+    """Select only fields supported by the social heartbeat API."""
+
+    return {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
+
 
 def _beijing_now() -> datetime:
     return datetime.now(BEIJING_TIMEZONE)
@@ -197,12 +219,11 @@ class SocialSyncThread(QThread):
         try:
             heartbeat_error = ""
             personal_state = self.presence.get("personal_state")
-            heartbeat_presence = dict(self.presence)
-            heartbeat_presence.pop("personal_state", None)
+            heartbeat_presence = _heartbeat_payload(self.presence)
             if self.send_heartbeat:
                 try:
                     self.client.heartbeat(**heartbeat_presence)
-                except SocialError as exc:
+                except (SocialError, TypeError) as exc:
                     # A transient write failure must not prevent the same
                     # cycle's dashboard read. Otherwise one platform can
                     # disappear from the other simply because its heartbeat
@@ -387,11 +408,17 @@ class BuddyCardWidget(QWidget):
         self._food_buttons: dict[str, QPushButton] = {}
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 8, 12, 8)
-        root.setSpacing(5)
+        root.setContentsMargins(8, 5, 8, 5)
+        root.setSpacing(2)
         uncertain = bool(buddy.get("presence_uncertain"))
         status = _presence_status(buddy)
-        online = status != "offline" and bool(buddy.get("online")) and not bool(buddy.get("stale_presence")) and not uncertain
+        online_flag = buddy.get("online")
+        online = (
+            status != "offline"
+            and (online_flag is None or bool(online_flag))
+            and not bool(buddy.get("stale_presence"))
+            and not uncertain
+        )
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         if status == "unknown":
@@ -407,8 +434,8 @@ class BuddyCardWidget(QWidget):
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
-        headline.setWordWrap(True)
-        headline.setStyleSheet("font-size:15px;font-weight:600;color:#203847;")
+        headline.setWordWrap(False)
+        headline.setStyleSheet("font-size:14px;font-weight:600;color:#203847;")
         root.addWidget(headline)
         duration = buddy.get("today_seconds")
         if uncertain:
@@ -423,53 +450,54 @@ class BuddyCardWidget(QWidget):
         if session_seconds is not None and status == "focus":
             time_text = f"本轮专注 {format_work_duration(session_seconds)}　·　{time_text}"
         focus = QLabel(time_text)
-        focus.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
+        focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
         quick_status = str(buddy.get("quick_status") or "").strip()
         expires = str(buddy.get("quick_status_expires_at") or "")
         if quick_status and (not expires or expires > datetime.now().astimezone().isoformat()):
             quick = QLabel(f"状态：{quick_status[:40]}")
-            quick.setStyleSheet("color:#b36b2c;font-size:12px;font-weight:600;")
+            quick.setStyleSheet("color:#b36b2c;font-size:11px;font-weight:600;")
             root.addWidget(quick)
         outfit = str(buddy.get("outfit_key") or "经典六毛")
-        footer = QLabel(f"当前娃衣：{outfit}　·　可以直接对这位搭子串门、加油或送补给")
+        footer = QLabel(f"娃衣：{outfit}")
         footer.setStyleSheet("color:#61727d;font-size:11px;")
-        footer.setWordWrap(True)
+        footer.setWordWrap(False)
+        footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、加油或送补给")
         root.addWidget(footer)
-        actions = QHBoxLayout()
-        for kind, label in (("visit", "串门"), ("cheer", "加油")):
-            button = QPushButton(label)
-            button.setMinimumHeight(32)
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            button.clicked.connect(lambda _checked=False, action=kind: self._request_interaction(action))
-            if is_self:
-                button.setEnabled(False)
-                button.setToolTip("互动按钮只对房间里的其他搭子开放")
-            self._buttons[kind] = button
-            actions.addWidget(button)
-        root.addLayout(actions)
-        food_actions = QGridLayout()
-        food_actions.setHorizontalSpacing(5)
-        food_actions.setVerticalSpacing(5)
-        for kind, label in (
+        actions = QGridLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setHorizontalSpacing(4)
+        actions.setVerticalSpacing(3)
+        action_specs = (
+            ("visit", "串门"),
+            ("cheer", "加油"),
             ("food_coffee", "请咖啡"),
             ("food_milk_tea", "请奶茶"),
             ("food_tea", "敬茶"),
             ("food_cake", "请蛋糕"),
-        ):
+        )
+        for index, (kind, label) in enumerate(action_specs):
             button = QPushButton(label)
-            button.setMinimumHeight(32)
+            button.setFixedHeight(26)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            button.clicked.connect(lambda _checked=False, action_kind=kind: self._request_food(action_kind))
-            if is_self:
-                button.setEnabled(False)
-                button.setToolTip("补给按钮只对房间里的其他搭子开放")
-            self._food_buttons[kind] = button
-            index = len(self._food_buttons) - 1
-            food_actions.addWidget(button, index // 2, index % 2)
-        root.addLayout(food_actions)
+            button.setStyleSheet("font-size:11px;padding:2px 4px;border-radius:7px;")
+            if kind.startswith("food_"):
+                button.clicked.connect(lambda _checked=False, action_kind=kind: self._request_food(action_kind))
+                if is_self:
+                    button.setEnabled(False)
+                    button.setToolTip("补给按钮只对房间里的其他搭子开放")
+                self._food_buttons[kind] = button
+            else:
+                button.clicked.connect(lambda _checked=False, action=kind: self._request_interaction(action))
+                if is_self:
+                    button.setEnabled(False)
+                    button.setToolTip("互动按钮只对房间里的其他搭子开放")
+                self._buttons[kind] = button
+            actions.addWidget(button, index // 3, index % 3)
+        root.addLayout(actions)
         if not is_self:
             subscribe = QCheckBox("订阅开工/下班提醒")
+            subscribe.setFixedHeight(18)
             subscribe.setChecked(bool(buddy.get("subscribed")))
             subscribe.stateChanged.connect(lambda state: self.subscription_requested.emit(self.buddy, bool(state)))
             root.addWidget(subscribe)
@@ -907,9 +935,10 @@ class SocialHubDialog(QDialog):
     @staticmethod
     def _set_buddy_item_height(item: QListWidgetItem, widget: BuddyCardWidget) -> None:
         widget.ensurePolished()
-        # Leave room for Windows font/DPI metrics and the checkbox below the
-        # interaction row. The old fixed 125px rows clipped this content.
-        item.setSizeHint(QSize(0, max(132, widget.sizeHint().height() + 16)))
+        # Keep a dense, repeatable row so a room with many buddies remains
+        # scannable. The widget still determines the font/DPI-aware height;
+        # only a small platform safety margin is added.
+        item.setSizeHint(QSize(0, max(96, widget.sizeHint().height() + 6)))
 
     def _home_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)

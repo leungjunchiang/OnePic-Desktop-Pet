@@ -108,6 +108,20 @@ def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
     assert load_settings(override_path=invalid).today_note_mode == "compact"
 
 
+def test_legacy_default_todo_surface_migrates_to_compact(tmp_path) -> None:
+    legacy = tmp_path / "legacy-settings.json"
+    legacy.write_text(
+        json.dumps({"today_note_mode": "detailed", "today_note_display_mode": "pending"}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 1
+
+
 def test_content_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
     assert settings.content_updates_enabled is True

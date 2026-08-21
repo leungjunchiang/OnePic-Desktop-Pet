@@ -123,6 +123,7 @@ class PetSettings:
     # predictable, lightweight task surface on both Windows and macOS.
     today_note_display_mode: str = "always"
     today_note_mode: str = "compact"
+    today_note_defaults_version: int = 1
     today_note_always_on_top: bool = False
     today_note_autoshow: bool = False
     today_note_folded: bool = False
@@ -281,6 +282,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.today_note_display_mode = "always"
     if settings.today_note_mode not in {"detailed", "compact", "hidden"}:
         settings.today_note_mode = "compact"
+    settings.today_note_defaults_version = max(1, int(settings.today_note_defaults_version))
     settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
     settings.today_note_folded = bool(settings.today_note_folded)
@@ -352,6 +354,7 @@ def load_settings(
                 "equipped_outfit",
                 "today_note_display_mode",
                 "today_note_mode",
+                "today_note_defaults_version",
                 "today_note_always_on_top",
                 "today_note_autoshow",
                 "today_note_folded",
@@ -378,6 +381,18 @@ def load_settings(
         base["auto_pause_on_idle"] = True
         base["auto_pause_on_fullscreen_video"] = True
         base["work_timer_policy_version"] = 1
+    # v0.23.42 changed the product default from the old detailed/pending
+    # combination to the compact Todo strip shown on the desktop. Migrate
+    # only that exact legacy default once, so a deliberate detailed setting
+    # with another display policy is preserved.
+    if "today_note_defaults_version" not in override:
+        if (
+            str(override.get("today_note_mode") or "") == "detailed"
+            and str(override.get("today_note_display_mode") or "pending") == "pending"
+        ):
+            base["today_note_mode"] = "compact"
+            base["today_note_display_mode"] = "always"
+        base["today_note_defaults_version"] = 1
     return _validated(base)
 
 
@@ -429,6 +444,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "equipped_outfit": settings.equipped_outfit,
         "today_note_display_mode": settings.today_note_display_mode,
         "today_note_mode": settings.today_note_mode,
+        "today_note_defaults_version": settings.today_note_defaults_version,
         "today_note_always_on_top": settings.today_note_always_on_top,
         "today_note_autoshow": settings.today_note_autoshow,
         "today_note_folded": settings.today_note_folded,
