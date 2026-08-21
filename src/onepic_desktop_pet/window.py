@@ -416,6 +416,9 @@ class PetWindow(QWidget):
         self._last_session_probe = {"locked": False, "sleeping": False}
         self._fullscreen_video_started_at: float | None = None
         self._pause_notice_shown = False
+        self._fullscreen_hidden = False
+        self._fullscreen_restore_visible: dict[QWidget, bool] = {}
+        self._process_started_at = datetime.now().astimezone()
         self._sleep_after_sit = False
         self._room_quick_status = ""
         self._room_quick_status_expires_at: datetime | None = None
@@ -746,6 +749,15 @@ class PetWindow(QWidget):
         self.social_sync_timer.timeout.connect(self._social_tick)
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
+
+        # A real video/PPT fullscreen window must own the whole display.  Poll
+        # the coarse, privacy-preserving geometry signal separately from the
+        # work-idle policy so the pet and its accessories disappear quickly,
+        # then return with exactly the visibility state they had before.
+        self.fullscreen_poll_timer = QTimer(self)
+        self.fullscreen_poll_timer.setInterval(1000)
+        self.fullscreen_poll_timer.timeout.connect(self._sync_fullscreen_visibility)
+        self.fullscreen_poll_timer.start()
 
         # Keep a low-frequency, cross-platform system probe.  It is the one
         # place that may auto-pause: 10 minutes of aggregate keyboard+mouse
@@ -1402,11 +1414,61 @@ class PetWindow(QWidget):
             self._compact_todo_panel.hide()
         super().hideEvent(event)
 
+    def _fullscreen_surfaces(self) -> list[QWidget]:
+        """Return the pet and every passive surface that can cover fullscreen."""
+
+        surfaces: list[QWidget] = [
+            self,
+            self.quick_panel,
+            self.work_controls,
+            self.coffee_scene_prompt,
+            self.work_duration_bubble,
+            self.speech_bubble,
+            self.photo_bubble,
+            self.visit_status_bubble,
+        ]
+        for optional in (
+            self._compact_todo_panel,
+            self._alarm_card,
+            self._idle_recovery_dialog,
+        ):
+            if optional is not None:
+                surfaces.append(optional)
+        return list(dict.fromkeys(surfaces))
+
+    def _sync_fullscreen_visibility(self) -> None:
+        """Temporarily yield the display to any real fullscreen foreground app."""
+
+        fullscreen = bool(active_window_is_fullscreen())
+        if fullscreen:
+            if self._fullscreen_hidden:
+                return
+            self._fullscreen_restore_visible = {
+                widget: bool(widget.isVisible())
+                for widget in self._fullscreen_surfaces()
+            }
+            self._fullscreen_hidden = True
+            for widget in self._fullscreen_restore_visible:
+                if widget.isVisible():
+                    widget.hide()
+            return
+
+        if not self._fullscreen_hidden:
+            return
+        restore = self._fullscreen_restore_visible
+        self._fullscreen_restore_visible = {}
+        self._fullscreen_hidden = False
+        for widget, was_visible in restore.items():
+            if was_visible:
+                self._show_nonactivating(widget)
+        self._position_accessories()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
         if self._qt_application is not None:
             self._qt_application.removeEventFilter(self)
+        self.fullscreen_poll_timer.stop()
         self.shutdown_work_timer()
         self.chat_manager.shutdown()
         if self._chat_history_dialog is not None:
@@ -4219,11 +4281,44 @@ class PetWindow(QWidget):
             return
         for visit in data.get("visits") or []:
             self._enqueue_incoming_visit_notice(visit)
-        active = data.get("active_visits") or []
+        active = self._active_visits_after_startup(data.get("active_visits") or [])
         if active:
             self._show_buddy_visit(active[0])
         else:
             self._hide_buddy_visit()
+
+    def _active_visits_after_startup(self, active: object) -> list[dict]:
+        """Ignore visits that were already active before this process started.
+
+        The server intentionally keeps accepted visits alive for a short
+        period so a heartbeat gap does not flicker.  That is useful during a
+        running session but should not resurrect a stale local companion
+        scene after the application is relaunched.
+        """
+
+        if not isinstance(active, list):
+            return []
+        fresh: list[dict] = []
+        for item in active:
+            if not isinstance(item, dict):
+                continue
+            started_text = (
+                item.get("responded_at")
+                or item.get("visit_started_at")
+                or item.get("created_at")
+            )
+            try:
+                started = datetime.fromisoformat(str(started_text).replace("Z", "+00:00"))
+                if started.tzinfo is None:
+                    started = started.astimezone()
+                if started >= self._process_started_at:
+                    fresh.append(dict(item))
+            except (TypeError, ValueError, OverflowError):
+                # Missing/invalid timestamps are treated as stale on startup;
+                # a later new event with a valid server timestamp can still
+                # open normally.
+                continue
+        return fresh
 
     def _merge_remote_personal_state(self, data: dict) -> None:
         """Merge same-account focus and outfit state from the server."""
