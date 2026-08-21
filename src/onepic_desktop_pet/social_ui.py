@@ -455,7 +455,9 @@ class BuddyCardWidget(QWidget):
         )
         for index, (kind, label) in enumerate(action_specs):
             button = QPushButton(label)
-            button.setFixedHeight(26)
+            # Keep the compact two-row grid, but leave enough touch/trackpad
+            # area for the supply actions on both Windows and macOS.
+            button.setFixedHeight(32)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             button.setStyleSheet("font-size:11px;padding:2px 4px;border-radius:7px;")
             if kind.startswith("food_"):
