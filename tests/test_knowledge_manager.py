@@ -38,3 +38,14 @@ def test_relations_and_song_catalog_are_local_data() -> None:
     assert "我爹" in relation_text
     assert "有没有人告诉你" in song_titles
     assert "荒野国王" in song_titles
+
+
+def test_material_cards_cover_baishizhou_and_shui_bi_shui_cha() -> None:
+    manager = KnowledgeManager(resource_path("resources"))
+    baishizhou = manager.search("白石洲这首歌讲了什么", limit=3)
+    assert baishizhou
+    assert any("深圳白石洲" in hit.block.content for hit in baishizhou)
+
+    meme = manager.search("谁比谁差是在什么场合", limit=3)
+    assert meme
+    assert any("四公" in hit.block.content and "披荆斩棘" in hit.block.content for hit in meme)
