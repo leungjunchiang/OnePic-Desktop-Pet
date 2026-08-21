@@ -157,7 +157,7 @@ from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
-from .focus_analytics import FocusAnalyticsStore, FocusQualityTracker
+from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore, FocusQualityTracker
 from .focus_session import FocusSessionManager
 from .growth import (
     ACTION_GROUPS,
@@ -1162,7 +1162,13 @@ class PetWindow(QWidget):
         self._update_work_duration_bubble()
         if self._compact_todo_panel is not None:
             if self._restore_compact_todos_after_show:
-                self._compact_todo_panel.show()
+                self._show_nonactivating(
+                    self._compact_todo_panel,
+                    always_on_top=bool(
+                        self.settings.always_on_top
+                        or getattr(self.settings, "today_note_always_on_top", False)
+                    ),
+                )
         self._position_accessories()
         QTimer.singleShot(0, self._ensure_on_top)
 
@@ -1212,6 +1218,19 @@ class PetWindow(QWidget):
 
         if sys.platform != "darwin":
             widget.raise_()
+
+    def _show_nonactivating(self, widget: QWidget, *, always_on_top: bool | None = None) -> None:
+        """Configure a pet surface before showing it on macOS.
+
+        Applying the NSPanel style after ``show()`` is too late on some Qt
+        builds: AppKit briefly activates Lili, and repeated speech/status
+        updates can then steal ChatGPT's text focus.  Creating/configuring the
+        native handle first makes every passive surface display-only.
+        """
+
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(widget, always_on_top=always_on_top)
+        widget.show()
 
     def _apply_macos_window_behavior(
         self,
@@ -1318,11 +1337,13 @@ class PetWindow(QWidget):
         self.settings.always_on_top = enabled
         self.setWindowFlags(self._pet_window_flags())
         self.move(position)
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self, always_on_top=enabled)
         for bubble, visible, bubble_position in bubble_states:
             bubble.setWindowFlags(self._ambient_window_flags())
             bubble.move(bubble_position)
             if visible:
-                bubble.show()
+                self._show_nonactivating(bubble, always_on_top=enabled)
         if self._compact_todo_panel is not None:
             self._compact_todo_panel.set_companion_topmost(enabled)
             if self._compact_todo_panel.isVisible():
@@ -1985,9 +2006,7 @@ class PetWindow(QWidget):
 
         self.speech_bubble.setText(text)
         self.speech_bubble.adjustSize()
-        self.speech_bubble.show()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self.speech_bubble)
+        self._show_nonactivating(self.speech_bubble)
         self._position_speech_bubble()
         self.speech_timer.start(max(1200, duration_ms))
 
@@ -2286,9 +2305,7 @@ class PetWindow(QWidget):
 
         self.coffee_scene_prompt.set_message(message)
         self._position_coffee_scene_prompt()
-        self.coffee_scene_prompt.show()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self.coffee_scene_prompt)
+        self._show_nonactivating(self.coffee_scene_prompt)
         self._raise_accessory(self.coffee_scene_prompt)
 
     def _continue_after_coffee_scene(self) -> None:
@@ -2489,6 +2506,7 @@ class PetWindow(QWidget):
         # analytics task for compatibility, but attribute new seconds to the
         # same local task record as soon as the session starts.
         started = self.focus_session.start()
+        self.focus_analytics.begin_focus_session()
         if started:
             self.set_paused(True)
         self._change_ambient_activity("computer")
@@ -2532,6 +2550,7 @@ class PetWindow(QWidget):
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause(reason)
         if was_running:
+            self.focus_analytics.pause_focus_session()
             self._record_focus_segment(session_seconds, completed=False)
             self._pause_notice_shown = False
             if automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
@@ -2595,6 +2614,7 @@ class PetWindow(QWidget):
         session_seconds = self.work_timer.session_seconds()
         total = self.focus_session.finish()
         self._record_focus_segment(session_seconds, completed=True)
+        self.focus_analytics.finish_focus_session(completed=True)
         self._award_focus_rewards()
         self.set_paused(False)
         self._recorded_focus_session_seconds = 0
@@ -2707,15 +2727,13 @@ class PetWindow(QWidget):
                 bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
             )
         self._compact_todo_panel.refresh()
-        self._compact_todo_panel.show()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(
-                self._compact_todo_panel,
-                always_on_top=bool(
-                    self.settings.always_on_top
-                    or getattr(self.settings, "today_note_always_on_top", False)
-                ),
-            )
+        self._show_nonactivating(
+            self._compact_todo_panel,
+            always_on_top=bool(
+                self.settings.always_on_top
+                or getattr(self.settings, "today_note_always_on_top", False)
+            ),
+        )
         self._position_compact_todos()
         # The pet and the compact panel are separate native windows.  Raise
         # the panel after positioning so a transient pet repaint cannot cover
@@ -3360,7 +3378,7 @@ class PetWindow(QWidget):
                 # to be represented once in the local daily card.
                 self.daily_stats.record_focus(0, completed=True)
             return 0
-        started_at = datetime.now().astimezone() - timedelta(seconds=seconds)
+        started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
         self.time_memory.record_focus(
             seconds,
             completed_session=completed,
@@ -4137,7 +4155,7 @@ class PetWindow(QWidget):
         # include the live part of today so the weekly total follows the
         # active computer immediately and can be merged on another computer.
         week_seconds += max(0, today_seconds - analytics_today)
-        today = datetime.now().date()
+        today = datetime.now(BEIJING_TIMEZONE).date()
         week_start = today - timedelta(days=today.weekday())
         presence = {
             "working": snapshot.is_running,
@@ -4145,6 +4163,8 @@ class PetWindow(QWidget):
             "work_state": str(getattr(snapshot, "state", "idle") or "idle"),
             "pause_reason": getattr(snapshot, "pause_reason", None),
             "today_seconds": snapshot.today_seconds,
+            "today_interruptions": int(analytics.get("today_interruptions") or 0),
+            "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
             "session_started_at": snapshot.session_started_at,
             "outfit_key": self.settings.equipped_outfit,
             "room_id": room_id,
@@ -4157,6 +4177,8 @@ class PetWindow(QWidget):
                 "lifetime_seconds": self.work_timer.lifetime_seconds(),
                 "week_start": week_start.isoformat(),
                 "week_seconds": week_seconds,
+                "today_interruptions": int(analytics.get("today_interruptions") or 0),
+                "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
                 "outfit_key": self.settings.equipped_outfit,
                 "outfit_set": self._personal_outfit_sync_pending,
             },
@@ -4221,7 +4243,7 @@ class PetWindow(QWidget):
             self.work_timer.merge_remote_state(
                 today_seconds=int(remote_today or 0),
                 lifetime_seconds=int(remote_lifetime or 0),
-                date_key=str(remote_date or datetime.now().date().isoformat()),
+                date_key=str(remote_date or datetime.now(BEIJING_TIMEZONE).date().isoformat()),
             )
 
         if "outfit_key" not in profile:
@@ -4366,9 +4388,10 @@ class PetWindow(QWidget):
             or peer.get("nickname")
             or "搭子"
         ).strip()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.visit_status_bubble)
         self.visit_status_bubble.set_visitor(nickname)
         self._position_visit_status_bubble()
-        self._apply_macos_window_behavior(self.visit_status_bubble)
         self._raise_accessory(self.visit_status_bubble)
 
     def _hide_buddy_visit(self) -> None:
@@ -4839,6 +4862,13 @@ class PetWindow(QWidget):
         current = snapshot or self.focus_session.snapshot()
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
         was_visible = self.work_duration_bubble.isVisible()
+        if sys.platform == "darwin":
+            # WorkDurationBubble may show itself while applying the session;
+            # prepare its native panel before that happens.
+            self._apply_macos_window_behavior(
+                self.work_duration_bubble,
+                always_on_top=bool(self.settings.always_on_top),
+            )
         self.work_duration_bubble.set_session(
             str(getattr(current, "status", "idle")),
             int(getattr(current, "session_seconds", 0) or 0),
@@ -4846,7 +4876,7 @@ class PetWindow(QWidget):
         )
         if self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
-        if not was_visible and self.work_duration_bubble.isVisible():
+        if not was_visible and self.work_duration_bubble.isVisible() and sys.platform != "darwin":
             self._apply_macos_window_behavior(self.work_duration_bubble)
         if self.work_duration_bubble.isVisible():
             self._raise_accessory(self.work_duration_bubble)
@@ -4868,9 +4898,7 @@ class PetWindow(QWidget):
             for key in ("coffee", "expensive_coffee", "milk_tea", "cake", "tea")
         })
         self._position_quick_panel()
-        self.quick_panel.show()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self.quick_panel)
+        self._show_nonactivating(self.quick_panel)
         self._raise_accessory(self.quick_panel)
         # A newly positioned top-level panel can receive a synthetic
         # enterEvent on headless/offscreen runners when it opens beneath the
@@ -4895,9 +4923,7 @@ class PetWindow(QWidget):
             "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
         )
         self._position_work_controls()
-        self.work_controls.show()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self.work_controls)
+        self._show_nonactivating(self.work_controls)
         self._raise_accessory(self.work_controls)
 
     def _start_work_from_control(self) -> None:
@@ -5389,9 +5415,7 @@ class PetWindow(QWidget):
             x = character_right + gap
         y = self.y() + max(0, (self.height() - self.photo_bubble.height()) // 2)
         self.photo_bubble.move(x, y)
-        self.photo_bubble.show()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self.photo_bubble)
+        self._show_nonactivating(self.photo_bubble)
         self.photo_timer.start(3800)
 
     def _scaled_selfie_photo(self, ratio: float) -> QPixmap:
