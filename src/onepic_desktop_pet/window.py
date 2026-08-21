@@ -2039,6 +2039,8 @@ class PetWindow(QWidget):
                 self._todo_choices_for_food(),
                 witness_choices=self._achievement_witness_choices,
                 achievement_submitter=self._submit_achievement_witness,
+                buddy_choices=self._achievement_witness_choices,
+                cake_share_submitter=self._submit_cake_share,
             )
             self._food_scene_dialog.scene_requested.connect(self._start_food_scene)
         else:
@@ -2086,6 +2088,42 @@ class PetWindow(QWidget):
             return result
         return {"status": "pending"}
 
+    def _submit_cake_share(self, message: str, buddy_ids: list[str]) -> dict[str, object]:
+        """Create one server-authoritative group cake event for 1–3 buddies."""
+
+        if not self.social_client.signed_in:
+            raise ValueError("请先登录搭子自习室，再邀请搭子分享蛋糕。")
+        ids = []
+        for value in buddy_ids:
+            clean = str(value or "").strip()
+            if clean and clean not in ids:
+                ids.append(clean)
+        if not 1 <= len(ids) <= 3:
+            raise ValueError("小蛋糕需要邀请 1～3 位好友。")
+        status = self.economy.cake_share_status()
+        if not status.get("can_start"):
+            raise ValueError("今天已经发起过蛋糕分享，或仓库里暂时没有小蛋糕。")
+        result = self.social_client.rpc(
+            "lili_create_cake_share",
+            {
+                "p_recipient_ids": ids,
+                "p_message": str(message or "").strip()[:160] or "今天值得庆祝一下。",
+            },
+        )
+        if not isinstance(result, dict):
+            raise ValueError("服务器没有返回蛋糕分享结果。")
+        share_id = str(result.get("share_id") or result.get("id") or uuid.uuid4().hex)
+        consumed = self.economy.consume_cake_for_share(
+            ids,
+            message=str(message or "").strip()[:160],
+            operation_key=share_id,
+        )
+        if consumed is None:
+            raise ValueError("蛋糕分享已送达，但本机库存状态没有完成扣除，请重新同步钱袋。")
+        self._sync_economy_events([dict(consumed.get("event") or {})])
+        self.show_speech(f"🍰 已请 {len(ids)} 位搭子吃蛋糕。\n{str(message or '').strip()[:100] or '今天值得庆祝一下。'}", 6200)
+        return result
+
     def _start_food_scene(
         self,
         item_key: str,
@@ -2098,6 +2136,9 @@ class PetWindow(QWidget):
     ) -> bool:
         """Turn a food item into a real focus/rest/companion scene."""
         item_key = str(item_key or "").strip()
+        if item_key == "cake" and consume_inventory:
+            self.show_food_scene_dialog()
+            return False
         snapshot = self.focus_session.snapshot()
         status = str(getattr(snapshot, "status", "") or "")
         start_error = self.economy.food_scene_start_error(
@@ -2271,6 +2312,9 @@ class PetWindow(QWidget):
         }.get(str(kind))
         if not item_key:
             return
+        if item_key == "cake":
+            self.show_speech("小蛋糕不能单独请一位搭子；请打开补给站，邀请 1～3 位好友一起分享。", 5200)
+            return
         catalog = self.economy.catalog().get(item_key) or {}
         price = int(catalog.get("price") or 0)
         if self.economy.balance < price:
@@ -2329,6 +2373,7 @@ class PetWindow(QWidget):
             "food_milk_tea": "milk_tea",
             "food_tea": "tea",
             "food_cake": "cake",
+            "food_cake_share": "cake",
         }.get(kind)
         if not item_key:
             return
@@ -2533,7 +2578,6 @@ class PetWindow(QWidget):
         self.work_activity_timer.stop()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
         self._show_new_outfit_unlock()
-        self._generate_daily_report(show_dialog=False)
         if room_id:
             self._record_social_room_event(room_id, "focus_finish")
         food_scene = self.economy.active_food_scene()
@@ -3199,8 +3243,6 @@ class PetWindow(QWidget):
         self._last_growth_hour = stage.hour
         self._set_temporary_activity(stage.activity, 60_000)
         self.show_speech(f"今日成长：{stage.title}\n解锁：{stage.reward}\n{stage.message}", 8200)
-        if stage.hour >= 8:
-            self._generate_daily_report(show_dialog=True)
 
     def _sync_hourly_outfit(self, *, announce: bool) -> None:
         """同步小时娃衣解锁，不覆盖用户主动选择的当前装备。
@@ -3359,10 +3401,8 @@ class PetWindow(QWidget):
                 # losing the Todo attribution and daily check-in record.
                 self._record_focus_segment(session_seconds, completed=False)
             self.focus_session.pause()
-            if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
-                self._generate_daily_report(show_dialog=False)
 
-    def _generate_daily_report(self, *, show_dialog: bool) -> Path | None:
+    def _generate_daily_report(self, *, show_dialog: bool, mark_generated: bool = False) -> Path | None:
         """生成只保存在本机的工作日报；可选展示预览窗口。"""
 
         if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1" and not show_dialog:
@@ -3380,7 +3420,25 @@ class PetWindow(QWidget):
             return None
         if show_dialog:
             self._show_daily_report_dialog(path)
+        if mark_generated:
+            self.daily_stats.mark_report_generated()
         return path
+
+    def _maybe_generate_scheduled_daily_report(self, now: datetime) -> bool:
+        """Generate one local report after the configured daily cutoff."""
+
+        if not getattr(self.settings, "daily_report_enabled", True):
+            return False
+        try:
+            hour, minute = (int(part) for part in str(getattr(self.settings, "daily_report_time", "18:00")).split(":", 1))
+        except (TypeError, ValueError):
+            hour, minute = 18, 0
+        cutoff = hour * 60 + minute
+        if now.hour * 60 + now.minute < cutoff:
+            return False
+        if self.daily_stats.report_generated_for(now.date().isoformat()):
+            return False
+        return self._generate_daily_report(show_dialog=False, mark_generated=True) is not None
 
     def show_daily_report(self) -> None:
         """由菜单生成并打开今天的六毛工作日报。"""
@@ -4738,6 +4796,9 @@ class PetWindow(QWidget):
         item_key = str(item_key or "").strip()
         if item_key not in {"coffee", "expensive_coffee", "milk_tea", "cake", "tea"}:
             return
+        if item_key == "cake":
+            self.show_food_scene_dialog()
+            return
         self._start_food_scene(
             item_key,
             10 if item_key == "milk_tea" else 0,
@@ -4967,7 +5028,9 @@ class PetWindow(QWidget):
     def _hourly_tick(self) -> None:
         """周期检查整点报时，关闭时不产生任何气泡。"""
 
-        self._maybe_announce_hour(datetime.now())
+        now = datetime.now()
+        self._maybe_announce_hour(now)
+        self._maybe_generate_scheduled_daily_report(now)
 
     def _maybe_announce_hour(self, now: datetime) -> bool:
         """在每个整点窗口内只播报一次，返回是否实际播报。"""

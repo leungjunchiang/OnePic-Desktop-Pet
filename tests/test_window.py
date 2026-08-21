@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -802,9 +803,11 @@ def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> 
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
     assert all(button.size() == QSize(42, 42) for button in buttons)
-    window.quick_panel._show_hint(window.quick_panel.music_button)
-    app.processEvents()
-    assert window.quick_panel.hover_hint.text() == "音乐"
+    for button, label in zip(buttons, ("聊聊", "开始工作", "待办", "搭子自习室", "音乐", "喂食")):
+        window.quick_panel._show_hint(button)
+        app.processEvents()
+        assert window.quick_panel.hover_hint.text() == label
+        window.quick_panel._hide_hint()
     assert "color: #111111" in window.quick_panel.hover_hint.styleSheet()
     window.quick_panel._hide_hint()
     assert not window.quick_panel.hover_hint.isVisible()
@@ -1180,6 +1183,27 @@ def test_hourly_announcement_can_be_disabled_and_deduplicates() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_daily_report_uses_configured_cutoff_once_per_day(monkeypatch) -> None:
+    app, window = _create_window()
+    calls = []
+    window.settings.daily_report_enabled = True
+    window.settings.daily_report_time = "18:00"
+    report_day = datetime.fromisoformat(window.daily_stats.date).date()
+
+    def fake_report(*, show_dialog, mark_generated=False):
+        calls.append((show_dialog, mark_generated))
+        if mark_generated:
+            window.daily_stats.mark_report_generated()
+        return Path("/tmp/lili-test-report.png")
+
+    monkeypatch.setattr(window, "_generate_daily_report", fake_report)
+    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=17, minute=59)) is False
+    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=18, minute=0)) is True
+    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=19, minute=0)) is False
+    assert calls == [(False, True)]
+    window.close(); window.deleteLater(); app.processEvents()
 
 def test_input_idle_under_ten_minutes_keeps_working(monkeypatch) -> None:
     """The ten-minute grace period does not pause early."""

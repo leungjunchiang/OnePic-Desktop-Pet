@@ -32,3 +32,14 @@ def test_daily_stats_reset_without_negative_penalty(tmp_path) -> None:
 
     assert stats.snapshot()["touches"] == 0
     assert stats.snapshot()["completed_tasks"] == 0
+
+
+def test_daily_report_marker_is_once_per_day(tmp_path) -> None:
+    current = [datetime(2026, 8, 10, 20, 0)]
+    stats = DailyCompanionStats(tmp_path / "daily.json", now_provider=lambda: current[0])
+    assert stats.report_generated_for() is False
+    stats.mark_report_generated()
+    assert stats.report_generated_for() is True
+
+    current[0] = datetime(2026, 8, 11, 8, 0)
+    assert stats.report_generated_for() is False

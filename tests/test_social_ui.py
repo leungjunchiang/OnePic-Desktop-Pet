@@ -225,7 +225,8 @@ def test_supply_actions_are_large_inline_buttons() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
     buttons = {button.text() for button in widget.findChildren(QPushButton)}
-    assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= buttons
+    assert {"请咖啡", "请奶茶", "敬茶"} <= buttons
+    assert "请蛋糕" not in buttons
     assert "送补给 ▼" not in buttons
     assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton) if button.text() in buttons)
     widget.close(); widget.deleteLater(); app.processEvents()

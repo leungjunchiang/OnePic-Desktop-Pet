@@ -7,7 +7,6 @@
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 对在线回复采用小片段、定时批量渲染，避免等待整段文字或每个字符都重排全文；
-- 监听聊天文档布局变化，确保加载或追加消息后视口稳定停在最新一条；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
@@ -30,7 +29,7 @@ from html import escape
 if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
-from PySide6.QtCore import QRect, QSize, QTimer, Qt, QThread, Signal
+from PySide6.QtCore import QTime, QRect, QSize, QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QCloseEvent, QFontMetrics, QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -49,6 +48,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTimeEdit,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -263,17 +263,6 @@ class ChatDialog(QDialog):
 
         self.transcript = QTextBrowser()
         self.transcript.setOpenExternalLinks(False)
-        # Qt on macOS can update the document geometry after the first
-        # zero-delay timer. Re-arm the existing scroll timer whenever the
-        # document layout reports a size change so the newest message stays
-        # visible without introducing a second scrolling loop.
-        self.transcript.document().documentLayout().documentSizeChanged.connect(
-            lambda _size: self._transcript_scroll_timer.start(0)
-        )
-        transcript_scroll_bar = self.transcript.verticalScrollBar()
-        transcript_scroll_bar.rangeChanged.connect(
-            lambda _minimum, maximum: transcript_scroll_bar.setValue(maximum)
-        )
         layout.addWidget(self.transcript, 1)
 
         entry = QHBoxLayout()
@@ -999,6 +988,26 @@ class AISettingsDialog(QDialog):
         idle_hint.setWordWrap(True)
         idle_hint.setObjectName("muted")
         form.addRow("规则说明", idle_hint)
+        self.daily_report_enabled = QCheckBox("每天自动生成工作日报")
+        self.daily_report_enabled.setChecked(getattr(settings, "daily_report_enabled", True))
+        self.daily_report_enabled.setToolTip("默认开启；每天到设定时间生成一次，不再按累计 8 小时触发。")
+        self.daily_report_time = QTimeEdit()
+        report_time = QTime.fromString(getattr(settings, "daily_report_time", "18:00"), "HH:mm")
+        self.daily_report_time.setTime(report_time if report_time.isValid() else QTime(18, 0))
+        self.daily_report_time.setDisplayFormat("HH:mm")
+        self.daily_report_time.setWrapping(True)
+        self.daily_report_time.setToolTip("可用鼠标滚轮选择小时和分钟；日报会在当天这个时间生成。")
+        report_row = QWidget()
+        report_layout = QHBoxLayout(report_row)
+        report_layout.setContentsMargins(0, 0, 0, 0)
+        report_layout.addWidget(self.daily_report_enabled)
+        report_layout.addWidget(QLabel("截止当天"))
+        report_layout.addWidget(self.daily_report_time)
+        report_layout.addWidget(QLabel("生成"))
+        report_layout.addStretch(1)
+        self.daily_report_enabled.toggled.connect(self.daily_report_time.setEnabled)
+        self.daily_report_time.setEnabled(self.daily_report_enabled.isChecked())
+        form.addRow("工作日报", report_row)
         self.music_service = QComboBox()
         for label, key in (
             ("自动选择（推荐）", "auto"),
@@ -1280,6 +1289,8 @@ class AISettingsDialog(QDialog):
         self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
+        self.settings.daily_report_enabled = self.daily_report_enabled.isChecked()
+        self.settings.daily_report_time = self.daily_report_time.time().toString("HH:mm")
         self.settings.app_awareness = self.app_awareness.isChecked()
         self.settings.voice_enabled = self.voice.isChecked()
         self.settings.lyric_inspiration_enabled = self.lyric_inspiration.isChecked()

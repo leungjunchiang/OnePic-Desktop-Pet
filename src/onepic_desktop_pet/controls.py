@@ -344,7 +344,7 @@ class QuickControlPanel(QWidget):
         self.hover_hint = QLabel(None)
         self.hover_hint.setObjectName("quickActionHint")
         self.hover_hint.setWindowFlags(
-            Qt.WindowType.Tool
+            Qt.WindowType.ToolTip
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
             | Qt.WindowType.WindowStaysOnTopHint
@@ -382,7 +382,9 @@ class QuickControlPanel(QWidget):
         )
         for button in self._quick_buttons:
             layout.addWidget(button)
+            button.setMouseTracking(True)
             button.installEventFilter(self)
+        self.setMouseTracking(True)
 
 
     @staticmethod
@@ -443,7 +445,11 @@ class QuickControlPanel(QWidget):
         # The hint is a separate top-level window. Raise it after applying
         # the native non-activating style so it stays above the shortcut dock
         # on macOS as well as Windows without taking keyboard focus.
-        self.hover_hint.raise_()
+        # ``ToolTip`` windows are ordered by AppKit/Windows themselves.  A
+        # manual raise on macOS can make the desktop pet briefly become the
+        # active application, which is exactly when the hint disappears.
+        if sys.platform != "darwin":
+            self.hover_hint.raise_()
 
     def _hide_hint(self) -> None:
         """Hide the hover label when the pointer leaves a shortcut."""

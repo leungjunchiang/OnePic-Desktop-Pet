@@ -48,6 +48,7 @@ class DailyCompanionStats:
         self.sleeps = 0
         self.random_events = 0
         self.last_activity = "stand"
+        self.last_report_date = ""
         if self._persist:
             self._load()
 
@@ -62,6 +63,21 @@ class DailyCompanionStats:
         self.sleeps = 0
         self.random_events = 0
         self.last_activity = "stand"
+        self.last_report_date = ""
+        self._save()
+
+    def report_generated_for(self, day: str | None = None) -> bool:
+        """Return whether the scheduled report was already written for a day."""
+
+        self._rollover()
+        target = str(day or self.date)[:10]
+        return self.last_report_date == target
+
+    def mark_report_generated(self, day: str | None = None) -> None:
+        """Persist the once-per-day scheduled-report marker."""
+
+        self._rollover()
+        self.last_report_date = str(day or self.date)[:10]
         self._save()
 
     def record_focus(self, seconds: int, *, completed: bool = False) -> None:
@@ -109,6 +125,7 @@ class DailyCompanionStats:
             self.sleeps = max(0, int(data.get("sleeps", 0)))
             self.random_events = max(0, int(data.get("random_events", 0)))
             self.last_activity = str(data.get("last_activity", "stand"))[:60]
+            self.last_report_date = str(data.get("last_report_date", ""))[:10]
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return
 
@@ -125,6 +142,7 @@ class DailyCompanionStats:
             "sleeps": self.sleeps,
             "random_events": self.random_events,
             "last_activity": self.last_activity,
+            "last_report_date": self.last_report_date,
         }
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self.path)

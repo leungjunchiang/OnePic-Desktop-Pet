@@ -843,6 +843,7 @@ class HttpSocialBackend:
             "lili_leave_room": "/rooms/leave",
             "lili_send_interaction": "/rooms/interaction",
             "lili_send_food_interaction": "/rooms/food-interaction",
+            "lili_create_cake_share": "/rooms/cake-share",
             "lili_set_buddy_interaction_mode": "/profile/interaction-mode",
             "lili_record_room_event": "/rooms/events",
             "lili_record_economy_event": "/economy/events",

@@ -501,7 +501,6 @@ class BuddyCardWidget(QWidget):
             ("food_coffee", "请咖啡"),
             ("food_milk_tea", "请奶茶"),
             ("food_tea", "敬茶"),
-            ("food_cake", "请蛋糕"),
         )
         for index, (kind, label) in enumerate(action_specs):
             button = QPushButton(label)
@@ -634,6 +633,7 @@ class IncomingVisitNotice(QDialog):
             "food_milk_tea": "🧋 请你喝奶茶",
             "food_tea": "🍵 请你喝茶",
             "food_cake": "🍰 请你吃蛋糕",
+            "food_cake_share": "🍰 请你一起吃蛋糕",
         }
         return f"{nickname}{labels.get(str(self._event_payload.get('kind') or ''), '来串门了')}"
 
@@ -1983,10 +1983,23 @@ class SocialHubDialog(QDialog):
                 "food_milk_tea": "🧋 一起休息邀请",
                 "food_tea": "🍵 敬茶",
                 "food_cake": "🍰 庆祝邀请",
+                "food_cake_share": "🍰 请你一起吃蛋糕",
             }
             label = labels.get(visit_kind, "串门邀请")
             inbox_kind = "food" if visit_kind.startswith("food_") else "visit"
             item=QListWidgetItem(f"{label}：{_owner_label(visit)}"); item.setData(Qt.ItemDataRole.UserRole,(inbox_kind,visit)); self.inbox.addItem(item)
+        if hasattr(self, "recent_interactions"):
+            self.recent_interactions.clear()
+            for share in self.data.get("cake_shares") or []:
+                if not isinstance(share, dict):
+                    continue
+                members = [item for item in (share.get("members") or []) if isinstance(item, dict)]
+                accepted = sum(str(item.get("status") or "") == "accepted" for item in members)
+                total = len(members)
+                message = str(share.get("message") or "今天值得庆祝一下")[:80]
+                self.recent_interactions.addItem(
+                    f"🍰 今日蛋糕 · 已邀请 {total} 人 · 已接受 {accepted}/{total}\n{message}"
+                )
         for request in self.data.get("achievement_witness_requests") or []:
             title = str(request.get("name") or "未命名成果")[:90]
             owner = _owner_label(request)

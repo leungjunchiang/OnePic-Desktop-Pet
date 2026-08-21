@@ -9,6 +9,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_room_dashboard",
   "lili_record_room_event",
   "lili_send_interaction",
+  "lili_create_cake_share",
   "lili_set_room_goal",
   "lili_leave_room",
   "lili_set_room_schedule",
@@ -30,6 +31,7 @@ const ROUTE_TO_RPC = new Map([
   ["/rooms/goal", "lili_set_room_goal"],
   ["/rooms/leave", "lili_leave_room"],
   ["/rooms/interaction", "lili_send_interaction"],
+  ["/rooms/cake-share", "lili_create_cake_share"],
   ["/rooms/events", "lili_record_room_event"],
   ["/leaderboard/focus-week", "lili_focus_weekly_leaderboard"],
 ]);

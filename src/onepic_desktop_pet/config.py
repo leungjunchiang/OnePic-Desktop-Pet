@@ -83,6 +83,11 @@ class PetSettings:
     codex_executable_path: str = ""
     automatic_grumbling: bool = True
     hourly_announcement: bool = False
+    # A daily report is generated once after this local clock time.  The
+    # default keeps the feature on while allowing users to choose another
+    # cutoff in Settings.
+    daily_report_enabled: bool = True
+    daily_report_time: str = "18:00"
     # Show the current work-session duration in the pet work-control bubble.
     show_work_duration: bool = True
     app_awareness: bool = True
@@ -211,6 +216,14 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.codex_executable_path = str(settings.codex_executable_path).replace("\x00", "").strip()[:1200]
     settings.automatic_grumbling = bool(settings.automatic_grumbling)
     settings.hourly_announcement = bool(settings.hourly_announcement)
+    settings.daily_report_enabled = bool(settings.daily_report_enabled)
+    try:
+        report_hour, report_minute = (int(part) for part in str(settings.daily_report_time).split(":", 1))
+        if not (0 <= report_hour <= 23 and 0 <= report_minute <= 59):
+            raise ValueError
+        settings.daily_report_time = f"{report_hour:02d}:{report_minute:02d}"
+    except (TypeError, ValueError):
+        settings.daily_report_time = "18:00"
     settings.show_work_duration = bool(settings.show_work_duration)
     settings.app_awareness = bool(settings.app_awareness)
     settings.voice_enabled = bool(settings.voice_enabled)
@@ -326,6 +339,8 @@ def load_settings(
                 "codex_executable_path",
                 "automatic_grumbling",
                 "hourly_announcement",
+                "daily_report_enabled",
+                "daily_report_time",
                 "show_work_duration",
                 "app_awareness",
                 "voice_enabled",
@@ -416,6 +431,8 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "codex_executable_path": settings.codex_executable_path,
         "automatic_grumbling": settings.automatic_grumbling,
         "hourly_announcement": settings.hourly_announcement,
+        "daily_report_enabled": settings.daily_report_enabled,
+        "daily_report_time": settings.daily_report_time,
         "show_work_duration": settings.show_work_duration,
         "app_awareness": settings.app_awareness,
         "voice_enabled": settings.voice_enabled,

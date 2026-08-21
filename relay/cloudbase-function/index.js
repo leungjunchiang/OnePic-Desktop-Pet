@@ -6,7 +6,7 @@
 const RPC_ALLOWLIST = new Set([
   "lili_add_buddy_by_code", "lili_respond_buddy", "lili_create_room", "lili_join_room",
   "lili_send_visit", "lili_respond_visit", "lili_dashboard", "lili_room_dashboard",
-  "lili_record_room_event", "lili_send_interaction", "lili_set_room_goal", "lili_leave_room",
+  "lili_record_room_event", "lili_send_interaction", "lili_create_cake_share", "lili_set_room_goal", "lili_leave_room",
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
   "lili_buddy_private_notes", "lili_set_buddy_private_note",
@@ -19,7 +19,7 @@ const ROUTE_TO_RPC = new Map([
   ["/rooms/create", "lili_create_room"], ["/rooms/join", "lili_join_room"],
   ["/rooms/goal", "lili_set_room_goal"], ["/rooms/schedule", "lili_set_room_schedule"],
   ["/rooms/challenge", "lili_set_room_challenge"], ["/rooms/leave", "lili_leave_room"],
-  ["/rooms/interaction", "lili_send_interaction"], ["/rooms/events", "lili_record_room_event"],
+  ["/rooms/interaction", "lili_send_interaction"], ["/rooms/cake-share", "lili_create_cake_share"], ["/rooms/events", "lili_record_room_event"],
   ["/leaderboard/focus-week", "lili_focus_weekly_leaderboard"],
 ]);
 

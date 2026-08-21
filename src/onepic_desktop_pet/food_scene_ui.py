@@ -7,12 +7,14 @@ from typing import Any, Callable, Iterable
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -45,6 +47,8 @@ class FoodSceneDialog(QDialog):
         *,
         witness_choices: Callable[[], Iterable[dict[str, Any]]] | None = None,
         achievement_submitter: Callable[[str, str, list[str]], Any] | None = None,
+        buddy_choices: Callable[[], Iterable[dict[str, Any]]] | None = None,
+        cake_share_submitter: Callable[[str, list[str]], Any] | None = None,
     ) -> None:
         super().__init__(None)
         del parent
@@ -52,6 +56,8 @@ class FoodSceneDialog(QDialog):
         self.todo_choices = [dict(item) for item in todo_choices if isinstance(item, dict)]
         self.witness_choices = witness_choices
         self.achievement_submitter = achievement_submitter
+        self.buddy_choices = buddy_choices
+        self.cake_share_submitter = cake_share_submitter
         self._remote_achievement_claims: list[dict[str, Any]] = []
         self.setObjectName("foodSupplyStation")
         self.setWindowTitle("给六毛来点什么？ · 六毛补给站")
@@ -99,7 +105,7 @@ class FoodSceneDialog(QDialog):
             "吉他拨片规则（当前标准）：\n"
             "• 有效专注工资：每小时 6 个；每天最多计薪 8 小时，即每天最多 48 个。\n"
             "• 早鸟补贴：首次有效工作在 10:00 前开始并达到 20 分钟，送昂贵咖啡 ×1，不额外发拨片。\n"
-            "• 完成 Todo：任务绩效 +2 个；小蛋糕想庆祝就使用，不绑定重要 Todo。\n"
+            "• 完成 Todo：任务绩效 +2 个；小蛋糕每天最多 1 个、库存最多 1 个，必须邀请 1～3 位好友分享。\n"
             "• 成果见证：手动邀请两名不同搭子确认后固定奖励 200 个，每月最多成功 3 次、发起 4 次。\n"
             "• 咖啡壶：144 个拨片；买下后每天补给普通咖啡 ×1，每天最多一杯。"
         )
@@ -236,6 +242,8 @@ class FoodSceneDialog(QDialog):
         source.setObjectName("source")
         source.setWordWrap(True)
         layout.addWidget(source)
+        if key == "cake":
+            return self._cake_card(card, layout)
         controls = QHBoxLayout()
         selector: QComboBox | None = None
         if key == "milk_tea":
@@ -251,6 +259,49 @@ class FoodSceneDialog(QDialog):
         button.clicked.connect(lambda _checked=False, item_key=key, box=selector: self._request(item_key, box))
         controls.addWidget(button)
         layout.addLayout(controls)
+        return card
+
+    def _cake_card(self, card: QFrame, layout: QVBoxLayout) -> QWidget:
+        """Render cake as a group celebration, never as a solo food button."""
+
+        status = self.ledger.cake_share_status()
+        hint = QLabel("开心的事，要有人一起分享。邀请 1～3 位好友，好友可以稍后接受。")
+        hint.setObjectName("rules")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        message = QLineEdit()
+        message.setPlaceholderText("今天庆祝什么？例如：终于把论文改完了")
+        layout.addWidget(message)
+        people = QListWidget()
+        people.setMaximumHeight(94)
+        choices = []
+        if self.buddy_choices is not None:
+            choices = [
+                dict(item) for item in (self.buddy_choices() or ())
+                if isinstance(item, dict)
+                and str(item.get("user_id") or item.get("id") or "").strip()
+                and not bool(item.get("is_self"))
+            ]
+        for buddy in choices:
+            user_id = str(buddy.get("user_id") or buddy.get("id") or "").strip()
+            label = str(buddy.get("nickname") or buddy.get("owner_nickname") or user_id)[:60]
+            item = QListWidgetItem(label, people)
+            item.setData(Qt.ItemDataRole.UserRole, user_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+        if not choices:
+            empty = QListWidgetItem("请先添加至少一位搭子，再分享小蛋糕。", people)
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+        layout.addWidget(people)
+        button = QPushButton("请朋友吃蛋糕")
+        button.setEnabled(bool(status.get("can_start")) and bool(choices))
+        if status.get("share_started"):
+            button.setText("今天已经发起过蛋糕分享")
+            button.setEnabled(False)
+        button.clicked.connect(
+            lambda _checked=False, edit=message, chooser=people: self._request_cake_share(edit, chooser)
+        )
+        layout.addWidget(button)
         return card
 
     def refresh_today(self) -> None:
@@ -281,9 +332,12 @@ class FoodSceneDialog(QDialog):
                 button = None
             else:
                 text = f"{row['name']} × {quantity}\n{row['description']}"
-                button = QPushButton("使用")
+                button = QPushButton("分享蛋糕" if row["item_key"] == "cake" else "使用")
                 button.setEnabled(quantity > 0)
-                button.clicked.connect(lambda _checked=False, key=row["item_key"]: self._use_from_inventory(key))
+                if row["item_key"] == "cake":
+                    button.clicked.connect(lambda _checked=False: self.tabs.setCurrentIndex(0))
+                else:
+                    button.clicked.connect(lambda _checked=False, key=row["item_key"]: self._use_from_inventory(key))
             widget = self._row_widget(text, button)
             item = QListWidgetItem()
             item.setSizeHint(widget.sizeHint())
@@ -297,6 +351,8 @@ class FoodSceneDialog(QDialog):
         group = self.shop_group.currentText()
         for key, spec in ITEM_CATALOG.items():
             if spec["group"] != group:
+                continue
+            if spec.get("daily_only"):
                 continue
             if spec["kind"] == "household" and key not in ACTIVE_HOUSEHOLD_KEYS:
                 continue
@@ -341,6 +397,7 @@ class FoodSceneDialog(QDialog):
 
     def refresh(self) -> None:
         self.ledger.ensure_daily_household_supply()
+        self.ledger.ensure_daily_cake()
         report = self.ledger.month_report()
         today = self.ledger.today_summary()
         self.balance_label.setText(f"🎸 {self.ledger.balance} 吉他拨片")
@@ -369,6 +426,29 @@ class FoodSceneDialog(QDialog):
         # resolves legacy/canonical inventory aliases atomically and the main
         # window returns a precise reason if another window changed the state.
         self._request(item_key, None)
+
+    def _request_cake_share(self, message: QLineEdit, people: QListWidget) -> None:
+        selected = [
+            str(people.item(index).data(Qt.ItemDataRole.UserRole) or "").strip()
+            for index in range(people.count())
+            if people.item(index).checkState() == Qt.CheckState.Checked
+        ]
+        selected = [value for value in selected if value]
+        if not 1 <= len(selected) <= 3:
+            QMessageBox.information(self, "还差一步", "请选择 1～3 位好友一起庆祝。")
+            return
+        if self.cake_share_submitter is None:
+            QMessageBox.information(self, "需要登录", "登录搭子自习室后，才能邀请好友分享蛋糕。")
+            return
+        try:
+            result = self.cake_share_submitter(str(message.text()).strip()[:160], selected)
+        except Exception as exc:
+            QMessageBox.warning(self, "蛋糕没有送出", str(exc))
+            return
+        if result is None:
+            return
+        self.refresh()
+        QMessageBox.information(self, "蛋糕已摆上桌", f"已邀请 {len(selected)} 位好友；他们上线后可以分别接受。")
 
     def _request(self, key: str, selector: QComboBox | None) -> None:
         duration = 0

@@ -127,7 +127,9 @@ def test_ledger_keeps_only_the_latest_31_days_of_events(tmp_path):
         path,
         now_provider=lambda: datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc),
     )
-    assert [event.event_id for event in ledger.events] == ["boundary-event", "new-event"]
+    event_ids = [event.event_id for event in ledger.events]
+    assert event_ids[:2] == ["boundary-event", "new-event"]
+    assert any(event.category == "supply_reward" and event.metadata.get("item_key") == "cake" for event in ledger.events)
     assert ledger.balance == 17
 
 
@@ -156,8 +158,27 @@ def test_important_todo_no_longer_grants_cake(tmp_path):
     second = ledger.record_important_todo_completion("todo-1", "论文机制")
     assert first is None
     assert second is None
-    assert ledger.inventory_count("cake") == 0
+    # Cake is now a daily free supply; completing Todo never grants an extra.
+    assert ledger.inventory_count("cake") == 1
     assert ledger.monthly_income() == 0
+
+
+def test_cake_is_one_daily_group_share_with_one_item_cap(tmp_path):
+    current = [datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)]
+    ledger = EconomyLedger(tmp_path / "economy.json", now_provider=lambda: current[0])
+    assert ledger.inventory_count("cake") == 1
+    assert ledger.ensure_daily_cake() is False
+    assert ledger.inventory_count("cake") == 1
+    assert ledger.use_item("cake") is None
+
+    consumed = ledger.consume_cake_for_share(["buddy-1", "buddy-2"], message="论文改完了", operation_key="share-1")
+    assert consumed is not None
+    assert ledger.inventory_count("cake") == 0
+    assert ledger.consume_cake_for_share(["buddy-3"], operation_key="share-2") is None
+
+    current[0] = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
+    assert ledger.ensure_daily_cake() is True
+    assert ledger.inventory_count("cake") == 1
 
 def test_coffee_pot_grants_one_coffee_per_day(tmp_path):
     ledger = EconomyLedger(tmp_path / "economy.json", now_provider=_now)

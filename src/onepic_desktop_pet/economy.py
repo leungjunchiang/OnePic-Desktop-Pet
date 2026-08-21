@@ -59,10 +59,11 @@ ITEM_CATALOG: dict[str, dict[str, Any]] = {
         "description": "正式歇一会儿，选择 10 或 15 分钟。",
     },
     "cake": {
-        "name": "小蛋糕", "price": 32, "group": "吃点喝点",
+        "name": "小蛋糕", "price": 0, "group": "吃点喝点",
         "kind": "consumable", "state": "celebrating", "collection": "cake",
         "scene_type": "celebrate", "scene_minutes": 0,
-        "description": "想庆祝就吃；六毛会把这段开心记下来。",
+        "daily_only": True,
+        "description": "每天最多得到 1 个，库存最多 1 个；不能独享，邀请 1～3 位好友一起分享。",
     },
     "tea": {
         "name": "茶", "price": 10, "group": "吃点喝点",
@@ -218,6 +219,7 @@ class EconomyLedger:
         }
         if self._persist:
             self._load()
+        self.ensure_daily_cake()
 
     @property
     def balance(self) -> int:
@@ -524,6 +526,101 @@ class EconomyLedger:
         target = str(day or self._now().date().isoformat())[:10]
         return bool(self._atomic(lambda: self._grant_household_daily_supply(target)))
 
+    def _grant_daily_cake(
+        self, day: str, events: list[WalletEvent] | None = None,
+    ) -> bool:
+        """Grant one free cake per local day, never stacking above one."""
+
+        daily = self._state.setdefault("daily_focus", {}).setdefault(day, {})
+        if bool(daily.get("cake_granted")):
+            return False
+        daily["cake_granted"] = True
+        if self._inventory_count("cake") < 1:
+            self._add_inventory("cake", 1)
+        event = self._append(
+            "supply_reward",
+            0,
+            "每日补给：小蛋糕 ×1",
+            f"supply:cake:{day}",
+            day,
+            source="daily_supply",
+            metadata={
+                "item_key": "cake",
+                "grant_quantity": 1,
+                "inventory_cap": 1,
+                "daily_limit": 1,
+            },
+        )
+        if events is not None:
+            events.append(event)
+        return True
+
+    def ensure_daily_cake(self, day: str | None = None) -> bool:
+        """Ensure the daily cake grant exists without farming repeats."""
+
+        target = str(day or self._now().date().isoformat())[:10]
+        return bool(self._atomic(lambda: self._grant_daily_cake(target)))
+
+    def cake_share_status(self, day: str | None = None) -> dict[str, Any]:
+        target = str(day or self._now().date().isoformat())[:10]
+        self.ensure_daily_cake(target)
+        daily = (self._state.get("daily_focus") or {}).get(target) or {}
+        return {
+            "quantity": self.inventory_count("cake"),
+            "daily_granted": bool(daily.get("cake_granted")),
+            "share_started": bool(daily.get("cake_share_started")),
+            "can_start": self.inventory_count("cake") > 0 and not bool(daily.get("cake_share_started")),
+            "rule": "每天最多发起 1 场；邀请 1～3 位好友，好友可稍后接受。",
+        }
+
+    def consume_cake_for_share(
+        self,
+        recipient_ids: Iterable[str],
+        *,
+        message: str = "",
+        operation_key: str = "",
+    ) -> dict[str, Any] | None:
+        """Consume today's cake only after the remote share was accepted."""
+
+        ids: list[str] = []
+        for value in recipient_ids:
+            clean = str(value or "").strip()[:120]
+            if clean and clean not in ids:
+                ids.append(clean)
+        if not 1 <= len(ids) <= 3:
+            return None
+        target = self._now().date().isoformat()
+        self.ensure_daily_cake(target)
+        source_key = f"cake-share:{operation_key}" if str(operation_key).strip() else f"cake-share:{uuid.uuid4().hex}"
+
+        def apply() -> dict[str, Any] | None:
+            existing = self._find_source(source_key)
+            if existing is not None:
+                return {"event": existing.as_dict(), "already_consumed": True}
+            daily = self._state.setdefault("daily_focus", {}).setdefault(target, {})
+            if daily.get("cake_share_started") or self._inventory_count("cake") <= 0:
+                return None
+            self._add_inventory("cake", -1)
+            daily["cake_share_started"] = True
+            self._record_life("cake")
+            event = self._append(
+                "item_use",
+                0,
+                "请朋友吃蛋糕",
+                source_key,
+                target,
+                source="cake_share",
+                metadata={
+                    "item_key": "cake",
+                    "recipient_ids": ids,
+                    "message": str(message or "").strip()[:160],
+                    "initiated_today": True,
+                },
+            )
+            return {"event": event.as_dict(), "already_consumed": False}
+
+        return self._atomic(apply)
+
     def record_focus(self, seconds: int, *, started_at: datetime | None = None) -> dict[str, Any]:
         """把真实专注片段换成工资和日常补给，不篡改真实工作时间。"""
         seconds = max(0, int(seconds))
@@ -618,6 +715,7 @@ class EconomyLedger:
     def daily_supply_status(self, day: str | None = None) -> dict[str, dict[str, Any]]:
         """Return today's free-supply checklist without treating food as hunger."""
         target = str(day or self._now().date().isoformat())[:10]
+        self.ensure_daily_cake(target)
         daily = (self._state.get("daily_focus") or {}).get(target) or {}
         claimed = daily.get("supplies") if isinstance(daily.get("supplies"), dict) else {}
         household_supplies = (
@@ -644,7 +742,12 @@ class EconomyLedger:
             "coffee": coffee_status,
             "expensive_coffee": {"claimed": bool(daily.get("early_bird")), "rule": "首次有效工作从 10:00 前开始，并达到 20 分钟"},
             "milk_tea": {"claimed": bool(claimed.get("milk_tea")), "rule": "一次连续专注达到 40 分钟"},
-            "cake": {"claimed": False, "rule": "想庆祝就使用；不需要完成特定 Todo"},
+            "cake": {
+                "claimed": bool(daily.get("cake_granted")),
+                "quantity": self.inventory_count("cake"),
+                "share_started": bool(daily.get("cake_share_started")),
+                "rule": "每天最多 1 个，库存最多 1 个；邀请 1～3 位好友一起分享",
+            },
             "tea": {"claimed": bool(claimed.get("tea")), "rule": "当天累计专注达到 2 小时；好友敬茶另计"},
         }
 
@@ -982,6 +1085,8 @@ class EconomyLedger:
             return None
         if spec["kind"] == "household" and item_key not in ACTIVE_HOUSEHOLD_KEYS:
             return None
+        if bool(spec.get("daily_only")):
+            return None
         if spec["kind"] == "household" and self.has_household(item_key):
             return None
         price = int(spec["price"])
@@ -1258,6 +1363,9 @@ class EconomyLedger:
         item_key = self._canonical_item_key(item_key)
         spec = ITEM_CATALOG.get(str(item_key))
         if not spec or spec["kind"] != "consumable":
+            return None
+        if item_key == "cake":
+            # Cakes are group invitations, never a solo food scene.
             return None
         if self.inventory_count(item_key) <= 0:
             return None
