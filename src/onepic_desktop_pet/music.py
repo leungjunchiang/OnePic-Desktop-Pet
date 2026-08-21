@@ -201,6 +201,21 @@ def music_search_url(service: str, title: str) -> str:
     return f"https://music.163.com/#/search/m/?s={query}&type=1"
 
 
+def artist_search_url(service: str, artist: str = "陈楚生") -> str:
+    """构造官方歌手搜索入口；避免把电台入口误构造成歌曲搜索。"""
+
+    query = urllib.parse.quote(str(artist or "陈楚生"))
+    if service == "qq":
+        return f"https://y.qq.com/n/ryqq/search?w={query}&t=singer"
+    if service == "kugou":
+        return f"https://www.kugou.com/yy/html/search.html#searchType=singer&searchKeyWord={query}"
+    if service == "apple":
+        return f"https://music.apple.com/cn/search?term={query}"
+    if service == "spotify":
+        return f"https://open.spotify.com/search/{query}/artists"
+    return f"https://music.163.com/#/search/m/?s={query}&type=100"
+
+
 def artist_collection_url(service: str, artist: str = "陈楚生") -> str:
     """返回连续播放的官方歌手/曲库入口，不假设第三方 Scheme 永久有效。"""
 
@@ -209,7 +224,7 @@ def artist_collection_url(service: str, artist: str = "陈楚生") -> str:
         return "https://music.163.com/#/artist?id=2124"
     if normalized == "apple" and artist == "陈楚生":
         return "https://music.apple.com/cn/artist/%E9%99%88%E6%A5%9A%E7%94%9F/930912184"
-    return music_search_url(normalized, artist)
+    return artist_search_url(normalized, artist)
 
 
 def artist_collection_deep_link(service: str, artist: str = "陈楚生") -> str:
