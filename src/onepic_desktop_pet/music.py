@@ -431,6 +431,11 @@ class CatalogMusicService:
             deep_link = song_deep_link(provider, song)
             if deep_link and self._open_deep_link(provider, deep_link):
                 return CatalogSongLaunch(True, provider, song, f"给你挑了《{song.title}》♪", deep_link)
+        return self.open_song_web_fallback(song)
+
+    def open_song_web_fallback(self, song: SongEntry) -> CatalogSongLaunch:
+        """在客户端没有真正播放能力时打开正版歌曲网页作为最终兜底。"""
+
         for provider in self._providers():
             web_url = song_web_url(provider, song)
             if self._try_open(self.browser_opener, web_url):
