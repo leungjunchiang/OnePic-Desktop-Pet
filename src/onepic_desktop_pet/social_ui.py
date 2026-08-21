@@ -349,6 +349,29 @@ class SocialEventThread(QThread):
             self.failed.emit(str(exc))
 
 
+class SocialVisitResponseThread(QThread):
+    """Accept or reject one incoming visit/food request off the UI thread."""
+
+    completed = Signal(dict, bool)
+    failed = Signal(dict, str)
+
+    def __init__(self, client: SocialClient, event: dict[str, Any], accept: bool, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.event = dict(event)
+        self.accept = bool(accept)
+
+    def run(self) -> None:
+        try:
+            self.client.rpc(
+                "lili_respond_visit",
+                {"event_id": str(self.event.get("id") or ""), "accept": self.accept},
+            )
+            self.completed.emit(self.event, self.accept)
+        except (SocialError, AttributeError, TypeError) as exc:
+            self.failed.emit(self.event, str(exc))
+
+
 class SocialProfileThread(QThread):
     """Persist an owner nickname away from the Qt GUI thread."""
 
@@ -522,6 +545,88 @@ class BuddyCardWidget(QWidget):
         button.setText(labels.get(kind, "互动"))
         if not bool(self.buddy.get("is_self")):
             button.setEnabled(True)
+
+
+class IncomingVisitNotice(QDialog):
+    """Small non-modal prompt for a newly received visit or food interaction."""
+
+    accept_requested = Signal(dict)
+    reject_requested = Signal(dict)
+    later_requested = Signal(dict)
+
+    def __init__(self, event: dict[str, Any], parent=None) -> None:
+        super().__init__(parent)
+        self.event = dict(event)
+        self._closing = False
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setWindowTitle("搭子互动")
+        self.setMinimumWidth(360)
+        self.setStyleSheet(
+            "QDialog{background:#edf4f7;} QLabel{color:#263746;} "
+            "QLabel#noticeTitle{font-size:18px;font-weight:700;} "
+            "QLabel#noticeHint{color:#667984;} "
+            "QPushButton{min-height:30px;padding:6px 12px;border:0;border-radius:9px;"
+            "background:#d7ece8;color:#204c4a;font-weight:600;} "
+            "QPushButton:hover{background:#c2e2dd;} QPushButton:disabled{color:#91a1a8;background:#e8eef0;}"
+        )
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(9)
+        title = QLabel(self._title_text())
+        title.setObjectName("noticeTitle")
+        title.setWordWrap(True)
+        root.addWidget(title)
+        hint = QLabel("对方正在等你处理；也可以先选择“稍后处理”，稍后在待处理里继续。")
+        hint.setObjectName("noticeHint")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(7)
+        self.accept_button = QPushButton("接受")
+        self.reject_button = QPushButton("拒绝")
+        self.later_button = QPushButton("稍后处理")
+        self.accept_button.clicked.connect(lambda: self.accept_requested.emit(self.event))
+        self.reject_button.clicked.connect(lambda: self.reject_requested.emit(self.event))
+        self.later_button.clicked.connect(lambda: self.later_requested.emit(self.event))
+        buttons.addWidget(self.accept_button)
+        buttons.addWidget(self.reject_button)
+        buttons.addWidget(self.later_button)
+        root.addLayout(buttons)
+
+    def _title_text(self) -> str:
+        nickname = _owner_label(self.event)
+        labels = {
+            "food_coffee": "☕ 请你喝咖啡",
+            "food_milk_tea": "🧋 请你喝奶茶",
+            "food_tea": "🍵 请你喝茶",
+            "food_cake": "🍰 请你吃蛋糕",
+        }
+        return f"{nickname}{labels.get(str(self.event.get('kind') or ''), '来串门了')}"
+
+    def set_busy(self, busy: bool, message: str = "正在处理…") -> None:
+        for button in (self.accept_button, self.reject_button, self.later_button):
+            button.setEnabled(not busy)
+        if busy:
+            self.later_button.setText(message)
+        else:
+            self.later_button.setText("稍后处理")
+
+    def close_without_notice(self) -> None:
+        self._closing = True
+        self.close()
+        self._closing = False
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self._closing:
+            self.later_requested.emit(self.event)
+        super().closeEvent(event)
 
 
 class BuddyVisitWindow(QWidget):

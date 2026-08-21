@@ -7,7 +7,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget
 
-from onepic_desktop_pet.social_ui import BuddyCardWidget, BuddyVisitWindow, SocialHubDialog
+from onepic_desktop_pet.social_ui import (
+    BuddyCardWidget,
+    BuddyVisitWindow,
+    IncomingVisitNotice,
+    SocialHubDialog,
+    SocialVisitResponseThread,
+)
 
 
 class SignedOutClient:
@@ -186,6 +192,38 @@ def test_supply_actions_are_large_inline_buttons() -> None:
     assert "送补给 ▼" not in buttons
     assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton) if button.text() in buttons)
     widget.close(); widget.deleteLater(); app.processEvents()
+
+
+def test_incoming_visit_notice_has_direct_accept_reject_and_later_actions() -> None:
+    app = QApplication.instance() or QApplication([])
+    notice = IncomingVisitNotice(
+        {"id": "visit-1", "nickname": "论文搭子", "kind": "food_milk_tea"}
+    )
+    labels = [button.text() for button in notice.findChildren(QPushButton)]
+    assert "论文搭子家的六毛请你喝奶茶" in [label.text() for label in notice.findChildren(QLabel)]
+    assert {"接受", "拒绝", "稍后处理"} <= set(labels)
+    notice.close_without_notice(); notice.deleteLater(); app.processEvents()
+
+
+def test_incoming_visit_response_thread_calls_visit_rpc() -> None:
+    app = QApplication.instance() or QApplication([])
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, body))
+
+    client = Client()
+    event = {"id": "visit-2", "nickname": "搭子", "kind": "visit"}
+    thread = SocialVisitResponseThread(client, event, True)
+    completed = []
+    thread.completed.connect(lambda received, accepted: completed.append((received, accepted)))
+    thread.run()
+    assert client.calls == [("lili_respond_visit", {"event_id": "visit-2", "accept": True})]
+    assert completed == [(event, True)]
+    thread.deleteLater(); app.processEvents()
 
 
 def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
