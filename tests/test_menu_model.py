@@ -73,7 +73,7 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         "播放 / 暂停",
         "上一首",
         "下一首",
-        "随机听陈楚生",
+        "随机听一首陈楚生歌曲",
     ]
     assert next(item for item in model.items() if item.title == "始终置顶（关闭即桌面模式）").checked
 
