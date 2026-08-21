@@ -999,7 +999,7 @@ class AISettingsDialog(QDialog):
             self.music_service.addItem(label, key)
         self.music_service.setCurrentIndex(max(0, self.music_service.findData(settings.music_service)))
         self.music_service.currentIndexChanged.connect(self._music_provider_changed)
-        form.addRow("优先播放器（高级）", self.music_service)
+        form.addRow("默认音乐软件", self.music_service)
         self.music_status = QLabel()
         self.music_status.setObjectName("status")
         self.music_status.setWordWrap(True)
