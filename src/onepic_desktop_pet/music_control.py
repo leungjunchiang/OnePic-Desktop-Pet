@@ -6,8 +6,9 @@ Windows Transport 优先读取 Windows.Media.Control 的目标播放器 Sessions
 目标 Session 后才允许发送系统媒体键。macOS 的 Apple Music 与 Spotify 使用 Apple Events，
 其他客户端仅在运行时使用媒体键回退。本模块不把安装或启动应用写成“已连接”，也不伪造
 QQ 音乐、网易云或酷狗不存在的公开桌面 API。曲库随机点歌使用现有 MusicCommandThread
-唤起 Deep Link，并在客户端初始化后发送一次幂等的 Play 命令；歌曲一旦启动，之后的基础
-控制始终锁定该 Provider 的 Transport。
+唤起 Deep Link，并在客户端初始化后只向目标 Provider 发送一次幂等的 Play 命令；目标
+Session 不存在时禁止退回全局媒体键，改用该 Provider 已有的 UI 自动化播放适配器。
+歌曲一旦启动，之后的基础控制始终锁定该 Provider 的 Transport。
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from .music_playback import (
     MusicProviderAdapter,
     SongCandidate,
     SongPlaybackResult,
+    _same_song,
     build_provider_adapters,
 )
 
@@ -1007,18 +1009,46 @@ class MusicProviderManager:
                 play_attempts=1,
             )
         # Deep Link 负责选中/打开内容，部分网易云版本只唤起窗口而不自动
-        # 开始声音。使用 Play 而不是 Toggle：已经播放时不会误暂停；没有
-        # GSMTC Session 时，Transport 层会按现有策略回退到系统媒体键。
+        # 开始声音。使用目标 Session 的 Play，而不是通用 Transport 的
+        # fallback：通用 Transport 在没有目标 Session 时会发全局媒体键，
+        # 这会误暂停当前正在播放的 QQ 音乐。
         activation = self._activate_catalog_playback(launch.provider)
-        if activation:
+        adapter_activation = False
+        used_native_random = False
+        if not activation and not launch.fallback_used:
+            adapter_activation = self._play_catalog_song_with_adapter(
+                launch.provider,
+                launch.song.title,
+                launch.song.artist or artist,
+            )
+            if not adapter_activation:
+                used_native_random = self._play_catalog_artist_with_adapter(
+                    launch.provider,
+                    artist,
+                )
+        if not launch.fallback_used and not activation and not adapter_activation and not used_native_random:
+            return SongPlaybackResult(
+                False,
+                launch.provider,
+                launch.song.title,
+                artist,
+                "网易云没有开始播放，未发送全局媒体键，也没有影响其他播放器。",
+                MusicPlaybackError.PLAY_ACTION_FAILED,
+                selected=selected,
+                play_attempts=1,
+            )
+        if activation or adapter_activation or used_native_random:
             self.active_provider = launch.provider
             self._record_provider_result(launch.provider, True)
+        message = launch.message
+        if used_native_random:
+            message = f"已在{MUSIC_SERVICE_LABELS[launch.provider]}发起{artist}随机歌曲播放。"
         return SongPlaybackResult(
             True,
             launch.provider,
             launch.song.title,
             artist,
-            launch.message,
+            message,
             selected=selected,
             play_attempts=1,
             outcome=(
@@ -1029,15 +1059,132 @@ class MusicProviderManager:
         )
 
     def _activate_catalog_playback(self, provider: str) -> bool:
-        """在 Deep Link 交给客户端后发送一次幂等 Play，不负责选歌。"""
+        """只向 Deep Link 对应的目标客户端发送一次幂等 Play。
+
+        这里不能调用 ``MusicTransportController.control``：当 Windows 没有
+        目标 GSMTC Session 时，通用控制器会按兼容策略发送全局媒体键，可能
+        把 QQ 音乐或其他当前播放器暂停。曲库启动流程宁可报告未激活，也不
+        能控制错误的播放器。
+        """
 
         if self.catalog_playback_delay:
             self._playback_sleep(self.catalog_playback_delay)
+        normalized = self._normalize(provider)
+        if self.platform_name == "win32":
+            try:
+                status = self._decorate_status(self._inspect_windows(normalized))
+            except (AttributeError, OSError, TypeError, ValueError) as exc:
+                LOGGER.debug(
+                    "music_catalog_activation provider=%s result=inspect_failed error=%r",
+                    normalized,
+                    exc,
+                )
+                return False
+            if not status.session_id or status.state not in {
+                MusicControlState.CONTROL_READY,
+                MusicControlState.PLAYING,
+            }:
+                LOGGER.debug(
+                    "music_catalog_activation provider=%s result=target_session_missing "
+                    "application_running=%s state=%s",
+                    normalized,
+                    status.application_running,
+                    status.state.value,
+                )
+                return False
+            try:
+                success = bool(self.windows_bridge.control(status.session_id, "play"))
+            except Exception as exc:
+                LOGGER.debug(
+                    "music_catalog_activation provider=%s result=target_control_failed error=%r",
+                    normalized,
+                    exc,
+                )
+                return False
+            if success:
+                try:
+                    self._cache[normalized] = self._decorate_status(
+                        self._inspect_windows(normalized)
+                    )
+                except Exception:
+                    # 播放动作已经交给目标 Session；刷新状态失败不应再尝试
+                    # 任何全局媒体键。
+                    pass
+            return success
         try:
-            result = self.transport_controller.control(provider, "play")
+            result = self.transport_controller.control(normalized, "play")
         except (AttributeError, OSError, TypeError, ValueError):
             return False
         return bool(result.success)
+
+    def _play_catalog_song_with_adapter(
+        self,
+        provider: str,
+        title: str,
+        artist: str,
+    ) -> bool:
+        """在目标客户端内精确搜索并点击曲库选中的歌曲。"""
+
+        adapter = self._playback_adapters.get(self._normalize(provider))
+        if adapter is None or not title:
+            return False
+        try:
+            candidates = tuple(adapter.search(title, artist))
+        except Exception as exc:
+            LOGGER.debug(
+                "music_catalog_adapter provider=%s stage=search error=%r",
+                provider,
+                exc,
+            )
+            return False
+        valid = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() == "song"
+            and _same_song(candidate.title, title)
+            and _same_song(candidate.artist, artist)
+        )
+        for candidate in valid:
+            try:
+                if bool(adapter.play(candidate)):
+                    LOGGER.debug(
+                        "music_catalog_adapter provider=%s stage=play title=%r artist=%r",
+                        provider,
+                        candidate.title,
+                        candidate.artist,
+                    )
+                    return True
+            except Exception as exc:
+                LOGGER.debug(
+                    "music_catalog_adapter provider=%s stage=play error=%r",
+                    provider,
+                    exc,
+                )
+        return False
+
+    def _play_catalog_artist_with_adapter(self, provider: str, artist: str) -> bool:
+        """目标客户端无法建立媒体 Session 时，使用其已有的歌手随机动作。"""
+
+        adapter = self._playback_adapters.get(self._normalize(provider))
+        native_random = getattr(adapter, "play_random_artist", None) if adapter else None
+        if not callable(native_random):
+            return False
+        try:
+            started = bool(native_random(artist))
+        except Exception as exc:
+            LOGGER.debug(
+                "music_catalog_adapter provider=%s stage=native_random error=%r",
+                provider,
+                exc,
+            )
+            return False
+        if started:
+            LOGGER.debug(
+                "music_catalog_adapter provider=%s stage=native_random artist=%r",
+                provider,
+                artist,
+            )
+        return started
 
     def open_catalog_artist_collection(self, artist: str = "陈楚生") -> bool:
         """打开曲库并在客户端 Deep Link 成功时补一次 Play 激活。"""
@@ -1047,7 +1194,10 @@ class MusicProviderManager:
             return False
         provider = self.catalog_music_service.last_provider
         if self.catalog_music_service.last_used_deep_link and provider:
-            if self._activate_catalog_playback(provider):
+            activated = self._activate_catalog_playback(provider)
+            if not activated:
+                activated = self._play_catalog_artist_with_adapter(provider, artist)
+            if activated:
                 self.active_provider = provider
         return True
 
