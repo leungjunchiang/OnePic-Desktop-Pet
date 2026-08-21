@@ -116,24 +116,46 @@ def active_window_is_fullscreen() -> bool:
             if app is None:
                 return False
             pid = int(app.processIdentifier())
-            screen = NSScreen.mainScreen()
-            if screen is None:
-                return False
-            frame = screen.frame()
             info = Quartz.CGWindowListCopyWindowInfo(
                 Quartz.kCGWindowListOptionOnScreenOnly,
                 Quartz.kCGNullWindowID,
             ) or []
+            screens = list(NSScreen.screens() or [])
+            screen_sizes: set[tuple[int, int]] = set()
+            for screen in screens:
+                frame = screen.frame()
+                logical_size = (
+                    round(float(frame.size.width)),
+                    round(float(frame.size.height)),
+                )
+                screen_sizes.add(logical_size)
+                # Quartz window bounds are normally reported in points, but
+                # a few macOS/video paths expose backing-pixel dimensions on
+                # Retina displays.  Accept both representations without
+                # inspecting window titles or pixels.
+                try:
+                    scale = float(screen.backingScaleFactor())
+                except (AttributeError, TypeError, ValueError):
+                    scale = 1.0
+                if scale > 1.0:
+                    screen_sizes.add(
+                        (
+                            round(logical_size[0] * scale),
+                            round(logical_size[1] * scale),
+                        )
+                    )
             for window in info:
                 if int(window.get(Quartz.kCGWindowOwnerPID, -1)) != pid:
                     continue
                 bounds = window.get(Quartz.kCGWindowBounds) or {}
-                if (
-                    abs(float(bounds.get("X", 0)) - float(frame.origin.x)) <= 3
-                    and abs(float(bounds.get("Y", 0)) - float(frame.origin.y)) <= 3
-                    and abs(float(bounds.get("Width", 0)) - float(frame.size.width)) <= 3
-                    and abs(float(bounds.get("Height", 0)) - float(frame.size.height)) <= 3
-                ):
+                width = round(float(bounds.get("Width", 0)))
+                height = round(float(bounds.get("Height", 0)))
+                # Quartz and AppKit use different global-origin conventions
+                # on some multi-monitor layouts.  Full-screen playback and
+                # PowerPoint still have an unambiguous display-sized frame,
+                # so compare dimensions first and avoid missing fullscreen
+                # merely because the monitor origin was transformed.
+                if (width, height) in screen_sizes:
                     return True
         except Exception:
             return False
