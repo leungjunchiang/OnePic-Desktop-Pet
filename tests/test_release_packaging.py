@@ -90,6 +90,8 @@ def test_tray_update_actions_are_explicit_manual_checks() -> None:
     )
     assert "lambda _checked=False: self.check_program_updates(True)" in app_source
     assert "lambda _checked=False: self.check_content_updates(True)" in app_source
+    assert "if not self._program_update_manual:" in app_source
+    assert "从托盘‘更新与关于’手动更新" in app_source
 
 
 def test_program_download_exposes_progress_to_the_gui() -> None:
