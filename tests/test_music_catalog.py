@@ -1,6 +1,7 @@
 """验证六毛曲库、洗牌袋和跨平台音乐唤起降级。"""
 
 import random
+import subprocess
 
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.music import (
@@ -12,6 +13,7 @@ from onepic_desktop_pet.music import (
     music_search_url,
     open_music_url,
     song_deep_link,
+    _extract_executable_from_shell_command,
 )
 
 
@@ -51,6 +53,79 @@ def test_windows_url_open_does_not_precheck_registry() -> None:
         startfile=opened.append,
     )
     assert opened == ["orpheus://song/66525/?autoplay=1"]
+
+
+def test_windows_shell_command_parser_handles_missing_space_after_exe(tmp_path) -> None:
+    executable = tmp_path / "cloudmusic.exe"
+    executable.write_bytes(b"MZ")
+
+    command = f'"{executable}"--webcmd="%1"'
+
+    assert _extract_executable_from_shell_command(command) == executable
+
+
+def test_windows_netease_launch_uses_exe_cwd_and_webcmd(tmp_path, monkeypatch) -> None:
+    executable = tmp_path / "cloudmusic.exe"
+    executable.write_bytes(b"MZ")
+    calls = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    def fake_popen(args, **kwargs):
+        calls.append((args, kwargs))
+        return Process()
+
+    monkeypatch.setattr("onepic_desktop_pet.music.subprocess.Popen", fake_popen)
+
+    assert open_music_url(
+        "orpheus://song/66525/?autoplay=1",
+        platform_name="win32",
+        service="netease",
+        executable=executable,
+    )
+    expected_kwargs = {
+        "cwd": str(tmp_path),
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if getattr(subprocess, "CREATE_NO_WINDOW", 0):
+        expected_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    assert calls == [(
+        [str(executable), "--webcmd=orpheus://song/66525/?autoplay=1"],
+        expected_kwargs,
+    )]
+
+
+def test_catalog_default_windows_launcher_uses_configured_netease_exe(tmp_path, monkeypatch) -> None:
+    executable = tmp_path / "cloudmusic.exe"
+    executable.write_bytes(b"MZ")
+    calls = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.music.subprocess.Popen",
+        lambda args, **kwargs: calls.append((args, kwargs)) or Process(),
+    )
+    settings = PetSettings(
+        music_service="netease",
+        netease_music_path=str(executable),
+    )
+    service = CatalogMusicService(
+        settings,
+        songs=(SongEntry("song-1", "白石洲", netease_song_id="2112804681"),),
+        platform_name="win32",
+    )
+
+    result = service.play_random_song()
+
+    assert result.success is True
+    assert calls[0][0] == [str(executable), "--webcmd=orpheus://song/2112804681/?autoplay=1"]
+    assert calls[0][1]["cwd"] == str(tmp_path)
 
 
 def test_catalog_prefers_deep_link_and_does_not_claim_confirmed_playback() -> None:
@@ -133,3 +208,4 @@ def test_catalog_persists_only_shuffle_state_in_settings() -> None:
 def test_collection_fallback_is_an_official_artist_page() -> None:
     assert artist_collection_url("netease") == "https://music.163.com/#/artist?id=2124"
     assert artist_collection_url("apple").startswith("https://music.apple.com/")
+
