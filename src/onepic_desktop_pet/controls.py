@@ -366,6 +366,7 @@ class QuickControlPanel(QWidget):
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
         self.hide_timer.timeout.connect(self._hide_hint)
+        self._ignore_initial_enter = False
         layout = QHBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9); layout.setSpacing(8)
         self.title = QLabel(f"{pet_name}快捷口袋")
         self.title.setVisible(False)
@@ -555,7 +556,19 @@ class QuickControlPanel(QWidget):
         """每次显示重新开始八秒自动收起计时。"""
 
         super().showEvent(event)
+        # Native/offscreen Qt may synthesize an enterEvent while a newly
+        # positioned top-level panel is being shown. Do not interpret that
+        # synthetic event as active mouse use; real pointer entry after the
+        # first event-loop turn still pauses the timer as before.
+        self._ignore_initial_enter = True
         self.hide_timer.start(8000)
+        # Keep the guard through the first short event-loop burst. Some
+        # platform plugins deliver the synthetic enterEvent after queued
+        # zero-delay callbacks, which would otherwise stop the timer again.
+        QTimer.singleShot(500, self._clear_initial_enter_guard)
+
+    def _clear_initial_enter_guard(self) -> None:
+        self._ignore_initial_enter = False
 
     def hideEvent(self, event) -> None:
         self._hide_hint()
@@ -564,7 +577,8 @@ class QuickControlPanel(QWidget):
     def enterEvent(self, event) -> None:
         """鼠标操作期间暂停自动收起。"""
 
-        self.hide_timer.stop()
+        if not self._ignore_initial_enter:
+            self.hide_timer.stop()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
