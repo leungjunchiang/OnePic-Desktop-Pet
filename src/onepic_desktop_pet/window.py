@@ -4214,7 +4214,7 @@ class PetWindow(QWidget):
 
     def _finish_incoming_visit_notice(self, event: dict) -> None:
         notice = self._incoming_visit_notice
-        if notice is None or self._incoming_visit_id(notice.event) != self._incoming_visit_id(event):
+        if notice is None or self._incoming_visit_id(notice._event_payload) != self._incoming_visit_id(event):
             return
         self._incoming_visit_notice = None
         notice.hide()
@@ -4259,7 +4259,7 @@ class PetWindow(QWidget):
 
     def _incoming_visit_response_failed(self, event: dict, message: str) -> None:
         notice = self._incoming_visit_notice
-        if notice is not None and self._incoming_visit_id(notice.event) == self._incoming_visit_id(event):
+        if notice is not None and self._incoming_visit_id(notice._event_payload) == self._incoming_visit_id(event):
             notice.set_busy(False)
         self.show_speech(f"处理互动失败：{message[:120]}", 5200)
 

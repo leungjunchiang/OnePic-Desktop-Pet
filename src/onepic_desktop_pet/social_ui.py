@@ -556,7 +556,7 @@ class IncomingVisitNotice(QDialog):
 
     def __init__(self, event: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
-        self.event = dict(event)
+        self._event_payload = dict(event)
         self._closing = False
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -592,9 +592,9 @@ class IncomingVisitNotice(QDialog):
         self.accept_button = QPushButton("接受")
         self.reject_button = QPushButton("拒绝")
         self.later_button = QPushButton("稍后处理")
-        self.accept_button.clicked.connect(lambda: self.accept_requested.emit(self.event))
-        self.reject_button.clicked.connect(lambda: self.reject_requested.emit(self.event))
-        self.later_button.clicked.connect(lambda: self.later_requested.emit(self.event))
+        self.accept_button.clicked.connect(lambda: self.accept_requested.emit(self._event_payload))
+        self.reject_button.clicked.connect(lambda: self.reject_requested.emit(self._event_payload))
+        self.later_button.clicked.connect(lambda: self.later_requested.emit(self._event_payload))
         buttons.addWidget(self.accept_button)
         buttons.addWidget(self.reject_button)
         buttons.addWidget(self.later_button)
@@ -625,7 +625,7 @@ class IncomingVisitNotice(QDialog):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if not self._closing:
-            self.later_requested.emit(self.event)
+            self.later_requested.emit(self._event_payload)
         super().closeEvent(event)
 
 
