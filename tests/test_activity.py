@@ -31,3 +31,9 @@ def test_macos_desktop_shell_name_matching_is_normalized() -> None:
     assert activity._is_macos_desktop_shell("  Finder  ") is True
     assert activity._is_macos_desktop_shell("Control   Center") is True
     assert activity._is_macos_desktop_shell("Safari") is False
+
+
+def test_windows_desktop_shell_class_matching_is_normalized() -> None:
+    assert activity._is_windows_desktop_shell_class(" Progman ") is True
+    assert activity._is_windows_desktop_shell_class("WorkerW") is True
+    assert activity._is_windows_desktop_shell_class("Chrome_WidgetWin_1") is False
