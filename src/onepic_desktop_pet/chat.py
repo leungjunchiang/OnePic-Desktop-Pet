@@ -270,6 +270,10 @@ class ChatDialog(QDialog):
         self.transcript.document().documentLayout().documentSizeChanged.connect(
             lambda _size: self._transcript_scroll_timer.start(0)
         )
+        transcript_scroll_bar = self.transcript.verticalScrollBar()
+        transcript_scroll_bar.rangeChanged.connect(
+            lambda _minimum, maximum: transcript_scroll_bar.setValue(maximum)
+        )
         layout.addWidget(self.transcript, 1)
 
         entry = QHBoxLayout()
