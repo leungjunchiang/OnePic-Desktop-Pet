@@ -888,6 +888,45 @@ def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> 
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_quick_panel_hover_label_switches_without_click() -> None:
+    """Moving across shortcuts must switch labels immediately, including macOS."""
+
+    app, window = _create_window()
+    panel = window.quick_panel
+    panel.show()
+    app.processEvents()
+    assert panel._hover_poll_timer.isActive()
+
+    panel._button_at_global_pos = lambda _position: panel.chat_button
+    panel._poll_hover_button()
+    assert panel.hover_hint.text() == "聊聊"
+
+    panel._button_at_global_pos = lambda _position: panel.social_button
+    panel._poll_hover_button()
+    assert panel.hover_hint.text() == "搭子自习室"
+
+    panel._button_at_global_pos = lambda _position: None
+    panel._poll_hover_button()
+    assert not panel.hover_hint.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_macos_hover_hint_is_configured_before_show(monkeypatch) -> None:
+    """Native macOS hint setup must not hide the first unclicked tooltip."""
+
+    monkeypatch.setattr("onepic_desktop_pet.controls.sys.platform", "darwin")
+    app, window = _create_window()
+    panel = window.quick_panel
+    seen_visibility: list[bool] = []
+    panel.set_window_behavior_callback(
+        lambda widget, **_kwargs: seen_visibility.append(widget.isVisible())
+    )
+    panel._show_hint(panel.todo_button)
+    assert seen_visibility == [False]
+    assert panel.hover_hint.text() == "待办"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_work_duration_stays_below_pet_and_reserves_bottom_space() -> None:
     """工作计时在屏幕底边仍固定在六毛下方，不与快捷栏抢位置。"""
 
