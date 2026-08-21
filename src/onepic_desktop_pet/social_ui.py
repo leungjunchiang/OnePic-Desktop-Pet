@@ -601,14 +601,14 @@ class IncomingVisitNotice(QDialog):
         root.addLayout(buttons)
 
     def _title_text(self) -> str:
-        nickname = _owner_label(self.event)
+        nickname = _owner_label(self._event_payload)
         labels = {
             "food_coffee": "☕ 请你喝咖啡",
             "food_milk_tea": "🧋 请你喝奶茶",
             "food_tea": "🍵 请你喝茶",
             "food_cake": "🍰 请你吃蛋糕",
         }
-        return f"{nickname}{labels.get(str(self.event.get('kind') or ''), '来串门了')}"
+        return f"{nickname}{labels.get(str(self._event_payload.get('kind') or ''), '来串门了')}"
 
     def set_busy(self, busy: bool, message: str = "正在处理…") -> None:
         for button in (self.accept_button, self.reject_button, self.later_button):
