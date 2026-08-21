@@ -171,6 +171,37 @@ def test_catalog_activation_never_sends_global_media_key_to_other_player() -> No
     assert media_keys == []
 
 
+def test_catalog_playback_failure_restores_official_web_fallback() -> None:
+    """Deep Link 唤起但无法播放时，仍应打开正版网页，不发送全局媒体键。"""
+
+    media_keys: list[str] = []
+    web_urls: list[str] = []
+    manager = MusicProviderManager(
+        PetSettings(music_service="netease"),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge(),
+        client_finder=_client_finder,
+        process_checker=lambda _name: True,
+        media_key_sender=lambda action: media_keys.append(action) or True,
+        playback_adapters={},
+        catalog_playback_delay=0,
+    )
+    manager.catalog_music_service = CatalogMusicService(
+        manager.settings,
+        songs=(SongEntry("song-1", "白石洲", netease_song_id="2112804681"),),
+        opener=lambda _url: True,
+        browser_opener=lambda url: web_urls.append(url) or True,
+        platform_name="win32",
+    )
+
+    result = manager.play_catalog_random_song("陈楚生")
+
+    assert result.success is True
+    assert result.provider == "netease"
+    assert web_urls and web_urls[0].startswith("https://music.163.com/")
+    assert media_keys == []
+
+
 def test_catalog_artist_collection_uses_target_adapter_without_global_media_key() -> None:
     """歌手电台没有目标 Session 时，也只能调用网易云自己的随机动作。"""
 
