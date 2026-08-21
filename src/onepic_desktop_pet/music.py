@@ -210,6 +210,17 @@ def artist_collection_url(service: str, artist: str = "陈楚生") -> str:
     return music_search_url(normalized, artist)
 
 
+def artist_collection_deep_link(service: str, artist: str = "陈楚生") -> str:
+    """返回客户端歌手入口；私有 Scheme 失败时由调用方回退到 HTTPS。"""
+
+    normalized = str(service or "").casefold()
+    if normalized == "netease" and artist == "陈楚生":
+        # 网易云 Windows 客户端支持通过 orpheus 打开歌手页；autoplay
+        # 让客户端有机会从歌手曲库开始播放，连续播放仍由客户端负责。
+        return "orpheus://artist/2124/?autoplay=1"
+    return ""
+
+
 def music_client_uri(service: str, title: str) -> str:
     """为支持深链的客户端生成应用内搜索地址。"""
 
@@ -374,6 +385,8 @@ class CatalogMusicService:
         self.browser_opener = browser_opener or (
             lambda url: open_music_url(url, platform_name="other")
         )
+        self.last_provider = ""
+        self.last_used_deep_link = False
 
     def _providers(self) -> tuple[str, ...]:
         preferred = str(getattr(self.settings, "music_service", "auto") or "auto").casefold()
@@ -437,10 +450,19 @@ class CatalogMusicService:
         )
 
     def open_artist_collection(self, artist: str = "陈楚生") -> bool:
-        """打开歌手曲库，让音乐客户端负责后续连续随机和播放状态。"""
+        """先打开客户端歌手曲库，失败后再打开官方 HTTPS 歌手页。"""
 
+        self.last_provider = ""
+        self.last_used_deep_link = False
+        for provider in self._providers():
+            deep_link = artist_collection_deep_link(provider, artist)
+            if deep_link and self._open_deep_link(provider, deep_link):
+                self.last_provider = provider
+                self.last_used_deep_link = True
+                return True
         for provider in self._providers():
             if self._try_open(self.browser_opener, artist_collection_url(provider, artist)):
+                self.last_provider = provider
                 return True
         return False
 
