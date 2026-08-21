@@ -10,6 +10,7 @@
 - 托盘提供“始终置顶/桌面模式”开关，并与宠物右键菜单和设置页保持同步；
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
+- 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
 Agent 快速定位：
 - 生命周期封装位于 DesktopPetApplication；
@@ -27,6 +28,7 @@ from __future__ import annotations
 import os
 import logging
 import sys
+from pathlib import Path
 from typing import ClassVar
 
 from PySide6.QtCore import QLockFile, QProcess, Qt, QTimer, QObject
@@ -508,7 +510,7 @@ class DesktopPetApplication(QObject):
 def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
-    lock_path = platform_app_data_root() / "Lili" / "app.lock"
+    lock_path = _instance_lock_path()
     instance_lock = QLockFile(str(lock_path))
     instance_lock.setStaleLockTime(0)
     if not instance_lock.tryLock(100):
@@ -522,3 +524,11 @@ def run(smoke_test_ms: int | None = None) -> int:
         if instance_lock.isLocked():
             instance_lock.unlock()
         raise
+
+
+def _instance_lock_path() -> Path:
+    """Return a writable per-user lock path and create its parent directory."""
+
+    lock_path = platform_app_data_root() / "Lili" / "app.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    return lock_path

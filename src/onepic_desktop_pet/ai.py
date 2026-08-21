@@ -4,7 +4,7 @@
 职责范围：
 - 定义在线优先的提供方预设与安全、短小的陪伴提示词；
 - 分开检测 ChatGPT/Codex 图形应用与 Codex CLI，不把安装 GUI 误判为可执行 CLI；
-- 在 macOS 登录 zsh 中发现 Codex CLI，缓存真实绝对路径，并以只读、临时会话模式获取回复；
+- 在 macOS 登录 zsh 和 ChatGPT.app 内置资源中发现 Codex CLI，缓存真实绝对路径，并以只读、临时会话模式获取回复；
 - 供 AgentManager 在启动、手动刷新和低频重连时检测本机登录状态与 API 模型端点；
 - 通过标准 HTTPS Chat Completions 接口调用用户主动配置的服务；
 - 使用系统凭据库保存 API 令牌，绝不把令牌写入设置文件；
@@ -487,6 +487,11 @@ def _cli_search_directories() -> tuple[Path, ...]:
             home / ".volta" / "bin",
             home / "Library" / "pnpm",
         )
+        if sys.platform == "darwin":
+            values += (
+                Path("/Applications/ChatGPT.app/Contents/Resources"),
+                home / "Applications" / "ChatGPT.app" / "Contents" / "Resources",
+            )
     return tuple(path for path in values if str(path) not in {"", "."})
 
 
@@ -758,6 +763,18 @@ def codex_runtime_diagnostics(
     return details
 
 
+def _macos_embedded_codex_paths() -> tuple[Path, ...]:
+    """Return Codex CLI paths shipped inside the ChatGPT macOS app."""
+
+    if sys.platform != "darwin":
+        return ()
+    home = Path.home()
+    return (
+        Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
+        home / "Applications" / "ChatGPT.app" / "Contents" / "Resources" / "codex",
+    )
+
+
 def _macos_codex_cli_path() -> Path | None:
     """Find Codex from the user's macOS shell, then keep the absolute path.
 
@@ -766,7 +783,8 @@ def _macos_codex_cli_path() -> Path | None:
     exactly as a login zsh command, then retry with the user's profile files
     and interactive zsh before falling back to well-known per-user locations.
     The fallback is deliberately only used when ``command -v`` returned no
-    executable; a ChatGPT.app installation is never treated as the CLI.
+    executable; an embedded ChatGPT CLI is accepted only after ``--version``
+    validates that it is a runnable Codex executable.
     """
 
     if sys.platform != "darwin":
@@ -818,6 +836,7 @@ def _macos_codex_cli_path() -> Path | None:
             Path("/opt/homebrew/bin/codex"),
             Path("/usr/local/bin/codex"),
         ]
+        fallback_paths.extend(_macos_embedded_codex_paths())
         fallback_paths.extend(
             sorted(
                 home.glob(".nvm/versions/node/*/bin/codex"),

@@ -33,6 +33,7 @@ from onepic_desktop_pet.ai import (
     _codex_cli_capabilities,
     _codex_exec_command,
     _macos_login_shell_path_value,
+    _macos_codex_cli_path,
     _codex_model_override,
     _codex_thread_identity,
     _read_codex_thread_id,
@@ -606,6 +607,7 @@ def test_cli_environment_adds_graphical_app_missing_paths() -> None:
     if sys.platform == "darwin":
         assert "/opt/homebrew/bin" in path
         assert str(Path.home() / ".local" / "bin") in path
+        assert "/Applications/ChatGPT.app/Contents/Resources" in path
     elif sys.platform == "win32":
         assert str(Path(os.environ.get("APPDATA", "")) / "npm") in path
 
@@ -688,7 +690,6 @@ def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_pat
     monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_gui_app", lambda: Path("/Applications/ChatGPT.app"))
     monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
     _macos_login_shell_path_value.cache_clear()
-    find_codex_executable.cache_clear()
 
     assert check_provider_connection("codex", FakeCredentials()) == "Codex 已连接。"
     assert calls[-1][0] == [str(executable), "login", "status"]
@@ -696,6 +697,35 @@ def test_macos_codex_login_status_uses_cached_absolute_path(monkeypatch, tmp_pat
     assert find_codex_executable() == executable
     find_codex_executable.cache_clear()
     _macos_login_shell_path_value.cache_clear()
+
+
+def test_macos_finds_chatgpt_embedded_codex_without_shell_path(monkeypatch, tmp_path) -> None:
+    """Finder launches must find the CLI bundled inside ChatGPT.app."""
+
+    executable = tmp_path / "ChatGPT.app" / "Contents" / "Resources" / "codex"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("codex", encoding="utf-8")
+    executable.chmod(0o755)
+
+    def fake_run(command, **_kwargs):
+        if command and command[0] == "/bin/zsh":
+            return SimpleNamespace(returncode=1, stdout="", stderr="not found")
+        if command == [str(executable), "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli 0.147.0", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "onepic_desktop_pet.ai._macos_embedded_codex_paths",
+        lambda: (executable,),
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.run", fake_run)
+    _macos_login_shell_path_value.cache_clear()
+
+    try:
+        assert _macos_codex_cli_path() == executable
+    finally:
+        _macos_login_shell_path_value.cache_clear()
 
 
 def test_macos_codex_lookup_retries_user_shell_profiles(monkeypatch, tmp_path) -> None:

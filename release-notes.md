@@ -1,3 +1,9 @@
+## v0.23.39 — 修复 macOS Codex 本机登录发现与首次启动单实例锁
+
+- macOS 连接检测现在会识别登录 shell、常见用户级 CLI 目录，以及 `/Applications/ChatGPT.app/Contents/Resources/codex` 和用户级 ChatGPT.app 中的内置 Codex CLI；找到后始终使用绝对路径运行 `codex login status`、`exec` 和 `app-server`。
+- 修复新 Mac 首次启动时 `~/Library/Application Support/Lili` 尚不存在，QLockFile 无法创建而误报“已有实例”的问题；应用会在加锁前自动创建每用户目录。
+- 增加 Finder 环境、ChatGPT.app 内置 CLI 和缺失应用数据目录的跨平台回归测试。
+
 ## v0.23.37 — Codex 持续连接、专注统计与经济榜单一致性
 
 - 修复 Codex 后台预热失败仍显示“已连接”的问题；现在会保留真实失败分类，首次聊天会再次尝试持久 App Server，只有真实会话失败才临时切换备用通道。
