@@ -4567,6 +4567,11 @@ class PetWindow(QWidget):
         if sys.platform == "darwin":
             self._apply_macos_window_behavior(self.quick_panel)
         self._raise_accessory(self.quick_panel)
+        # A newly positioned top-level panel can receive a synthetic
+        # enterEvent on headless/offscreen runners when it opens beneath the
+        # pointer. Re-arm the normal eight-second auto-hide after showing so
+        # the explicit open action remains deterministic across platforms.
+        self.quick_panel.hide_timer.start(8000)
 
     def show_work_controls(self) -> None:
         """在六毛上方显示当前状态唯一有效的工作操作。"""
