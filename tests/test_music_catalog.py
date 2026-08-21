@@ -8,6 +8,7 @@ from onepic_desktop_pet.music import (
     CatalogMusicService,
     SongEntry,
     ShuffleBag,
+    artist_collection_deep_link,
     artist_collection_url,
     load_song_catalog,
     music_search_url,
@@ -227,4 +228,41 @@ def test_catalog_persists_only_shuffle_state_in_settings() -> None:
 def test_collection_fallback_is_an_official_artist_page() -> None:
     assert artist_collection_url("netease") == "https://music.163.com/#/artist?id=2124"
     assert artist_collection_url("apple").startswith("https://music.apple.com/")
+
+
+def test_collection_prefers_netease_client_deep_link() -> None:
+    opened: list[str] = []
+    browser: list[str] = []
+    service = CatalogMusicService(
+        PetSettings(music_service="netease"),
+        opener=lambda url: opened.append(url) or True,
+        browser_opener=lambda url: browser.append(url) or True,
+    )
+
+    assert service.open_artist_collection() is True
+    assert opened == ["orpheus://artist/2124/?autoplay=1"]
+    assert browser == []
+    assert service.last_provider == "netease"
+    assert service.last_used_deep_link is True
+
+
+def test_collection_falls_back_to_web_when_netease_deep_link_fails() -> None:
+    opened: list[str] = []
+    browser: list[str] = []
+    service = CatalogMusicService(
+        PetSettings(music_service="netease"),
+        opener=lambda url: opened.append(url) or False,
+        browser_opener=lambda url: browser.append(url) or True,
+    )
+
+    assert service.open_artist_collection() is True
+    assert opened == ["orpheus://artist/2124/?autoplay=1"]
+    assert browser == ["https://music.163.com/#/artist?id=2124"]
+    assert service.last_provider == "netease"
+    assert service.last_used_deep_link is False
+
+
+def test_artist_collection_deep_link_is_only_defined_for_supported_client() -> None:
+    assert artist_collection_deep_link("netease") == "orpheus://artist/2124/?autoplay=1"
+    assert artist_collection_deep_link("qq") == ""
 
