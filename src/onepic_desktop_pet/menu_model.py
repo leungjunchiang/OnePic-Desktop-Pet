@@ -70,7 +70,7 @@ class UnifiedMenuModel:
             MenuItemSpec("播放 / 暂停", "music_toggle"),
             MenuItemSpec("上一首", "music_previous"),
             MenuItemSpec("下一首", "music_next"),
-            MenuItemSpec("随机听陈楚生", "music_random"),
+            MenuItemSpec("随机听一首陈楚生歌曲", "music_random"),
         ]
 
         interaction_children = [
