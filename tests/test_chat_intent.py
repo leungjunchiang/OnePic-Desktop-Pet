@@ -96,3 +96,8 @@ def test_anaphoric_followup_keeps_previous_family_topic() -> None:
 
     assert intent.primary_intent == CHEN_PROFILE
     assert is_topic_shift("那他的经历呢", history) is False
+
+
+def test_baishizhou_song_and_variety_meme_are_fast_local_knowledge_queries() -> None:
+    assert classify_intent("白石洲这首歌讲什么").need_knowledge is True
+    assert classify_intent("谁比谁差是在披荆斩棘哪一期").need_knowledge is True
