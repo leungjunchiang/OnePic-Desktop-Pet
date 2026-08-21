@@ -2,10 +2,11 @@
 
 每个音乐平台拥有独立 Provider Adapter。搜索成功、打开客户端或触发控件都不等于
 播放成功；只有当前媒体标题和歌手与最终选中的歌曲同时匹配时才返回成功。Windows
-Adapter 使用 UI Automation 定位“歌曲”结果；网易云 3.x 不公开 Chromium 控件树时，
-使用绑定用户 Default 桌面的 DPI-aware 本机交互回退。macOS 优先使用 Apple Events，
-并在需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放
-动作已执行但媒体 Session 暂不可读时标记为未验证启动，不会因此主动停止音乐。
+Adapter 优先使用不移动鼠标的 UI Automation Value/Invoke pattern；网易云 3.x 不公开
+Chromium 控件树时，旧的 Default 桌面 DPI-aware 鼠标交互回退只保留给明确的兼容入口，
+曲库随机播放不会调用它。macOS 优先使用 Apple Events，并在需要时使用已授权的
+Accessibility。严格点歌返回明确失败码；随机歌手播放在播放动作已执行但媒体 Session
+暂不可读时标记为未验证启动，不会因此主动停止音乐。
 """
 
 from __future__ import annotations
@@ -707,6 +708,49 @@ class WindowsUIAutomationAdapter:
         except Exception:
             return False
 
+    def play_song_background(self, title: str, artist: str) -> bool:
+        """使用 PowerShell UI Automation 的 InvokePattern 播放，不移动鼠标。
+
+        这是曲库后台播放专用入口。它可以短暂改变播放器的键盘焦点以提交
+        搜索，但不会调用 ``SetCursorPos``、``mouse_event`` 或
+        ``SetForegroundWindow``；失败时由调用方报告后台能力不可用，不自动
+        降级到会打断用户操作的鼠标脚本。
+        """
+
+        try:
+            candidates = tuple(self._powershell_search(title, artist))
+        except Exception as exc:
+            LOGGER.debug(
+                "music_playback provider=%s stage=background_search error=%r",
+                self.provider,
+                exc,
+            )
+            return False
+        valid = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() == "song"
+            and _same_song(candidate.title, title)
+            and _same_song(candidate.artist, artist)
+        )
+        for candidate in valid:
+            try:
+                if self._powershell_play(candidate):
+                    LOGGER.debug(
+                        "music_playback provider=%s stage=background_play title=%r artist=%r",
+                        self.provider,
+                        candidate.title,
+                        candidate.artist,
+                    )
+                    return True
+            except Exception as exc:
+                LOGGER.debug(
+                    "music_playback provider=%s stage=background_play error=%r",
+                    self.provider,
+                    exc,
+                )
+        return False
+
     @staticmethod
     def _automation():
         try:
@@ -984,7 +1028,51 @@ class NeteaseMusicAdapter(WindowsUIAutomationAdapter):
     search_names = ("搜索", "搜索音乐、视频、播客、用户", "Search")
     play_button_names = ("播放", "播放全部", "Play")
 
+    def play_random_artist_background(self, artist: str) -> bool:
+        """通过目标客户端的 UI Automation 播一首歌，不操作鼠标。"""
+
+        try:
+            candidates = tuple(self._powershell_search("", artist))
+        except Exception as exc:
+            LOGGER.debug(
+                "music_playback provider=%s stage=background_random_search error=%r",
+                self.provider,
+                exc,
+            )
+            return False
+        selectable = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.result_type.casefold() == "song"
+            and _same_song(candidate.artist, artist)
+        )
+        if not selectable:
+            return False
+        candidate = random.choice(selectable)
+        try:
+            started = bool(self._powershell_play(candidate))
+        except Exception as exc:
+            LOGGER.debug(
+                "music_playback provider=%s stage=background_random_play error=%r",
+                self.provider,
+                exc,
+            )
+            return False
+        if started:
+            LOGGER.debug(
+                "music_playback provider=%s stage=background_random_started artist=%r title=%r",
+                self.provider,
+                artist,
+                candidate.title,
+            )
+        return started
+
     def play_random_artist(self, artist: str) -> bool:
+        # 旧的显式兼容入口仍可使用鼠标脚本，但先尝试真正的后台 UI
+        # Automation；曲库随机路径由 MusicProviderManager 只调用上面的
+        # *_background 方法，因此不会走到这里。
+        if self.play_random_artist_background(artist):
+            return True
         client = self.client_finder(self.provider, self._custom_path())
         if client is None:
             return False
@@ -1480,3 +1568,4 @@ def provider_label(provider: str) -> str:
     """为日志工具和调试面板返回稳定的平台名称。"""
 
     return MUSIC_SERVICE_LABELS.get(provider, provider)
+
