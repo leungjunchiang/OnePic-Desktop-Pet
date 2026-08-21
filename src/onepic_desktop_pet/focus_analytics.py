@@ -12,12 +12,25 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 
 MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60
+INTERRUPTION_GRACE_SECONDS = 10 * 60
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def _as_beijing(value: datetime) -> datetime:
+    """Normalize an event without making machine timezone part of the metric."""
+
+    if value.tzinfo is None:
+        # Naive values are legacy/test values.  They already represent the
+        # caller's stated clock time, so attach Beijing rather than silently
+        # shifting them by the developer machine's timezone.
+        value = value.replace(tzinfo=BEIJING_TIMEZONE)
+    return value.astimezone(BEIJING_TIMEZONE)
 
 
 def focus_analytics_path() -> Path:
@@ -45,6 +58,10 @@ class FocusAnalyticsSummary:
     quality_label: str
     high_efficiency_window: str
     late_night_average_seconds: int
+    today_interruptions: int = 0
+    current_interruptions: int = 0
+    longest_continuous_seconds: int = 0
+    current_continuous_seconds: int = 0
 
 
 class FocusQualityTracker:
@@ -108,9 +125,17 @@ class FocusAnalyticsStore:
         persist: bool = True,
     ) -> None:
         self.path = path or focus_analytics_path()
-        self._now = now_provider or datetime.now
+        self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
         self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None}
+        self._live: dict[str, Any] = {
+            "session_active": False,
+            "running": False,
+            "paused_at": None,
+            "continuous_started_at": None,
+            "current_interruptions": 0,
+            "current_continuous_seconds": 0,
+        }
         if self._persist:
             self._load()
         # ``days.seconds`` is derived data.  Older releases added cumulative
@@ -130,19 +155,24 @@ class FocusAnalyticsStore:
         application_switches: int = 0,
         away_count: int = 0,
         task: str = "",
+        interruptions: int = 0,
     ) -> FocusQuality:
         duration = max(0, int(seconds))
-        started = started_at or self._now()
+        started = _as_beijing(started_at or self._now())
         quality = score_focus_quality(duration, application_switches, away_count)
         day_key = started.date().isoformat()
         days = self._state.setdefault("days", {})
-        day = days.setdefault(day_key, {"seconds": 0, "rounds": 0, "longest": 0, "quality": [], "switches": 0, "away": 0})
+        day = days.setdefault(day_key, self._empty_day())
         day["seconds"] = max(0, int(day.get("seconds", 0))) + duration
         day["rounds"] = max(0, int(day.get("rounds", 0))) + (1 if completed else 0)
         day["longest"] = max(max(0, int(day.get("longest", 0))), duration)
         day["quality"] = [*list(day.get("quality", []))[-49:], quality.score]
         day["switches"] = max(0, int(day.get("switches", 0))) + max(0, int(application_switches))
         day["away"] = max(0, int(day.get("away", 0))) + max(0, int(away_count))
+        day["interruptions"] = max(0, int(day.get("interruptions", 0))) + max(0, int(interruptions))
+        day["longest_continuous"] = max(
+            max(0, int(day.get("longest_continuous", 0))), duration
+        )
         records = self._state.setdefault("records", [])
         records.append({
             "date": day_key,
@@ -153,12 +183,87 @@ class FocusAnalyticsStore:
             "away_count": max(0, int(away_count)),
             "quality": quality.score,
             "task": str(task)[:120],
+            "interruptions": max(0, int(interruptions)),
         })
         self._state["records"] = records[-500:]
         self._rebuild_days_from_records()
         self._trim_days()
         self._save()
         return quality
+
+    @staticmethod
+    def _empty_day() -> dict[str, Any]:
+        return {
+            "seconds": 0, "rounds": 0, "longest": 0, "quality": [],
+            "switches": 0, "away": 0, "interruptions": 0,
+            "longest_continuous": 0,
+        }
+
+    def begin_focus_session(self, at: datetime | None = None) -> None:
+        """Start/resume the live continuity tracker, without a second timer."""
+
+        now = _as_beijing(at or self._now())
+        live = self._live
+        if not live.get("session_active"):
+            live.update({
+                "session_active": True,
+                "current_interruptions": 0,
+                "current_continuous_seconds": 0,
+            })
+        paused_at = live.get("paused_at")
+        if paused_at:
+            try:
+                paused = _as_beijing(datetime.fromisoformat(str(paused_at)))
+                if (now - paused).total_seconds() > INTERRUPTION_GRACE_SECONDS:
+                    live["current_interruptions"] = max(0, int(live.get("current_interruptions", 0))) + 1
+                    day = self._state.setdefault("days", {}).setdefault(now.date().isoformat(), self._empty_day())
+                    day["interruptions"] = max(0, int(day.get("interruptions", 0))) + 1
+            except (TypeError, ValueError, OverflowError):
+                pass
+        live["running"] = True
+        live["paused_at"] = None
+        live["continuous_started_at"] = now.isoformat()
+        self._save()
+
+    def pause_focus_session(self, at: datetime | None = None) -> None:
+        """Mark a pause; only a pause longer than ten minutes is an interruption."""
+
+        if not self._live.get("session_active"):
+            return
+        now = _as_beijing(at or self._now())
+        self._update_live_continuous(now)
+        self._live["running"] = False
+        self._live["paused_at"] = now.isoformat()
+        self._save()
+
+    def finish_focus_session(self, *, completed: bool = True, at: datetime | None = None) -> None:
+        """Close the live tracker after the timer has recorded its final segment."""
+
+        if self._live.get("session_active"):
+            self._update_live_continuous(_as_beijing(at or self._now()))
+        self._live.update({
+            "session_active": False,
+            "running": False,
+            "paused_at": None,
+            "continuous_started_at": None,
+            "current_continuous_seconds": 0,
+            "current_interruptions": 0,
+        })
+        self._save()
+
+    def _update_live_continuous(self, now: datetime) -> None:
+        started = self._live.get("continuous_started_at")
+        if not started:
+            return
+        try:
+            value = max(0, int((now - _as_beijing(datetime.fromisoformat(str(started)))).total_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            return
+        self._live["current_continuous_seconds"] = max(
+            max(0, int(self._live.get("current_continuous_seconds", 0))), value
+        )
+        day = self._state.setdefault("days", {}).setdefault(now.date().isoformat(), self._empty_day())
+        day["longest_continuous"] = max(max(0, int(day.get("longest_continuous", 0))), value)
 
     def set_current_task(self, title: str, *, due_at: str | None = None, target_seconds: int = 0) -> None:
         clean = str(title).strip()[:120]
@@ -181,7 +286,7 @@ class FocusAnalyticsStore:
         return dict(task) if isinstance(task, dict) else None
 
     def set_tomorrow_task(self, title: str) -> None:
-        tomorrow = (self._now().date() + timedelta(days=1)).isoformat()
+        tomorrow = (_as_beijing(self._now()).date() + timedelta(days=1)).isoformat()
         clean = str(title).strip()[:160]
         if clean:
             self._state.setdefault("reviews", {})[tomorrow] = clean
@@ -190,15 +295,15 @@ class FocusAnalyticsStore:
         self._save()
 
     def tomorrow_task(self) -> str:
-        tomorrow = (self._now().date() + timedelta(days=1)).isoformat()
+        tomorrow = (_as_beijing(self._now()).date() + timedelta(days=1)).isoformat()
         return str(self._state.setdefault("reviews", {}).get(tomorrow, ""))
 
     def today_first_task(self) -> str:
-        today = self._now().date().isoformat()
+        today = _as_beijing(self._now()).date().isoformat()
         return str(self._state.setdefault("reviews", {}).get(today, ""))
 
     def summary(self, at: datetime | None = None) -> FocusAnalyticsSummary:
-        moment = at or self._now()
+        moment = _as_beijing(at or self._now())
         today = moment.date()
         days = self._state.get("days", {})
 
@@ -249,7 +354,7 @@ class FocusAnalyticsStore:
         late_records = []
         for raw in self._state.get("records", []):
             try:
-                started = datetime.fromisoformat(str(raw.get("started_at", "")))
+                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
             except ValueError:
                 continue
             if today - timedelta(days=6) <= started.date() <= today and started.hour >= 23:
@@ -260,9 +365,15 @@ class FocusAnalyticsStore:
             yesterday, (today_seconds - yesterday) if today_seconds is not None and yesterday is not None else None,
             average_quality,
             quality_label, window, late_average,
+            day_value(today, "interruptions"),
+            max(0, int(self._live.get("current_interruptions", 0))),
+            day_value(today, "longest_continuous"),
+            max(0, int(self._live.get("current_continuous_seconds", 0))),
         )
 
     def snapshot(self) -> dict[str, Any]:
+        if self._live.get("running"):
+            self._update_live_continuous(_as_beijing(self._now()))
         summary = self.summary()
         return {
             **summary.__dict__,
@@ -275,7 +386,7 @@ class FocusAnalyticsStore:
         buckets: dict[int, list[int]] = {}
         for raw in self._state.get("records", []):
             try:
-                started = datetime.fromisoformat(str(raw.get("started_at", "")))
+                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
                 seconds = max(0, int(raw.get("seconds", 0)))
             except (ValueError, TypeError):
                 continue
@@ -303,8 +414,6 @@ class FocusAnalyticsStore:
                 duration = max(0, min(int(raw.get("seconds", 0)), MAX_ANALYTICS_DAY_SECONDS))
             except (TypeError, ValueError, OverflowError):
                 continue
-            if started.tzinfo is None:
-                started = started.replace(tzinfo=datetime.now().astimezone().tzinfo)
             if duration <= 0:
                 continue
             end = started + timedelta(seconds=duration)
@@ -331,10 +440,7 @@ class FocusAnalyticsStore:
                 MAX_ANALYTICS_DAY_SECONDS,
                 sum(max(0, int((end - start).total_seconds())) for start, end in merged),
             )
-            day = days.setdefault(
-                day_key,
-                {"seconds": 0, "rounds": 0, "longest": 0, "quality": [], "switches": 0, "away": 0},
-            )
+            day = days.setdefault(day_key, self._empty_day())
             if int(day.get("seconds", 0) or 0) != seconds:
                 day["seconds"] = seconds
                 changed = True
@@ -342,7 +448,7 @@ class FocusAnalyticsStore:
 
     def _trim_days(self) -> bool:
         days = self._state.setdefault("days", {})
-        cutoff = self._now().date() - timedelta(days=400)
+        cutoff = _as_beijing(self._now()).date() - timedelta(days=400)
         trimmed = {key: value for key, value in days.items() if key >= cutoff.isoformat()}
         changed = len(trimmed) != len(days)
         self._state["days"] = trimmed
