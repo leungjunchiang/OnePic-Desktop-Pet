@@ -3958,6 +3958,16 @@ class PetWindow(QWidget):
         if room_id != self.focus_session.room_id:
             self.focus_session.set_room_id(room_id)
         snapshot = self.focus_session.snapshot()
+        analytics = self.focus_analytics.snapshot()
+        today_seconds = int(snapshot.today_seconds or 0)
+        analytics_today = int(analytics.get("today_seconds") or 0)
+        week_seconds = max(0, int(analytics.get("weekly_total_seconds") or 0))
+        # The analytics store records a session when it is paused/finished;
+        # include the live part of today so the weekly total follows the
+        # active computer immediately and can be merged on another computer.
+        week_seconds += max(0, today_seconds - analytics_today)
+        today = datetime.now().date()
+        week_start = today - timedelta(days=today.weekday())
         presence = {
             "working": snapshot.is_running,
             "session_active": bool(self.work_timer.has_active_session),
@@ -3971,9 +3981,11 @@ class PetWindow(QWidget):
             "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
             if self._room_quick_status_expires_at is not None else None,
             "personal_state": {
-                "focus_date": datetime.now().date().isoformat(),
-                "today_seconds": snapshot.today_seconds,
+                "focus_date": today.isoformat(),
+                "today_seconds": today_seconds,
                 "lifetime_seconds": self.work_timer.lifetime_seconds(),
+                "week_start": week_start.isoformat(),
+                "week_seconds": week_seconds,
                 "outfit_key": self.settings.equipped_outfit,
                 "outfit_set": self._personal_outfit_sync_pending,
             },

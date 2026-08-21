@@ -394,6 +394,21 @@ def test_personal_focus_and_outfit_state_is_server_merged_and_proxy_allowlisted(
         assert "lili_sync_personal_state" in path.read_text(encoding="utf-8")
 
 
+def test_weekly_focus_sync_and_leaderboard_are_available_in_every_relay() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260821000400_lili_weekly_focus_dashboard.sql").read_text(encoding="utf-8")
+    assert "focus_week_seconds" in migration
+    assert "lili_focus_weekly_leaderboard" in migration
+    assert "p_week_seconds" in migration
+    assert "p.visibility <> 'friends' then 'offline'" in migration
+    for path in (
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        assert "lili_focus_weekly_leaderboard" in path.read_text(encoding="utf-8")
+
+
 def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000200_lili_room_focus_ledger.sql").read_text(encoding="utf-8")

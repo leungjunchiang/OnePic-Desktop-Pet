@@ -22,6 +22,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_buddy_private_notes",
   "lili_set_buddy_private_note",
   "lili_sync_personal_state",
+  "lili_focus_weekly_leaderboard",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -40,6 +41,7 @@ const ROUTE_TO_RPC = new Map([
   ["/rooms/food-interaction", "lili_send_food_interaction"],
   ["/profile/interaction-mode", "lili_set_buddy_interaction_mode"],
   ["/rooms/events", "lili_record_room_event"],
+  ["/leaderboard/focus-week", "lili_focus_weekly_leaderboard"],
 ]);
 
 class RelayError extends Error {
@@ -170,7 +172,14 @@ async function dashboard(request: Request, env: Env, roomId = ""): Promise<Recor
   const dashboardData = await rpc(request, env, "lili_dashboard", {}) as Record<string, unknown> | null;
   const result: Record<string, unknown> = { ...(dashboardData || {}) };
   if (!roomId) return result;
-  const room = await rpc(request, env, "lili_room_dashboard", { p_room_id: roomId });
+  let room: unknown;
+  try {
+    room = await rpc(request, env, "lili_room_dashboard", { p_room_id: roomId });
+  } catch (error) {
+    if (!(error instanceof RelayError) || error.status !== 404) throw error;
+    result._room_endpoint_unavailable = true;
+    return result;
+  }
   Object.assign(result, room || {});
   try {
     const rituals = await rpc(request, env, "lili_room_room_rituals", { p_room_id: roomId });
@@ -269,7 +278,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const user = await requireUser(request, env);
     const body = await parseBody(request);
     const clean: Record<string, unknown> = {};
-    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key"]) {
+    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
       if (key in body) clean[key] = body[key];
     }
     if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";

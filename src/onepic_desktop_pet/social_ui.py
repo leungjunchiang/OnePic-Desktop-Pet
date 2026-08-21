@@ -5,11 +5,13 @@ from __future__ import annotations
 import sys
 import time
 import logging
+from functools import cmp_to_key
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QLocale, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QCollator
 from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
@@ -153,6 +155,29 @@ def _owner_label(record: dict[str, Any] | None) -> str:
     return social_pet_label(_owner_nickname(record))
 
 
+def _compare_buddies(left: dict[str, Any], right: dict[str, Any]) -> int:
+    """在线优先、今日专注降序，最后按备注/姓名的中文拼音排序。"""
+
+    def online(record: dict[str, Any]) -> int:
+        return 0 if _presence_status(record) in {"focus", "rest"} else 1
+
+    left_online, right_online = online(left), online(right)
+    if left_online != right_online:
+        return -1 if left_online < right_online else 1
+    try:
+        left_today = max(0, int(left.get("today_seconds") or 0))
+    except (TypeError, ValueError):
+        left_today = 0
+    try:
+        right_today = max(0, int(right.get("today_seconds") or 0))
+    except (TypeError, ValueError):
+        right_today = 0
+    if left_today != right_today:
+        return -1 if left_today > right_today else 1
+    collator = QCollator(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
+    return collator.compare(_owner_nickname(left), _owner_nickname(right))
+
+
 def _live_session_seconds(record: dict[str, Any]) -> int | None:
     """Calculate a peer's current round from the server start timestamp."""
     if _presence_status(record) != "focus":
@@ -217,6 +242,8 @@ class SocialSyncThread(QThread):
                                 "p_focus_date": str(personal_state.get("focus_date") or ""),
                                 "p_today_seconds": int(personal_state.get("today_seconds") or 0),
                                 "p_lifetime_seconds": int(personal_state.get("lifetime_seconds") or 0),
+                                "p_week_start": str(personal_state.get("week_start") or ""),
+                                "p_week_seconds": int(personal_state.get("week_seconds") or 0),
                                 "p_outfit_key": str(personal_state.get("outfit_key") or ""),
                                 "p_outfit_set": bool(personal_state.get("outfit_set")),
                             },
@@ -233,11 +260,11 @@ class SocialSyncThread(QThread):
                 # Keep third-party/test backends compatible while they adopt
                 # the room-scoped dashboard argument.
                 data = self.client.dashboard()
-            leaderboard = getattr(self.client, "economy_leaderboard", None)
+            leaderboard = getattr(self.client, "focus_leaderboard", None)
             if callable(leaderboard) and getattr(self.client, "signed_in", True):
                 try:
                     data = dict(data or {})
-                    data["leaderboard"] = leaderboard(period="month")
+                    data["leaderboard"] = leaderboard(period="week")
                 except (SocialError, TypeError):
                     # A missing/temporarily unavailable economy RPC must not
                     # make the room heartbeat fail or clear the cached rows.
@@ -274,11 +301,11 @@ class SocialDashboardThread(QThread):
                 # Keep small offline/test backends compatible with the room
                 # scoped dashboard while the real request stays off the GUI.
                 data = self.client.dashboard()
-            leaderboard = getattr(self.client, "economy_leaderboard", None)
+            leaderboard = getattr(self.client, "focus_leaderboard", None)
             if callable(leaderboard) and getattr(self.client, "signed_in", True):
                 try:
                     data = dict(data or {})
-                    data["leaderboard"] = leaderboard(period="month")
+                    data["leaderboard"] = leaderboard(period="week")
                 except (SocialError, TypeError):
                     # Older deployments can run without the economy migration.
                     # The room dashboard remains usable while the migration is
@@ -438,6 +465,7 @@ class BuddyCardWidget(QWidget):
         headline.setStyleSheet("font-size:14px;font-weight:600;color:#203847;")
         root.addWidget(headline)
         duration = buddy.get("today_seconds")
+        week_duration = buddy.get("week_seconds")
         if uncertain:
             age = int(buddy.get("presence_age_seconds") or 0)
             age_text = f"约 {max(1, age // 60)} 分钟前" if age else "刚才"
@@ -445,10 +473,9 @@ class BuddyCardWidget(QWidget):
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
-            time_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
-        session_seconds = _live_session_seconds(buddy)
-        if session_seconds is not None and status == "focus":
-            time_text = f"本轮专注 {format_work_duration(session_seconds)}　·　{time_text}"
+            today_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
+            week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
+            time_text = f"{today_text}　·　{week_text}"
         focus = QLabel(time_text)
         focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
@@ -1027,7 +1054,7 @@ class SocialHubDialog(QDialog):
     def _home_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         welcome, welcome_layout = self._card("今天也一起往前一点", "查看搭子动态、待处理邀请和当前专注状态。")
-        self.study_summary = QLabel("登录后可查看搭子专注时间；本地工作计时不受影响。")
+        self.study_summary = QLabel("登录后可查看搭子今天和本周的专注时间；本地工作计时不受影响。")
         self.study_summary.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
         self.study_summary.setWordWrap(True)
         welcome_layout.addWidget(self.study_summary)
@@ -1044,7 +1071,13 @@ class SocialHubDialog(QDialog):
         network_row.addWidget(network_check)
         welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "绿色表示最近两分钟内有心跳；灰色表示已离线。每张搭子卡都可以直接串门或送补给。")
+        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。")
+        buddy_tools = QHBoxLayout()
+        add_buddy = QPushButton("用搭子码添加")
+        add_buddy.clicked.connect(self._add_buddy)
+        buddy_tools.addWidget(add_buddy)
+        buddy_tools.addStretch()
+        buddies_layout.addLayout(buddy_tools)
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
         self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
@@ -1053,8 +1086,8 @@ class SocialHubDialog(QDialog):
         buddies_layout.addWidget(self.buddies)
         layout.addWidget(buddies_card)
         wealth_card, wealth_layout = self._card(
-            "荒野王国富豪榜",
-            "只展示已接受搭子且主动参与的好友；按本月创收排名，不按余额。",
+            "本周专注排行榜",
+            "只展示已接受搭子且主动参与的好友；按本周专注时间排名。默认参与，可在“我的”中关闭。",
         )
         self.wealth_leaderboard = QListWidget()
         self.wealth_leaderboard.setMinimumHeight(52)
@@ -1066,13 +1099,7 @@ class SocialHubDialog(QDialog):
 
     def _chat_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        actions, action_layout = self._card("互动", "处理搭子申请、成果见证和需要你决定的串门事件。")
-        row = QHBoxLayout()
-        add = QPushButton("用搭子码添加")
-        add.clicked.connect(self._add_buddy)
-        row.addWidget(add); action_layout.addLayout(row)
-        layout.addWidget(actions)
-        inbox_card, inbox_layout = self._card("待处理", "成果见证、搭子申请和串门都会在这里等待你的明确决定。")
+        inbox_card, inbox_layout = self._card("待处理", "成果见证、搭子申请和串门都会在这里等待你的明确决定。添加搭子请回到首页“我的搭子”。")
         self.inbox = QListWidget(); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
         inbox_layout.addWidget(self.inbox)
         inbox_buttons = QHBoxLayout()
@@ -1598,18 +1625,18 @@ class SocialHubDialog(QDialog):
             nickname = social_pet_label(
                 row.get("private_note_name") or row.get("nickname") or row.get("owner_nickname") or "搭子"
             )
-            wealth = int(row.get("net_worth") or row.get("wealth") or 0)
-            income = int(row.get("period_income") or row.get("month_income") or 0)
-            windfall = int(row.get("windfall") or 0)
+            try:
+                week_seconds = max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0))
+            except (TypeError, ValueError):
+                week_seconds = 0
             self.wealth_leaderboard.addItem(
-                f"{index}. {nickname}　本月创收 {income} 吉他拨片"
-                + (f"　·　稿费 {windfall}" if windfall else "")
+                f"{index}. {nickname}　本周专注 {format_work_duration(week_seconds)}"
             )
         if self.wealth_leaderboard.count() == 0:
             if self._leaderboard_error:
-                self.wealth_leaderboard.addItem("富豪榜暂时没有同步成功，请稍后重试。")
+                self.wealth_leaderboard.addItem("本周专注排行榜暂时没有同步成功，请稍后重试。")
             elif not self._leaderboard_loaded:
-                self.wealth_leaderboard.addItem("正在加载荒野王国榜单…")
+                self.wealth_leaderboard.addItem("正在加载本周专注排行榜…")
             else:
                 self.wealth_leaderboard.addItem("暂无可展示的榜单成员。")
 
@@ -1740,7 +1767,7 @@ class SocialHubDialog(QDialog):
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
-        self.wealth_opt_in = QCheckBox("在荒野王国富豪榜中显示我")
+        self.wealth_opt_in = QCheckBox("参加本周专注排行榜")
         self.wealth_opt_in.setChecked(True)
         self.wealth_opt_in.setToolTip("默认参加；仅已接受的搭子可见，可随时关闭。")
         layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
@@ -1892,11 +1919,19 @@ class SocialHubDialog(QDialog):
         self.buddies.clear()
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
         seen=set()
+        unique_people = []
+        for buddy in people:
+            if not isinstance(buddy, dict):
+                continue
+            buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+            if buddy_id in seen:
+                continue
+            seen.add(buddy_id)
+            unique_people.append(buddy)
+        unique_people.sort(key=cmp_to_key(_compare_buddies))
         working_count = 0
         visible_total = 0
-        for buddy in people:
-            if buddy.get("user_id") in seen: continue
-            seen.add(buddy.get("user_id"))
+        for buddy in unique_people:
             if buddy.get("subscribed"):
                 previous_buddies = {
                     str(item.get("user_id")): item
@@ -1935,7 +1970,7 @@ class SocialHubDialog(QDialog):
         )
         self._refresh_own_focus_labels()
         if not seen:
-            empty = QListWidgetItem("还没有搭子。点击下方“用搭子码添加”，一起工作时这里会显示清楚的专注时长。")
+            empty = QListWidgetItem("还没有搭子。点击上面的“用搭子码添加”，一起工作时这里会显示今天和本周的专注时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
         self._fit_list_height(self.buddies, 46, 360)
         self.inbox.clear()
@@ -2097,7 +2132,9 @@ class SocialHubDialog(QDialog):
         active=self.data.get("active_visits") or []
         if active and not self.data.get("_sync_offline"): self.active_visit.emit(active[0])
         state = str(self.data.get("_connection_state") or "")
-        if self.data.get("_presence_grace_active") or state == "DEGRADED":
+        if self.data.get("_room_endpoint_unavailable"):
+            self._set_status("账号与搭子已同步，但当前部署缺少自习室详情接口；隐私设置仍已保存。", error=False)
+        elif self.data.get("_presence_grace_active") or state == "DEGRADED":
             self._set_status(
                 "自习室连接暂时不稳定，搭子最近状态仍保留显示；正在自动恢复实时同步。"
             )

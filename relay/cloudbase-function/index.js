@@ -10,7 +10,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
   "lili_buddy_private_notes", "lili_set_buddy_private_note",
-  "lili_sync_personal_state",
+  "lili_sync_personal_state", "lili_focus_weekly_leaderboard",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -20,6 +20,7 @@ const ROUTE_TO_RPC = new Map([
   ["/rooms/goal", "lili_set_room_goal"], ["/rooms/schedule", "lili_set_room_schedule"],
   ["/rooms/challenge", "lili_set_room_challenge"], ["/rooms/leave", "lili_leave_room"],
   ["/rooms/interaction", "lili_send_interaction"], ["/rooms/events", "lili_record_room_event"],
+  ["/leaderboard/focus-week", "lili_focus_weekly_leaderboard"],
 ]);
 
 class RelayError extends Error {
@@ -112,7 +113,13 @@ async function handleDashboard(env, event, roomId = "") {
   const data = await callRpc(env, event, "lili_dashboard", {});
   if (!roomId) return data || {};
   const result = { ...(data || {}) };
-  Object.assign(result, await callRpc(env, event, "lili_room_dashboard", { p_room_id: roomId }) || {});
+  try {
+    Object.assign(result, await callRpc(env, event, "lili_room_dashboard", { p_room_id: roomId }) || {});
+  } catch (error) {
+    if (!(error instanceof RelayError) || error.status !== 404) throw error;
+    result._room_endpoint_unavailable = true;
+    return result;
+  }
   try { Object.assign(result, await callRpc(env, event, "lili_room_room_rituals", { p_room_id: roomId }) || {}); } catch (error) {
     if (!(error instanceof RelayError) || error.status >= 500) throw error;
   }

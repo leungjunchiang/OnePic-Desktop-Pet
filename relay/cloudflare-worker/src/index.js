@@ -17,7 +17,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_room_room_rituals",
   "lili_buddy_private_notes",
   "lili_set_buddy_private_note",
-  "lili_sync_personal_state",
+  "lili_sync_personal_state", "lili_focus_weekly_leaderboard",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -31,6 +31,7 @@ const ROUTE_TO_RPC = new Map([
   ["/rooms/leave", "lili_leave_room"],
   ["/rooms/interaction", "lili_send_interaction"],
   ["/rooms/events", "lili_record_room_event"],
+  ["/leaderboard/focus-week", "lili_focus_weekly_leaderboard"],
 ]);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -163,8 +164,16 @@ async function handleDashboard(env, request, roomId = "") {
   const data = await callRpc(env, request, "lili_dashboard", {});
   if (!roomId) return data || {};
   if (!UUID_RE.test(roomId)) throw new RelayError(400, "房间编号格式不正确。");
-  const room = await callRpc(env, request, "lili_room_dashboard", { p_room_id: roomId });
-  const result = { ...(data || {}), ...(room || {}) };
+  const result = { ...(data || {}) };
+  let room;
+  try {
+    room = await callRpc(env, request, "lili_room_dashboard", { p_room_id: roomId });
+  } catch (error) {
+    if (!(error instanceof RelayError) || error.status !== 404) throw error;
+    result._room_endpoint_unavailable = true;
+    return result;
+  }
+  Object.assign(result, room || {});
   try {
     const rituals = await callRpc(env, request, "lili_room_room_rituals", { p_room_id: roomId });
     Object.assign(result, rituals || {});
@@ -245,7 +254,7 @@ async function handleRequest(request, env) {
     const auth = bearer(request);
     const userId = userIdFromBearer(auth);
     const body = await parseJsonBody(request);
-    const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key"]);
+    const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]);
     if (profile.owner_nickname !== undefined) profile.owner_nickname = String(profile.owner_nickname).trim().slice(0, 24);
     if (profile.nickname !== undefined) profile.nickname = String(profile.nickname).trim().slice(0, 24) || "搭子";
     if (profile.outfit_key !== undefined) profile.outfit_key = String(profile.outfit_key).slice(0, 60);

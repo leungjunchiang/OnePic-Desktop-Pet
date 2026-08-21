@@ -136,6 +136,15 @@ def social_user_message(error: BaseException) -> str:
     return raw[:300] or "自习室连接失败，请稍后重试。"
 
 
+def _missing_room_endpoint(error: BaseException) -> bool:
+    """识别旧中转服务/旧数据库缺少房间详情 RPC 的情况。"""
+
+    status = getattr(error, "status", None)
+    code = str(getattr(error, "error_code", "") or "").casefold()
+    raw = str(error or "").casefold()
+    return status == 404 or code in {"pgrst202", "42883"} or "room_dashboard" in raw or "自习室接口" in raw
+
+
 def _endpoint_host(base_url: str) -> str:
     parsed = urllib.parse.urlparse(str(base_url or ""))
     return parsed.netloc or "未配置"
@@ -626,6 +635,7 @@ class SocialBackend(Protocol):
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
     def economy_leaderboard(self, *, period: str = "month") -> list[dict[str, Any]]: ...
+    def focus_leaderboard(self, *, period: str = "week") -> list[dict[str, Any]]: ...
     def set_room_goal(self, *, room_id: str, title: str, target_seconds: int, due_at: str | None = None) -> None: ...
     def set_room_schedule(self, *, room_id: str, start_at: str, end_at: str, enabled: bool = True) -> None: ...
     def set_room_challenge(self, *, room_id: str, title: str, target_seconds: int, target_rounds: int) -> None: ...
@@ -783,20 +793,38 @@ class HttpSocialBackend:
         if self.transport == "direct":
             data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
             if room_id:
-                room = self._raw("POST", "/rest/v1/rpc/lili_room_dashboard", {"p_room_id": room_id}, authenticated=True) or {}
-                if isinstance(room, dict): data.update(room)
                 try:
-                    rituals = self._raw("POST", "/rest/v1/rpc/lili_room_room_rituals", {"p_room_id": room_id}, authenticated=True) or {}
-                    if isinstance(rituals, dict): data.update(rituals)
+                    room = self._raw("POST", "/rest/v1/rpc/lili_room_dashboard", {"p_room_id": room_id}, authenticated=True) or {}
+                    if isinstance(room, dict): data.update(room)
                 except SocialError as exc:
-                    if exc.status >= 500 or exc.kind in {"dns", "timeout", "refused", "tls", "network", "server"}: raise
+                    if not _missing_room_endpoint(exc):
+                        raise
+                    # The base dashboard still contains buddies and privacy
+                    # data. An old project must not make saving privacy
+                    # settings look like a failed operation.
+                    data["_room_endpoint_unavailable"] = True
+                if not data.get("_room_endpoint_unavailable"):
+                    try:
+                        rituals = self._raw("POST", "/rest/v1/rpc/lili_room_room_rituals", {"p_room_id": room_id}, authenticated=True) or {}
+                        if isinstance(rituals, dict): data.update(rituals)
+                    except SocialError as exc:
+                        if exc.status >= 500 or exc.kind in {"dns", "timeout", "refused", "tls", "network", "server"}: raise
             result = dict(data)
             if self.last_server_timestamp:
                 result.setdefault("server_timestamp", self.last_server_timestamp)
             return result
         path = "/dashboard"
         if room_id: path += "?room_id=" + urllib.parse.quote(str(room_id), safe="")
-        result = dict(self._raw("GET", path, authenticated=True) or {})
+        try:
+            result = dict(self._raw("GET", path, authenticated=True) or {})
+        except SocialError as exc:
+            if not room_id or not _missing_room_endpoint(exc):
+                raise
+            # Old deployed relays sometimes do not recognize the room query
+            # yet. Keep the account/buddy snapshot usable and mark only the
+            # optional room detail as unavailable.
+            result = dict(self._raw("GET", "/dashboard", authenticated=True) or {})
+            result["_room_endpoint_unavailable"] = True
         if self.last_server_timestamp:
             result.setdefault("server_timestamp", self.last_server_timestamp)
         return result
@@ -819,6 +847,7 @@ class HttpSocialBackend:
             "lili_record_room_event": "/rooms/events",
             "lili_record_economy_event": "/economy/events",
             "lili_economy_leaderboard": "/economy/leaderboard",
+            "lili_focus_weekly_leaderboard": "/leaderboard/focus-week",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
@@ -906,6 +935,10 @@ class HttpSocialBackend:
 
     def economy_leaderboard(self, *, period: str = "month") -> list[dict[str, Any]]:
         result = self.rpc("lili_economy_leaderboard", {"p_period": period})
+        return list(result or []) if isinstance(result, list) else []
+
+    def focus_leaderboard(self, *, period: str = "week") -> list[dict[str, Any]]:
+        result = self.rpc("lili_focus_weekly_leaderboard", {"p_period": period})
         return list(result or []) if isinstance(result, list) else []
 
 
@@ -1307,27 +1340,33 @@ class LegacyDirectSocialClient:
             else:
                 data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
                 if room_id:
-                    room = self._raw(
-                        "POST",
-                        "/rest/v1/rpc/lili_room_dashboard",
-                        {"p_room_id": room_id},
-                        authenticated=True,
-                    ) or {}
-                    if isinstance(room, dict):
-                        data.update(room)
                     try:
-                        rituals = self._raw(
+                        room = self._raw(
                             "POST",
-                            "/rest/v1/rpc/lili_room_room_rituals",
+                            "/rest/v1/rpc/lili_room_dashboard",
                             {"p_room_id": room_id},
                             authenticated=True,
                         ) or {}
-                        if isinstance(rituals, dict):
-                            data.update(rituals)
-                    except SocialError:
-                        # Older deployed projects may not have the optional ritual
-                        # migration yet; the core room dashboard remains usable.
-                        pass
+                        if isinstance(room, dict):
+                            data.update(room)
+                    except SocialError as exc:
+                        if not _missing_room_endpoint(exc):
+                            raise
+                        data["_room_endpoint_unavailable"] = True
+                    if not data.get("_room_endpoint_unavailable"):
+                        try:
+                            rituals = self._raw(
+                                "POST",
+                                "/rest/v1/rpc/lili_room_room_rituals",
+                                {"p_room_id": room_id},
+                                authenticated=True,
+                            ) or {}
+                            if isinstance(rituals, dict):
+                                data.update(rituals)
+                        except SocialError:
+                            # Older deployed projects may not have the optional ritual
+                            # migration yet; the core room dashboard remains usable.
+                            pass
             result = dict(data or {})
             self._last_error = ""
             result["_connection_state"] = "ONLINE"
@@ -1601,6 +1640,7 @@ class DashboardCacheClientBase:
     def record_room_event(self, **kwargs: Any) -> None: self._require_backend().record_room_event(**kwargs)
     def record_economy_event(self, **kwargs: Any) -> None: self._require_backend().record_economy_event(**kwargs)
     def economy_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return self._require_backend().economy_leaderboard(**kwargs)
+    def focus_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return self._require_backend().focus_leaderboard(**kwargs)
     def set_room_goal(self, **kwargs: Any) -> None: self._require_backend().set_room_goal(**kwargs)
     def set_room_schedule(self, **kwargs: Any) -> None: self._require_backend().set_room_schedule(**kwargs)
     def set_room_challenge(self, **kwargs: Any) -> None: self._require_backend().set_room_challenge(**kwargs)
@@ -1615,7 +1655,7 @@ class BackendRouteManager:
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
     AUTH_METHODS = {"sign_in", "sign_up"}
-    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in"}
+    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend, *, persist_state: bool = True) -> None:
@@ -1998,6 +2038,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     def record_room_event(self, **kwargs: Any) -> None: self._manager.request("record_room_event", **kwargs)
     def record_economy_event(self, **kwargs: Any) -> None: self._manager.request("record_economy_event", **kwargs)
     def economy_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return list(self._manager.request("economy_leaderboard", **kwargs) or [])
+    def focus_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return list(self._manager.request("focus_leaderboard", **kwargs) or [])
     def set_room_goal(self, **kwargs: Any) -> None: self._manager.request("set_room_goal", **kwargs)
     def set_room_schedule(self, **kwargs: Any) -> None: self._manager.request("set_room_schedule", **kwargs)
     def set_room_challenge(self, **kwargs: Any) -> None: self._manager.request("set_room_challenge", **kwargs)

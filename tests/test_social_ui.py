@@ -143,6 +143,43 @@ def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard({
+        "me": {"nickname": "六毛搭子", "visibility": "friends", "show_exact_time": True},
+        "buddies": [
+            {"user_id": "offline", "nickname": "张三", "visibility": "hidden", "online": False, "status": "offline"},
+            {"user_id": "online-low", "nickname": "乙", "online": True, "status": "rest", "today_seconds": 60, "week_seconds": 120},
+            {"user_id": "online-high", "nickname": "甲", "online": True, "status": "focus", "working": True, "today_seconds": 600, "week_seconds": 1200},
+        ],
+        "room_people": [], "requests": [], "visits": [],
+    })
+    app.processEvents()
+
+    assert dialog.buddies.count() == 3
+    first = dialog.buddies.itemWidget(dialog.buddies.item(0))
+    last = dialog.buddies.itemWidget(dialog.buddies.item(2))
+    assert first is not None and last is not None
+    assert any("甲家的六毛" in label.text() for label in first.findChildren(QLabel))
+    assert any("已离线" in label.text() for label in last.findChildren(QLabel))
+    assert any("本周已专注 20:00" in label.text() for label in first.findChildren(QLabel))
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_homepage_uses_weekly_focus_leaderboard_labels() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard({
+        "me": {"nickname": "六毛搭子"}, "buddies": [], "room_people": [],
+        "leaderboard": [{"nickname": "甲", "week_seconds": 3660}],
+    })
+    app.processEvents()
+    assert "甲家的六毛" in dialog.wealth_leaderboard.item(0).text()
+    assert "本周专注 1:01:00" in dialog.wealth_leaderboard.item(0).text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_social_hub_is_minimizable_and_signed_in_room_refresh_works() -> None:
     """自习室是普通可最小化窗口，且登录后能渲染房间数据。"""
     app = QApplication.instance() or QApplication([])
