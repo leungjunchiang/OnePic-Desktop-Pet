@@ -53,7 +53,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTime, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QContextMenuEvent,
@@ -73,13 +73,17 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QInputDialog,
     QMenu,
     QMessageBox,
     QPushButton,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -143,6 +147,7 @@ from .controls import (
     SizeControlDialog,
     WorkControlBubble,
     WorkDurationBubble,
+    VisitStatusBubble,
 )
 from .economy import EconomyLedger
 from .economy_ui import EconomyDialog
@@ -450,6 +455,7 @@ class PetWindow(QWidget):
         self._economy_sync_user_id = ""
         self._personal_outfit_sync_pending = False
         self._buddy_visit_window = BuddyVisitWindow()
+        self.visit_status_bubble = VisitStatusBubble()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
         self._incoming_visit_notice: IncomingVisitNotice | None = None
@@ -1368,6 +1374,7 @@ class PetWindow(QWidget):
         self.work_controls.hide()
         self.coffee_scene_prompt.hide()
         self.work_duration_bubble.hide()
+        self.visit_status_bubble.hide()
         self.quick_panel.hide()
         if self._compact_todo_panel is not None:
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
@@ -1388,6 +1395,7 @@ class PetWindow(QWidget):
         self.speech_bubble.close()
         self.coffee_scene_prompt.close()
         self.work_duration_bubble.close()
+        self.visit_status_bubble.close()
         self._buddy_visit_window.close()
         if self._today_note_window is not None:
             self._today_note_window.close()
@@ -2357,6 +2365,10 @@ class PetWindow(QWidget):
             self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
             return
         self._sync_economy_events([event.as_dict()])
+        # A drink invitation is a shared visual moment, not a local break:
+        # the sender changes into the same limited food pose immediately and
+        # keeps any active focus timer running.
+        self._set_social_food_activity(item_key, duration)
         text = {
             "coffee": f"☕ 已邀请 {recipient_label} 一起开工 30 分钟。",
             "milk_tea": f"🧋 已邀请 {recipient_label} 一起歇会儿。",
@@ -2364,6 +2376,21 @@ class PetWindow(QWidget):
             "cake": f"🍰 已请 {recipient_label} 庆祝一下。",
         }.get(item_key, "互动已经送出。")
         self.show_speech(text, 5200)
+
+    def _set_social_food_activity(self, item_key: str, duration_minutes: int = 0) -> None:
+        """Show a food-interaction pose without pausing or starting focus."""
+
+        activity = {
+            "coffee": "work-study",
+            "milk_tea": "milk-tea",
+            "tea": "tea",
+        }.get(str(item_key or ""))
+        if not activity:
+            return
+        default_minutes = {"coffee": 30, "milk_tea": 10, "tea": 1}
+        minutes = max(1, int(duration_minutes or default_minutes.get(item_key, 1)))
+        self._set_temporary_activity(activity, minutes * 60 * 1000)
+        self._refresh_pixmap()
 
     def _handle_food_interaction_accepted(self, event: dict) -> None:
         kind = str(event.get("kind") or "")
@@ -2379,6 +2406,15 @@ class PetWindow(QWidget):
             return
         duration = int(payload.get("duration_minutes") or 0)
         todo_title = str(payload.get("todo_title") or "")
+        if kind in {"food_coffee", "food_milk_tea", "food_tea"}:
+            self._set_social_food_activity(item_key, duration)
+            labels = {
+                "coffee": "☕ 一起喝咖啡",
+                "milk_tea": "🧋 一起喝奶茶",
+                "tea": "🍵 一起喝茶",
+            }
+            self.show_speech(f"{labels[item_key]}，六毛继续陪你专注。", 4800)
+            return
         self._start_food_scene(
             item_key,
             duration,
@@ -2806,6 +2842,28 @@ class PetWindow(QWidget):
         y = max(available.top(), min(top, available.bottom() - note.height() + 1))
         note.move(x, y)
 
+    def _position_visit_status_bubble(self) -> None:
+        """Place the compact visitor label at the pet's lower-left side."""
+
+        bubble = self.visit_status_bubble
+        if not bubble.isVisible():
+            return
+        bubble.adjustSize()
+        area = self._screen_geometry()
+        bounds = self.mask().boundingRect()
+        left = self.x() + (bounds.left() if not bounds.isEmpty() else 0)
+        right = self.x() + (bounds.right() + 1 if not bounds.isEmpty() else self.width())
+        bottom = self.y() + (bounds.bottom() + 1 if not bounds.isEmpty() else self.height())
+        gap = 7
+        x = left - bubble.width() - gap
+        y = bottom - bubble.height() - 16
+        if area is not None:
+            if x < area.left():
+                x = right + gap
+            x = min(max(x, area.left()), area.right() - bubble.width() + 1)
+            y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
+        bubble.move(x, y)
+
     def _position_accessories(self) -> None:
         """Reflow every pet accessory from the pet as its single anchor."""
 
@@ -2819,6 +2877,8 @@ class PetWindow(QWidget):
             self._position_coffee_scene_prompt()
         if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
             self._position_work_duration_bubble()
+        if hasattr(self, "visit_status_bubble") and self.visit_status_bubble.isVisible():
+            self._position_visit_status_bubble()
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
             self._position_compact_todos()
         self._position_sticky_note()
@@ -3430,9 +3490,9 @@ class PetWindow(QWidget):
         if not getattr(self.settings, "daily_report_enabled", True):
             return False
         try:
-            hour, minute = (int(part) for part in str(getattr(self.settings, "daily_report_time", "18:00")).split(":", 1))
+            hour, minute = (int(part) for part in str(getattr(self.settings, "daily_report_time", "22:30")).split(":", 1))
         except (TypeError, ValueError):
-            hour, minute = 18, 0
+            hour, minute = 22, 30
         cutoff = hour * 60 + minute
         if now.hour * 60 + now.minute < cutoff:
             return False
@@ -3445,6 +3505,59 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         self._generate_daily_report(show_dialog=True)
+
+    def configure_daily_report(self) -> None:
+        """从“工作记录”直接设置日报开关和每天的生成时间。"""
+
+        self._record_user_interaction()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("设置工作报告总结时间")
+        dialog.setMinimumWidth(390)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel("日报会在当天设定时间后自动生成一次；不会再按累计 8 小时触发。")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        enabled = QCheckBox("每天自动生成工作日报")
+        enabled.setChecked(bool(getattr(self.settings, "daily_report_enabled", True)))
+        time_edit = QTimeEdit()
+        report_time = QTime.fromString(
+            str(getattr(self.settings, "daily_report_time", "22:30")),
+            "HH:mm",
+        )
+        time_edit.setTime(report_time if report_time.isValid() else QTime(22, 30))
+        time_edit.setDisplayFormat("HH:mm")
+        time_edit.setWrapping(True)
+        time_edit.setToolTip("鼠标滚轮选择小时和分钟")
+        enabled.toggled.connect(time_edit.setEnabled)
+        time_edit.setEnabled(enabled.isChecked())
+        form.addRow(enabled)
+        form.addRow("每天截止", time_edit)
+        layout.addLayout(form)
+        hint = QLabel("时间按本机时区计算。关闭后只保留手动生成日报。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#667784;font-size:11px;")
+        layout.addWidget(hint)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Ok,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.settings.daily_report_enabled = enabled.isChecked()
+        self.settings.daily_report_time = time_edit.time().toString("HH:mm")
+        save_settings(self.settings)
+        if self.settings.daily_report_enabled:
+            self.show_speech(
+                f"工作日报已设置为每天 {self.settings.daily_report_time} 自动生成。",
+                4200,
+            )
+        else:
+            self.show_speech("自动工作日报已关闭，仍可从工作记录手动生成。", 4200)
 
     def _show_daily_report_dialog(self, path: Path) -> None:
         """在应用内预览工作卡，并提供打开本机相册的按钮。"""
@@ -4087,6 +4200,8 @@ class PetWindow(QWidget):
         active = data.get("active_visits") or []
         if active:
             self._show_buddy_visit(active[0])
+        else:
+            self._hide_buddy_visit()
 
     def _merge_remote_personal_state(self, data: dict) -> None:
         """Merge same-account focus and outfit state from the server."""
@@ -4241,11 +4356,26 @@ class PetWindow(QWidget):
             return
         if visit_id:
             self._shown_active_visit_ids.add(visit_id)
-        self._buddy_visit_window.show_peer(
-            peer,
-            self.settings.equipped_outfit,
-            self.work_timer.today_seconds(),
-        )
+        # A visit is a lightweight presence state. Keep the large historical
+        # two-pet window available for compatibility, but do not open it for
+        # ordinary room visits; the small label follows the pet instead.
+        self._buddy_visit_window.hide_visit()
+        nickname = str(
+            peer.get("private_note_name")
+            or peer.get("owner_nickname")
+            or peer.get("nickname")
+            or "搭子"
+        ).strip()
+        self.visit_status_bubble.set_visitor(nickname)
+        self._position_visit_status_bubble()
+        self._apply_macos_window_behavior(self.visit_status_bubble)
+        self._raise_accessory(self.visit_status_bubble)
+
+    def _hide_buddy_visit(self) -> None:
+        """Hide the compact visit label after the server ends the visit."""
+
+        self.visit_status_bubble.hide()
+        self._buddy_visit_window.hide_visit()
 
     @staticmethod
     def _incoming_visit_id(event: dict) -> str:
@@ -4881,6 +5011,7 @@ class PetWindow(QWidget):
             "alarms": lambda _checked=False: self.show_alarm_center(),
             "show_growth": lambda _checked=False: self.show_daily_growth(),
             "show_report": lambda _checked=False: self.show_daily_report(),
+            "configure_daily_report": lambda _checked=False: self.configure_daily_report(),
             "open_album": lambda _checked=False: self.open_daily_album(),
             "topmost": lambda checked=False: self.set_always_on_top(checked),
             "visibility": lambda _checked=False: self.show() if not self.isVisible() else self.hide(),

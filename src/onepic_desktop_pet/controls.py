@@ -11,7 +11,7 @@ import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from .work_timer import format_elapsed_clock
 
 from PySide6.QtWidgets import (
@@ -60,6 +60,9 @@ border: 1px solid rgba(40, 125, 158, 86); border-radius: 10px;
 padding: 3px 8px; font-size: 11px; }
 QLabel#workDurationHint[paused="true"] { background: rgba(255, 240, 238, 242); color: #b94b51;
 border: 1px solid rgba(231, 74, 79, 155); }
+QLabel#visitStatusHint { background: rgba(246, 251, 251, 235); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 86); border-radius: 10px;
+padding: 3px 8px; font-size: 11px; }
 """
 
 
@@ -191,6 +194,37 @@ class WorkDurationBubble(QLabel):
         if active:
             self.style().unpolish(self)
             self.style().polish(self)
+
+
+class VisitStatusBubble(QLabel):
+    """跟随六毛左下角显示轻量串门状态，不创建大窗口。"""
+
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.setObjectName("visitStatusHint")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(CONTROL_STYLE)
+        self.hide()
+
+    def set_visitor(self, nickname: str | None) -> None:
+        """Show or hide the current visitor label."""
+
+        name = str(nickname or "搭子").strip()[:40]
+        if not name:
+            self.hide()
+            self.setText("")
+            return
+        self.setText(f"{name}正在串门")
+        self.adjustSize()
+        self.show()
 
 
 class CoffeeScenePrompt(QWidget):
@@ -356,6 +390,13 @@ class QuickControlPanel(QWidget):
         self.hover_hint.hide()
         self._hint_button: QPushButton | None = None
         self._window_behavior_callback: Callable[..., object] | None = None
+        # Native macOS Qt windows can omit Enter/Leave delivery until the
+        # first click when the panel is a non-activating Tool window. Polling
+        # the pointer over our six known buttons keeps the label a true hover
+        # affordance on both macOS and Windows, without relying on clicks.
+        self._hover_poll_timer = QTimer(self)
+        self._hover_poll_timer.setInterval(60)
+        self._hover_poll_timer.timeout.connect(self._poll_hover_button)
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
@@ -383,8 +424,10 @@ class QuickControlPanel(QWidget):
         for button in self._quick_buttons:
             layout.addWidget(button)
             button.setMouseTracking(True)
+            button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             button.installEventFilter(self)
         self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
 
     @staticmethod
@@ -457,12 +500,44 @@ class QuickControlPanel(QWidget):
         self._hint_button = None
         self.hover_hint.hide()
 
+    def _button_at_global_pos(self, position: QPoint) -> QPushButton | None:
+        """Return the shortcut currently under the native pointer."""
+
+        for button in self._quick_buttons:
+            if button.rect().contains(button.mapFromGlobal(position)):
+                return button
+        return None
+
+    def _poll_hover_button(self) -> None:
+        """Repair missing native hover events without changing focus."""
+
+        button = self._button_at_global_pos(QCursor.pos())
+        if button is not None:
+            if self._hint_button is not button or not self.hover_hint.isVisible():
+                self._show_hint(button)
+        elif self._hint_button is not None:
+            self._hide_hint()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._hover_poll_timer.start()
+        QTimer.singleShot(0, self._poll_hover_button)
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._hover_poll_timer.stop()
+        self._hide_hint()
+        super().hideEvent(event)
+
     def eventFilter(self, watched, event) -> bool:
         if watched in getattr(self, "_quick_buttons", ()):
-            if event.type() == QEvent.Type.Enter:
+            if event.type() in {
+                QEvent.Type.Enter,
+                QEvent.Type.HoverEnter,
+                QEvent.Type.MouseMove,
+            }:
                 self._show_hint(watched)
-            elif event.type() == QEvent.Type.Leave:
-                self._hide_hint()
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
+                QTimer.singleShot(0, self._poll_hover_button)
         return super().eventFilter(watched, event)
 
     def _show_music_menu(self) -> None:

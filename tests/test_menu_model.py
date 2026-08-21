@@ -38,6 +38,7 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
             "size",
             "content_update",
             "program_update",
+            "configure_daily_report",
             "topmost",
             "visibility",
             "quit",
@@ -66,6 +67,8 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     settings_titles = [item.title for item in settings.children]
     assert settings_titles[:3] == ["主人称呼", "调整大小", "显示本轮工作时长"]
     assert "设置中心…" in settings_titles
+    work_record = next(item for item in model.items() if item.title == "工作记录")
+    assert "设置工作报告时间…" in [item.title for item in work_record.children]
     updates = next(item for item in settings.children if item.title == "更新与关于")
     assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "更新到最新版本…"]
     music = next(item for item in model.items() if item.title == "音乐")

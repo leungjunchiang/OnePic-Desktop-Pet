@@ -519,14 +519,16 @@ def test_study_room_menu_restores_minimized_window() -> None:
     app.processEvents()
 
 
-def test_background_visit_refresh_does_not_reopen_same_window(monkeypatch) -> None:
+def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
     app, window = _create_window()
-    calls = []
-    monkeypatch.setattr(window._buddy_visit_window, "show_peer", lambda *args, **kwargs: calls.append(args))
     peer = {"id": "visit-1", "nickname": "搭子", "today_seconds": 5}
     window._show_buddy_visit(peer)
+    app.processEvents()
+    assert window.visit_status_bubble.isVisible()
+    assert window.visit_status_bubble.text() == "搭子正在串门"
+    assert not window._buddy_visit_window.isVisible()
     window._show_buddy_visit(peer)
-    assert len(calls) == 1
+    assert window.visit_status_bubble.text() == "搭子正在串门"
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -781,6 +783,18 @@ def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
     assert window.quick_panel.hide_timer.isActive()
     window.show_quick_panel()
     assert not window.quick_panel.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_received_social_drink_changes_pose_without_pausing_focus() -> None:
+    app, window = _create_window()
+    window.start_work_timer()
+    assert window.work_timer.is_running
+    window._handle_food_interaction_accepted(
+        {"kind": "food_milk_tea", "payload": {"duration_minutes": 10}}
+    )
+    assert window.work_timer.is_running
+    assert window._ambient_activity == "milk-tea"
     window.close(); window.deleteLater(); app.processEvents()
 
 
@@ -1189,7 +1203,7 @@ def test_daily_report_uses_configured_cutoff_once_per_day(monkeypatch) -> None:
     app, window = _create_window()
     calls = []
     window.settings.daily_report_enabled = True
-    window.settings.daily_report_time = "18:00"
+    window.settings.daily_report_time = "22:30"
     report_day = datetime.fromisoformat(window.daily_stats.date).date()
 
     def fake_report(*, show_dialog, mark_generated=False):
@@ -1199,9 +1213,9 @@ def test_daily_report_uses_configured_cutoff_once_per_day(monkeypatch) -> None:
         return Path("/tmp/lili-test-report.png")
 
     monkeypatch.setattr(window, "_generate_daily_report", fake_report)
-    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=17, minute=59)) is False
-    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=18, minute=0)) is True
-    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=19, minute=0)) is False
+    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=22, minute=29)) is False
+    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=22, minute=30)) is True
+    assert window._maybe_generate_scheduled_daily_report(datetime.combine(report_day, datetime.min.time()).replace(hour=23, minute=0)) is False
     assert calls == [(False, True)]
     window.close(); window.deleteLater(); app.processEvents()
 

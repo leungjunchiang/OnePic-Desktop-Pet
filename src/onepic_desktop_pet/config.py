@@ -87,7 +87,7 @@ class PetSettings:
     # default keeps the feature on while allowing users to choose another
     # cutoff in Settings.
     daily_report_enabled: bool = True
-    daily_report_time: str = "18:00"
+    daily_report_time: str = "22:30"
     # Show the current work-session duration in the pet work-control bubble.
     show_work_duration: bool = True
     app_awareness: bool = True
@@ -223,7 +223,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
             raise ValueError
         settings.daily_report_time = f"{report_hour:02d}:{report_minute:02d}"
     except (TypeError, ValueError):
-        settings.daily_report_time = "18:00"
+        settings.daily_report_time = "22:30"
     settings.show_work_duration = bool(settings.show_work_duration)
     settings.app_awareness = bool(settings.app_awareness)
     settings.voice_enabled = bool(settings.voice_enabled)
