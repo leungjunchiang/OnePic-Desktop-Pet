@@ -263,6 +263,13 @@ class ChatDialog(QDialog):
 
         self.transcript = QTextBrowser()
         self.transcript.setOpenExternalLinks(False)
+        # On Apple Silicon with newer Qt, the document layout can grow after
+        # the zero-delay scroll timer has already fired. Follow the layout's
+        # final size signal so appending a message never leaves the last line
+        # just below the viewport.
+        self.transcript.document().documentLayout().documentSizeChanged.connect(
+            self._scroll_transcript_to_bottom
+        )
         layout.addWidget(self.transcript, 1)
 
         entry = QHBoxLayout()
