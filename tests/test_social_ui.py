@@ -261,3 +261,25 @@ def test_offline_dashboard_does_not_mask_local_focus_when_no_room_is_selected() 
 
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
+
+def test_local_focus_wins_and_missing_leaderboard_does_not_clear_cache() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.set_focus_snapshot({"status": "focus", "session_seconds": 10, "today_seconds": 16080})
+    dialog.apply_dashboard({
+        "me": {"nickname": "六毛搭子", "today_seconds": 0},
+        "buddies": [], "room_people": [], "requests": [], "visits": [],
+        "leaderboard": [{"nickname": "甲", "period_income": 12}, {"nickname": "乙", "period_income": 3}],
+    })
+    app.processEvents()
+    assert "4小时28分钟" in dialog.study_summary.text()
+    assert "甲家的六毛" in dialog.wealth_leaderboard.item(0).text()
+
+    dialog.apply_dashboard({"me": {"nickname": "六毛搭子"}, "buddies": [], "room_people": []})
+    app.processEvents()
+    assert "甲家的六毛" in dialog.wealth_leaderboard.item(0).text()
+
+    dialog.apply_dashboard({"me": {"nickname": "六毛搭子"}, "leaderboard": []})
+    app.processEvents()
+    assert "暂无可展示" in dialog.wealth_leaderboard.item(0).text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()

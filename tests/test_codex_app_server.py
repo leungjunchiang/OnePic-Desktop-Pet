@@ -53,6 +53,14 @@ class _FakeStdin:
                 {"id": request_id, "result": {"thread": thread}}
             )
         elif method == "turn/start":
+            if self.owner.reject_model and "model" in (message.get("params") or {}):
+                self.owner.emit(
+                    {
+                        "id": request_id,
+                        "error": {"message": "model not found"},
+                    }
+                )
+                return
             self.owner.emit(
                 {"id": request_id, "result": {"turn": {"id": "turn_fake"}}}
             )
@@ -102,6 +110,7 @@ class _FakeProcess:
         self.thread_id = ""
         self.resume_provider = ""
         self.start_provider = ""
+        self.reject_model = False
         self.returncode = None
 
     def emit(self, message: dict) -> None:
@@ -147,6 +156,29 @@ def test_app_server_initializes_once_and_streams_multiple_turns(monkeypatch, tmp
     client.close()
 
 
+def test_app_server_retries_turn_with_cli_default_when_model_is_unavailable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A per-platform model mismatch must not drop an otherwise warm session."""
+
+    process = _FakeProcess()
+    process.reject_model = True
+    monkeypatch.setattr(
+        "onepic_desktop_pet.codex_app_server.subprocess.Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    client = CodexAppServerClient(["codex", "app-server"], cwd=tmp_path)
+
+    assert client.stream_turn("广东省会是哪", model="gpt-5.6-luna") == "首字完整回复"
+    turn_starts = [
+        message for message in process.messages if message.get("method") == "turn/start"
+    ]
+    assert len(turn_starts) == 2
+    assert turn_starts[0]["params"]["model"] == "gpt-5.6-luna"
+    assert "model" not in turn_starts[1]["params"]
+    client.close()
+
+
 def test_app_server_can_resume_saved_thread(monkeypatch, tmp_path: Path) -> None:
     process = _FakeProcess()
     monkeypatch.setattr(
@@ -174,11 +206,13 @@ def test_app_server_replaces_resumed_thread_when_provider_changed(monkeypatch, t
         lambda *_args, **_kwargs: process,
     )
     saved: list[str] = []
+    invalidated: list[bool] = []
     client = CodexAppServerClient(
         ["codex", "app-server"],
         cwd=tmp_path,
         thread_id="thr_saved",
         on_thread_id=saved.append,
+        on_thread_invalidated=lambda: invalidated.append(True),
         desired_provider="lili_http",
         desired_transport="https",
     )
@@ -188,6 +222,7 @@ def test_app_server_replaces_resumed_thread_when_provider_changed(monkeypatch, t
     assert methods.count("thread/resume") == 1
     assert methods.count("thread/start") == 1
     assert saved == ["thr_fake"]
+    assert invalidated == [True]
     assert client.thread_id == "thr_fake"
     client.close()
 

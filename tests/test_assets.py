@@ -224,7 +224,7 @@ def test_daily_action_library_is_transparent_consistent_and_uncropped() -> None:
 def test_night_limited_sprite_is_transparent_and_normalized() -> None:
     """夜间限定素材必须是完整透明画布，不能带生成图的背景方块。"""
 
-    path = PROJECT_ROOT / "assets" / "pet" / "night-limited" / "00-night-study.png"
+    path = PROJECT_ROOT / "assets" / "pet" / "night-limited" / "00-night-study-clean.png"
     with Image.open(path) as image:
         rgba = image.convert("RGBA")
         alpha = rgba.getchannel("A")
@@ -235,6 +235,15 @@ def test_night_limited_sprite_is_transparent_and_normalized() -> None:
         assert bbox is not None
         assert bbox[0] >= 34 and bbox[1] >= 34
         assert bbox[2] <= 990 and bbox[3] <= 990
+        # The source PNG had an opaque generated checkerboard behind the
+        # scene.  These points were background and must remain transparent.
+        assert alpha.getpixel((64, 79)) == 0
+        assert alpha.getpixel((500, 100)) == 0
+        assert sum(
+            1
+            for red, green, blue, value in rgba.getdata()
+            if value >= 250 and red >= 245 and green >= 245 and blue >= 245
+        ) < 10_000
 
 
 def test_hourly_outfit_library_is_transparent_consistent_and_uncropped() -> None:

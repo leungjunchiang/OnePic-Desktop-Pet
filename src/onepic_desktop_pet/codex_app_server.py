@@ -4,6 +4,8 @@
 本模块只负责跨平台 JSONL 传输、一次初始化、thread 生命周期、turn 流式事件
 和中断；模型选择、提示词与失败回退仍由 ai.py 负责。客户端不复制登录令牌，
 认证继续由 Codex CLI 使用本机已有的登录状态完成。
+App Server stderr is bounded and redacted before debug logging; user-facing
+transport failures are classified by the owning AI service.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -26,6 +29,29 @@ class CodexAppServerError(RuntimeError):
     """表示 App Server 没有完成协议握手、请求或 turn。"""
 
 
+def _looks_like_model_rejection(detail: str) -> bool:
+    """Return whether a turn failed only because its model is unavailable."""
+
+    lowered = str(detail or "").casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "unknown model",
+            "model not found",
+            "model_not_found",
+            "unsupported model",
+            "invalid model",
+            "model is not available",
+            "model is unavailable",
+            "model does not exist",
+            "does not support model",
+            "not a valid model",
+            "模型不存在",
+            "模型不可用",
+        )
+    )
+
+
 class CodexAppServerClient:
     """保持一个 Codex App Server 进程，并在同一 thread 上连续发送 turns。"""
 
@@ -37,6 +63,7 @@ class CodexAppServerClient:
         env: Mapping[str, str] | None = None,
         thread_id: str = "",
         on_thread_id: Callable[[str], None] | None = None,
+        on_thread_invalidated: Callable[[], None] | None = None,
         desired_provider: str = "",
         desired_transport: str = "",
         client_version: str = "0.22.70",
@@ -46,6 +73,7 @@ class CodexAppServerClient:
         self.env = dict(env or os.environ)
         self.thread_id = str(thread_id or "").strip()
         self.on_thread_id = on_thread_id
+        self.on_thread_invalidated = on_thread_invalidated
         self.desired_provider = str(desired_provider or "").strip()
         self.desired_transport = str(desired_transport or "").strip()
         self.client_version = client_version
@@ -68,6 +96,11 @@ class CodexAppServerClient:
 
         process = self._process
         return process is not None and process.poll() is None
+
+    def ensure_ready(self) -> None:
+        """Start and handshake the persistent server without generating text."""
+
+        self._ensure_ready()
 
     def stream_turn(
         self,
@@ -100,7 +133,17 @@ class CodexAppServerClient:
                 params["model"] = str(model)[:120]
             if effort:
                 params["effort"] = str(effort)[:20]
-            started = self._request("turn/start", params, timeout=min(timeout, 30.0))
+            try:
+                started = self._request("turn/start", params, timeout=min(timeout, 30.0))
+            except CodexAppServerError as exc:
+                # A model selected by one platform/account may not be exposed
+                # by the installed CLI.  Retry the same warm thread once with
+                # the CLI default.  This does not reconnect, change config, or
+                # affect the macOS HTTPS compatibility path.
+                if not model or not _looks_like_model_rejection(str(exc)):
+                    raise
+                params.pop("model", None)
+                started = self._request("turn/start", params, timeout=min(timeout, 30.0))
             turn = started.get("turn") or {}
             turn_id = str(turn.get("id") or "").strip()
             if not turn_id:
@@ -286,6 +329,13 @@ class CodexAppServerClient:
                 # Never log prompts, tokens, or the full server output.  This is
                 # only a bounded diagnostic useful when the child exits.
                 compact = " ".join(raw_line.split())
+                compact = re.sub(r"(?i)command\s*\[[^\]]*\]", "Command [REDACTED]", compact)
+                compact = re.sub(r"(?i)(prompt|system\s+prompt)\s*[:=].*$", r"\1=<redacted>", compact)
+                compact = re.sub(
+                    r"(?i)(authorization|api[_ -]?key|token|access[_ -]?token)\s*[:=]\s*\S+",
+                    r"\1=<redacted>",
+                    compact,
+                )
                 if compact:
                     LOGGER.debug("[AI Codex] app-server: %s", compact[:300])
         except (OSError, ValueError):
@@ -357,6 +407,7 @@ class CodexAppServerClient:
                 # A deleted, archived, or incompatible saved id should not make
                 # the chat permanently unusable.  Start a fresh persistent thread.
                 self.thread_id = ""
+                self._invalidate_saved_thread()
             else:
                 if self._thread_matches_desired_provider(result):
                     self._accept_thread(result)
@@ -371,6 +422,7 @@ class CodexAppServerClient:
                 # intentionally left untouched; a fresh thread is safer than
                 # sending a turn through a stale provider configuration.
                 self.thread_id = ""
+                self._invalidate_saved_thread()
         result = self._request("thread/start", common, timeout=20.0)
         if not self._thread_matches_desired_provider(result):
             raise CodexAppServerError(
@@ -400,16 +452,61 @@ class CodexAppServerClient:
                 return value
         return ""
 
+    def _thread_transport(self, result: dict[str, Any]) -> str:
+        """Read transport metadata across App Server response versions."""
+
+        thread = result.get("thread") or {}
+        candidates: list[Any] = []
+        if isinstance(thread, dict):
+            candidates.extend(
+                thread.get(key)
+                for key in ("transport", "modelTransport", "model_transport")
+            )
+        candidates.extend(
+            result.get(key)
+            for key in ("transport", "modelTransport", "model_transport")
+        )
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                candidate = candidate.get("id") or candidate.get("name") or candidate.get("key")
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return ""
+
     def _thread_matches_desired_provider(self, result: dict[str, Any]) -> bool:
         """Reject an explicitly mismatched provider, tolerate older metadata."""
 
         if not self.desired_provider:
             return True
         actual = self._thread_provider(result)
+        actual_transport = self._thread_transport(result)
         # Some older servers omit provider metadata from thread/start and
         # thread/resume responses.  The local v2 state check still protects
         # those servers; only an explicit server-side mismatch is fatal.
-        return not actual or actual.casefold() == self.desired_provider.casefold()
+        if actual and actual.casefold() != self.desired_provider.casefold():
+            return False
+        return (
+            not self.desired_transport
+            or not actual_transport
+            or actual_transport.casefold() == self.desired_transport.casefold()
+        )
+
+    def _invalidate_saved_thread(self) -> None:
+        """Forget the persisted pointer before a fresh thread attempt.
+
+        Keeping a bad pointer on disk is what turns a one-time migration issue
+        into a failure on every reconnect.  The server-side Codex history is
+        not deleted; only Lili's resume pointer is cleared.
+        """
+
+        callback = self.on_thread_invalidated
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            LOGGER.debug("[AI Codex] failed to invalidate saved thread", exc_info=True)
 
     def _accept_thread(self, result: dict[str, Any]) -> None:
         thread = result.get("thread") or {}

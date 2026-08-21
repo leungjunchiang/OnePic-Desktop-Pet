@@ -44,7 +44,7 @@ SPECIAL_ACTIVITY_SPRITES = {
 }
 
 SPECIAL_LIMITED_ACTIVITY_SPRITES = {
-    "night-study-limited": "assets/pet/night-limited/00-night-study.png",
+    "night-study-limited": "assets/pet/night-limited/00-night-study-clean.png",
 }
 
 SPECIAL_OUTFIT_SPRITES = {

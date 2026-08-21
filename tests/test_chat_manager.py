@@ -121,6 +121,60 @@ def test_background_detection_updates_cache_once_without_chat_recheck(monkeypatc
     manager.shutdown()
 
 
+def test_agent_manager_schedules_app_server_recovery_after_real_turn_cooldown() -> None:
+    """真实 turn 走 exec 后，AgentManager 会后台重新预热 App Server。"""
+
+    class RecoveryService:
+        app_server_cooldown_active = True
+
+        def __init__(self) -> None:
+            self.warm_calls = 0
+
+        def warm_codex(self) -> bool:
+            self.warm_calls += 1
+            return True
+
+    app = _app()
+    settings = PetSettings(ai_provider="codex")
+    service = RecoveryService()
+    agents = AgentManager(settings, FakeCredentials(), ai_service=service)
+    agents.APP_SERVER_RECOVERY_DELAY_MS = 1
+
+    agents.mark_runtime_success("codex")
+    deadline = datetime.now().timestamp() + 2
+    while service.warm_calls == 0 and datetime.now().timestamp() < deadline:
+        app.processEvents()
+        QTest.qWait(10)
+
+    assert service.warm_calls == 1
+    agents.shutdown()
+
+
+def test_agent_warmup_failure_is_not_reported_as_connected() -> None:
+    """Warm-up's completed(bool, detail) result must reach the status cache."""
+
+    app = _app()
+
+    class WarmupService:
+        def warm_codex(self) -> bool:
+            return False
+
+        last_error_message = "Codex App Server 启动失败，当前使用离线陪伴。"
+
+    settings = PetSettings(ai_provider="codex")
+    agents = AgentManager(settings, FakeCredentials(), ai_service=WarmupService())
+    assert agents._start_codex_warmup()
+    assert agents._warmup_thread is not None
+    assert agents._warmup_thread.wait(2000)
+    app.processEvents()
+
+    status = agents.status("codex")
+    assert status.state is AgentConnectionState.CONNECTED
+    assert "高速会话不可用" in status.detail
+    assert "启动失败" in status.detail
+    agents.shutdown()
+
+
 def test_chatgpt_gui_without_codex_cli_is_not_routable_as_connected(monkeypatch) -> None:
     """中性 GUI 文案必须保留，但实际聊天不能误调用不存在的 Codex CLI。"""
 
@@ -161,13 +215,38 @@ def test_connected_agent_failure_marks_error_and_next_message_skips_ai() -> None
     app.processEvents()
     first = replies[0]
     assert first.mode == "offline"
-    assert "离线模式" in first.text
+    assert "Codex 响应超时" in first.text
+    assert first.show_recovery_actions is True
     assert agents.status("codex").state is AgentConnectionState.ERROR
 
     assert manager.submit("今天工作很多", []) is True
     app.processEvents()
     assert replies[1].mode == "offline"
     assert service.calls == 1
+    manager.shutdown()
+
+
+def test_factual_question_failure_shows_diagnosis_not_companion_echo() -> None:
+    """在线失败时，知识问题不能被替换成无关的离线陪伴话术。"""
+
+    app = _app()
+    settings = PetSettings(ai_provider="codex")
+    agents = AgentManager(settings, FakeCredentials())
+    agents.mark_runtime_success("codex")
+    service = FakeService(error="网络连接异常")
+    manager = ChatManager(settings, service, agents, _offline_manager())
+    replies = []
+    manager.reply_ready.connect(replies.append)
+
+    assert manager.submit("那你知道广东省会是哪吗", []) is True
+    assert manager._thread is not None
+    assert manager._thread.wait(2000)
+    app.processEvents()
+
+    reply = replies[0]
+    assert "网络连接异常" in reply.text
+    assert "我现在是离线陪伴" not in reply.text
+    assert reply.show_recovery_actions is True
     manager.shutdown()
 
 
@@ -298,7 +377,8 @@ def test_online_chat_action_writes_todo_and_emits_refresh_signal(tmp_path) -> No
     assert actions.count() == 1
     assert memory.todos.find("修改论文") is not None
     assert len(memory.reminders.items) == 1
-    assert "已经放进待办" in replies.at(0)[0].text
+    assert "放进待办了" in replies.at(0)[0].text
+    assert "新增" not in replies.at(0)[0].text
     assert service.calls == 0
     manager.shutdown()
 
@@ -359,6 +439,62 @@ def test_chat_management_buttons_expose_new_chat_and_history() -> None:
     assert "旧消息" in dialog.transcript.toPlainText()
     dialog.clear_transcript()
     assert dialog.transcript.toPlainText() == ""
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_chat_transcript_load_and_append_stay_at_latest_message() -> None:
+    """加载长历史或追加新消息时，聊天视口都应停在最底部。"""
+
+    app = _app()
+    dialog = ChatDialog()
+    dialog.resize(460, 260)
+    dialog.show()
+    messages = [
+        ("你" if index % 2 == 0 else "六毛", f"历史消息 {index} " + "内容 " * 12)
+        for index in range(36)
+    ]
+    dialog.load_transcript(messages)
+    for _ in range(3):
+        app.processEvents()
+
+    bar = dialog.transcript.verticalScrollBar()
+    assert bar.maximum() > 0
+    assert bar.value() == bar.maximum()
+
+    dialog.append_message("六毛", "最新消息已经到了。")
+    for _ in range(3):
+        app.processEvents()
+    assert bar.value() == bar.maximum()
+    assert "最新消息已经到了。" in dialog.transcript.toPlainText()
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_streaming_chat_renders_small_batches_and_finishes_authoritative_text() -> None:
+    """聊天流式输出不应等全文，也不应每个 delta 都重排一次 HTML。"""
+
+    app = _app()
+    dialog = ChatDialog()
+    dialog.begin_streaming_message("六毛")
+    dialog.append_streaming_delta("一二三四五六")
+
+    # Drive the flush directly so CI timer scheduling cannot make this test
+    # flaky; the production timer still remains the 25ms typewriter batch.
+    dialog._flush_streaming_text()
+    app.processEvents()
+    visible = dialog.transcript.toPlainText()
+    assert "一二三四" in visible
+    assert "一二三四五六" not in visible
+
+    dialog.finish_streaming_message("一二三四五六")
+    while dialog._streaming_message_index is not None:
+        dialog._flush_streaming_text()
+    app.processEvents()
+    assert "一二三四五六" in dialog.transcript.toPlainText()
+    assert dialog._streaming_message_index is None
     dialog.close()
     dialog.deleteLater()
     app.processEvents()

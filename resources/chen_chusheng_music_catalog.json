@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "artist": "陈楚生",
+  "notes": "只保存公开曲目元数据和平台唤起地址，不保存音频或歌词。Deep Link 失效时由程序降级到官方 HTTPS 页面。",
+  "songs": [
+    {
+      "id": "chen_001",
+      "title": "有没有人告诉你",
+      "artist": "陈楚生",
+      "album": "原来我一直都不孤单",
+      "tags": ["代表作", "安静", "夜晚"],
+      "netease": {"song_id": "66525"},
+      "qqmusic": {"song_mid": "0008M0vG1upzui"},
+      "apple_music": {"url": "https://music.apple.com/fr/song/1631527954"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_002",
+      "title": "山楂花",
+      "artist": "陈楚生",
+      "album": "影之传说",
+      "tags": ["电影", "安静"],
+      "netease": {"song_id": "66267"},
+      "qqmusic": {"song_mid": "004TEqku3oLUDX"},
+      "apple_music": {"url": "https://music.apple.com/cn/album/%E5%B1%B1%E6%A5%82%E8%8A%B1/1690850742?i=1690851081&uo=4"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_003",
+      "title": "姑娘",
+      "artist": "陈楚生",
+      "album": "快乐男声陈楚生歌曲",
+      "tags": ["早期", "现场"],
+      "netease": {"song_id": "25795005"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_004",
+      "title": "白石洲",
+      "artist": "陈楚生",
+      "album": "涂鸦森林",
+      "tags": ["城市", "深圳", "夜晚"],
+      "netease": {"song_id": "2112804681"},
+      "qqmusic": {"song_mid": "0019f9U01clD4c"},
+      "apple_music": {"url": "https://music.apple.com/cn/album/%E7%99%BD%E7%9F%B3%E6%B4%B2/1635905468?i=1635905632&uo=4"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_005",
+      "title": "获奖之作",
+      "artist": "陈楚生",
+      "album": "荒芜之境",
+      "tags": ["新作", "庆祝", "完成任务彩蛋"],
+      "netease": {"song_id": "2734044457"},
+      "qqmusic": {"song_mid": "003JxtVQ3GtR0A"},
+      "apple_music": {"url": "https://music.apple.com/cn/album/%E8%8E%B7%E5%A5%96%E4%B9%8B%E4%BD%9C/6777006766?i=6777007058&uo=4"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_006",
+      "title": "荒废光年",
+      "artist": "陈楚生",
+      "album": "趋光",
+      "tags": ["成长", "趋光", "安静"],
+      "netease": {"song_id": "1374475880"},
+      "apple_music": {"url": "https://music.apple.com/cn/album/%E8%8D%92%E5%BA%9F%E5%85%89%E5%B9%B4/1780302727?i=1780302995&uo=4"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_007",
+      "title": "趋光号",
+      "artist": "陈楚生",
+      "album": "趋光",
+      "tags": ["成长", "旅途"],
+      "netease": {"song_id": "1373165560"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_008",
+      "title": "鹿回头",
+      "artist": "陈楚生",
+      "album": "荒芜之境",
+      "tags": ["归乡", "海风"],
+      "netease": {"song_id": "3388620850"},
+      "apple_music": {"url": "https://music.apple.com/cn/album/%E9%B9%BF%E5%9B%9E%E5%A4%B4/6777006766?i=6777007283&uo=4"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_009",
+      "title": "荒野国王",
+      "artist": "陈楚生",
+      "album": "荒芜之境",
+      "tags": ["荒野", "成长"],
+      "netease": {"song_id": "3360391720"},
+      "last_verified": "2026-08-21"
+    },
+    {
+      "id": "chen_010",
+      "title": "原来我一直都不孤单",
+      "artist": "陈楚生",
+      "album": "原来我一直都不孤单",
+      "tags": ["代表作", "安静"],
+      "netease": {"song_id": "66521"},
+      "last_verified": "2026-08-21"
+    }
+  ]
+}

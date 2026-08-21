@@ -183,6 +183,15 @@ class SocialSyncThread(QThread):
                 # Keep third-party/test backends compatible while they adopt
                 # the room-scoped dashboard argument.
                 data = self.client.dashboard()
+            leaderboard = getattr(self.client, "economy_leaderboard", None)
+            if callable(leaderboard) and getattr(self.client, "signed_in", True):
+                try:
+                    data = dict(data or {})
+                    data["leaderboard"] = leaderboard(period="month")
+                except (SocialError, TypeError):
+                    # A missing/temporarily unavailable economy RPC must not
+                    # make the room heartbeat fail or clear the cached rows.
+                    pass
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -583,6 +592,7 @@ class SocialHubDialog(QDialog):
     quick_action_requested = Signal(str)
     food_interaction_requested = Signal(dict, str)
     food_interaction_accepted = Signal(dict)
+    account_state_changed = Signal(bool)
 
     def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -593,6 +603,9 @@ class SocialHubDialog(QDialog):
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
         self._focus_snapshot: Any = None
+        self._leaderboard_rows: list[Any] = []
+        self._leaderboard_loaded = False
+        self._leaderboard_error = False
         self._applying_dashboard = False
         self._room_goal_state: dict[str, Any] = {}
         self._room_schedule_state: dict[str, Any] = {}
@@ -701,6 +714,38 @@ class SocialHubDialog(QDialog):
         self.focus_start.setEnabled(str(status) != "focus")
         self.focus_pause.setEnabled(str(status) == "focus")
         self.focus_finish.setEnabled(int(session_seconds) > 0 or int(today_seconds) > 0)
+        self._refresh_own_focus_labels()
+
+    def _local_today_seconds(self) -> int | None:
+        snapshot = self._focus_snapshot
+        if snapshot is None:
+            return None
+        if isinstance(snapshot, dict):
+            value = snapshot.get("today_seconds")
+        else:
+            value = getattr(snapshot, "today_seconds", None)
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _refresh_own_focus_labels(self) -> None:
+        """Refresh both focus surfaces from the shared local snapshot."""
+
+        seconds = self._local_today_seconds()
+        if seconds is None:
+            return
+        if hasattr(self, "focus_today"):
+            self.focus_today.setText(f"今日累计 {format_work_duration(seconds)}")
+        if hasattr(self, "study_summary"):
+            current = self.study_summary.text()
+            marker = "我的今日专注 "
+            start = current.find(marker)
+            end = current.find("　·　", start + len(marker)) if start >= 0 else -1
+            if start >= 0 and end >= 0:
+                self.study_summary.setText(
+                    current[:start] + marker + format_work_duration(seconds) + current[end:]
+                )
 
     def set_room_quick_status(self, status: str, expires_at: datetime | None = None) -> None:
         """Render the local room action immediately, before the next heartbeat."""
@@ -746,12 +791,20 @@ class SocialHubDialog(QDialog):
         if first_task:
             task_text += f"\n今天第一件事：{first_task}"
         self.focus_task.setText(task_text)
+        difference = summary.get("difference_vs_yesterday_seconds")
+        if difference is None:
+            comparison = "较昨天 暂无可靠数据"
+        else:
+            difference = int(difference)
+            comparison = (
+                f"较昨天 {'多' if difference >= 0 else '少'} "
+                f"{format_work_duration(abs(difference))}"
+            )
         self.focus_insights.setText(
             f"今天第 {int(summary.get('today_rounds') or 0)} 轮 · 连续 {int(summary.get('current_streak_days') or 0)} 天 · "
             f"本周 {format_work_duration(int(summary.get('weekly_total_seconds') or 0))}\n"
             f"最长连续 {int(summary.get('longest_streak_days') or 0)} 天 · "
-            f"较昨天 {'多' if int(summary.get('difference_vs_yesterday_seconds') or 0) >= 0 else '少'} "
-            f"{format_work_duration(abs(int(summary.get('difference_vs_yesterday_seconds') or 0)))} · "
+            f"{comparison} · "
             f"{summary.get('quality_label') or '暂无质量数据'}"
         )
 
@@ -1384,11 +1437,16 @@ class SocialHubDialog(QDialog):
             income = int(row.get("period_income") or row.get("month_income") or 0)
             windfall = int(row.get("windfall") or 0)
             self.wealth_leaderboard.addItem(
-                f"{index}. {nickname}　本月创收 {income} 毛币"
+                f"{index}. {nickname}　本月创收 {income} 吉他拨片"
                 + (f"　·　稿费 {windfall}" if windfall else "")
             )
         if self.wealth_leaderboard.count() == 0:
-            self.wealth_leaderboard.addItem("登录并邀请搭子参与后，这里会出现荒野王国榜单。")
+            if self._leaderboard_error:
+                self.wealth_leaderboard.addItem("富豪榜暂时没有同步成功，请稍后重试。")
+            elif not self._leaderboard_loaded:
+                self.wealth_leaderboard.addItem("正在加载荒野王国榜单…")
+            else:
+                self.wealth_leaderboard.addItem("暂无可展示的榜单成员。")
 
     def _refresh_room_goal_text(self) -> None:
         if not hasattr(self, "room_goal"):
@@ -1578,7 +1636,10 @@ class SocialHubDialog(QDialog):
         if hasattr(self, "room_activity"):
             self._render_room_activity([])
         if hasattr(self, "wealth_leaderboard"):
-            self._render_wealth_leaderboard([])
+            self._leaderboard_rows = []
+            self._leaderboard_loaded = False
+            self._leaderboard_error = False
+            self._render_wealth_leaderboard(self._leaderboard_rows)
 
     def _error(self, exc: Exception) -> None:
         self._end_action()
@@ -1606,7 +1667,7 @@ class SocialHubDialog(QDialog):
             signed = self.client.sign_up(self.signup_email.text(), self.signup_password.text(), self.signup_nickname.text())
             self._end_action()
             if signed:
-                self._update_account_state(); self.refresh()
+                self._update_account_state(); self.refresh(); self.account_state_changed.emit(True)
             else:
                 self._set_status("注册成功，请到邮箱确认后回来登录。")
                 QMessageBox.information(
@@ -1623,11 +1684,12 @@ class SocialHubDialog(QDialog):
         try:
             self.client.sign_in(self.login_email.text(), self.login_password.text())
             self._end_action(); self._update_account_state(); self.tabs.setCurrentIndex(0); self.refresh()
+            self.account_state_changed.emit(True)
         except SocialError as exc:
             self._error(exc)
 
     def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._update_account_state(); self._set_status("已退出账号，六毛继续离线陪伴。")
+        self.client.sign_out(); self.data = {}; self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
         if not self._require_login(): return
@@ -1643,7 +1705,14 @@ class SocialHubDialog(QDialog):
 
         previous_data = self.data
         self.data = dict(data or {})
-        self._render_wealth_leaderboard(list(self.data.get("leaderboard") or []))
+        # Missing is not empty: heartbeat payloads may omit this optional RPC
+        # while the room dashboard remains healthy.  Preserve the last known
+        # board until an explicit ``leaderboard=[]`` arrives.
+        if "leaderboard" in self.data:
+            self._leaderboard_rows = list(self.data.get("leaderboard") or [])
+            self._leaderboard_loaded = True
+            self._leaderboard_error = False
+            self._render_wealth_leaderboard(self._leaderboard_rows)
         me=self.data.get("me") or {}
         if not self.owner_nickname:
             self.owner_nickname = clean_owner_nickname(me.get("owner_nickname") or me.get("nickname"))
@@ -1687,12 +1756,18 @@ class SocialHubDialog(QDialog):
             buddy_widget.subscription_requested.connect(self._set_subscription)
             self.buddies.setItemWidget(item, buddy_widget)
             self._set_buddy_item_height(item, buddy_widget)
-        me_seconds = int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
+        local_today = self._local_today_seconds()
+        me_seconds = (
+            local_today
+            if local_today is not None
+            else int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
+        )
         self.study_summary.setText(
             f"现在 {working_count} 位搭子正在专注　·　"
             f"我的今日专注 {format_work_duration(me_seconds)}　·　"
             f"房间可见合计 {format_work_duration(visible_total)}"
         )
+        self._refresh_own_focus_labels()
         if not seen:
             empty = QListWidgetItem("还没有搭子。点击下方“用搭子码添加”，一起工作时这里会显示清楚的专注时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
@@ -2065,4 +2140,3 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
-

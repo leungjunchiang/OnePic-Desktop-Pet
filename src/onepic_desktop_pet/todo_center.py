@@ -281,7 +281,10 @@ class _ItemEditor(QDialog):
         title = self.title.text().strip()
         if not title:
             raise ValueError("标题不能为空")
-        day = self.date.text().strip() or self.memory.now().date().isoformat()
+        # An empty date means “no scheduled date” for a Todo.  TodoManager
+        # keeps its legacy compatibility date internally, but the semantic
+        # ``date_explicit`` flag prevents that placeholder reaching the UI.
+        day = self.date.text().strip()
         if kind in {"todo", "reminder"}:
             values = {
                 "title": title,
@@ -306,6 +309,8 @@ class _ItemEditor(QDialog):
                 saved = self.memory.todos.add(source="todo_center", **values)
             self.memory.sync_todo_reminder(saved)
             return
+        if not day:
+            raise ValueError("请填写日期")
         try:
             show_before = max(
                 0, min(365, int(self.show_before.text().strip() or "7"))
@@ -598,10 +603,10 @@ class TodoCenterWindow(QDialog):
         else:
             status = item.detail
         time_part = f" · {item.time_text}" if item.time_text else ""
-        return (
-            f"{'✓ ' if item.completed else '○ '}{item.title}{time_part}\n"
-            f"{item.date_text} · {status}"
-        )
+        event_part = f"{item.date_text}{time_part}" if item.date_text else ""
+        first_line = f"{'✓ ' if item.completed else '○ '}{item.title}{time_part if not item.date_text else ''}"
+        second_line = f"\n{event_part} · {status}" if event_part else f"\n{status}"
+        return first_line + second_line
 
     def refresh(self) -> None:
         if self._alarm_center is not None:
@@ -623,11 +628,11 @@ class TodoCenterWindow(QDialog):
                 key=lambda item: int(item.queue_position or 99),
             )
             for item in queue_rows:
-                row = QListWidgetItem(
-                    f"≡  {item.title}"
-                    f"\n{item.date_text}{(' · ' + item.time_text) if item.time_text else ''}",
-                    self._queue_list,
-                )
+                event_text = f"{item.date_text}{(' · ' + item.time_text) if item.time_text else ''}"
+                row_text = f"≡  {item.title}"
+                if event_text:
+                    row_text += f"\n{event_text}"
+                row = QListWidgetItem(row_text, self._queue_list)
                 row.setData(Qt.ItemDataRole.UserRole, item.id)
                 row.setData(Qt.ItemDataRole.UserRole + 1, item)
                 row.setToolTip("拖动调整顺序；双击编辑")

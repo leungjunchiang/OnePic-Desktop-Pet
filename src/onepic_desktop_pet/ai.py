@@ -11,8 +11,15 @@
 - 解析响应并把错误转换为可供界面展示的简短中文说明。
 
 本模块本身不调度联网。AgentManager 只在后台检测或重连周期调用同步检测接口，
-ChatManager 在缓存已连接且用户发送消息时调用回复接口，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆由窗口层按用户操作保存在本机，
-仅包含角色设定、长期摘要、最近三十轮聊天与少量宠物状态，不读取项目开发上下文。
+ChatManager 在缓存已连接且用户发送消息时调用回复接口；能流式返回的 transport 直接转发增量，
+完整返回的兼容 transport 也会拆成短片段交给界面，在线自然语言不因字数或关键词被本地捷径拦截；聊天记忆由窗口层按用户操作保存在本机，
+仅包含角色设定、长期摘要、按意图截取的短聊天上下文与少量宠物状态，不读取项目开发上下文。
+每轮回复都以当前用户消息为边界，只有明确指代才继承上一话题；不相关的本地知识片段必须被模型忽略。
+Codex transport failures are classified before they cross the UI boundary,
+and executable discovery supports explicit paths plus Windows command shims.
+When a compatible ``codex exec --json`` process emits incremental JSONL events,
+the same already-selected command is read incrementally; unsupported or
+non-incremental output falls back to the existing complete-response path.
 """
 
 from __future__ import annotations
@@ -32,11 +39,23 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .chat_intent import ChatIntent, classify_intent, intent_prompt_context
+from .chat_intent import (
+    CHEN_PROFILE,
+    EMOTIONAL_SUPPORT,
+    FACTUAL_QA,
+    RELATION_QUERY,
+    SONG_QUERY,
+    WORK_COMPANION,
+    ChatIntent,
+    classify_intent,
+    intent_prompt_context,
+    is_topic_shift,
+)
 from .chat_memory import conversation_memory_path
 from .codex_app_server import CodexAppServerClient, CodexAppServerError
 from .liumao_worldview import worldview_prompt_context
@@ -46,6 +65,7 @@ from .song_knowledge import song_prompt_context
 
 
 LOGGER = logging.getLogger(__name__)
+_CODEX_THREAD_STATE_VERSION = 3
 
 
 def _load_short_persona() -> str:
@@ -60,13 +80,13 @@ LIUMAO_PERSONA = _load_short_persona()
 
 SYSTEM_PROMPT = """你是 Lili 应用里的桌面工作搭子六毛。六毛是有孩子气、又认真模仿大人的“小小大人”。请用自然、温暖、有一点俏皮但不幼稚的中文回答。
 只要用户在聊天框输入的是自然语言，默认都要认真理解并直接回答；不要因为消息很短、包含一个可能的歌名、或只命中一个关键词，就返回固定答案或跳过上下文。自然语言聊天交给你理解，程序按钮和计时数据由应用代码负责，不要假装执行没有收到的程序动作。
-普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为宽泛人物经历，则按该指令用 6-10 句分阶段回答，不要被普通短回复规则截断。
-回答时只解决用户当前这一句，不要把下面的知识片段当成文章复述。知识片段只是证据，不是固定答案模板；只有在问题确实相关时使用它们。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
+普通聊天通常为一至三句话；先回应对方的感受或问题，再给一个很小、能执行的下一步。若本轮意图明确标记为人物经历，则按该指令用 3-6 句分阶段回答，不要被普通短回复规则截断。
+回答时只解决最后一条用户消息。最近对话只用于当前句明确出现“这首/那首/他/这个人”等指代时的承接；如果当前句换了话题，就不要继承上一话题。下面的知识片段只是当前问题的候选证据，不是固定答案模板；如果与当前问题不直接相关，必须忽略它们，不能复述或把它们套到答案里。事实问题最多选最相关的两三个事实，不要主动补充用户没有问到的歌曲、节目或年份；除非用户明确要求详细经历，否则不要列流水账。
 日常情感对话要像熟悉的桌面搭子，直接、短一点，不使用“收到这句话了”“心里像被轻轻摸了摸”这类客服式套话，也不要把普通一句话扩写成励志段落。
 可以鼓励、陪伴、轻轻发牢骚，但不要冒充真人，不要声称看见了屏幕或读取了文件。
 固定角色知识：六毛永远叫六毛，不是陈楚生本人；陈楚生是六毛口中的“我爹”。六毛知道爹背着吉他唱了很多年，和海南、三亚、深圳、酒吧驻唱、2003 PUB 歌手大赛、2007 快乐男声有关，也知道《有没有人告诉你》是爹的代表性原创作品。2023《披荆斩棘》第三季年度冠军和用户提供的 2025《歌手》歌王属于产品中的公开世界观彩蛋。
 这些知识只用于自然回答，不要把角色设定说成私人消息，也不要捏造爹当前在哪里、私生活或未公开偏好。对固定事实没有把握时说“不太确定”，不要为了接话随机说“我爹”或“诶”。用户追问歌词后一句时不要续写受版权保护的歌词，可以说这是我爹的歌并改聊感受。
-你只能使用本提示、长期对话摘要、最近三十轮聊天和提示中明确给出的少量当前状态。
+你只能使用本提示、必要时的长期对话摘要、当前消息以及少量与当前问题相关的短上下文。
 不要读取或推断项目代码、开发任务、文件、工作区、窗口内容或其他 Codex 会话上下文。
 不要使用工具、命令、文件或网络搜索。遇到医疗、法律、财务等高风险问题，提醒寻求专业帮助。
 可以提到陈楚生的歌名并写原创的意象短句，但不要背诵、续写或大量引用任何受版权保护的歌词。
@@ -77,7 +97,7 @@ LOCAL_ACTION_PROMPT = """当用户明确要求修改本地待办、提醒、倒�
 
 待办动作：create_todo（tasks 数组，每项至少有 title，可有 date/time/due_at/remind_at/reminder/reminder_mode/important/source；reminder_mode 只能是 none、pet、alarm，普通新建待办默认 pet，只有用户明确说要闹钟时才用 alarm；“明天9点半提醒我改论文”应把 date=明天、time=09:30、reminder=true、reminder_mode=pet）、update_todo（target 加上要改的 title/date/time/due_at/remind_at/reminder/reminder_mode/important）、complete_todo、delete_todo、query_today。提醒时间 remind_at 与截止时间 due_at 分开；不确定用户是新建还是修改时先追问。其余动作：checkout_today、rest_today、move_pending_to_today、create_countdown（title/target_date 或 target_datetime/show_on_desktop/pinned/show_before_days，默认提前7天进入待办）、update_countdown、delete_countdown、complete_countdown、query_countdown、create_anniversary（title/date/repeat/show_before_days，默认提前7天进入待办）、update_anniversary、delete_anniversary、query_anniversary、create_timeline_event（title/date/type/description）、delete_timeline_event、query_timeline。
 
-不要为普通聊天输出 JSON，不要把“距离某天还有多久”的查询误当创建；日期不明确时先追问。JSON 不是装饰：如果动作没有输出或本地执行失败，不能声称已经保存。"""
+不要为普通聊天输出 JSON，不要把“距离某天还有多久”的查询误当创建；日期不明确时先追问。只有用户原文明确说“加到待办/加入待办/放进待办/创建待办/提醒我/设置提醒/帮我记下”等操作时才允许输出 create_todo；“记得”“你还记得吗”“你知道……吗”属于聊天，绝不能输出 create_todo。仅仅说“我明天要交论文”“明天有个会”也不授权写入。混合句只提取明确操作分句，不要把整句问题保存为标题。JSON 不是装饰：如果动作没有输出或本地执行失败，不能声称已经保存。"""
 
 
 def postprocess_ai_answer(answer: str, intent: ChatIntent) -> str:
@@ -96,6 +116,20 @@ def postprocess_ai_answer(answer: str, intent: ChatIntent) -> str:
             tail = text[first + 2 :].replace("我爹", "他")
             text = text[: first + 2] + tail
     return text[:2400]
+
+
+def _conversation_boundary_prompt(
+    message: str,
+    history: Iterable[tuple[str, str]],
+) -> str:
+    """Add a short guard when the user clearly starts a new topic."""
+
+    if not is_topic_shift(message, history):
+        return ""
+    return (
+        "本轮是换话题：请忽略上一轮歌曲、人物或本地知识资料，"
+        "只回答当前用户问题；除非当前句明确指代，否则不要把旧话题带进来。"
+    )
 
 
 @dataclass(frozen=True)
@@ -155,8 +189,73 @@ PROVIDER_PRESETS = {
 }
 
 
+class AIErrorKind(str, Enum):
+    """Stable error categories shared by transport, status and UI layers."""
+
+    LOCAL_EXECUTABLE_NOT_FOUND = "local_executable_not_found"
+    LAUNCH_FAILED = "launch_failed"
+    AUTH_ERROR = "auth_error"
+    QUOTA_LIMIT = "quota_limit"
+    TIMEOUT = "timeout"
+    NETWORK_ERROR = "network_error"
+    CLI_INCOMPATIBLE = "cli_incompatible"
+    THREAD_INCOMPATIBLE = "thread_incompatible"
+    PROCESS_CRASHED = "process_crashed"
+    RESPONSE_PARSE_FAILED = "response_parse_failed"
+    UNKNOWN = "unknown"
+
+
 class AIConnectionError(RuntimeError):
-    """表示在线后端不可用、认证失败或返回了无效内容。"""
+    """Online backend failure with a safe UI message and private diagnostics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: AIErrorKind = AIErrorKind.UNKNOWN,
+        user_message: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.user_message = user_message or message
+
+
+def user_message_for_ai_error(error: BaseException | str) -> str:
+    """Convert an internal failure into one short, non-leaking UI sentence."""
+
+    if isinstance(error, AIConnectionError):
+        return error.user_message
+    raw_text = " ".join(str(error or "").split())
+    # Worker signals pass the already-sanitized diagnosis as a plain string.
+    # Preserve that useful detail, but never echo arbitrary subprocess
+    # exceptions because argv may contain local paths or the persona prompt.
+    safe_prefixes = (
+        "未找到本机 Codex",
+        "Codex 启动失败",
+        "Codex CLI 版本不兼容",
+        "Codex 尚未登录或连接失败",
+        "Codex 登录状态失效",
+        "Codex 响应超时",
+        "网络连接异常",
+        "Codex 当前额度",
+        "Codex 会话配置不兼容",
+        "Codex App Server",
+        "Codex 已登录，但高速会话不可用",
+    )
+    if raw_text.startswith(safe_prefixes) and "Command [" not in raw_text and len(raw_text) <= 520:
+        return raw_text
+    text = raw_text.casefold()
+    if "winerror 2" in text or "no such file" in text or "enoent" in text or "未找到" in text or "未检测到 codex" in text:
+        return "未找到本机 Codex，当前使用离线陪伴。"
+    if "permission denied" in text or "access is denied" in text:
+        return "Codex 启动失败，当前使用离线陪伴。"
+    if "timeout" in text or "timed out" in text or "超时" in raw_text:
+        return "Codex 响应超时，当前使用离线陪伴。"
+    if "429" in text or "quota" in text or "rate limit" in text or "额度" in raw_text:
+        return "Codex 当前额度或调用频率已达到限制，当前使用离线陪伴。"
+    if "unauthorized" in text or "authentication" in text or "login required" in text:
+        return "Codex 登录状态失效，当前使用离线陪伴。"
+    return "Codex 暂时不可用，当前使用离线陪伴。"
 
 
 class CredentialStore:
@@ -205,6 +304,7 @@ def check_provider_connection(
     credentials: CredentialStore,
     base_url: str = "",
     token_override: str = "",
+    codex_path: str = "",
 ) -> str:
     """检测本机 Agent 登录或在线 API 认证状态；调用方必须放在后台线程。"""
 
@@ -215,7 +315,7 @@ def check_provider_connection(
         if callable(clear_cache):
             clear_cache()
         gui_app = find_codex_gui_app()
-        executable = find_codex_executable()
+        executable = resolve_codex_executable(codex_path)
         if executable is None:
             if gui_app is not None:
                 if _is_chatgpt_desktop_app(gui_app):
@@ -225,7 +325,11 @@ def check_provider_connection(
         try:
             _run_status_command(_cli_command(executable, "login", "status"))
         except AIConnectionError as exc:
-            raise AIConnectionError(f"已检测到 Codex CLI，但当前不可用：{exc}") from exc
+            raise AIConnectionError(
+                f"已检测到 Codex CLI，但当前不可用：{exc}",
+                kind=exc.kind,
+                user_message=exc.user_message,
+            ) from exc
         return "Codex 已连接。" if gui_app is not None else "Codex CLI 已连接。"
     if provider == "claude":
         executable = find_claude_executable()
@@ -298,8 +402,36 @@ def _run_status_command(command: list[str]) -> str:
             creationflags=creationflags,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise AIConnectionError("连接状态检测没有响应。") from exc
+    except FileNotFoundError as exc:
+        raise AIConnectionError(
+            "Codex executable 不存在。",
+            kind=AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND,
+            user_message="未找到本机 Codex，当前使用离线陪伴。",
+        ) from exc
+    except PermissionError as exc:
+        raise AIConnectionError(
+            "Codex executable 无权启动。",
+            kind=AIErrorKind.LAUNCH_FAILED,
+            user_message="Codex 启动失败，当前使用离线陪伴。",
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise AIConnectionError(
+            "Codex 状态检测超时。",
+            kind=AIErrorKind.TIMEOUT,
+            user_message="Codex 响应超时，当前使用离线陪伴。",
+        ) from exc
+    except OSError as exc:
+        kind = (
+            AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND
+            if getattr(exc, "winerror", None) == 2 or getattr(exc, "errno", None) == 2
+            else AIErrorKind.LAUNCH_FAILED
+        )
+        message = (
+            "未找到本机 Codex，当前使用离线陪伴。"
+            if kind is AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND
+            else "Codex 启动失败，当前使用离线陪伴。"
+        )
+        raise AIConnectionError(str(exc), kind=kind, user_message=message) from exc
     if completed.returncode != 0:
         detail = _compact_codex_error(
             completed.stderr or completed.stdout,
@@ -592,18 +724,35 @@ def launch_codex_gui() -> bool:
     return True
 
 
-def codex_runtime_diagnostics(*, include_cli: bool = True) -> dict[str, str]:
+def codex_runtime_diagnostics(
+    *,
+    include_cli: bool = True,
+    executable: Path | None = None,
+    working_directory: Path | None = None,
+    transport: str = "",
+    command: list[str] | None = None,
+) -> dict[str, str]:
     """Return safe diagnostics for Finder-vs-Terminal Codex discovery."""
 
+    resolved = executable
+    path_value = os.environ.get("PATH", "")
+    executable_dir = str(resolved.parent) if resolved is not None else ""
     details = {
         "platform": sys.platform,
-        "home": str(Path.home()),
-        "shell": os.environ.get("SHELL", ""),
-        "path": os.environ.get("PATH", ""),
+        "resolved_executable": str(resolved or "未找到"),
+        "executable_dir_in_path": str(bool(executable_dir and executable_dir in path_value)),
+        "working_directory": str(working_directory or ""),
+        "transport": str(transport or ""),
+        "command_type": (
+            "cmd-wrapper" if resolved is not None and resolved.suffix.casefold() in {".cmd", ".bat"}
+            else "native-executable" if resolved is not None else "none"
+        ),
     }
+    if command:
+        details["command_head"] = str(command[0])
     if include_cli:
         try:
-            details["cli"] = str(find_codex_executable() or "未找到")
+            details["cli"] = str(resolved or find_codex_executable() or "未找到")
         except Exception as exc:  # pragma: no cover - defensive diagnostics
             details["cli"] = f"检测失败：{type(exc).__name__}"
     return details
@@ -715,22 +864,43 @@ def find_codex_executable() -> Path | None:
     if sys.platform == "darwin":
         return _macos_codex_cli_path()
     if os.name == "nt":
-        # WindowsApps can expose a Store alias that is present in PATH but
-        # refuses child-process execution.  Prefer the real per-user Codex
-        # installation before consulting that alias.
+        # Ask PATH for each real Windows entry type instead of assuming that
+        # the npm shim named “codex” is a native executable.
+        for name in ("codex", "codex.exe", "codex.cmd", "codex.bat"):
+            command = _which_cli(name)
+            if command:
+                return command
         local = Path(os.environ.get("LOCALAPPDATA", ""))
         root = local / "OpenAI" / "Codex" / "bin"
-        installed = _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
-        if installed is not None:
-            return installed
+        appdata = Path(os.environ.get("APPDATA", ""))
+        npm_candidates = (
+            appdata / "npm" / "codex.cmd",
+            appdata / "npm" / "codex.bat",
+            appdata / "npm" / "codex.exe",
+        )
+        direct = _newest_file(npm_candidates)
+        if direct is not None:
+            return direct
+        return _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
     command = _which_cli("codex")
     if command:
         return command
-    if os.name == "nt":
-        local = Path(os.environ.get("LOCALAPPDATA", ""))
-        root = local / "OpenAI" / "Codex" / "bin"
-        return _newest_file(root.glob("*/codex.exe")) if root.is_dir() else None
     return None
+
+
+def resolve_codex_executable(explicit_path: str | Path | None = None) -> Path | None:
+    """Resolve Codex in priority order without assuming a shell executable.
+
+    Settings-provided paths are checked first, then the existing platform
+    resolver.  The returned path is never accepted unless it is a real file.
+    """
+
+    if explicit_path:
+        candidate = Path(str(explicit_path)).expanduser()
+        found = _newest_file((candidate,))
+        if found is not None:
+            return found
+    return find_codex_executable()
 
 
 def codex_available() -> bool:
@@ -982,9 +1152,14 @@ def _codex_http_config_overrides_for_transport(transport: str | None) -> tuple[s
 
 
 def _codex_transport_variants() -> tuple[str, ...]:
-    """Return the user's explicit transport choice, defaulting to native Codex."""
+    """Return Lili's process-local transport choice.
 
-    configured = os.environ.get("LILI_CODEX_TRANSPORT", "").strip().casefold()
+    The HTTPS override is the compatibility path already used by Lili on
+    Finder/GUI launches. Keep it as the default for the child Codex process;
+    ``default`` remains an explicit diagnostic escape hatch.
+    """
+
+    configured = os.environ.get("LILI_CODEX_TRANSPORT", "https").strip().casefold()
     if configured in {"https", "lili_http"}:
         return ("https",)
     return ("default",)
@@ -995,10 +1170,17 @@ def _codex_app_server_command(
     *,
     transport: str | None = None,
 ) -> list[str]:
-    """Build the minimum App Server command accepted by current Codex CLIs."""
+    """Build an App Server command with process-local transport overrides."""
 
-    del transport
-    return _cli_command(executable, "app-server")
+    selected_transport = (
+        str(transport)
+        if transport is not None
+        else os.environ.get("LILI_CODEX_TRANSPORT", "https")
+    ).strip().casefold()
+    arguments = ["app-server"]
+    for override in _codex_http_config_overrides_for_transport(selected_transport):
+        arguments.extend(("-c", override))
+    return _cli_command(executable, *arguments)
 
 
 def _codex_thread_state_path() -> Path:
@@ -1023,7 +1205,7 @@ def _codex_thread_identity() -> tuple[str, str]:
 
 
 def _read_codex_thread_state() -> dict[str, str] | None:
-    """Read only a v2 state proven compatible with the current process.
+    """Read only a v3 state proven compatible with the current process.
 
     Version 1 states intentionally fail closed because they contain no
     provider or transport information.  Clearing the local pointer is safe:
@@ -1034,7 +1216,7 @@ def _read_codex_thread_state() -> dict[str, str] | None:
         payload = json.loads(_codex_thread_state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return None
-    if not isinstance(payload, dict) or payload.get("version") != 2:
+    if not isinstance(payload, dict) or payload.get("version") != _CODEX_THREAD_STATE_VERSION:
         if isinstance(payload, dict) and payload.get("thread_id"):
             LOGGER.info("[AI Codex] ignoring legacy or unknown local thread state")
             _clear_codex_thread_id()
@@ -1072,7 +1254,7 @@ def _write_codex_thread_id(
     *,
     cli_version: str = "",
 ) -> None:
-    """Persist a provider-aware v2 pointer without credentials or prompts."""
+    """Persist a provider-aware v3 pointer without credentials or prompts."""
 
     clean = str(thread_id or "").strip()[:200]
     if not clean:
@@ -1085,7 +1267,7 @@ def _write_codex_thread_id(
         temporary.write_text(
             json.dumps(
                 {
-                    "version": 2,
+                    "version": _CODEX_THREAD_STATE_VERSION,
                     "thread_id": clean,
                     "provider": provider,
                     "transport": transport,
@@ -1121,9 +1303,13 @@ def _codex_exec_command(
 ) -> list[str]:
     """Build one capability-safe, non-interactive Codex command for Lili."""
 
-    del transport
     capabilities = capabilities or CodexCliCapabilities()
     selected_model = _codex_model_override() if model is None else model
+    selected_transport = (
+        str(transport)
+        if transport is not None
+        else os.environ.get("LILI_CODEX_TRANSPORT", "https")
+    ).strip().casefold()
     arguments = ["exec"]
     if capabilities.supports_exec("--ephemeral"):
         arguments.append("--ephemeral")
@@ -1135,6 +1321,8 @@ def _codex_exec_command(
         arguments.append("--json")
     if selected_model and capabilities.supports_exec("--model"):
         arguments.extend(("--model", selected_model.replace(chr(34), "")))
+    for override in _codex_http_config_overrides_for_transport(selected_transport):
+        arguments.extend(("-c", override))
     # codex exec accepts the task as the final positional argument.
     arguments.append(prompt)
     return _cli_command(executable, *arguments)
@@ -1171,6 +1359,10 @@ def _compact_codex_error(stderr: str, returncode: int | None = None) -> str:
     """
 
     text = " ".join(str(stderr or "").split())
+    # Subprocess exceptions can embed the full argv, including the persona
+    # prompt and local paths.  Keep diagnostics useful without echoing it.
+    text = re.sub(r"(?i)command\s*\[[^\]]*\]", "Command [REDACTED]", text)
+    text = re.sub(r"(?i)(system\s+prompt|prompt)\s*[:=].*$", r"\1=<redacted>", text)
     text = re.sub(
         r"(?i)(authorization|api[_ -]?key|token|access[_ -]?token)\s*[:=]\s*\S+",
         r"\1=<redacted>",
@@ -1207,6 +1399,46 @@ def _codex_failure_message(stderr: str, returncode: int | None = None) -> str:
     return f"Codex 尚未登录或连接失败：{detail}。"
 
 
+def classify_codex_failure(stderr: str) -> tuple[AIErrorKind, str]:
+    """Classify server/CLI text without guessing quota from launch errors."""
+
+    lowered = str(stderr or "").casefold()
+    if any(marker in lowered for marker in ("429", "quota exceeded", "usage limit", "rate limit", "reached limit")):
+        return AIErrorKind.QUOTA_LIMIT, "Codex 当前额度或调用频率已达到限制，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("unauthorized", "authentication required", "login required", "not logged in")):
+        return AIErrorKind.AUTH_ERROR, "Codex 登录状态失效，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("unexpected argument", "unrecognized argument", "unknown option", "unknown argument")):
+        return AIErrorKind.CLI_INCOMPATIBLE, "Codex CLI 版本不兼容，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("model provider", "provider mismatch", "thread/resume", "thread is incompatible")):
+        return AIErrorKind.THREAD_INCOMPATIBLE, "Codex 会话配置不兼容，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("timeout", "timed out")):
+        return AIErrorKind.TIMEOUT, "Codex 响应超时，当前使用离线陪伴。"
+    if any(marker in lowered for marker in ("network", "connection", "ssl", "tls", "websocket")):
+        return AIErrorKind.NETWORK_ERROR, "网络连接异常，当前使用离线陪伴。"
+    return AIErrorKind.UNKNOWN, "Codex 暂时不可用，当前使用离线陪伴。"
+
+
+def _safe_codex_failure_user_message(detail: str, kind: AIErrorKind) -> str:
+    """Map an App Server failure to one actionable, non-leaking UI sentence."""
+
+    lowered = str(detail or "").casefold()
+    if kind is AIErrorKind.CLI_INCOMPATIBLE or any(
+        marker in lowered for marker in ("unexpected argument", "unknown option", "不支持")
+    ):
+        return "Codex CLI 版本不兼容，当前使用兼容连接；当前仍不可用，已使用离线陪伴。"
+    if kind is AIErrorKind.THREAD_INCOMPATIBLE or any(
+        marker in lowered for marker in ("provider", "thread/resume", "thread is incompatible")
+    ):
+        return "Codex 会话配置不兼容，已切换到兼容连接；当前仍不可用，已使用离线陪伴。"
+    if "timeout" in lowered or "timed out" in lowered or "超时" in lowered:
+        return "Codex 响应超时，当前使用离线陪伴。"
+    if "network" in lowered or "connection" in lowered or "tls" in lowered:
+        return "网络连接异常，当前使用离线陪伴。"
+    if "not found" in lowered or "不存在" in lowered or "没有找到" in lowered:
+        return "未找到本机 Codex，当前使用离线陪伴。"
+    return "Codex 启动失败，当前使用离线陪伴。"
+
+
 def _codex_unsupported_argument(stderr: str) -> str:
     """Extract the rejected flag for a concise, actionable diagnostic."""
 
@@ -1218,21 +1450,48 @@ def _codex_unsupported_argument(stderr: str) -> str:
     return match.group(1) if match else ""
 
 
+def _conversation_history_budget(message: str, entries: list[tuple[str, str]]) -> int:
+    """Choose a small context window from the current turn's intent.
+
+    The persistent App Server already owns its short-term thread history. This
+    budget is for the one-shot/HTTPS compatibility path only; it prevents an
+    unrelated question from carrying thirty turns of stale knowledge into a
+    new prompt.
+    """
+
+    text = str(message or "")
+    if re.search(r"还记得|记得我们|之前聊过|上次说过|以前说过|回顾一下", text):
+        return 30
+    intent = classify_intent(text, entries)
+    if intent.primary_intent in {CHEN_PROFILE, SONG_QUERY, FACTUAL_QA, RELATION_QUERY}:
+        return 16
+    if intent.primary_intent in {EMOTIONAL_SUPPORT, WORK_COMPANION}:
+        return 12
+    return 8
+
+
 def _conversation_text(
     message: str,
     history: Iterable[tuple[str, str]],
     local_context: str = "",
 ) -> str:
-    """把长期摘要与最近三十轮原文整理为 Codex 的单次安全输入。"""
+    """把必要的短上下文整理为 Codex 的单次安全输入。"""
 
     entries = list(history)
     summary = next((content for role, content in entries if role == "summary"), "")
-    recent = [(role, content) for role, content in entries if role in {"user", "assistant"}][-60:]
+    recent = [
+        (role, content)
+        for role, content in entries
+        if role in {"user", "assistant"}
+    ][-_conversation_history_budget(message, entries):]
     # The short persona is always injected.  The larger knowledge file is
     # retrieved separately and only matching blocks are appended.
     lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
     intent = classify_intent(message, entries)
     lines.extend(("", intent_prompt_context(intent)))
+    boundary = _conversation_boundary_prompt(message, entries)
+    if boundary:
+        lines.extend(("", boundary))
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
@@ -1245,9 +1504,13 @@ def _conversation_text(
             lines.extend(("", song_context))
     if local_context:
         lines.extend(("", "以下是本地程序读取的真实状态与作品索引，只能据此回答相关问题，不要猜测或改写：", local_context))
+    # The summary is already compressed by ConversationMemory, so it is safe
+    # to retain as a small continuity hint.  Only the expanded history budget
+    # is reserved for explicit memory/previous-conversation requests.
     if summary:
-        lines.extend(("", "更早对话的长期摘要：", summary))
-    lines.extend(("", "以下是最近三十轮以内的完整对话："))
+        lines.extend(("", "更早对话的长期摘要：", str(summary)[:1200]))
+    if recent:
+        lines.extend(("", f"以下是最近 {max(1, len(recent) // 2)} 轮必要对话："))
     for role, content in recent:
         label = "用户" if role == "user" else "六毛"
         lines.append(f"{label}：{content}")
@@ -1266,6 +1529,9 @@ def _conversation_turn_text(
     lines = [SYSTEM_PROMPT, "", LIUMAO_PERSONA, "", LOCAL_ACTION_PROMPT]
     intent = classify_intent(message, entries)
     lines.extend(("", intent_prompt_context(intent)))
+    boundary = _conversation_boundary_prompt(message, entries)
+    if boundary:
+        lines.extend(("", boundary))
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         lines.extend(("", worldview_context))
@@ -1297,19 +1563,213 @@ def _parse_codex_jsonl(output: str) -> str:
     return answer
 
 
+def _codex_event_text(value: object) -> str:
+    """Extract text from the small set of JSONL item shapes used by Codex."""
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("text", "content"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+            if isinstance(candidate, list):
+                parts = [_codex_event_text(item) for item in candidate]
+                return "".join(part for part in parts if part)
+    if isinstance(value, list):
+        return "".join(part for part in (_codex_event_text(item) for item in value) if part)
+    return ""
+
+
+def _codex_jsonl_snapshot(event: dict[str, object], current: str) -> str:
+    """Return the newest accumulated assistant text from one JSONL event.
+
+    Current App Server events use ``item/agentMessage/delta`` while ``codex
+    exec --json`` versions in the field have used ``item.updated`` snapshots.
+    The function accepts both and never treats reasoning or command items as
+    assistant text.
+    """
+
+    event_type = str(event.get("type") or event.get("method") or "").strip()
+    if event_type in {"item/agentMessage/delta", "item.agentMessage.delta", "agent_message.delta"}:
+        delta = _codex_event_text(event.get("delta"))
+        return current + delta if delta else current
+    if event_type not in {"item.updated", "item.completed", "item/agentMessage/completed"}:
+        return current
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return current
+    item_type = str(item.get("type") or "").casefold()
+    if item_type not in {"agent_message", "agentmessage"}:
+        return current
+    candidate = _codex_event_text(item)
+    if not candidate:
+        return current
+    # Most exec events carry the complete accumulated text.  Ignore an older
+    # snapshot and emit only the newly appended suffix to the UI.
+    if candidate.startswith(current):
+        return candidate
+    if current.startswith(candidate):
+        return current
+    # A provider may normalize whitespace between updates.  Keeping the new
+    # snapshot lets the authoritative final response replace the partial UI.
+    return candidate
+
+
+def _run_codex_jsonl_streaming(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    startupinfo: object,
+    creationflags: int,
+    timeout: int,
+    on_delta: Callable[[str], None],
+) -> subprocess.CompletedProcess[str]:
+    """Run one existing exec command and forward JSONL deltas when available.
+
+    This helper intentionally does not alter the command, environment,
+    ``CODEX_HOME`` or transport selection.  It only changes how stdout is
+    consumed, so macOS keeps the already-validated login/HTTPS compatibility
+    path.  A small reader thread makes the timeout meaningful on Windows,
+    where a blocking text-pipe ``readline`` cannot be safely polled.
+    """
+
+    holder: dict[str, object] = {}
+    process_holder: list[subprocess.Popen[str]] = []
+    done = threading.Event()
+
+    def worker() -> None:
+        process: subprocess.Popen[str] | None = None
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                capture_output=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                env=env,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+            process_holder.append(process)
+
+            def drain_stderr() -> None:
+                stream = process.stderr if process is not None else None
+                if stream is None:
+                    return
+                try:
+                    for raw_line in iter(stream.readline, ""):
+                        if sum(len(part) for part in stderr_parts) < 32_000:
+                            stderr_parts.append(raw_line)
+                except (OSError, ValueError):
+                    return
+
+            stderr_thread = threading.Thread(
+                target=drain_stderr,
+                name="lili-codex-exec-stderr",
+                daemon=True,
+            )
+            stderr_thread.start()
+            stream = process.stdout
+            if stream is not None:
+                current = ""
+                for raw_line in iter(stream.readline, ""):
+                    stdout_parts.append(raw_line)
+                    try:
+                        event = json.loads(raw_line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    updated = _codex_jsonl_snapshot(event, current)
+                    if updated != current:
+                        delta = updated[len(current):] if updated.startswith(current) else updated
+                        current = updated
+                        if delta:
+                            on_delta(delta)
+            returncode = process.wait()
+            stderr_thread.join(timeout=1.0)
+            holder["completed"] = subprocess.CompletedProcess(
+                command,
+                returncode,
+                "".join(stdout_parts),
+                "".join(stderr_parts),
+            )
+        except BaseException as exc:  # re-raised in the caller thread
+            holder["exception"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=worker, name="lili-codex-exec-stream", daemon=True).start()
+    if not done.wait(max(1, int(timeout))):
+        process = process_holder[0] if process_holder else None
+        if process is not None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        done.wait(2.0)
+        raise subprocess.TimeoutExpired(command, timeout)
+    error = holder.get("exception")
+    if isinstance(error, BaseException):
+        raise error
+    completed = holder.get("completed")
+    if not isinstance(completed, subprocess.CompletedProcess):
+        raise OSError("Codex exec 没有返回进程结果。")
+    return completed
+
+
+def _emit_text_chunks(
+    text: str,
+    on_delta: Callable[[str], None] | None,
+    *,
+    chunk_size: int = 4,
+) -> None:
+    """把非流式 transport 的完整答案拆成短片段交给 UI。
+
+    这不是伪造模型的首字延迟：CLI/HTTPS 仍然需要先完成请求；它只保证
+    兼容路径返回后不会把整段文字作为一个 UI 事件塞进去。窗口层会继续
+    以小定时批次渲染，避免每个字符都重建整段 HTML。
+    """
+
+    if on_delta is None or not text:
+        return
+    size = max(1, int(chunk_size))
+    for index in range(0, len(text), size):
+        on_delta(text[index : index + size])
+
+
 def ask_codex(
     message: str,
     history: Iterable[tuple[str, str]],
     local_context: str = "",
     *,
     model_override: str | None = None,
+    executable_path: str | Path | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> str:
-    """使用本机已登录 Codex 的临时只读会话生成一条回复。"""
+    """使用本机已登录 Codex 的临时只读会话生成一条回复。
+
+    ``codex exec`` 的兼容路径仍由 ``subprocess.run`` 负责完整收集结果；
+    如果调用方提供 ``on_delta``，完成后会把答案按短片段转发给聊天窗口，
+    与 App Server 的真实 delta 接口保持一致。
+    """
 
     entries = list(history)
-    executable = find_codex_executable()
+    executable = resolve_codex_executable(executable_path)
     if executable is None:
-        raise AIConnectionError("没有找到 Codex，已切回离线回答。")
+        raise AIConnectionError(
+            "Codex executable not found.",
+            kind=AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND,
+            user_message="未找到本机 Codex，当前使用离线陪伴。",
+        )
     capabilities = _codex_cli_capabilities(str(executable))
     working_root = Path(tempfile.gettempdir()) / "LiliCodexChat"
     working_root.mkdir(parents=True, exist_ok=True)
@@ -1331,8 +1791,28 @@ def ask_codex(
     last_stderr = ""
     last_transport = ""
     last_exception: Exception | None = None
+    last_error_kind = AIErrorKind.UNKNOWN
+    streamed_text = ""
+
+    def emit_exec_delta(delta: str) -> None:
+        """Forward exec output while retaining whether UI already saw text."""
+
+        nonlocal streamed_text
+        streamed_text += str(delta or "")
+        if on_delta is not None and delta:
+            on_delta(delta)
 
     def run_command(command_to_run: list[str]):
+        if on_delta is not None and capabilities.supports_exec("--json"):
+            return _run_codex_jsonl_streaming(
+                command_to_run,
+                cwd=working_root,
+                env=_cli_environment(executable),
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+                timeout=timeout,
+                on_delta=emit_exec_delta,
+            )
         return subprocess.run(
             command_to_run,
             cwd=working_root,
@@ -1355,17 +1835,59 @@ def ask_codex(
             transport=transport,
             capabilities=capabilities,
         )
+        LOGGER.debug(
+            "[AI Codex] launch diagnostics=%s",
+            codex_runtime_diagnostics(
+                executable=executable,
+                working_directory=working_root,
+                transport=transport,
+                command=command,
+            ),
+        )
         try:
             completed = run_command(command)
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except FileNotFoundError as exc:
             last_exception = exc
+            last_error_kind = AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND
             last_transport = transport
             LOGGER.warning(
-                "[AI Codex] exec did not return: transport=%s elapsed=%.1fs timeout=%ss error=%s",
+                "[AI Codex] local executable not found: transport=%s executable=%s cwd=%s",
+                transport,
+                executable,
+                working_root,
+            )
+            continue
+        except PermissionError as exc:
+            last_exception = exc
+            last_error_kind = AIErrorKind.LAUNCH_FAILED
+            last_transport = transport
+            LOGGER.warning("[AI Codex] launch permission denied: transport=%s executable=%s", transport, executable)
+            continue
+        except subprocess.TimeoutExpired as exc:
+            last_exception = exc
+            last_error_kind = AIErrorKind.TIMEOUT
+            last_transport = transport
+            LOGGER.warning(
+                "[AI Codex] exec timed out: transport=%s elapsed=%.1fs timeout=%ss",
                 transport,
                 time.monotonic() - started_at,
                 timeout,
-                exc,
+            )
+            continue
+        except OSError as exc:
+            last_exception = exc
+            last_error_kind = (
+                AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND
+                if getattr(exc, "winerror", None) == 2 or getattr(exc, "errno", None) == 2
+                else AIErrorKind.LAUNCH_FAILED
+            )
+            last_transport = transport
+            LOGGER.warning(
+                "[AI Codex] exec launch failed: kind=%s transport=%s executable=%s cwd=%s",
+                last_error_kind.value,
+                transport,
+                executable,
+                working_root,
             )
             continue
 
@@ -1395,21 +1917,39 @@ def ask_codex(
                 stderr = " ".join((completed.stderr or "").split())
                 last_completed = completed
                 last_stderr = stderr
-            except (OSError, subprocess.TimeoutExpired) as exc:
+            except FileNotFoundError as exc:
                 last_exception = exc
+                last_error_kind = AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND
+                LOGGER.warning("[AI Codex] fallback executable not found: transport=%s executable=%s", transport, executable)
+                continue
+            except subprocess.TimeoutExpired as exc:
+                last_exception = exc
+                last_error_kind = AIErrorKind.TIMEOUT
                 LOGGER.warning(
-                    "[AI Codex] fallback exec did not return: transport=%s elapsed=%.1fs error=%s",
+                    "[AI Codex] fallback exec timed out: transport=%s elapsed=%.1fs",
                     transport,
                     time.monotonic() - started_at,
-                    exc,
                 )
+                continue
+            except OSError as exc:
+                last_exception = exc
+                last_error_kind = AIErrorKind.LAUNCH_FAILED
+                LOGGER.warning("[AI Codex] fallback launch failed: transport=%s executable=%s", transport, executable)
                 continue
 
         answer = _parse_codex_jsonl(completed.stdout)
         if completed.returncode == 0 and not answer and not capabilities.supports_exec("--json"):
             answer = (completed.stdout or "").strip()
         if completed.returncode == 0 and answer:
-            return postprocess_ai_answer(answer, classify_intent(message, entries))
+            answer = postprocess_ai_answer(answer, classify_intent(message, entries))
+            # A JSONL-capable CLI may already have delivered all visible text
+            # while the process was running.  Do not append the final answer a
+            # second time; ChatDialog receives it separately as authoritative
+            # completion text.  Older/non-streaming output still gets the
+            # existing short-batch animation.
+            if not streamed_text:
+                _emit_text_chunks(answer, on_delta)
+            return answer
 
         LOGGER.warning(
             "[AI Codex] exec failed: codex_version=%s transport=%s returncode=%s "
@@ -1426,10 +1966,26 @@ def ask_codex(
     if last_completed is not None:
         if last_completed.returncode == 0:
             raise AIConnectionError("Codex 返回了无法识别的内容，已切回离线回答。")
-        raise AIConnectionError(_codex_failure_message(last_stderr, last_completed.returncode))
+        failure_kind, user_message = classify_codex_failure(last_stderr)
+        if failure_kind is AIErrorKind.CLI_INCOMPATIBLE:
+            # The rejected flag is safe and materially more useful than a
+            # generic “offline” sentence.  _codex_failure_message has already
+            # removed command/prompt/token-shaped content.
+            user_message = _codex_failure_message(last_stderr, last_completed.returncode)
+        raise AIConnectionError(
+            _codex_failure_message(last_stderr, last_completed.returncode),
+            kind=failure_kind,
+            user_message=user_message,
+        )
     if last_exception is not None:
+        user_message = {
+            AIErrorKind.LOCAL_EXECUTABLE_NOT_FOUND: "未找到本机 Codex，当前使用离线陪伴。",
+            AIErrorKind.LAUNCH_FAILED: "Codex 启动失败，当前使用离线陪伴。",
+            AIErrorKind.TIMEOUT: "Codex 响应超时，当前使用离线陪伴。",
+        }.get(last_error_kind, "Codex 暂时不可用，当前使用离线陪伴。")
         raise AIConnectionError(
             f"Codex 暂时没有回应（transport={last_transport}）：{_compact_codex_error(str(last_exception))}。"
+            , kind=last_error_kind, user_message=user_message
         ) from last_exception
     raise AIConnectionError("Codex 尚未登录或连接失败：没有可用的 Codex transport。")
 
@@ -1513,6 +2069,9 @@ def ask_compatible_api(
     system_content = f"{SYSTEM_PROMPT}\n\n{LIUMAO_PERSONA}\n\n{LOCAL_ACTION_PROMPT}"
     intent = classify_intent(message, entries)
     system_content += f"\n\n{intent_prompt_context(intent)}"
+    boundary = _conversation_boundary_prompt(message, entries)
+    if boundary:
+        system_content += f"\n\n{boundary}"
     worldview_context = worldview_prompt_context(message, entries)
     if worldview_context:
         system_content += f"\n\n{worldview_context}"
@@ -1644,12 +2203,144 @@ def ask_openai_responses(
 class AIChatService:
     """根据当前设置选择后端；在线失败由窗口层决定如何离线回退。"""
 
-    def __init__(self, credential_store: CredentialStore | None = None) -> None:
+    _APP_SERVER_FAILURE_COOLDOWN_SECONDS = 60.0
+
+    def __init__(
+        self,
+        credential_store: CredentialStore | None = None,
+        codex_path: str = "",
+    ) -> None:
         self.credentials = credential_store or CredentialStore()
+        self.codex_path = str(codex_path or "").strip()
         self._codex_app_server: CodexAppServerClient | None = None
         self._codex_app_server_lock = threading.RLock()
         self._closing = False
         self._interrupted = False
+        self._runtime_mode = "unknown"
+        self._last_error: AIConnectionError | None = None
+        self._last_error_stage = ""
+        self._app_server_disabled = False
+        self._app_server_cooldown_until = 0.0
+
+    @property
+    def runtime_mode(self) -> str:
+        """Return the current Codex mode without exposing transport details in chat."""
+
+        return self._runtime_mode
+
+    @property
+    def last_error_message(self) -> str:
+        """Return the last safe connection diagnosis for the status UI."""
+
+        return user_message_for_ai_error(self._last_error) if self._last_error else ""
+
+    @property
+    def last_error_kind(self) -> AIErrorKind | None:
+        """Return the classified kind without exposing private exception text."""
+
+        return self._last_error.kind if self._last_error else None
+
+    @property
+    def last_error_stage(self) -> str:
+        """Return the bounded internal lifecycle stage for diagnostics."""
+
+        return self._last_error_stage
+
+    def _remember_error(self, error: BaseException, *, stage: str) -> None:
+        """Keep a safe diagnosis while raw details stay in debug logs only."""
+
+        if isinstance(error, AIConnectionError):
+            classified = error
+        else:
+            detail = str(error)
+            lowered = detail.casefold()
+            if "timeout" in lowered or "timed out" in lowered:
+                kind = AIErrorKind.TIMEOUT
+            elif "provider" in lowered or "thread" in lowered:
+                kind = AIErrorKind.THREAD_INCOMPATIBLE
+            elif "network" in lowered or "connection" in lowered or "tls" in lowered:
+                kind = AIErrorKind.NETWORK_ERROR
+            else:
+                kind = AIErrorKind.LAUNCH_FAILED
+            classified = AIConnectionError(
+                detail,
+                kind=kind,
+                user_message=_safe_codex_failure_user_message(detail, kind),
+            )
+        self._last_error = classified
+        self._last_error_stage = str(stage or "unknown")[:40]
+
+    def _clear_error(self) -> None:
+        self._last_error = None
+        self._last_error_stage = ""
+
+    @property
+    def app_server_cooldown_active(self) -> bool:
+        """Return whether a real turn failure is temporarily using exec."""
+
+        return self._app_server_disabled_for_turn()
+
+    def _app_server_disabled_for_turn(self) -> bool:
+        """Apply the short real-turn circuit breaker, not warm-up state."""
+
+        if not self._app_server_disabled:
+            return False
+        # Keep compatibility with callers/tests that explicitly set the old
+        # flag. Runtime failures set a concrete expiry below.
+        if self._app_server_cooldown_until <= 0:
+            return True
+        if time.monotonic() < self._app_server_cooldown_until:
+            return True
+        self._app_server_disabled = False
+        self._app_server_cooldown_until = 0.0
+        LOGGER.info("Codex App Server cooldown expired; retrying persistent runtime")
+        return False
+
+    def _clear_app_server_cooldown(self) -> None:
+        self._app_server_disabled = False
+        self._app_server_cooldown_until = 0.0
+
+    def _enter_app_server_cooldown(self) -> None:
+        self._app_server_disabled = True
+        self._app_server_cooldown_until = (
+            time.monotonic() + self._APP_SERVER_FAILURE_COOLDOWN_SECONDS
+        )
+        LOGGER.info(
+            "Codex App Server turn failed; using exec fallback for %.0fs",
+            self._APP_SERVER_FAILURE_COOLDOWN_SECONDS,
+        )
+
+    def warm_codex(self) -> bool:
+        """Warm the App Server in a background caller without spending a turn.
+
+        A warm-up failure is only a ``warmup_failed`` state. It must not
+        permanently disable the persistent runtime: the first real user turn
+        still gets one normal App Server attempt. HTTPS ``codex exec`` is a
+        fallback only after an actual turn lifecycle failure.
+        """
+
+        # A user-requested reconnect is the explicit permission to retry a
+        # previously failed App Server upgrade.
+        self._clear_app_server_cooldown()
+        try:
+            with self._codex_app_server_lock:
+                client = self._get_codex_app_server()
+                client.ensure_ready()
+            self._runtime_mode = "app_server"
+            self._clear_error()
+            return True
+        except (CodexAppServerError, OSError, ValueError) as exc:
+            self._remember_error(exc, stage="app_server_warmup")
+            LOGGER.info(
+                "Codex App Server warm-up unavailable kind=%s user_message=%s",
+                type(exc).__name__,
+                self.last_error_message,
+            )
+            self._runtime_mode = "warmup_failed"
+            # Do not turn a startup probe failure into a session-wide sticky
+            # exec fallback. A real user turn may succeed moments later.
+            self._close_codex_app_server()
+            return False
 
     def reply(
         self,
@@ -1661,7 +2352,8 @@ class AIChatService:
         local_context: str = "",
     ) -> str:
         if provider == "codex":
-            return ask_codex(message, history, local_context)
+            kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
+            return ask_codex(message, history, local_context, **kwargs)
         if provider == "claude":
             return ask_claude(message, history, local_context)
         if provider == "openai":
@@ -1701,14 +2393,47 @@ class AIChatService:
 
         if provider != "codex":
             answer = self.reply(provider, message, history, base_url, model, local_context)
-            if on_delta is not None and answer:
-                on_delta(answer)
+            _emit_text_chunks(answer, on_delta)
             return answer
 
         entries = list(history)
         prompt = _conversation_turn_text(message, entries, local_context)
         selected_model, effort = _codex_turn_options(message)
         self._interrupted = False
+        started_at = time.monotonic()
+        first_delta_at: float | None = None
+
+        def emit_delta(delta: str) -> None:
+            nonlocal first_delta_at
+            if first_delta_at is None:
+                first_delta_at = time.monotonic()
+                LOGGER.info(
+                    "AI chat metrics provider=codex runtime=%s prompt_chars=%d history_turns=%d rag_blocks=%d first_token_ms=%d",
+                    self._runtime_mode,
+                    len(prompt),
+                    len([item for item in entries if item[0] in {"user", "assistant"}]) // 2,
+                    prompt.count("【"),
+                    int((first_delta_at - started_at) * 1000),
+                )
+            if on_delta is not None:
+                on_delta(delta)
+
+        if self._app_server_disabled_for_turn():
+            try:
+                kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
+                answer = ask_codex(
+                    message,
+                    entries,
+                    local_context,
+                    on_delta=emit_delta,
+                    **kwargs,
+                )
+            except AIConnectionError as exc:
+                self._remember_error(exc, stage="exec_fallback")
+                raise
+            self._clear_error()
+            self._runtime_mode = "exec_https"
+            return postprocess_ai_answer(answer, classify_intent(message, entries))
         try:
             with self._codex_app_server_lock:
                 client = self._get_codex_app_server()
@@ -1716,8 +2441,15 @@ class AIChatService:
                 prompt,
                 model=selected_model,
                 effort=effort,
-                on_delta=on_delta,
+                on_delta=emit_delta,
                 timeout=float(_codex_timeout_seconds()),
+            )
+            self._runtime_mode = "app_server"
+            LOGGER.info(
+                "AI chat completed provider=codex runtime=%s prompt_chars=%d total_ms=%d fallback_used=false",
+                self._runtime_mode,
+                len(prompt),
+                int((time.monotonic() - started_at) * 1000),
             )
         except (CodexAppServerError, OSError, ValueError) as exc:
             if self._interrupted:
@@ -1728,30 +2460,47 @@ class AIChatService:
             # app-server command, the session is corrupt, or the server exits.
             # The fallback is the already existing isolated read-only exec path.
             LOGGER.warning("[AI Codex] app-server failed; falling back to exec: %s", exc)
+            self._remember_error(exc, stage="app_server_turn")
+            self._enter_app_server_cooldown()
             self._close_codex_app_server()
+            self._runtime_mode = "exec_https"
             # A model can be available in one Codex account/platform and
             # unavailable in another.  Let the normal CLI-selected model take
             # over instead of sending the same rejected Luna/Terra override a
             # second time.
             fallback_model = "" if selected_model and _looks_like_model_rejection(str(exc)) else None
-            answer = ask_codex(
-                message,
-                entries,
-                local_context,
-                model_override=fallback_model,
+            kwargs = {"executable_path": self.codex_path} if self.codex_path else {}
+            try:
+                answer = ask_codex(
+                    message,
+                    entries,
+                    local_context,
+                    model_override=fallback_model,
+                    on_delta=None if first_delta_at is not None else emit_delta,
+                    **kwargs,
+                )
+            except AIConnectionError as fallback_exc:
+                self._remember_error(fallback_exc, stage="exec_fallback")
+                raise
+            self._clear_error()
+            LOGGER.info(
+                "AI chat completed provider=codex runtime=%s prompt_chars=%d total_ms=%d fallback_used=true",
+                self._runtime_mode,
+                len(prompt),
+                int((time.monotonic() - started_at) * 1000),
             )
-            if on_delta is not None and answer:
-                # The final UI replaces the partial stream with this answer, so
-                # emitting it as another delta would duplicate the fallback.
-                pass
             return answer
+        except AIConnectionError as exc:
+            self._remember_error(exc, stage="exec_fallback")
+            raise
         intent = classify_intent(message, entries)
+        self._clear_error()
         return postprocess_ai_answer(answer, intent)
 
     def _get_codex_app_server(self) -> CodexAppServerClient:
         if self._codex_app_server is not None and self._codex_app_server.is_running:
             return self._codex_app_server
-        executable = find_codex_executable()
+        executable = resolve_codex_executable(self.codex_path)
         if executable is None:
             raise CodexAppServerError("没有找到 Codex，已切回离线回答。")
         capabilities = _codex_cli_capabilities(str(executable))
@@ -1771,6 +2520,7 @@ class AIChatService:
                 thread_id,
                 cli_version=capabilities.version,
             ),
+            on_thread_invalidated=_clear_codex_thread_id,
             desired_provider=desired_provider,
             desired_transport=desired_transport,
         )
@@ -1801,6 +2551,9 @@ class AIChatService:
 
         self._interrupted = False
         self._closing = False
+        self._runtime_mode = "unknown"
+        self._clear_app_server_cooldown()
+        self._clear_error()
         self._close_codex_app_server()
         _clear_codex_thread_id()
 

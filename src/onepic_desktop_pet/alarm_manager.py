@@ -1,4 +1,4 @@
-"""Persistent local alarms built on top of Lili's reminder clock.
+"""基于六毛提醒时钟的本地持久闹钟；关闭、错过与删除拥有独立生命周期。
 
 An alarm is intentionally separate from a normal Todo reminder: it stays
 active until the user starts work, snoozes it, or closes it.  The manager is
@@ -41,6 +41,13 @@ class Alarm:
     active: bool = False
     last_triggered_slot: str | None = None
     snooze_until: str | None = None
+    # Lifecycle metadata.  Disabling/dismissing is intentionally distinct
+    # from deleting so a closed alarm remains visible after a day boundary or
+    # restart.
+    origin: str = "standalone"
+    created_at: str = ""
+    disabled_at: str | None = None
+    disabled_reason: str | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Alarm":
@@ -77,6 +84,10 @@ class Alarm:
             active=bool(value.get("active", False)),
             last_triggered_slot=str(value.get("last_triggered_slot") or "") or None,
             snooze_until=str(value.get("snooze_until") or "") or None,
+            origin=str(value.get("origin") or ("todo" if value.get("source_todo_id") else "standalone"))[:20],
+            created_at=str(value.get("created_at") or ""),
+            disabled_at=str(value.get("disabled_at") or "") or None,
+            disabled_reason=str(value.get("disabled_reason") or "") or None,
         )
 
 
@@ -141,6 +152,8 @@ class AlarmManager:
             pet_action=str(pet_action or "alarm")[:40],
             allow_during_dnd=bool(allow_during_dnd),
             source_todo_id=str(source_todo_id or "") or None,
+            origin="todo" if source_todo_id else "standalone",
+            created_at=now_local(self._now).isoformat(),
         )
         self._items.append(item)
         self._save()
@@ -174,6 +187,12 @@ class AlarmManager:
             item.source_todo_id = str(changes["source_todo_id"] or "") or None
         if "enabled" in changes:
             item.enabled = bool(changes["enabled"])
+            if item.enabled:
+                item.disabled_at = None
+                item.disabled_reason = None
+            else:
+                item.disabled_at = now_local(self._now).isoformat()
+                item.disabled_reason = "user"
         item.active = False
         item.snooze_until = None
         item.last_triggered_slot = None
@@ -198,7 +217,15 @@ class AlarmManager:
         should_exist = mode == "alarm" and not bool(getattr(todo, "completed", False)) and bool(due)
         if not should_exist:
             if item is not None:
-                self.delete(alarm_id)
+                item.enabled = False
+                item.active = False
+                item.snooze_until = None
+                item.disabled_at = item.disabled_at or now_local(self._now).isoformat()
+                item.disabled_reason = (
+                    "todo_completed" if bool(getattr(todo, "completed", False))
+                    else "todo_reminder_changed"
+                )
+                self._save()
             return
         if item is None:
             item = Alarm(
@@ -212,12 +239,15 @@ class AlarmManager:
                 snooze_minutes=max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10))),
                 linked_todo_id=todo_id,
                 source_todo_id=todo_id,
+                origin="todo",
+                created_at=now_local(self._now).isoformat(),
             )
             self._items.append(item)
             self._save()
             return
+        was_user_disabled = (not item.enabled and item.disabled_reason == "user")
         changed = (
-            not item.enabled
+            (not item.enabled and not was_user_disabled)
             or
             item.title != str(getattr(todo, "title", "待办"))[:240]
             or item.trigger_at != parse_datetime(due, self._now).isoformat()
@@ -226,7 +256,10 @@ class AlarmManager:
             or item.snooze_minutes != max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10)))
         )
         item.title = str(getattr(todo, "title", "待办"))[:240] or "待办"
-        item.enabled = True
+        if not was_user_disabled:
+            item.enabled = True
+            item.disabled_at = None
+            item.disabled_reason = None
         item.trigger_at = parse_datetime(due, self._now).isoformat()
         item.sound_enabled = True
         item.sound_id = str(getattr(todo, "alarm_sound_id", "system") or "system")[:40]
@@ -235,6 +268,7 @@ class AlarmManager:
         item.snooze_minutes = max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10)))
         item.linked_todo_id = todo_id
         item.source_todo_id = todo_id
+        item.origin = "todo"
         if changed:
             item.active = False
             item.snooze_until = None
@@ -263,6 +297,11 @@ class AlarmManager:
         if not item.enabled:
             item.active = False
             item.snooze_until = None
+            item.disabled_at = now_local(self._now).isoformat()
+            item.disabled_reason = "user"
+        else:
+            item.disabled_at = None
+            item.disabled_reason = None
         self._save()
         return item
 
@@ -299,6 +338,8 @@ class AlarmManager:
             if (current - slot).total_seconds() > max(1, int(grace_minutes)) * 60:
                 if item.repeat_rule == REPEAT_ONCE:
                     item.enabled = False
+                    item.disabled_at = now_local(self._now).isoformat()
+                    item.disabled_reason = "missed"
                 item.last_triggered_slot = slot.isoformat()
                 item.snooze_until = None
                 changed = True
@@ -330,6 +371,8 @@ class AlarmManager:
         item.snooze_until = None
         if item.repeat_rule == REPEAT_ONCE:
             item.enabled = False
+            item.disabled_at = now_local(self._now).isoformat()
+            item.disabled_reason = "dismissed"
         self._save()
         return item
 

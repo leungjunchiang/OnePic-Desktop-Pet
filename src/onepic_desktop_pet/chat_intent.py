@@ -4,11 +4,16 @@ The classifier is deliberately conservative.  A title that can also be a
 normal sentence stays casual unless the user supplies clear song context.
 It does not answer questions or rewrite facts; it only decides which local
 knowledge and response budget are appropriate.
+Offline message-type classification is kept separate from the existing
+knowledge intent and never performs local writes.
+Family-topic context is carried across turns only when the current message
+contains an explicit anaphoric reference; unrelated questions start fresh.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable
 
 
@@ -19,6 +24,15 @@ SONG_QUERY = "song_query"
 EMOTIONAL_SUPPORT = "emotional_support"
 WORK_COMPANION = "work_companion"
 RELATION_QUERY = "relation_query"
+
+CASUAL_CHAT_MESSAGE = "CASUAL_CHAT"
+FACTUAL_QUESTION = "FACTUAL_QUESTION"
+MEMORY_RECALL = "MEMORY_RECALL"
+TASK_COMMAND = "TASK_COMMAND"
+TODO_COMMAND = "TODO_COMMAND"
+TIMER_COMMAND = "TIMER_COMMAND"
+EMOTIONAL_CHAT = "EMOTIONAL_CHAT"
+UNKNOWN_MESSAGE = "UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -41,13 +55,31 @@ _SONG_CONTEXT = (
     "谁唱", "是谁唱", "播放", "放一下", "这首歌", "这首", "歌曲", "歌名",
     "代表作", "专辑", "听听", "听歌", "正在听", "唱的", "歌单",
 )
+# Keep generic words such as “人生” and “后来” out of the profile trigger.
+# They are common in unrelated questions and may only be interpreted as a
+# Chen profile when the current turn supplies an explicit subject or a real
+# anaphoric follow-up.
 _PROFILE_MARKERS = (
-    "经历", "人生", "成长", "出道", "以前", "后来", "一路", "职业生涯",
-    "讲讲", "介绍一下", "从哪里", "怎么走过来", "怎么出道",
+    "经历", "成长经历", "出道", "职业生涯", "怎么走过来", "怎么出道",
+)
+_ANAPHORIC_PROFILE_MARKERS = (
+    "后来", "以前", "之前", "一路", "讲讲", "介绍一下", "怎么走过来",
+)
+_EXPLICIT_PROFILE_PHRASES = (
+    "陈楚生的人生", "陈楚生的人生经历", "陈楚生的经历", "陈楚生的成长",
+    "陈楚生的职业生涯", "陈楚生怎么出道", "陈楚生如何出道",
+    "陈楚生怎么一路走来", "我爹的人生", "我爹的经历", "你爹的人生",
+    "你爹的经历",
 )
 _FACT_MARKERS = (
-    "哪年", "什么时候", "出生", "冠军", "第几", "是什么", "什么意思",
+    "哪年", "什么时候", "出生", "冠军", "第几", "是哪", "哪个", "哪项", "哪一",
+    "是什么", "什么意思",
     "哪位", "是谁", "多少人", "有哪些", "获得", "称号", "日期",
+)
+_GENERAL_FACT_MARKERS = (
+    "哪里", "哪儿", "是哪", "哪个", "哪项", "哪一", "哪位", "哪年",
+    "什么时候", "出生", "冠军", "第几", "多少人", "有哪些", "获得", "称号",
+    "日期",
 )
 _RELATION_MARKERS = (
     "0713", "再就业", "快乐再出发", "蘑菇屋", "什么关系", "都有谁", "哪六个",
@@ -63,6 +95,13 @@ _WORK_MARKERS = (
     "工作", "论文", "任务", "代码", "学习", "专注", "交稿", "开工", "收工",
     "写不动", "开始干活", "工作了多久",
 )
+_FAMILY_MARKERS = ("陈楚生", "我爹", "你爹", "他的歌", "陈楚生家的")
+_FAMILY_ANAPHORA = (
+    "他的", "他是", "他在", "他有", "他会", "他怎么", "他为什么", "他是谁", "那他",
+    "这个人", "那个人", "这位", "那位", "这首", "那首", "这张", "那张",
+    "这件事", "那件事", "它是", "它的", "它在", "刚才", "上面", "前面",
+)
+_KNOWLEDGE_INTENTS = frozenset({SONG_QUERY, CHEN_PROFILE, FACTUAL_QA, RELATION_QUERY})
 
 
 def _clean(value: str) -> str:
@@ -79,6 +118,118 @@ def _history_text(history: Iterable[tuple[str, str]]) -> str:
 
 def _contains(text: str, markers: Iterable[str]) -> bool:
     return any(marker in text for marker in markers)
+
+
+def _has_family_context(
+    text: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> bool:
+    """Only carry the Chen/family topic across an explicit anaphoric follow-up.
+
+    A previous mention of a song is not permission to reinterpret an unrelated
+    question such as ``人生的意义是什么`` as a question about Chen Chusheng's
+    biography.  Context is retained for phrases that actually refer back to a
+    person, song, album, or event.
+    """
+
+    if _contains(text, _FAMILY_MARKERS):
+        return True
+    recent = _history_text(history)
+    return bool(recent and _contains(recent, _FAMILY_MARKERS) and _is_anaphoric_followup(text))
+
+
+def _is_anaphoric_followup(text: str) -> bool:
+    """Return whether the current turn actually refers to prior context."""
+
+    text = _clean(text)
+    # Standalone discourse words (``刚才``/``前面``) are not enough: accepting
+    # them made an unrelated question inherit the previous subject.
+    return bool(
+        re.search(r"(?:那|这个|那个)?他(?:呢|的|后来|以前|之前|怎么|为什么|是谁|在|有|会)", text)
+        or _contains(text, ("这首", "那首", "这张", "那张", "这件事", "那件事", "这个人", "那个人"))
+    )
+
+
+def _has_profile_request(text: str, *, family_context: bool) -> bool:
+    """Require an explicit profile phrase, not a broad word like “人生”."""
+
+    if _contains(text, _EXPLICIT_PROFILE_PHRASES):
+        return True
+    if not family_context:
+        return False
+    return (_contains(text, _PROFILE_MARKERS) or _contains(text, _ANAPHORIC_PROFILE_MARKERS)) and (
+        _contains(text, _FAMILY_MARKERS) or _is_anaphoric_followup(text)
+    )
+
+
+def knowledge_retrieval_query(
+    message: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> str:
+    """Build a current-turn-first retrieval query.
+
+    History may resolve a short anaphora, but the previous assistant answer is
+    never appended wholesale to lexical retrieval.
+    """
+
+    text = _clean(message)
+    if _has_family_context(text, tuple(history)) and not _contains(text, _FAMILY_MARKERS):
+        return f"陈楚生 {text}".strip()
+    return text
+
+
+def is_topic_shift(
+    message: str,
+    history: Iterable[tuple[str, str]] = (),
+) -> bool:
+    """Detect a clear switch away from a recent knowledge-heavy topic.
+
+    This is only a prompt-boundary hint.  It does not discard local chat
+    memory, execute actions, or create a second conversation router.
+    """
+
+    entries = tuple(history)
+    if not entries:
+        return False
+    text = _clean(message)
+    if _contains(text, _FAMILY_ANAPHORA) or _contains(text, ("还记得", "记得吗", "继续")):
+        return False
+    if classify_intent(text, entries).primary_intent != CASUAL_CHAT:
+        return False
+    for role, content in reversed(entries[-8:]):
+        if role != "user":
+            continue
+        if classify_intent(str(content or ""), ()).primary_intent in _KNOWLEDGE_INTENTS:
+            return True
+    return False
+
+
+def classify_offline_message(message: str) -> str:
+    """Classify fallback traffic without creating a second Todo router."""
+
+    text = _clean(message)
+    if not text:
+        return UNKNOWN_MESSAGE
+    if re.search(r"^(?:开始工作|开工|开始计时|暂停(?:工作|计时)?|继续工作|恢复计时|结束工作|收工)", text):
+        return TIMER_COMMAND
+    if re.search(r"加到待办|加入待办|放到待办|放进待办|记到待办|创建待办|新增待办|添加待办|提醒我|设置提醒|帮我记", text):
+        return TODO_COMMAND
+    if re.search(r"还记得|记不记得|你.*记得|知不知道|你知道.*吗|记得什么|记得谁", text):
+        return MEMORY_RECALL
+    if _contains(text, ("好累", "很累", "不想干", "好烦", "崩溃", "难过", "想休息")):
+        return EMOTIONAL_CHAT
+    if _contains(text, ("你的状态", "你怎么样", "精力", "饱食度", "心情怎么样")):
+        return CASUAL_CHAT_MESSAGE
+    # Chinese factual questions often end with “是哪吗/哪个/哪一项” rather
+    # than the longer “哪里/哪儿”.  Keep this deterministic gate broad enough
+    # to classify a knowledge question safely, but never use it for writes.
+    if re.search(r"(哪里|哪儿|是哪|哪个|哪项|哪一|是什么|什么意思|为什么|怎么|多少|哪位|哪年|\?|？)", text):
+        return FACTUAL_QUESTION
+    if _contains(text, ("待办", "提醒")):
+        return TODO_COMMAND
+    if _contains(text, ("工作", "任务", "论文", "学习", "专注")):
+        return CASUAL_CHAT_MESSAGE
+    return CASUAL_CHAT_MESSAGE
 
 
 def _has_explicit_song_context(text: str) -> bool:
@@ -98,10 +249,8 @@ def classify_intent(
     history: Iterable[tuple[str, str]] = (),
 ) -> ChatIntent:
     text = _clean(message)
-    recent = _history_text(history)
-    family_context = _contains(text, ("陈楚生", "我爹", "你爹", "他的歌")) or _contains(
-        recent, ("陈楚生", "我爹", "你爹", "歌曲", "歌名")
-    )
+    entries = tuple(history)
+    family_context = _has_family_context(text, entries)
 
     if _has_explicit_song_context(text):
         return ChatIntent(SONG_QUERY, None, True, ("songs", "music"), 0.96, 3, "short", False)
@@ -112,8 +261,14 @@ def classify_intent(
     ):
         return ChatIntent(RELATION_QUERY, None, True, ("relations", "timeline"), 0.94, 4, "medium", False)
 
-    if family_context and _contains(text, _PROFILE_MARKERS):
-        return ChatIntent(CHEN_PROFILE, None, True, ("profile", "timeline", "history"), 0.93, 8, "detailed", False)
+    if _has_profile_request(text, family_context=family_context):
+        return ChatIntent(CHEN_PROFILE, None, True, ("profile", "timeline", "history"), 0.93, 5, "detailed", False)
+
+    # A complete question about a place, person, date, or choice can change
+    # topic without any Chen/family context.  Do not include broad markers
+    # such as “是什么” here: “人生的意义是什么” remains ordinary chat.
+    if _contains(text, _GENERAL_FACT_MARKERS):
+        return ChatIntent(FACTUAL_QA, None, True, ("facts",), 0.88, 2, "short", False)
 
     if family_context and _contains(text, _FACT_MARKERS):
         return ChatIntent(FACTUAL_QA, None, True, ("facts", "history", "songs", "relations"), 0.88, 3, "short", False)
@@ -132,7 +287,7 @@ def intent_prompt_context(intent: ChatIntent) -> str:
     """Turn routing metadata into a short instruction for the model."""
 
     if intent.primary_intent == CHEN_PROFILE:
-        style = "这是宽泛人物经历问题：按时间线组织 6-10 句，优先讲阶段转折，不要逐段复述资料。"
+        style = "这是人物经历问题：按时间线组织 3-6 句，优先讲阶段转折，不要逐段复述资料。"
     elif intent.primary_intent == RELATION_QUERY:
         style = "这是人物关系问题：先纠正概念，再给名单或关系，控制在 2-4 句。"
     elif intent.primary_intent == SONG_QUERY:
@@ -142,7 +297,7 @@ def intent_prompt_context(intent: ChatIntent) -> str:
     elif intent.primary_intent in {EMOTIONAL_SUPPORT, WORK_COMPANION}:
         style = "六毛首先是工作搭子；先处理用户眼前的一小步，除非故事引擎明确命中，不要提陈楚生。"
     else:
-        style = "这是普通聊天；结合最近上下文自然接话。关键词只能作为候选线索，不要把它直接当成歌曲、事实或固定回复。"
+        style = "这是普通聊天；只有当前句明确出现‘他/这首/那张’等指代时才沿用上一话题，否则视为换题，直接回答当前问题。关键词只能作为候选线索，不要把它直接当成歌曲、事实或固定回复。"
     return (
         f"本轮意图：{intent.primary_intent}；置信度 {intent.confidence:.2f}。{style}"
         "事实优先，‘我爹’最多自然出现一次。"

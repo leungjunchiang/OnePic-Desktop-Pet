@@ -2,6 +2,8 @@
 
 Natural language remains AI territory.  This module only accepts a clearly
 structured object, validates it, and performs the side effect in local stores.
+Todo creation is authorized by the original user message immediately before
+the existing manager writes; no parallel Todo store is introduced.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from .timeline_manager import TimelineManager
 from .todo_manager import TodoManager
 from .reminder_manager import ReminderManager
 from .alarm_manager import AlarmManager
+from .todo_nlp import parse_explicit_todo_request, validate_todo_creation_intent
 
 
 ACTION_NAMES = {
@@ -76,21 +79,37 @@ class LocalActionExecutor:
         self.reminders = reminders
         self.alarms = alarms
 
-    def execute(self, value: dict[str, Any]) -> ActionResult | None:
+    def execute(self, value: dict[str, Any], *, user_text: str | None = None) -> ActionResult | None:
         action = str(value.get("action") or "")
         if action not in ACTION_NAMES:
             return None
         if action == "create_todo":
+            permission = validate_todo_creation_intent(user_text, value)
+            if not permission.allowed:
+                return ActionResult(
+                    action,
+                    "我把这句按聊天理解了，没有写入待办。",
+                    {"saved": False, "permission_denied": True, "reason": permission.reason},
+                    False,
+                )
             raw_tasks = value.get("tasks")
             if not isinstance(raw_tasks, list):
                 raw_tasks = [value]
+            # When a model emits the whole user sentence as the title, prefer
+            # the same deterministic parser used by the offline fast path.
+            # This keeps “六毛，帮我设个今天9点的待办：去图书馆自习” as a
+            # structured task instead of storing the command itself.
+            if user_text is not None and len(raw_tasks) == 1:
+                normalized = parse_explicit_todo_request(user_text)
+                if normalized and isinstance(normalized.get("tasks"), list):
+                    raw_tasks = normalized["tasks"]
             created = []
             updated = []
             for raw in raw_tasks:
                 if not isinstance(raw, dict) or not str(raw.get("title") or "").strip():
                     continue
                 title = str(raw.get("title") or "").strip()
-                date = raw.get("date") or "today"
+                date = raw.get("date")
                 existing = self.todos.find_similar_pending(title, date)
                 changes = {
                     key: raw[key]
@@ -120,22 +139,21 @@ class LocalActionExecutor:
                 self._sync_todo_reminder(task)
             if not created and not updated:
                 return ActionResult(action, "没有明确的待办内容，我还没保存。", {"saved": False}, False)
-            parts = []
-            if created:
-                parts.append(f"新增 {len(created)} 项")
-            if updated:
-                parts.append(f"更新 {len(updated)} 项")
             tasks = created + updated
             labels = [
-                f"{item.title} · {item.time}" if item.time else item.title
+                f"{item.time} {item.title}" if item.time else item.title
                 for item in tasks
             ]
             summary = "、".join(labels[:4])
             if len(labels) > 4:
-                summary += f"等 {len(labels)} 项"
+                summary += "等"
+            if created and updated:
+                reply = f"记上了：{summary}。"
+            else:
+                reply = f"好，放进待办了：{summary}。"
             return ActionResult(
                 action,
-                f"已经放进待办了：{summary}（{'，'.join(parts)}）。",
+                reply,
                 {"saved": True, "created": [item.to_dict() for item in created], "updated": [item.to_dict() for item in updated], "tasks": [item.to_dict() for item in tasks]},
             )
         if action == "update_todo":

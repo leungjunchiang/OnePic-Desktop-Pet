@@ -19,6 +19,7 @@ Agent 快速定位：
 
 输入为可选的无界面冒烟测试时长，输出为 Qt 事件循环退出码。
 副作用包括创建桌面窗口、托盘图标和用户设置文件；不修改项目默认配置或原始素材。
+程序入口使用每用户 QLockFile，确保一个进程只拥有一个真实桌宠窗口。
 """
 
 from __future__ import annotations
@@ -26,8 +27,9 @@ from __future__ import annotations
 import os
 import logging
 import sys
+from typing import ClassVar
 
-from PySide6.QtCore import QProcess, Qt, QTimer, QObject
+from PySide6.QtCore import QLockFile, QProcess, Qt, QTimer, QObject
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .config import PET_NAME, PetSettings, load_settings, save_settings
+from .local_data import platform_app_data_root
 from .companion import APP_DISPLAY_NAME
 from .content_updates import (
     ContentUpdateResult,
@@ -66,7 +69,19 @@ LOGGER = logging.getLogger(__name__)
 class DesktopPetApplication(QObject):
     """封装窗口、托盘与持久化状态的桌面宠物应用。"""
 
-    def __init__(self, settings: PetSettings | None = None) -> None:
+    # QLockFile protects separate processes.  This second, process-local
+    # guard protects against a launcher/reconnect path constructing the app
+    # controller twice before Qt's event loop starts.
+    _active_instance: ClassVar["DesktopPetApplication | None"] = None
+
+    def __init__(
+        self,
+        settings: PetSettings | None = None,
+        *,
+        instance_lock: QLockFile | None = None,
+    ) -> None:
+        if type(self)._active_instance is not None:
+            raise RuntimeError("Lili application ownership already exists")
         if QApplication.instance() is None:
             QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -77,11 +92,13 @@ class DesktopPetApplication(QObject):
         # those callbacks back to the main thread before they touch windows,
         # message boxes, or speech bubbles.
         super().__init__()
+        self._instance_lock = instance_lock
         self.qt_app.setApplicationName(APP_DISPLAY_NAME)
         self.qt_app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
+        type(self)._active_instance = self
         self.window.quit_requested.connect(self.quit)
         self.update_manager = UpdateManager()
         self._content_update_worker: ContentUpdateWorker | None = None
@@ -200,10 +217,14 @@ class DesktopPetApplication(QObject):
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         finally:
+            if type(self)._active_instance is self:
+                type(self)._active_instance = None
             self._status_item_controller.close()
             self._dock_controller.close()
             self.tray.hide()
             self.window.close()
+            if self._instance_lock is not None and self._instance_lock.isLocked():
+                self._instance_lock.unlock()
             self.qt_app.quit()
 
     def check_content_updates(self, manual: bool = True) -> None:
@@ -487,5 +508,17 @@ class DesktopPetApplication(QObject):
 def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
-    return DesktopPetApplication().start(smoke_test_ms=smoke_test_ms)
-
+    lock_path = platform_app_data_root() / "Lili" / "app.lock"
+    instance_lock = QLockFile(str(lock_path))
+    instance_lock.setStaleLockTime(0)
+    if not instance_lock.tryLock(100):
+        LOGGER.warning("Lili 已有运行中的应用实例，忽略重复启动：lock=%s", lock_path)
+        return 0
+    try:
+        return DesktopPetApplication(instance_lock=instance_lock).start(
+            smoke_test_ms=smoke_test_ms
+        )
+    except Exception:
+        if instance_lock.isLocked():
+            instance_lock.unlock()
+        raise

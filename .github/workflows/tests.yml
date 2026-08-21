@@ -17,7 +17,17 @@ jobs:
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest
+        shell: powershell
+        run: |
+          # Keep each Qt-heavy test module in its own Python process. This
+          # prevents a Windows runner's native Qt state from leaking between
+          # modules while still running the complete test suite.
+          $files = Get-ChildItem -Path tests -Filter 'test_*.py' | Sort-Object FullName
+          foreach ($file in $files) {
+            Write-Host "=== Running $($file.FullName) ==="
+            python -m pytest --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)" $file.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   relay-tests:
     runs-on: ubuntu-latest

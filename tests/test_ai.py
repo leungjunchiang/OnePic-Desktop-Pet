@@ -14,6 +14,7 @@ import pytest
 from onepic_desktop_pet.ai import (
     AIChatService,
     AIConnectionError,
+    AIErrorKind,
     CodexCliCapabilities,
     PROVIDER_PRESETS,
     _chat_endpoint,
@@ -38,7 +39,11 @@ from onepic_desktop_pet.ai import (
     _write_codex_thread_id,
     _codex_turn_options,
     _codex_timeout_seconds,
+    _codex_jsonl_snapshot,
+    _conversation_turn_text,
+    _emit_text_chunks,
     provider_defaults,
+    user_message_for_ai_error,
     _models_endpoint,
 )
 
@@ -196,8 +201,8 @@ def test_codex_uses_capability_safe_command_and_prompt_argument(monkeypatch) -> 
     assert captured["kwargs"].get("input") is None
 
 
-def test_macos_codex_exec_uses_native_minimal_transport(monkeypatch) -> None:
-    """Finder-launched macOS chat does not force a provider override by default."""
+def test_macos_codex_exec_uses_process_local_https_transport(monkeypatch) -> None:
+    """Finder-launched macOS chat keeps the verified HTTPS provider path."""
 
     calls = []
     output = json.dumps(
@@ -228,7 +233,9 @@ def test_macos_codex_exec_uses_native_minimal_transport(monkeypatch) -> None:
         if "exec" in command and command[-1] != "--help"
     ]
     assert len(exec_commands) == 1
-    assert not any("model_provider" in str(part) for part in exec_commands[0])
+    assert ("-c", 'model_provider="lili_http"') in list(
+        zip(exec_commands[0], exec_commands[0][1:])
+    )
 
 
 def test_codex_failure_keeps_sanitized_runtime_diagnostic(monkeypatch) -> None:
@@ -301,14 +308,35 @@ def test_windows_lili_codex_call_uses_low_latency_model(monkeypatch) -> None:
 
 def test_app_server_command_uses_minimal_cross_platform_command(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
+    monkeypatch.delenv("LILI_CODEX_TRANSPORT", raising=False)
     command = _codex_app_server_command(Path("codex.exe"))
-    assert command == ["codex.exe", "app-server"]
+    assert command[:2] == ["codex.exe", "app-server"]
+    assert ("-c", 'model_provider="lili_http"') in list(zip(command, command[1:]))
 
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "darwin")
     command = _codex_app_server_command(Path("/usr/local/bin/codex"))
-    assert command[-1] == "app-server"
+    assert command[1] == "app-server"
+    assert ("-c", 'model_provider="lili_http"') in list(zip(command, command[1:]))
     assert command[0].replace("\\", "/") == "/usr/local/bin/codex"
     assert "--ignore-user-config" not in command
+
+
+def test_codex_exec_command_applies_process_local_https_config(monkeypatch) -> None:
+    monkeypatch.delenv("LILI_CODEX_TRANSPORT", raising=False)
+    capabilities = CodexCliCapabilities(
+        exec_options=frozenset({"--ephemeral", "--json", "--model"})
+    )
+    command = _codex_exec_command(
+        Path("codex"),
+        "测试消息",
+        capabilities=capabilities,
+    )
+
+    assert ("-c", 'model_provider="lili_http"') in list(zip(command, command[1:]))
+    assert ("-c", 'model_providers.lili_http.supports_websockets=false') in list(
+        zip(command, command[1:])
+    )
+    assert command[-1] == "测试消息"
 
 
 def test_codex_cli_argument_error_is_short_and_actionable() -> None:
@@ -320,6 +348,162 @@ def test_codex_cli_argument_error_is_short_and_actionable() -> None:
     assert message == "Codex CLI 版本不兼容：不支持参数 --ignore-user-config。已临时切换到离线陪伴。"
 
 
+def test_safe_codex_diagnosis_survives_agent_status_boundary() -> None:
+    """A classified reason must not collapse into the generic offline text."""
+
+    message = "Codex CLI 版本不兼容：不支持参数 --ignore-user-config。已临时切换到离线陪伴。"
+    assert user_message_for_ai_error(message) == message
+    error = AIConnectionError(
+        "internal command omitted",
+        kind=AIErrorKind.CLI_INCOMPATIBLE,
+        user_message=message,
+    )
+    assert user_message_for_ai_error(error) == message
+
+
+def test_non_streaming_transport_is_split_into_small_deltas() -> None:
+    """兼容 transport 返回完整文本时也能交给 UI 做增量显示。"""
+
+    chunks: list[str] = []
+    _emit_text_chunks("中国的首都是北京。", chunks.append, chunk_size=4)
+
+    assert chunks == ["中国的首", "都是北京", "。"]
+    assert "".join(chunks) == "中国的首都是北京。"
+
+
+def test_codex_exec_jsonl_snapshots_emit_only_new_assistant_suffix() -> None:
+    current = ""
+    current = _codex_jsonl_snapshot(
+        {
+            "type": "item.updated",
+            "item": {"type": "agent_message", "text": "中国的"},
+        },
+        current,
+    )
+    assert current == "中国的"
+    current = _codex_jsonl_snapshot(
+        {
+            "type": "item.updated",
+            "item": {"type": "agent_message", "text": "中国的首都是"},
+        },
+        current,
+    )
+    assert current == "中国的首都是"
+    # A completed event repeats the accumulated snapshot; it must not cause
+    # the UI to append the same answer a second time.
+    assert _codex_jsonl_snapshot(
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "中国的首都是"},
+        },
+        current,
+    ) == current
+
+
+def test_ask_codex_reads_exec_jsonl_while_process_is_running(monkeypatch) -> None:
+    class FakeStream:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = FakeStream(
+                [
+                    json.dumps({"type": "thread.started"}) + "\n",
+                    json.dumps(
+                        {
+                            "type": "item.updated",
+                            "item": {"type": "agent_message", "text": "首"},
+                        }
+                    ) + "\n",
+                    json.dumps(
+                        {
+                            "type": "item.updated",
+                            "item": {"type": "agent_message", "text": "首字"},
+                        }
+                    ) + "\n",
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "首字"},
+                        }
+                    ) + "\n",
+                ]
+            )
+            self.stderr = FakeStream([])
+            self.returncode = None
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    process = FakeProcess()
+    monkeypatch.setattr("onepic_desktop_pet.ai.find_codex_executable", lambda: Path("codex"))
+    monkeypatch.setattr(
+        "onepic_desktop_pet.ai._codex_cli_capabilities",
+        lambda _path: CodexCliCapabilities(exec_options=frozenset({"--json"})),
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai.subprocess.Popen", lambda *_args, **_kwargs: process)
+
+    deltas: list[str] = []
+    assert ask_codex("测试", [], on_delta=deltas.append) == "首字"
+    assert deltas == ["首", "字"]
+
+
+def test_failed_app_server_is_not_retried_on_every_chat(monkeypatch) -> None:
+    """After warm-up failure, the session uses the known-compatible exec path."""
+
+    service = AIChatService(FakeCredentials())
+    service._app_server_disabled = True
+    monkeypatch.setattr("onepic_desktop_pet.ai.ask_codex", lambda *_args, **_kwargs: "兼容连接已回复")
+    assert service.stream_reply("codex", "中国的首都是哪里？", []) == "兼容连接已回复"
+
+
+def test_warmup_failure_does_not_disable_first_real_app_server_turn(monkeypatch) -> None:
+    """启动预热失败后，真实聊天仍应重新尝试并复用 App Server。"""
+
+    class FakeAppServer:
+        def __init__(self, *, warmup_fails: bool = False) -> None:
+            self.warmup_fails = warmup_fails
+            self.turn_calls = 0
+            self.is_running = True
+
+        def ensure_ready(self) -> None:
+            if self.warmup_fails:
+                raise OSError("temporary warm-up failure")
+
+        def stream_turn(self, *_args, **_kwargs) -> str:
+            self.turn_calls += 1
+            return f"App Server 回复 {self.turn_calls}"
+
+        def close(self) -> None:
+            self.is_running = False
+
+    warmup_client = FakeAppServer(warmup_fails=True)
+    persistent_client = FakeAppServer()
+    clients = iter((warmup_client, persistent_client, persistent_client))
+    service = AIChatService(FakeCredentials())
+    monkeypatch.setattr(service, "_get_codex_app_server", lambda: next(clients))
+
+    assert service.warm_codex() is False
+    assert service.runtime_mode == "warmup_failed"
+    assert service._app_server_disabled is False
+
+    assert service.stream_reply("codex", "第一句话", []) == "App Server 回复 1"
+    assert service.runtime_mode == "app_server"
+    assert service.stream_reply("codex", "第二句话", []) == "App Server 回复 2"
+    assert persistent_client.turn_calls == 2
+
+
 def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(monkeypatch) -> None:
     monkeypatch.setattr("onepic_desktop_pet.ai.sys.platform", "win32")
     monkeypatch.delenv("LILI_CODEX_MODEL", raising=False)
@@ -328,6 +512,19 @@ def test_codex_turn_options_keep_daily_chat_fast_and_escalate_complex_questions(
         "gpt-5.6-terra",
         "low",
     )
+
+
+def test_codex_turn_prompt_marks_unrelated_topic_boundary() -> None:
+    history = [
+        ("user", "那你知道《趋光号》这张专辑吗"),
+        ("assistant", "知道，这是陈楚生的作品。"),
+    ]
+
+    prompt = _conversation_turn_text("你知道人生的意义是什么吗", history)
+
+    assert "本轮是换话题" in prompt
+    assert "本轮意图：casual_chat" in prompt
+    assert "本轮意图：chen_chusheng_profile" not in prompt
 
 
 def test_codex_exec_failure_is_logged_without_prompt_or_credentials(monkeypatch, caplog) -> None:
@@ -593,10 +790,22 @@ def test_codex_thread_state_v1_is_not_resumed(monkeypatch, tmp_path: Path) -> No
     assert not thread_path.exists()
 
 
+def test_codex_thread_state_v2_is_reset_after_prompt_boundary_upgrade(monkeypatch, tmp_path: Path) -> None:
+    thread_path = tmp_path / "codex-app-server-thread.json"
+    thread_path.write_text(
+        '{"version": 2, "thread_id": "stale-topic-thread", "provider": "openai", "transport": "native"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
+
+    assert _read_codex_thread_id() == ""
+    assert not thread_path.exists()
+
+
 def test_codex_thread_state_rejects_provider_mismatch(monkeypatch, tmp_path: Path) -> None:
     thread_path = tmp_path / "codex-app-server-thread.json"
     thread_path.write_text(
-        '{"version": 2, "thread_id": "old-thread", "provider": "openai", "transport": "native"}\n',
+        '{"version": 3, "thread_id": "old-thread", "provider": "openai", "transport": "native"}\n',
         encoding="utf-8",
     )
     monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
@@ -607,7 +816,7 @@ def test_codex_thread_state_rejects_provider_mismatch(monkeypatch, tmp_path: Pat
     assert not thread_path.exists()
 
 
-def test_codex_thread_state_v2_round_trips_without_credentials(monkeypatch, tmp_path: Path) -> None:
+def test_codex_thread_state_v3_round_trips_without_credentials(monkeypatch, tmp_path: Path) -> None:
     thread_path = tmp_path / "codex-app-server-thread.json"
     monkeypatch.setattr("onepic_desktop_pet.ai._codex_thread_state_path", lambda: thread_path)
     monkeypatch.setenv("LILI_CODEX_TRANSPORT", "https")
@@ -615,7 +824,7 @@ def test_codex_thread_state_v2_round_trips_without_credentials(monkeypatch, tmp_
     _write_codex_thread_id("fresh-thread", cli_version="codex-cli 1.2.3")
     payload = json.loads(thread_path.read_text(encoding="utf-8"))
 
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert payload["thread_id"] == "fresh-thread"
     assert payload["provider"] == "lili_http"
     assert payload["transport"] == "https"

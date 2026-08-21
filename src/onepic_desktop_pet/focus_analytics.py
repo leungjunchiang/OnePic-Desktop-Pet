@@ -12,9 +12,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
+
+
+MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60
 
 
 def focus_analytics_path() -> Path:
@@ -36,8 +39,8 @@ class FocusAnalyticsSummary:
     current_streak_days: int
     longest_streak_days: int
     weekly_total_seconds: int
-    yesterday_seconds: int
-    difference_vs_yesterday_seconds: int
+    yesterday_seconds: int | None
+    difference_vs_yesterday_seconds: int | None
     average_quality: int
     quality_label: str
     high_efficiency_window: str
@@ -110,6 +113,13 @@ class FocusAnalyticsStore:
         self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None}
         if self._persist:
             self._load()
+        # ``days.seconds`` is derived data.  Older releases added cumulative
+        # timer checkpoints as if they were independent sessions, which could
+        # produce impossible values such as 38 hours in one calendar day.
+        # Rebuild from the raw records on load while keeping those records for
+        # diagnostics and future migrations.
+        if self._rebuild_days_from_records() or self._trim_days():
+            self._save()
 
     def record_session(
         self,
@@ -145,6 +155,7 @@ class FocusAnalyticsStore:
             "task": str(task)[:120],
         })
         self._state["records"] = records[-500:]
+        self._rebuild_days_from_records()
         self._trim_days()
         self._save()
         return quality
@@ -198,16 +209,29 @@ class FocusAnalyticsStore:
             except (AttributeError, TypeError, ValueError):
                 return 0
 
-        weekly_total = sum(day_value(today - timedelta(days=i), "seconds") for i in range(7))
-        yesterday = day_value(today - timedelta(days=1), "seconds")
-        streak_reference = today if day_value(today, "seconds") else today - timedelta(days=1)
+        def day_seconds(day: date) -> int | None:
+            raw = days.get(day.isoformat(), {})
+            try:
+                value = max(0, int(raw.get("seconds", 0)))
+            except (AttributeError, TypeError, ValueError):
+                return None
+            return value if value <= MAX_ANALYTICS_DAY_SECONDS else None
+
+        weekly_total = sum(
+            seconds or 0
+            for i in range(7)
+            for seconds in (day_seconds(today - timedelta(days=i)),)
+        )
+        yesterday = day_seconds(today - timedelta(days=1))
+        today_seconds = day_seconds(today)
+        streak_reference = today if (today_seconds or 0) > 0 else today - timedelta(days=1)
         streak = 0
-        while day_value(streak_reference - timedelta(days=streak), "seconds") > 0:
+        while (day_seconds(streak_reference - timedelta(days=streak)) or 0) > 0:
             streak += 1
         longest = 0
         run = 0
         for offset in range(366, -1, -1):
-            if day_value(today - timedelta(days=offset), "seconds") > 0:
+            if (day_seconds(today - timedelta(days=offset)) or 0) > 0:
                 run += 1
                 longest = max(longest, run)
             else:
@@ -233,7 +257,8 @@ class FocusAnalyticsStore:
         late_average = round(sum(late_records) / len(late_records)) if late_records else 0
         return FocusAnalyticsSummary(
             today.isoformat(), day_value(today, "rounds"), streak, longest, weekly_total,
-            yesterday, day_value(today, "seconds") - yesterday, average_quality,
+            yesterday, (today_seconds - yesterday) if today_seconds is not None and yesterday is not None else None,
+            average_quality,
             quality_label, window, late_average,
         )
 
@@ -261,10 +286,67 @@ class FocusAnalyticsStore:
         hour = max(buckets, key=lambda key: (sum(buckets[key]) / len(buckets[key]), len(buckets[key])))
         return f"{hour:02d}:00–{(hour + 1) % 24:02d}:00"
 
-    def _trim_days(self) -> None:
+    def _rebuild_days_from_records(self) -> bool:
+        """Recompute daily duration as a union of raw focus intervals.
+
+        Raw records are intentionally retained.  Only the derived daily
+        ``seconds`` field is repaired, so a future migration can still inspect
+        the original checkpoints that caused an over-count.
+        """
+
+        intervals: dict[str, list[tuple[datetime, datetime]]] = {}
+        for raw in self._state.get("records", []):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                started = datetime.fromisoformat(str(raw.get("started_at", "")))
+                duration = max(0, min(int(raw.get("seconds", 0)), MAX_ANALYTICS_DAY_SECONDS))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            if duration <= 0:
+                continue
+            end = started + timedelta(seconds=duration)
+            cursor = started
+            while cursor.date() < end.date():
+                boundary = datetime.combine(
+                    cursor.date() + timedelta(days=1), time.min, tzinfo=cursor.tzinfo
+                )
+                intervals.setdefault(cursor.date().isoformat(), []).append((cursor, boundary))
+                cursor = boundary
+            intervals.setdefault(cursor.date().isoformat(), []).append((cursor, end))
+
+        days = self._state.setdefault("days", {})
+        changed = False
+        for day_key, pieces in intervals.items():
+            pieces.sort(key=lambda item: item[0])
+            merged: list[list[datetime]] = []
+            for start, end in pieces:
+                if not merged or start > merged[-1][1]:
+                    merged.append([start, end])
+                elif end > merged[-1][1]:
+                    merged[-1][1] = end
+            seconds = min(
+                MAX_ANALYTICS_DAY_SECONDS,
+                sum(max(0, int((end - start).total_seconds())) for start, end in merged),
+            )
+            day = days.setdefault(
+                day_key,
+                {"seconds": 0, "rounds": 0, "longest": 0, "quality": [], "switches": 0, "away": 0},
+            )
+            if int(day.get("seconds", 0) or 0) != seconds:
+                day["seconds"] = seconds
+                changed = True
+        return changed
+
+    def _trim_days(self) -> bool:
         days = self._state.setdefault("days", {})
         cutoff = self._now().date() - timedelta(days=400)
-        self._state["days"] = {key: value for key, value in days.items() if key >= cutoff.isoformat()}
+        trimmed = {key: value for key, value in days.items() if key >= cutoff.isoformat()}
+        changed = len(trimmed) != len(days)
+        self._state["days"] = trimmed
+        return changed
 
     def _load(self) -> None:
         try:

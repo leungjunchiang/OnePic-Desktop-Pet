@@ -26,13 +26,14 @@ from typing import Callable, Mapping
 from PySide6.QtCore import QObject, QThread, Signal
 
 from .config import PetSettings
-from .music import MUSIC_SERVICE_LABELS, find_music_client
+from .music import CatalogMusicService, MUSIC_SERVICE_LABELS, find_music_client
 from .music_playback import (
     BasicRandomArtistPlaybackManager,
     ExactMusicPlaybackManager,
     MusicPlaybackError,
     MusicPlaybackOutcome,
     MusicProviderAdapter,
+    SongCandidate,
     SongPlaybackResult,
     build_provider_adapters,
 )
@@ -712,6 +713,12 @@ class MusicProviderManager:
             sleep=playback_sleep or time.sleep,
         )
         self.song_resolver = MusicSongResolver(self)
+        # 快捷“随机听一首”使用轻量曲库唤起；旧 Resolver 继续服务精确点歌
+        # 和兼容 API，避免把 UI 自动化控制层与 Deep Link 混成一套状态。
+        self.catalog_music_service = CatalogMusicService(
+            settings,
+            platform_name=self.platform_name,
+        )
 
     def cached_status(self, provider: str) -> MusicProviderStatus:
         """返回缓存；没有缓存时只做安装检测，不声称已经建立控制。"""
@@ -973,6 +980,42 @@ class MusicProviderManager:
         """兼容公开 API；实际自动回退由 Song Resolver 执行。"""
 
         return self.song_resolver.resolve_random_artist_auto(artist)
+
+    def play_catalog_random_song(self, artist: str) -> SongPlaybackResult:
+        """从本地曲库挑歌并唤起平台，不把打开链接伪装成播放已确认。"""
+
+        launch = self.catalog_music_service.play_random_song()
+        selected = SongCandidate(
+            launch.provider,
+            launch.song.title,
+            launch.song.artist or artist,
+            identifier=launch.song.id,
+        )
+        if not launch.success:
+            return SongPlaybackResult(
+                False,
+                launch.provider,
+                launch.song.title,
+                artist,
+                launch.message,
+                MusicPlaybackError.PLAY_ACTION_FAILED,
+                selected=selected,
+                play_attempts=1,
+            )
+        return SongPlaybackResult(
+            True,
+            launch.provider,
+            launch.song.title,
+            artist,
+            launch.message,
+            selected=selected,
+            play_attempts=1,
+            outcome=(
+                MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+                if launch.confirmed
+                else MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+            ),
+        )
 
     def current_track(self, provider: str) -> TrackInfo | None:
         """直接读取当前媒体信息供点歌校验使用，不复用可能过期的状态缓存。"""
@@ -1451,12 +1494,15 @@ class MusicCommandThread(QThread):
     def run(self) -> None:
         try:
             if self.action == "play_song":
-                result = self.manager.play_song(
-                    self.provider,
-                    self.title,
-                    self.artist,
-                    random_artist=self.random_artist,
-                )
+                if self.random_artist:
+                    result = self.manager.play_catalog_random_song(self.artist)
+                else:
+                    result = self.manager.play_song(
+                        self.provider,
+                        self.title,
+                        self.artist,
+                        random_artist=False,
+                    )
             else:
                 result = self.manager.control(self.provider, self.action)
         except Exception as exc:

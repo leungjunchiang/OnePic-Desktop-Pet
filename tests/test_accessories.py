@@ -46,5 +46,5 @@ def test_night_limited_activity_uses_the_dedicated_transparent_sprite() -> None:
     from onepic_desktop_pet.accessories import SPECIAL_LIMITED_ACTIVITY_SPRITES
 
     assert SPECIAL_LIMITED_ACTIVITY_SPRITES["night-study-limited"] == (
-        "assets/pet/night-limited/00-night-study.png"
+        "assets/pet/night-limited/00-night-study-clean.png"
     )

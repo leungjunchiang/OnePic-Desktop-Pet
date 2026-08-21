@@ -6,6 +6,7 @@
 - 禁止设置类按钮成为 QDialog 默认按钮，确保回车只发送消息，不会误触设置入口；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
+- 对在线回复采用小片段、定时批量渲染，避免等待整段文字或每个字符都重排全文；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
@@ -15,6 +16,7 @@
 
 聊天窗口只保留当前显示的渲染内容；有限的聊天会话由窗口层分开保存在本机，
 用户可以清空显示、开始新对话或删除全部聊天记录。待办和提醒不属于聊天记录。
+连接检测只向普通界面传递用户友好错误，不渲染 subprocess 命令或系统提示词。
 """
 
 from __future__ import annotations
@@ -27,8 +29,8 @@ from html import escape
 if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
-from PySide6.QtCore import QRect, QSize, Qt, QThread, Signal
-from PySide6.QtGui import QCloseEvent, QFontMetrics
+from PySide6.QtCore import QRect, QSize, QTimer, Qt, QThread, Signal
+from PySide6.QtGui import QCloseEvent, QFontMetrics, QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -61,6 +63,7 @@ from .ai import (
     find_codex_gui_app,
     launch_codex_gui,
     provider_defaults,
+    user_message_for_ai_error,
 )
 from . import __version__
 from .config import PET_NAME
@@ -117,6 +120,7 @@ class ConnectionCheckThread(QThread):
         credentials: CredentialStore,
         base_url: str,
         token: str,
+        codex_path: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -124,6 +128,7 @@ class ConnectionCheckThread(QThread):
         self.credentials = credentials
         self.base_url = base_url
         self.token = token
+        self.codex_path = codex_path
 
     def run(self) -> None:
         try:
@@ -132,9 +137,10 @@ class ConnectionCheckThread(QThread):
                 self.credentials,
                 self.base_url,
                 self.token,
+                self.codex_path,
             )
         except AIConnectionError as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(user_message_for_ai_error(exc))
         except Exception:
             self.failed.emit("检测遇到意外问题，请稍后重试。")
         else:
@@ -162,6 +168,14 @@ class ChatDialog(QDialog):
         self.pet_name = PET_NAME
         self._transcript_entries: list[tuple[str, str]] = []
         self._streaming_message_index: int | None = None
+        self._streaming_pending_text = ""
+        self._streaming_final_text: str | None = None
+        self._stream_flush_timer = QTimer(self)
+        self._stream_flush_timer.setSingleShot(True)
+        self._stream_flush_timer.timeout.connect(self._flush_streaming_text)
+        self._transcript_scroll_timer = QTimer(self)
+        self._transcript_scroll_timer.setSingleShot(True)
+        self._transcript_scroll_timer.timeout.connect(self._scroll_transcript_to_bottom)
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -289,6 +303,12 @@ class ChatDialog(QDialog):
         event.ignore()
         self.hide()
 
+    def showEvent(self, event: QShowEvent) -> None:
+        """每次打开聊天窗都把视口恢复到最新一条消息。"""
+
+        super().showEvent(event)
+        QTimer.singleShot(0, self._scroll_transcript_to_bottom)
+
     def _submit(self) -> None:
         message = " ".join(self.input.text().split())
         if not message:
@@ -318,7 +338,12 @@ class ChatDialog(QDialog):
             # AgentManager 的 detail 可能是“Codex 已连接。”，再拼在
             # “Codex（使用本机登录）· 已连接”下面会造成截图中的重复状态。
             # 成功状态只保留一个稳定标签；失败状态才显示诊断原因。
-            suffix = "" if state == AgentConnectionState.CONNECTED.value else (f"\n{detail}" if detail else "")
+            degraded_connected = state == AgentConnectionState.CONNECTED.value and any(
+                marker in detail for marker in ("不可用", "失败", "不兼容", "兼容连接")
+            )
+            if (state != AgentConnectionState.CONNECTED.value or degraded_connected) and detail:
+                detail = user_message_for_ai_error(detail)
+            suffix = "" if not detail or (state == AgentConnectionState.CONNECTED.value and not degraded_connected) else f"\n{detail}"
             detail = f"{preset.label} · {label}{suffix}"
         self.status_label.setText(detail)
 
@@ -328,6 +353,7 @@ class ChatDialog(QDialog):
         self.recovery_actions.setVisible(bool(visible))
 
     def append_message(self, role: str, text: str) -> None:
+        self._cancel_streaming_flush()
         self._streaming_message_index = None
         self._transcript_entries.append((str(role), str(text)))
         self._render_transcript()
@@ -335,6 +361,7 @@ class ChatDialog(QDialog):
     def load_transcript(self, messages: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> None:
         """加载本机会话记录到当前显示，不改变 AI 连接或待办数据。"""
 
+        self._cancel_streaming_flush()
         self._streaming_message_index = None
         self._transcript_entries = [
             (str(role), str(text)) for role, text in messages if str(text).strip()
@@ -344,6 +371,7 @@ class ChatDialog(QDialog):
     def clear_transcript(self) -> None:
         """只清空窗口显示，不删除本地聊天记录或 AI 上下文。"""
 
+        self._cancel_streaming_flush()
         self._streaming_message_index = None
         self._transcript_entries.clear()
         self._render_transcript()
@@ -351,33 +379,97 @@ class ChatDialog(QDialog):
     def begin_streaming_message(self, role: str) -> None:
         """Create a temporary assistant bubble that can be updated per delta."""
 
+        self._cancel_streaming_flush()
         self._streaming_message_index = len(self._transcript_entries)
+        self._streaming_pending_text = ""
+        self._streaming_final_text = None
         self._transcript_entries.append((str(role), ""))
         self._render_transcript()
 
     def append_streaming_delta(self, delta: str) -> None:
-        """Append one App Server agentMessage/delta to the temporary bubble."""
+        """Queue one delta and render it in a small typewriter-like batch.
+
+        A delta may contain several tokens or characters.  Rendering every
+        signal immediately rebuilds the whole QTextBrowser HTML and makes a
+        fast stream look slower than it is, so the pending text is flushed at
+        most once per short interval.
+        """
 
         if self._streaming_message_index is None:
             self.begin_streaming_message(self.pet_name)
         index = self._streaming_message_index
         if index is None or index >= len(self._transcript_entries):
             return
-        role, current = self._transcript_entries[index]
-        self._transcript_entries[index] = (role, current + str(delta))
-        self._render_transcript()
+        self._streaming_pending_text += str(delta)
+        self._schedule_streaming_flush()
 
     def finish_streaming_message(self, text: str) -> None:
-        """Replace a partial stream with the authoritative final answer."""
+        """Finish with the authoritative answer without duplicating a stream."""
 
         if self._streaming_message_index is None:
             self.append_message(self.pet_name, text)
             return
         index = self._streaming_message_index
-        role = self._transcript_entries[index][0]
-        self._transcript_entries[index] = (role, str(text))
-        self._streaming_message_index = None
+        if index >= len(self._transcript_entries):
+            self._cancel_streaming_flush()
+            self._streaming_message_index = None
+            return
+        self._streaming_pending_text = ""
+        self._streaming_final_text = str(text)
+        self._flush_streaming_text()
+
+    def _schedule_streaming_flush(self) -> None:
+        if not self._stream_flush_timer.isActive():
+            # 25ms is fast enough to feel immediate while avoiding a full HTML
+            # rebuild for every token/character emitted by the transport.
+            self._stream_flush_timer.start(25)
+
+    def _cancel_streaming_flush(self) -> None:
+        if self._stream_flush_timer.isActive():
+            self._stream_flush_timer.stop()
+        self._streaming_pending_text = ""
+        self._streaming_final_text = None
+
+    def _flush_streaming_text(self) -> None:
+        index = self._streaming_message_index
+        if index is None or index >= len(self._transcript_entries):
+            self._cancel_streaming_flush()
+            return
+
+        role, current = self._transcript_entries[index]
+        target = self._streaming_final_text
+        if target is not None:
+            # Once the authoritative answer is known, continue the same small
+            # batches when it extends the visible prefix.  If post-processing
+            # changed the prefix (for example a fallback error), replace it
+            # immediately rather than showing a misleading mixed response.
+            if not target.startswith(current):
+                self._transcript_entries[index] = (role, target)
+                self._streaming_message_index = None
+                self._streaming_final_text = None
+                self._render_transcript()
+                return
+            remaining = target[len(current) :]
+            if not remaining:
+                self._streaming_message_index = None
+                self._streaming_final_text = None
+                self._render_transcript()
+                return
+            piece = remaining[:4]
+        else:
+            if not self._streaming_pending_text:
+                return
+            piece = self._streaming_pending_text[:4]
+            self._streaming_pending_text = self._streaming_pending_text[4:]
+
+        updated = current + piece
+        self._transcript_entries[index] = (role, updated)
         self._render_transcript()
+        if target is not None and updated == target:
+            self._streaming_message_index = None
+            self._streaming_final_text = None
+        elif target is not None or self._streaming_pending_text:
+            self._stream_flush_timer.start(25)
 
     def _render_transcript(self) -> None:
         """Render the bounded in-memory transcript, keeping streaming simple."""
@@ -393,6 +485,15 @@ class ChatDialog(QDialog):
                 f'background:{background};"><b style="color:{color};">{escape(role)}</b><br>{safe}</div>'
             )
         self.transcript.setHtml("".join(blocks))
+        # QTextBrowser may finish laying out the new document after setHtml()
+        # returns.  Moving the scrollbar synchronously can therefore use the
+        # previous maximum and leave the newest message below the viewport.
+        # Defer until the event loop has applied the new document geometry.
+        self._transcript_scroll_timer.start(0)
+
+    def _scroll_transcript_to_bottom(self) -> None:
+        """让聊天窗口打开、加载历史和流式更新后都显示最新一条消息。"""
+
         bar = self.transcript.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -770,6 +871,9 @@ class AISettingsDialog(QDialog):
         form.addRow("API 地址", self.base_url)
         self.model = QLineEdit(settings.ai_model)
         form.addRow("模型", self.model)
+        self.codex_path = QLineEdit(getattr(settings, "codex_executable_path", ""))
+        self.codex_path.setPlaceholderText("留空自动查找；Windows 可填 codex.cmd 的完整路径")
+        form.addRow("Codex 路径", self.codex_path)
         self.token = QLineEdit()
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("留空则保留已安全保存的令牌")
@@ -1106,7 +1210,8 @@ class AISettingsDialog(QDialog):
             self.credentials,
             self.base_url.text().strip(),
             self.token.text().strip(),
-            self,
+            codex_path=self.codex_path.text().strip(),
+            parent=self,
         )
         self._connection_thread.succeeded.connect(self._manual_check_succeeded)
         self._connection_thread.failed.connect(self._manual_check_failed)
@@ -1156,6 +1261,7 @@ class AISettingsDialog(QDialog):
         self.settings.ai_provider = provider
         self.settings.ai_base_url = self.base_url.text().strip()
         self.settings.ai_model = self.model.text().strip()
+        self.settings.codex_executable_path = self.codex_path.text().strip()[:1200]
         self.settings.always_on_top = self.always_on_top.isChecked()
         self.settings.content_updates_enabled = self.content_updates.isChecked()
         self.settings.program_updates_enabled = self.program_updates.isChecked()

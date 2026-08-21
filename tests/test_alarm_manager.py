@@ -144,7 +144,37 @@ def test_todo_alarm_is_mirrored_without_duplicate_rows(tmp_path) -> None:
 
     task = todos.update(task.id, reminder_mode=REMINDER_PET)
     alarms.sync_todo(task, reminder_mode=task.reminder_mode)
-    assert not [item for item in alarms.items if item.source_todo_id == task.id]
+    mirrored = [item for item in alarms.items if item.source_todo_id == task.id]
+    assert len(mirrored) == 1
+    assert mirrored[0].enabled is False
+    assert mirrored[0].disabled_reason == "todo_reminder_changed"
+
+
+def test_disabled_alarm_survives_next_day_and_reload(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 18, 54))
+    path = tmp_path / "alarms.json"
+    manager = AlarmManager(path, now_provider=clock)
+    alarm = manager.add("下班", clock.value)
+    manager.dismiss(alarm.id)
+    clock.value = datetime(2026, 8, 20, 9, 0)
+    restored = AlarmManager(path, now_provider=clock).get(alarm.id)
+    assert restored is not None
+    assert restored.enabled is False
+    assert restored.disabled_reason == "dismissed"
+
+
+def test_user_disabled_todo_alarm_is_not_reopened_by_startup_sync(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    alarms = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    todos = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    task = todos.add("组会", date="2026-08-19", time="10:00", reminder_mode=REMINDER_ALARM, reminder=True)
+    alarms.sync_todo(task, reminder_mode=REMINDER_ALARM)
+    alarms.set_enabled(f"todo:{task.id}", False)
+    alarms.sync_todo(task, reminder_mode=REMINDER_ALARM)
+    restored = alarms.get(f"todo:{task.id}")
+    assert restored is not None
+    assert restored.enabled is False
+    assert restored.disabled_reason == "user"
 
 
 def test_new_timed_todo_defaults_to_quiet_pet_reminder_and_can_disable(tmp_path) -> None:

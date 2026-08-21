@@ -35,6 +35,7 @@ Agent 快速定位：
 本模块启动后只在后台低频检测 Agent；每条聊天不重复完整检测，普通动画、牢骚和报时均不访问网络。
 API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 app.py 在退出时完成。
 `user_assets/` 默认不进入 Git；只有用户主动放入的自拍图片才会在本机显示。
+右键菜单和附属窗口使用宠物所在显示器的 Qt 全局逻辑坐标，不混用物理像素。
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from PySide6.QtGui import (
     QCursor,
     QDesktopServices,
     QFont,
+    QGuiApplication,
     QHideEvent,
     QMouseEvent,
     QMoveEvent,
@@ -178,10 +180,24 @@ from .workflow import WorkflowError, character_is_approved, load_workflow
 from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
 from .todo_center import TodoCenterWindow
+
+
 from .compact_todo import CompactTodoPanel
 from .menu_model import UnifiedMenuModel, populate_qmenu
 from .night_limited import night_limited_activity
 from . import __version__
+
+
+def clamp_global_popup_position(global_pos: QPoint, popup_size: QSize, available: QRect) -> QPoint:
+    """Clamp a Qt logical global popup point to one monitor, including negatives."""
+
+    width = max(1, int(popup_size.width()))
+    height = max(1, int(popup_size.height()))
+    right = available.right() - width + 1
+    bottom = available.bottom() - height + 1
+    x = min(max(global_pos.x(), available.left()), max(available.left(), right))
+    y = min(max(global_pos.y(), available.top()), max(available.top(), bottom))
+    return QPoint(x, y)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -321,7 +337,9 @@ class PetWindow(QWidget):
         self.companion_behavior = CompanionBehaviorController()
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
-        self.work_timer = work_timer or WorkTimerModel()
+        self.work_timer = work_timer or WorkTimerModel(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
         self.focus_session = FocusSessionManager(self.work_timer, self)
         self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self.daily_stats = DailyCompanionStats(
@@ -400,7 +418,10 @@ class PetWindow(QWidget):
         self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
         self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
         self.credentials = CredentialStore()
-        self.ai_service = AIChatService(self.credentials)
+        self.ai_service = AIChatService(
+            self.credentials,
+            codex_path=getattr(self.settings, "codex_executable_path", ""),
+        )
         self.social_client = SocialClient(
             persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -410,11 +431,27 @@ class PetWindow(QWidget):
         self._social_profile_threads: list[SocialProfileThread] = []
         self._owner_nickname_sync_key: tuple[str, str] | None = None
         self._owner_nickname_sync_inflight = False
+        # Economy events are an append-only local ledger.  A complete,
+        # idempotent replay is used when an account becomes available so a
+        # transient offline period cannot leave the leaderboard behind the
+        # local supply-station balance forever.
+        self._economy_sync_lock = threading.Lock()
+        self._economy_sync_inflight = False
+        self._economy_sync_pending = False
+        self._economy_sync_user_id = ""
         self._buddy_visit_window = BuddyVisitWindow()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
         self._chat_dialog: ChatDialog | None = None
         self._chat_streaming_active = False
+        # A failed request can finish and re-enable the send button before a
+        # second queued click is delivered.  Keep one short-lived submission
+        # fence at the UI boundary so one user action cannot duplicate a chat
+        # turn or its local history entry.  Intentional repeats remain allowed
+        # after the fence expires.
+        self._last_chat_submission = ""
+        self._last_chat_submission_at = 0.0
+        self._chat_submission_active = False
         self._chat_memory = ConversationMemory(
             max_recent_rounds=30,
             persist_path=conversation_memory_path()
@@ -427,7 +464,12 @@ class PetWindow(QWidget):
             else None,
         )
         self._chat_history_dialog: ChatHistoryDialog | None = None
-        self.agent_manager = AgentManager(self.settings, self.credentials, self)
+        self.agent_manager = AgentManager(
+            self.settings,
+            self.credentials,
+            self,
+            ai_service=self.ai_service,
+        )
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
             self.work_timer.status_text,
@@ -444,6 +486,7 @@ class PetWindow(QWidget):
             local_context_provider=self.time_memory.summary.context,
             action_executor=self.time_memory.actions,
             todo_now_provider=self.time_memory.now,
+            local_command_handler=self._handle_chat_local_command,
         )
         self.music_provider_manager = MusicProviderManager(self.settings)
         self.music_controller = MusicController(
@@ -549,6 +592,7 @@ class PetWindow(QWidget):
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
         self.quick_panel.music_requested.connect(self.play_random_song)
+        self.quick_panel.music_playlist_requested.connect(self.open_music_collection)
         self.quick_panel.food_requested.connect(self._quick_food_action)
         self.quick_panel.supply_requested.connect(self.show_food_scene_dialog)
         self.quick_panel.size_requested.connect(self.open_size_control)
@@ -807,7 +851,7 @@ class PetWindow(QWidget):
         return QPixmap()
 
     def place_at_start(self) -> None:
-        """按已保存位置或主屏幕右下角放置窗口。"""
+        """Restore a saved global position, or use the primary-screen default."""
 
         screen = QApplication.primaryScreen()
         if screen is None:
@@ -2346,6 +2390,24 @@ class PetWindow(QWidget):
             self._show_work_controls()
         return reply
 
+    def _handle_chat_local_command(self, message: str) -> ManagedChatReply | None:
+        """Route explicit work controls through the existing shared session."""
+
+        text = " ".join(str(message or "").replace("六毛", "", 1).split())
+        text = text.strip(" ，,。.!！")
+        reply: CompanionReply | None = None
+        if text in {"开始工作", "开工", "开始计时"}:
+            reply = self.start_work_timer()
+        elif text in {"暂停", "暂停工作", "暂停计时"}:
+            reply = self.pause_work_timer()
+        elif text in {"继续", "继续工作", "恢复计时"}:
+            reply = self.resume_work()
+        elif text in {"结束工作", "结束计时", "收工"}:
+            reply = self.finish_work_timer()
+        if reply is None:
+            return None
+        return ManagedChatReply(reply.text, reply.state, "local-action")
+
     def pause_work_timer(self, reason: str = "") -> CompanionReply:
         """Pause the shared timer through one path, preserving the reason."""
 
@@ -3213,20 +3275,42 @@ class PetWindow(QWidget):
         recorder = getattr(self.social_client, "record_economy_event", None)
         if not callable(recorder):
             return
+        normalized = [
+            dict(event)
+            for event in events
+            if isinstance(event, dict) and int(event.get("amount") or 0) != 0
+        ]
+        if not normalized:
+            return
+        with self._economy_sync_lock:
+            if self._economy_sync_inflight:
+                self._economy_sync_pending = True
+                return
+            self._economy_sync_inflight = True
 
         def sync() -> None:
-            for event in events:
-                try:
-                    recorder(
-                        event_id=str(event.get("event_id") or ""),
-                        category=str(event.get("category") or "other"),
-                        amount=int(event.get("amount") or 0),
-                        label=str(event.get("label") or "")[:120],
-                        source_key=str(event.get("source_key") or "")[:160],
-                        occurred_on=str(event.get("occurred_on") or "")[:10],
+            try:
+                for event in normalized:
+                    try:
+                        recorder(
+                            event_id=str(event.get("event_id") or ""),
+                            category=str(event.get("category") or "other"),
+                            amount=int(event.get("amount") or 0),
+                            label=str(event.get("label") or "")[:120],
+                            source_key=str(event.get("source_key") or "")[:160],
+                            occurred_on=str(event.get("occurred_on") or "")[:10],
+                        )
+                    except Exception:
+                        LOGGER.info("economy event sync deferred", exc_info=True)
+            finally:
+                with self._economy_sync_lock:
+                    rerun = self._economy_sync_pending
+                    self._economy_sync_pending = False
+                    self._economy_sync_inflight = False
+                if rerun and getattr(self.social_client, "signed_in", False):
+                    self._sync_economy_events(
+                        [event.as_dict() for event in self.economy.events]
                     )
-                except Exception:
-                    LOGGER.info("economy event sync deferred", exc_info=True)
 
         threading.Thread(target=sync, name="lili-economy-sync", daemon=True).start()
 
@@ -3300,7 +3384,14 @@ class PetWindow(QWidget):
             # Keep chat as an independent utility window so it has a normal
             # taskbar/Dock entry and can be minimized without affecting pet.
             self._chat_dialog = ChatDialog(None, self._pet_name())
-            self._chat_dialog.message_submitted.connect(self._submit_chat_message)
+            # Opening the chat repeatedly must not add another signal
+            # connection.  A duplicate connection would submit one user
+            # message multiple times and make every retry look like a second
+            # pet or a second conversation.
+            self._chat_dialog.message_submitted.connect(
+                self._submit_chat_message,
+                Qt.ConnectionType.UniqueConnection,
+            )
             self._chat_dialog.stop_requested.connect(self._interrupt_chat)
             self._chat_dialog.settings_requested.connect(self.open_settings)
             self._chat_dialog.rename_requested.connect(self.rename_pet)
@@ -3413,22 +3504,40 @@ class PetWindow(QWidget):
 
         if self._chat_dialog is None:
             return
+        message = " ".join(str(message or "").split())
+        if not message:
+            return
+        now = time.monotonic()
+        if (
+            message == self._last_chat_submission
+            and (
+                self._chat_submission_active
+                or now - self._last_chat_submission_at < 1.5
+            )
+        ):
+            LOGGER.debug("suppressed duplicate chat submission")
+            return
         self._record_user_interaction()
         if self.chat_manager.busy:
             self._chat_dialog.append_message(self._pet_name(), "上一句话还在路上，稍等我一下。")
             return
+        self._last_chat_submission = message
+        self._last_chat_submission_at = now
+        self._chat_submission_active = True
         self._chat_dialog.append_message("你", message)
         history_before = self._chat_memory.snapshot().as_history()
         self._chat_memory.add("user", message)
         self._chat_history.append("user", message)
         self._chat_dialog.show_recovery_actions(False)
-        self.chat_manager.submit(message, history_before)
+        if not self.chat_manager.submit(message, history_before):
+            self._chat_submission_active = False
 
     def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
         """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
 
         self._chat_memory.add("assistant", reply.text)
         self._chat_history.append("assistant", reply.text)
+        self._chat_submission_active = False
         if self._chat_dialog is not None:
             if self._chat_streaming_active:
                 self._chat_dialog.finish_streaming_message(reply.text)
@@ -3507,6 +3616,9 @@ class PetWindow(QWidget):
         self._chat_memory.clear()
         self._chat_history.start_new_session()
         self._chat_streaming_active = False
+        self._last_chat_submission = ""
+        self._last_chat_submission_at = 0.0
+        self._chat_submission_active = False
         if self._chat_dialog is not None:
             self._chat_dialog.clear_transcript()
             self._chat_dialog.append_message(
@@ -3636,6 +3748,9 @@ class PetWindow(QWidget):
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
             return True
+        self.ai_service.codex_path = str(
+            getattr(self.settings, "codex_executable_path", "") or ""
+        ).strip()
         current_pet_name = self._pet_name()
         self.setWindowTitle(f"{APP_DISPLAY_NAME} · {current_pet_name}")
         if self._chat_dialog is not None:
@@ -3691,6 +3806,7 @@ class PetWindow(QWidget):
                 None,
             )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.account_state_changed.connect(self._social_account_state_changed)
             self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
             self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
             self._social_dialog.room_event_received.connect(self._room_event_received)
@@ -3786,8 +3902,18 @@ class PetWindow(QWidget):
     def _social_tick(self) -> None:
         """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
 
-        if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
+        if not self.social_client.signed_in:
+            self._economy_sync_user_id = ""
             return
+        if self._social_thread is not None and self._social_thread.isRunning():
+            return
+        session = getattr(self.social_client, "session", None)
+        user_id = str(getattr(session, "user_id", "") or "")
+        if user_id and user_id != self._economy_sync_user_id:
+            self._economy_sync_user_id = user_id
+            self._sync_economy_events(
+                [event.as_dict() for event in self.economy.events]
+            )
         self._maybe_sync_owner_nickname()
         selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
         # A persisted local room ID is not an invitation to re-enter a room.
@@ -3866,6 +3992,15 @@ class PetWindow(QWidget):
                 self._social_dialog._set_status(
                     "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
                 )
+
+    def _social_account_state_changed(self, signed_in: bool) -> None:
+        """Reset account cursors and reconcile the local ledger after login."""
+
+        if not signed_in:
+            self._economy_sync_user_id = ""
+            return
+        self._economy_sync_user_id = ""
+        self._schedule_social_tick()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""
@@ -4011,13 +4146,22 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """自动寻找最可用的本机播放器并随机开始播放陈楚生。"""
+        """从本地曲库挑一首并交给音乐客户端尝试打开。"""
 
         if self.music_controller.play_song("", "陈楚生", random_artist=True):
-            self.show_speech("正在自动寻找可用播放器，并随机播放一首陈楚生…", 4200)
+            self.show_speech("六毛来挑一首，马上给你打开♪", 2800)
         else:
             self.show_speech("音乐操作正在处理中，请稍等一下。", 3200)
         return "陈楚生随机歌曲"
+
+    def open_music_collection(self) -> str:
+        """打开歌手曲库，后续随机播放与暂停交给音乐客户端。"""
+
+        if self.music_provider_manager.catalog_music_service.open_artist_collection():
+            self.show_speech("已打开陈楚生曲库，后面交给播放器随机播放♪", 3600)
+        else:
+            self.show_speech("暂时没能打开陈楚生曲库，请确认浏览器可用。", 3600)
+        return "陈楚生随机电台"
 
     def _play_random_song_legacy(self) -> str:
         """从搜索结果中的陈楚生歌曲行随机选择，再执行播放与媒体校验。"""
@@ -4060,7 +4204,7 @@ class PetWindow(QWidget):
             save_settings(self.settings)
         if result.success:
             if isinstance(result, SongPlaybackResult):
-                feedback = "随机播放已启动。"
+                feedback = result.message or "给你挑了一首歌♪"
             else:
                 feedback = {
                     "toggle": "播放状态已切换。",
@@ -4955,7 +5099,12 @@ class PetWindow(QWidget):
         if time.monotonic() < self._suppress_context_until:
             event.accept()
             return
-        self._pending_context_global = event.globalPos()
+        global_position = getattr(event, "globalPosition", None)
+        self._pending_context_global = (
+            global_position().toPoint()
+            if callable(global_position)
+            else event.globalPos()
+        )
         self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
         event.accept()
 
@@ -4964,7 +5113,27 @@ class PetWindow(QWidget):
 
         if time.monotonic() >= self._suppress_context_until:
             self.work_controls.hide()
-            self._build_context_menu().exec(self._pending_context_global)
+            menu = self._build_context_menu()
+            if bool(getattr(self.settings, "always_on_top", False)):
+                # Keep the popup above the desktop-mode pet without changing
+                # the ownership or flags of the real pet window.
+                menu.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            menu.ensurePolished()
+            point = self._pending_context_global
+            screen = QGuiApplication.screenAt(point) or self.screen() or QGuiApplication.primaryScreen()
+            if screen is not None:
+                point = clamp_global_popup_position(
+                    point,
+                    menu.sizeHint(),
+                    screen.availableGeometry(),
+                )
+                LOGGER.debug(
+                    "context menu popup: point=%s screen=%s available=%s",
+                    point,
+                    screen.name(),
+                    screen.availableGeometry(),
+                )
+            menu.exec(point)
 
     def eventFilter(self, watched, event) -> bool:
         """收起工作条并记录 Lili 窗口焦点变化，绝不主动重新激活。"""

@@ -317,6 +317,7 @@ class QuickControlPanel(QWidget):
     todo_requested = Signal()
     social_requested = Signal()
     music_requested = Signal()
+    music_playlist_requested = Signal()
     music_control_requested = Signal(str)
     food_requested = Signal(str)
     supply_requested = Signal()
@@ -464,12 +465,16 @@ class QuickControlPanel(QWidget):
             action = menu.addAction(label)
             if command == "random":
                 action.triggered.connect(lambda: self._choose(self.music_requested))
+            elif command == "playlist":
+                action.triggered.connect(lambda: self._choose(self.music_playlist_requested))
             else:
                 action.triggered.connect(
                     lambda _checked=False, value=command: self._choose(
                         self.music_control_requested, value
                     )
                 )
+        playlist = menu.addAction("\u9648\u695a\u751f\u968f\u673a\u7535\u53f0")
+        playlist.triggered.connect(lambda: self._choose(self.music_playlist_requested))
         menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
 
     def _show_settings_menu(self) -> None:

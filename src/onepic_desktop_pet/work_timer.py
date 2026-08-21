@@ -93,8 +93,13 @@ class WorkTimerModel:
         path: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
         monotonic_provider: Callable[[], float] | None = None,
+        *,
+        persist: bool = True,
     ) -> None:
-        self.path = path or work_timer_path()
+        # Demo/offscreen windows must not read or mutate the user's real
+        # session.  Production callers keep the historical persistent default.
+        self.persist = bool(persist)
+        self.path = (path or work_timer_path()) if self.persist else None
         self._now = now_provider or datetime.now
         self._monotonic = monotonic_provider or time.monotonic
         self._date_key = self._today_key()
@@ -154,6 +159,8 @@ class WorkTimerModel:
     def _load(self) -> None:
         """读取累计秒数；崩溃后恢复最近保存的运行状态。"""
 
+        if self.path is None:
+            return
         if not self.path.is_file():
             return
         try:
@@ -384,6 +391,8 @@ class WorkTimerModel:
     def _save(self) -> None:
         """原子保存日期和累计秒数，不写入任何工作内容。"""
 
+        if self.path is None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".json.tmp")
         data = {

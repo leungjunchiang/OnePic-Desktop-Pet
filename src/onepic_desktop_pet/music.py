@@ -1,23 +1,27 @@
-"""处理指定歌曲搜索、客户端发现和正版网页回退，不承担基础播放控制。
+"""处理六毛的选歌、音乐 Deep Link 和正版网页回退，不承担基础播放控制。
 
 支持 QQ、网易云、酷狗、Apple Music 与 Spotify。本模块不内置歌词、音频或非公开曲库接口。
-用户主动点歌后，Lili 会把搜索交给已安装客户端，并在系统允许时尝试选中首条结果；客户端
-不存在时打开官方搜索网页。搜索结果不等于已经建立播放控制，基础播放命令由 music_control.py
-读取系统媒体 Session 或发送媒体键。键盘自动化只针对这次明确点击，不在后台控制其他应用。
+快捷“随机听一首”只负责从本地曲库选歌，然后直接尝试平台 Deep Link；Deep Link 失效、客户端
+未安装或系统拒绝唤起时，降级到正版 HTTPS 页面。打开客户端不等于已确认播放，基础播放命令
+仍由 music_control.py 读取系统媒体 Session 或发送媒体键。
 """
 
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import json
 import os
 import random
 import subprocess
 import sys
 import urllib.parse
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Mapping, Sequence
+
+from .resources import resource_path
 
 
 CHEN_CHUSHENG_SONGS = (
@@ -33,6 +37,128 @@ CHEN_CHUSHENG_SONGS = (
     "一夜",
 )
 
+
+@dataclass(frozen=True)
+class SongEntry:
+    """曲库中的一首歌；平台 ID 只用于生成可失效的唤起地址。"""
+
+    id: str
+    title: str
+    artist: str = "陈楚生"
+    album: str = ""
+    tags: tuple[str, ...] = ()
+    netease_song_id: str = ""
+    qq_song_mid: str = ""
+    apple_music_url: str = ""
+    spotify_url: str = ""
+    web_urls: Mapping[str, str] = field(default_factory=dict)
+    enabled: bool = True
+    weight: float = 1.0
+    last_verified: str = ""
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, object], *, default_index: int = 0) -> "SongEntry":
+        """从公开 JSON 曲目卡读取一首歌，并忽略未知字段。"""
+
+        netease = raw.get("netease") if isinstance(raw.get("netease"), Mapping) else {}
+        qq = raw.get("qqmusic") if isinstance(raw.get("qqmusic"), Mapping) else {}
+        apple = raw.get("apple_music") if isinstance(raw.get("apple_music"), Mapping) else {}
+        spotify = raw.get("spotify") if isinstance(raw.get("spotify"), Mapping) else {}
+        tags = raw.get("tags")
+        web_urls = raw.get("web_urls")
+        return cls(
+            id=str(raw.get("id") or f"chen_chusheng_{default_index:03d}"),
+            title=str(raw.get("title") or "").strip(),
+            artist=str(raw.get("artist") or "陈楚生").strip(),
+            album=str(raw.get("album") or "").strip(),
+            tags=tuple(str(item).strip() for item in tags if str(item).strip())
+            if isinstance(tags, (list, tuple))
+            else (),
+            netease_song_id=str(netease.get("song_id") or raw.get("netease_song_id") or "").strip(),
+            qq_song_mid=str(qq.get("song_mid") or raw.get("qq_song_mid") or "").strip(),
+            apple_music_url=str(apple.get("url") or raw.get("apple_music_url") or "").strip(),
+            spotify_url=str(spotify.get("url") or raw.get("spotify_url") or "").strip(),
+            web_urls={str(key): str(value) for key, value in web_urls.items()}
+            if isinstance(web_urls, Mapping)
+            else {},
+            enabled=bool(raw.get("enabled", True)),
+            weight=max(0.1, float(raw.get("weight", 1.0) or 1.0)),
+            last_verified=str(raw.get("last_verified") or "").strip(),
+        )
+
+
+class ShuffleBag:
+    """一轮内不重复的随机袋，避免随机选择连续撞到同一首歌。"""
+
+    def __init__(
+        self,
+        *,
+        bag_ids: Sequence[str] = (),
+        recent_ids: Sequence[str] = (),
+        random_source: random.Random | None = None,
+        recent_limit: int = 3,
+    ) -> None:
+        self.random = random_source or random.Random()
+        self.bag_ids = list(dict.fromkeys(str(item) for item in bag_ids if str(item)))
+        self.recent_limit = max(1, int(recent_limit))
+        self.recent_ids = list(dict.fromkeys(str(item) for item in recent_ids if str(item)))[-self.recent_limit:]
+
+    def next(self, entries: Sequence[SongEntry]) -> SongEntry:
+        """从启用曲目中取下一首；曲目不足时才允许跨轮重复。"""
+
+        available = [entry for entry in entries if entry.enabled and entry.title]
+        if not available:
+            raise ValueError("曲库没有可用歌曲")
+        by_id = {entry.id: entry for entry in available}
+        self.bag_ids = [item for item in self.bag_ids if item in by_id]
+        if not self.bag_ids:
+            ordered = list(available)
+            # 权重只影响一轮内的顺序，不会改变“不重复”的保证。
+            ordered.sort(
+                key=lambda entry: self.random.random() ** (1.0 / max(0.1, entry.weight)),
+                reverse=True,
+            )
+            self.bag_ids = [entry.id for entry in ordered]
+        if len(by_id) > 1:
+            for index, song_id in enumerate(self.bag_ids):
+                if song_id not in self.recent_ids:
+                    if index:
+                        self.bag_ids.insert(0, self.bag_ids.pop(index))
+                    break
+        selected_id = self.bag_ids.pop(0)
+        self.recent_ids.append(selected_id)
+        self.recent_ids = self.recent_ids[-self.recent_limit:]
+        return by_id[selected_id]
+
+    def state(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """返回可安全持久化到 PetSettings 的纯字符串状态。"""
+
+        return tuple(self.bag_ids), tuple(self.recent_ids)
+
+
+def load_song_catalog(path: Path | None = None) -> tuple[SongEntry, ...]:
+    """加载打包曲库；失败时返回内置标题卡，保证旧版本仍可点歌。"""
+
+    catalog_path = path or resource_path("resources/chen_chusheng_music_catalog.json")
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        raw_songs = payload.get("songs", []) if isinstance(payload, Mapping) else []
+        entries = tuple(
+            entry
+            for index, raw in enumerate(raw_songs)
+            if isinstance(raw, Mapping)
+            for entry in (SongEntry.from_mapping(raw, default_index=index),)
+            if entry.title
+        )
+        if entries:
+            return entries
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return tuple(
+        SongEntry(id=f"legacy_{index:03d}", title=title)
+        for index, title in enumerate(CHEN_CHUSHENG_SONGS)
+    )
+
 MUSIC_SERVICE_LABELS = {
     "qq": "QQ 音乐",
     "netease": "网易云音乐",
@@ -42,10 +168,19 @@ MUSIC_SERVICE_LABELS = {
 }
 
 
-def choose_song(random_source: random.Random | None = None) -> str:
-    """随机返回一个歌曲标题，不包含歌词内容。"""
+_DEFAULT_SHUFFLE_BAG = ShuffleBag()
 
-    return (random_source or random).choice(CHEN_CHUSHENG_SONGS)
+
+def choose_song(random_source: random.Random | None = None) -> str:
+    """按洗牌袋返回一个歌曲标题，不包含歌词内容。"""
+
+    entries = tuple(
+        SongEntry(id=str(index), title=title)
+        for index, title in enumerate(CHEN_CHUSHENG_SONGS)
+    )
+    if random_source is not None:
+        return ShuffleBag(random_source=random_source).next(entries).title
+    return _DEFAULT_SHUFFLE_BAG.next(entries).title
 
 
 def music_search_url(service: str, title: str) -> str:
@@ -63,6 +198,17 @@ def music_search_url(service: str, title: str) -> str:
     return f"https://music.163.com/#/search/m/?s={query}&type=1"
 
 
+def artist_collection_url(service: str, artist: str = "陈楚生") -> str:
+    """返回连续播放的官方歌手/曲库入口，不假设第三方 Scheme 永久有效。"""
+
+    normalized = str(service or "").casefold()
+    if normalized == "netease" and artist == "陈楚生":
+        return "https://music.163.com/#/artist?id=2124"
+    if normalized == "apple" and artist == "陈楚生":
+        return "https://music.apple.com/cn/artist/%E9%99%88%E6%A5%9A%E7%94%9F/930912184"
+    return music_search_url(normalized, artist)
+
+
 def music_client_uri(service: str, title: str) -> str:
     """为支持深链的客户端生成应用内搜索地址。"""
 
@@ -74,12 +220,172 @@ def music_client_uri(service: str, title: str) -> str:
     return music_search_url(service, title)
 
 
+def song_deep_link(service: str, song: SongEntry) -> str:
+    """生成平台私有但常用的单曲唤起地址；没有真实 ID 时返回空串。"""
+
+    normalized = str(service or "").casefold()
+    if normalized == "netease" and song.netease_song_id:
+        return f"orpheus://song/{urllib.parse.quote(song.netease_song_id, safe='')}/?autoplay=1"
+    if normalized == "qq" and song.qq_song_mid:
+        encoded = urllib.parse.quote(song.qq_song_mid, safe="")
+        return f"qqmusic://qq.com/media/playSonglist?p={encoded}"
+    if normalized == "apple" and song.apple_music_url:
+        return song.apple_music_url
+    if normalized == "spotify" and song.spotify_url:
+        return song.spotify_url
+    return ""
+
+
+def song_web_url(service: str, song: SongEntry) -> str:
+    """返回优先级最高的正版 HTTPS 歌曲链接，缺失时再生成官方搜索页。"""
+
+    normalized = str(service or "").casefold()
+    explicit = song.web_urls.get(normalized, "") if isinstance(song.web_urls, Mapping) else ""
+    if explicit.startswith("https://"):
+        return explicit
+    if normalized == "apple" and song.apple_music_url.startswith("https://"):
+        return song.apple_music_url
+    if normalized == "spotify" and song.spotify_url.startswith("https://"):
+        return song.spotify_url
+    return music_search_url(normalized, song.title)
+
+
 @dataclass(frozen=True)
 class MusicLaunchResult:
     """说明客户端是否找到以及用户可见的启动结果。"""
 
     client_found: bool
     message: str
+    attempted_url: str = ""
+    fallback_used: bool = False
+    confirmed: bool = False
+
+
+@dataclass(frozen=True)
+class CatalogSongLaunch:
+    """曲库选歌结果；success 只表示系统接受了唤起，不伪装成播放已确认。"""
+
+    success: bool
+    provider: str
+    song: SongEntry
+    message: str
+    attempted_url: str = ""
+    fallback_used: bool = False
+    confirmed: bool = False
+
+
+def open_music_url(
+    url: str,
+    *,
+    platform_name: str | None = None,
+    startfile: Callable[[str], object] | None = None,
+    popen: Callable[..., object] | None = None,
+    browser_open: Callable[[str], object] | None = None,
+) -> bool:
+    """用系统默认方式唤起 URL；不预检测注册表或 LaunchServices。"""
+
+    if not str(url or "").strip():
+        return False
+    platform = platform_name or sys.platform
+    try:
+        if platform == "win32":
+            launcher = startfile or getattr(os, "startfile")
+            launcher(url)
+            return True
+        if platform == "darwin":
+            runner = popen or subprocess.Popen
+            runner(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        opener = browser_open or webbrowser.open
+        return bool(opener(url))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+class CatalogMusicService:
+    """六毛“帮你挑一首”的轻量服务，和旧 Transport 控制层解耦。"""
+
+    def __init__(
+        self,
+        settings: object | None = None,
+        *,
+        songs: Sequence[SongEntry] | None = None,
+        random_source: random.Random | None = None,
+        opener: Callable[[str], bool] | None = None,
+        browser_opener: Callable[[str], bool] | None = None,
+        platform_name: str | None = None,
+    ) -> None:
+        self.settings = settings
+        self.songs = tuple(songs or load_song_catalog())
+        bag_ids = getattr(settings, "music_shuffle_bag", ()) if settings is not None else ()
+        recent_ids = getattr(settings, "music_recent_history", ()) if settings is not None else ()
+        self.shuffle_bag = ShuffleBag(
+            bag_ids=bag_ids,
+            recent_ids=recent_ids,
+            random_source=random_source,
+        )
+        self.platform_name = platform_name or sys.platform
+        self.opener = opener or (
+            lambda url: open_music_url(url, platform_name=self.platform_name)
+        )
+        self.browser_opener = browser_opener or (
+            lambda url: open_music_url(url, platform_name="other")
+        )
+
+    def _providers(self) -> tuple[str, ...]:
+        preferred = str(getattr(self.settings, "music_service", "auto") or "auto").casefold()
+        if preferred in {"qq", "netease", "apple", "spotify", "kugou"}:
+            return (preferred,) + tuple(
+                item for item in ("netease", "qq", "apple") if item != preferred
+            )
+        return ("netease", "qq", "apple")
+
+    @staticmethod
+    def _try_open(opener: Callable[[str], bool], url: str) -> bool:
+        """把第三方客户端的异常限制在本次唤起，确保还能走网页降级。"""
+
+        try:
+            return bool(opener(url))
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+
+    def play_random_song(self) -> CatalogSongLaunch:
+        """选一首歌并直接唤起；私有 Scheme 失败后打开同平台官方网页。"""
+
+        song = self.shuffle_bag.next(self.songs)
+        if self.settings is not None:
+            bag, recent = self.shuffle_bag.state()
+            setattr(self.settings, "music_shuffle_bag", list(bag))
+            setattr(self.settings, "music_recent_history", list(recent))
+        for provider in self._providers():
+            deep_link = song_deep_link(provider, song)
+            if deep_link and self._try_open(self.opener, deep_link):
+                return CatalogSongLaunch(True, provider, song, f"给你挑了《{song.title}》♪", deep_link)
+        for provider in self._providers():
+            web_url = song_web_url(provider, song)
+            if self._try_open(self.browser_opener, web_url):
+                return CatalogSongLaunch(
+                    True,
+                    provider,
+                    song,
+                    f"给你挑了《{song.title}》♪ 已打开正版网页。",
+                    web_url,
+                    fallback_used=True,
+                )
+        return CatalogSongLaunch(
+            False,
+            self._providers()[0],
+            song,
+            f"这次没能打开《{song.title}》，请确认音乐客户端或浏览器可用。",
+        )
+
+    def open_artist_collection(self, artist: str = "陈楚生") -> bool:
+        """打开歌手曲库，让音乐客户端负责后续连续随机和播放状态。"""
+
+        for provider in self._providers():
+            if self._try_open(self.browser_opener, artist_collection_url(provider, artist)):
+                return True
+        return False
 
 
 def music_client_candidates(service: str) -> tuple[Path, ...]:

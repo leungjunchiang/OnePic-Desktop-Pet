@@ -4,29 +4,26 @@ The model is still responsible for ambiguous natural language.  This module
 only handles explicit requests whose date/time can be understood without a
 model call, so a phrase such as ``明天9点半提醒我改论文`` is saved even when
 Codex is slow or temporarily unavailable.
+Todo writes are additionally checked at the executor boundary so recall
+questions and date-only statements cannot mutate local storage.
 """
 
 from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from dataclasses import dataclass
 from typing import Any, Callable
 
 
 DateProvider = Callable[[], datetime]
 
 
-_CREATE_MARKERS = (
-    "待办",
-    "提醒我",
-    "提醒一下",
-    "提醒",
-    "备忘",
-    "记一下",
-    "记得",
-    "放进待办",
-    "设置",
-    "安排",
+_EXPLICIT_CREATE_MARKERS = (
+    "加到待办", "加入待办", "放到待办", "放进待办", "记到待办",
+    "建个待办", "创建待办", "新增待办", "添加待办", "加一个待办",
+    "加个待办", "设置提醒", "提醒我", "提醒一下我", "帮我记一下",
+    "帮我记下",
 )
 _QUERY_MARKERS = (
     "有什么",
@@ -52,6 +49,83 @@ _CHINESE_DIGITS = {
     "八": 8,
     "九": 9,
 }
+
+
+@dataclass(frozen=True)
+class TodoCreationPermission:
+    """Last-mile authorization result for a Todo database write."""
+
+    allowed: bool
+    reason: str
+
+
+_RECALL_DENIAL_PATTERNS = (
+    re.compile(r"你.*记得.*吗"),
+    re.compile(r"还记得.*吗"),
+    re.compile(r"记不记得"),
+    re.compile(r"知不知道"),
+    re.compile(r"你知道.*吗"),
+    re.compile(r"记得什么"),
+    re.compile(r"记得谁"),
+)
+
+
+def _has_explicit_create(text: str) -> bool:
+    """Recognize direct Todo/reminder operations, never bare ``记得``."""
+
+    if any(marker in text for marker in _EXPLICIT_CREATE_MARKERS):
+        return True
+    if "最重要的事情" in text or "今日重点" in text:
+        return True
+    if "待办事项" in text and re.search(r"[：:]", text):
+        return True
+    return bool(re.search(r"(?:帮我\s*)?(?:设|设置|建|创建|新增|添加|加|安排).{0,16}待办", text))
+
+
+def _is_recall_question(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _RECALL_DENIAL_PATTERNS)
+
+
+def _explicit_operation_segment(text: str) -> str:
+    """Keep only the clause that actually authorizes the write."""
+
+    suffix = re.search(
+        r"(?:把|将)?\s*[^。！？!?；;]+?(?:加到待办|加入待办|放到待办|放进待办|记到待办)",
+        text,
+    )
+    if suffix:
+        segment = suffix.group(0)
+        return re.sub(r"^(?:顺便|然后|再|并且)\s*", "", segment).strip()
+    return text
+
+
+def validate_todo_creation_intent(
+    user_text: str | None,
+    parsed_action: dict[str, Any] | None = None,
+) -> TodoCreationPermission:
+    """Authorize a Todo write immediately before the storage call.
+
+    ``None`` is reserved for trusted programmatic actions.  Chat actions must
+    carry the original user text and a direct operation phrase; dates or
+    planning verbs alone are never authorization.
+    """
+
+    if user_text is None:
+        return TodoCreationPermission(True, "trusted-programmatic-action")
+    text = _clean(user_text)[:600]
+    if not text or not _has_explicit_create(text):
+        return TodoCreationPermission(False, "no-explicit-create-intent")
+    tasks = (parsed_action or {}).get("tasks")
+    if tasks is not None and (
+        not isinstance(tasks, list)
+        or not any(isinstance(task, dict) and str(task.get("title") or "").strip() for task in tasks)
+    ):
+        return TodoCreationPermission(False, "missing-todo-title")
+    # A recall question remains chat unless the same sentence contains a
+    # separate direct operation, e.g. “顺便把今晚听歌加到待办”.
+    if _is_recall_question(text) and not _has_explicit_create(text):
+        return TodoCreationPermission(False, "recall-question")
+    return TodoCreationPermission(True, "explicit-create-intent")
 
 
 def _clean(value: str) -> str:
@@ -180,9 +254,17 @@ def _extract_title(text: str, time_match: str, important: bool, current: date) -
         result = result.replace(time_match, " ", 1)
     result = re.sub(
         r"^(?:(?:你能不能|能不能|可不可以|可以不可以)\s*)?"
-        r"(?:(?:可以帮我|请|帮我|给我)\s*)?"
+        r"(?:(?:可以帮我|请|帮我|给我|六毛[，,]?\s*)\s*)?"
         r"(?:(?:用你的待办功能|使用待办功能)\s*)?"
-        r"(?:(?:设置|安排|添加|加|记一下|备忘一下)(?:一个|一项)?\s*)?",
+        r"(?:(?:设置|安排|添加|加|记一下|记下|备忘一下)(?:一个|一项|个)?\s*)?"
+        r"",
+        "",
+        result,
+    )
+    if re.search(r"(?:加到|加入|放到|放进|记到)\s*(?:我的)?待办", result):
+        result = re.sub(r"^(?:把|将)\s*", "", result)
+    result = re.sub(
+        r"(?:加到|加入|放到|放进|记到)\s*(?:我的)?待办(?:事项)?\s*$",
         "",
         result,
     )
@@ -210,17 +292,23 @@ def parse_explicit_todo_request(
     if not text or any(marker in text for marker in _QUERY_MARKERS):
         return None
     important = "最重要" in text or "今日重点" in text
-    has_date = any(word in text for word in _DATE_WORDS) or bool(re.search(r"20\d{2}\s*[年./-].*?月.*?[日号]?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?", text))
-    time_value, time_match = _time_value(text)
-    explicit_create = any(marker in text for marker in _CREATE_MARKERS)
-    # “明天10点起床” is a clear plan even without the word “待办”; do not
-    # intercept ordinary “明天怎么样” chat.
-    implicit_create = bool(has_date and time_value and re.search(r"起床|开会|上班|投稿|写|改|交|买|跑|整理|完成|学习|工作", text))
-    if not explicit_create and not implicit_create and not important:
+    operation_text = _explicit_operation_segment(text)
+    has_date = any(word in operation_text for word in _DATE_WORDS) or bool(re.search(r"20\d{2}\s*[年./-].*?月.*?[日号]?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?", operation_text))
+    time_value, time_match = _time_value(operation_text)
+    explicit_create = _has_explicit_create(text)
+    # A date/time and a planning verb are not permission to write data.  Only
+    # an explicit Todo/reminder operation reaches the local action executor.
+    if not explicit_create:
+        return None
+    permission = validate_todo_creation_intent(text)
+    if not permission.allowed:
         return None
     current = (now or (lambda: datetime.now().astimezone()))().date()
-    date_value = _date_value(text, current) or "today"
-    title = _extract_title(text, time_match, important, current)
+    # No date in the user's request means an untimed sticky Todo, not a task
+    # scheduled for the creation day.  TodoManager keeps its legacy date
+    # compatibility field separately via ``date_explicit=False``.
+    date_value = _date_value(operation_text, current)
+    title = _extract_title(operation_text, time_match, important, current)
     if not title:
         return None
     return {

@@ -1,4 +1,4 @@
-"""验证六毛只在内存中保留长期摘要与最近三十轮完整对话。"""
+"""验证六毛保留长期摘要，并按消息类型选择短上下文窗口。"""
 
 from onepic_desktop_pet.ai import _conversation_text
 from onepic_desktop_pet.chat_memory import ChatHistoryStore, ConversationMemory
@@ -26,7 +26,7 @@ def test_recent_messages_preserve_original_line_breaks() -> None:
     assert memory.recent == (("user", "第一行\n  第二行"),)
 
 
-def test_older_rounds_roll_into_bounded_summary_and_keep_latest_thirty() -> None:
+def test_older_rounds_roll_into_bounded_summary_and_normal_chat_keeps_latest_four_rounds() -> None:
     memory = ConversationMemory()
     for index in range(34):
         memory.add("user", f"第 {index} 轮：我喜欢安静工作，最近压力是 {index}")
@@ -42,7 +42,8 @@ def test_older_rounds_roll_into_bounded_summary_and_keep_latest_thirty() -> None
     prompt = _conversation_text("继续刚才的话题", snapshot.as_history())
     assert "更早对话的长期摘要" in prompt
     assert "第 0 轮" in prompt
-    assert "第 4 轮：我喜欢安静工作" in prompt
+    assert "第 4 轮：我喜欢安静工作" not in prompt
+    assert "第 30 轮：我喜欢安静工作" in prompt
     assert "第 33 轮：我会陪你" in prompt
 
 
