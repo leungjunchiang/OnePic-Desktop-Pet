@@ -352,6 +352,17 @@ class DesktopPetApplication(QObject):
         self.program_update_state = UpdateState.UPDATE_AVAILABLE
         release = result.release
         self._program_release = release
+        if not self._program_update_manual:
+            # Startup checks are informational only.  Showing a modal question
+            # with a default Yes made an unattended launch look like a random
+            # exit when the user accepted it accidentally or a window manager
+            # delivered the default button key.  Updating remains an explicit
+            # tray/menu action and therefore cannot interrupt fullscreen work.
+            self.window.show_speech(
+                f"发现新版本 Lili {release.version}，需要时可从托盘‘更新与关于’手动更新。",
+                6200,
+            )
+            return
         size_mb = max(1, round(release.asset_size / 1024 / 1024))
         notes = [
             line.strip(" -*•\t")
