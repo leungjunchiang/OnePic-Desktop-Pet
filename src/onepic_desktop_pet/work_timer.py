@@ -17,7 +17,7 @@ import json
 import os
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -31,6 +31,11 @@ WORK_STATE_PAUSED_IDLE = "paused_idle"
 WORK_STATE_PAUSED_LOCK = "paused_lock"
 WORK_STATE_PAUSED_SLEEP = "paused_sleep"
 WORK_STATE_PAUSED_VIDEO = "paused_video"
+
+# Focus statistics use one calendar everywhere.  A fixed offset is deliberate:
+# Beijing has no daylight-saving transition, and the social backend uses the
+# same Asia/Shanghai boundary for its daily and weekly ledgers.
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 _PAUSE_STATE_BY_REASON = {
     "manual": WORK_STATE_PAUSED_MANUAL,
@@ -100,7 +105,7 @@ class WorkTimerModel:
         # session.  Production callers keep the historical persistent default.
         self.persist = bool(persist)
         self.path = (path or work_timer_path()) if self.persist else None
-        self._now = now_provider or datetime.now
+        self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._monotonic = monotonic_provider or time.monotonic
         self._date_key = self._today_key()
         self._accumulated_seconds = 0
@@ -152,9 +157,15 @@ class WorkTimerModel:
         return self._session_active and not self.is_running
 
     def _today_key(self) -> str:
-        """返回本地日期键。"""
+        """Return the Beijing calendar date used by all focus ledgers."""
 
-        return self._now().date().isoformat()
+        current = self._now()
+        if current.tzinfo is None:
+            # Test providers and legacy callers often supply a naive datetime;
+            # preserve that explicit value while production uses the aware
+            # Beijing provider above.
+            return current.date().isoformat()
+        return current.astimezone(BEIJING_TIMEZONE).date().isoformat()
 
     def _load(self) -> None:
         """读取累计秒数；崩溃后恢复最近保存的运行状态。"""
