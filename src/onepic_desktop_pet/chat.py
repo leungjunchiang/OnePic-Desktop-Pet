@@ -7,6 +7,7 @@
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
 - 对在线回复采用小片段、定时批量渲染，避免等待整段文字或每个字符都重排全文；
+- 监听聊天文档布局变化，确保加载或追加消息后视口稳定停在最新一条；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
@@ -262,6 +263,13 @@ class ChatDialog(QDialog):
 
         self.transcript = QTextBrowser()
         self.transcript.setOpenExternalLinks(False)
+        # Qt on macOS can update the document geometry after the first
+        # zero-delay timer. Re-arm the existing scroll timer whenever the
+        # document layout reports a size change so the newest message stays
+        # visible without introducing a second scrolling loop.
+        self.transcript.document().documentLayout().documentSizeChanged.connect(
+            lambda _size: self._transcript_scroll_timer.start(0)
+        )
         layout.addWidget(self.transcript, 1)
 
         entry = QHBoxLayout()
