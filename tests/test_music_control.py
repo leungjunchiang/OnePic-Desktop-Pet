@@ -54,6 +54,25 @@ class FakeRandomAdapter:
         return self.play_success
 
 
+class FakeCatalogAdapter(FakeRandomAdapter):
+    """模拟曲库 Deep Link 失败后的目标客户端精确播放兜底。"""
+
+    def search(self, title: str, artist: str):
+        return (SongCandidate(self.provider, title, artist),)
+
+
+class FakeNativeRandomAdapter(FakeCatalogAdapter):
+    """模拟网易云已有的歌手随机 UI 自动化动作。"""
+
+    def __init__(self, provider: str, *, play_success: bool) -> None:
+        super().__init__(provider, play_success=play_success)
+        self.random_artists: list[str] = []
+
+    def play_random_artist(self, artist: str) -> bool:
+        self.random_artists.append(artist)
+        return self.play_success
+
+
 def _client_finder(_provider: str, _custom: str) -> Path:
     return Path("detected-player.exe")
 
@@ -112,6 +131,63 @@ def test_catalog_deep_link_is_followed_by_idempotent_play_activation() -> None:
     assert result.success is True
     assert bridge.commands == [(session.source_id, "play")]
     assert manager.active_provider == "netease"
+
+
+def test_catalog_activation_never_sends_global_media_key_to_other_player() -> None:
+    """网易云没有目标 Session 时，不能暂停当前正在播放的 QQ 音乐。"""
+
+    media_keys: list[str] = []
+    adapter = FakeCatalogAdapter("netease", play_success=True)
+    manager = MusicProviderManager(
+        PetSettings(music_service="netease"),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge(),
+        client_finder=_client_finder,
+        process_checker=lambda _name: True,
+        media_key_sender=lambda action: media_keys.append(action) or True,
+        playback_adapters={"netease": adapter},
+        catalog_playback_delay=0,
+    )
+    manager.catalog_music_service = CatalogMusicService(
+        manager.settings,
+        songs=(SongEntry("song-1", "白石洲", netease_song_id="2112804681"),),
+        opener=lambda _url: True,
+        platform_name="win32",
+    )
+
+    result = manager.play_catalog_random_song("陈楚生")
+
+    assert result.success is True
+    assert adapter.played == [SongCandidate("netease", "白石洲", "陈楚生")]
+    assert media_keys == []
+
+
+def test_catalog_artist_collection_uses_target_adapter_without_global_media_key() -> None:
+    """歌手电台没有目标 Session 时，也只能调用网易云自己的随机动作。"""
+
+    media_keys: list[str] = []
+    adapter = FakeNativeRandomAdapter("netease", play_success=True)
+    manager = MusicProviderManager(
+        PetSettings(music_service="netease"),
+        platform_name="win32",
+        windows_bridge=FakeWindowsBridge(),
+        client_finder=_client_finder,
+        process_checker=lambda _name: True,
+        media_key_sender=lambda action: media_keys.append(action) or True,
+        playback_adapters={"netease": adapter},
+        catalog_playback_delay=0,
+    )
+    manager.catalog_music_service = CatalogMusicService(
+        manager.settings,
+        songs=(SongEntry("song-1", "白石洲", netease_song_id="2112804681"),),
+        opener=lambda _url: True,
+        platform_name="win32",
+    )
+
+    assert manager.open_catalog_artist_collection("陈楚生") is True
+
+    assert adapter.random_artists == ["陈楚生"]
+    assert media_keys == []
 
 
 def test_managed_provider_exposes_unified_detection_and_track_api() -> None:
