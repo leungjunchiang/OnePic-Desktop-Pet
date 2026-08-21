@@ -49,7 +49,7 @@ class ChatIntent:
 
 _SONG_TITLES = (
     "有没有人告诉你", "姑娘", "趋光", "侦探C", "涂鸦森林", "获奖之作",
-    "荒岛", "荒野国王", "鹿回头",
+    "荒岛", "荒野国王", "鹿回头", "白石洲", "荒芜之境",
 )
 _SONG_CONTEXT = (
     "谁唱", "是谁唱", "播放", "放一下", "这首歌", "这首", "歌曲", "歌名",
@@ -85,6 +85,7 @@ _RELATION_MARKERS = (
     "0713", "再就业", "快乐再出发", "蘑菇屋", "什么关系", "都有谁", "哪六个",
     "成员", "兄弟",
 )
+_CHEN_MEME_MARKERS = ("谁比谁差", "相信我们的尺寸", "揍你哦", "妄想症")
 _EMOTION_MARKERS = (
     "累", "困", "压力", "烦", "崩溃", "没人看", "没结果", "没成果", "太晚",
     "年龄大", "想放弃", "学不下去", "来不及", "孤独", "想家", "难过",
@@ -260,6 +261,9 @@ def classify_intent(
         or _contains(text, ("关系", "成员", "兄弟", "都有谁", "哪六个"))
     ):
         return ChatIntent(RELATION_QUERY, None, True, ("relations", "timeline"), 0.94, 4, "medium", False)
+
+    if _contains(text, _CHEN_MEME_MARKERS):
+        return ChatIntent(FACTUAL_QA, None, True, ("variety", "relations", "timeline"), 0.92, 2, "short", False)
 
     if _has_profile_request(text, family_context=family_context):
         return ChatIntent(CHEN_PROFILE, None, True, ("profile", "timeline", "history"), 0.93, 5, "detailed", False)
