@@ -855,6 +855,37 @@ def test_received_social_drink_changes_pose_without_pausing_focus() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+
+def test_social_food_overrides_hourly_outfit_and_cake_keeps_focus_running(monkeypatch) -> None:
+    """食物互动造型应盖过永久娃衣，但不能把专注计时变成休息。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "hour-07"
+    window.start_work_timer()
+
+    window._handle_food_interaction_accepted(
+        {
+            "kind": "food_cake_share",
+            "payload": {"item_key": "cake", "duration_minutes": 0},
+        }
+    )
+
+    assert window.work_timer.is_running
+    assert window._ambient_activity == "feast"
+    assert window._social_food_activity_until > time.monotonic()
+
+    captured: list[bool] = []
+
+    def probe(source, activity, outfit, phase, *, food_scene=False):
+        captured.append(bool(food_scene))
+        return source
+
+    monkeypatch.setattr("onepic_desktop_pet.window.draw_activity_overlay", probe)
+    window._refresh_pixmap()
+    assert captured and captured[-1] is True
+
+    window.close(); window.deleteLater(); app.processEvents()
+
 def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> None:
     """快捷面板使用六个红黄蓝图标入口和悬停说明。"""
 
