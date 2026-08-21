@@ -5,8 +5,9 @@
 Windows Transport 优先读取 Windows.Media.Control 的目标播放器 Sessions，短暂等待并重新获取
 目标 Session 后才允许发送系统媒体键。macOS 的 Apple Music 与 Spotify 使用 Apple Events，
 其他客户端仅在运行时使用媒体键回退。本模块不把安装或启动应用写成“已连接”，也不伪造
-QQ 音乐、网易云或酷狗不存在的公开桌面 API。随机播放仍会按真实能力与本机成败历史自动
-回退 Provider；歌曲一旦启动，之后的基础控制始终锁定该 Provider 的 Transport。
+QQ 音乐、网易云或酷狗不存在的公开桌面 API。曲库随机点歌使用现有 MusicCommandThread
+唤起 Deep Link，并在客户端初始化后发送一次幂等的 Play 命令；歌曲一旦启动，之后的基础
+控制始终锁定该 Provider 的 Transport。
 """
 
 from __future__ import annotations
@@ -673,6 +674,7 @@ class MusicProviderManager:
         playback_sleep: Callable[[float], None] | None = None,
         transport_wait_timeout: float = 1.8,
         transport_poll_interval: float = 0.2,
+        catalog_playback_delay: float = 0.8,
     ) -> None:
         self.settings = settings
         self.platform_name = platform_name or sys.platform
@@ -683,6 +685,8 @@ class MusicProviderManager:
         self.media_key_sender = media_key_sender or self._default_media_key_sender
         self.window_checker = window_checker or self._default_window_checker
         self.client_launcher = client_launcher
+        self._playback_sleep = playback_sleep or time.sleep
+        self.catalog_playback_delay = max(0.0, float(catalog_playback_delay))
         self._cache: dict[str, MusicProviderStatus] = {}
         adapters = playback_adapters or build_provider_adapters(
             settings,
@@ -697,20 +701,20 @@ class MusicProviderManager:
             self.current_track,
             verify_timeout_seconds=playback_verify_timeout,
             poll_interval_seconds=playback_poll_interval,
-            sleep=playback_sleep or time.sleep,
+            sleep=self._playback_sleep,
         )
         self.random_playback_manager = BasicRandomArtistPlaybackManager(
             adapters,
             self.current_track,
             verify_timeout_seconds=playback_verify_timeout,
             poll_interval_seconds=playback_poll_interval,
-            sleep=playback_sleep or time.sleep,
+            sleep=self._playback_sleep,
         )
         self.transport_controller = MusicTransportController(
             self,
             wait_timeout_seconds=transport_wait_timeout,
             poll_interval_seconds=transport_poll_interval,
-            sleep=playback_sleep or time.sleep,
+            sleep=self._playback_sleep,
         )
         self.song_resolver = MusicSongResolver(self)
         # 快捷“随机听一首”使用轻量曲库唤起；旧 Resolver 继续服务精确点歌
@@ -982,7 +986,7 @@ class MusicProviderManager:
         return self.song_resolver.resolve_random_artist_auto(artist)
 
     def play_catalog_random_song(self, artist: str) -> SongPlaybackResult:
-        """从本地曲库挑歌并唤起平台，不把打开链接伪装成播放已确认。"""
+        """从本地曲库挑歌、唤起平台，并补一次安全的 Play 激活。"""
 
         launch = self.catalog_music_service.play_random_song()
         selected = SongCandidate(
@@ -1002,6 +1006,13 @@ class MusicProviderManager:
                 selected=selected,
                 play_attempts=1,
             )
+        # Deep Link 负责选中/打开内容，部分网易云版本只唤起窗口而不自动
+        # 开始声音。使用 Play 而不是 Toggle：已经播放时不会误暂停；没有
+        # GSMTC Session 时，Transport 层会按现有策略回退到系统媒体键。
+        activation = self._activate_catalog_playback(launch.provider)
+        if activation:
+            self.active_provider = launch.provider
+            self._record_provider_result(launch.provider, True)
         return SongPlaybackResult(
             True,
             launch.provider,
@@ -1016,6 +1027,29 @@ class MusicProviderManager:
                 else MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
             ),
         )
+
+    def _activate_catalog_playback(self, provider: str) -> bool:
+        """在 Deep Link 交给客户端后发送一次幂等 Play，不负责选歌。"""
+
+        if self.catalog_playback_delay:
+            self._playback_sleep(self.catalog_playback_delay)
+        try:
+            result = self.transport_controller.control(provider, "play")
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+        return bool(result.success)
+
+    def open_catalog_artist_collection(self, artist: str = "陈楚生") -> bool:
+        """打开曲库并在客户端 Deep Link 成功时补一次 Play 激活。"""
+
+        opened = self.catalog_music_service.open_artist_collection(artist)
+        if not opened:
+            return False
+        provider = self.catalog_music_service.last_provider
+        if self.catalog_music_service.last_used_deep_link and provider:
+            if self._activate_catalog_playback(provider):
+                self.active_provider = provider
+        return True
 
     def current_track(self, provider: str) -> TrackInfo | None:
         """直接读取当前媒体信息供点歌校验使用，不复用可能过期的状态缓存。"""
@@ -1493,7 +1527,9 @@ class MusicCommandThread(QThread):
 
     def run(self) -> None:
         try:
-            if self.action == "play_song":
+            if self.action == "catalog_random_song":
+                result = self.manager.play_catalog_random_song(self.artist)
+            elif self.action == "play_song":
                 if self.random_artist:
                     result = self.manager.play_catalog_random_song(self.artist)
                 else:
@@ -1506,7 +1542,7 @@ class MusicCommandThread(QThread):
             else:
                 result = self.manager.control(self.provider, self.action)
         except Exception as exc:
-            if self.action == "play_song":
+            if self.action in {"play_song", "catalog_random_song"}:
                 result = SongPlaybackResult(
                     False,
                     self.provider,
@@ -1583,6 +1619,24 @@ class MusicController(QObject):
         self._thread.start()
         return True
 
+    def play_catalog_random_song(self, artist: str = "陈楚生") -> bool:
+        """在线程中执行曲库 Deep Link 点歌，避免阻塞桌宠界面。"""
+
+        if self.busy:
+            return False
+        self._thread = MusicCommandThread(
+            self.manager,
+            "auto",
+            "catalog_random_song",
+            self,
+            artist=artist,
+        )
+        self._thread.completed.connect(self._completed)
+        self._thread.finished.connect(self._finished)
+        self.busy_changed.emit(True)
+        self._thread.start()
+        return True
+
     def _completed(self, result: MusicControlResult | SongPlaybackResult) -> None:
         if isinstance(result, MusicControlResult):
             self.status_changed.emit(result.status)
@@ -1605,3 +1659,4 @@ class MusicController(QObject):
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
             self._thread.wait(5500)
+
