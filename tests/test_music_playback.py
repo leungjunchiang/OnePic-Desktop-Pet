@@ -182,6 +182,43 @@ def test_netease_default_desktop_script_is_dpi_aware_and_defers_verification_to_
     assert "$pick=3" in script
 
 
+def test_netease_background_random_uses_invoke_path_without_mouse_script(monkeypatch) -> None:
+    adapter = NeteaseMusicAdapter(PetSettings())
+    candidate = SongCandidate(
+        "netease",
+        "白石洲",
+        "陈楚生",
+        native=("powershell", "白石洲", "陈楚生"),
+    )
+    monkeypatch.setattr(adapter, "_powershell_search", lambda _title, _artist: (candidate,))
+    played: list[SongCandidate] = []
+    monkeypatch.setattr(
+        adapter,
+        "_powershell_play",
+        lambda selected: played.append(selected) or True,
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_netease_default_desktop_script",
+        lambda *_args: pytest.fail("后台曲库播放不应调用鼠标脚本"),
+    )
+
+    assert adapter.play_random_artist_background("陈楚生") is True
+    assert played == [candidate]
+
+
+def test_netease_random_prefers_background_path_before_legacy_mouse_fallback(monkeypatch) -> None:
+    adapter = NeteaseMusicAdapter(PetSettings())
+    monkeypatch.setattr(adapter, "play_random_artist_background", lambda _artist: True)
+    monkeypatch.setattr(
+        adapter,
+        "_netease_default_desktop_script",
+        lambda *_args: pytest.fail("后台播放成功后不应调用鼠标脚本"),
+    )
+
+    assert adapter.play_random_artist("陈楚生") is True
+
+
 def test_random_artist_retries_once_when_search_results_are_still_loading() -> None:
     adapter = DelayedSearchAdapter()
     manager = BasicRandomArtistPlaybackManager(
@@ -452,3 +489,4 @@ def test_specific_song_never_uses_global_media_key_as_play_success() -> None:
     assert result.success is True
     assert media_keys == []
     assert bridge.controls == []
+
