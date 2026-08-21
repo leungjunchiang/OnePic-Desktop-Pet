@@ -1896,6 +1896,11 @@ class SocialHubDialog(QDialog):
         on the previous (often resting) state until the user clicked refresh.
         """
 
+        # A direct render can happen immediately after construction (for
+        # example when the owner restores a cached snapshot). Do not let the
+        # one-shot 50 ms bootstrap refresh arrive afterward and overwrite that
+        # newer view with its older in-flight result.
+        self._initial_refresh_timer.stop()
         previous_data = self.data
         self.data = dict(data or {})
         # Missing is not empty: heartbeat payloads may omit this optional RPC
