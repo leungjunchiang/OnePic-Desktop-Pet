@@ -534,6 +534,57 @@ def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
     app.processEvents()
 
 
+def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> None:
+    """全屏时让位，退出全屏后只恢复进入前已经可见的界面。"""
+
+    app, window = _create_window()
+    window.quick_panel.show()
+    window.work_duration_bubble.show()
+    app.processEvents()
+    assert window.isVisible()
+    assert window.quick_panel.isVisible()
+    assert window.work_duration_bubble.isVisible()
+
+    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
+    window._sync_fullscreen_visibility()
+    app.processEvents()
+    assert window._fullscreen_hidden
+    assert not window.isVisible()
+    assert not window.quick_panel.isVisible()
+    assert not window.work_duration_bubble.isVisible()
+
+    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
+    window._sync_fullscreen_visibility()
+    app.processEvents()
+    assert not window._fullscreen_hidden
+    assert window.isVisible()
+    assert window.quick_panel.isVisible()
+    assert window.work_duration_bubble.isVisible()
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_relaunch_does_not_restore_old_active_visit() -> None:
+    """重新启动只接受本次进程之后产生的串门，不复活旧场景。"""
+
+    app, window = _create_window()
+    old_visit = {
+        "id": "old-visit",
+        "visit_started_at": "2000-01-01T00:00:00+00:00",
+    }
+    assert window._active_visits_after_startup([old_visit]) == []
+
+    fresh_time = (window._process_started_at + timedelta(seconds=1)).isoformat()
+    fresh_visit = {"id": "fresh-visit", "visit_started_at": fresh_time}
+    assert window._active_visits_after_startup([fresh_visit]) == [fresh_visit]
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_window_uses_character_mask_and_reuses_render_cache() -> None:
     app, window = _create_window()
     initial_render_count = len(window._render_cache)
