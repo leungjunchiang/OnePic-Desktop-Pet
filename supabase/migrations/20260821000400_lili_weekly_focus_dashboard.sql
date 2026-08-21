@@ -2,7 +2,7 @@
 -- 同步同一账号在不同电脑上的本周专注时间，并提供专注排行榜。
 
 alter table public.lili_profiles
-  add column if not exists focus_week_start_date date not null default date_trunc('week', current_date)::date;
+  add column if not exists focus_week_start_date date not null default date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date;
 
 alter table public.lili_profiles
   add column if not exists focus_week_seconds integer not null default 0;
@@ -14,12 +14,12 @@ alter table public.lili_profiles
   check (focus_week_seconds between 0 and 604800);
 
 create or replace function public.lili_sync_personal_state(
-  p_focus_date date default current_date,
+  p_focus_date date default (now() at time zone 'Asia/Shanghai')::date,
   p_today_seconds integer default 0,
   p_lifetime_seconds bigint default 0,
   p_outfit_key text default null,
   p_outfit_set boolean default false,
-  p_week_start date default date_trunc('week', current_date)::date,
+  p_week_start date default date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date,
   p_week_seconds integer default 0
 ) returns jsonb
 language plpgsql
@@ -27,7 +27,7 @@ security definer
 set search_path = ''
 as $$
 declare
-  target_date date := coalesce(p_focus_date, current_date);
+  target_date date := coalesce(p_focus_date, (now() at time zone 'Asia/Shanghai')::date);
   target_week date := coalesce(p_week_start, date_trunc('week', target_date)::date);
   merged_today integer;
   merged_lifetime bigint;
@@ -93,13 +93,13 @@ as $$
       'nickname', public.lili_owner_nickname(p.user_id),
       'week_start', p.focus_week_start_date,
       'week_seconds', case
-        when p.focus_week_start_date = date_trunc('week', current_date)::date
+        when p.focus_week_start_date = date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date
           then greatest(0, p.focus_week_seconds)
         else 0
       end
     )
     order by
-      case when p.focus_week_start_date = date_trunc('week', current_date)::date
+      case when p.focus_week_start_date = date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date
         then greatest(0, p.focus_week_seconds) else 0 end desc,
       public.lili_owner_nickname(p.user_id)
   ), '[]'::jsonb)
@@ -133,7 +133,7 @@ as $$
           else 0 end,
         'today_seconds', greatest(coalesce(p.focus_today_seconds, 0), coalesce(f.today_seconds, 0)),
         'week_seconds', case
-          when p.focus_week_start_date = date_trunc('week', current_date)::date
+          when p.focus_week_start_date = date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date
             then coalesce(p.focus_week_seconds, 0) else 0 end,
         'outfit_key', coalesce(f.outfit_key, p.outfit_key, ''),
         'room_id', f.room_id,
@@ -183,7 +183,7 @@ as $$
           else null end,
         'week_seconds', case
           when p.visibility = 'friends' and p.show_exact_time
-            and p.focus_week_start_date = date_trunc('week', current_date)::date
+            and p.focus_week_start_date = date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date
             then coalesce(p.focus_week_seconds, 0)
           else null end,
         'online', case when p.visibility = 'friends'
@@ -233,7 +233,7 @@ as $$
         'today_seconds', case when p.visibility = 'friends' and p.show_exact_time
           then greatest(coalesce(p.focus_today_seconds, 0), coalesce(f.today_seconds, 0)) else null end,
         'week_seconds', case when p.visibility = 'friends' and p.show_exact_time
-          and p.focus_week_start_date = date_trunc('week', current_date)::date
+          and p.focus_week_start_date = date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date
           then coalesce(p.focus_week_seconds, 0) else null end,
         'online', case when p.visibility = 'friends'
           then coalesce(f.last_seen > now() - interval '2 minutes', false) else false end,
@@ -275,7 +275,7 @@ as $$
         'today_seconds', case when p.visibility = 'friends' and p.show_exact_time
           then greatest(coalesce(p.focus_today_seconds, 0), coalesce(f.today_seconds, 0)) else null end,
         'week_seconds', case when p.visibility = 'friends' and p.show_exact_time
-          and p.focus_week_start_date = date_trunc('week', current_date)::date
+          and p.focus_week_start_date = date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date
           then coalesce(p.focus_week_seconds, 0) else null end,
         'online', case when p.visibility = 'friends'
           then coalesce(f.last_seen > now() - interval '2 minutes', false) else false end,
