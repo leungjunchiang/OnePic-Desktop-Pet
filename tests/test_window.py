@@ -534,6 +534,27 @@ def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
     app.processEvents()
 
 
+
+def test_visit_status_bubble_sits_below_todo_and_left_of_work_duration() -> None:
+    """串门标签使用六毛下方的状态行，不遮挡待办内容。"""
+
+    app, window = _create_window()
+    window.move(220, 120)
+    window.start_work_timer()
+    window._show_buddy_visit({"id": "visit-layout", "nickname": "搭子", "today_seconds": 5})
+    app.processEvents()
+
+    bubble = window.visit_status_bubble
+    assert bubble.isVisible()
+    assert bubble.y() >= window.y() + window.height()
+    if window.work_duration_bubble.isVisible():
+        assert bubble.geometry().right() < window.work_duration_bubble.geometry().left()
+        assert bubble.y() == window.work_duration_bubble.y()
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
 def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> None:
     """全屏时让位，退出全屏后只恢复进入前已经可见的界面。"""
 
