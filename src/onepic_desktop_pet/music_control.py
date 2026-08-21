@@ -7,7 +7,7 @@ Windows Transport 优先读取 Windows.Media.Control 的目标播放器 Sessions
 其他客户端仅在运行时使用媒体键回退。本模块不把安装或启动应用写成“已连接”，也不伪造
 QQ 音乐、网易云或酷狗不存在的公开桌面 API。曲库随机点歌使用现有 MusicCommandThread
 唤起 Deep Link，并在客户端初始化后只向目标 Provider 发送一次幂等的 Play 命令；目标
-Session 不存在时禁止退回全局媒体键，改用该 Provider 已有的 UI 自动化播放适配器。
+Session 不存在时禁止退回全局媒体键，改用该 Provider 已有的后台 UI Automation 播放适配器。
 歌曲一旦启动，之后的基础控制始终锁定该 Provider 的 Transport。
 """
 
@@ -37,7 +37,6 @@ from .music_playback import (
     MusicProviderAdapter,
     SongCandidate,
     SongPlaybackResult,
-    _same_song,
     build_provider_adapters,
 )
 
@@ -1032,7 +1031,7 @@ class MusicProviderManager:
                 launch.provider,
                 launch.song.title,
                 artist,
-                "网易云没有开始播放，未发送全局媒体键，也没有影响其他播放器。",
+                "网易云没有提供可用的后台播放入口，未移动鼠标、未发送全局媒体键，也没有影响其他播放器。",
                 MusicPlaybackError.PLAY_ACTION_FAILED,
                 selected=selected,
                 play_attempts=1,
@@ -1123,50 +1122,37 @@ class MusicProviderManager:
         title: str,
         artist: str,
     ) -> bool:
-        """在目标客户端内精确搜索并点击曲库选中的歌曲。"""
+        """在目标客户端内通过后台 UI Automation 精确播放曲库选中的歌曲。"""
 
         adapter = self._playback_adapters.get(self._normalize(provider))
-        if adapter is None or not title:
+        background_play = getattr(adapter, "play_song_background", None) if adapter else None
+        if not callable(background_play) or not title:
             return False
         try:
-            candidates = tuple(adapter.search(title, artist))
+            started = bool(background_play(title, artist))
         except Exception as exc:
             LOGGER.debug(
-                "music_catalog_adapter provider=%s stage=search error=%r",
+                "music_catalog_adapter provider=%s stage=background_play error=%r",
                 provider,
                 exc,
             )
             return False
-        valid = tuple(
-            candidate
-            for candidate in candidates
-            if candidate.result_type.casefold() == "song"
-            and _same_song(candidate.title, title)
-            and _same_song(candidate.artist, artist)
-        )
-        for candidate in valid:
-            try:
-                if bool(adapter.play(candidate)):
-                    LOGGER.debug(
-                        "music_catalog_adapter provider=%s stage=play title=%r artist=%r",
-                        provider,
-                        candidate.title,
-                        candidate.artist,
-                    )
-                    return True
-            except Exception as exc:
-                LOGGER.debug(
-                    "music_catalog_adapter provider=%s stage=play error=%r",
-                    provider,
-                    exc,
-                )
-        return False
+        if started:
+            LOGGER.debug(
+                "music_catalog_adapter provider=%s stage=background_play title=%r artist=%r",
+                provider,
+                title,
+                artist,
+            )
+        return started
 
     def _play_catalog_artist_with_adapter(self, provider: str, artist: str) -> bool:
-        """目标客户端无法建立媒体 Session 时，使用其已有的歌手随机动作。"""
+        """目标客户端无法建立媒体 Session 时，使用其已有的后台歌手随机动作。"""
 
         adapter = self._playback_adapters.get(self._normalize(provider))
-        native_random = getattr(adapter, "play_random_artist", None) if adapter else None
+        native_random = (
+            getattr(adapter, "play_random_artist_background", None) if adapter else None
+        )
         if not callable(native_random):
             return False
         try:
