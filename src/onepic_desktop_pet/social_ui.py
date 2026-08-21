@@ -24,6 +24,7 @@ from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import SocialClient, SocialError, _heartbeat_payload, social_user_message
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
+from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .work_timer import format_work_duration
 
 LOGGER = logging.getLogger(__name__)
@@ -1038,15 +1039,23 @@ class SocialHubDialog(QDialog):
         except (TypeError, ValueError):
             return summary
         unrecorded_today = max(0, int(local_today) - recorded_today)
-        if unrecorded_today <= 0:
-            return summary
-        summary["weekly_total_seconds"] = weekly + unrecorded_today
-        difference = summary.get("difference_vs_yesterday_seconds")
-        if difference is not None:
-            try:
-                summary["difference_vs_yesterday_seconds"] = int(difference) + unrecorded_today
-            except (TypeError, ValueError):
-                pass
+        if unrecorded_today > 0:
+            summary["weekly_total_seconds"] = weekly + unrecorded_today
+
+        # This is a day-vs-day metric, never a weekly total.  Do not add the
+        # live weekly supplement to a stale comparison value: doing so can
+        # turn an invalid weekly snapshot into text such as “较昨天 多
+        # 49小时2分钟”.  Recompute from the explicit yesterday total and
+        # keep the comparison unavailable if that total is not trustworthy.
+        yesterday = summary.get("yesterday_seconds")
+        try:
+            yesterday_seconds = int(yesterday)
+        except (TypeError, ValueError):
+            yesterday_seconds = None
+        if yesterday_seconds is not None and 0 <= yesterday_seconds <= MAX_ANALYTICS_DAY_SECONDS:
+            summary["difference_vs_yesterday_seconds"] = int(local_today) - yesterday_seconds
+        else:
+            summary["difference_vs_yesterday_seconds"] = None
         return summary
 
     def set_room_quick_status(self, status: str, expires_at: datetime | None = None) -> None:
