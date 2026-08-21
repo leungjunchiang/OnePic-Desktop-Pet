@@ -573,6 +573,87 @@ class BuddyCardWidget(QWidget):
             button.setEnabled(True)
 
 
+class RoomPetCardWidget(QWidget):
+    """A compact room-stage card: pet first, metrics second, actions last."""
+
+    interaction_requested = Signal(dict, str)
+    food_interaction_requested = Signal(dict, str)
+
+    def __init__(self, buddy: dict[str, Any], parent=None) -> None:
+        super().__init__(parent)
+        self.buddy = buddy
+        self.setObjectName("roomPetCard")
+        self.setMinimumHeight(112)
+        self.setStyleSheet(
+            "QWidget#roomPetCard{background:#f7fbfc;border:1px solid #c3d9df;border-radius:12px;}"
+            "QPushButton{min-height:25px;padding:2px 7px;border-radius:7px;font-size:11px;"
+            "background:#d8eeea;color:#245c59;}"
+            "QPushButton:disabled{color:#9ba9ad;background:#e7eef0;}"
+        )
+        root = QHBoxLayout(self)
+        root.setContentsMargins(8, 7, 8, 7)
+        root.setSpacing(9)
+        details = QVBoxLayout()
+        details.setSpacing(2)
+
+        status = _presence_status(buddy)
+        uncertain = bool(buddy.get("presence_uncertain"))
+        online = status != "offline" and not bool(buddy.get("stale_presence")) and not uncertain
+        if status == "unknown":
+            status_text = "正在工作（同步恢复中）" if buddy.get("working") else "在线待确认"
+        else:
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+        nickname = _owner_nickname(buddy)
+        # Create the headline before the image so existing accessibility/tests
+        # and screen readers encounter identity/state first.
+        headline = QLabel(
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
+            f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
+        )
+        headline.setStyleSheet("font-size:14px;font-weight:700;color:#203847;")
+        headline.setWordWrap(False)
+        details.addWidget(headline)
+        session = format_work_duration(int(buddy.get("session_seconds") or 0))
+        today = format_work_duration(int(buddy.get("today_seconds") or 0))
+        week = format_work_duration(int(buddy.get("week_seconds") or 0))
+        metrics = QLabel(f"本轮 {session}　·　今日 {today}　·　本周 {week}")
+        metrics.setStyleSheet("font-size:11px;font-weight:600;color:#087f74;")
+        details.addWidget(metrics)
+        interruptions = int(buddy.get("today_interruptions") or 0)
+        longest = format_work_duration(int(buddy.get("longest_continuous_seconds") or 0))
+        continuity = f"今日中断 {interruptions} 次" if interruptions else "连续专注中"
+        detail = QLabel(f"{continuity}　·　最长连续 {longest}")
+        detail.setStyleSheet("font-size:11px;color:#61727d;")
+        details.addWidget(detail)
+
+        actions = QGridLayout()
+        actions.setContentsMargins(0, 2, 0, 0)
+        actions.setHorizontalSpacing(3)
+        actions.setVerticalSpacing(3)
+        is_self = bool(buddy.get("is_self"))
+        specs = (("visit", "串门"), ("cheer", "加油"), ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"))
+        for index, (kind, label) in enumerate(specs):
+            button = QPushButton(label)
+            button.setEnabled(not is_self)
+            if kind.startswith("food_"):
+                button.clicked.connect(lambda _checked=False, value=kind: self.food_interaction_requested.emit(self.buddy, value))
+            else:
+                button.clicked.connect(lambda _checked=False, value=kind: self.interaction_requested.emit(self.buddy, value))
+            actions.addWidget(button, index // 2, index % 2)
+        details.addLayout(actions)
+        root.addLayout(details, 1)
+
+        image = QLabel()
+        image.setFixedSize(70, 82)
+        image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outfit = str(buddy.get("outfit_key") or "")
+        relative = SPECIAL_OUTFIT_SPRITES.get(outfit, "assets/pet/daily-actions/39-work-study.png")
+        pixmap = QPixmap(str(resource_path(relative)))
+        if not pixmap.isNull():
+            image.setPixmap(pixmap.scaled(70, 82, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        root.insertWidget(0, image)
+
+
 class IncomingVisitNotice(QDialog):
     """Small non-modal prompt for a newly received visit or food interaction."""
 
@@ -995,6 +1076,8 @@ class SocialHubDialog(QDialog):
             f"今天第 {int(summary.get('today_rounds') or 0)} 轮 · 连续 {int(summary.get('current_streak_days') or 0)} 天 · "
             f"本周 {format_work_duration(int(summary.get('weekly_total_seconds') or 0))}\n"
             f"最长连续 {int(summary.get('longest_streak_days') or 0)} 天 · "
+            f"最长专注 {format_work_duration(int(summary.get('longest_continuous_seconds') or 0))} · "
+            f"今日中断 {int(summary.get('today_interruptions') or 0)} 次 · "
             f"{comparison} · "
             f"{summary.get('quality_label') or '暂无质量数据'}"
         )
@@ -1044,7 +1127,7 @@ class SocialHubDialog(QDialog):
         widget.setFixedHeight(desired)
 
     @staticmethod
-    def _set_buddy_item_height(item: QListWidgetItem, widget: BuddyCardWidget) -> None:
+    def _set_buddy_item_height(item: QListWidgetItem, widget: QWidget) -> None:
         widget.ensurePolished()
         # Keep a dense, repeatable row so a room with many buddies remains
         # scannable. The widget still determines the font/DPI-aware height;
@@ -1172,8 +1255,13 @@ class SocialHubDialog(QDialog):
         room_exclusive_note.setObjectName("muted")
         room_exclusive_note.setWordWrap(True)
         room_layout.addWidget(room_exclusive_note)
-        self.room_members = QListWidget(); self.room_members.setSpacing(5)
-        self.room_members.setMinimumHeight(46); self.room_members.setMaximumHeight(310)
+        self.room_members = QListWidget(); self.room_members.setSpacing(6)
+        self.room_members.setObjectName("roomStage")
+        self.room_members.setStyleSheet(
+            "QListWidget#roomStage{background:#eaf4f5;border:1px solid #bfd6dc;border-radius:12px;padding:5px;}"
+            "QListWidget#roomStage::item{background:transparent;border:0;}"
+        )
+        self.room_members.setMinimumHeight(120); self.room_members.setMaximumHeight(360)
         room_layout.addWidget(self.room_members)
         self.room_activity_label = QLabel("房间动态（北京时间）")
         self.room_activity_label.setObjectName("muted")
@@ -1195,16 +1283,25 @@ class SocialHubDialog(QDialog):
         create.clicked.connect(self._create_room); join.clicked.connect(self._join_room)
         row.addWidget(create, 0, 0); row.addWidget(join, 0, 1)
         row.setColumnStretch(0, 1); row.setColumnStretch(1, 1); room_layout.addLayout(row)
+        invite_row = QHBoxLayout()
+        self.room_invite_button = QPushButton("邀请好友")
+        self.room_invite_button.clicked.connect(self._show_room_invite)
+        self.room_invite_button.setEnabled(False)
+        invite_row.addWidget(self.room_invite_button)
+        invite_row.addStretch()
+        room_layout.addLayout(invite_row)
         room_actions = QGridLayout()
         self.room_goal_button = QPushButton("设置共同目标")
         self.room_schedule_button = QPushButton("一起开工/收工")
         self.room_challenge_button = QPushButton("设置共同挑战")
         self.room_leave_button = QPushButton("离开当前房间")
+        self.room_start_prompt_button = QPushButton("喊大家开工")
         self.room_goal_button.clicked.connect(self._set_room_goal)
         self.room_schedule_button.clicked.connect(self._set_room_schedule)
         self.room_challenge_button.clicked.connect(self._set_room_challenge)
         self.room_leave_button.clicked.connect(self._leave_room)
-        for index, button in enumerate((self.room_goal_button, self.room_schedule_button, self.room_challenge_button, self.room_leave_button)):
+        self.room_start_prompt_button.clicked.connect(lambda: self._quick_action_clicked("一起开工"))
+        for index, button in enumerate((self.room_goal_button, self.room_schedule_button, self.room_challenge_button, self.room_start_prompt_button, self.room_leave_button)):
             room_actions.addWidget(button, index // 2, index % 2)
             room_actions.setColumnStretch(index % 2, 1)
         room_layout.addLayout(room_actions)
@@ -1227,7 +1324,10 @@ class SocialHubDialog(QDialog):
         return self._scroll_page(page)
 
     def _quick_action_clicked(self, action: str) -> None:
-        if action == "下班没？":
+        if action in {"下班没？", "一起开工"}:
+            if action == "一起开工":
+                self._send_phrase("一起开工？")
+                return
             self._send_phrase(action)
             return
         if not self._require_login() or not self.current_room_id:
@@ -1253,6 +1353,20 @@ class SocialHubDialog(QDialog):
             self._set_status("已切换房间；正在同步这个房间的成员、目标和动态。")
             if not self._applying_dashboard:
                 self._room_refresh_timer.start(0)
+
+    def _show_room_invite(self) -> None:
+        """Reveal the invite code only when the user explicitly asks for it."""
+
+        if not self.current_room_id:
+            self._set_status("请先选择一个自习室。", error=True)
+            return
+        current = self.rooms.currentItem()
+        room = current.data(Qt.ItemDataRole.UserRole) if current is not None else {}
+        code = str(room.get("invite_code") or "") if isinstance(room, dict) else ""
+        if code:
+            QMessageBox.information(self, "邀请好友", f"把这个房间码发给搭子：\n\n{code}")
+        else:
+            self._set_status("当前房间暂时没有可用房间码。", error=True)
 
     def _backend_hint(self) -> str:
         backend = str(getattr(self.client, "backend_name", "unknown") or "unknown")
@@ -1563,11 +1677,9 @@ class SocialHubDialog(QDialog):
         self.room_members.clear()
         for buddy in people:
             item = QListWidgetItem()
-            widget = BuddyCardWidget(buddy, self.room_members)
+            widget = RoomPetCardWidget(buddy, self.room_members)
             widget.interaction_requested.connect(self._send_interaction)
             widget.food_interaction_requested.connect(self._send_food_interaction)
-            widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
-            widget.subscription_requested.connect(self._set_subscription)
             item.setData(Qt.ItemDataRole.UserRole, buddy)
             self.room_members.addItem(item)
             self.room_members.setItemWidget(item, widget)
@@ -1576,15 +1688,15 @@ class SocialHubDialog(QDialog):
             empty = QListWidgetItem("加入房间后，这里会显示一起专注的六毛和累计时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             self.room_members.addItem(empty)
-        self._fit_list_height(self.room_members, 46, 310)
+        self._fit_list_height(self.room_members, 120, 360)
 
     def _render_room_activity(self, entries: list[Any]) -> None:
         if not hasattr(self, "room_activity"):
             return
         self.room_activity.clear()
-        # The room RPC returns newest-first; keep the newest eight events so
-        # recent interactions cannot disappear behind older activity.
-        for entry in entries[:8]:
+        # A room is a stage, not an audit log. Keep only the newest three
+        # lightweight events; older history remains available from the server.
+        for entry in entries[:3]:
             if isinstance(entry, dict):
                 stamp = _format_beijing_time(str(entry.get("created_at") or ""))
                 text = str(entry.get("text") or entry.get("message") or "")
@@ -2026,7 +2138,7 @@ class SocialHubDialog(QDialog):
         self.rooms.clear()
         for room in rooms:
             room_item = QListWidgetItem(
-                f"{room.get('name')} · {room.get('members')} 人 · 房间码 {room.get('invite_code')}"
+                f"{room.get('name')} · {room.get('members')} 人"
             )
             room_item.setData(Qt.ItemDataRole.UserRole, room)
             self.rooms.addItem(room_item)
@@ -2082,6 +2194,11 @@ class SocialHubDialog(QDialog):
                 "session_seconds": int(getattr(local_status, "session_seconds", 0)),
                 "today_seconds": int(getattr(local_status, "today_seconds", 0)),
             }
+        if isinstance(self._focus_analytics, dict):
+            local_presence.update({
+                "today_interruptions": int(self._focus_analytics.get("today_interruptions") or 0),
+                "longest_continuous_seconds": int(self._focus_analytics.get("longest_continuous_seconds") or 0),
+            })
         local_presence.update({
             "user_id": str(me.get("user_id") or me.get("id") or "me"),
             "owner_nickname": self.owner_nickname or clean_owner_nickname(me.get("owner_nickname") or me.get("nickname")),
@@ -2113,6 +2230,10 @@ class SocialHubDialog(QDialog):
             self.room_schedule_button.setEnabled(bool(self.current_room_id))
         if hasattr(self, "room_challenge_button"):
             self.room_challenge_button.setEnabled(bool(self.current_room_id))
+        if hasattr(self, "room_start_prompt_button"):
+            self.room_start_prompt_button.setEnabled(bool(self.current_room_id))
+        if hasattr(self, "room_invite_button"):
+            self.room_invite_button.setEnabled(bool(self.current_room_id))
         self.room_leave_button.setEnabled(bool(self.current_room_id))
         self._refresh_room_goal_text()
         if hasattr(self, "room_ritual"):
