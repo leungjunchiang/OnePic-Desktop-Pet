@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
-from .social import SocialClient, SocialError, social_user_message
+from .social import SocialClient, SocialError, _heartbeat_payload, social_user_message
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .work_timer import format_work_duration
 
@@ -31,29 +31,6 @@ LOGGER = logging.getLogger(__name__)
 # machine's local timezone, so users in different regions see the same room
 # timeline.  A fixed UTC+8 offset is sufficient for Beijing (no DST).
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
-
-# The local focus snapshot contains extra fields used by room UI and local
-# diagnostics. Presence storage accepts only these durable fields; passing
-# the whole snapshot used to raise TypeError before the heartbeat request was
-# sent, so both Windows and macOS stayed offline.
-HEARTBEAT_FIELDS = frozenset(
-    {
-        "working",
-        "today_seconds",
-        "session_started_at",
-        "outfit_key",
-        "room_id",
-        "quick_status",
-        "quick_status_expires_at",
-    }
-)
-
-
-def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
-    """Select only fields supported by the social heartbeat API."""
-
-    return {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
-
 
 def _beijing_now() -> datetime:
     return datetime.now(BEIJING_TIMEZONE)

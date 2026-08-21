@@ -38,6 +38,27 @@ CONNECTION_STATES = {"CONNECTING", "ONLINE", "DEGRADED", "OFFLINE", "RECONNECTIN
 # the time needed for the next retry without claiming that the peer is live.
 PRESENCE_GRACE_SECONDS = 180
 
+# Fields accepted by the durable focus-presence heartbeat endpoint. The
+# desktop UI keeps additional local-only state in the same snapshot, so the
+# transport must filter it before calling the backend.
+HEARTBEAT_FIELDS = frozenset(
+    {
+        "working",
+        "today_seconds",
+        "session_started_at",
+        "outfit_key",
+        "room_id",
+        "quick_status",
+        "quick_status_expires_at",
+    }
+)
+
+
+def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
+    """Select only fields supported by the social heartbeat API."""
+
+    return {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
+
 
 class ConnectionStateStore:
     """Single source of truth for the study-room transport state.
@@ -1985,4 +2006,3 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
-
