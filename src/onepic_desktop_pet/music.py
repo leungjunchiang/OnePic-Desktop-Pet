@@ -4,6 +4,8 @@
 快捷“随机听一首”只负责从本地曲库选歌，然后直接尝试平台 Deep Link；Deep Link 失效、客户端
 未安装或系统拒绝唤起时，降级到正版 HTTPS 页面。打开客户端不等于已确认播放，基础播放命令
 仍由 music_control.py 读取系统媒体 Session 或发送媒体键。
+“随机电台”则只按用户设置的默认音乐软件打开陈楚生歌手入口；不跨平台抢占其它播放器，后续
+随机播放交给用户选择的音乐客户端或其官方网页。
 """
 
 from __future__ import annotations
@@ -396,6 +398,19 @@ class CatalogMusicService:
             )
         return ("netease", "qq", "apple")
 
+    def _artist_collection_providers(self) -> tuple[str, ...]:
+        """返回“随机电台”唯一允许使用的播放器顺序。
+
+        电台是用户主动选择的播放器入口，不应像单曲容错那样跨平台尝试；否则用户明明
+        选择了 QQ 音乐，网易云失败后却会被悄悄打开，甚至抢占正在播放的其它客户端。
+        auto 仍保留兼容顺序，但显式选择时只使用该平台及其网页回退。
+        """
+
+        preferred = str(getattr(self.settings, "music_service", "auto") or "auto").casefold()
+        if preferred in {"qq", "netease", "kugou", "apple", "spotify"}:
+            return (preferred,)
+        return ("netease", "qq", "kugou", "apple", "spotify")
+
     @staticmethod
     def _try_open(opener: Callable[[str], bool], url: str) -> bool:
         """把第三方客户端的异常限制在本次唤起，确保还能走网页降级。"""
@@ -455,17 +470,18 @@ class CatalogMusicService:
         )
 
     def open_artist_collection(self, artist: str = "陈楚生") -> bool:
-        """先打开客户端歌手曲库，失败后再打开官方 HTTPS 歌手页。"""
+        """按默认播放器打开歌手入口，失败后只回退到同一平台网页。"""
 
         self.last_provider = ""
         self.last_used_deep_link = False
-        for provider in self._providers():
+        providers = self._artist_collection_providers()
+        for provider in providers:
             deep_link = artist_collection_deep_link(provider, artist)
             if deep_link and self._open_deep_link(provider, deep_link):
                 self.last_provider = provider
                 self.last_used_deep_link = True
                 return True
-        for provider in self._providers():
+        for provider in providers:
             if self._try_open(self.browser_opener, artist_collection_url(provider, artist)):
                 self.last_provider = provider
                 return True
