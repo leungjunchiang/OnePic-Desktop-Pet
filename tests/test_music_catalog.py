@@ -229,6 +229,8 @@ def test_catalog_persists_only_shuffle_state_in_settings() -> None:
 def test_collection_fallback_is_an_official_artist_page() -> None:
     assert artist_collection_url("netease") == "https://music.163.com/#/artist?id=2124"
     assert artist_collection_url("apple").startswith("https://music.apple.com/")
+    assert "t=singer" in artist_collection_url("qq")
+    assert "searchType=singer" in artist_collection_url("kugou")
 
 
 def test_collection_prefers_netease_client_deep_link() -> None:
