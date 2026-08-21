@@ -13,6 +13,7 @@ from ctypes import wintypes
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -281,14 +282,45 @@ def open_music_url(
     startfile: Callable[[str], object] | None = None,
     popen: Callable[..., object] | None = None,
     browser_open: Callable[[str], object] | None = None,
+    service: str = "",
+    executable: Path | str | None = None,
 ) -> bool:
-    """用系统默认方式唤起 URL；不预检测注册表或 LaunchServices。"""
+    """用系统默认方式唤起 URL；Windows 可用真实 exe 绕过坏的 Scheme 命令。"""
 
     if not str(url or "").strip():
         return False
     platform = platform_name or sys.platform
     try:
         if platform == "win32":
+            if executable:
+                client = Path(executable).expanduser()
+                if not client.is_file():
+                    return False
+                runner = popen or subprocess.Popen
+                args = [str(client)]
+                if str(service or "").casefold() == "netease":
+                    # 网易云的 orpheus 注册器使用的就是这个参数；直接传参时
+                    # 同时设置 cwd，避免便携/非 Program Files 安装缺少 DLL 搜索目录。
+                    args.append(f"--webcmd={url}")
+                else:
+                    args.append(url)
+                kwargs: dict[str, object] = {
+                    "cwd": str(client.parent),
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                }
+                creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+                if creationflags:
+                    kwargs["creationflags"] = creationflags
+                process = runner(args, **kwargs)
+                # Loader/initialization error 可能表现为“进程已创建后立刻退出”，
+                # 这时立刻走 HTTPS 回退，不把启动失败误报成播放成功。
+                poll = getattr(process, "poll", None)
+                if callable(poll):
+                    exit_code = poll()
+                    if exit_code not in (None, 0):
+                        return False
+                return True
             launcher = startfile or getattr(os, "startfile")
             launcher(url)
             return True
@@ -325,6 +357,7 @@ class CatalogMusicService:
             random_source=random_source,
         )
         self.platform_name = platform_name or sys.platform
+        self._custom_opener = opener is not None
         self.opener = opener or (
             lambda url: open_music_url(url, platform_name=self.platform_name)
         )
@@ -349,6 +382,20 @@ class CatalogMusicService:
         except (AttributeError, OSError, TypeError, ValueError):
             return False
 
+    def _open_deep_link(self, provider: str, url: str) -> bool:
+        """在 Windows 优先直接启动真实客户端，其它平台仍走原生 URL 打开器。"""
+
+        if self._custom_opener:
+            return self._try_open(self.opener, url)
+        custom_path = str(getattr(self.settings, f"{provider}_music_path", "") or "")
+        client = find_music_client(provider, custom_path)
+        return open_music_url(
+            url,
+            platform_name=self.platform_name,
+            service=provider,
+            executable=client if self.platform_name == "win32" else None,
+        )
+
     def play_random_song(self) -> CatalogSongLaunch:
         """选一首歌并直接唤起；私有 Scheme 失败后打开同平台官方网页。"""
 
@@ -359,7 +406,7 @@ class CatalogMusicService:
             setattr(self.settings, "music_recent_history", list(recent))
         for provider in self._providers():
             deep_link = song_deep_link(provider, song)
-            if deep_link and self._try_open(self.opener, deep_link):
+            if deep_link and self._open_deep_link(provider, deep_link):
                 return CatalogSongLaunch(True, provider, song, f"给你挑了《{song.title}》♪", deep_link)
         for provider in self._providers():
             web_url = song_web_url(provider, song)
@@ -442,7 +489,13 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
 
 
 def find_music_client(service: str, custom_path: str = "") -> Path | None:
-    """优先返回用户选择的程序，否则返回首个自动检测到的客户端。"""
+    """优先返回用户选择的程序，否则返回首个自动检测到的客户端。
+
+    Windows 的网易云安装目录不一定在 Program Files；有些安装器只注册了
+    ``orpheus`` URL Scheme。因此最后再读取注册表中的真实可执行文件路径，
+    但不执行注册表里的整条命令。这样可以规避类似
+    ``"cloudmusic.exe"--webcmd="%1"`` 这种缺少空格的坏注册命令。
+    """
 
     selected = Path(custom_path).expanduser() if custom_path.strip() else None
     if selected is not None and selected.exists():
@@ -450,7 +503,64 @@ def find_music_client(service: str, custom_path: str = "") -> Path | None:
             sys.platform == "darwin" and selected.is_dir() and selected.suffix.casefold() == ".app"
         ):
             return selected
-    return next((path for path in music_client_candidates(service) if path.exists()), None)
+    # URL Scheme 是 Windows 当前真正选择的客户端；优先于机器上可能遗留的
+    # 旧 Program Files 副本（本机就同时存在一个旧版 C: 副本和 D: 的活动副本）。
+    registered = _registered_music_client(service)
+    detected = next((path for path in music_client_candidates(service) if path.exists()), None)
+    return registered or detected
+
+
+def _extract_executable_from_shell_command(command: str) -> Path | None:
+    """从 Windows URL Scheme 命令中只提取 exe，不信任其余参数。"""
+
+    value = str(command or "").strip()
+    if not value:
+        return None
+    if value.startswith('"'):
+        end = value.find('"', 1)
+        if end <= 1:
+            return None
+        candidate = value[1:end]
+    else:
+        match = re.match(r"([^\s]+)", value)
+        if match is None:
+            return None
+        candidate = match.group(1)
+    path = Path(candidate).expanduser()
+    if path.is_file() and path.suffix.casefold() == ".exe":
+        return path
+    return None
+
+
+def _registered_music_client(service: str) -> Path | None:
+    """读取 Windows URL Scheme 的 exe 路径；macOS/Linux 不触碰注册表。"""
+
+    if os.name != "nt":
+        return None
+    scheme = {"netease": "orpheus", "qq": "qqmusic"}.get(str(service or "").casefold())
+    if not scheme:
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    subkey = rf"Software\Classes\{scheme}\shell\open\command"
+    roots = (
+        getattr(winreg, "HKEY_CURRENT_USER", None),
+        getattr(winreg, "HKEY_LOCAL_MACHINE", None),
+    )
+    for root in roots:
+        if root is None:
+            continue
+        try:
+            with winreg.OpenKey(root, subkey) as key:
+                raw_command, _ = winreg.QueryValueEx(key, None)
+            executable = _extract_executable_from_shell_command(str(raw_command))
+        except (OSError, TypeError, ValueError):
+            continue
+        if executable is not None:
+            return executable
+    return None
 
 
 def search_song(service: str, title: str, custom_path: str = "") -> MusicLaunchResult:
@@ -521,3 +631,4 @@ def _windows_process_ids(executable_name: str) -> set[int]:
     finally:
         kernel32.CloseHandle(snapshot)
     return result
+
