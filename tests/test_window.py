@@ -553,6 +553,12 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     assert not window.quick_panel.isVisible()
     assert not window.work_duration_bubble.isVisible()
 
+    # A live focus refresh may try to show the duration bubble while the
+    # foreground app is still fullscreen. That refresh must remain hidden.
+    window._update_work_duration_bubble()
+    app.processEvents()
+    assert not window.work_duration_bubble.isVisible()
+
     monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
     window._sync_fullscreen_visibility()
     app.processEvents()
