@@ -4148,7 +4148,7 @@ class PetWindow(QWidget):
     def play_random_song(self) -> str:
         """从本地曲库挑一首并交给音乐客户端尝试打开。"""
 
-        if self.music_controller.play_song("", "陈楚生", random_artist=True):
+        if self.music_controller.play_catalog_random_song("陈楚生"):
             self.show_speech("六毛来挑一首，马上给你打开♪", 2800)
         else:
             self.show_speech("音乐操作正在处理中，请稍等一下。", 3200)
@@ -4157,7 +4157,7 @@ class PetWindow(QWidget):
     def open_music_collection(self) -> str:
         """打开歌手曲库，后续随机播放与暂停交给音乐客户端。"""
 
-        if self.music_provider_manager.catalog_music_service.open_artist_collection():
+        if self.music_provider_manager.open_catalog_artist_collection():
             self.show_speech("已打开陈楚生曲库，后面交给播放器随机播放♪", 3600)
         else:
             self.show_speech("暂时没能打开陈楚生曲库，请确认浏览器可用。", 3600)
@@ -4166,7 +4166,7 @@ class PetWindow(QWidget):
     def _play_random_song_legacy(self) -> str:
         """从搜索结果中的陈楚生歌曲行随机选择，再执行播放与媒体校验。"""
 
-        if self.music_controller.play_song("", "陈楚生", random_artist=True):
+        if self.music_controller.play_catalog_random_song("陈楚生"):
             self.show_speech("正在从陈楚生的歌曲结果中随机选择，并核对实际播放歌曲……", 4200)
         else:
             self.show_speech("上一项音乐操作还在处理中，请稍等一下。", 3200)
@@ -5270,3 +5270,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
