@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCheckBox,
     QDialog,
+    QAbstractItemView,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -89,6 +90,10 @@ class FoodSceneDialog(QDialog):
             "QTabBar::tab { background:#dcecef; color:#426471; padding:9px 16px; margin-right:3px; border-radius:8px; }"
             "QTabBar::tab:selected { background:#8ed1c5; color:#124d4a; font-weight:700; }"
             "QListWidget { background:#ffffff; border:0; border-radius:10px; }"
+            "QFrame#cakeBuddyChoice { background:#ffffff; border:1px solid #d4e2e7; border-radius:8px; }"
+            "QFrame#cakeBuddyChoice[selected=\"true\"] { background:#dff4ef; border:1px solid #69b8ad; }"
+            "QCheckBox#cakeBuddyCheck { color:#203847; padding:5px 6px; }"
+            "QCheckBox#cakeBuddyCheck:checked { color:#124d4a; font-weight:600; }"
         )
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 18)
@@ -273,6 +278,9 @@ class FoodSceneDialog(QDialog):
         message.setPlaceholderText("今天庆祝什么？例如：终于把论文改完了")
         layout.addWidget(message)
         people = QListWidget()
+        people.setObjectName("cakeBuddyChooser")
+        people.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        people.setSpacing(4)
         people.setMaximumHeight(94)
         choices = []
         if self.buddy_choices is not None:
@@ -285,10 +293,34 @@ class FoodSceneDialog(QDialog):
         for buddy in choices:
             user_id = str(buddy.get("user_id") or buddy.get("id") or "").strip()
             label = str(buddy.get("nickname") or buddy.get("owner_nickname") or user_id)[:60]
-            item = QListWidgetItem(label, people)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, user_id)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            people.addItem(item)
+
+            # Use a real checkbox inside a styled row instead of QListWidget's
+            # native item-check indicator. On macOS the latter can disappear
+            # when the row enters the platform selected state, leaving a
+            # white rectangle with no visible selection feedback.
+            row = QFrame()
+            row.setObjectName("cakeBuddyChoice")
+            row.setProperty("selected", False)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(4, 2, 4, 2)
+            check = QCheckBox(label, row)
+            check.setObjectName("cakeBuddyCheck")
+            check.setProperty("cake_user_id", user_id)
+
+            def update_choice_style(state: int, *, choice_row=row) -> None:
+                choice_row.setProperty("selected", state == Qt.CheckState.Checked.value)
+                choice_row.style().unpolish(choice_row)
+                choice_row.style().polish(choice_row)
+                choice_row.update()
+
+            check.stateChanged.connect(update_choice_style)
+            row_layout.addWidget(check)
+            item.setSizeHint(row.sizeHint())
+            people.setItemWidget(item, row)
         if not choices:
             empty = QListWidgetItem("请先添加至少一位搭子，再分享小蛋糕。", people)
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -428,11 +460,13 @@ class FoodSceneDialog(QDialog):
         self._request(item_key, None)
 
     def _request_cake_share(self, message: QLineEdit, people: QListWidget) -> None:
-        selected = [
-            str(people.item(index).data(Qt.ItemDataRole.UserRole) or "").strip()
-            for index in range(people.count())
-            if people.item(index).checkState() == Qt.CheckState.Checked
-        ]
+        selected: list[str] = []
+        for index in range(people.count()):
+            item = people.item(index)
+            row = people.itemWidget(item)
+            check = row.findChild(QCheckBox, "cakeBuddyCheck") if row is not None else None
+            if check is not None and check.isChecked():
+                selected.append(str(item.data(Qt.ItemDataRole.UserRole) or "").strip())
         selected = [value for value in selected if value]
         if not 1 <= len(selected) <= 3:
             QMessageBox.information(self, "还差一步", "请选择 1～3 位好友一起庆祝。")
