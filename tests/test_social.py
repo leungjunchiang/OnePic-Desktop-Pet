@@ -350,6 +350,21 @@ def test_cloudbase_presence_and_profile_proxy_preserve_upsert_contract() -> None
     assert "wealth_leaderboard_preference_set" in cloudbase
 
 
+def test_personal_focus_and_outfit_state_is_server_merged_and_proxy_allowlisted() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260821000200_lili_personal_state_sync.sql").read_text(encoding="utf-8")
+    assert "focus_lifetime_seconds" in migration
+    assert "focus_today_seconds" in migration
+    assert "create or replace function public.lili_sync_personal_state" in migration
+    assert "greatest(p.focus_lifetime_seconds" in migration
+    for path in (
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        assert "lili_sync_personal_state" in path.read_text(encoding="utf-8")
+
+
 def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000200_lili_room_focus_ledger.sql").read_text(encoding="utf-8")

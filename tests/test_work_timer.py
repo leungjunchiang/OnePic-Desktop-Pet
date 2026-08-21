@@ -145,6 +145,30 @@ def test_new_date_resets_today_total(tmp_path) -> None:
     assert "0分钟" in timer.status_text()
 
 
+def test_remote_focus_totals_merge_without_double_counting_live_seconds(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    clock.advance(50)
+
+    assert timer.merge_remote_state(
+        today_seconds=600,
+        lifetime_seconds=3600,
+        date_key="2026-08-10",
+    )
+    assert timer.today_seconds() == 600
+    assert timer.lifetime_seconds() == 3600
+
+    clock.advance(20)
+    assert timer.today_seconds() == 620
+    assert timer.lifetime_seconds() == 3620
+    assert not timer.merge_remote_state(
+        today_seconds=600,
+        lifetime_seconds=3600,
+        date_key="2026-08-10",
+    )
+
+
 def test_reminders_fire_once_at_focus_break_and_long_work_thresholds(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)

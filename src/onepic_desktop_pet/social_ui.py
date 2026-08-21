@@ -196,9 +196,12 @@ class SocialSyncThread(QThread):
     def run(self) -> None:
         try:
             heartbeat_error = ""
+            personal_state = self.presence.get("personal_state")
+            heartbeat_presence = dict(self.presence)
+            heartbeat_presence.pop("personal_state", None)
             if self.send_heartbeat:
                 try:
-                    self.client.heartbeat(**self.presence)
+                    self.client.heartbeat(**heartbeat_presence)
                 except SocialError as exc:
                     # A transient write failure must not prevent the same
                     # cycle's dashboard read. Otherwise one platform can
@@ -206,6 +209,25 @@ class SocialSyncThread(QThread):
                     # proxy is briefly unavailable.
                     heartbeat_error = str(exc)
                     LOGGER.warning("social presence heartbeat failed: %s", exc)
+            if isinstance(personal_state, dict):
+                sync_rpc = getattr(self.client, "rpc", None)
+                if callable(sync_rpc):
+                    try:
+                        sync_rpc(
+                            "lili_sync_personal_state",
+                            {
+                                "p_focus_date": str(personal_state.get("focus_date") or ""),
+                                "p_today_seconds": int(personal_state.get("today_seconds") or 0),
+                                "p_lifetime_seconds": int(personal_state.get("lifetime_seconds") or 0),
+                                "p_outfit_key": str(personal_state.get("outfit_key") or ""),
+                                "p_outfit_set": bool(personal_state.get("outfit_set")),
+                            },
+                        )
+                    except (SocialError, AttributeError, TypeError) as exc:
+                        # Older relays can serve the room dashboard before the
+                        # personal-state migration is deployed.  Keep the
+                        # social room usable and retry on the next heartbeat.
+                        LOGGER.info("personal state sync deferred: %s", exc)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -1898,7 +1920,9 @@ class SocialHubDialog(QDialog):
             "user_id": str(me.get("user_id") or me.get("id") or "me"),
             "owner_nickname": self.owner_nickname or clean_owner_nickname(me.get("owner_nickname") or me.get("nickname")),
             "nickname": self.owner_nickname or str(me.get("nickname") or "搭子"),
-            "outfit_key": str(me_presence.get("outfit_key") or self.outfit_key or me.get("outfit_key") or ""),
+            # The profile is the durable same-account outfit.  Presence is a
+            # per-device heartbeat and can briefly belong to an older client.
+            "outfit_key": str(me.get("outfit_key") or me_presence.get("outfit_key") or self.outfit_key or ""),
             "online": True,
             "is_self": True,
         })

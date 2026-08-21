@@ -17,6 +17,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_room_room_rituals",
   "lili_buddy_private_notes",
   "lili_set_buddy_private_note",
+  "lili_sync_personal_state",
 ]);
 
 const ROUTE_TO_RPC = new Map([

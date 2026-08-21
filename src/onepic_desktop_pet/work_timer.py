@@ -264,6 +264,43 @@ class WorkTimerModel:
 
         return self._lifetime_seconds + self._current_elapsed()
 
+    def merge_remote_state(
+        self,
+        *,
+        today_seconds: int = 0,
+        lifetime_seconds: int = 0,
+        date_key: str | None = None,
+    ) -> bool:
+        """Merge a server snapshot without counting the same work twice.
+
+        The same account may be open on more than one computer.  The server
+        stores the greatest confirmed totals, while this model keeps the
+        currently running monotonic segment separate.  Therefore a remote
+        snapshot can raise local totals, but can never reset them or add the
+        live segment a second time.
+        """
+
+        self._rollover_if_needed()
+        if date_key and str(date_key)[:10] != self._date_key:
+            return False
+        remote_today = max(0, int(today_seconds or 0))
+        remote_lifetime = max(0, int(lifetime_seconds or 0))
+        elapsed = self._current_elapsed()
+        local_today = self._accumulated_seconds + elapsed
+        local_lifetime = self._lifetime_seconds + elapsed
+        target_today = max(local_today, remote_today)
+        target_lifetime = max(local_lifetime, remote_lifetime)
+        changed = False
+        if target_today > local_today:
+            self._accumulated_seconds = max(0, target_today - elapsed)
+            changed = True
+        if target_lifetime > local_lifetime:
+            self._lifetime_seconds = max(0, target_lifetime - elapsed)
+            changed = True
+        if changed:
+            self._save()
+        return changed
+
     def unlocked_outfit_count(self) -> int:
         """每累计一小时解锁一套娃衣，最多十二套。"""
 

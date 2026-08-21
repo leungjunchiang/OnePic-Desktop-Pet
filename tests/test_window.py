@@ -816,6 +816,32 @@ def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> 
     window.move(340, 240)
     app.processEvents()
     assert window.quick_panel.pos() - window.pos() == first_offset
+    assert window.quick_panel.y() + window.quick_panel.height() + 12 <= window.y()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_work_duration_stays_below_pet_and_reserves_bottom_space() -> None:
+    """工作计时在屏幕底边仍固定在六毛下方，不与快捷栏抢位置。"""
+
+    app, window = _create_window()
+    area = window._screen_geometry()
+    assert area is not None
+    window.move(area.right() - window.width() - 4, area.bottom() - window.height())
+    window.focus_session.start()
+    app.processEvents()
+
+    bubble = window.work_duration_bubble
+    assert bubble.isVisible()
+    assert bubble.y() >= window.y() + window.height()
+    assert bubble.y() + bubble.height() <= area.bottom() + 1
+    assert window.y() + window.height() + bubble.height() + 5 <= area.bottom() + 1
+
+    first_offset = bubble.pos() - window.pos()
+    window.move(window.x() - 80, window.y() - 40)
+    app.processEvents()
+    assert bubble.pos() - window.pos() == first_offset
+
+    window.focus_session.finish()
     window.close(); window.deleteLater(); app.processEvents()
 
 
