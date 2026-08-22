@@ -27,7 +27,7 @@ from typing import Any, Callable, Protocol
 import unicodedata
 
 from .local_data import app_data_dir
-from .resources import resource_path
+from .resources import resource_path, resource_root
 from .tls_support import tls_diagnostics, verified_ssl_context
 
 
@@ -1021,7 +1021,12 @@ class LegacyDirectSocialClient:
     ACCOUNT_NAME = "supabase-session"
 
     def __init__(self, *, persist_tokens: bool = True, backend: SocialBackend | None = None) -> None:
-        config = json.loads(resource_path("config/social_backend.json").read_text(encoding="utf-8"))
+        # Backend credentials and endpoints are release-controlled.  Do not let
+        # a user content overlay replace this file: an older executable may
+        # interpret a newer overlay schema as a legacy CloudBase proxy.
+        config = json.loads(
+            (resource_root() / "config" / "social_backend.json").read_text(encoding="utf-8")
+        )
         self.url = str(config.get("url", "")).rstrip("/")
         self.key = str(config.get("publishable_key", ""))
         self.social_api_base_url = (
@@ -2110,7 +2115,8 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     def sign_out(self) -> None:
         backend = self._manager.direct if hasattr(self._manager, "direct") else None
         if backend is not None: backend._clear_session()
-        self._manager.proxy.session = None
+        if self._manager.proxy is not None:
+            self._manager.proxy.session = None
 
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
         self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
