@@ -2047,6 +2047,13 @@ class SocialHubDialog(QDialog):
                     "确认页会打开六毛项目页面，不需要启动 localhost 服务。",
                 )
         except SocialError as exc:
+            # A slow SMTP request may have created the account before the
+            # client received a response. Keep the email ready for resend and
+            # never make the user submit the password again.
+            if str(getattr(exc, "kind", "") or "").casefold() == "signup_timeout":
+                self._pending_signup_email = self.signup_email.text().strip()
+                self.login_email.setText(self._pending_signup_email)
+                self.signup_resend_button.setVisible(bool(self._pending_signup_email))
             self._error(exc)
 
     def _resend_confirmation(self) -> None:
