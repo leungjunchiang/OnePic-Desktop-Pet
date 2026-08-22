@@ -355,7 +355,7 @@ def test_http_backend_uses_direct_supabase_paths():
             super().__init__("https://supabase.example.test", client_key="sb_publishable_test", persist_tokens=False, transport="direct")
             self.calls = []
 
-        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
             self.calls.append((method, path, body, authenticated, extra_headers))
             if path.startswith("/auth/v1/token"):
                 return {"access_token": "a", "refresh_token": "r", "expires_in": 3600, "user": {"id": "u"}}
@@ -391,7 +391,7 @@ def test_signup_reports_confirmation_pending_without_fabricating_a_session():
             )
             self.calls = []
 
-        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
             self.calls.append((method, path, body, authenticated, extra_headers))
             if path.startswith("/auth/v1/signup"):
                 return {
@@ -428,7 +428,7 @@ def test_resend_confirmation_uses_supabase_resend_endpoint_and_redirect():
             )
             self.call = None
 
-        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
             self.call = (method, path, body, authenticated, extra_headers)
             return {}
 
@@ -449,7 +449,7 @@ def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
             self.headers = None
             self.session = SocialSession("a", "r", "u", 9_999_999_999)
 
-        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None):
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
             self.headers = extra_headers
             return {}
 
