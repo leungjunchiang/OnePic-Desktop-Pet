@@ -43,4 +43,5 @@ def test_focus_history_deployment_uses_existing_management_token_and_public_proj
     assert "/database/query" in script
     assert "config/social_backend.json" in script
     assert "database_write" in script
+    assert "20260822000400_lili_focus_daily_visibility.sql" in script
 

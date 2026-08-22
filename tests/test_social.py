@@ -526,6 +526,15 @@ def test_daily_focus_history_is_account_scoped_and_allowlisted() -> None:
         assert "lili_sync_focus_history" in path.read_text(encoding="utf-8")
 
 
+def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260822000400_lili_focus_daily_visibility.sql").read_text(encoding="utf-8")
+    assert "permanent, one-row-per-account-per-Beijing-day" in migration
+    assert "'retention_days', 2" in migration
+    assert "d.focus_date between today - 1 and today" in migration
+    assert "delete from public.lili_focus_daily" not in migration.lower()
+
+
 def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000200_lili_room_focus_ledger.sql").read_text(encoding="utf-8")

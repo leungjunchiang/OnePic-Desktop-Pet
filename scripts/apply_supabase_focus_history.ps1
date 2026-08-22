@@ -2,7 +2,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$MigrationPath = "supabase/migrations/20260822000300_lili_focus_daily_history.sql",
+    [string]$MigrationPath = "supabase/migrations/20260822000400_lili_focus_daily_visibility.sql",
     [string]$ConfigPath = "config/social_backend.json"
 )
 
