@@ -964,6 +964,8 @@ class HttpSocialBackend:
         routes = {
             "lili_add_buddy_by_code": "/buddies/request",
             "lili_respond_buddy": "/buddies/accept",
+            "lili_remove_buddy": "/buddies/remove",
+            "lili_set_buddy_subscription": "/buddies/subscription",
             "lili_send_visit": "/visits/send",
             "lili_respond_visit": "/visits/accept",
             "lili_create_room": "/rooms/create",

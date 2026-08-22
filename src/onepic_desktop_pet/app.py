@@ -10,6 +10,7 @@
 - 托盘提供“始终置顶/桌面模式”开关，并与宠物右键菜单和设置页保持同步；
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
+- 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
 - 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
 Agent 快速定位：
@@ -121,6 +122,7 @@ class DesktopPetApplication(QObject):
         self._program_update_progress: QProgressDialog | None = None
         self._program_update_manual = False
         self._program_release: ProgramRelease | None = None
+        self._quit_started = False
         self.program_update_state = UpdateState.IDLE
         self.window.set_menu_external_callbacks(
             {
@@ -213,9 +215,10 @@ class DesktopPetApplication(QObject):
             # The startup check is deliberately delayed and silent.  It only
             # fetches the manifest; changed files are downloaded in a worker.
             QTimer.singleShot(2500, lambda: self.check_content_updates(False))
+        # Startup only checks release metadata.  Downloading, installing, and
+        # quitting remain behind the explicit tray/settings action, so a newly
+        # published Release can never make a healthy pet disappear on launch.
         if self._program_updates_enabled():
-            # The program check is metadata-only.  A download and installer
-            # launch happen only after the user confirms the discovered release.
             QTimer.singleShot(5000, lambda: self.check_program_updates(False))
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
@@ -224,6 +227,9 @@ class DesktopPetApplication(QObject):
     def quit(self) -> None:
         """保存窗口位置、隐藏托盘并退出应用。"""
 
+        if self._quit_started:
+            return
+        self._quit_started = True
         self.settings.start_x = self.window.x()
         self.settings.start_y = self.window.y()
         try:
@@ -290,7 +296,9 @@ class DesktopPetApplication(QObject):
             if manual:
                 self.window.show_speech("程序更新正在检查中…", 2400)
             return
-        if not manual and not self._program_updates_enabled():
+        if not self._program_updates_enabled():
+            if manual:
+                self.window.show_speech("程序更新已关闭；需要时可在设置中重新启用。", 3200)
             return
         self.program_update_state = UpdateState.CHECKING
         if manual:
@@ -486,6 +494,16 @@ class DesktopPetApplication(QObject):
         if not isinstance(result, ProgramUpdateResult):
             self.program_update_state = UpdateState.ERROR
             self.window.show_speech("更新包无效，没有改动当前程序。", 4200)
+            return
+        # This is a defense-in-depth guard.  The startup path no longer
+        # checks program releases, and only a user-confirmed manual action may
+        # ever reach the installer.  If a stale worker callback arrives after
+        # a lifecycle change, keep Lili running instead of launching or
+        # scheduling a quit unexpectedly.
+        if not self._program_update_manual:
+            self.program_update_state = UpdateState.ERROR
+            LOGGER.warning("[Update] refusing installer launch from non-manual check")
+            self.window.show_speech("检测到新版本，但不会自动安装；请从托盘手动更新。", 4200)
             return
         self.program_update_state = UpdateState.READY_TO_INSTALL
         installer = str(result.installer_path)
