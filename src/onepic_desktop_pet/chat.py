@@ -6,7 +6,7 @@
 - 禁止设置类按钮成为 QDialog 默认按钮，确保回车只发送消息，不会误触设置入口；
 - 收集单条用户消息并发出信号，不在界面类中直接访问网络；
 - 允许选择纯离线、Codex、Claude Code、DeepSeek、Kimi 或兼容接口并主动检测连接；
-- 对在线回复采用小片段、定时批量渲染，避免等待整段文字或每个字符都重排全文；
+- 对在线回复先缓存传输片段，回复完成后一次性渲染，避免流式重排造成闪屏；
 - 分开显示 ChatGPT/Codex 图形应用与 Codex CLI 状态，并只在用户点击时打开 GUI；
 - 音乐默认自动选择本机最可用 Provider，只把手动路径和优先项保留为高级选项；
 - 分开显示“已检测应用”“已建立播放控制”“仅支持基础控制”，不把安装发现称为已连接；
@@ -408,8 +408,10 @@ class ChatDialog(QDialog):
         index = self._streaming_message_index
         if index is None or index >= len(self._transcript_entries):
             return
+        # The transport can emit dozens of tiny deltas per second.  Rebuilding
+        # the complete QTextBrowser HTML for each one causes visible flicker on
+        # some Qt backends, so keep the deltas buffered until the final answer.
         self._streaming_pending_text += str(delta)
-        self._schedule_streaming_flush()
 
     def finish_streaming_message(self, text: str) -> None:
         """Finish with the authoritative answer without duplicating a stream."""
@@ -422,9 +424,11 @@ class ChatDialog(QDialog):
             self._cancel_streaming_flush()
             self._streaming_message_index = None
             return
-        self._streaming_pending_text = ""
-        self._streaming_final_text = str(text)
-        self._flush_streaming_text()
+        role, _current = self._transcript_entries[index]
+        self._cancel_streaming_flush()
+        self._transcript_entries[index] = (role, str(text))
+        self._streaming_message_index = None
+        self._render_transcript()
 
     def _schedule_streaming_flush(self) -> None:
         if not self._stream_flush_timer.isActive():
