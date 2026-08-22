@@ -101,3 +101,39 @@ def test_pause_longer_than_ten_minutes_is_the_only_interruption(tmp_path) -> Non
     store.begin_focus_session(at=now + timedelta(minutes=31))
     assert store.snapshot()["current_interruptions"] == 1
     assert store.snapshot()["today_interruptions"] == 1
+
+
+
+def test_account_totals_are_rendered_on_a_new_computer(tmp_path) -> None:
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=False,
+    )
+
+    changed = store.merge_remote_state(
+        focus_date="2026-08-22",
+        today_seconds=42 * 60,
+        lifetime_seconds=8 * 3600,
+        week_start="2026-08-17",
+        week_seconds=3 * 3600,
+    )
+
+    assert changed
+    snapshot = store.snapshot()
+    assert snapshot["today_seconds"] == 42 * 60
+    assert snapshot["weekly_total_seconds"] == 3 * 3600
+
+
+def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+
+    assert store.merge_remote_state(
+        focus_date="2026-08-22",
+        today_seconds=60,
+        week_start="2026-08-10",
+        week_seconds=99 * 3600,
+    )
+    assert store.snapshot()["weekly_total_seconds"] == 0
