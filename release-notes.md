@@ -1,3 +1,8 @@
+## v0.23.60 — 减少 SMTP 部署配置
+
+- 自动从公开配置读取 Supabase project ref 和确认跳转地址，SMTP 端口、From 邮箱和发件人名称提供安全默认值。
+- 开发者只需准备 Supabase Management Token、SMTP 主机、SMTP 账号和 SMTP 密码/授权码四个 Secrets。
+
 ## v0.23.59 — 自动配置 Supabase Auth SMTP
 
 - 新增 `configure-supabase-auth` GitHub Actions 工作流，开发者只需在 GitHub Secrets/Variables 配置一次，工作流即可通过 Supabase Management API 写入 Auth SMTP 设置。

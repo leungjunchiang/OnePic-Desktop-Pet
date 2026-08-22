@@ -5,6 +5,7 @@ param(
     [string]$ProjectRef = "",
     [string]$SiteUrl = "",
     [string]$SmtpPort = "",
+    [string]$ConfigPath = "config/social_backend.json",
     [switch]$DryRun
 )
 
@@ -24,16 +25,33 @@ function Require-Value {
     return $Value.Trim()
 }
 
+$publicConfig = $null
+if (Test-Path -LiteralPath $ConfigPath) {
+    try {
+        $publicConfig = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
+    } catch {
+        throw "Could not parse public social backend configuration: $ConfigPath"
+    }
+}
+
 $resolvedProjectRef = if (-not [string]::IsNullOrWhiteSpace($ProjectRef)) {
     $ProjectRef
-} else {
+} elseif (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_PROJECT_REF)) {
     $env:SUPABASE_PROJECT_REF
+} elseif ($null -ne $publicConfig -and -not [string]::IsNullOrWhiteSpace($publicConfig.supabase_url)) {
+    ([Uri]$publicConfig.supabase_url).Host.Split('.')[0]
+} else {
+    ""
 }
 
 $resolvedSiteUrl = if (-not [string]::IsNullOrWhiteSpace($SiteUrl)) {
     $SiteUrl
-} else {
+} elseif (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_SITE_URL)) {
     $env:SUPABASE_SITE_URL
+} elseif ($null -ne $publicConfig) {
+    $publicConfig.email_redirect_to
+} else {
+    ""
 }
 
 $resolvedPort = if (-not [string]::IsNullOrWhiteSpace($SmtpPort)) {
@@ -49,8 +67,16 @@ $accessToken = Require-Value -Name "SUPABASE_ACCESS_TOKEN" -Value $env:SUPABASE_
 $smtpHost = Require-Value -Name "SUPABASE_SMTP_HOST" -Value $env:SUPABASE_SMTP_HOST
 $smtpUser = Require-Value -Name "SUPABASE_SMTP_USER" -Value $env:SUPABASE_SMTP_USER
 $smtpPassword = Require-Value -Name "SUPABASE_SMTP_PASSWORD" -Value $env:SUPABASE_SMTP_PASSWORD
-$smtpAdminEmail = Require-Value -Name "SUPABASE_SMTP_ADMIN_EMAIL" -Value $env:SUPABASE_SMTP_ADMIN_EMAIL
-$smtpSenderName = Require-Value -Name "SUPABASE_SMTP_SENDER_NAME" -Value $env:SUPABASE_SMTP_SENDER_NAME
+$smtpAdminEmail = if (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_SMTP_ADMIN_EMAIL)) {
+    $env:SUPABASE_SMTP_ADMIN_EMAIL.Trim()
+} else {
+    $smtpUser
+}
+$smtpSenderName = if (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_SMTP_SENDER_NAME)) {
+    $env:SUPABASE_SMTP_SENDER_NAME.Trim()
+} else {
+    "Lili"
+}
 
 [int]$smtpPortNumber = 0
 if (-not [int]::TryParse($resolvedPort, [ref]$smtpPortNumber) -or $smtpPortNumber -lt 1 -or $smtpPortNumber -gt 65535) {

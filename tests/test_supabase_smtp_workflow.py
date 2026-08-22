@@ -22,3 +22,12 @@ def test_supabase_smtp_script_does_not_print_credentials():
     assert "Write-Output $smtpPassword" not in script
     assert "Write-Host $body" not in script
 
+
+def test_supabase_smtp_script_can_derive_public_defaults():
+    script = (ROOT / "scripts" / "configure_supabase_auth.ps1").read_text(encoding="utf-8")
+
+    assert "config/social_backend.json" in script
+    assert "publicConfig.supabase_url" in script
+    assert "publicConfig.email_redirect_to" in script
+    assert '"587"' in script
+

@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       project_ref:
-        description: "Supabase project ref; leave empty to use the repository variable SUPABASE_PROJECT_REF"
+        description: "Optional Supabase project ref; empty automatically uses config/social_backend.json"
         required: false
         type: string
       site_url:
-        description: "Optional Auth site URL; leave empty to use the repository variable SUPABASE_SITE_URL"
+        description: "Optional Auth site URL; empty automatically uses config/social_backend.json"
         required: false
         type: string
 
