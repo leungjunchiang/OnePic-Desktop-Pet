@@ -87,6 +87,7 @@ def test_windows_maximised_chatgpt_is_not_treated_as_fullscreen(monkeypatch) -> 
     """Maximising a normal app must not hide the desktop pet."""
 
     monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.setattr(
         activity.ctypes,
@@ -102,6 +103,7 @@ def test_windows_borderless_monitor_window_is_treated_as_fullscreen(monkeypatch)
     """A borderless monitor-sized surface still yields to the desktop pet policy."""
 
     monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.setattr(
         activity.ctypes,
