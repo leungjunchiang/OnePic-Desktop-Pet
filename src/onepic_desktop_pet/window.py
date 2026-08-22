@@ -768,8 +768,8 @@ class PetWindow(QWidget):
 
         # Keep a low-frequency, cross-platform system probe.  It is the one
         # place that may auto-pause: 10 minutes of aggregate keyboard+mouse
-        # silence, a verified lock/sleep boundary, or a known video player in
-        # real fullscreen.  None of those paths ever auto-resume.
+        # silence, a verified lock/sleep boundary, or a known player/browser
+        # video in real fullscreen. None of those paths ever auto-resume.
         self.input_idle_timer = QTimer(self)
         self.input_idle_timer.setInterval(5_000)
         self.input_idle_timer.timeout.connect(self._check_input_idle)
@@ -1763,9 +1763,10 @@ class PetWindow(QWidget):
                 self.pause_work_timer(reason="lock")
                 return
 
-            # Browser/document fullscreen is deliberately ignored.  Only a
-            # known media player counts, and it must remain fullscreen for a
-            # few seconds to avoid a false transition while switching apps.
+            # A real player or browser video fullscreen counts, and it must
+            # remain fullscreen for a few seconds to avoid a false transition
+            # while switching apps. Ordinary maximised windows are excluded
+            # by active_window_is_fullscreen().
             if bool(getattr(self.settings, "auto_pause_on_fullscreen_video", True)) and active_fullscreen_video():
                 if self._fullscreen_video_started_at is None:
                     self._fullscreen_video_started_at = time.monotonic()

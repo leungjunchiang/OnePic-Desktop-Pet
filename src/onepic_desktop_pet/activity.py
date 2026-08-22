@@ -25,6 +25,22 @@ KNOWN_VIDEO_PLAYER_TOKENS = (
     "wmplayer",
 )
 
+# Browsers do not expose the video page as a separate process.  When a user
+# enters the browser's real video fullscreen, the foreground process is still
+# Chrome/Edge/Firefox/etc.  Keep this list limited to browser executables so a
+# normal maximised document window is not treated as a video surface.
+KNOWN_BROWSER_VIDEO_TOKENS = (
+    "chrome",
+    "msedge",
+    "firefox",
+    "brave",
+    "opera",
+    "vivaldi",
+    "arc",
+    "qqbrowser",
+    "sogouexplorer",
+)
+
 # Finder's desktop is exposed by Quartz as a screen-sized window.  Treating
 # that window as fullscreen makes a click on an empty desktop area hide Lili;
 # opening a normal browser window then appears to "restore" it.  These are
@@ -82,7 +98,12 @@ def _windows_foreground_is_desktop_shell(user32, hwnd) -> bool:
         return False
 
 
-def _windows_foreground_is_normal_window(user32, hwnd) -> bool:
+def _windows_foreground_is_normal_window(
+    user32,
+    hwnd,
+    *,
+    allow_media_fullscreen: bool = False,
+) -> bool:
     """Return whether a full-monitor HWND is still a normal window.
 
     A maximised application can have the same outer rectangle as its monitor
@@ -93,18 +114,37 @@ def _windows_foreground_is_normal_window(user32, hwnd) -> bool:
     """
 
     try:
-        is_zoomed = getattr(user32, "IsZoomed", None)
-        if is_zoomed is not None and bool(is_zoomed(hwnd)):
-            return True
-
         # WS_CAPTION includes the title bar and WS_THICKFRAME identifies a
         # resizable window.  Borderless fullscreen surfaces normally have
         # neither style, while maximised ChatGPT/browser/document windows do.
         get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
         style = int(get_style(hwnd, -16))
-        return bool(style & (0x00C00000 | 0x00040000))
+        if style & (0x00C00000 | 0x00040000):
+            return True
+
+        # Some Chromium builds keep the maximised bit while switching to
+        # borderless video fullscreen.  For non-browser apps, IsZoomed remains
+        # a useful conservative guard (and protects normal maximised apps
+        # whose style query is unavailable).  A known player/browser is
+        # allowed through only after the style check above has confirmed it is
+        # borderless; geometry is still checked by active_window_is_fullscreen().
+        is_zoomed = getattr(user32, "IsZoomed", None)
+        if is_zoomed is not None and bool(is_zoomed(hwnd)):
+            return not allow_media_fullscreen
+        return False
+
     except (AttributeError, OSError, TypeError, ValueError):
         return False
+
+
+def _is_known_media_process(name: str) -> bool:
+    """Return whether a process can own a browser/player video fullscreen."""
+
+    normalized = str(name or "").casefold().strip()
+    return bool(normalized) and any(
+        token in normalized
+        for token in (*KNOWN_VIDEO_PLAYER_TOKENS, *KNOWN_BROWSER_VIDEO_TOKENS)
+    )
 
 
 def classify_application(name: str) -> str:
@@ -261,7 +301,13 @@ def active_window_is_fullscreen() -> bool:
         # content and must not hide the desktop pet.
         if _windows_foreground_is_desktop_shell(user32, hwnd):
             return False
-        if _windows_foreground_is_normal_window(user32, hwnd):
+        foreground_name = active_application_name()
+        allow_media_fullscreen = _is_known_media_process(foreground_name)
+        if _windows_foreground_is_normal_window(
+            user32,
+            hwnd,
+            allow_media_fullscreen=allow_media_fullscreen,
+        ):
             return False
 
         class RECT(ctypes.Structure):
@@ -292,14 +338,17 @@ def active_window_is_fullscreen() -> bool:
 
 
 def active_fullscreen_video() -> bool:
-    """Return true only for a known video player in real fullscreen.
+    """Return true for a known player or browser in real fullscreen.
 
     A maximised Word/PDF/browser/IDE window is intentionally not enough
-    evidence.  This helper is privacy-preserving: it reads only the process
-    name and coarse window geometry, never page content or pixels.
+    evidence.  Browser video fullscreen is identified by the browser process
+    plus a borderless monitor-sized foreground window; ordinary maximised
+    browser/document windows retain their caption or resize frame and remain
+    visible.  This helper reads only the process name and coarse window
+    geometry, never page content or pixels.
     """
 
     name = active_application_name().casefold().strip()
-    if not name or not any(token in name for token in KNOWN_VIDEO_PLAYER_TOKENS):
+    if not _is_known_media_process(name):
         return False
     return active_window_is_fullscreen()

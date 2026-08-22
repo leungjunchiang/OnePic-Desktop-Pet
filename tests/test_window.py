@@ -1401,6 +1401,31 @@ def test_input_idle_at_ten_minutes_pauses_without_auto_resume(monkeypatch) -> No
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_browser_video_fullscreen_pauses_after_short_confirmation(monkeypatch) -> None:
+    """Real video fullscreen hides the pet and pauses work after confirmation."""
+
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
+    )
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
+    window.settings.auto_pause_on_fullscreen_video = True
+    window.start_work_timer()
+
+    # The first observation only arms the debounce window.  A second
+    # observation after four seconds confirms that fullscreen is persistent.
+    window._check_input_idle()
+    assert window.work_timer.is_running
+    window._fullscreen_video_started_at -= 4.1
+    window._check_input_idle()
+
+    assert not window.work_timer.is_running
+    assert window.work_timer.pause_reason == "fullscreen_video"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_verified_sleep_can_pause_work_timer(monkeypatch) -> None:
     """Only the explicit OS sleep signal may trigger an automatic pause."""
     app, window = _create_window()

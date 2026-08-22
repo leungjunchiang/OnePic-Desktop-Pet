@@ -99,6 +99,47 @@ def test_windows_maximised_chatgpt_is_not_treated_as_fullscreen(monkeypatch) -> 
     assert activity.active_window_is_fullscreen() is False
 
 
+def test_windows_browser_video_fullscreen_is_treated_as_fullscreen(monkeypatch) -> None:
+    """A borderless browser video surface must hide the desktop pet."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(activity, "active_application_name", lambda: "msedge.exe")
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(user32=_fake_windows_user32(zoomed=True)),
+        raising=False,
+    )
+
+    assert activity.active_window_is_fullscreen() is True
+    assert activity.active_fullscreen_video() is True
+
+
+def test_windows_maximised_browser_is_not_treated_as_video_fullscreen(monkeypatch) -> None:
+    """A normal maximised browser window must remain visible like Word/ChatGPT."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(activity, "active_application_name", lambda: "chrome.exe")
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=_fake_windows_user32(
+                zoomed=True,
+                style=0x00C00000 | 0x00040000,
+            )
+        ),
+        raising=False,
+    )
+
+    assert activity.active_window_is_fullscreen() is False
+    assert activity.active_fullscreen_video() is False
+
+
 def test_windows_borderless_monitor_window_is_treated_as_fullscreen(monkeypatch) -> None:
     """A borderless monitor-sized surface still yields to the desktop pet policy."""
 
