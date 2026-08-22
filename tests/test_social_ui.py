@@ -161,6 +161,21 @@ def test_outgoing_buddy_request_has_retract_action_and_is_not_acceptable() -> No
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_buddy_lookup_with_existing_pending_request_does_not_claim_to_send_again() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+
+    dialog._buddy_lookup_completed(
+        "5BCF1D45",
+        {"state": "pending", "owner_nickname": "胡老师"},
+    )
+    app.processEvents()
+
+    assert "本次没有重复发送" in dialog.status_label.text()
+    assert "查找完成" in dialog.status_label.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())

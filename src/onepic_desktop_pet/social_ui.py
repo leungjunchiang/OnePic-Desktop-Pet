@@ -2849,7 +2849,10 @@ class SocialHubDialog(QDialog):
             self._set_status(f"{owner}已经是你的搭子。")
             return
         if state == "pending":
-            self._set_status(f"已向{owner}发送申请，请等待对方回应。")
+            self._set_status(
+                f"查找完成：你之前已经向{owner}发送过申请；本次没有重复发送。"
+                "请到“互动”页查看或撤回。"
+            )
             return
         if state == "incoming":
             self.tabs.setCurrentIndex(1)
