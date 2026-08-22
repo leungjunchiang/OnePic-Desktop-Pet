@@ -1,3 +1,9 @@
+## v0.23.59 — 自动配置 Supabase Auth SMTP
+
+- 新增 `configure-supabase-auth` GitHub Actions 工作流，开发者只需在 GitHub Secrets/Variables 配置一次，工作流即可通过 Supabase Management API 写入 Auth SMTP 设置。
+- SMTP 密码、Supabase Management Token 只从 Actions Secrets 读取，不进入源码、安装包或桌面客户端。
+- 增加 PowerShell 配置脚本和静态安全回归测试；终端用户仍只填写邮箱和密码。
+
 ## v0.23.58 — 修复邮箱注册确认反馈与重发
 
 - 注册接口不再把“已创建账号但等待邮箱确认”误判为失败，163、学校邮箱等需要确认的账号会明确显示待确认状态。
