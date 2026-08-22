@@ -22,6 +22,7 @@ from onepic_desktop_pet.social import (
     normalize_email,
     social_user_message,
 )
+from onepic_desktop_pet.resources import clear_content_overlay_cache, set_content_update_root
 
 
 def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
@@ -205,6 +206,37 @@ def test_production_config_uses_supabase_direct_without_proxy():
     assert config["supabase_publishable_key"].startswith("sb_publishable_")
     assert config["social_api_base_url"] == ""
     assert "service_role" not in json.dumps(config).lower()
+
+
+def test_backend_config_ignores_legacy_content_overlay(tmp_path, monkeypatch):
+    overlay_root = tmp_path / "content_updates"
+    overlay_config = overlay_root / "versions" / "v0.23.60-legacy" / "config" / "social_backend.json"
+    overlay_config.parent.mkdir(parents=True)
+    overlay_config.write_text(
+        json.dumps(
+            {
+                "social_api_base_url": "https://legacy.example.test/proxy",
+                "supabase_url": "https://zkgctfntrioffpifiggk.supabase.co",
+                "supabase_publishable_key": "sb_publishable_test",
+                "social_backend": "direct_with_cloudbase_fallback",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (overlay_root / "active.json").write_text(
+        json.dumps({"content_version": "v0.23.60", "directory": "v0.23.60-legacy"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    set_content_update_root(overlay_root)
+    try:
+        client = SocialClient(persist_tokens=False)
+        assert client.backend_name == "Supabase Direct"
+        assert client.backend_endpoint == "https://zkgctfntrioffpifiggk.supabase.co"
+        assert client._manager.proxy is None
+    finally:
+        set_content_update_root(None)
+        clear_content_overlay_cache()
 
 
 def test_route_manager_retries_direct_once_then_switches_only_network_failures():
