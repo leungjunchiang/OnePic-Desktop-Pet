@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget
 from onepic_desktop_pet.social import SignupResult, SocialError
 from onepic_desktop_pet.social_ui import (
     BuddyCardWidget,
+    BuddyProfileDialog,
     BuddyVisitWindow,
     IncomingVisitNotice,
     SocialHubDialog,
@@ -174,6 +175,20 @@ def test_buddy_lookup_with_existing_pending_request_does_not_claim_to_send_again
     assert "本次没有重复发送" in dialog.status_label.text()
     assert "查找完成" in dialog.status_label.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_buddy_profile_dialog_requires_explicit_submit_or_return_choice() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = BuddyProfileDialog("找到：胡老师家的六毛\n昵称：胡老师")
+
+    assert dialog.windowTitle() == "搭子资料确认"
+    assert dialog.submit_button.text() == "提交搭子申请"
+    assert dialog.return_button.text() == "返回"
+    assert "提交搭子申请" in " ".join(label.text() for label in dialog.findChildren(QLabel))
+
+    dialog.return_button.click()
+    assert dialog.result() == 0
+    dialog.deleteLater(); app.processEvents()
 
 
 def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted() -> None:
