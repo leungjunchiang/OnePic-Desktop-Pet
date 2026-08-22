@@ -5,6 +5,7 @@ param(
     [string]$ProjectRef = "",
     [string]$SiteUrl = "",
     [string]$SmtpPort = "",
+    [string]$EmailRateLimit = "",
     [string]$ConfigPath = "config/social_backend.json",
     [switch]$DryRun
 )
@@ -77,6 +78,14 @@ $resolvedPort = if (-not [string]::IsNullOrWhiteSpace($SmtpPort)) {
     "587"
 }
 
+$resolvedEmailRateLimit = if (-not [string]::IsNullOrWhiteSpace($EmailRateLimit)) {
+    $EmailRateLimit
+} elseif (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_EMAIL_RATE_LIMIT)) {
+    $env:SUPABASE_EMAIL_RATE_LIMIT
+} else {
+    "30"
+}
+
 $projectRef = Require-Value -Name "SUPABASE_PROJECT_REF" -Value $resolvedProjectRef
 $accessToken = Require-Value -Name "SUPABASE_ACCESS_TOKEN" -Value $env:SUPABASE_ACCESS_TOKEN
 $smtpHost = Require-Value -Name "SUPABASE_SMTP_HOST" -Value $env:SUPABASE_SMTP_HOST
@@ -99,8 +108,15 @@ if (-not [int]::TryParse($resolvedPort, [ref]$smtpPortNumber) -or
     throw "SUPABASE_SMTP_PORT must be an integer between 1 and 65535"
 }
 
+[int]$emailRateLimitNumber = 0
+if (-not [int]::TryParse($resolvedEmailRateLimit, [ref]$emailRateLimitNumber) -or
+    $emailRateLimitNumber -lt 1) {
+    throw "SUPABASE_EMAIL_RATE_LIMIT must be a positive integer"
+}
+
 $authConfig = [ordered]@{
     external_email_enabled = $true
+    rate_limit_email_sent = $emailRateLimitNumber
     mailer_autoconfirm = $false
     smtp_admin_email = $smtpAdminEmail
     smtp_host = $smtpHost
