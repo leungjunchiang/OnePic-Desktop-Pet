@@ -379,7 +379,9 @@ class PetWindow(QWidget):
         self._active_focus_account_id = ""
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
-        self._recorded_focus_session_seconds = 0
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
         self._last_focus_quality = None
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
@@ -2597,6 +2599,9 @@ class PetWindow(QWidget):
         # analytics task for compatibility, but attribute new seconds to the
         # same local task record as soon as the session starts.
         started = self.focus_session.start()
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
         self.focus_analytics.begin_focus_session()
         if started:
             self.set_paused(True)
@@ -2703,8 +2708,11 @@ class PetWindow(QWidget):
         self._fullscreen_video_started_at = None
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
+        session_id = self.work_timer.focus_session_id
+        # Commit the final analytics segment while the timer still owns its
+        # stable session ID.  The timer is reset immediately afterwards.
+        self._record_focus_segment(session_seconds, completed=True, session_id=session_id)
         total = self.focus_session.finish()
-        self._record_focus_segment(session_seconds, completed=True)
         self.focus_analytics.finish_focus_session(completed=True)
         self._award_focus_rewards()
         self.set_paused(False)
@@ -3470,7 +3478,13 @@ class PetWindow(QWidget):
         if self._food_scene_dialog is not None:
             self._food_scene_dialog.refresh()
 
-    def _record_focus_segment(self, session_seconds: int, *, completed: bool) -> int:
+    def _record_focus_segment(
+        self,
+        session_seconds: int,
+        *,
+        completed: bool,
+        session_id: str | None = None,
+    ) -> int:
         """Credit only newly completed WORKING seconds in this session.
 
         ``WorkTimerModel.session_seconds()`` remains cumulative across a
@@ -3502,9 +3516,15 @@ class PetWindow(QWidget):
             application_switches=self._focus_quality_tracker.application_switches,
             away_count=self._focus_quality_tracker.away_count,
             task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            record_id=(
+                f"{session_id or self.work_timer.focus_session_id}:{total}"
+                if (session_id or self.work_timer.focus_session_id)
+                else None
+            ),
         )
         self.focus_analytics.update_current_task_progress(seconds)
         self.daily_stats.record_focus(seconds, completed=completed)
+        self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
         return seconds
 
@@ -4566,7 +4586,9 @@ class PetWindow(QWidget):
             # account; keep the chat fast-action path on the new namespace.
             self.chat_manager.action_executor = self.time_memory.actions
         self._active_focus_account_id = clean
-        self._recorded_focus_session_seconds = 0
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
         self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self._focus_quality_tracker.reset()
         self._last_focus_quality = None

@@ -248,10 +248,19 @@ class FocusAnalyticsStore:
         away_count: int = 0,
         task: str = "",
         interruptions: int = 0,
+        record_id: str | None = None,
     ) -> FocusQuality:
         duration = max(0, int(seconds))
         started = _as_beijing(started_at or self._now())
         quality = score_focus_quality(duration, application_switches, away_count)
+        clean_record_id = str(record_id or "").strip()[:160]
+        if clean_record_id:
+            for raw in self._state.get("records", []):
+                if isinstance(raw, dict) and str(raw.get("record_id") or "") == clean_record_id:
+                    # A crash can occur after the analytics write but before
+                    # the timer cursor is persisted.  Replaying the same
+                    # segment must be harmless.
+                    return quality
         day_key = started.date().isoformat()
         days = self._state.setdefault("days", {})
         day = days.setdefault(day_key, self._empty_day())
@@ -276,6 +285,7 @@ class FocusAnalyticsStore:
             "quality": quality.score,
             "task": str(task)[:120],
             "interruptions": max(0, int(interruptions)),
+            "record_id": clean_record_id,
         })
         self._state["records"] = records[-500:]
         self._rebuild_days_from_records()
@@ -408,6 +418,11 @@ class FocusAnalyticsStore:
 
         def day_seconds(day: date) -> int | None:
             raw = days.get(day.isoformat(), {})
+            if isinstance(raw, dict) and bool(raw.get("seconds_untrusted")):
+                # Legacy releases could write cumulative session checkpoints
+                # again after a restart.  The resulting union is useful for
+                # diagnostics, but it is not safe for day-to-day comparison.
+                return None
             try:
                 value = max(0, int(raw.get("seconds", 0)))
             except (AttributeError, TypeError, ValueError):
@@ -511,6 +526,7 @@ class FocusAnalyticsStore:
         """
 
         intervals: dict[str, list[tuple[datetime, datetime]]] = {}
+        raw_durations: dict[str, list[int]] = {}
         for raw in self._state.get("records", []):
             if not isinstance(raw, dict):
                 continue
@@ -521,6 +537,7 @@ class FocusAnalyticsStore:
                 continue
             if duration <= 0:
                 continue
+            raw_durations.setdefault(started.date().isoformat(), []).append(duration)
             end = started + timedelta(seconds=duration)
             cursor = started
             while cursor.date() < end.date():
@@ -546,8 +563,22 @@ class FocusAnalyticsStore:
                 sum(max(0, int((end - start).total_seconds())) for start, end in merged),
             )
             day = days.setdefault(day_key, self._empty_day())
+            raw_total = sum(raw_durations.get(day_key, []))
+            # Before the session cursor was persisted, a recovered app could
+            # write the cumulative timer total repeatedly.  A large raw/union
+            # ratio with several records is a strong signal of that specific
+            # corruption.  Keep the raw data for diagnostics, but never use
+            # the derived value for a day-vs-day comparison.
+            seconds_untrusted = (
+                len(raw_durations.get(day_key, [])) >= 3
+                and seconds > 0
+                and raw_total >= seconds * 1.5
+            )
             if int(day.get("seconds", 0) or 0) != seconds:
                 day["seconds"] = seconds
+                changed = True
+            if bool(day.get("seconds_untrusted")) != seconds_untrusted:
+                day["seconds_untrusted"] = seconds_untrusted
                 changed = True
         return changed
 
