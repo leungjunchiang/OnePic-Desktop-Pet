@@ -1761,7 +1761,7 @@ class BackendRouteManager:
     BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in", "resend_confirmation"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
-    def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend, *, persist_state: bool = True) -> None:
+    def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend | None, *, persist_state: bool = True) -> None:
         self.direct = direct
         self.proxy = proxy
         self.persist_state = persist_state
@@ -1825,15 +1825,16 @@ class BackendRouteManager:
     @property
     def signed_in(self) -> bool:
         manager = getattr(self.direct, "auth_manager", None)
-        return bool((manager.current() if isinstance(manager, AuthSessionManager) else (self.direct.session or self.proxy.session)) and not (manager.requires_relogin if isinstance(manager, AuthSessionManager) else False))
+        fallback_session = self.proxy.session if self.proxy is not None else None
+        return bool((manager.current() if isinstance(manager, AuthSessionManager) else (self.direct.session or fallback_session)) and not (manager.requires_relogin if isinstance(manager, AuthSessionManager) else False))
 
     @property
     def active(self) -> HttpSocialBackend:
-        return self.direct if self.current_route == self.DIRECT_SUPABASE else self.proxy
+        return self.direct if self.current_route == self.DIRECT_SUPABASE or self.proxy is None else self.proxy
 
     @property
     def backend_name(self) -> str:
-        return "Supabase Direct" if self.current_route == self.DIRECT_SUPABASE else "CloudBase Proxy"
+        return "Supabase Direct" if self.current_route == self.DIRECT_SUPABASE or self.proxy is None else "CloudBase Proxy"
 
     @property
     def backend_endpoint(self) -> str:
@@ -1844,7 +1845,9 @@ class BackendRouteManager:
         return exc.kind in BackendRouteManager.NETWORK_KINDS or exc.status in {502, 503, 504}
 
     @staticmethod
-    def _sync_sessions(source: HttpSocialBackend, target: HttpSocialBackend) -> None:
+    def _sync_sessions(source: HttpSocialBackend, target: HttpSocialBackend | None) -> None:
+        if target is None:
+            return
         manager = getattr(source, "auth_manager", None)
         if isinstance(manager, AuthSessionManager) and isinstance(getattr(target, "auth_manager", None), AuthSessionManager):
             target.auth_manager = manager
@@ -1869,7 +1872,7 @@ class BackendRouteManager:
         self._save_state()
 
     def _probe_direct_recovery(self) -> None:
-        if self.current_route != self.CLOUDBASE_PROXY or time.monotonic() - self._last_direct_probe < self.DIRECT_RECOVERY_INTERVAL_SECONDS:
+        if self.proxy is None or self.current_route != self.CLOUDBASE_PROXY or time.monotonic() - self._last_direct_probe < self.DIRECT_RECOVERY_INTERVAL_SECONDS:
             return
         self._last_direct_probe = time.monotonic()
         try:
@@ -1910,6 +1913,8 @@ class BackendRouteManager:
                 if not self._is_network_failure(second):
                     raise
                 self._mark_failure()
+                if self.proxy is None:
+                    raise second
                 result = self.proxy.health()
                 self._switch(self.CLOUDBASE_PROXY)
                 self._mark_success(started)
@@ -1921,6 +1926,7 @@ class BackendRouteManager:
         # Do not persist this temporary choice until the probe succeeds.  This
         # prevents a stale proxy state from surviving a changed VPN/network.
         self.current_route = self.DIRECT_SUPABASE
+        last_network_error: SocialError | None = None
         for _ in range(2):
             started = time.monotonic()
             try:
@@ -1933,6 +1939,11 @@ class BackendRouteManager:
                     self.current_route = previous_route
                     raise
                 self._mark_failure()
+                last_network_error = exc
+        if self.proxy is None:
+            if last_network_error is not None:
+                raise last_network_error
+            raise SocialError("Supabase 服务暂时不可用，请稍后重试。")
         self._switch(self.CLOUDBASE_PROXY)
         return self.proxy
 
@@ -1961,6 +1972,8 @@ class BackendRouteManager:
                     self._mark_failure()
                 raise
             self._mark_failure()
+            if self.proxy is None:
+                raise first
             self._switch(self.CLOUDBASE_PROXY)
             result = getattr(self.proxy, method)(*args, **kwargs)
             self._sync_sessions(self.proxy, self.direct)
@@ -2000,6 +2013,8 @@ class BackendRouteManager:
                 if not self._is_network_failure(second):
                     raise
                 self._mark_failure()
+                if self.proxy is None:
+                    raise second
                 self._switch(self.CLOUDBASE_PROXY)
                 self._sync_sessions(self.direct, self.proxy)
                 result = getattr(self.proxy, method)(*args, **kwargs)
@@ -2027,7 +2042,8 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             self._manager = backend
         else:
             direct = HttpSocialBackend(supabase_url, client_key=supabase_key, persist_tokens=persist_tokens, email_redirect_url=str(config.get("email_redirect_to", "")), transport="direct")
-            proxy = HttpSocialBackend(proxy_url, client_key="", persist_tokens=False, email_redirect_url=str(config.get("email_redirect_to", "")), transport="proxy")
+            proxy_enabled = bool(proxy_url) and str(config.get("social_backend", "")).strip().lower() in {"direct_with_cloudbase_fallback", "cloudbase_proxy"}
+            proxy = HttpSocialBackend(proxy_url, client_key="", persist_tokens=False, email_redirect_url=str(config.get("email_redirect_to", "")), transport="proxy") if proxy_enabled else None
             self._manager = BackendRouteManager(direct, proxy, persist_state=persist_tokens)
         self._load_dashboard_cache()
 
