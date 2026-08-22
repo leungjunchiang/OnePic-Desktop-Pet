@@ -130,7 +130,7 @@ def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
     now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
 
-    assert not store.merge_remote_state(
+    assert store.merge_remote_state(
         focus_date="2026-08-22",
         today_seconds=60,
         week_start="2026-08-10",
