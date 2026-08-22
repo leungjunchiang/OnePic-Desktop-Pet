@@ -212,6 +212,29 @@ def clamp_global_popup_position(global_pos: QPoint, popup_size: QSize, available
     return QPoint(x, y)
 
 
+def context_menu_position_for_pet(
+    event_global: QPoint,
+    pet_center: QPoint,
+    pet_screen_geometry: QRect | None,
+    *,
+    macos: bool = False,
+) -> QPoint:
+    """Keep a macOS context menu on the screen that owns the pet.
+
+    On macOS with mixed-DPI external displays, a context-menu event can
+    occasionally report a global point in the other display's coordinate
+    space.  Using that point to choose the popup screen makes the native menu
+    appear to jump between displays.  If the event point is outside the pet's
+    actual screen, use the pet's global center as a stable same-screen anchor.
+    Other platforms retain the precise event position.
+    """
+
+    point = QPoint(event_global)
+    if macos and pet_screen_geometry is not None and not pet_screen_geometry.contains(point):
+        return QPoint(pet_center)
+    return point
+
+
 LOGGER = logging.getLogger(__name__)
 SETTINGS_SOURCE_USER_ACTION = "user_action"
 
@@ -5822,13 +5845,23 @@ class PetWindow(QWidget):
         if time.monotonic() >= self._suppress_context_until:
             self.work_controls.hide()
             menu = self._build_context_menu()
-            if bool(getattr(self.settings, "always_on_top", False)):
+            if sys.platform != "darwin" and bool(getattr(self.settings, "always_on_top", False)):
                 # Keep the popup above the desktop-mode pet without changing
                 # the ownership or flags of the real pet window.
                 menu.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             menu.ensurePolished()
-            point = self._pending_context_global
-            screen = QGuiApplication.screenAt(point) or self.screen() or QGuiApplication.primaryScreen()
+            pet_center = self.frameGeometry().center()
+            screen = (
+                QGuiApplication.screenAt(pet_center)
+                or self.screen()
+                or QGuiApplication.primaryScreen()
+            )
+            point = context_menu_position_for_pet(
+                self._pending_context_global,
+                pet_center,
+                screen.geometry() if screen is not None else None,
+                macos=sys.platform == "darwin",
+            )
             if screen is not None:
                 point = clamp_global_popup_position(
                     point,
