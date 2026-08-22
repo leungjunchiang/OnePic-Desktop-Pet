@@ -2,6 +2,7 @@
 
 - 自动从公开配置读取 Supabase project ref 和确认跳转地址，SMTP 端口、From 邮箱和发件人名称提供安全默认值。
 - 开发者只需准备 Supabase Management Token、SMTP 主机、SMTP 账号和 SMTP 密码/授权码四个 Secrets。
+- 修复旧版腾讯云 CloudBase 中转超时：生产桌面端默认只使用 Supabase Direct，不再自动切换到失效的中转地址。
 
 ## v0.23.59 — 自动配置 Supabase Auth SMTP
 
