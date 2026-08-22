@@ -62,6 +62,9 @@ class FocusAnalyticsSummary:
     current_interruptions: int = 0
     longest_continuous_seconds: int = 0
     current_continuous_seconds: int = 0
+    # The server-confirmed daily value is kept separately from the local
+    # record history so a new computer can render the same account totals.
+    today_seconds: int | None = None
 
 
 class FocusQualityTracker:
@@ -127,7 +130,7 @@ class FocusAnalyticsStore:
         self.path = path or focus_analytics_path()
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
-        self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None}
+        self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None, "account_state": {}}
         self._live: dict[str, Any] = {
             "session_active": False,
             "running": False,
@@ -145,6 +148,61 @@ class FocusAnalyticsStore:
         # diagnostics and future migrations.
         if self._rebuild_days_from_records() or self._trim_days():
             self._save()
+
+    def merge_remote_state(
+        self,
+        *,
+        focus_date: str | None = None,
+        today_seconds: int = 0,
+        lifetime_seconds: int = 0,
+        week_start: str | None = None,
+        week_seconds: int = 0,
+    ) -> bool:
+        """Merge account totals received from Supabase without double counting.
+
+        The detailed history remains local, but the totals that identify the
+        account (today, this week, and lifetime) are server-authoritative
+        maxima.  This lets a second computer immediately show the same totals
+        while keeping an offline session usable until the next sync.
+        """
+
+        now = _as_beijing(self._now()).date()
+        today_key = now.isoformat()
+        current_week_key = (now - timedelta(days=now.weekday())).isoformat()
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        changed = False
+
+        remote_date = str(focus_date or "")[:10]
+        if remote_date == today_key:
+            value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(today_seconds or 0)))
+            if value > max(0, int(state.get("focus_today_seconds", 0) or 0)):
+                state["focus_today_seconds"] = value
+                changed = True
+            if state.get("focus_date") != today_key:
+                state["focus_date"] = today_key
+                changed = True
+
+        lifetime = max(0, int(lifetime_seconds or 0))
+        if lifetime > max(0, int(state.get("focus_lifetime_seconds", 0) or 0)):
+            state["focus_lifetime_seconds"] = lifetime
+            changed = True
+
+        remote_week = str(week_start or "")[:10]
+        if remote_week == current_week_key:
+            value = max(0, min(7 * MAX_ANALYTICS_DAY_SECONDS, int(week_seconds or 0)))
+            if value > max(0, int(state.get("focus_week_seconds", 0) or 0)):
+                state["focus_week_seconds"] = value
+                changed = True
+            if state.get("focus_week_start") != current_week_key:
+                state["focus_week_start"] = current_week_key
+                changed = True
+
+        if changed:
+            self._save()
+        return changed
 
     def record_session(
         self,
@@ -329,6 +387,18 @@ class FocusAnalyticsStore:
         )
         yesterday = day_seconds(today - timedelta(days=1))
         today_seconds = day_seconds(today)
+        account_state = self._state.get("account_state", {})
+        if not isinstance(account_state, dict):
+            account_state = {}
+        if str(account_state.get("focus_date") or "")[:10] == today.isoformat():
+            account_today = max(0, int(account_state.get("focus_today_seconds", 0) or 0))
+            today_seconds = max(today_seconds or 0, account_today)
+        current_week_key = (today - timedelta(days=today.weekday())).isoformat()
+        if str(account_state.get("focus_week_start") or "")[:10] == current_week_key:
+            weekly_total = max(
+                weekly_total,
+                max(0, int(account_state.get("focus_week_seconds", 0) or 0)),
+            )
         streak_reference = today if (today_seconds or 0) > 0 else today - timedelta(days=1)
         streak = 0
         while (day_seconds(streak_reference - timedelta(days=streak)) or 0) > 0:
@@ -369,6 +439,7 @@ class FocusAnalyticsStore:
             max(0, int(self._live.get("current_interruptions", 0))),
             day_value(today, "longest_continuous"),
             max(0, int(self._live.get("current_continuous_seconds", 0))),
+            today_seconds,
         )
 
     def snapshot(self) -> dict[str, Any]:
