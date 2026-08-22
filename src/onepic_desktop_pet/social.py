@@ -1377,7 +1377,7 @@ class LegacyDirectSocialClient:
         if isinstance(summary, dict):
             summary["presence_uncertain"] = True
 
-    def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None) -> Any:
+    def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None, timeout: float | None = None) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {"apikey": self.key, "Content-Type": "application/json", "Accept": "application/json"}
         if authenticated:
@@ -1470,6 +1470,7 @@ class LegacyDirectSocialClient:
             "POST",
             f"/auth/v1/signup?{redirect}",
             {"email": normalized_email, "password": password, "data": {"nickname": nickname.strip()[:24] or "搭子"}},
+            timeout=_auth_request_timeout(),
         )
         return self._signup_result(data, normalized_email)
 
@@ -1481,13 +1482,14 @@ class LegacyDirectSocialClient:
             "POST",
             "/auth/v1/resend",
             {"type": "signup", "email": normalized_email, "options": {"emailRedirectTo": self.email_redirect_url}},
+            timeout=_auth_request_timeout(),
         )
         return True
 
     def sign_in(self, email: str, password: str) -> None:
         if self._http_backend is not None:
             return self._http_backend.sign_in(email, password)
-        data = self._raw("POST", "/auth/v1/token?grant_type=password", {"email": email.strip(), "password": password})
+        data = self._raw("POST", "/auth/v1/token?grant_type=password", {"email": email.strip(), "password": password}, timeout=_auth_request_timeout())
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
@@ -2036,6 +2038,12 @@ class BackendRouteManager:
             self._mark_success(started)
             return result
         except SocialError as first:
+            # Signup/resend can create the Auth user before SMTP returns. Never
+            # replay these timeout results to the proxy, or the same password
+            # request may create a duplicate-account response or send twice.
+            if method in {"sign_up", "resend_confirmation"} and first.kind in {"signup_timeout", "confirmation_timeout"}:
+                self._mark_failure()
+                raise
             if not (backend is self.direct and self._is_network_failure(first)):
                 if self._is_network_failure(first):
                     self._mark_failure()
