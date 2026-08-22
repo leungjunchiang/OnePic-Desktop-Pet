@@ -353,6 +353,66 @@ class SocialHealthThread(QThread):
             self.failed.emit(SocialError(f"健康检查失败：{exc}", kind="network"))
 
 
+class SocialSignupThread(QThread):
+    """Create an account without blocking the Qt GUI thread on SMTP."""
+
+    completed = Signal(object)
+    failed = Signal(object)
+
+    def __init__(
+        self,
+        client: SocialClient,
+        email: str,
+        password: str,
+        nickname: str,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = email
+        self._password = password
+        self.nickname = nickname
+
+    def run(self) -> None:
+        try:
+            self.completed.emit(
+                self.client.sign_up(self.email, self._password, self.nickname)
+            )
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            # Keep unexpected transport/client failures user-safe and off the
+            # GUI thread. Do not include credentials in the error text.
+            self.failed.emit(
+                SocialError("注册请求失败，请稍后重试。", kind="network", retryable=True)
+            )
+        finally:
+            self._password = ""
+
+
+class SocialResendConfirmationThread(QThread):
+    """Resend a confirmation email without freezing the Qt GUI thread."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, email: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = email
+
+    def run(self) -> None:
+        try:
+            self.client.resend_confirmation(self.email)
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            self.failed.emit(
+                SocialError("确认邮件重发失败，请稍后重试。", kind="network", retryable=True)
+            )
+
+
 class SocialEventThread(QThread):
     """Send a room event without freezing pet animation or the study window."""
 
@@ -901,6 +961,8 @@ class SocialHubDialog(QDialog):
         self._dashboard_thread: SocialDashboardThread | None = None
         self._room_refresh_pending = False
         self._health_thread: SocialHealthThread | None = None
+        self._signup_thread: SocialSignupThread | None = None
+        self._resend_thread: SocialResendConfirmationThread | None = None
         self._event_threads: list[SocialEventThread] = []
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
@@ -1910,8 +1972,8 @@ class SocialHubDialog(QDialog):
         register = QWidget(); register_layout = QVBoxLayout(register); register_form = QFormLayout()
         self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
         register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
-        register_layout.addLayout(register_form); signup_button = QPushButton("注册")
-        signup_button.clicked.connect(self._signup); register_layout.addWidget(signup_button)
+        register_layout.addLayout(register_form); self.signup_button = QPushButton("注册")
+        self.signup_button.clicked.connect(self._signup); register_layout.addWidget(self.signup_button)
         self.signup_resend_button = QPushButton("重新发送确认邮件")
         self.signup_resend_button.setVisible(False)
         self.signup_resend_button.clicked.connect(self._resend_confirmation)
@@ -2017,59 +2079,95 @@ class SocialHubDialog(QDialog):
         QMessageBox.warning(self, "六毛搭子自习室", message)
 
     def _signup(self) -> None:
+        if self._signup_thread is not None and self._signup_thread.isRunning():
+            return
+        email = self.signup_email.text().strip()
+        password = self.signup_password.text()
+        nickname = self.signup_nickname.text().strip()
         self._begin_action("正在创建账号…")
-        try:
-            result = self.client.sign_up(self.signup_email.text(), self.signup_password.text(), self.signup_nickname.text())
-            self._end_action()
-            if isinstance(result, SignupResult):
-                self._pending_signup_email = result.email
-                self.signup_resend_button.setVisible(result.confirmation_pending)
-                self.login_email.setText(result.email)
-            if isinstance(result, SignupResult) and result.confirmation_pending:
-                self._set_status("注册成功，确认邮件已提交；请点击邮件后回到这里登录。")
-                QMessageBox.information(
-                    self,
-                    "注册成功，请确认邮箱",
-                    f"账号 {result.email} 已创建。\n\n"
-                    "请打开确认邮件中的链接。链接会跳转到六毛项目页面；这表示邮箱确认已完成，"
-                    "不是失败。然后回到 Lili，在“登录”页输入邮箱和密码即可。\n\n"
-                    "如果 163 或学校邮箱暂时没有收到，请检查垃圾邮件/广告邮件，稍后点击“重新发送确认邮件”。",
-                )
-            elif bool(result):
-                self._update_account_state(); self.refresh(); self.account_state_changed.emit(True)
-                self._set_status("注册并登录成功，六毛自习室已准备好。")
-            else:
-                self._set_status("注册请求已提交，请到邮箱确认后回来登录。")
-                QMessageBox.information(
-                    self,
-                    "请确认邮箱",
-                    "注册请求已提交。请到邮箱完成确认，然后回到这里登录。\n\n"
-                    "确认页会打开六毛项目页面，不需要启动 localhost 服务。",
-                )
-        except SocialError as exc:
-            # A slow SMTP request may have created the account before the
-            # client received a response. Keep the email ready for resend and
-            # never make the user submit the password again.
-            if str(getattr(exc, "kind", "") or "").casefold() == "signup_timeout":
-                self._pending_signup_email = self.signup_email.text().strip()
-                self.login_email.setText(self._pending_signup_email)
-                self.signup_resend_button.setVisible(bool(self._pending_signup_email))
-            self._error(exc)
+        self.signup_button.setEnabled(False)
+        thread = SocialSignupThread(self.client, email, password, nickname, self)
+        self._signup_thread = thread
+        thread.completed.connect(self._signup_completed)
+        thread.failed.connect(self._signup_failed)
+        thread.finished.connect(lambda: self._signup_thread_finished(thread))
+        thread.start()
 
-    def _resend_confirmation(self) -> None:
-        email = self._pending_signup_email or self.signup_email.text()
-        self._begin_action("正在重新发送确认邮件…")
-        try:
-            self.client.resend_confirmation(email)
-            self._end_action()
-            self._set_status("确认邮件已重新提交，请稍后检查收件箱和垃圾邮件。")
+    def _signup_completed(self, result: object) -> None:
+        self._end_action()
+        if isinstance(result, SignupResult):
+            self._pending_signup_email = result.email
+            self.signup_resend_button.setVisible(result.confirmation_pending)
+            self.login_email.setText(result.email)
+        if isinstance(result, SignupResult) and result.confirmation_pending:
+            self._set_status("注册成功，确认邮件已提交；请点击邮件后回到这里登录。")
             QMessageBox.information(
                 self,
-                "确认邮件已重发",
-                "邮件已重新提交。163、学校邮箱可能需要几分钟；如果仍未收到，需要管理员为 Supabase Auth 配置自定义 SMTP。",
+                "注册成功，请确认邮箱",
+                f"账号 {result.email} 已创建。\n\n"
+                "请打开确认邮件中的链接。链接会跳转到六毛项目页面；这表示邮箱确认已完成，"
+                "不是失败。然后回到 Lili，在“登录”页输入邮箱和密码即可。\n\n"
+                "如果 163 或学校邮箱暂时没有收到，请检查垃圾邮件/广告邮件，稍后点击“重新发送确认邮件”。",
             )
-        except SocialError as exc:
-            self._error(exc)
+        elif bool(result):
+            self._update_account_state()
+            self.refresh()
+            self.account_state_changed.emit(True)
+            self._set_status("注册并登录成功，六毛自习室已准备好。")
+        else:
+            self._set_status("注册请求已提交，请到邮箱确认后回来登录。")
+            QMessageBox.information(
+                self,
+                "请确认邮箱",
+                "注册请求已提交。请到邮箱完成确认，然后回到这里登录。\n\n"
+                "确认页会打开六毛项目页面，不需要启动 localhost 服务。",
+            )
+
+    def _signup_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        if str(getattr(exc, "kind", "") or "").casefold() == "signup_timeout":
+            self._pending_signup_email = self.signup_email.text().strip()
+            self.login_email.setText(self._pending_signup_email)
+            self.signup_resend_button.setVisible(bool(self._pending_signup_email))
+        self._error(exc)
+
+    def _signup_thread_finished(self, thread: SocialSignupThread) -> None:
+        if self._signup_thread is thread:
+            self._signup_thread = None
+        self.signup_button.setEnabled(True)
+        thread.deleteLater()
+
+    def _resend_confirmation(self) -> None:
+        if self._resend_thread is not None and self._resend_thread.isRunning():
+            return
+        email = (self._pending_signup_email or self.signup_email.text()).strip()
+        self._begin_action("正在重新发送确认邮件…")
+        self.signup_resend_button.setEnabled(False)
+        thread = SocialResendConfirmationThread(self.client, email, self)
+        self._resend_thread = thread
+        thread.completed.connect(self._resend_completed)
+        thread.failed.connect(self._resend_failed)
+        thread.finished.connect(lambda: self._resend_thread_finished(thread))
+        thread.start()
+
+    def _resend_completed(self) -> None:
+        self._end_action()
+        self._set_status("确认邮件已重新提交，请稍后检查收件箱和垃圾邮件。")
+        QMessageBox.information(
+            self,
+            "确认邮件已重发",
+            "邮件已重新提交。163、学校邮箱可能需要几分钟；如果仍未收到，需要管理员为 Supabase Auth 配置自定义 SMTP。",
+        )
+
+    def _resend_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._error(exc)
+
+    def _resend_thread_finished(self, thread: SocialResendConfirmationThread) -> None:
+        if self._resend_thread is thread:
+            self._resend_thread = None
+        self.signup_resend_button.setEnabled(True)
+        thread.deleteLater()
 
     def _login(self) -> None:
         self._begin_action("正在登录搭子自习室…")
