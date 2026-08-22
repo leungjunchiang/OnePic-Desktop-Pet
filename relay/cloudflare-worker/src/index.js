@@ -1,6 +1,7 @@
 const RPC_ALLOWLIST = new Set([
   "lili_add_buddy_by_code",
   "lili_respond_buddy",
+  "lili_remove_buddy",
   "lili_create_room",
   "lili_join_room",
   "lili_send_visit",
@@ -24,6 +25,8 @@ const RPC_ALLOWLIST = new Set([
 const ROUTE_TO_RPC = new Map([
   ["/buddies/request", "lili_add_buddy_by_code"],
   ["/buddies/accept", "lili_respond_buddy"],
+  ["/buddies/remove", "lili_remove_buddy"],
+  ["/buddies/subscription", "lili_set_buddy_subscription"],
   ["/visits/send", "lili_send_visit"],
   ["/visits/accept", "lili_respond_visit"],
   ["/rooms/create", "lili_create_room"],
