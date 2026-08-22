@@ -923,13 +923,13 @@ class AISettingsDialog(QDialog):
         layout.addWidget(self.content_updates)
 
         self.program_updates = QCheckBox(
-            "启用程序更新（仅手动触发，不会在启动时自动退出）"
+            "启用启动时检查程序更新（只提示，不会自动安装或退出）"
         )
         self.program_updates.setChecked(
             getattr(settings, "program_updates_enabled", True)
         )
         self.program_updates.setToolTip(
-            "程序更新不会在后台自动检查、安装或关闭六毛。启用后，需要更新时请点击下面按钮或从托盘“更新与关于”手动检查。"
+            "启动时只检查 GitHub Releases 是否有新版并提示；下载、安装和退出必须由你手动确认。关闭后不会检查，也不能使用下面的手动更新按钮。"
         )
         layout.addWidget(self.program_updates)
         self.program_update_button = QPushButton("立即检查并更新到最新版本…")

@@ -466,6 +466,7 @@ class PetWindow(QWidget):
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
         self._seen_buddy_request_ids: set[str] = set()
+        self._muted_buddy_ids: set[str] = set()
         self._incoming_visit_notice: IncomingVisitNotice | None = None
         self._incoming_visit_queue: list[dict] = []
         self._incoming_visit_response_threads: list[SocialVisitResponseThread] = []
@@ -4179,6 +4180,14 @@ class PetWindow(QWidget):
     def _room_event_received(self, event: dict) -> None:
         """Play a received room interaction on this desktop pet."""
 
+        actor_id = str(
+            event.get("actor_id")
+            or event.get("sender_id")
+            or event.get("user_id")
+            or ""
+        )
+        if actor_id and actor_id in self._muted_buddy_ids:
+            return
         if detect_quiet_mode().blocked:
             return
         kind = str(event.get("kind") or "")
@@ -4306,6 +4315,11 @@ class PetWindow(QWidget):
     def _social_dashboard_received(self, data: dict) -> None:
         """显示新串门提醒，并在双方本地打开双六毛画面。"""
 
+        self._muted_buddy_ids = {
+            str(item).strip()
+            for item in (data.get("muted_buddy_ids") or [])
+            if str(item).strip()
+        }
         self._merge_remote_personal_state(data)
         if self._personal_outfit_sync_pending and not data.get("_sync_offline"):
             self._personal_outfit_sync_pending = False
@@ -4326,11 +4340,29 @@ class PetWindow(QWidget):
 
         if detect_quiet_mode().blocked:
             return
+        def sender_id(item: object) -> str:
+            if not isinstance(item, dict):
+                return ""
+            return str(
+                item.get("sender_id")
+                or item.get("requester_id")
+                or item.get("peer_id")
+                or item.get("user_id")
+                or ""
+            )
+
         for request in data.get("requests") or []:
-            self._enqueue_buddy_request_notice(request)
+            if sender_id(request) not in self._muted_buddy_ids:
+                self._enqueue_buddy_request_notice(request)
         for visit in data.get("visits") or []:
-            self._enqueue_incoming_visit_notice(visit)
-        active = self._active_visits_after_startup(data.get("active_visits") or [])
+            if sender_id(visit) not in self._muted_buddy_ids:
+                self._enqueue_incoming_visit_notice(visit)
+        active = self._active_visits_after_startup(
+            [
+                item for item in (data.get("active_visits") or [])
+                if sender_id(item) not in self._muted_buddy_ids
+            ]
+        )
         if active:
             self._show_buddy_visit(active[0])
         else:
@@ -4524,6 +4556,7 @@ class PetWindow(QWidget):
         self._focus_quality_tracker.reset()
         self._last_focus_quality = None
         self._seen_buddy_request_ids.clear()
+        self._muted_buddy_ids.clear()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""

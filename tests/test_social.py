@@ -538,6 +538,24 @@ def test_private_buddy_note_migration_is_owner_scoped_and_proxy_allowlisted():
         assert "lili_set_buddy_private_note" in source
 
 
+def test_buddy_controls_migration_and_proxy_routes_are_present():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260822000100_lili_buddy_controls.sql").read_text(encoding="utf-8")
+    assert "lili_remove_buddy" in migration
+    assert "revoke execute on function public.lili_remove_buddy(uuid) from public, anon" in migration
+    assert "'muted_buddy_ids'" in migration
+    assert "'notifications_muted'" in migration
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_remove_buddy" in source
+        assert "/buddies/remove" in source
+
+
 def test_economy_migration_is_rls_scoped_and_friend_opt_in():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260818000100_lili_economy_wallet.sql").read_text(encoding="utf-8")
@@ -726,4 +744,3 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
-

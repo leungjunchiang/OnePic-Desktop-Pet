@@ -215,11 +215,11 @@ class DesktopPetApplication(QObject):
             # The startup check is deliberately delayed and silent.  It only
             # fetches the manifest; changed files are downloaded in a worker.
             QTimer.singleShot(2500, lambda: self.check_content_updates(False))
-        # Program updates are deliberately manual-only.  A background version
-        # check can race with startup, an old persisted preference, or a
-        # platform installer and make a healthy pet look as if it exited when
-        # a new Release is published.  The tray/settings action remains
-        # available through ``check_program_updates(True)``.
+        # Startup only checks release metadata.  Downloading, installing, and
+        # quitting remain behind the explicit tray/settings action, so a newly
+        # published Release can never make a healthy pet disappear on launch.
+        if self._program_updates_enabled():
+            QTimer.singleShot(5000, lambda: self.check_program_updates(False))
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
         return self.qt_app.exec()

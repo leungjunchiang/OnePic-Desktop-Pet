@@ -160,6 +160,19 @@ def _owner_label(record: dict[str, Any] | None) -> str:
     return social_pet_label(_owner_nickname(record))
 
 
+def _notification_sender_id(record: dict[str, Any] | None) -> str:
+    if not isinstance(record, dict):
+        return ""
+    return str(
+        record.get("sender_id")
+        or record.get("requester_id")
+        or record.get("peer_id")
+        or record.get("actor_id")
+        or record.get("user_id")
+        or ""
+    )
+
+
 def _compare_buddies(left: dict[str, Any], right: dict[str, Any]) -> int:
     """在线优先、今日专注降序，最后按备注/姓名的中文拼音排序。"""
 
@@ -948,6 +961,7 @@ class SocialHubDialog(QDialog):
         self._room_schedule_state: dict[str, Any] = {}
         self._room_challenge_state: dict[str, Any] = {}
         self._seen_room_event_ids: set[str] = set()
+        self._muted_buddy_ids: set[str] = set()
         self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
         self._last_ritual_notice = ""
@@ -1260,7 +1274,7 @@ class SocialHubDialog(QDialog):
         network_row.addWidget(network_check)
         welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。")
+        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。右键搭子卡片可设置消息免打扰或删除搭子。")
         buddy_tools = QHBoxLayout()
         add_buddy = QPushButton("用搭子码添加")
         add_buddy.clicked.connect(self._add_buddy)
@@ -2180,7 +2194,7 @@ class SocialHubDialog(QDialog):
             self._error(exc)
 
     def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
+        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
         if not self._require_login(): return
@@ -2201,6 +2215,11 @@ class SocialHubDialog(QDialog):
         self._initial_refresh_timer.stop()
         previous_data = self.data
         self.data = dict(data or {})
+        self._muted_buddy_ids = {
+            str(item).strip()
+            for item in (self.data.get("muted_buddy_ids") or [])
+            if str(item).strip()
+        }
         # Missing is not empty: heartbeat payloads may omit this optional RPC
         # while the room dashboard remains healthy.  Preserve the last known
         # board until an explicit ``leaderboard=[]`` arrives.
@@ -2226,16 +2245,20 @@ class SocialHubDialog(QDialog):
         for buddy in people:
             if not isinstance(buddy, dict):
                 continue
+            buddy = dict(buddy)
             buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
             if buddy_id in seen:
                 continue
+            buddy["notifications_muted"] = bool(
+                buddy.get("notifications_muted") or buddy_id in self._muted_buddy_ids
+            )
             seen.add(buddy_id)
             unique_people.append(buddy)
         unique_people.sort(key=cmp_to_key(_compare_buddies))
         working_count = 0
         visible_total = 0
         for buddy in unique_people:
-            if buddy.get("subscribed"):
+            if buddy.get("subscribed") and not buddy.get("notifications_muted"):
                 previous_buddies = {
                     str(item.get("user_id")): item
                     for item in (previous_data.get("buddies") or [])
@@ -2278,8 +2301,12 @@ class SocialHubDialog(QDialog):
         self._fit_list_height(self.buddies, 46, 360)
         self.inbox.clear()
         for request in self.data.get("requests") or []:
+            if _notification_sender_id(request) in self._muted_buddy_ids:
+                continue
             item=QListWidgetItem(f"搭子申请：{_owner_label(request)}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
         for visit in self.data.get("visits") or []:
+            if _notification_sender_id(visit) in self._muted_buddy_ids:
+                continue
             visit_kind = str(visit.get("kind") or "visit")
             labels = {
                 "food_coffee": "☕ 一起开工邀请",
@@ -2451,10 +2478,20 @@ class SocialHubDialog(QDialog):
                 is_target = target_id == me_id or (
                     not target_id and str(event.get("target_owner_nickname") or event.get("target_nickname") or "") == str(me.get("owner_nickname") or me.get("nickname") or "")
                 )
-                if not self.data.get("_sync_offline") and me_id and is_target and str(event.get("actor_id") or "") != me_id:
+                actor_id = str(event.get("actor_id") or "")
+                if (
+                    not self.data.get("_sync_offline")
+                    and me_id
+                    and is_target
+                    and actor_id != me_id
+                    and actor_id not in self._muted_buddy_ids
+                ):
                     self.room_event_received.emit(dict(event))
         self._render_room_activity(activity)
-        active=self.data.get("active_visits") or []
+        active = [
+            item for item in (self.data.get("active_visits") or [])
+            if _notification_sender_id(item) not in self._muted_buddy_ids
+        ]
         if active and not self.data.get("_sync_offline"): self.active_visit.emit(active[0])
         state = str(self.data.get("_connection_state") or "")
         if self.data.get("_room_endpoint_unavailable"):
@@ -2513,11 +2550,72 @@ class SocialHubDialog(QDialog):
             return
         try:
             setter = getattr(self.client, "set_buddy_subscription", None)
+            muted = bool(buddy.get("notifications_muted") or buddy_id in self._muted_buddy_ids)
             if callable(setter):
-                setter(buddy_id=buddy_id, on_focus_start=enabled, on_focus_end=enabled, muted=not enabled)
+                setter(buddy_id=buddy_id, on_focus_start=enabled, on_focus_end=enabled, muted=muted)
             else:
-                self.client.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": enabled, "p_on_focus_end": enabled, "p_muted": not enabled})
+                self.client.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": enabled, "p_on_focus_end": enabled, "p_muted": muted})
             self._set_status("搭子状态订阅已开启。" if enabled else "搭子状态订阅已关闭。")
+        except SocialError as exc:
+            self._error(exc)
+
+    def _set_buddy_muted(self, buddy: dict[str, Any], muted: bool) -> None:
+        if not self._require_login():
+            return
+        buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+        if not buddy_id:
+            return
+        try:
+            subscribed = bool(buddy.get("subscribed"))
+            setter = getattr(self.client, "set_buddy_subscription", None)
+            if callable(setter):
+                setter(
+                    buddy_id=buddy_id,
+                    on_focus_start=subscribed,
+                    on_focus_end=subscribed,
+                    muted=bool(muted),
+                )
+            else:
+                self.client.rpc(
+                    "lili_set_buddy_subscription",
+                    {
+                        "p_buddy_id": buddy_id,
+                        "p_on_focus_start": subscribed,
+                        "p_on_focus_end": subscribed,
+                        "p_muted": bool(muted),
+                    },
+                )
+            if muted:
+                self._muted_buddy_ids.add(buddy_id)
+            else:
+                self._muted_buddy_ids.discard(buddy_id)
+            self._set_status("已开启消息免打扰。" if muted else "已关闭消息免打扰。")
+            self.refresh()
+        except SocialError as exc:
+            self._error(exc)
+
+    def _remove_buddy(self, buddy: dict[str, Any]) -> None:
+        if not self._require_login():
+            return
+        buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+        if not buddy_id:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除搭子",
+            f"确定删除“{_owner_label(buddy)}”吗？\n\n双方的搭子关系和通知设置会删除，但不会删除你自己的待办、专注记录或聊天记录。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._begin_action("正在删除搭子关系…")
+        try:
+            self.client.rpc("lili_remove_buddy", {"p_buddy_id": buddy_id})
+            self._muted_buddy_ids.discard(buddy_id)
+            self._end_action()
+            self._set_status("搭子已删除。")
+            self.refresh()
         except SocialError as exc:
             self._error(exc)
 
@@ -2539,11 +2637,20 @@ class SocialHubDialog(QDialog):
             clear = menu.addAction("清空私人备注")
         else:
             clear = None
+        menu.addSeparator()
+        muted = bool(buddy.get("notifications_muted") or buddy_id in self._muted_buddy_ids)
+        mute = menu.addAction("关闭消息免打扰" if muted else "消息免打扰")
+        menu.addSeparator()
+        remove = menu.addAction("删除搭子")
         chosen = menu.exec(self.buddies.viewport().mapToGlobal(position))
         if chosen is edit:
             self._edit_buddy_private_note(buddy)
         elif clear is not None and chosen is clear:
             self._save_buddy_private_note(buddy, "")
+        elif chosen is mute:
+            self._set_buddy_muted(buddy, not muted)
+        elif chosen is remove:
+            self._remove_buddy(buddy)
 
     def _edit_buddy_private_note(self, buddy: dict[str, Any]) -> None:
         current = str(buddy.get("private_note_name") or "").strip()
