@@ -94,6 +94,22 @@ def test_tray_update_actions_are_explicit_manual_checks() -> None:
     assert "从托盘‘更新与关于’手动更新" in app_source
 
 
+def test_startup_program_update_check_is_informational_only() -> None:
+    """Startup may notify about a Release, but never launch its installer."""
+
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    settings_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "chat.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "QTimer.singleShot(5000, lambda: self.check_program_updates(False))" in app_source
+    assert "if not self._program_update_manual:" in app_source
+    assert "refusing installer launch from non-manual check" in app_source
+    assert "启用启动时检查程序更新（只提示，不会自动安装或退出）" in settings_source
+
+
 def test_program_download_exposes_progress_to_the_gui() -> None:
     app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
         encoding="utf-8"
