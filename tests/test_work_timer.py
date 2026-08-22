@@ -169,6 +169,29 @@ def test_remote_focus_totals_merge_without_double_counting_live_seconds(tmp_path
     )
 
 
+def test_work_timer_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    clock = FakeClock()
+    timer = WorkTimerModel(
+        now_provider=lambda: clock.now,
+        monotonic_provider=lambda: clock.monotonic,
+    )
+
+    assert timer.switch_account("account-a")
+    assert timer.start()
+    clock.advance(90)
+    assert timer.pause()
+    assert timer.today_seconds() == 90
+
+    assert timer.switch_account("account-b")
+    assert timer.today_seconds() == 0
+    assert timer.lifetime_seconds() == 0
+
+    assert timer.switch_account("account-a")
+    assert timer.today_seconds() == 90
+    assert timer.lifetime_seconds() == 90
+
+
 def test_reminders_fire_once_at_focus_break_and_long_work_thresholds(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)
