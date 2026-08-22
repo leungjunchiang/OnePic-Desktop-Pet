@@ -1,1 +1,35 @@
-name: configure-supabase-authon:  workflow_dispatch:    inputs:      project_ref:        description: "Optional Supabase project ref; empty automatically uses config/social_backend.json"        required: false        type: string      site_url:        description: "Optional Auth site URL; empty automatically uses config/social_backend.json"        required: false        type: stringpermissions:  contents: readjobs:  configure:    runs-on: ubuntu-latest    env:      SUPABASE_PROJECT_REF: ${{ inputs.project_ref || vars.SUPABASE_PROJECT_REF }}      SUPABASE_SITE_URL: ${{ inputs.site_url || vars.SUPABASE_SITE_URL }}      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}      SUPABASE_SMTP_HOST: ${{ secrets.SUPABASE_SMTP_HOST }}      SUPABASE_SMTP_PORT: ${{ vars.SUPABASE_SMTP_PORT || '587' }}      SUPABASE_SMTP_USER: ${{ secrets.SUPABASE_SMTP_USER }}      SUPABASE_SMTP_PASSWORD: ${{ secrets.SUPABASE_SMTP_PASSWORD }}      SUPABASE_SMTP_ADMIN_EMAIL: ${{ secrets.SUPABASE_SMTP_ADMIN_EMAIL }}      SUPABASE_SMTP_SENDER_NAME: ${{ vars.SUPABASE_SMTP_SENDER_NAME || 'Lili' }}    steps:      - uses: actions/checkout@v4      - name: Configure Supabase Auth custom SMTP        shell: pwsh        run: ./scripts/configure_supabase_auth.ps1
+name: configure-supabase-auth
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_ref:
+        description: "Optional Supabase project ref; empty automatically uses config/social_backend.json"
+        required: false
+        type: string
+      site_url:
+        description: "Optional Auth site URL; empty automatically uses config/social_backend.json"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_PROJECT_REF: ${{ inputs.project_ref || vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_SITE_URL: ${{ inputs.site_url || vars.SUPABASE_SITE_URL }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_SMTP_HOST: ${{ secrets.SUPABASE_SMTP_HOST }}
+      SUPABASE_SMTP_PORT: ${{ vars.SUPABASE_SMTP_PORT || '587' }}
+      SUPABASE_SMTP_USER: ${{ secrets.SUPABASE_SMTP_USER }}
+      SUPABASE_SMTP_PASSWORD: ${{ secrets.SUPABASE_SMTP_PASSWORD }}
+      SUPABASE_SMTP_ADMIN_EMAIL: ${{ secrets.SUPABASE_SMTP_ADMIN_EMAIL }}
+      SUPABASE_SMTP_SENDER_NAME: ${{ vars.SUPABASE_SMTP_SENDER_NAME || 'Lili' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Supabase Auth custom SMTP
+        shell: pwsh
+        run: ./scripts/configure_supabase_auth.ps1
