@@ -25,13 +25,24 @@ from .work_session_manager import WorkSessionManager
 class TimeMemory:
     """One small dependency container shared by the Todo views and chat."""
 
-    def __init__(self, base=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
+    def __init__(
+        self,
+        base=None,
+        *,
+        account_id: str | None = None,
+        now_provider: Callable[[], datetime] | None = None,
+        persist: bool = True,
+    ) -> None:
+        self._base = base
+        self._account_id = str(account_id or "").strip()
+        self._now_provider = now_provider
+        self._persist = bool(persist)
         def path(name: str):
             if base is not None:
                 from pathlib import Path
                 return Path(base) / name
-            from .local_data import local_data_path
-            return local_data_path(name)
+            from .local_data import account_local_data_path
+            return account_local_data_path(name, self._account_id)
 
         self.todos = TodoManager(path("todos.json"), now_provider=now_provider, persist=persist)
         self.records = DailyRecordManager(path("daily_records.json"), now_provider=now_provider, persist=persist)
@@ -39,7 +50,7 @@ class TimeMemory:
         self.reminders = ReminderManager(path("reminders.json"), now_provider=now_provider, persist=persist)
         self.alarms = AlarmManager(path("alarms.json"), now_provider=now_provider, persist=persist)
         self.alarm_sounds = AlarmSoundLibrary(
-            (Path(base) if base is not None else None),
+            (Path(base) if base is not None else path("alarm_sounds").parent),
             persist=persist,
         )
         self.sticky_note = StickyNoteManager(path("sticky_note.json"), now_provider=now_provider, persist=persist)
@@ -57,6 +68,21 @@ class TimeMemory:
         # and repair the real notification queue on startup.
         for item in self.todos.items:
             self.sync_todo_reminder(item)
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """Reload all local tasks, alarms and reminders for one account."""
+
+        if self._base is not None:
+            return False
+        target = str(account_id or "").strip()
+        if target == self._account_id:
+            return False
+        self.__init__(
+            account_id=target,
+            now_provider=self._now_provider,
+            persist=self._persist,
+        )
+        return True
 
     def now(self) -> datetime:
         """Return the same clock used by every local time-memory store."""

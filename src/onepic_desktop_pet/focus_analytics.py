@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -33,10 +34,12 @@ def _as_beijing(value: datetime) -> datetime:
     return value.astimezone(BEIJING_TIMEZONE)
 
 
-def focus_analytics_path() -> Path:
+def focus_analytics_path(account_id: str | None = None) -> Path:
     base = os.environ.get("LOCALAPPDATA")
     root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "Lili" / "focus_analytics.json"
+    value = str(account_id or "").strip().casefold()
+    key = re.sub(r"[^a-z0-9._-]", "_", value)[:80] or "anonymous"
+    return root / "Lili" / "accounts" / key / "focus_analytics.json"
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,7 @@ class FocusAnalyticsStore:
         now_provider: Callable[[], datetime] | None = None,
         persist: bool = True,
     ) -> None:
+        self._uses_explicit_path = path is not None
         self.path = path or focus_analytics_path()
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
@@ -148,6 +152,36 @@ class FocusAnalyticsStore:
         # diagnostics and future migrations.
         if self._rebuild_days_from_records() or self._trim_days():
             self._save()
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """切换本地专注分析命名空间，避免账号之间复用历史记录。"""
+
+        if not self._persist or self._uses_explicit_path:
+            return False
+        target = focus_analytics_path(account_id)
+        if self.path == target:
+            return False
+        self._save()
+        self.path = target
+        self._state = {
+            "days": {},
+            "records": [],
+            "reviews": {},
+            "current_task": None,
+            "account_state": {},
+        }
+        self._live = {
+            "session_active": False,
+            "running": False,
+            "paused_at": None,
+            "continuous_started_at": None,
+            "current_interruptions": 0,
+            "current_continuous_seconds": 0,
+        }
+        self._load()
+        if self._rebuild_days_from_records() or self._trim_days():
+            self._save()
+        return True
 
     def merge_remote_state(
         self,

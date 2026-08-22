@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -45,23 +46,39 @@ _PAUSE_STATE_BY_REASON = {
     "sleep": WORK_STATE_PAUSED_SLEEP,
     "fullscreen_video": WORK_STATE_PAUSED_VIDEO,
     "video": WORK_STATE_PAUSED_VIDEO,
+    "account_switch": WORK_STATE_PAUSED_MANUAL,
 }
 
 
-def work_timer_path() -> Path:
-    """返回当前用户的本地工作计时文件路径。"""
-
+def _local_data_root() -> Path:
     base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    current = root / "Lili" / "work_timer.json"
-    legacy = root / "SixHairWorkmate" / "work_timer.json"
-    if not current.exists() and legacy.exists():
-        try:
-            current.parent.mkdir(parents=True, exist_ok=True)
-            current.write_bytes(legacy.read_bytes())
-        except OSError:
-            return legacy
-    return current
+    return Path(base) if base else Path.home() / ".desktop_pet"
+
+
+def _account_storage_key(account_id: str | None) -> str:
+    """将 Supabase user id 转成安全、稳定的本地目录名。"""
+
+    value = str(account_id or "").strip().casefold()
+    if not value:
+        return "anonymous"
+    value = re.sub(r"[^a-z0-9._-]", "_", value)
+    return value[:80] or "anonymous"
+
+
+def work_timer_path(account_id: str | None = None) -> Path:
+    """返回按账号隔离的本地工作计时文件路径。
+
+    旧版本把所有账号写进 ``Lili/work_timer.json``。该文件不再自动
+    迁移或读取，避免登录另一个账号时把旧账号的累计时长再次上传。
+    """
+
+    return (
+        _local_data_root()
+        / "Lili"
+        / "accounts"
+        / _account_storage_key(account_id)
+        / "work_timer.json"
+    )
 
 
 def format_work_duration(seconds: int) -> str:
@@ -104,6 +121,8 @@ class WorkTimerModel:
         # Demo/offscreen windows must not read or mutate the user's real
         # session.  Production callers keep the historical persistent default.
         self.persist = bool(persist)
+        self._uses_account_storage = path is None and self.persist
+        self._account_id = "" if self._uses_account_storage else None
         self.path = (path or work_timer_path()) if self.persist else None
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._monotonic = monotonic_provider or time.monotonic
@@ -121,6 +140,39 @@ class WorkTimerModel:
         self._last_reminder_key: str | None = None
         self._recovered_active_session = False
         self._load()
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """切换本地计时命名空间，绝不把一个账号的计时带给另一个账号。"""
+
+        if not self._uses_account_storage or self.path is None:
+            return False
+        target_id = str(account_id or "").strip()
+        target = work_timer_path(target_id)
+        if self.path == target:
+            self._account_id = target_id
+            return False
+        if self.is_running:
+            self.pause("account_switch")
+        self.path = target
+        self._account_id = target_id
+        self._reset_in_memory_state()
+        self._load()
+        return True
+
+    def _reset_in_memory_state(self) -> None:
+        self._date_key = self._today_key()
+        self._accumulated_seconds = 0
+        self._lifetime_seconds = 0
+        self._notified_outfit_count = 0
+        self._session_accumulated_seconds = 0
+        self._episode_accumulated_seconds = 0
+        self._session_active = False
+        self._running_since = None
+        self._state = WORK_STATE_IDLE
+        self._pause_reason = None
+        self._last_checkpoint = self._monotonic()
+        self._last_reminder_key = None
+        self._recovered_active_session = False
 
     @property
     def is_running(self) -> bool:

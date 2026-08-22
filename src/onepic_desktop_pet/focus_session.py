@@ -78,6 +78,15 @@ class FocusSessionManager(QObject):
         self._room_id = clean or None
         self.refresh()
 
+    def switch_account(self, account_id: str | None) -> bool:
+        """切换计时账号并清空当前账号的房间上下文。"""
+
+        changed = self.timer.switch_account(account_id)
+        self._room_id = None
+        self._resting = False
+        self.refresh()
+        return changed
+
     def snapshot(self) -> FocusSessionSnapshot:
         return FocusSessionSnapshot.from_timer(
             self.timer,

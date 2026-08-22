@@ -7,26 +7,23 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from .local_data import account_data_dir
 
-def diary_state_path() -> Path:
+
+def diary_state_path(account_id: str | None = None) -> Path:
     """返回本机陪伴统计文件。"""
 
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "Lili" / "daily_companion.json"
+    return account_data_dir(account_id) / "daily_companion.json"
 
 
-def album_directory() -> Path:
+def album_directory(account_id: str | None = None) -> Path:
     """返回只在本机保存每日工作卡的六毛相册目录。"""
 
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "Lili" / "album"
+    return account_data_dir(account_id) / "album"
 
 
 class DailyCompanionStats:
@@ -37,8 +34,11 @@ class DailyCompanionStats:
         path: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
         persist: bool = True,
+        account_id: str | None = None,
     ) -> None:
-        self.path = path or diary_state_path()
+        self._explicit_path = path is not None
+        self._account_id = str(account_id or "").strip()
+        self.path = path or diary_state_path(self._account_id)
         self._now = now_provider or datetime.now
         self._persist = bool(persist)
         self.date = self._now().date().isoformat()
@@ -51,6 +51,22 @@ class DailyCompanionStats:
         self.last_report_date = ""
         if self._persist:
             self._load()
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """Reload private daily stats without carrying them to another account."""
+
+        if self._explicit_path:
+            return False
+        target = str(account_id or "").strip()
+        if target == self._account_id:
+            return False
+        self._save()
+        self.__init__(
+            now_provider=self._now,
+            persist=self._persist,
+            account_id=target,
+        )
+        return True
 
     def _rollover(self) -> None:
         today = self._now().date().isoformat()

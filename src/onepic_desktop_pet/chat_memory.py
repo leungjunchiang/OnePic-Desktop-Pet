@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from .local_data import account_local_data_path
 
 
 MAX_RECENT_ROUNDS = 30
@@ -48,13 +49,38 @@ class ConversationMemory:
         self,
         max_recent_rounds: int = MAX_RECENT_ROUNDS,
         persist_path: Path | None = None,
+        *,
+        account_scoped: bool = False,
+        account_id: str | None = None,
     ) -> None:
         self.max_recent_messages = max(2, int(max_recent_rounds) * 2)
         self._recent: list[tuple[str, str]] = []
         self._summary_items: list[str] = []
-        self.persist_path = Path(persist_path) if persist_path is not None else None
+        self._account_scoped = bool(account_scoped)
+        self._account_id = str(account_id or "").strip()
+        self.persist_path = (
+            conversation_memory_path(self._account_id)
+            if self._account_scoped
+            else (Path(persist_path) if persist_path is not None else None)
+        )
         if self.persist_path is not None:
             self.load()
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """Reload private chat memory without exposing another account's chat."""
+
+        if not self._account_scoped:
+            return False
+        target = str(account_id or "").strip()
+        if target == self._account_id:
+            return False
+        self.save()
+        self._account_id = target
+        self.persist_path = conversation_memory_path(target)
+        self._recent = []
+        self._summary_items = []
+        self.load()
+        return True
 
     @property
     def summary(self) -> str:
@@ -182,12 +208,10 @@ class ConversationMemory:
         return ""
 
 
-def conversation_memory_path() -> Path:
+def conversation_memory_path(account_id: str | None = None) -> Path:
     """返回六毛本机聊天记忆路径；不使用项目目录或云端存储。"""
 
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "Lili" / "conversation-memory.json"
+    return account_local_data_path("conversation-memory.json", account_id)
 
 
 @dataclass(frozen=True)
@@ -209,13 +233,37 @@ class ChatHistoryStore:
         persist_path: Path | None = None,
         *,
         max_sessions: int = MAX_CHAT_HISTORY_SESSIONS,
+        account_scoped: bool = False,
+        account_id: str | None = None,
     ) -> None:
-        self.persist_path = Path(persist_path) if persist_path is not None else None
+        self._account_scoped = bool(account_scoped)
+        self._account_id = str(account_id or "").strip()
+        self.persist_path = (
+            conversation_history_path(self._account_id)
+            if self._account_scoped
+            else (Path(persist_path) if persist_path is not None else None)
+        )
         self.max_sessions = max(1, int(max_sessions))
         self._sessions: list[dict[str, object]] = []
         self._current_session_id = ""
         if self.persist_path is not None:
             self.load()
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """Reload private chat sessions for another account namespace."""
+
+        if not self._account_scoped:
+            return False
+        target = str(account_id or "").strip()
+        if target == self._account_id:
+            return False
+        self.save()
+        self._account_id = target
+        self.persist_path = conversation_history_path(target)
+        self._sessions = []
+        self._current_session_id = ""
+        self.load()
+        return True
 
     @property
     def current_session_id(self) -> str:
@@ -499,9 +547,7 @@ class ChatHistoryStore:
         return compact[:32] + ("…" if len(compact) > 32 else "")
 
 
-def conversation_history_path() -> Path:
+def conversation_history_path(account_id: str | None = None) -> Path:
     """返回本地聊天记录路径，与 AI 摘要分开保存。"""
 
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    return root / "Lili" / "chat-history.json"
+    return account_local_data_path("chat-history.json", account_id)

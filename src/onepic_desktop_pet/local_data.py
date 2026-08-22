@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,31 @@ def local_data_path(filename: str, base: str | Path | None = None) -> Path:
     return app_data_dir(base) / clean
 
 
+def account_data_dir(account_id: str | None = None, base: str | Path | None = None) -> Path:
+    """Return an account-scoped Lili data directory.
+
+    The anonymous namespace is deliberately separate from every Supabase user
+    so offline data cannot be uploaded after a later login.
+    """
+
+    value = str(account_id or "").strip().casefold()
+    key = re.sub(r"[^a-z0-9._-]", "_", value)[:80] or "anonymous"
+    return app_data_dir(base) / "accounts" / key
+
+
+def account_local_data_path(
+    filename: str,
+    account_id: str | None = None,
+    base: str | Path | None = None,
+) -> Path:
+    """Return a sanitized JSON path inside one account namespace."""
+
+    clean = Path(str(filename).replace("\\", "/")).name
+    if not clean.endswith(".json"):
+        clean += ".json"
+    return account_data_dir(account_id, base) / clean
+
+
 def read_json(path: Path, default: Any) -> Any:
     """Read JSON and return *default* for missing/corrupt old files."""
 
@@ -65,4 +91,3 @@ def write_json_atomic(path: Path, value: Any) -> Path:
     )
     temporary.replace(path)
     return path
-

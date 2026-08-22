@@ -130,8 +130,6 @@ from .chat_manager import (
 from .chat_memory import (
     ChatHistoryStore,
     ConversationMemory,
-    conversation_history_path,
-    conversation_memory_path,
 )
 from .companion import (
     ACTION_BY_KEY,
@@ -378,6 +376,7 @@ class PetWindow(QWidget):
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self._focus_quality_tracker = FocusQualityTracker()
+        self._active_focus_account_id = ""
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
         self._recorded_focus_session_seconds = 0
@@ -466,6 +465,7 @@ class PetWindow(QWidget):
         self.visit_status_bubble = VisitStatusBubble()
         self._seen_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
+        self._seen_buddy_request_ids: set[str] = set()
         self._incoming_visit_notice: IncomingVisitNotice | None = None
         self._incoming_visit_queue: list[dict] = []
         self._incoming_visit_response_threads: list[SocialVisitResponseThread] = []
@@ -481,14 +481,10 @@ class PetWindow(QWidget):
         self._chat_submission_active = False
         self._chat_memory = ConversationMemory(
             max_recent_rounds=30,
-            persist_path=conversation_memory_path()
-            if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-            else None,
+            account_scoped=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
         )
         self._chat_history = ChatHistoryStore(
-            persist_path=conversation_history_path()
-            if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
-            else None,
+            account_scoped=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
         )
         self._chat_history_dialog: ChatHistoryDialog | None = None
         self.agent_manager = AgentManager(
@@ -515,6 +511,9 @@ class PetWindow(QWidget):
             todo_now_provider=self.time_memory.now,
             local_command_handler=self._handle_chat_local_command,
         )
+        # All account-aware local stores now exist, so a restored Supabase
+        # session can safely select its namespace during startup.
+        self._switch_focus_account(self._current_social_user_id())
         self.music_provider_manager = MusicProviderManager(self.settings)
         self.music_controller = MusicController(
             self.settings,
@@ -3704,7 +3703,7 @@ class PetWindow(QWidget):
     def open_daily_album(self) -> None:
         """打开本机六毛相册文件夹，不访问网络。"""
 
-        directory = album_directory(); directory.mkdir(parents=True, exist_ok=True)
+        directory = album_directory(self._active_focus_account_id); directory.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
 
     def prompt_dialogue(self) -> None:
@@ -4327,6 +4326,8 @@ class PetWindow(QWidget):
 
         if detect_quiet_mode().blocked:
             return
+        for request in data.get("requests") or []:
+            self._enqueue_buddy_request_notice(request)
         for visit in data.get("visits") or []:
             self._enqueue_incoming_visit_notice(visit)
         active = self._active_visits_after_startup(data.get("active_visits") or [])
@@ -4334,6 +4335,37 @@ class PetWindow(QWidget):
             self._show_buddy_visit(active[0])
         else:
             self._hide_buddy_visit()
+
+    @staticmethod
+    def _buddy_request_id(request: dict) -> str:
+        """Return a stable ID so one pending request cannot spam the pet."""
+
+        return str(
+            request.get("id")
+            or request.get("request_id")
+            or f"{request.get('sender_id') or request.get('user_id') or ''}:{request.get('created_at') or ''}"
+        ).strip()
+
+    def _enqueue_buddy_request_notice(self, request: object) -> None:
+        """Show a lightweight pet notification for a newly observed buddy request."""
+
+        if not isinstance(request, dict):
+            return
+        item = dict(request)
+        request_id = self._buddy_request_id(item)
+        if not request_id or request_id in self._seen_buddy_request_ids:
+            return
+        self._seen_buddy_request_ids.add(request_id)
+        nickname = social_pet_label(
+            item.get("owner_nickname")
+            or item.get("nickname")
+            or item.get("sender_nickname")
+            or "新搭子"
+        )
+        self._set_temporary_activity("pointing", 20_000)
+        self.show_speech(f"💌 {nickname} 发来搭子申请\n打开“互动”处理。", 7000)
+        if self._social_dialog is not None:
+            self._social_dialog._set_status(f"💌 {nickname} 发来搭子申请，请到“互动”处理。")
 
     def _active_visits_after_startup(self, active: object) -> list[dict]:
         """Ignore visits that were already active before this process started.
@@ -4441,13 +4473,57 @@ class PetWindow(QWidget):
                 )
 
     def _social_account_state_changed(self, signed_in: bool) -> None:
-        """Reset account cursors and reconcile the local ledger after login."""
+        """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
+
+        account_id = self._current_social_user_id() if signed_in else ""
+        self._switch_focus_account(account_id)
+        if self._social_dialog is not None:
+            # A room selected under another account is not an invitation for
+            # the new account to keep sending heartbeats into that room.
+            self._social_dialog.current_room_id = None
+            self._social_dialog._room_selection_explicit = False
+            self._social_dialog._room_refresh_pending = False
 
         if not signed_in:
             self._economy_sync_user_id = ""
             return
         self._economy_sync_user_id = ""
         self._schedule_social_tick()
+
+    def _current_social_user_id(self) -> str:
+        client = getattr(self, "social_client", None)
+        if client is None or not getattr(client, "signed_in", False):
+            return ""
+        session = getattr(client, "session", None)
+        return str(getattr(session, "user_id", "") or "").strip()
+
+    def _switch_focus_account(self, account_id: str | None) -> None:
+        """在本地加载目标账号的计时与分析命名空间。"""
+
+        clean = str(account_id or "").strip()
+        if clean == self._active_focus_account_id:
+            return
+        self.focus_session.switch_account(clean or None)
+        self.focus_analytics.switch_account(clean or None)
+        self.daily_stats.switch_account(clean or None)
+        self.time_memory.switch_account(clean or None)
+        self.economy.switch_account(clean or None)
+        if hasattr(self, "_chat_memory"):
+            self._chat_memory.switch_account(clean or None)
+        if hasattr(self, "_chat_history"):
+            self._chat_history.switch_account(clean or None)
+        if hasattr(self, "offline_dialogue_manager"):
+            self.offline_dialogue_manager.local_context = self.time_memory.summary.context
+        if hasattr(self, "chat_manager"):
+            # TimeMemory rebuilds its coordinator objects when changing
+            # account; keep the chat fast-action path on the new namespace.
+            self.chat_manager.action_executor = self.time_memory.actions
+        self._active_focus_account_id = clean
+        self._recorded_focus_session_seconds = 0
+        self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
+        self._focus_quality_tracker.reset()
+        self._last_focus_quality = None
+        self._seen_buddy_request_ids.clear()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""

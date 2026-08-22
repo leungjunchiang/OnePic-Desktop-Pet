@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .local_data import local_data_path, read_json, write_json_atomic
+from .local_data import account_local_data_path, read_json, write_json_atomic
 
 
 FOCUS_DAILY_CAP_SECONDS = 8 * 60 * 60
@@ -198,8 +198,11 @@ class EconomyLedger:
         *,
         now_provider: Callable[[], datetime] | None = None,
         persist: bool = True,
+        account_id: str | None = None,
     ) -> None:
-        self.path = path or local_data_path("economy.json")
+        self._explicit_path = path is not None
+        self._account_id = str(account_id or "").strip()
+        self.path = path or account_local_data_path("economy.json", self._account_id)
         self._now = now_provider or (lambda: datetime.now().astimezone())
         self._persist = bool(persist)
         self._state: dict[str, Any] = {
@@ -220,6 +223,22 @@ class EconomyLedger:
         if self._persist:
             self._load()
         self.ensure_daily_cake()
+
+    def switch_account(self, account_id: str | None) -> bool:
+        """Reload the private wallet and inventory for another account."""
+
+        if self._explicit_path:
+            return False
+        target = str(account_id or "").strip()
+        if target == self._account_id:
+            return False
+        self._save()
+        self.__init__(
+            now_provider=self._now,
+            persist=self._persist,
+            account_id=target,
+        )
+        return True
 
     @property
     def balance(self) -> int:
