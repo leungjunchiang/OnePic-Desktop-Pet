@@ -197,13 +197,13 @@ class FakeTransport:
         return None
 
 
-def test_production_config_has_one_supabase_source_and_proxy_url():
+def test_production_config_uses_supabase_direct_without_proxy():
     root = Path(__file__).resolve().parents[1]
     config = json.loads((root / "config" / "social_backend.json").read_text(encoding="utf-8"))
-    assert config["social_backend"] == "direct_with_cloudbase_fallback"
+    assert config["social_backend"] == "supabase_direct"
     assert config["supabase_url"].startswith("https://")
     assert config["supabase_publishable_key"].startswith("sb_publishable_")
-    assert ".tcloudbase.com/" in config["social_api_base_url"]
+    assert config["social_api_base_url"] == ""
     assert "service_role" not in json.dumps(config).lower()
 
 
