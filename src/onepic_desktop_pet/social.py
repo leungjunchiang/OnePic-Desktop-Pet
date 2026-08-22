@@ -131,7 +131,7 @@ def social_user_message(error: BaseException) -> str:
     raw = str(error or "")
     lowered = raw.casefold()
     if kind == "signup_timeout":
-        return "注册服务未在规定时间内返回，当前无法确认账号是否已创建；请不要重复注册或连续点击注册，先检查收件箱和垃圾邮件。如果没有收到邮件，稍后再尝试注册；若持续失败，请管理员检查或更换 Supabase Auth 的事务邮件 SMTP。"
+        return "注册服务未在规定时间内返回，当前无法确认账号是否已创建；请不要重复注册或连续点击注册，先检查收件箱和垃圾邮件。“重新发送确认邮件”仅适用于账号已经创建的情况；如果没有收到邮件，稍后再尝试注册；若持续失败，请管理员检查或更换 Supabase Auth 的事务邮件 SMTP。"
     if kind == "confirmation_timeout" or code == "request_timeout":
         return "确认邮件服务未在规定时间内返回，请稍后再试并检查收件箱和垃圾邮件；如果注册本身也未成功，请稍后重新注册。若持续失败，请管理员检查或更换 Supabase Auth 的事务邮件 SMTP。"
     if "email address not authorized" in lowered or "email not authorized" in lowered:
