@@ -692,3 +692,38 @@ def test_presence_transitions_are_not_persisted_as_room_history():
     assert "focus_finish" in migration
     assert "challenge_complete" in migration
 
+def test_signup_timeout_is_not_replayed_to_proxy():
+    class SignupTimeoutTransport(FakeTransport):
+        def sign_up(self, email, password, nickname):
+            self.calls.append(("sign_up", email))
+            raise SocialError(
+                "SMTP request timed out",
+                kind="signup_timeout",
+                retryable=True,
+                status=504,
+            )
+
+    direct = SignupTimeoutTransport("direct")
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+
+    with pytest.raises(SocialError, match="SMTP request timed out"):
+        manager.request("sign_up", "a@example.com", "secret123", "小梁")
+
+    assert direct.calls == ["health", ("sign_up", "a@example.com")]
+    assert proxy.calls == []
+
+
+def test_signup_timeout_message_warns_against_duplicate_registration():
+    message = social_user_message(
+        SocialError(
+            "SMTP request timed out",
+            kind="signup_timeout",
+            retryable=True,
+            status=504,
+        )
+    )
+
+    assert "不要重复注册" in message
+    assert "重新发送确认邮件" in message
+
