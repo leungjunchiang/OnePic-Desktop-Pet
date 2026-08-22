@@ -7,11 +7,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget
 
+from onepic_desktop_pet.social import SignupResult, SocialError
 from onepic_desktop_pet.social_ui import (
     BuddyCardWidget,
     BuddyVisitWindow,
     IncomingVisitNotice,
     SocialHubDialog,
+    SocialSignupThread,
     SocialVisitResponseThread,
 )
 
@@ -241,6 +243,57 @@ def test_incoming_visit_notice_has_direct_accept_reject_and_later_actions() -> N
     assert "论文搭子家的六毛🧋 请你喝奶茶" in [label.text() for label in notice.findChildren(QLabel)]
     assert {"接受", "拒绝", "稍后处理"} <= set(labels)
     notice.close_without_notice(); notice.deleteLater(); app.processEvents()
+
+
+def test_signup_thread_calls_client_without_gui_side_effects() -> None:
+    app = QApplication.instance() or QApplication([])
+
+    class Client:
+        def sign_up(self, email, password, nickname):
+            return SignupResult(
+                email=email,
+                user_id="user-1",
+                confirmation_pending=True,
+                confirmation_sent=True,
+            )
+
+    client = Client()
+    thread = SocialSignupThread(client, "person@example.com", "secret", "昵称")
+    completed = []
+    thread.completed.connect(completed.append)
+    thread.run()
+
+    assert completed == [
+        SignupResult(
+            email="person@example.com",
+            user_id="user-1",
+            confirmation_pending=True,
+            confirmation_sent=True,
+        )
+    ]
+    assert thread._password == ""
+    thread.deleteLater()
+    app.processEvents()
+
+
+def test_signup_thread_forwards_social_error() -> None:
+    app = QApplication.instance() or QApplication([])
+
+    class Client:
+        def sign_up(self, email, password, nickname):
+            raise SocialError("SMTP timeout", kind="signup_timeout", retryable=True)
+
+    thread = SocialSignupThread(Client(), "person@example.com", "secret", "昵称")
+    failed = []
+    thread.failed.connect(failed.append)
+    thread.run()
+
+    assert len(failed) == 1
+    assert isinstance(failed[0], SocialError)
+    assert failed[0].kind == "signup_timeout"
+    assert thread._password == ""
+    thread.deleteLater()
+    app.processEvents()
 
 
 def test_incoming_visit_response_thread_calls_visit_rpc() -> None:
