@@ -1563,7 +1563,12 @@ class DashboardCacheClientBase:
     ACCOUNT_NAME = "supabase-session"
 
     def __init__(self, *, persist_tokens: bool = True, backend: SocialBackend | None = None) -> None:
-        config = json.loads(resource_path("config/social_backend.json").read_text(encoding="utf-8"))
+        # Backend credentials and endpoints are release-controlled.  Do not let
+        # a user content overlay replace this file: an older executable may
+        # interpret a newer overlay schema as a legacy CloudBase proxy.
+        config = json.loads(
+            (resource_root() / "config" / "social_backend.json").read_text(encoding="utf-8")
+        )
         self.social_api_base_url = (os.environ.get("LILI_SOCIAL_API_BASE_URL", "").strip() or str(config.get("social_api_base_url", "")).strip()).rstrip("/")
         self.email_redirect_url = os.environ.get("LILI_AUTH_REDIRECT_URL", "").strip() or str(config.get("email_redirect_to", "")).strip()
         self.persist_tokens = persist_tokens
