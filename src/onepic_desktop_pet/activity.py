@@ -82,6 +82,31 @@ def _windows_foreground_is_desktop_shell(user32, hwnd) -> bool:
         return False
 
 
+def _windows_foreground_is_normal_window(user32, hwnd) -> bool:
+    """Return whether a full-monitor HWND is still a normal window.
+
+    A maximised application can have the same outer rectangle as its monitor
+    without being a real exclusive/borderless fullscreen surface.  In
+    particular, ChatGPT and other ordinary desktop apps may be maximised this
+    way.  Treating those windows as fullscreen would hide the desktop pet even
+    though the user has only maximised a normal application window.
+    """
+
+    try:
+        is_zoomed = getattr(user32, "IsZoomed", None)
+        if is_zoomed is not None and bool(is_zoomed(hwnd)):
+            return True
+
+        # WS_CAPTION includes the title bar and WS_THICKFRAME identifies a
+        # resizable window.  Borderless fullscreen surfaces normally have
+        # neither style, while maximised ChatGPT/browser/document windows do.
+        get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        style = int(get_style(hwnd, -16))
+        return bool(style & (0x00C00000 | 0x00040000))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
 def classify_application(name: str) -> str:
     """把进程或应用名称归类，供六毛选择不打扰的陪伴动作。"""
 
@@ -235,6 +260,8 @@ def active_window_is_fullscreen() -> bool:
         # foreground HWND. It fills the monitor, but it is not real fullscreen
         # content and must not hide the desktop pet.
         if _windows_foreground_is_desktop_shell(user32, hwnd):
+            return False
+        if _windows_foreground_is_normal_window(user32, hwnd):
             return False
 
         class RECT(ctypes.Structure):
