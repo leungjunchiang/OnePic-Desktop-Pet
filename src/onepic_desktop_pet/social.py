@@ -130,6 +130,8 @@ def social_user_message(error: BaseException) -> str:
     kind = str(getattr(error, "kind", "") or "").casefold()
     raw = str(error or "")
     lowered = raw.casefold()
+    if kind in {"signup_timeout", "confirmation_timeout"} or code == "request_timeout":
+        return "邮件服务响应较慢，注册请求可能已经创建账号；请不要重复注册，稍后点击“重新发送确认邮件”，并检查垃圾邮件/广告邮件。若持续失败，请管理员检查 Supabase SMTP 的主机、端口、账号和授权码。"
     if "email address not authorized" in lowered or "email not authorized" in lowered:
         return "当前 Supabase 邮件服务只允许项目团队邮箱收信，163/学校邮箱不会收到邮件；请为 Supabase Auth 配置自定义 SMTP 后重试。"
     if "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
@@ -276,6 +278,25 @@ def _social_request_timeout() -> float:
         )
     except ValueError:
         return 4.0
+
+
+def _auth_request_timeout() -> float:
+    """Allow SMTP-backed Auth requests more time than normal dashboard calls.
+
+    Supabase can create the user and send the confirmation email before Auth
+    returns. The hosted SMTP path has a hard server-side deadline around ten
+    seconds, while healthy custom SMTP requests can still take longer than the
+    normal four-second desktop request budget. Registration and resend calls
+    therefore use a dedicated, bounded timeout and are never blindly replayed.
+    """
+
+    try:
+        return min(
+            45.0,
+            max(8.0, float(os.environ.get("LILI_AUTH_TIMEOUT_SECONDS", "30"))),
+        )
+    except ValueError:
+        return 30.0
 
 
 def _verified_urlopen(request: urllib.request.Request, *, timeout: float):
@@ -732,6 +753,7 @@ class HttpSocialBackend:
         *,
         authenticated: bool = False,
         extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -747,7 +769,10 @@ class HttpSocialBackend:
             headers.update({str(key): str(value) for key, value in extra_headers.items()})
         request = urllib.request.Request(f"{self.base_url}{path}", data=payload, headers=headers, method=method)
         try:
-            with _verified_urlopen(request, timeout=_social_request_timeout()) as response:
+            with _verified_urlopen(
+                request,
+                timeout=_social_request_timeout() if timeout is None else timeout,
+            ) as response:
                 server_time = response.headers.get("X-Lili-Server-Time") or response.headers.get("Date")
                 if server_time:
                     try:
@@ -832,7 +857,26 @@ class HttpSocialBackend:
             path = "/auth/v1/signup?" + urllib.parse.urlencode({"redirect_to": self.email_redirect_url}) if self.email_redirect_url else "/auth/v1/signup"
         else:
             path = "/auth/signup"
-        data = self._raw("POST", path, body if self.transport == "proxy" else {"email": body["email"], "password": body["password"], "data": body["data"]})
+        try:
+            data = self._raw(
+                "POST",
+                path,
+                body if self.transport == "proxy" else {"email": body["email"], "password": body["password"], "data": body["data"]},
+                timeout=_auth_request_timeout(),
+            )
+        except SocialError as exc:
+            # A Supabase signup can create the user before SMTP finishes. Do
+            # not replay the password to another route after a timeout.
+            if exc.kind == "timeout" or exc.kind == "server" or exc.status in {502, 503, 504}:
+                raise SocialError(
+                    "注册请求已等待邮件服务较长时间，服务器暂未返回结果。请不要重复注册；稍后点击“重新发送确认邮件”，并检查垃圾邮件/广告邮件。",
+                    kind="signup_timeout",
+                    endpoint=exc.endpoint or _endpoint_host(self.base_url),
+                    retryable=True,
+                    status=exc.status,
+                    error_code=exc.error_code,
+                ) from exc
+            raise
         return self._signup_result(data, normalized_email)
 
     def resend_confirmation(self, email: str) -> bool:
@@ -843,12 +887,24 @@ class HttpSocialBackend:
         if self.email_redirect_url:
             body["options"] = {"emailRedirectTo": self.email_redirect_url}
         path = "/auth/v1/resend" if self.transport == "direct" else "/auth/resend"
-        self._raw("POST", path, body)
+        try:
+            self._raw("POST", path, body, timeout=_auth_request_timeout())
+        except SocialError as exc:
+            if exc.kind == "timeout" or exc.kind == "server" or exc.status in {502, 503, 504}:
+                raise SocialError(
+                    "确认邮件服务响应较慢；请稍后再试，并检查垃圾邮件/广告邮件。",
+                    kind="confirmation_timeout",
+                    endpoint=exc.endpoint or _endpoint_host(self.base_url),
+                    retryable=True,
+                    status=exc.status,
+                    error_code=exc.error_code,
+                ) from exc
+            raise
         return True
 
     def sign_in(self, email: str, password: str) -> None:
         path = "/auth/v1/token?grant_type=password" if self.transport == "direct" else "/auth/signin"
-        data = self._raw("POST", path, {"email": email.strip(), "password": password})
+        data = self._raw("POST", path, {"email": email.strip(), "password": password}, timeout=_auth_request_timeout())
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
@@ -1334,7 +1390,10 @@ class LegacyDirectSocialClient:
             headers.update(extra_headers)
         request = urllib.request.Request(f"{self.url}{path}", data=payload, headers=headers, method=method)
         try:
-            with _verified_urlopen(request, timeout=_social_request_timeout()) as response:
+            with _verified_urlopen(
+                request,
+                timeout=_social_request_timeout() if timeout is None else timeout,
+            ) as response:
                 raw = response.read()
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
