@@ -4389,6 +4389,20 @@ class PetWindow(QWidget):
                 date_key=str(remote_date or datetime.now(BEIJING_TIMEZONE).date().isoformat()),
             )
 
+        remote_week_start = profile.get("focus_week_start_date")
+        remote_week_seconds = profile.get("focus_week_seconds")
+        if remote_week_seconds is None:
+            remote_week_seconds = presence.get("week_seconds")
+        analytics_changed = self.focus_analytics.merge_remote_state(
+            focus_date=str(remote_date or ""),
+            today_seconds=int(remote_today or 0),
+            lifetime_seconds=int(remote_lifetime or 0),
+            week_start=str(remote_week_start or ""),
+            week_seconds=int(remote_week_seconds or 0),
+        )
+        if analytics_changed and self._social_dialog is not None:
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+
         if "outfit_key" not in profile:
             return
         remote_outfit = str(profile.get("outfit_key") or "")[:60]
