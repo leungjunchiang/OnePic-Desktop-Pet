@@ -2040,7 +2040,12 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     ACCOUNT_NAME = "supabase-session"
 
     def __init__(self, *, persist_tokens: bool = True, backend: SocialBackend | None = None) -> None:
-        config = json.loads(resource_path("config/social_backend.json").read_text(encoding="utf-8"))
+        # Backend credentials and endpoints are release-controlled.  Do not let
+        # a user content overlay replace this file: an older executable may
+        # interpret a newer overlay schema as a legacy CloudBase proxy.
+        config = json.loads(
+            (resource_root() / "config" / "social_backend.json").read_text(encoding="utf-8")
+        )
         supabase_url = os.environ.get("LILI_SUPABASE_URL", "").strip() or str(config.get("supabase_url", "")).strip()
         supabase_key = os.environ.get("LILI_SUPABASE_PUBLISHABLE_KEY", "").strip() or str(config.get("supabase_publishable_key", "")).strip()
         proxy_url = os.environ.get("LILI_CLOUDBASE_PROXY_URL", "").strip() or str(config.get("social_api_base_url", "")).strip()
