@@ -137,3 +137,19 @@ def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
         week_seconds=99 * 3600,
     )
     assert store.snapshot()["weekly_total_seconds"] == 0
+
+
+def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(now_provider=lambda: now, persist=True)
+
+    assert store.switch_account("account-a")
+    store.record_session(90, started_at=now, completed=True)
+    assert store.summary().weekly_total_seconds == 90
+
+    assert store.switch_account("account-b")
+    assert store.summary().weekly_total_seconds == 0
+
+    assert store.switch_account("account-a")
+    assert store.summary().weekly_total_seconds == 90

@@ -378,6 +378,8 @@ class PetWindow(QWidget):
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self._focus_quality_tracker = FocusQualityTracker()
+        self._active_focus_account_id = ""
+        self._switch_focus_account(self._current_social_user_id())
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
         self._recorded_focus_session_seconds = 0
@@ -4441,13 +4443,42 @@ class PetWindow(QWidget):
                 )
 
     def _social_account_state_changed(self, signed_in: bool) -> None:
-        """Reset account cursors and reconcile the local ledger after login."""
+        """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
+
+        account_id = self._current_social_user_id() if signed_in else ""
+        self._switch_focus_account(account_id)
+        if self._social_dialog is not None:
+            # A room selected under another account is not an invitation for
+            # the new account to keep sending heartbeats into that room.
+            self._social_dialog.current_room_id = None
+            self._social_dialog._room_selection_explicit = False
+            self._social_dialog._room_refresh_pending = False
 
         if not signed_in:
             self._economy_sync_user_id = ""
             return
         self._economy_sync_user_id = ""
         self._schedule_social_tick()
+
+    def _current_social_user_id(self) -> str:
+        if not getattr(self.social_client, "signed_in", False):
+            return ""
+        session = getattr(self.social_client, "session", None)
+        return str(getattr(session, "user_id", "") or "").strip()
+
+    def _switch_focus_account(self, account_id: str | None) -> None:
+        """在本地加载目标账号的计时与分析命名空间。"""
+
+        clean = str(account_id or "").strip()
+        if clean == self._active_focus_account_id:
+            return
+        self.focus_session.switch_account(clean or None)
+        self.focus_analytics.switch_account(clean or None)
+        self._active_focus_account_id = clean
+        self._recorded_focus_session_seconds = 0
+        self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
+        self._focus_quality_tracker.reset()
+        self._last_focus_quality = None
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""
