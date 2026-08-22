@@ -555,6 +555,41 @@ class BuddyCodeDialog(QDialog):
         return self.code_edit.text().strip().upper()
 
 
+class BuddyProfileDialog(QDialog):
+    """展示查找到的搭子资料，并把申请动作交给用户明确确认。"""
+
+    def __init__(self, profile_text: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("搭子资料确认")
+        self.setModal(True)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        title = QLabel("已找到搭子资料")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        profile = QLabel(profile_text)
+        profile.setWordWrap(True)
+        layout.addWidget(profile)
+
+        hint = QLabel("确认资料后，点击“提交搭子申请”才会发送申请；点击“返回”不会发送。")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        self.submit_button = QPushButton("提交搭子申请")
+        self.return_button = QPushButton("返回")
+        self.submit_button.clicked.connect(self.accept)
+        self.return_button.clicked.connect(self.reject)
+        buttons.addWidget(self.submit_button)
+        buttons.addWidget(self.return_button)
+        layout.addLayout(buttons)
+        self.return_button.setFocus()
+
+
 class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
@@ -2867,13 +2902,8 @@ class SocialHubDialog(QDialog):
         if outfit:
             profile_text += f"\n娃衣：{outfit[:60]}"
         profile_text += "\n\n确认后才会发送搭子申请。"
-        box = QMessageBox(self)
-        box.setWindowTitle("确认添加搭子")
-        box.setText(profile_text)
-        add_button = box.addButton("添加搭子", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("返回", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        if box.clickedButton() is add_button:
+        confirm = BuddyProfileDialog(profile_text, self)
+        if confirm.exec() == QDialog.DialogCode.Accepted:
             self._send_buddy_request(code)
 
     def _send_buddy_request(self, code: str) -> None:
