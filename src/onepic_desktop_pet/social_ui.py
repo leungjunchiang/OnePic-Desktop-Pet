@@ -238,6 +238,7 @@ class SocialSyncThread(QThread):
     def run(self) -> None:
         try:
             heartbeat_error = ""
+            focus_history_result = None
             personal_state = self.presence.get("personal_state")
             heartbeat_presence = _heartbeat_payload(self.presence)
             if self.send_heartbeat:
@@ -271,6 +272,16 @@ class SocialSyncThread(QThread):
                         # personal-state migration is deployed.  Keep the
                         # social room usable and retry on the next heartbeat.
                         LOGGER.info("personal state sync deferred: %s", exc)
+                    try:
+                        focus_history_result = sync_rpc(
+                            "lili_sync_focus_history",
+                            {"p_history": personal_state.get("focus_history") or []},
+                        )
+                    except (SocialError, AttributeError, TypeError) as exc:
+                        # Daily history is additive.  If an older relay has not
+                        # received this migration yet, the existing profile
+                        # sync and local cache continue to work.
+                        LOGGER.info("daily focus history sync deferred: %s", exc)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -290,6 +301,9 @@ class SocialSyncThread(QThread):
             if heartbeat_error:
                 data = dict(data or {})
                 data["_presence_heartbeat_error"] = heartbeat_error
+            if isinstance(focus_history_result, dict):
+                data = dict(data or {})
+                data["_focus_history"] = focus_history_result
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)

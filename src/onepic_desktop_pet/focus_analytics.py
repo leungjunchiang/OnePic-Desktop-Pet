@@ -238,6 +238,56 @@ class FocusAnalyticsStore:
             self._save()
         return changed
 
+    def merge_remote_history(self, payload: Any) -> bool:
+        """Merge server-confirmed daily totals into this account's local cache.
+
+        The server is the source of truth for cross-device day comparisons.
+        A local day marked as untrusted is replaced by the server value rather
+        than allowed to hide a valid remote record.
+        """
+
+        if isinstance(payload, dict):
+            entries = payload.get("days")
+        else:
+            entries = payload
+        if not isinstance(entries, list):
+            return False
+
+        today = _as_beijing(self._now()).date()
+        cutoff = today - timedelta(days=400)
+        days = self._state.setdefault("days", {})
+        changed = False
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            try:
+                focus_date = date.fromisoformat(str(item.get("focus_date") or "")[:10])
+                value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(item.get("seconds") or 0)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if focus_date < cutoff or focus_date > today:
+                continue
+            key = focus_date.isoformat()
+            day = days.setdefault(key, self._empty_day())
+            try:
+                local_value = max(0, int(day.get("seconds", 0) or 0))
+            except (AttributeError, TypeError, ValueError):
+                local_value = 0
+            local_untrusted = bool(day.get("seconds_untrusted"))
+            merged = value if local_untrusted else max(local_value, value)
+            if local_value != merged:
+                day["seconds"] = merged
+                changed = True
+            if local_untrusted and day.get("seconds_untrusted"):
+                day["seconds_untrusted"] = False
+                changed = True
+
+        if self._trim_days():
+            changed = True
+        if changed:
+            self._save()
+        return changed
+
     def record_session(
         self,
         seconds: int,
@@ -501,6 +551,26 @@ class FocusAnalyticsStore:
             "tomorrow_task": self.tomorrow_task(),
             "first_task_today": self.today_first_task(),
         }
+
+    def daily_history(self, days: int = 8) -> list[dict[str, Any]]:
+        """Return recent trustworthy daily totals for server reconciliation."""
+
+        count = max(1, min(31, int(days)))
+        today = _as_beijing(self._now()).date()
+        result: list[dict[str, Any]] = []
+        stored = self._state.get("days", {})
+        for offset in range(count - 1, -1, -1):
+            focus_date = today - timedelta(days=offset)
+            raw = stored.get(focus_date.isoformat(), {})
+            if not isinstance(raw, dict) or bool(raw.get("seconds_untrusted")):
+                continue
+            try:
+                seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if seconds:
+                result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
+        return result
 
     def _best_window(self, today: date) -> str:
         buckets: dict[int, list[int]] = {}

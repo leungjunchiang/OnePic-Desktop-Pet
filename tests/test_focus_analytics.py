@@ -166,6 +166,21 @@ def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
     assert store.snapshot()["weekly_total_seconds"] == 0
 
 
+def test_server_daily_history_makes_yesterday_comparison_available_on_new_computer(tmp_path) -> None:
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.merge_remote_history({
+        "days": [
+            {"focus_date": "2026-08-21", "seconds": 11 * 3600},
+            {"focus_date": "2026-08-22", "seconds": 3 * 3600},
+        ]
+    })
+
+    summary = store.summary()
+    assert summary.yesterday_seconds == 11 * 3600
+    assert summary.difference_vs_yesterday_seconds == -8 * 3600
+
+
 def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))

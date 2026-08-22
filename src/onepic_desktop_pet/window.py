@@ -4334,6 +4334,15 @@ class PetWindow(QWidget):
         week_seconds += max(0, today_seconds - analytics_today)
         today = datetime.now(BEIJING_TIMEZONE).date()
         week_start = today - timedelta(days=today.weekday())
+        focus_history = self.focus_analytics.daily_history(days=8)
+        today_key = today.isoformat()
+        focus_history = [
+            item for item in focus_history
+            if str(item.get("focus_date") or "")[:10] != today_key
+        ]
+        if today_seconds > 0:
+            focus_history.append({"focus_date": today_key, "seconds": today_seconds})
+        focus_history.sort(key=lambda item: str(item.get("focus_date") or ""))
         presence = {
             "working": snapshot.is_running,
             "session_active": bool(self.work_timer.has_active_session),
@@ -4356,6 +4365,7 @@ class PetWindow(QWidget):
                 "week_seconds": week_seconds,
                 "today_interruptions": int(analytics.get("today_interruptions") or 0),
                 "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
+                "focus_history": focus_history,
                 "outfit_key": self.settings.equipped_outfit,
                 "outfit_set": self._personal_outfit_sync_pending,
             },
@@ -4523,7 +4533,8 @@ class PetWindow(QWidget):
             week_start=str(remote_week_start or ""),
             week_seconds=int(remote_week_seconds or 0),
         )
-        if analytics_changed and self._social_dialog is not None:
+        history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        if (analytics_changed or history_changed) and self._social_dialog is not None:
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
 
         if "outfit_key" not in profile:
