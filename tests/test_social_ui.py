@@ -145,6 +145,22 @@ def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_outgoing_buddy_request_has_retract_action_and_is_not_acceptable() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard({
+        "me": {"nickname": "六毛搭子", "visibility": "friends", "show_exact_time": True},
+        "buddies": [], "room_people": [], "requests": [],
+        "outgoing_requests": [{"id": "request-1", "nickname": "胡老师", "owner_nickname": "胡老师"}],
+        "visits": [],
+    })
+    dialog.inbox.setCurrentRow(0)
+    assert dialog.inbox.item(0).data(Qt.ItemDataRole.UserRole)[0] == "buddy_outgoing"
+    assert not dialog.inbox_cancel_button.isHidden()
+    assert dialog.inbox_accept_button.isHidden()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())

@@ -4140,6 +4140,7 @@ class PetWindow(QWidget):
             self._social_dialog.account_state_changed.connect(self._social_account_state_changed)
             self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
             self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
+            self._social_dialog.buddy_request_received.connect(self._buddy_request_received)
             self._social_dialog.room_event_received.connect(self._room_event_received)
             self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
             self._social_dialog.finished.connect(self._social_dialog_finished)
@@ -4202,6 +4203,20 @@ class PetWindow(QWidget):
             activity = {"poke": "surprised", "cheer": "pointing", "drink": "tea"}.get(kind, "happy")
         self._set_temporary_activity(activity, 20_000)
         self.show_speech(text, 5200)
+
+    def _buddy_request_received(self, request: dict) -> None:
+        """Give a fast desktop-pet notice for a new buddy request."""
+
+        if not isinstance(request, dict):
+            return
+        sender_id = str(request.get("sender_id") or request.get("requester_id") or "")
+        if sender_id and sender_id in self._muted_buddy_ids:
+            return
+        if detect_quiet_mode().blocked:
+            return
+        label = social_pet_label(request.get("owner_nickname") or request.get("nickname"))
+        self._set_temporary_activity("pointing", 20_000)
+        self.show_speech(f"收到{label}的搭子申请。打开‘互动’页即可处理。", 5600)
 
     def _set_focus_task(self, title: str, minutes: int) -> None:
         task = self.time_memory.todos.find(title)

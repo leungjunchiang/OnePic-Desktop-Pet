@@ -138,6 +138,12 @@ def social_user_message(error: BaseException) -> str:
         return "当前 Supabase 邮件服务只允许项目团队邮箱收信，163/学校邮箱不会收到邮件；请为 Supabase Auth 配置自定义 SMTP 后重试。"
     if "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
         return "确认邮件发送次数已达到服务限额，请稍后再试；生产环境建议为 Supabase Auth 配置自定义 SMTP。"
+    if "lili_buddy_pair_unique" in lowered or "duplicate key" in lowered:
+        return "这位搭子已经存在或申请已处理，无需重复添加；请刷新互动页查看当前状态。"
+    if "已经是你的搭子" in raw or "already buddies" in lowered:
+        return "这位搭子已经在你的搭子列表中。"
+    if "搭子申请已经处理" in raw or "request already" in lowered:
+        return "这条搭子申请已经处理，请刷新互动页。"
     if code == "refresh_token_already_used" or kind in {"auth_refresh", "auth_refresh_reused"} or (
         "refresh token" in lowered and ("already used" in lowered or "invalid" in lowered)
     ):
@@ -938,6 +944,7 @@ class HttpSocialBackend:
                         if isinstance(rituals, dict): data.update(rituals)
                     except SocialError as exc:
                         if exc.status >= 500 or exc.kind in {"dns", "timeout", "refused", "tls", "network", "server"}: raise
+            self._merge_buddy_requests(data)
             result = dict(data)
             if self.last_server_timestamp:
                 result.setdefault("server_timestamp", self.last_server_timestamp)
@@ -954,16 +961,40 @@ class HttpSocialBackend:
             # optional room detail as unavailable.
             result = dict(self._raw("GET", "/dashboard", authenticated=True) or {})
             result["_room_endpoint_unavailable"] = True
+        self._merge_buddy_requests(result)
         if self.last_server_timestamp:
             result.setdefault("server_timestamp", self.last_server_timestamp)
         return result
+
+    def _merge_buddy_requests(self, data: dict[str, Any]) -> None:
+        """Add incoming/outgoing buddy requests without breaking old relays."""
+
+        try:
+            payload = self.rpc("lili_buddy_requests", {})
+        except SocialError as exc:
+            # The request-state migration can roll out after the desktop
+            # binary. Existing incoming requests from lili_dashboard remain
+            # usable while the optional outgoing list catches up.
+            LOGGER.info("buddy request inbox unavailable kind=%s status=%s", exc.kind, exc.status)
+            return
+        if not isinstance(payload, dict):
+            return
+        incoming = payload.get("incoming")
+        outgoing = payload.get("outgoing")
+        if isinstance(incoming, list):
+            data["requests"] = incoming
+        if isinstance(outgoing, list):
+            data["outgoing_requests"] = outgoing
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any:
         if self.transport == "direct":
             return self._raw("POST", f"/rest/v1/rpc/{urllib.parse.quote(name, safe='')}", body, authenticated=True)
         routes = {
             "lili_add_buddy_by_code": "/buddies/request",
+            "lili_lookup_buddy_by_code": "/buddies/lookup",
+            "lili_buddy_requests": "/buddies/requests",
             "lili_respond_buddy": "/buddies/accept",
+            "lili_cancel_buddy_request": "/buddies/cancel",
             "lili_remove_buddy": "/buddies/remove",
             "lili_set_buddy_subscription": "/buddies/subscription",
             "lili_send_visit": "/visits/send",
