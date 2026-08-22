@@ -496,6 +496,65 @@ class SocialProfileThread(QThread):
             self.failed.emit(str(exc))
 
 
+class SocialBuddyRpcThread(QThread):
+    """Run buddy lookup/request actions away from the Qt GUI thread."""
+
+    completed = Signal(object)
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, name: str, body: dict[str, Any], parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.name = name
+        self.body = dict(body)
+
+    def run(self) -> None:
+        try:
+            self.completed.emit(self.client.rpc(self.name, self.body))
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            self.failed.emit(
+                SocialError("搭子服务暂时没有响应，请稍后重试。", kind="network", retryable=True)
+            )
+
+
+class BuddyCodeDialog(QDialog):
+    """仅负责输入搭子码；网络查找和发送申请由后台线程完成。"""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("查找搭子")
+        self.setModal(True)
+        self.setMinimumWidth(330)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("输入对方的 8 位搭子码"))
+        hint = QLabel("先查找并确认资料，不会直接建立搭子关系。")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.code_edit = QLineEdit()
+        self.code_edit.setMaxLength(8)
+        self.code_edit.setPlaceholderText("例如 AB12CD34")
+        self.code_edit.setInputMethodHints(Qt.InputMethodHint.ImhUppercaseOnly)
+        layout.addWidget(self.code_edit)
+        buttons = QHBoxLayout()
+        find = QPushButton("查找")
+        cancel = QPushButton("取消")
+        find.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+        self.code_edit.returnPressed.connect(self.accept)
+        buttons.addStretch()
+        buttons.addWidget(find)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+        self.code_edit.setFocus()
+
+    @property
+    def code(self) -> str:
+        return self.code_edit.text().strip().upper()
+
+
 class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
@@ -942,6 +1001,7 @@ class SocialHubDialog(QDialog):
     quick_action_requested = Signal(str)
     food_interaction_requested = Signal(dict, str)
     food_interaction_accepted = Signal(dict)
+    buddy_request_received = Signal(dict)
     account_state_changed = Signal(bool)
 
     def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
@@ -961,6 +1021,7 @@ class SocialHubDialog(QDialog):
         self._room_schedule_state: dict[str, Any] = {}
         self._room_challenge_state: dict[str, Any] = {}
         self._seen_room_event_ids: set[str] = set()
+        self._seen_buddy_request_ids: set[str] = set()
         self._muted_buddy_ids: set[str] = set()
         self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
@@ -978,6 +1039,7 @@ class SocialHubDialog(QDialog):
         self._signup_thread: SocialSignupThread | None = None
         self._resend_thread: SocialResendConfirmationThread | None = None
         self._event_threads: list[SocialEventThread] = []
+        self._buddy_rpc_threads: list[SocialBuddyRpcThread] = []
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
         # flags differ by platform and can omit the minimize button when a
@@ -1302,13 +1364,19 @@ class SocialHubDialog(QDialog):
 
     def _chat_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        inbox_card, inbox_layout = self._card("待处理", "成果见证、搭子申请和串门都会在这里等待你的明确决定。添加搭子请回到首页“我的搭子”。")
+        inbox_card, inbox_layout = self._card("待处理", "搭子申请、成果见证和串门都会在这里等待你的明确决定。添加搭子请回到首页“我的搭子”。")
         self.inbox = QListWidget(); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
+        self.inbox.currentItemChanged.connect(self._update_inbox_actions)
         inbox_layout.addWidget(self.inbox)
         inbox_buttons = QHBoxLayout()
-        accept = QPushButton("同意"); accept.clicked.connect(self._accept_inbox)
-        reject = QPushButton("拒绝"); reject.clicked.connect(self._reject_inbox)
-        inbox_buttons.addWidget(accept); inbox_buttons.addWidget(reject); inbox_layout.addLayout(inbox_buttons)
+        self.inbox_accept_button = QPushButton("接受"); self.inbox_accept_button.clicked.connect(self._accept_inbox)
+        self.inbox_reject_button = QPushButton("拒绝"); self.inbox_reject_button.clicked.connect(self._reject_inbox)
+        self.inbox_cancel_button = QPushButton("撤回申请"); self.inbox_cancel_button.clicked.connect(self._cancel_buddy_request)
+        inbox_buttons.addWidget(self.inbox_accept_button)
+        inbox_buttons.addWidget(self.inbox_reject_button)
+        inbox_buttons.addWidget(self.inbox_cancel_button)
+        inbox_layout.addLayout(inbox_buttons)
+        self._update_inbox_actions(None, None)
         layout.addWidget(inbox_card)
         recent_card, recent_layout = self._card("最近互动", "已处理的事件会保留一条轻量记录。")
         self.recent_interactions = QListWidget(); self.recent_interactions.setMaximumHeight(180)
@@ -2059,6 +2127,8 @@ class SocialHubDialog(QDialog):
     def _fill_signed_out_placeholders(self) -> None:
         self.buddies.clear(); self.buddies.addItem("登录后，这里会显示搭子的在线与专注状态。")
         self.inbox.clear(); self.inbox.addItem("登录后可接收搭子申请与串门邀请。")
+        if hasattr(self, "inbox_accept_button"):
+            self._update_inbox_actions(None, None)
         self.rooms.clear(); self.rooms.addItem("登录后可创建或加入私人自习室。")
         self._fit_list_height(self.buddies, 46, 360)
         self._fit_list_height(self.rooms, 52, 140)
@@ -2072,12 +2142,34 @@ class SocialHubDialog(QDialog):
             self._leaderboard_error = False
             self._render_wealth_leaderboard(self._leaderboard_rows)
 
+    def _update_inbox_actions(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+        """Only show actions that match the selected notification state."""
+
+        if not hasattr(self, "inbox_accept_button"):
+            return
+        kind = ""
+        if current is not None:
+            payload = current.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and payload:
+                kind = str(payload[0])
+        incoming_buddy = kind == "buddy"
+        outgoing_buddy = kind == "buddy_outgoing"
+        self.inbox_accept_button.setVisible(incoming_buddy or kind in {"food", "visit", "achievement_witness"})
+        self.inbox_reject_button.setVisible(incoming_buddy or kind in {"food", "visit", "achievement_witness"})
+        self.inbox_cancel_button.setVisible(outgoing_buddy)
+
     def _error(self, exc: Exception) -> None:
         self._end_action()
         raw = str(exc)
         kind = str(getattr(exc, "kind", "") or "").casefold()
+        error_code = str(getattr(exc, "error_code", "") or "").casefold()
         retryable = bool(getattr(exc, "retryable", False))
-        is_auth = kind.startswith("auth") or bool(getattr(exc, "error_code", ""))
+        is_auth = kind.startswith("auth") or error_code in {
+            "refresh_token_already_used",
+            "invalid_refresh_token",
+            "invalid_grant",
+            "email_not_confirmed",
+        }
         LOGGER.warning(
             "social room operation failed kind=%s endpoint=%s status=%s retryable=%s: %s",
             getattr(exc, "kind", "unknown"),
@@ -2234,6 +2326,13 @@ class SocialHubDialog(QDialog):
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
         self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
+        for request in self.data.get("requests") or []:
+            if not isinstance(request, dict) or _notification_sender_id(request) in self._muted_buddy_ids:
+                continue
+            request_id = str(request.get("id") or "")
+            if request_id and request_id not in self._seen_buddy_request_ids:
+                self._seen_buddy_request_ids.add(request_id)
+                self.buddy_request_received.emit(dict(request))
         self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
         mode = str(me.get("buddy_interaction_mode") or "focus_priority")
         mode_index = self.interaction_mode.findData(mode)
@@ -2304,6 +2403,12 @@ class SocialHubDialog(QDialog):
             if _notification_sender_id(request) in self._muted_buddy_ids:
                 continue
             item=QListWidgetItem(f"搭子申请：{_owner_label(request)}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
+        for request in self.data.get("outgoing_requests") or []:
+            if not isinstance(request, dict):
+                continue
+            item = QListWidgetItem(f"我发出的搭子申请：{_owner_label(request)}\n等待对方回应")
+            item.setData(Qt.ItemDataRole.UserRole, ("buddy_outgoing", request))
+            self.inbox.addItem(item)
         for visit in self.data.get("visits") or []:
             if _notification_sender_id(visit) in self._muted_buddy_ids:
                 continue
@@ -2339,6 +2444,7 @@ class SocialHubDialog(QDialog):
         if self.inbox.count() == 0:
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
+        self._update_inbox_actions(self.inbox.currentItem(), None)
         QTimer.singleShot(0, self._auto_accept_light_food_interactions)
         rooms = list(self.data.get("rooms") or [])
         previous_room_id = self.current_room_id
@@ -2712,12 +2818,95 @@ class SocialHubDialog(QDialog):
             self._error(exc)
 
     def _add_buddy(self) -> None:
-        if not self._require_login(): return
-        code,ok=QInputDialog.getText(self,"添加搭子","输入对方的 8 位搭子码：")
-        if ok and code:
-            self._begin_action("正在发送搭子申请…")
-            try: self.client.rpc("lili_add_buddy_by_code",{"code":code}); self.refresh(); self._set_status("搭子申请已发送。")
-            except SocialError as exc: self._error(exc)
+        if not self._require_login():
+            return
+        dialog = BuddyCodeDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        code = dialog.code
+        if len(code) != 8:
+            self._error(SocialError("请输入 8 位搭子码。", kind="validation"))
+            return
+        self._begin_action("正在查找搭子…")
+        thread = SocialBuddyRpcThread(self.client, "lili_lookup_buddy_by_code", {"code": code}, self)
+        self._buddy_rpc_threads.append(thread)
+        thread.completed.connect(lambda payload, value=code: self._buddy_lookup_completed(value, payload))
+        thread.failed.connect(self._buddy_rpc_failed)
+        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current))
+        thread.start()
+
+    def _buddy_lookup_completed(self, code: str, payload: object) -> None:
+        self._end_action()
+        if not isinstance(payload, dict):
+            self._error(SocialError("搭子资料返回异常，请稍后重试。", kind="network", retryable=True))
+            return
+        state = str(payload.get("state") or "available")
+        owner = _owner_label(payload)
+        if state == "self":
+            self._set_status("这是你自己的六毛，不能添加自己。", error=True)
+            return
+        if state == "accepted":
+            self._set_status(f"{owner}已经是你的搭子。")
+            return
+        if state == "pending":
+            self._set_status(f"已向{owner}发送申请，请等待对方回应。")
+            return
+        if state == "incoming":
+            self.tabs.setCurrentIndex(1)
+            self._set_status(f"{owner}已经向你发送申请，请到“互动”页处理。")
+            return
+
+        profile_text = f"找到：{owner}"
+        nickname = _owner_nickname(payload)
+        if nickname and nickname != owner.replace("家的六毛", ""):
+            profile_text += f"\n昵称：{nickname}"
+        outfit = str(payload.get("outfit_key") or "").strip()
+        if outfit:
+            profile_text += f"\n娃衣：{outfit[:60]}"
+        profile_text += "\n\n确认后才会发送搭子申请。"
+        box = QMessageBox(self)
+        box.setWindowTitle("确认添加搭子")
+        box.setText(profile_text)
+        add_button = box.addButton("添加搭子", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("返回", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is add_button:
+            self._send_buddy_request(code)
+
+    def _send_buddy_request(self, code: str) -> None:
+        self._begin_action("正在发送搭子申请…")
+        thread = SocialBuddyRpcThread(self.client, "lili_add_buddy_by_code", {"code": code}, self)
+        self._buddy_rpc_threads.append(thread)
+        thread.completed.connect(self._buddy_request_completed)
+        thread.failed.connect(self._buddy_rpc_failed)
+        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current))
+        thread.start()
+
+    def _buddy_request_completed(self, payload: object) -> None:
+        self._end_action()
+        state = str(payload.get("state") or "pending") if isinstance(payload, dict) else "pending"
+        owner = _owner_label(payload if isinstance(payload, dict) else {})
+        if state == "accepted":
+            message = f"{owner}已经是你的搭子，无需重复添加。"
+        elif state == "incoming":
+            self.tabs.setCurrentIndex(1)
+            message = f"{owner}已经向你发送申请，请到“互动”页处理。"
+        elif state == "pending":
+            message = f"已向{owner}发送搭子申请，等待对方回应。"
+        else:
+            message = "搭子申请状态已更新，请刷新互动页。"
+        self._set_status(message)
+        self.refresh()
+
+    def _buddy_rpc_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._error(exc)
+
+    def _buddy_rpc_finished(self, thread: SocialBuddyRpcThread) -> None:
+        if thread in self._buddy_rpc_threads:
+            self._buddy_rpc_threads.remove(thread)
+        thread.deleteLater()
+
     def _send_visit(self) -> None:
         if not self._require_login(): return
         item=self.buddies.currentItem()
@@ -2733,6 +2922,8 @@ class SocialHubDialog(QDialog):
         item=self.inbox.currentItem()
         if not item: return self._error(SocialError("请先选择一项申请或串门。"))
         kind,data=item.data(Qt.ItemDataRole.UserRole)
+        if kind == "buddy_outgoing":
+            return self._set_status("这是你发出的申请，请等待对方回应或选择撤回。")
         self._begin_action("正在处理选中的申请…")
         try:
             if kind=="buddy":
@@ -2753,6 +2944,9 @@ class SocialHubDialog(QDialog):
         if item is None:
             return self._error(SocialError("请先选择一项申请或串门。"))
         kind, data = item.data(Qt.ItemDataRole.UserRole)
+        if kind == "buddy_outgoing":
+            return self._cancel_buddy_request()
+        self._begin_action("正在处理选中的申请…")
         try:
             if kind == "buddy":
                 self.client.rpc("lili_respond_buddy", {"request_id": data["id"], "accept": False})
@@ -2760,6 +2954,28 @@ class SocialHubDialog(QDialog):
                 self.client.rpc("lili_respond_achievement_witness", {"p_achievement_id": data["achievement_id"], "p_accept": False})
             else:
                 self.client.rpc("lili_respond_visit", {"event_id": data["id"], "accept": False})
+            self.refresh()
+        except SocialError as exc:
+            self._error(exc)
+
+    def _cancel_buddy_request(self) -> None:
+        if not self._require_login():
+            return
+        item = self.inbox.currentItem()
+        if item is None:
+            return self._error(SocialError("请先选择一条我发出的搭子申请。", kind="validation"))
+        payload = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(payload, tuple) or len(payload) != 2 or payload[0] != "buddy_outgoing":
+            return self._error(SocialError("当前选中项不是待撤回的搭子申请。", kind="validation"))
+        data = payload[1] if isinstance(payload[1], dict) else {}
+        request_id = str(data.get("id") or "")
+        if not request_id:
+            return self._error(SocialError("搭子申请编号缺失，请刷新互动页。", kind="validation"))
+        self._begin_action("正在撤回搭子申请…")
+        try:
+            self.client.rpc("lili_cancel_buddy_request", {"request_id": request_id})
+            self._end_action()
+            self._set_status("搭子申请已撤回。")
             self.refresh()
         except SocialError as exc:
             self._error(exc)

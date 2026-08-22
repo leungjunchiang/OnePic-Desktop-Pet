@@ -4,7 +4,7 @@
 // Realtime and all durable business data remain the single source of truth.
 
 const RPC_ALLOWLIST = new Set([
-  "lili_add_buddy_by_code", "lili_respond_buddy", "lili_remove_buddy", "lili_create_room", "lili_join_room",
+  "lili_add_buddy_by_code", "lili_lookup_buddy_by_code", "lili_buddy_requests", "lili_respond_buddy", "lili_cancel_buddy_request", "lili_remove_buddy", "lili_create_room", "lili_join_room",
   "lili_send_visit", "lili_respond_visit", "lili_dashboard", "lili_room_dashboard",
   "lili_record_room_event", "lili_send_interaction", "lili_create_cake_share", "lili_set_room_goal", "lili_leave_room",
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
@@ -14,7 +14,7 @@ const RPC_ALLOWLIST = new Set([
 ]);
 
 const ROUTE_TO_RPC = new Map([
-  ["/buddies/request", "lili_add_buddy_by_code"], ["/buddies/accept", "lili_respond_buddy"],
+  ["/buddies/request", "lili_add_buddy_by_code"], ["/buddies/lookup", "lili_lookup_buddy_by_code"], ["/buddies/requests", "lili_buddy_requests"], ["/buddies/accept", "lili_respond_buddy"], ["/buddies/cancel", "lili_cancel_buddy_request"],
   ["/buddies/remove", "lili_remove_buddy"], ["/buddies/subscription", "lili_set_buddy_subscription"],
   ["/visits/send", "lili_send_visit"], ["/visits/accept", "lili_respond_visit"],
   ["/rooms/create", "lili_create_room"], ["/rooms/join", "lili_join_room"],

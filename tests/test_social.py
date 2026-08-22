@@ -367,7 +367,7 @@ def test_http_backend_uses_direct_supabase_paths():
     backend.dashboard("room-1")
     backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
     paths = [call[1] for call in backend.calls]
-    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/lili_focus_presence?on_conflict=user_id"]
+    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/rpc/lili_buddy_requests", "/rest/v1/lili_focus_presence?on_conflict=user_id"]
     heartbeat_call = backend.calls[-1]
     heartbeat_body = heartbeat_call[2]
     assert "last_seen" not in heartbeat_body
@@ -554,6 +554,26 @@ def test_buddy_controls_migration_and_proxy_routes_are_present():
         source = path.read_text(encoding="utf-8")
         assert "lili_remove_buddy" in source
         assert "/buddies/remove" in source
+
+
+def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
+    assert "on conflict do nothing" in migration
+    assert "lili_lookup_buddy_by_code" in migration
+    assert "lili_buddy_requests" in migration
+    assert "lili_cancel_buddy_request" in migration
+    assert "status in ('pending', 'accepted', 'declined', 'rejected', 'cancelled')" in migration
+    assert "on conflict do nothing" in migration
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_lookup_buddy_by_code" in source
+        assert "lili_cancel_buddy_request" in source
 
 
 def test_economy_migration_is_rls_scoped_and_friend_opt_in():
