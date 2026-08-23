@@ -9,8 +9,8 @@ def _top_level_titles(model: UnifiedMenuModel) -> list[str]:
 
 def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     state = {
-        "work_action_label": "暂停工作",
         "work_status": "focus",
+        "work_status_text": "⏱ 已工作 12:43",
         "visible": False,
         "always_on_top": True,
     }
@@ -36,10 +36,14 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
             "rename",
             "settings",
             "size",
+            "quick_panel",
+            "alarms",
+            "show_work_duration",
             "content_update",
             "program_update",
             "show_report",
-            "topmost",
+            "topmost_on",
+            "topmost_off",
             "visibility",
             "quit",
         )
@@ -51,26 +55,28 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     )
 
     titles = _top_level_titles(model)
-    assert titles[:6] == [
+    assert titles[:4] == [
         "和六毛聊聊…",
+        "⏱ 已工作 12:43",
         "暂停工作",
-        "搭子自习室…",
-        "音乐",
-        "六毛互动",
-        "换装与外观…",
+        "结束本轮工作",
     ]
-    assert "设置" in titles
+    assert "设置…" in titles
     assert "显示六毛" in titles
     assert "检查补充内容更新" not in titles
     assert "检查程序更新" not in titles
-    settings = next(item for item in model.items() if item.title == "设置")
-    settings_titles = [item.title for item in settings.children]
-    assert settings_titles[:3] == ["主人称呼", "调整大小", "显示本轮工作时长"]
-    assert "设置中心…" in settings_titles
     work_record = next(item for item in model.items() if item.title == "工作记录")
     assert "工作报告…" in [item.title for item in work_record.children]
     assert "设置工作报告时间…" not in [item.title for item in work_record.children]
-    updates = next(item for item in settings.children if item.title == "更新与关于")
+    shortcuts = next(item for item in model.items() if item.title == "快捷工具")
+    shortcut_titles = [item.title for item in shortcuts.children]
+    assert shortcut_titles[:4] == [
+        "六毛快捷口袋…",
+        "调整大小…",
+        "六毛闹钟…",
+        "主人称呼…",
+    ]
+    updates = next(item for item in shortcuts.children if item.title == "更新与关于")
     assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "更新到最新版本…"]
     music = next(item for item in model.items() if item.title == "音乐")
     assert [item.title for item in music.children] == [
@@ -79,15 +85,18 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         "下一首",
         "随机听陈楚生",
     ]
-    assert next(item for item in model.items() if item.title == "始终置顶（关闭即桌面模式）").checked
+    display_mode = next(item for item in model.items() if item.title == "显示模式")
+    assert [item.title for item in display_mode.children] == ["始终置顶", "桌面模式"]
+    assert display_mode.children[0].checked is True
+    assert display_mode.children[1].checked is False
 
-    # The Dock and status-bar entry points must render the same model rather
-    # than maintaining separate macOS-specific command lists.
-    assert model.items("macos") == model.items("status") == model.items("dock")
+    # Every Lili-owned entry point renders the same model. The macOS Dock is
+    # intentionally excluded because it remains a native system menu.
+    assert model.items("pet") == model.items("tray") == model.items("status")
 
-    model.execute("topmost", False)
+    model.execute("topmost_on", False)
     model.execute("visibility")
-    assert called[-2:] == [("topmost", False), ("visibility", False)]
+    assert called[-2:] == [("topmost_on", False), ("visibility", False)]
 
 
 def test_unified_menu_model_exposes_end_work_for_focus_and_paused_sessions() -> None:
@@ -96,9 +105,9 @@ def test_unified_menu_model_exposes_end_work_for_focus_and_paused_sessions() -> 
         for command in ("work_pause", "work_resume", "work_finish")
     }
 
-    for status, label, expected in (
-        ("focus", "暂停工作", ["暂停工作", "结束工作"]),
-        ("rest", "继续工作", ["继续工作", "结束工作"]),
+    for status, label in (
+        ("focus", "暂停工作"),
+        ("rest", "继续工作"),
     ):
         model = UnifiedMenuModel(
             pet_name="六毛",
@@ -108,10 +117,12 @@ def test_unified_menu_model_exposes_end_work_for_focus_and_paused_sessions() -> 
             },
             callbacks=callbacks,
         )
-        item = next(item for item in model.items() if item.title == label)
-        assert item.children
-        assert [child.title for child in item.children] == expected
-        assert all(child.enabled for child in item.children)
+        titles = [item.title for item in model.items() if not item.separator]
+        assert titles[titles.index(label) : titles.index(label) + 2] == [
+            label,
+            "结束本轮工作",
+        ]
+        assert titles[titles.index(label) + 1] == "结束本轮工作"
 
 
 
@@ -121,8 +132,8 @@ def test_unified_menu_model_exposes_optional_duration_setting() -> None:
         state_provider=lambda: {"show_work_duration": False},
         callbacks={"show_work_duration": lambda checked=False: None},
     )
-    settings = next(item for item in model.items() if item.title == "设置")
-    duration = next(item for item in settings.children if item.command == "show_work_duration")
+    shortcut = next(item for item in model.items() if item.title == "快捷工具")
+    duration = next(item for item in shortcut.children if item.command == "show_work_duration")
     assert duration.title == "显示本轮工作时长"
     assert duration.checkable is True
     assert duration.checked is False

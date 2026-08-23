@@ -19,6 +19,20 @@ def test_status_item_is_a_noop_off_macos(monkeypatch) -> None:
     controller.close()
 
 
+def test_dock_menu_stays_native_on_macos(monkeypatch) -> None:
+    """The Lili menu belongs to the pet/status item, not the Dock menu."""
+
+    monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {},
+        callbacks={},
+    )
+    controller = macos_dock.install_dock_menu(model)
+    assert controller.installed is False
+    controller.close()
+
+
 def test_macos_uses_only_native_status_item(monkeypatch) -> None:
     monkeypatch.setattr(application.sys, "platform", "darwin")
     assert application._uses_qt_system_tray() is False

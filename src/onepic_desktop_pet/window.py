@@ -5409,7 +5409,7 @@ class PetWindow(QWidget):
     def set_menu_external_callbacks(
         self, callbacks: dict[str, Callable[[bool], object]]
     ) -> None:
-        """Add application-level commands used by tray and Dock projections."""
+        """Add application-level commands used by tray/status projections."""
 
         self._menu_external_callbacks = dict(callbacks)
 
@@ -5425,9 +5425,13 @@ class PetWindow(QWidget):
     def _menu_state(self) -> dict[str, object]:
         snapshot = self.focus_session.snapshot()
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
+        work_status_text = ""
+        if snapshot.status in {"focus", "rest"}:
+            work_status_text = f"⏱ 已工作 {format_elapsed_clock(snapshot.session_seconds)}"
         return {
             "work_action_label": labels.get(snapshot.status, "开始工作"),
             "work_status": snapshot.status,
+            "work_status_text": work_status_text,
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
             "show_work_duration": bool(self.settings.show_work_duration),
@@ -5436,7 +5440,7 @@ class PetWindow(QWidget):
         }
 
     def _menu_callbacks(self) -> dict[str, Callable[[bool], object]]:
-        """Return commands shared by the pet window, tray, and Dock."""
+        """Return commands shared by the pet, tray, and status-item menus."""
 
         callbacks: dict[str, Callable[[bool], object]] = {
             "chat": lambda _checked=False: self.prompt_dialogue(),
@@ -5470,7 +5474,8 @@ class PetWindow(QWidget):
             "show_report": lambda _checked=False: self.show_daily_report(),
             "configure_daily_report": lambda _checked=False: self.configure_daily_report(),
             "open_album": lambda _checked=False: self.open_daily_album(),
-            "topmost": lambda checked=False: self.set_always_on_top(checked),
+            "topmost_on": lambda _checked=False: self.set_always_on_top(True),
+            "topmost_off": lambda _checked=False: self.set_always_on_top(False),
             "visibility": lambda _checked=False: self.show_pet()
             if not self.isVisible()
             else self.hide_pet(),
@@ -5480,7 +5485,7 @@ class PetWindow(QWidget):
         return callbacks
 
     def unified_menu_model(self) -> UnifiedMenuModel:
-        """Expose the same model to Qt and the optional native macOS Dock menu."""
+        """Expose the same model to the pet, tray, and macOS status item."""
 
         return UnifiedMenuModel(
             pet_name=self._pet_name(),
@@ -5491,7 +5496,7 @@ class PetWindow(QWidget):
     def build_unified_menu(self, parent=None, context: str = "pet") -> QMenu:
         """Render the unified menu for the requested platform entrance."""
 
-        # Tray/Dock menus must not inherit the pet window's active/enabled
+        # Tray/status menus must not inherit the pet window's active/enabled
         # state. A standalone menu remains usable while another app has focus
         # or while the pet itself is hidden.
         menu = QMenu(parent) if parent is not None else QMenu()
@@ -5882,46 +5887,10 @@ class PetWindow(QWidget):
         self.set_paused(not self.paused)
 
     def _build_context_menu(self) -> QMenu:
-        """Build the small menu for the pet itself, not the full app menu."""
+        """Build the same complete app menu used by the tray and status item."""
 
         menu = QMenu(self)
-
-        activity_menu = menu.addMenu("换动作")
-        for group_title, activities in ACTION_GROUPS:
-            group_menu = activity_menu.addMenu(group_title)
-            for label, activity in activities:
-                action = group_menu.addAction(label)
-                action.triggered.connect(
-                    lambda _checked=False, value=activity: self.set_activity(value)
-                )
-        activity_menu.addSeparator()
-        random_action = activity_menu.addAction("随机动作")
-        random_action.triggered.connect(
-            lambda _checked=False: self.set_activity(random.choice(RANDOM_ACTIONS))
-        )
-
-        companion_menu = menu.addMenu("六毛互动")
-        self._populate_pet_companion_menu(companion_menu)
-
-        food_action = menu.addAction("喂食…")
-        food_action.triggered.connect(lambda _checked=False: self.show_food_scene_dialog())
-
-        outfit_menu = menu.addMenu("换娃衣")
-        self._populate_outfit_menu(outfit_menu, default_label="默认装")
-
-        appearance_menu = menu.addMenu("换装与外观")
-        size_action = appearance_menu.addAction("调整大小")
-        size_action.triggered.connect(lambda _checked=False: self.open_size_control())
-        topmost_action = appearance_menu.addAction("始终置顶（关闭即桌面模式）")
-        topmost_action.setCheckable(True)
-        topmost_action.setChecked(bool(self.settings.always_on_top))
-        topmost_action.triggered.connect(
-            lambda checked=False: self.set_always_on_top(bool(checked))
-        )
-
-        menu.addSeparator()
-        hide_action = menu.addAction("隐藏六毛")
-        hide_action.triggered.connect(lambda _checked=False: self.hide_pet())
+        populate_qmenu(menu, self.unified_menu_model(), "pet")
         return menu
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:

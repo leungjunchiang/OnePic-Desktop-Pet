@@ -1,8 +1,9 @@
-"""Shared menu model for the pet window, tray icon, and macOS Dock.
+"""Shared menu model for the pet window, tray icon, and macOS status item.
 
 The menu is deliberately represented as small, platform-neutral specifications.
-Windows and Qt render the same specs as ``QMenu`` actions, while macOS can
-render them as ``NSMenu`` items without maintaining another command list.
+Windows and Qt render the same specs as ``QMenu`` actions, while the macOS
+status item can render them as ``NSMenu`` items without maintaining another
+command list. The macOS Dock menu is intentionally owned by macOS itself.
 """
 
 from __future__ import annotations
@@ -60,15 +61,14 @@ class UnifiedMenuModel:
         return MenuItemSpec(title, command)
 
     def items(self, context: str = "pet") -> tuple[MenuItemSpec, ...]:
-        """Return one menu projection for every platform entry point.
+        """Return the same app menu for every Lili entry point.
 
-        ``context`` remains available for callers and diagnostics, but the
-        macOS status item and Dock intentionally render this same sequence so
-        their right-click menus cannot drift apart.
+        ``context`` remains available for callers and diagnostics. The menu
+        is deliberately platform-neutral: the pet, Windows tray, and macOS
+        status item all expose the same commands in the same order.
         """
 
         state = dict(self._state_provider())
-        work_label = str(state.get("work_action_label") or "开始工作")
         work_status = str(state.get("work_status") or "idle")
         visible = bool(state.get("visible", True))
         music_children = [
@@ -118,75 +118,99 @@ class UnifiedMenuModel:
             ),
         ]
         update_children = [item for item in update_children if item is not None]
-        settings_children = [
-            self._optional("主人称呼", "rename"),
-            self._optional("调整大小", "size"),
-            MenuItemSpec("显示本轮工作时长", "show_work_duration", checkable=True, checked=bool(state.get("show_work_duration", True))),
+        duration_item = (
+            MenuItemSpec(
+                "显示本轮工作时长",
+                "show_work_duration",
+                checkable=True,
+                checked=bool(state.get("show_work_duration", True)),
+            )
+            if "show_work_duration" in self._callbacks
+            else None
+        )
+        shortcut_children = [
+            self._optional("六毛快捷口袋…", "quick_panel"),
+            self._optional("调整大小…", "size"),
             self._optional("六毛闹钟…", "alarms"),
-            self._optional("设置中心…", "settings"),
+            self._optional("主人称呼…", "rename"),
+            duration_item,
             MenuItemSpec("更新与关于", children=tuple(update_children)),
         ]
-        settings_children = [item for item in settings_children if item is not None]
+        shortcut_children = [item for item in shortcut_children if item is not None]
 
+        work_entries: list[MenuItemSpec] = []
         if work_status == "focus":
-            work_item = MenuItemSpec(
-                work_label,
-                children=(
+            work_entries.extend(
+                (
+                    MenuItemSpec(
+                        str(state.get("work_status_text") or "⏱ 正在工作"),
+                        enabled=False,
+                    ),
                     MenuItemSpec("暂停工作", "work_pause"),
-                    MenuItemSpec("结束工作", "work_finish"),
-                ),
+                    MenuItemSpec("结束本轮工作", "work_finish"),
+                )
             )
         elif work_status == "rest":
-            work_item = MenuItemSpec(
-                work_label,
-                children=(
+            work_entries.extend(
+                (
+                    MenuItemSpec(
+                        str(state.get("work_status_text") or "⏱ 工作已暂停"),
+                        enabled=False,
+                    ),
                     MenuItemSpec("继续工作", "work_resume"),
-                    MenuItemSpec("结束工作", "work_finish"),
-                ),
+                    MenuItemSpec("结束本轮工作", "work_finish"),
+                )
             )
         else:
-            work_item = MenuItemSpec(work_label, "work")
+            work_entries.append(MenuItemSpec("开始工作", "work"))
+
+        display_mode_children = (
+            MenuItemSpec(
+                "始终置顶",
+                "topmost_on",
+                checkable=True,
+                checked=bool(state.get("always_on_top", False)),
+            ),
+            MenuItemSpec(
+                "桌面模式",
+                "topmost_off",
+                checkable=True,
+                checked=not bool(state.get("always_on_top", False)),
+            ),
+        )
 
         entries: list[MenuItemSpec] = [
             MenuItemSpec(f"和{self.pet_name}聊聊…", "chat"),
-            work_item,
-            MenuItemSpec("搭子自习室…", "social"),
-            MenuItemSpec("音乐", children=tuple(music_children)),
         ]
+        entries.extend(work_entries)
+
+        entries.append(MenuItemSpec.divider())
+        entries.extend(
+            (
+                MenuItemSpec("搭子自习室…", "social"),
+                MenuItemSpec("音乐", children=tuple(music_children)),
+            )
+        )
+        entries.append(MenuItemSpec.divider())
+        if todo_children:
+            entries.append(MenuItemSpec("待办", children=tuple(todo_children)))
+        if work_record_children:
+            entries.append(MenuItemSpec("工作记录", children=tuple(work_record_children)))
+        if shortcut_children:
+            entries.append(MenuItemSpec("快捷工具", children=tuple(shortcut_children)))
         if interaction_children:
             entries.append(MenuItemSpec("六毛互动", children=tuple(interaction_children)))
 
-        # Separate high-frequency actions from history, outfit and todo
-        # surfaces before the settings/system section.
         entries.append(MenuItemSpec.divider())
         if "outfit" in self._callbacks:
             entries.append(MenuItemSpec("换装与外观…", "outfit"))
-        if work_record_children:
-            entries.append(MenuItemSpec("工作记录", children=tuple(work_record_children)))
-        if todo_children:
-            entries.append(MenuItemSpec("待办", children=tuple(todo_children)))
-        if "quick_panel" in self._callbacks:
-            entries.append(MenuItemSpec("六毛快捷口袋", "quick_panel"))
-
         entries.extend(
             (
-                MenuItemSpec.divider(),
-            )
-        )
-        entries.append(MenuItemSpec("设置", children=tuple(settings_children)) if settings_children else MenuItemSpec("设置", "settings"))
-        entries.append(
-            MenuItemSpec(
-                "始终置顶（关闭即桌面模式）",
-                "topmost",
-                checkable=True,
-                checked=bool(state.get("always_on_top", False)),
-            )
-        )
-        entries.extend(
-            (
+                MenuItemSpec("显示模式", children=display_mode_children),
+                MenuItemSpec("设置…", "settings"),
                 MenuItemSpec.divider(),
                 MenuItemSpec("隐藏六毛" if visible else "显示六毛", "visibility"),
-                MenuItemSpec("退出", "quit"),
+                MenuItemSpec("退出六毛", "quit"),
             )
         )
         return tuple(entries)
@@ -195,9 +219,11 @@ class UnifiedMenuModel:
 def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
     """Render a :class:`UnifiedMenuModel` into a fresh Qt menu."""
 
+    from PySide6.QtGui import QActionGroup
     from PySide6.QtWidgets import QMenu
 
     def add_items(target: QMenu, items: tuple[MenuItemSpec, ...]) -> None:
+        checkable_actions = []
         for spec in items:
             if spec.separator:
                 target.addSeparator()
@@ -211,8 +237,15 @@ def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
             action.setEnabled(spec.enabled)
             action.setCheckable(spec.checkable)
             action.setChecked(spec.checked)
+            if spec.checkable:
+                checkable_actions.append(action)
             action.triggered.connect(
                 lambda checked=False, command=spec.command: model.execute(command, checked)
             )
+        if checkable_actions:
+            group = QActionGroup(target)
+            group.setExclusive(True)
+            for action in checkable_actions:
+                group.addAction(action)
 
     add_items(menu, model.items(context))

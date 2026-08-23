@@ -1156,7 +1156,7 @@ def test_dialogue_is_handled_locally_and_shows_reply() -> None:
 
 
 def test_context_menu_uses_direct_high_frequency_entries() -> None:
-    """任务栏/Dock 完整菜单继续使用统一的高频入口和动态状态。"""
+    """六毛本体、任务栏和状态栏使用同一套高频入口和动态状态。"""
 
     app, window = _create_window()
     # Arrange the dynamic menu test in IDLE even if an earlier test left a
@@ -1165,19 +1165,15 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     menu = window.build_unified_menu(None, "tray")
     assert menu.parent() is None
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-    assert labels[:7] == [
+    assert labels[:2] == [
         "和六毛聊聊…",
         "开始工作",
-        "搭子自习室…",
-        "音乐",
-        "六毛互动",
-        "换装与外观…",
-        "工作记录",
     ]
-    assert "始终置顶（关闭即桌面模式）" in labels
-    assert "设置" in labels
+    assert "快捷工具" in labels
+    assert "显示模式" in labels
+    assert "设置…" in labels
     assert "隐藏六毛" in labels
-    assert "退出" in labels
+    assert "退出六毛" in labels
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
@@ -1189,8 +1185,15 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "提醒我休息",
         "查看心情与能量",
     ]
+    shortcuts = next(action for action in menu.actions() if action.text() == "快捷工具")
+    assert "六毛快捷口袋…" in [action.text() for action in shortcuts.menu().actions()]
+    display_mode = next(action for action in menu.actions() if action.text() == "显示模式")
+    assert [action.text() for action in display_mode.menu().actions()] == ["始终置顶", "桌面模式"]
     separators = [index for index, action in enumerate(menu.actions()) if action.isSeparator()]
-    assert len(separators) == 3
+    assert len(separators) == 4
+    pet_menu = window._build_context_menu()
+    assert [action.text() for action in pet_menu.actions()] == [action.text() for action in menu.actions()]
+    pet_menu.close()
     menu.close()
     window.close()
     window.deleteLater()
@@ -1206,11 +1209,18 @@ def test_tray_menu_keeps_work_actions_available_when_pet_is_not_active() -> None
     window.hide()
     menu = window.build_unified_menu(None, "tray")
 
+    status = next(action for action in menu.actions() if action.text().startswith("⏱ "))
+    assert status.isEnabled() is False
     work = next(action for action in menu.actions() if action.text() == "继续工作")
-    assert work.menu() is not None
-    assert [action.text() for action in work.menu().actions()] == ["继续工作", "结束工作"]
-    assert all(action.isEnabled() for action in work.menu().actions())
-    assert all(action.isEnabled() for action in menu.actions() if not action.isSeparator())
+    finish = next(action for action in menu.actions() if action.text() == "结束本轮工作")
+    assert work.menu() is None
+    assert finish.menu() is None
+    assert work.isEnabled() and finish.isEnabled()
+    assert all(
+        action.isEnabled()
+        for action in menu.actions()
+        if not action.isSeparator() and action is not status
+    )
 
     menu.close()
     window.close()
@@ -1218,70 +1228,20 @@ def test_tray_menu_keeps_work_actions_available_when_pet_is_not_active() -> None
     app.processEvents()
 
 
-def test_pet_context_menu_only_contains_pet_actions() -> None:
-    """六毛本体右键只负责动作、娃衣、外观和隐藏。"""
+def test_pet_context_menu_matches_the_tray_menu() -> None:
+    """六毛本体右键不再使用另一套旧菜单。"""
 
     app, window = _create_window()
     menu = window._build_context_menu()
     actions = [action for action in menu.actions() if not action.isSeparator()]
-    assert [action.text() for action in actions] == [
-        "换动作",
-        "六毛互动",
-        "喂食…",
-        "换娃衣",
-        "换装与外观",
-        "隐藏六毛",
+    tray = window.build_unified_menu(None, "tray")
+    assert [action.text() for action in menu.actions()] == [
+        action.text() for action in tray.actions()
     ]
-
-    action_menu = actions[0].menu()
-    assert action_menu is not None
-    action_labels = [
-        action.text() for action in action_menu.actions() if not action.isSeparator()
-    ]
-    assert action_labels == [
-        "专注工作",
-        "休息一下",
-        "音乐演出",
-        "爱与庆祝",
-        "出门冒险",
-        "工作搭子",
-        "随机动作",
-    ]
-
-    interaction_menu = actions[1].menu()
-    assert interaction_menu is not None
-    interaction_labels = [
-        action.text()
-        for action in interaction_menu.actions()
-        if not action.isSeparator()
-    ]
-    assert interaction_labels == [
-        "给我一个抱抱",
-        "为我加油",
-        "提醒我休息",
-    ]
-
-    food_action = actions[2]
-    assert food_action.text() == "喂食…"
-    assert food_action.menu() is None
-
-    outfit_menu = actions[3].menu()
-    assert outfit_menu is not None
-    outfit_labels = [
-        action.text() for action in outfit_menu.actions() if not action.isSeparator()
-    ]
-    assert outfit_labels[0] == "默认装"
-    assert "兔兔搭子" in outfit_labels
-    assert "陈楚生歌王" in outfit_labels
-
-    appearance_menu = actions[4].menu()
-    assert appearance_menu is not None
-    assert [
-        action.text() for action in appearance_menu.actions() if not action.isSeparator()
-    ] == ["调整大小", "始终置顶（关闭即桌面模式）"]
-
-    forbidden = ("聊聊", "工作计时", "自习室", "音乐", "待办", "AI", "更新", "退出")
-    assert not any(any(word in action.text() for word in forbidden) for action in actions)
+    assert "选项" not in [action.text() for action in actions]
+    assert "显示所有窗口" not in [action.text() for action in actions]
+    assert "退出" not in [action.text() for action in actions]
+    tray.close()
     menu.close()
     window.close()
     window.deleteLater()
