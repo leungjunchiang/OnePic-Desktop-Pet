@@ -1203,6 +1203,8 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "开始工作",
     ]
     assert "快捷工具" in labels
+    assert "更新与关于" in labels
+    assert labels.index("更新与关于") < labels.index("设置…")
     assert "显示模式" in labels
     assert "设置…" in labels
     assert "隐藏六毛" in labels
@@ -1228,7 +1230,9 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "查看心情与能量",
     ]
     shortcuts = next(action for action in menu.actions() if action.text() == "快捷工具")
-    assert "六毛快捷口袋…" in [action.text() for action in shortcuts.menu().actions()]
+    shortcut_labels = [action.text() for action in shortcuts.menu().actions()]
+    assert "六毛快捷口袋…" not in shortcut_labels
+    assert "更新与关于" not in shortcut_labels
     display_mode = next(action for action in menu.actions() if action.text() == "显示模式")
     assert [action.text() for action in display_mode.menu().actions()] == ["始终置顶", "桌面模式"]
     separators = [index for index, action in enumerate(menu.actions()) if action.isSeparator()]

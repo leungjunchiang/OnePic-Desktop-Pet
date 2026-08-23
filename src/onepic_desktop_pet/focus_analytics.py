@@ -595,6 +595,9 @@ class FocusAnalyticsStore:
             key = "day"
             start = today
 
+        range_start = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
+        range_end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=BEIJING_TIMEZONE)
+
         stored = self._state.get("days", {})
         if not isinstance(stored, dict):
             stored = {}
@@ -646,6 +649,15 @@ class FocusAnalyticsStore:
         if key == "week" and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat():
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_week_seconds", 0) or 0)))
 
+        trusted_days = {
+            str(item.get("date") or "")
+            for item in daily
+            if bool(item.get("trusted"))
+        }
+
+        def trusted_record_date(value: datetime) -> bool:
+            return value.date().isoformat() in trusted_days
+
         quality_values: list[int] = []
         for raw in self._state.get("records", []):
             if not isinstance(raw, dict):
@@ -655,7 +667,7 @@ class FocusAnalyticsStore:
                 value = int(raw.get("quality", 0) or 0)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if start <= started.date() <= today and value > 0:
+            if start <= started.date() <= today and trusted_record_date(started) and value > 0:
                 quality_values.append(max(0, min(100, value)))
 
         # Derive report-only metrics from the raw account-scoped records. A
@@ -663,6 +675,7 @@ class FocusAnalyticsStore:
         # session prefix in record_id, so group those segments before showing
         # completion rate or average session length.
         session_records: dict[str, dict[str, Any]] = {}
+        hourly_intervals: list[list[tuple[datetime, datetime]]] = [[] for _ in range(24)]
         for index, raw in enumerate(self._state.get("records", [])):
             if not isinstance(raw, dict):
                 continue
@@ -671,7 +684,7 @@ class FocusAnalyticsStore:
                 seconds = max(0, int(raw.get("seconds", 0) or 0))
             except (TypeError, ValueError, OverflowError):
                 continue
-            if not (start <= started.date() <= today):
+            if not (start <= started.date() <= today) or not trusted_record_date(started):
                 continue
             record_id = str(raw.get("record_id") or "").strip()
             session_key = record_id.split(":", 1)[0] if record_id else f"record:{index}"
@@ -692,15 +705,41 @@ class FocusAnalyticsStore:
             item["ended"] = max(item["ended"], ended)
             item["intervals"].append((started, ended))
 
+            clipped_start = max(started, range_start)
+            clipped_end = min(ended, range_end)
+            cursor = clipped_start
+            while cursor < clipped_end:
+                next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                part_end = min(clipped_end, next_hour)
+                hourly_intervals[cursor.hour].append((cursor, part_end))
+                cursor = part_end
+
+        def merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+            merged: list[list[datetime]] = []
+            for interval_start, interval_end in sorted(intervals):
+                if interval_end <= interval_start:
+                    continue
+                if not merged or interval_start > merged[-1][1]:
+                    merged.append([interval_start, interval_end])
+                elif interval_end > merged[-1][1]:
+                    merged[-1][1] = interval_end
+            return [(item[0], item[1]) for item in merged]
+
+        def union_seconds(intervals: list[tuple[datetime, datetime]]) -> int:
+            return sum(
+                max(0, int((interval_end - interval_start).total_seconds()))
+                for interval_start, interval_end in merge_intervals(intervals)
+            )
+
         def continuous_seconds(intervals: list[tuple[datetime, datetime]]) -> int:
             """Merge short pause gaps while keeping active time as the value."""
 
-            if not intervals:
+            merged = merge_intervals(intervals)
+            if not merged:
                 return 0
-            ordered = sorted(intervals)
-            best = current = max(0, int((ordered[0][1] - ordered[0][0]).total_seconds()))
-            previous_end = ordered[0][1]
-            for started, ended in ordered[1:]:
+            best = current = max(0, int((merged[0][1] - merged[0][0]).total_seconds()))
+            previous_end = merged[0][1]
+            for started, ended in merged[1:]:
                 duration = max(0, int((ended - started).total_seconds()))
                 gap = max(0, int((started - previous_end).total_seconds()))
                 if gap <= INTERRUPTION_GRACE_SECONDS:
@@ -713,7 +752,7 @@ class FocusAnalyticsStore:
 
         started_rounds = len(session_records)
         completed_sessions = sum(1 for item in session_records.values() if item["completed"])
-        session_seconds = sum(max(0, int(item["seconds"])) for item in session_records.values())
+        session_seconds = sum(union_seconds(item["intervals"]) for item in session_records.values())
         longest_session_seconds = max(
             (continuous_seconds(item["intervals"]) for item in session_records.values()),
             default=0,
@@ -722,10 +761,11 @@ class FocusAnalyticsStore:
         last_ended = max((item["ended"] for item in session_records.values()), default=None)
         completion_rate = round(completed_sessions / started_rounds * 100, 1) if started_rounds else 0.0
         high_quality_seconds = sum(
-            max(0, int(item["seconds"]))
+            union_seconds(item["intervals"])
             for item in session_records.values()
-            if int(item["seconds"]) >= 25 * 60
+            if union_seconds(item["intervals"]) >= 25 * 60
         )
+        high_quality_seconds = min(high_quality_seconds, total_seconds)
         if first_started is not None:
             first_started_text = first_started.strftime("%H:%M")
             last_ended_text = last_ended.strftime("%H:%M") if last_ended is not None else "--:--"
@@ -748,12 +788,25 @@ class FocusAnalyticsStore:
             "high_quality_seconds": high_quality_seconds,
             "first_started_at": first_started_text,
             "last_ended_at": last_ended_text,
-            "strongest_window": self._best_window(today),
+            "strongest_window": self._best_window(today, start=start),
+            "hourly": [
+                {"hour": hour, "label": f"{hour:02d}:00", "seconds": union_seconds(intervals)}
+                for hour, intervals in enumerate(hourly_intervals)
+            ],
             "daily": daily,
             "untrusted_days": untrusted_days,
+            "data_quality": {
+                "trusted": not bool(untrusted_days),
+                "untrusted_days": list(untrusted_days),
+                "message": (
+                    "本周期包含旧版异常计时记录；异常日期已从报告指标中剔除，避免把重复检查点当成真实工作时间。"
+                    if untrusted_days else "本周期数据口径正常。"
+                ),
+            },
         }
 
-    def _best_window(self, today: date) -> str:
+    def _best_window(self, today: date, *, start: date | None = None) -> str:
+        window_start = start or (today - timedelta(days=6))
         buckets: dict[int, list[int]] = {}
         for raw in self._state.get("records", []):
             try:
@@ -761,7 +814,10 @@ class FocusAnalyticsStore:
                 seconds = max(0, int(raw.get("seconds", 0)))
             except (ValueError, TypeError):
                 continue
-            if today - timedelta(days=6) <= started.date() <= today:
+            if window_start <= started.date() <= today:
+                day = self._state.get("days", {}).get(started.date().isoformat(), {})
+                if isinstance(day, dict) and bool(day.get("seconds_untrusted")):
+                    continue
                 buckets.setdefault(started.hour, []).append(seconds)
         if not buckets:
             return "暂无足够数据"

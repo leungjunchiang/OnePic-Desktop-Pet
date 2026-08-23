@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -34,6 +35,7 @@ REPORT_STYLE = """
 QDialog#workReportDialog { background: #eef5f7; color: #243b4b; }
 QFrame#reportHero { background: #ffffff; border: 1px solid #d6e4e8; border-radius: 20px; }
 QFrame#reportMetric { background: #ffffff; border: 1px solid #d6e4e8; border-radius: 14px; }
+QFrame#reportChart { background: #ffffff; border: 1px solid #d6e4e8; border-radius: 18px; }
 QLabel#reportTitle { color: #173d55; font-size: 23px; font-weight: 700; }
 QLabel#reportSubtitle, QLabel#reportHint { color: #647b88; }
 QLabel#reportHeroValue { color: #008b83; font-size: 30px; font-weight: 700; }
@@ -41,6 +43,7 @@ QLabel#reportMetricLabel { color: #6c7f89; font-size: 11px; }
 QLabel#reportMetricValue { color: #21475d; font-size: 16px; font-weight: 650; }
 QLabel#reportSection { color: #21475d; font-size: 15px; font-weight: 650; }
 QLabel#reportNote { background: #e0f2ee; color: #28665b; border-radius: 12px; padding: 10px; }
+QLabel#reportWarning { background: #fff3df; color: #855d2c; border: 1px solid #edd2a7; border-radius: 12px; padding: 10px; }
 QProgressBar#reportBar { background: #e7eff1; border: none; border-radius: 5px; height: 10px; text-align: right; }
 QProgressBar#reportBar::chunk { background: #51b8aa; border-radius: 5px; }
 QLabel#reportTodayLabel { color: #008b83; font-weight: 700; }
@@ -198,6 +201,68 @@ def _clear_layout(layout: QVBoxLayout) -> None:
             _clear_layout(child)  # type: ignore[arg-type]
 
 
+class ReportBarChart(QWidget):
+    """Draw a compact bar chart without creating image files."""
+
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        hourly: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rows = [row for row in rows if isinstance(row, dict)]
+        self._hourly = bool(hourly)
+        self.setMinimumHeight(178)
+        self.setMinimumWidth(360)
+        self.setToolTip("悬停图表可查看对应时段的工作时长")
+
+    def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        plot = self.rect().adjusted(34, 12, 12, 34)
+        values = [max(0, int(row.get("seconds", 0) or 0)) for row in self._rows]
+        maximum = max(values or [1])
+
+        painter.setPen(QPen(QColor("#e3edef"), 1))
+        for ratio in (0.0, 0.5, 1.0):
+            y = plot.bottom() - int(plot.height() * ratio)
+            painter.drawLine(plot.left(), y, plot.right(), y)
+        painter.setPen(QColor("#7b8d96"))
+        painter.drawText(2, plot.top() + 4, format_work_duration(maximum))
+        painter.drawText(12, plot.bottom() + 4, "0")
+
+        count = max(1, len(self._rows))
+        gap = 4 if count <= 12 else 2
+        bar_width = max(3, int((plot.width() - gap * (count - 1)) / count))
+        label_step = 1 if count <= 12 else 3
+        for index, (row, value) in enumerate(zip(self._rows, values)):
+            x = plot.left() + index * (bar_width + gap)
+            height = int(plot.height() * value / maximum) if maximum else 0
+            y = plot.bottom() - height
+            color = QColor("#36a99d") if row.get("is_today") else QColor("#75c8bd")
+            if self._hourly:
+                color = QColor("#4389ad") if value else QColor("#dfecef")
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            if height > 0:
+                painter.drawRoundedRect(x, y, bar_width, max(3, height), 4, 4)
+            if index % label_step == 0:
+                painter.setPen(QColor("#647b88"))
+                label = str(row.get("label") or row.get("hour") or "")
+                painter.drawText(
+                    x - 4,
+                    plot.bottom() + 20,
+                    bar_width + 8,
+                    18,
+                    Qt.AlignmentFlag.AlignCenter,
+                    label,
+                )
+        painter.end()
+
+
 class WorkReportDialog(QDialog):
     """Live day/week/month report window with no image-generation side effect."""
 
@@ -216,11 +281,11 @@ class WorkReportDialog(QDialog):
         self.setObjectName("workReportDialog")
         self.setWindowTitle(f"{self._pet_name}工作报告")
         self.setWindowFlags(
-            Qt.WindowType.Tool
+            Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setMinimumSize(620, 620)
         self.resize(720, 760)
@@ -309,6 +374,30 @@ class WorkReportDialog(QDialog):
         box.addWidget(amount)
         return frame
 
+    @staticmethod
+    def _chart_card(
+        title: str,
+        subtitle: str,
+        rows: list[dict[str, Any]],
+        *,
+        hourly: bool = False,
+    ) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("reportChart")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(14, 12, 14, 10)
+        box.setSpacing(4)
+        heading = QLabel(title)
+        heading.setObjectName("reportSection")
+        box.addWidget(heading)
+        if subtitle:
+            note = QLabel(subtitle)
+            note.setObjectName("reportHint")
+            note.setWordWrap(True)
+            box.addWidget(note)
+        box.addWidget(ReportBarChart(rows, hourly=hourly), 1)
+        return frame
+
     def _render_period(self, layout: QVBoxLayout, key: str, report: dict[str, Any]) -> None:
         data = report.get(key) or {}
         total = max(0, int(data.get("total_seconds", 0) or 0))
@@ -335,16 +424,54 @@ class WorkReportDialog(QDialog):
         hero_layout.addWidget(generated)
         layout.addWidget(hero)
 
+        quality = data.get("data_quality") or {}
+        if not bool(quality.get("trusted", True)):
+            warning = QLabel(str(quality.get("message") or "本周期包含旧版异常计时记录，相关日期已剔除。"))
+            warning.setObjectName("reportWarning")
+            warning.setWordWrap(True)
+            layout.addWidget(warning)
+
+        daily_rows = data.get("daily") or []
+        if key == "day":
+            daily_rows = (report.get("week") or {}).get("daily") or daily_rows
+        chart_period = "本周" if key in {"day", "week"} else "本月"
+        layout.addWidget(
+            self._chart_card(
+                f"{chart_period}工作时长",
+                "柱状图按日期展示有效专注时间，当前日期使用更深色标记。",
+                daily_rows,
+            )
+        )
+        layout.addWidget(
+            self._chart_card(
+                "24 小时工作时间分布",
+                "按开始时间切分并合并重叠区间；只统计本页周期内可信的专注记录。",
+                data.get("hourly") or [],
+                hourly=True,
+            )
+        )
+
+        core_grid = QGridLayout()
+        core_grid.setSpacing(10)
+        core_metrics = [
+            ("完成专注段", f"{int(data.get('completed_rounds', 0) or 0)} 段"),
+            ("最长连续专注", format_work_duration(int(data.get("longest_focus_seconds", 0) or 0))),
+            ("中间打断次数", f"{int(data.get('interruptions', 0) or 0)} 次"),
+            ("高质量专注（≥25分钟）", format_work_duration(int(data.get("high_quality_seconds", 0) or 0))),
+        ]
+        for index, (label, value) in enumerate(core_metrics):
+            core_grid.addWidget(self._metric(label, value), index // 2, index % 2)
+        layout.addLayout(core_grid)
+
+        detail_title = QLabel("节律与质量")
+        detail_title.setObjectName("reportSection")
+        layout.addWidget(detail_title)
         grid = QGridLayout()
         grid.setSpacing(10)
         completion_rate = float(data.get("completion_rate", 0) or 0)
         metrics = [
-            ("完成专注段", f"{int(data.get('completed_rounds', 0) or 0)} 段"),
-            ("最长连续专注", format_work_duration(int(data.get("longest_focus_seconds", 0) or 0))),
-            ("中间打断次数", f"{int(data.get('interruptions', 0) or 0)} 次"),
             ("平均单段时长", format_work_duration(int(data.get("average_session_seconds", 0) or 0))),
             ("专注完成率", f"{completion_rate:g}%"),
-            ("高质量专注（≥25分钟）", format_work_duration(int(data.get("high_quality_seconds", 0) or 0))),
             ("活跃天数", f"{int(data.get('active_days', 0) or 0)} 天"),
             ("最强时段", str(data.get("strongest_window") or "暂无足够数据")),
             ("最早开始", str(data.get("first_started_at") or "暂无记录")),
@@ -392,15 +519,6 @@ class WorkReportDialog(QDialog):
         note.setObjectName("reportNote")
         note.setWordWrap(True)
         layout.addWidget(note)
-
-        if key in {"day", "week", "month"}:
-            chart_title = QLabel("本周工作趋势" if key == "day" else "每日专注分布")
-            chart_title.setObjectName("reportSection")
-            layout.addWidget(chart_title)
-            chart_data = data.get("daily") or []
-            if key == "day":
-                chart_data = (report.get("week") or {}).get("daily") or []
-            self._render_daily_bars(layout, chart_data)
 
         hint = QLabel("报告在窗口打开时实时刷新；关闭窗口不会生成 PNG，也不会增加服务器报告数据。")
         hint.setObjectName("reportHint")

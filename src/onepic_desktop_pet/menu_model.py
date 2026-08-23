@@ -170,12 +170,10 @@ class UnifiedMenuModel:
             else None
         )
         shortcut_children = [
-            self._optional("六毛快捷口袋…", "quick_panel"),
             self._optional("调整大小…", "size"),
             self._optional("六毛闹钟…", "alarms"),
             self._optional("主人称呼…", "rename"),
             duration_item,
-            MenuItemSpec("更新与关于", children=tuple(update_children)),
         ]
         shortcut_children = [item for item in shortcut_children if item is not None]
 
@@ -248,6 +246,7 @@ class UnifiedMenuModel:
         entries.extend(
             (
                 MenuItemSpec("显示模式", children=display_mode_children),
+                MenuItemSpec("更新与关于", children=tuple(update_children)),
                 MenuItemSpec("设置…", "settings"),
                 MenuItemSpec.divider(),
                 MenuItemSpec("隐藏六毛" if visible else "显示六毛", "visibility"),

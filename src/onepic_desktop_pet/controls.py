@@ -761,7 +761,6 @@ class QuickControlPanel(QWidget):
         for label, signal in (
             ("调整大小", self.size_requested),
             ("主人称呼", self.rename_requested),
-            ("设置中心…", self.settings_requested),
         ):
             action = menu.addAction(label)
             action.triggered.connect(lambda _checked=False, chosen=signal: self._choose(chosen))
@@ -773,6 +772,9 @@ class QuickControlPanel(QWidget):
         program.triggered.connect(lambda _checked=False: self._choose(self.program_update_requested))
         version = updates.addAction("当前版本信息")
         version.setEnabled(False)
+
+        settings = menu.addAction("设置中心…")
+        settings.triggered.connect(lambda _checked=False: self._choose(self.settings_requested))
         menu.exec(self.food_button.mapToGlobal(self.food_button.rect().bottomLeft()))
 
     def set_food_inventory(self, inventory: dict[str, int]) -> None:

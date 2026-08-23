@@ -100,6 +100,65 @@ def test_period_summary_derives_report_metrics_from_account_records(tmp_path) ->
     assert day["daily"][-1]["is_today"] is True
 
 
+def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) -> None:
+    now = datetime(2026, 8, 13, 18, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(30 * 60, started_at=datetime(2026, 8, 13, 9, 15), completed=True)
+    store.record_session(45 * 60, started_at=datetime(2026, 8, 13, 15, 30), completed=True)
+
+    day = store.period_summary("day", now)
+    hourly = {int(row["hour"]): int(row["seconds"]) for row in day["hourly"]}
+
+    assert hourly[9] == 30 * 60
+    assert hourly[15] == 30 * 60
+    assert hourly[16] == 15 * 60
+    assert sum(hourly.values()) == 75 * 60
+    assert day["data_quality"]["trusted"] is True
+
+
+def test_period_summary_excludes_legacy_cumulative_records_from_charts(tmp_path) -> None:
+    path = tmp_path / "focus.json"
+    path.write_text(
+        json.dumps(
+            {
+                "days": {},
+                "records": [
+                    {"date": "2026-08-20", "started_at": "2026-08-20T10:00:00", "seconds": 3600},
+                    {"date": "2026-08-20", "started_at": "2026-08-20T10:30:00", "seconds": 7200},
+                    {"date": "2026-08-20", "started_at": "2026-08-20T11:00:00", "seconds": 10800},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = FocusAnalyticsStore(
+        path=path,
+        now_provider=lambda: datetime(2026, 8, 21, 12, 0),
+        persist=True,
+    )
+
+    month = store.period_summary("month")
+
+    assert month["total_seconds"] == 0
+    assert month["high_quality_seconds"] == 0
+    assert sum(int(row["seconds"]) for row in month["hourly"]) == 0
+    assert month["data_quality"]["trusted"] is False
+    assert "2026-08-20" in month["data_quality"]["untrusted_days"]
+
+
+def test_period_summary_caps_overlapping_quality_time_to_effective_total(tmp_path) -> None:
+    now = datetime(2026, 8, 21, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.record_session(60 * 60, started_at=datetime(2026, 8, 20, 10, 0), completed=True)
+    store.record_session(2 * 60 * 60, started_at=datetime(2026, 8, 20, 10, 30), completed=True)
+
+    week = store.period_summary("week", now)
+
+    assert week["total_seconds"] == 150 * 60
+    assert week["high_quality_seconds"] <= week["total_seconds"]
+    assert week["high_quality_seconds"] == week["total_seconds"]
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

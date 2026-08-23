@@ -2,10 +2,37 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
+
 from onepic_desktop_pet.diary import DailyCompanionStats
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
-from onepic_desktop_pet.work_report import build_work_report
+from onepic_desktop_pet.work_report import WorkReportDialog, build_work_report
 from onepic_desktop_pet.work_timer import WorkTimerModel
+
+
+def test_work_report_is_a_normal_minimizable_window() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = WorkReportDialog(lambda: {})
+    flags = dialog.windowFlags()
+
+    assert int(flags) & 0x0F == int(Qt.WindowType.Window)
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint
+    assert flags & Qt.WindowType.WindowSystemMenuHint
+    assert flags & Qt.WindowType.WindowCloseButtonHint
+    assert not flags & Qt.WindowType.WindowStaysOnTopHint
+    assert not flags & Qt.WindowType.Tool
+    assert dialog.parent() is None
+
+    dialog.show()
+    app.processEvents()
+    dialog.showMinimized()
+    app.processEvents()
+    assert dialog.isMinimized()
+    dialog.showNormal()
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
 
 
 def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None:
