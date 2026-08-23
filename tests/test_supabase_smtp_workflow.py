@@ -41,6 +41,15 @@ def test_auth_config_includes_password_policy_and_recovery_redirect():
     assert "password_reset_redirect_to" in config
 
 
+def test_account_security_workflow_can_run_without_smtp_credentials():
+    workflow = (ROOT / ".github" / "workflows" / "configure-supabase-account-security.yml").read_text(encoding="utf-8")
+    script = (ROOT / "scripts" / "configure_supabase_auth.ps1").read_text(encoding="utf-8")
+
+    assert "-SkipSmtp" in workflow
+    assert "[switch]$SkipSmtp" in script
+    assert "password_min_length = 8" in script
+
+
 def test_account_security_migration_is_authenticated_and_uid_scoped():
     migration = (ROOT / "supabase" / "migrations" / "20260823000100_lili_account_security.sql").read_text(encoding="utf-8")
 
