@@ -186,7 +186,7 @@ class DesktopPetApplication(QObject):
             # fixing the style in showEvent can briefly activate Lili and
             # steal a ChatGPT/Codex text field.
             self.window._apply_macos_window_behavior()
-        self.window.show()
+        self.window.show_pet()
         # PetWindow.showEvent schedules the one-time native macOS panel
         # configuration.  Calling it synchronously as well can make AppKit
         # re-apply the floating level during a user-initiated show and has

@@ -510,6 +510,31 @@ def test_weekly_focus_sync_and_leaderboard_are_available_in_every_relay() -> Non
         assert "lili_focus_weekly_leaderboard" in path.read_text(encoding="utf-8")
 
 
+def test_daily_focus_history_is_account_scoped_and_allowlisted() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260822000300_lili_focus_daily_history.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.lili_focus_daily" in migration
+    assert "primary key (user_id, focus_date)" in migration
+    assert "alter table public.lili_focus_daily enable row level security" in migration
+    assert "lili_sync_focus_history" in migration
+    assert "(select auth.uid())" in migration
+    for path in (
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        assert "lili_sync_focus_history" in path.read_text(encoding="utf-8")
+
+
+def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260822000400_lili_focus_daily_visibility.sql").read_text(encoding="utf-8")
+    assert "permanent, one-row-per-account-per-Beijing-day" in migration
+    assert "'retention_days', 2" in migration
+    assert "d.focus_date between today - 1 and today" in migration
+    assert "delete from public.lili_focus_daily" not in migration.lower()
+
+
 def test_room_focus_time_uses_session_ledger_not_legacy_accumulator():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000200_lili_room_focus_ledger.sql").read_text(encoding="utf-8")

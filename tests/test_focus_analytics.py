@@ -74,6 +74,33 @@ def test_legacy_impossible_day_does_not_report_false_38_hour_difference(tmp_path
     assert summary.weekly_total_seconds == 0
 
 
+def test_legacy_cumulative_checkpoints_are_excluded_from_day_comparison(tmp_path) -> None:
+    path = tmp_path / "focus.json"
+    path.write_text(
+        json.dumps(
+            {
+                "days": {},
+                "records": [
+                    {"date": "2026-08-20", "started_at": "2026-08-20T10:00:00", "seconds": 3600},
+                    {"date": "2026-08-20", "started_at": "2026-08-20T10:30:00", "seconds": 7200},
+                    {"date": "2026-08-20", "started_at": "2026-08-20T11:00:00", "seconds": 10800},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = FocusAnalyticsStore(
+        path=path,
+        now_provider=lambda: datetime(2026, 8, 21, 12, 0),
+        persist=True,
+    )
+
+    summary = store.summary()
+    assert store._state["days"]["2026-08-20"]["seconds_untrusted"] is True
+    assert summary.yesterday_seconds is None
+    assert summary.difference_vs_yesterday_seconds is None
+
+
 def test_focus_day_boundary_is_beijing_midnight(tmp_path) -> None:
     # 16:00 UTC is 00:00 the next day in Beijing.
     now = datetime(2026, 8, 20, 16, 30, tzinfo=timezone.utc)
@@ -137,6 +164,21 @@ def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
         week_seconds=99 * 3600,
     )
     assert store.snapshot()["weekly_total_seconds"] == 0
+
+
+def test_server_daily_history_makes_yesterday_comparison_available_on_new_computer(tmp_path) -> None:
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.merge_remote_history({
+        "days": [
+            {"focus_date": "2026-08-21", "seconds": 11 * 3600},
+            {"focus_date": "2026-08-22", "seconds": 3 * 3600},
+        ]
+    })
+
+    summary = store.summary()
+    assert summary.yesterday_seconds == 11 * 3600
+    assert summary.difference_vs_yesterday_seconds == -8 * 3600
 
 
 def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:

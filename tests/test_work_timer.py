@@ -72,6 +72,33 @@ def test_running_work_timer_recovers_last_checkpoint_after_restart(tmp_path) -> 
     reloaded.pause()
 
 
+def test_analytics_cursor_survives_restart_without_replaying_session_total(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    clock.advance(120)
+    timer.mark_analytics_recorded(timer.session_seconds())
+    assert timer.analytics_recorded_session_seconds() == 120
+    timer.pause()
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.has_active_session
+    assert reloaded.analytics_recorded_session_seconds() == 120
+    assert reloaded.focus_session_id
+
+
+def test_legacy_active_timer_without_cursor_is_treated_as_already_recorded(tmp_path) -> None:
+    path = tmp_path / "work_timer.json"
+    path.write_text(
+        '{"date":"2026-08-10","accumulated_seconds":120,"lifetime_seconds":120,'
+        '"running":false,"session_active":true,"session_accumulated_seconds":120}',
+        encoding="utf-8",
+    )
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.analytics_recorded_session_seconds() == 120
+
+
 def test_work_timer_does_not_double_start_or_count_offline_time(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)

@@ -101,8 +101,8 @@ class PetSettings:
     # is a safety net, never an automatic resume mechanism.
     auto_pause_on_idle: bool = True
     idle_pause_seconds: int = 600
-    # Only a known video player in real fullscreen can trigger this optional
-    # pause. Browser/document fullscreen is deliberately not enough evidence.
+    # A known video player or a browser's borderless video fullscreen can
+    # trigger this optional pause. Ordinary maximised documents do not.
     auto_pause_on_fullscreen_video: bool = True
     # Distinguishes the new explicit pause-policy choice from the old builds
     # that persisted a legacy ``auto_pause_on_idle=false`` while ignoring it.

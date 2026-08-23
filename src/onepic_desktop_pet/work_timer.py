@@ -17,6 +17,7 @@ import json
 import os
 import re
 import time
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -132,6 +133,8 @@ class WorkTimerModel:
         self._notified_outfit_count = 0
         self._session_accumulated_seconds = 0
         self._episode_accumulated_seconds = 0
+        self._session_id = ""
+        self._analytics_recorded_session_seconds = 0
         self._session_active = False
         self._running_since: float | None = None
         self._state = WORK_STATE_IDLE
@@ -166,6 +169,8 @@ class WorkTimerModel:
         self._notified_outfit_count = 0
         self._session_accumulated_seconds = 0
         self._episode_accumulated_seconds = 0
+        self._session_id = ""
+        self._analytics_recorded_session_seconds = 0
         self._session_active = False
         self._running_since = None
         self._state = WORK_STATE_IDLE
@@ -236,6 +241,11 @@ class WorkTimerModel:
                 max(0, int(data.get("session_accumulated_seconds", 0)))
                 if same_date else 0
             )
+            analytics_cursor_present = "analytics_recorded_session_seconds" in data
+            analytics_recorded_seconds = (
+                max(0, int(data.get("analytics_recorded_session_seconds", 0)))
+                if same_date else 0
+            )
             episode_seconds = (
                 max(0, int(data.get("episode_accumulated_seconds", 0)))
                 if same_date else 0
@@ -262,7 +272,18 @@ class WorkTimerModel:
         self._accumulated_seconds = max(0, seconds)
         self._session_accumulated_seconds = session_seconds
         self._episode_accumulated_seconds = episode_seconds
+        self._session_id = str(data.get("session_id") or "") if same_date else ""
         self._session_active = saved_session_active
+        if self._session_active and not self._session_id:
+            self._session_id = uuid.uuid4().hex
+        # Old releases did not persist the analytics cursor.  Their active
+        # session may already have been written before a restart; treating
+        # the saved session total as accounted prevents the next pause from
+        # writing that cumulative total a second time.
+        self._analytics_recorded_session_seconds = min(
+            session_seconds,
+            analytics_recorded_seconds if analytics_cursor_present else session_seconds,
+        )
         self._state = saved_state if same_date else WORK_STATE_IDLE
         self._pause_reason = (
             str(data.get("pause_reason") or "manual")
@@ -288,6 +309,8 @@ class WorkTimerModel:
         self._accumulated_seconds = 0
         self._session_accumulated_seconds = 0
         self._session_active = False
+        self._session_id = ""
+        self._analytics_recorded_session_seconds = 0
         self._running_since = self._monotonic() if was_running else None
         self._episode_accumulated_seconds = 0
         self._state = WORK_STATE_IDLE
@@ -315,6 +338,35 @@ class WorkTimerModel:
 
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
+
+    @property
+    def focus_session_id(self) -> str:
+        """Stable identifier for the current session across app restarts."""
+
+        if self._session_id:
+            return self._session_id
+        if self._session_active:
+            self._session_id = uuid.uuid4().hex
+            self._save()
+        return self._session_id
+
+    def analytics_recorded_session_seconds(self) -> int:
+        """Return the cumulative session seconds already written to analytics."""
+
+        return min(
+            max(0, int(self.session_seconds())),
+            max(0, int(self._analytics_recorded_session_seconds)),
+        )
+
+    def mark_analytics_recorded(self, seconds: int) -> None:
+        """Persist the analytics cursor after a segment is committed."""
+
+        total = max(0, int(seconds))
+        self._analytics_recorded_session_seconds = max(
+            self._analytics_recorded_session_seconds,
+            total,
+        )
+        self._save()
 
     def episode_seconds(self) -> int:
         """Return uninterrupted WORKING seconds since the last pause/resume."""
@@ -388,7 +440,11 @@ class WorkTimerModel:
         now = self._monotonic()
         if not self._session_active:
             self._session_accumulated_seconds = 0
+            self._session_id = uuid.uuid4().hex
+            self._analytics_recorded_session_seconds = 0
             self._last_reminder_key = None
+        elif not self._session_id:
+            self._session_id = uuid.uuid4().hex
         self._session_active = True
         self._state = WORK_STATE_WORKING
         self._pause_reason = None
@@ -435,6 +491,8 @@ class WorkTimerModel:
         self._session_active = False
         self._session_accumulated_seconds = 0
         self._episode_accumulated_seconds = 0
+        self._session_id = ""
+        self._analytics_recorded_session_seconds = 0
         self._state = WORK_STATE_IDLE
         self._pause_reason = None
         self._last_reminder_key = None
@@ -504,6 +562,10 @@ class WorkTimerModel:
             "session_active": self._session_active,
             "session_accumulated_seconds": max(0, int(self._session_accumulated_seconds)),
             "episode_accumulated_seconds": max(0, int(self._episode_accumulated_seconds)),
+            "session_id": self._session_id,
+            "analytics_recorded_session_seconds": max(
+                0, int(self._analytics_recorded_session_seconds)
+            ),
             "state": self._state,
             "pause_reason": self._pause_reason,
         }

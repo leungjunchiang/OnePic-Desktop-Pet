@@ -1,0 +1,22 @@
+name: deploy-supabase-focus-history
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "release/v*"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply account-scoped daily focus history migration
+        shell: pwsh
+        run: ./scripts/apply_supabase_focus_history.ps1

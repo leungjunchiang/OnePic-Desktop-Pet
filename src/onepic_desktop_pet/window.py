@@ -109,6 +109,7 @@ from .accessories import (
 from .activity import (
     active_application_category,
     active_application_name,
+    active_fullscreen_game,
     active_fullscreen_video,
     active_window_is_fullscreen,
 )
@@ -210,6 +211,29 @@ def clamp_global_popup_position(global_pos: QPoint, popup_size: QSize, available
     x = min(max(global_pos.x(), available.left()), max(available.left(), right))
     y = min(max(global_pos.y(), available.top()), max(available.top(), bottom))
     return QPoint(x, y)
+
+
+def context_menu_position_for_pet(
+    event_global: QPoint,
+    pet_center: QPoint,
+    pet_screen_geometry: QRect | None,
+    *,
+    macos: bool = False,
+) -> QPoint:
+    """Keep a macOS context menu on the screen that owns the pet.
+
+    On macOS with mixed-DPI external displays, a context-menu event can
+    occasionally report a global point in the other display's coordinate
+    space.  Using that point to choose the popup screen makes the native menu
+    appear to jump between displays.  If the event point is outside the pet's
+    actual screen, use the pet's global center as a stable same-screen anchor.
+    Other platforms retain the precise event position.
+    """
+
+    point = QPoint(event_global)
+    if macos and pet_screen_geometry is not None and not pet_screen_geometry.contains(point):
+        return QPoint(pet_center)
+    return point
 
 
 LOGGER = logging.getLogger(__name__)
@@ -379,7 +403,9 @@ class PetWindow(QWidget):
         self._active_focus_account_id = ""
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
-        self._recorded_focus_session_seconds = 0
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
         self._last_focus_quality = None
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
@@ -421,6 +447,7 @@ class PetWindow(QWidget):
         self._fullscreen_video_started_at: float | None = None
         self._pause_notice_shown = False
         self._fullscreen_hidden = False
+        self._manually_hidden = False
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
         self._process_started_at = datetime.now().astimezone()
         self._sleep_after_sit = False
@@ -766,8 +793,8 @@ class PetWindow(QWidget):
 
         # Keep a low-frequency, cross-platform system probe.  It is the one
         # place that may auto-pause: 10 minutes of aggregate keyboard+mouse
-        # silence, a verified lock/sleep boundary, or a known video player in
-        # real fullscreen.  None of those paths ever auto-resume.
+        # silence, a verified lock/sleep boundary, or a known player/browser
+        # video in real fullscreen. None of those paths ever auto-resume.
         self.input_idle_timer = QTimer(self)
         self.input_idle_timer.setInterval(5_000)
         self.input_idle_timer.timeout.connect(self._check_input_idle)
@@ -1258,7 +1285,10 @@ class PetWindow(QWidget):
         # fullscreen poll has already hidden it (the duration bubble is
         # refreshed every timer tick).  Do not let that refresh punch through
         # a video or presentation fullscreen window.
-        if getattr(self, "_fullscreen_hidden", False) and widget in self._fullscreen_surfaces():
+        if (
+            getattr(self, "_manually_hidden", False)
+            or getattr(self, "_fullscreen_hidden", False)
+        ) and widget in self._fullscreen_surfaces():
             widget.hide()
             return
 
@@ -1436,6 +1466,27 @@ class PetWindow(QWidget):
             self._compact_todo_panel.hide()
         super().hideEvent(event)
 
+    def hide_pet(self) -> None:
+        """Hide the pet and every detached accessory until explicitly shown."""
+
+        self._manually_hidden = True
+        # These are top-level windows, not children of PetWindow. Hide them
+        # explicitly so a later focus/session refresh cannot leave the live
+        # duration badge behind on the desktop.
+        for widget in self._fullscreen_surfaces():
+            if widget is not self:
+                widget.hide()
+        self.hide()
+
+    def show_pet(self) -> None:
+        """Explicitly show the pet again, respecting an active full-screen app."""
+
+        self._manually_hidden = False
+        if active_window_is_fullscreen():
+            self._sync_fullscreen_visibility()
+            return
+        self.show()
+
     def _fullscreen_surfaces(self) -> list[QWidget]:
         """Return the pet and every passive surface that can cover fullscreen."""
 
@@ -1484,7 +1535,7 @@ class PetWindow(QWidget):
         self._fullscreen_restore_visible = {}
         self._fullscreen_hidden = False
         for widget, was_visible in restore.items():
-            if was_visible:
+            if was_visible and not self._manually_hidden:
                 self._show_nonactivating(widget)
         self._position_accessories()
 
@@ -1761,10 +1812,15 @@ class PetWindow(QWidget):
                 self.pause_work_timer(reason="lock")
                 return
 
-            # Browser/document fullscreen is deliberately ignored.  Only a
-            # known media player counts, and it must remain fullscreen for a
-            # few seconds to avoid a false transition while switching apps.
-            if bool(getattr(self.settings, "auto_pause_on_fullscreen_video", True)) and active_fullscreen_video():
+            # A real player/browser video or known game fullscreen counts, and
+            # it must remain fullscreen for a few seconds to avoid a false
+            # transition while switching apps. Ordinary maximised windows are
+            # excluded by the native fullscreen detector.
+            fullscreen_video = active_fullscreen_video()
+            fullscreen_game = active_fullscreen_game()
+            if bool(getattr(self.settings, "auto_pause_on_fullscreen_video", True)) and (
+                fullscreen_video or fullscreen_game
+            ):
                 if self._fullscreen_video_started_at is None:
                     self._fullscreen_video_started_at = time.monotonic()
                 elif time.monotonic() - self._fullscreen_video_started_at >= 4.0:
@@ -2597,6 +2653,9 @@ class PetWindow(QWidget):
         # analytics task for compatibility, but attribute new seconds to the
         # same local task record as soon as the session starts.
         started = self.focus_session.start()
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
         self.focus_analytics.begin_focus_session()
         if started:
             self.set_paused(True)
@@ -2663,7 +2722,7 @@ class PetWindow(QWidget):
             )
         elif was_running and reason in {"fullscreen_video", "video"}:
             reply = CompanionReply(
-                "检测到播放器全屏，六毛先帮你停表了；看完后点继续工作。",
+                "检测到视频或游戏全屏，六毛先帮你停表了；结束后点继续工作。",
                 PetState.CURIOUS,
             )
         elif was_running:
@@ -2703,8 +2762,11 @@ class PetWindow(QWidget):
         self._fullscreen_video_started_at = None
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
+        session_id = self.work_timer.focus_session_id
+        # Commit the final analytics segment while the timer still owns its
+        # stable session ID.  The timer is reset immediately afterwards.
+        self._record_focus_segment(session_seconds, completed=True, session_id=session_id)
         total = self.focus_session.finish()
-        self._record_focus_segment(session_seconds, completed=True)
         self.focus_analytics.finish_focus_session(completed=True)
         self._award_focus_rewards()
         self.set_paused(False)
@@ -3470,7 +3532,13 @@ class PetWindow(QWidget):
         if self._food_scene_dialog is not None:
             self._food_scene_dialog.refresh()
 
-    def _record_focus_segment(self, session_seconds: int, *, completed: bool) -> int:
+    def _record_focus_segment(
+        self,
+        session_seconds: int,
+        *,
+        completed: bool,
+        session_id: str | None = None,
+    ) -> int:
         """Credit only newly completed WORKING seconds in this session.
 
         ``WorkTimerModel.session_seconds()`` remains cumulative across a
@@ -3502,9 +3570,15 @@ class PetWindow(QWidget):
             application_switches=self._focus_quality_tracker.application_switches,
             away_count=self._focus_quality_tracker.away_count,
             task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            record_id=(
+                f"{session_id or self.work_timer.focus_session_id}:{total}"
+                if (session_id or self.work_timer.focus_session_id)
+                else None
+            ),
         )
         self.focus_analytics.update_current_task_progress(seconds)
         self.daily_stats.record_focus(seconds, completed=completed)
+        self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
         return seconds
 
@@ -4290,6 +4364,15 @@ class PetWindow(QWidget):
         week_seconds += max(0, today_seconds - analytics_today)
         today = datetime.now(BEIJING_TIMEZONE).date()
         week_start = today - timedelta(days=today.weekday())
+        focus_history = self.focus_analytics.daily_history(days=8)
+        today_key = today.isoformat()
+        focus_history = [
+            item for item in focus_history
+            if str(item.get("focus_date") or "")[:10] != today_key
+        ]
+        if today_seconds > 0:
+            focus_history.append({"focus_date": today_key, "seconds": today_seconds})
+        focus_history.sort(key=lambda item: str(item.get("focus_date") or ""))
         presence = {
             "working": snapshot.is_running,
             "session_active": bool(self.work_timer.has_active_session),
@@ -4312,6 +4395,7 @@ class PetWindow(QWidget):
                 "week_seconds": week_seconds,
                 "today_interruptions": int(analytics.get("today_interruptions") or 0),
                 "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
+                "focus_history": focus_history,
                 "outfit_key": self.settings.equipped_outfit,
                 "outfit_set": self._personal_outfit_sync_pending,
             },
@@ -4479,7 +4563,8 @@ class PetWindow(QWidget):
             week_start=str(remote_week_start or ""),
             week_seconds=int(remote_week_seconds or 0),
         )
-        if analytics_changed and self._social_dialog is not None:
+        history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        if (analytics_changed or history_changed) and self._social_dialog is not None:
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
 
         if "outfit_key" not in profile:
@@ -4566,7 +4651,9 @@ class PetWindow(QWidget):
             # account; keep the chat fast-action path on the new namespace.
             self.chat_manager.action_executor = self.time_memory.actions
         self._active_focus_account_id = clean
-        self._recorded_focus_session_seconds = 0
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
         self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self._focus_quality_tracker.reset()
         self._last_focus_quality = None
@@ -5155,7 +5242,7 @@ class PetWindow(QWidget):
             int(getattr(current, "session_seconds", 0) or 0),
             show_duration,
         )
-        if getattr(self, "_fullscreen_hidden", False):
+        if getattr(self, "_manually_hidden", False) or getattr(self, "_fullscreen_hidden", False):
             # set_session() intentionally owns the normal visible/hidden
             # state, so enforce fullscreen's temporary override afterwards.
             self.work_duration_bubble.hide()
@@ -5325,7 +5412,9 @@ class PetWindow(QWidget):
             "configure_daily_report": lambda _checked=False: self.configure_daily_report(),
             "open_album": lambda _checked=False: self.open_daily_album(),
             "topmost": lambda checked=False: self.set_always_on_top(checked),
-            "visibility": lambda _checked=False: self.show() if not self.isVisible() else self.hide(),
+            "visibility": lambda _checked=False: self.show_pet()
+            if not self.isVisible()
+            else self.hide_pet(),
             "quit": lambda _checked=False: self.quit_requested.emit(),
         }
         callbacks.update(self._menu_external_callbacks)
@@ -5774,7 +5863,7 @@ class PetWindow(QWidget):
 
         menu.addSeparator()
         hide_action = menu.addAction("隐藏六毛")
-        hide_action.triggered.connect(lambda _checked=False: self.hide())
+        hide_action.triggered.connect(lambda _checked=False: self.hide_pet())
         return menu
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
@@ -5799,13 +5888,23 @@ class PetWindow(QWidget):
         if time.monotonic() >= self._suppress_context_until:
             self.work_controls.hide()
             menu = self._build_context_menu()
-            if bool(getattr(self.settings, "always_on_top", False)):
+            if sys.platform != "darwin" and bool(getattr(self.settings, "always_on_top", False)):
                 # Keep the popup above the desktop-mode pet without changing
                 # the ownership or flags of the real pet window.
                 menu.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             menu.ensurePolished()
-            point = self._pending_context_global
-            screen = QGuiApplication.screenAt(point) or self.screen() or QGuiApplication.primaryScreen()
+            pet_center = self.frameGeometry().center()
+            screen = (
+                QGuiApplication.screenAt(pet_center)
+                or self.screen()
+                or QGuiApplication.primaryScreen()
+            )
+            point = context_menu_position_for_pet(
+                self._pending_context_global,
+                pet_center,
+                screen.geometry() if screen is not None else None,
+                macos=sys.platform == "darwin",
+            )
             if screen is not None:
                 point = clamp_global_popup_position(
                     point,

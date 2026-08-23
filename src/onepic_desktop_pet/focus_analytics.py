@@ -238,6 +238,56 @@ class FocusAnalyticsStore:
             self._save()
         return changed
 
+    def merge_remote_history(self, payload: Any) -> bool:
+        """Merge server-confirmed daily totals into this account's local cache.
+
+        The server is the source of truth for cross-device day comparisons.
+        A local day marked as untrusted is replaced by the server value rather
+        than allowed to hide a valid remote record.
+        """
+
+        if isinstance(payload, dict):
+            entries = payload.get("days")
+        else:
+            entries = payload
+        if not isinstance(entries, list):
+            return False
+
+        today = _as_beijing(self._now()).date()
+        cutoff = today - timedelta(days=400)
+        days = self._state.setdefault("days", {})
+        changed = False
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            try:
+                focus_date = date.fromisoformat(str(item.get("focus_date") or "")[:10])
+                value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(item.get("seconds") or 0)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if focus_date < cutoff or focus_date > today:
+                continue
+            key = focus_date.isoformat()
+            day = days.setdefault(key, self._empty_day())
+            try:
+                local_value = max(0, int(day.get("seconds", 0) or 0))
+            except (AttributeError, TypeError, ValueError):
+                local_value = 0
+            local_untrusted = bool(day.get("seconds_untrusted"))
+            merged = value if local_untrusted else max(local_value, value)
+            if local_value != merged:
+                day["seconds"] = merged
+                changed = True
+            if local_untrusted and day.get("seconds_untrusted"):
+                day["seconds_untrusted"] = False
+                changed = True
+
+        if self._trim_days():
+            changed = True
+        if changed:
+            self._save()
+        return changed
+
     def record_session(
         self,
         seconds: int,
@@ -248,10 +298,19 @@ class FocusAnalyticsStore:
         away_count: int = 0,
         task: str = "",
         interruptions: int = 0,
+        record_id: str | None = None,
     ) -> FocusQuality:
         duration = max(0, int(seconds))
         started = _as_beijing(started_at or self._now())
         quality = score_focus_quality(duration, application_switches, away_count)
+        clean_record_id = str(record_id or "").strip()[:160]
+        if clean_record_id:
+            for raw in self._state.get("records", []):
+                if isinstance(raw, dict) and str(raw.get("record_id") or "") == clean_record_id:
+                    # A crash can occur after the analytics write but before
+                    # the timer cursor is persisted.  Replaying the same
+                    # segment must be harmless.
+                    return quality
         day_key = started.date().isoformat()
         days = self._state.setdefault("days", {})
         day = days.setdefault(day_key, self._empty_day())
@@ -276,6 +335,7 @@ class FocusAnalyticsStore:
             "quality": quality.score,
             "task": str(task)[:120],
             "interruptions": max(0, int(interruptions)),
+            "record_id": clean_record_id,
         })
         self._state["records"] = records[-500:]
         self._rebuild_days_from_records()
@@ -408,6 +468,11 @@ class FocusAnalyticsStore:
 
         def day_seconds(day: date) -> int | None:
             raw = days.get(day.isoformat(), {})
+            if isinstance(raw, dict) and bool(raw.get("seconds_untrusted")):
+                # Legacy releases could write cumulative session checkpoints
+                # again after a restart.  The resulting union is useful for
+                # diagnostics, but it is not safe for day-to-day comparison.
+                return None
             try:
                 value = max(0, int(raw.get("seconds", 0)))
             except (AttributeError, TypeError, ValueError):
@@ -487,6 +552,26 @@ class FocusAnalyticsStore:
             "first_task_today": self.today_first_task(),
         }
 
+    def daily_history(self, days: int = 8) -> list[dict[str, Any]]:
+        """Return recent trustworthy daily totals for server reconciliation."""
+
+        count = max(1, min(31, int(days)))
+        today = _as_beijing(self._now()).date()
+        result: list[dict[str, Any]] = []
+        stored = self._state.get("days", {})
+        for offset in range(count - 1, -1, -1):
+            focus_date = today - timedelta(days=offset)
+            raw = stored.get(focus_date.isoformat(), {})
+            if not isinstance(raw, dict) or bool(raw.get("seconds_untrusted")):
+                continue
+            try:
+                seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if seconds:
+                result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
+        return result
+
     def _best_window(self, today: date) -> str:
         buckets: dict[int, list[int]] = {}
         for raw in self._state.get("records", []):
@@ -511,6 +596,7 @@ class FocusAnalyticsStore:
         """
 
         intervals: dict[str, list[tuple[datetime, datetime]]] = {}
+        raw_durations: dict[str, list[int]] = {}
         for raw in self._state.get("records", []):
             if not isinstance(raw, dict):
                 continue
@@ -521,6 +607,7 @@ class FocusAnalyticsStore:
                 continue
             if duration <= 0:
                 continue
+            raw_durations.setdefault(started.date().isoformat(), []).append(duration)
             end = started + timedelta(seconds=duration)
             cursor = started
             while cursor.date() < end.date():
@@ -546,8 +633,22 @@ class FocusAnalyticsStore:
                 sum(max(0, int((end - start).total_seconds())) for start, end in merged),
             )
             day = days.setdefault(day_key, self._empty_day())
+            raw_total = sum(raw_durations.get(day_key, []))
+            # Before the session cursor was persisted, a recovered app could
+            # write the cumulative timer total repeatedly.  A large raw/union
+            # ratio with several records is a strong signal of that specific
+            # corruption.  Keep the raw data for diagnostics, but never use
+            # the derived value for a day-vs-day comparison.
+            seconds_untrusted = (
+                len(raw_durations.get(day_key, [])) >= 3
+                and seconds > 0
+                and raw_total >= seconds * 1.5
+            )
             if int(day.get("seconds", 0) or 0) != seconds:
                 day["seconds"] = seconds
+                changed = True
+            if bool(day.get("seconds_untrusted")) != seconds_untrusted:
+                day["seconds_untrusted"] = seconds_untrusted
                 changed = True
         return changed
 

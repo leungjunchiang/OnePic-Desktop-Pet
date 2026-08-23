@@ -985,12 +985,14 @@ class AISettingsDialog(QDialog):
             "只有键盘和鼠标连续10分钟都没有输入才暂停；回来后不会自动继续，必须点击继续工作。"
         )
         form.addRow("工作与计时", self.auto_pause_on_idle)
-        self.auto_pause_on_fullscreen_video = QCheckBox("明确的播放器全屏时自动暂停")
+        self.auto_pause_on_fullscreen_video = QCheckBox("视频或游戏全屏时自动暂停")
         self.auto_pause_on_fullscreen_video.setChecked(
             getattr(settings, "auto_pause_on_fullscreen_video", True)
         )
         self.auto_pause_on_fullscreen_video.setToolTip(
-            "只识别 VLC、IINA、mpv 等明确播放器；浏览器、Word、PDF、VS Code 全屏不会误判。"
+            "识别 VLC、IINA、mpv 等播放器、Chrome/Edge/Firefox 的无边框视频全屏，"
+            "以及 Dota2、CS2、Valorant 等全屏游戏；普通最大化的 Word、ChatGPT、"
+            "浏览器、PDF、VS Code 不会误判。"
         )
         form.addRow("", self.auto_pause_on_fullscreen_video)
         idle_hint = QLabel(

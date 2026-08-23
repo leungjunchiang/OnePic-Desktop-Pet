@@ -593,6 +593,30 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     app.processEvents()
 
 
+def test_manual_hide_also_hides_duration_bubble_until_explicit_show() -> None:
+    """隐藏六毛 must not leave the detached live-duration badge behind."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    app.processEvents()
+    assert window.work_duration_bubble.isVisible()
+
+    window.hide_pet()
+    app.processEvents()
+    assert not window.isVisible()
+    assert not window.work_duration_bubble.isVisible()
+
+    window._update_work_duration_bubble()
+    app.processEvents()
+    assert not window.work_duration_bubble.isVisible()
+
+    window.show_pet()
+    app.processEvents()
+    assert window.isVisible()
+    assert window.work_duration_bubble.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_relaunch_does_not_restore_old_active_visit() -> None:
     """重新启动只接受本次进程之后产生的串门，不复活旧场景。"""
 
@@ -1398,6 +1422,55 @@ def test_input_idle_at_ten_minutes_pauses_without_auto_resume(monkeypatch) -> No
     monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
     window._check_input_idle()
     assert not window.work_timer.is_running
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_browser_video_fullscreen_pauses_after_short_confirmation(monkeypatch) -> None:
+    """Real video fullscreen hides the pet and pauses work after confirmation."""
+
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
+    )
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
+    window.settings.auto_pause_on_fullscreen_video = True
+    window.start_work_timer()
+
+    # The first observation only arms the debounce window.  A second
+    # observation after four seconds confirms that fullscreen is persistent.
+    window._check_input_idle()
+    assert window.work_timer.is_running
+    window._fullscreen_video_started_at -= 4.1
+    window._check_input_idle()
+
+    assert not window.work_timer.is_running
+    assert window.work_timer.pause_reason == "fullscreen_video"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_game_fullscreen_pauses_after_short_confirmation(monkeypatch) -> None:
+    """全屏游戏与视频一样隐藏六毛并暂停当前工作轮次。"""
+
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
+    )
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: True)
+    window.settings.auto_pause_on_fullscreen_video = True
+    window.start_work_timer()
+
+    window._check_input_idle()
+    assert window.work_timer.is_running
+    window._fullscreen_video_started_at -= 4.1
+    window._check_input_idle()
+
+    assert not window.work_timer.is_running
+    assert window.work_timer.pause_reason == "fullscreen_video"
     window.close(); window.deleteLater(); app.processEvents()
 
 
