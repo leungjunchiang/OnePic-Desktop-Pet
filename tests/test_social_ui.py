@@ -5,6 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget
 
 from onepic_desktop_pet.social import SignupResult, SocialError
@@ -418,6 +419,11 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     assert "正在工作" in dialog.room_members.itemWidget(dialog.room_members.item(1)).findChildren(QLabel)[0].text()
     assert dialog.room_activity.count() == 2
     assert "35分钟" in dialog.room_goal.text()
+    report_buttons = dialog.findChildren(QPushButton, "focusReportButton")
+    assert len(report_buttons) == 1
+    report_signal = QSignalSpy(dialog.work_report_requested)
+    report_buttons[0].click()
+    assert report_signal.count() == 1
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

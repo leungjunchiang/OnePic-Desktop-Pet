@@ -105,6 +105,7 @@ def build_work_report(
     daily_stats: DailyCompanionStats,
     *,
     best_buddy: str = "暂无自习室排行榜数据",
+    focus_snapshot: Any | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build an account-scoped report snapshot without writing a file."""
@@ -114,10 +115,25 @@ def build_work_report(
         moment = moment.replace(tzinfo=BEIJING_TIMEZONE)
     summary = analytics.summary(moment)
     daily_stats_snapshot = daily_stats.snapshot()
-    live_today = max(0, int(timer.today_seconds()))
+    snapshot_status = ""
+    snapshot_today = 0
+    snapshot_session = 0
+    snapshot_room = ""
+    if focus_snapshot is not None:
+        if isinstance(focus_snapshot, dict):
+            snapshot_status = str(focus_snapshot.get("status") or "")
+            snapshot_today = max(0, int(focus_snapshot.get("today_seconds") or 0))
+            snapshot_session = max(0, int(focus_snapshot.get("session_seconds") or 0))
+            snapshot_room = str(focus_snapshot.get("room_id") or "")
+        else:
+            snapshot_status = str(getattr(focus_snapshot, "status", "") or "")
+            snapshot_today = max(0, int(getattr(focus_snapshot, "today_seconds", 0) or 0))
+            snapshot_session = max(0, int(getattr(focus_snapshot, "session_seconds", 0) or 0))
+            snapshot_room = str(getattr(focus_snapshot, "room_id", "") or "")
+    live_today = max(0, int(timer.today_seconds()), snapshot_today)
     stored_today = max(0, int(summary.today_seconds or 0))
     live_delta = max(0, live_today - stored_today)
-    current_status = (
+    current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
         "focus" if bool(timer.is_running)
         else "rest" if bool(timer.has_active_session)
         else "idle"
@@ -157,6 +173,8 @@ def build_work_report(
     day["current_streak_days"] = int(summary.current_streak_days)
     day["rest_state"] = report["rest_state"]
     day["current_status_label"] = report["current_status_label"]
+    day["focus_session_seconds"] = snapshot_session
+    day["focus_room_id"] = snapshot_room
     if day.get("daily"):
         day["daily"][-1]["seconds"] = max(int(day["daily"][-1]["seconds"]), live_today)
 
@@ -197,6 +215,13 @@ class WorkReportDialog(QDialog):
         self._pet_name = pet_name.strip() or "六毛"
         self.setObjectName("workReportDialog")
         self.setWindowTitle(f"{self._pet_name}工作报告")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setMinimumSize(620, 620)
         self.resize(720, 760)
         self.setStyleSheet(REPORT_STYLE)
@@ -207,7 +232,7 @@ class WorkReportDialog(QDialog):
         root.setSpacing(12)
         title = QLabel(f"{self._pet_name}工作报告")
         title.setObjectName("reportTitle")
-        subtitle = QLabel("今天六毛陪你又往前一点 · 实时生成 · 不保存每日图片")
+        subtitle = QLabel("今天六毛陪你又往前一点 · 与搭子自习室共用 FocusSession · 实时生成")
         subtitle.setObjectName("reportSubtitle")
         root.addWidget(title)
         root.addWidget(subtitle)
@@ -344,6 +369,13 @@ class WorkReportDialog(QDialog):
                 str(data.get("rest_state") or report.get("rest_state") or "暂无足够数据"),
             )
             layout.addWidget(state_card)
+            room_label = "已连接搭子自习室" if data.get("focus_room_id") else "个人自习室"
+            session_card = self._metric(
+                "自习室 FocusSession",
+                f"{report.get('current_status_label', '未开始工作')} · "
+                f"本轮 {format_work_duration(int(data.get('focus_session_seconds', 0) or 0))} · {room_label}",
+            )
+            layout.addWidget(session_card)
             extras = self._metric(
                 f"{self._pet_name()}陪伴",
                 f"摸摸 {int(data.get('touches', 0) or 0)} 次 · 六毛入睡动作 {int(data.get('pet_sleeps', 0) or 0)} 次",

@@ -40,6 +40,15 @@ QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228)
 border: 1px solid rgba(231, 74, 79, 145); }
 QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
 border: 1px solid rgba(40, 125, 158, 135); }
+/* The report action is a top-level floating button, so it cannot inherit the
+   quickActionDock descendant selector. Keep its icon tile identical to the
+   six buttons in the dock. */
+QPushButton#quickAction_report { background: rgba(239, 246, 247, 150); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
+QPushButton#quickAction_report:hover { background: rgba(255, 244, 216, 228);
+border: 1px solid rgba(231, 74, 79, 145); }
+QPushButton#quickAction_report:pressed { background: rgba(217, 238, 241, 235);
+border: 1px solid rgba(40, 125, 158, 135); }
 QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;
 border: 1px solid rgba(75, 96, 112, 95); border-radius: 8px;
 padding: 4px 9px; font-size: 11px; }
@@ -426,7 +435,11 @@ class QuickControlPanel(QWidget):
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
-        self.report_button = self._button("report", "工作报告", self.work_report_requested)
+        # Keep this as a top-level button so it can float above the work
+        # button without changing the dock's row height. It has its own
+        # click bridge because hiding the dock and opening a second window
+        # in the same native mouse event is unreliable on macOS/Windows.
+        self.report_button = self._button("report", "工作报告", None)
         self.report_button.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -438,7 +451,7 @@ class QuickControlPanel(QWidget):
         self.report_button.setMouseTracking(True)
         self.report_button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.report_button.setStyleSheet(CONTROL_STYLE)
-        self.report_button.clicked.connect(self.hide)
+        self.report_button.clicked.connect(self._open_report_from_button)
         self.report_button.hide()
         work_column = QWidget(self)
         work_column.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -519,6 +532,13 @@ class QuickControlPanel(QWidget):
         self.work_button.setIcon(_quick_icon("work", active=label == "暂停工作"))
         if self._hint_button is self.work_button:
             self._show_hint(self.work_button)
+
+    def _open_report_from_button(self) -> None:
+        """Close the floating dock, then open the report on the next Qt turn."""
+
+        self._report_hide_timer.stop()
+        self.hide()
+        QTimer.singleShot(0, self.work_report_requested.emit)
 
     def _set_report_button_visible(self, visible: bool) -> None:
         """Show the work-report secondary action only while work is hovered."""

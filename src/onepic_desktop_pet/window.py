@@ -3752,6 +3752,7 @@ class PetWindow(QWidget):
             self.work_timer,
             self.daily_stats,
             best_buddy=self._best_buddy_for_report(),
+            focus_snapshot=self.focus_session.snapshot(),
             now=datetime.now(BEIJING_TIMEZONE),
         )
 
@@ -3759,6 +3760,9 @@ class PetWindow(QWidget):
         """Open the live day/week/month report without creating a local image."""
 
         self._record_user_interaction()
+        # Close the floating shortcut first. Showing both top-level windows
+        # in one mouse event can leave the report behind the dock on macOS.
+        self.quick_panel.hide()
         if self._work_report_dialog is None:
             self._work_report_dialog = WorkReportDialog(
                 self._work_report_snapshot,
@@ -3767,7 +3771,7 @@ class PetWindow(QWidget):
             )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
         self._work_report_dialog.refresh()
-        self._work_report_dialog.show()
+        self._work_report_dialog.showNormal()
         self._work_report_dialog.raise_()
         self._work_report_dialog.activateWindow()
 
@@ -4284,6 +4288,7 @@ class PetWindow(QWidget):
             self._social_dialog.focus_start_requested.connect(self.start_work_timer)
             self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
             self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
+            self._social_dialog.work_report_requested.connect(self.show_work_report)
             self._social_dialog.focus_task_requested.connect(self._set_focus_task)
             self._social_dialog.tomorrow_review_requested.connect(self._set_tomorrow_review)
             self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
