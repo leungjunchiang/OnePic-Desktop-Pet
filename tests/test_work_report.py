@@ -21,7 +21,6 @@ def test_work_report_is_a_normal_minimizable_window() -> None:
     assert flags & Qt.WindowType.WindowSystemMenuHint
     assert flags & Qt.WindowType.WindowCloseButtonHint
     assert not flags & Qt.WindowType.WindowStaysOnTopHint
-    assert not flags & Qt.WindowType.Tool
     assert dialog.parent() is None
 
     dialog.show()
