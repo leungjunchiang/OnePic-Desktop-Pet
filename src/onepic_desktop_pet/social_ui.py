@@ -383,7 +383,7 @@ class SocialHealthThread(QThread):
 class SocialLoginThread(QThread):
     """Authenticate without blocking the Qt GUI thread."""
 
-    completed = Signal()
+    completed = Signal(object)
     failed = Signal(object)
 
     def __init__(self, client: SocialClient, email: str, password: str, parent=None) -> None:
@@ -395,7 +395,19 @@ class SocialLoginThread(QThread):
     def run(self) -> None:
         try:
             self.client.sign_in(self.email, self._password)
-            self.completed.emit()
+            streak = {}
+            recorder = getattr(self.client, "record_login_streak", None)
+            if callable(recorder):
+                try:
+                    streak = dict(recorder() or {})
+                except SocialError as exc:
+                    # Login is already valid. A rollout race or a temporary
+                    # RPC outage must not turn a successful login into a
+                    # failed one; the next app launch can record the day.
+                    LOGGER.info("login streak record deferred: %s", exc)
+                except Exception as exc:
+                    LOGGER.info("login streak record deferred: %s", exc)
+            self.completed.emit(streak)
         except SocialError as exc:
             self.failed.emit(exc)
         except Exception:
@@ -406,6 +418,26 @@ class SocialLoginThread(QThread):
             )
         finally:
             self._password = ""
+
+
+class SocialLoginStreakThread(QThread):
+    """Record a restored session's once-per-Beijing-day login."""
+
+    completed = Signal(dict)
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+
+    def run(self) -> None:
+        try:
+            recorder = getattr(self.client, "record_login_streak", None)
+            self.completed.emit(dict(recorder() or {}) if callable(recorder) else {})
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception as exc:
+            self.failed.emit(SocialError(str(exc), kind="network", retryable=True))
 
 
 class SocialSignupThread(QThread):
@@ -512,6 +544,167 @@ class SocialPasswordResetThread(QThread):
             self.failed.emit(exc)
         except Exception:
             self.failed.emit(SocialError("密码重置邮件发送失败，请稍后重试。", kind="network", retryable=True))
+
+
+class SocialPasswordOtpResetThread(QThread):
+    """Verify the in-memory recovery OTP and set the new password."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, email: str, otp: str, new_password: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = email
+        self._otp = otp
+        self._new_password = new_password
+
+    def run(self) -> None:
+        try:
+            self.client.verify_password_reset_otp(self.email, self._otp)
+            # Clear the code before the password update. The app never writes
+            # the OTP to settings, logs, files, or the credential store.
+            self._otp = ""
+            self.client.set_password_after_reset(self._new_password)
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            self.failed.emit(SocialError("验证码验证或密码修改失败，请检查验证码后重试。", kind="network", retryable=True))
+        finally:
+            self._otp = ""
+            self._new_password = ""
+
+
+class PasswordResetDialog(QDialog):
+    """Email OTP recovery flow; the server enforces the ten-minute expiry."""
+
+    password_reset_completed = Signal(str)
+
+    def __init__(self, client: SocialClient, email: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = str(email or "").strip()
+        self._request_thread: SocialPasswordResetThread | None = None
+        self._verify_thread: SocialPasswordOtpResetThread | None = None
+        self._remaining_seconds = 0
+        self.setWindowTitle("邮箱验证码重置密码 - Lili")
+        self.setModal(True)
+        self.resize(470, 430)
+        self.setStyleSheet("""
+            QDialog { background:#edf4f7; }
+            QLabel { color:#263746; }
+            QLabel#title { font-size:22px; font-weight:700; }
+            QLabel#muted { color:#667984; }
+            QLabel#status { background:#e1efec; color:#087f74; border-radius:8px; padding:7px 10px; }
+            QLineEdit { background:white; border:1px solid #b8ccd6; border-radius:8px; padding:7px; }
+            QPushButton { background:#d8efeb; color:#075d57; border:0; border-radius:8px; padding:8px 12px; }
+            QPushButton:hover { background:#c7e5e1; }
+            QPushButton#link { background:transparent; color:#087f74; text-align:left; padding:2px; }
+        """)
+        layout = QVBoxLayout(self); layout.setSpacing(10)
+        title = QLabel("邮箱验证码重置密码"); title.setObjectName("title"); layout.addWidget(title)
+        hint = QLabel("输入注册邮箱，发送 6 位验证码；验证码 10 分钟内有效，过期后必须重新发送。Lili 不保存验证码。")
+        hint.setObjectName("muted"); hint.setWordWrap(True); layout.addWidget(hint)
+        form = QFormLayout()
+        self.email_edit = QLineEdit(self.email); self.email_edit.setPlaceholderText("注册邮箱")
+        self.otp_edit = QLineEdit(); self.otp_edit.setPlaceholderText("邮件中的 6 位数字验证码"); self.otp_edit.setMaxLength(10)
+        self.new_password = QLineEdit(); self.new_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password = QLineEdit(); self.confirm_password.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("邮箱", self.email_edit); layout.addLayout(form)
+        otp_row = QHBoxLayout(); otp_row.addWidget(self.otp_edit, 1)
+        self.send_button = QPushButton("发送验证码"); self.send_button.clicked.connect(self._send_code); otp_row.addWidget(self.send_button)
+        layout.addLayout(otp_row)
+        self.countdown = QLabel("尚未发送验证码"); self.countdown.setObjectName("muted"); layout.addWidget(self.countdown)
+        password_form = QFormLayout(); password_form.addRow("新密码", self.new_password); password_form.addRow("确认新密码", self.confirm_password); layout.addLayout(password_form)
+        self.status_label = QLabel(); self.status_label.setObjectName("status"); self.status_label.setWordWrap(True); self.status_label.hide(); layout.addWidget(self.status_label)
+        self.verify_button = QPushButton("确认修改密码"); self.verify_button.setEnabled(False); self.verify_button.clicked.connect(self._verify_and_reset); layout.addWidget(self.verify_button)
+        cancel = QPushButton("取消"); cancel.clicked.connect(self.reject); layout.addWidget(cancel)
+        layout.addStretch(1)
+        self._countdown_timer = QTimer(self); self._countdown_timer.setInterval(1000); self._countdown_timer.timeout.connect(self._tick)
+
+    def _show_status(self, message: str, *, error: bool = False) -> None:
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet(
+            f"background:{'#f7e5e5' if error else '#e1efec'};color:{'#a33a3a' if error else '#087f74'};border-radius:8px;padding:7px 10px;"
+        )
+        self.status_label.show()
+
+    def _send_code(self) -> None:
+        email = self.email_edit.text().strip()
+        if not email or "@" not in email:
+            self._show_status("请输入有效的注册邮箱。", error=True); return
+        if self._request_thread is not None and self._request_thread.isRunning():
+            return
+        self.email = email
+        self.send_button.setEnabled(False); self.verify_button.setEnabled(False)
+        self._show_status("正在发送验证码…")
+        thread = SocialPasswordResetThread(self.client, email, self)
+        self._request_thread = thread
+        thread.completed.connect(self._code_sent)
+        thread.failed.connect(self._code_failed)
+        thread.finished.connect(lambda: self._request_finished(thread))
+        thread.start()
+
+    def _code_sent(self) -> None:
+        self._remaining_seconds = 600
+        self._countdown_timer.start()
+        self.verify_button.setEnabled(True)
+        self._show_status("如果该邮箱已注册，验证码已发送；请检查收件箱和垃圾邮件。")
+
+    def _code_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._show_status(social_user_message(exc), error=True)
+
+    def _request_finished(self, thread: SocialPasswordResetThread) -> None:
+        if self._request_thread is thread:
+            self._request_thread = None
+        self.send_button.setEnabled(True); thread.deleteLater()
+
+    def _tick(self) -> None:
+        self._remaining_seconds = max(0, self._remaining_seconds - 1)
+        minutes, seconds = divmod(self._remaining_seconds, 60)
+        if self._remaining_seconds:
+            self.countdown.setText(f"验证码剩余有效时间：{minutes:02d}:{seconds:02d}")
+        else:
+            self._countdown_timer.stop(); self.verify_button.setEnabled(False); self.countdown.setText("验证码已过期，请重新发送。")
+
+    def _verify_and_reset(self) -> None:
+        email = self.email_edit.text().strip(); otp = self.otp_edit.text().strip()
+        new = self.new_password.text(); confirm = self.confirm_password.text()
+        if self._remaining_seconds <= 0:
+            self._show_status("验证码已过期，请重新发送。", error=True); return
+        if not otp.isdigit() or len(otp) != 6:
+            self._show_status("请输入邮件中的 6 位数字验证码。", error=True); return
+        if len(new) < 8:
+            self._show_status("新密码至少需要 8 位。", error=True); return
+        if new != confirm:
+            self._show_status("两次输入的新密码不一致。", error=True); return
+        if self._verify_thread is not None and self._verify_thread.isRunning():
+            return
+        self.send_button.setEnabled(False); self.verify_button.setEnabled(False); self._show_status("正在验证验证码并修改密码…")
+        thread = SocialPasswordOtpResetThread(self.client, email, otp, new, self)
+        self._verify_thread = thread
+        thread.completed.connect(self._reset_succeeded)
+        thread.failed.connect(self._reset_failed)
+        thread.finished.connect(lambda: self._verify_finished(thread))
+        thread.start()
+
+    def _reset_succeeded(self) -> None:
+        self._countdown_timer.stop(); self.otp_edit.clear(); self.new_password.clear(); self.confirm_password.clear()
+        self._show_status("密码已修改成功，现在可以使用新密码登录自习室。")
+        self.password_reset_completed.emit(self.email)
+        self.accept()
+
+    def _reset_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self.verify_button.setEnabled(self._remaining_seconds > 0)
+        self._show_status(social_user_message(exc), error=True)
+
+    def _verify_finished(self, thread: SocialPasswordOtpResetThread) -> None:
+        if self._verify_thread is thread:
+            self._verify_thread = None
+        self.send_button.setEnabled(True); thread.deleteLater()
 
 
 class SocialDeleteAccountThread(QThread):
@@ -1242,15 +1435,9 @@ class AccountSecurityDialog(QDialog):
         email = email.strip()
         if not email or "@" not in email:
             self._show_status("请输入有效的邮箱地址。", error=True); return
-        if self._reset_thread is not None and self._reset_thread.isRunning():
-            return
-        self._set_busy(True); self._show_status("正在提交密码重置邮件…")
-        thread = SocialPasswordResetThread(self.client, email, self)
-        self._reset_thread = thread
-        thread.completed.connect(self._reset_requested)
-        thread.failed.connect(self._reset_failed)
-        thread.finished.connect(lambda: self._reset_thread_finished(thread))
-        thread.start()
+        dialog = PasswordResetDialog(self.client, email, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._show_status("密码已通过邮箱验证码修改成功；现在可以使用新密码登录。")
 
     def _reset_requested(self) -> None:
         # Keep this response neutral even when the email is not registered.
@@ -1337,6 +1524,7 @@ class SocialHubDialog(QDialog):
     food_interaction_accepted = Signal(dict)
     buddy_request_received = Signal(dict)
     account_state_changed = Signal(bool)
+    login_streak_updated = Signal(dict)
 
     def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -1372,6 +1560,7 @@ class SocialHubDialog(QDialog):
         self._room_refresh_pending = False
         self._health_thread: SocialHealthThread | None = None
         self._login_thread: SocialLoginThread | None = None
+        self._login_streak_thread: SocialLoginStreakThread | None = None
         self._signup_thread: SocialSignupThread | None = None
         self._resend_thread: SocialResendConfirmationThread | None = None
         self._password_reset_thread: SocialPasswordResetThread | None = None
@@ -1445,6 +1634,7 @@ class SocialHubDialog(QDialog):
         self._update_account_state()
         if client.signed_in:
             self._initial_refresh_timer.start(50)
+            QTimer.singleShot(180, self._record_login_streak)
 
     def set_focus_snapshot(self, snapshot: Any) -> None:
         """Render the desktop timer state without creating a second timer."""
@@ -2405,7 +2595,7 @@ class SocialHubDialog(QDialog):
         self.signup_resend_button.setVisible(False)
         self.signup_resend_button.clicked.connect(self._resend_confirmation)
         register_layout.addWidget(self.signup_resend_button)
-        register_layout.addWidget(QLabel("163、学校邮箱未收到时，请先查垃圾邮件/广告邮件；也可点击上面的按钮重发。"))
+        register_layout.addWidget(QLabel("163、学校邮箱未收到时，请先查垃圾邮件/广告邮件。若邮箱已经注册，重复注册不会再次创建账号或覆盖密码，请切换到登录，或使用“忘记密码？”重置。"))
         register_layout.addStretch()
         auth_tabs.addTab(login, "登录"); auth_tabs.addTab(register, "注册")
         layout.addWidget(auth_tabs)
@@ -2454,24 +2644,14 @@ class SocialHubDialog(QDialog):
         self._set_status("账号已注销，六毛继续离线陪伴。")
 
     def _request_password_reset(self) -> None:
-        if self._password_reset_thread is not None and self._password_reset_thread.isRunning():
-            return
         initial = self.login_email.text().strip()
-        email, accepted = QInputDialog.getText(self, "忘记密码", "请输入注册邮箱：", QLineEdit.EchoMode.Normal, initial)
-        if not accepted:
-            return
-        email = email.strip()
-        if not email or "@" not in email:
-            self._error(SocialError("请输入有效的邮箱地址。", kind="validation"))
-            return
-        self._begin_action("正在提交密码重置邮件…")
-        self.forgot_password_button.setEnabled(False)
-        thread = SocialPasswordResetThread(self.client, email, self)
-        self._password_reset_thread = thread
-        thread.completed.connect(self._password_reset_completed)
-        thread.failed.connect(self._password_reset_failed)
-        thread.finished.connect(lambda: self._password_reset_thread_finished(thread))
-        thread.start()
+        dialog = PasswordResetDialog(self.client, initial, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._account_email = dialog.email
+            self._update_account_state()
+            self.account_state_changed.emit(True)
+            self._set_status("密码已修改成功，现在可以使用新密码进入自习室。")
+            self.refresh()
 
     def _password_reset_completed(self) -> None:
         self._end_action()
@@ -2613,6 +2793,7 @@ class SocialHubDialog(QDialog):
             self.refresh()
             self.account_state_changed.emit(True)
             self._set_status("注册并登录成功，六毛自习室已准备好。")
+            self._record_login_streak()
         elif isinstance(result, SignupResult) and result.existing_account:
             if result.email_confirmed:
                 message = (
@@ -2705,6 +2886,40 @@ class SocialHubDialog(QDialog):
         self.signup_resend_button.setEnabled(True)
         thread.deleteLater()
 
+    def _record_login_streak(self) -> None:
+        if not self.client.signed_in:
+            return
+        if self._login_streak_thread is not None and self._login_streak_thread.isRunning():
+            return
+        thread = SocialLoginStreakThread(self.client, self)
+        self._login_streak_thread = thread
+        thread.completed.connect(self._login_streak_completed)
+        thread.failed.connect(self._login_streak_failed)
+        thread.finished.connect(lambda: self._login_streak_thread_finished(thread))
+        thread.start()
+
+    def _login_streak_completed(self, result: dict) -> None:
+        payload = dict(result or {})
+        self.login_streak_updated.emit(payload)
+        try:
+            days = max(0, int(payload.get("streak_days") or 0))
+        except (TypeError, ValueError):
+            days = 0
+        if payload.get("newly_unlocked"):
+            self._set_status("连续登录 3 天，已解锁新娃衣「三日连登搭子」！")
+        elif payload.get("reward_unlocked"):
+            self._set_status("连续登录奖励已解锁；当前连续登录 %d 天。" % days)
+
+    def _login_streak_failed(self, error: object) -> None:
+        # This is an optional reward side effect. Do not show a red auth error
+        # after the user has already logged in successfully.
+        LOGGER.info("login streak unavailable: %s", error)
+
+    def _login_streak_thread_finished(self, thread: SocialLoginStreakThread) -> None:
+        if self._login_streak_thread is thread:
+            self._login_streak_thread = None
+        thread.deleteLater()
+
     def _login(self) -> None:
         if self._login_thread is not None and self._login_thread.isRunning():
             return
@@ -2722,13 +2937,18 @@ class SocialHubDialog(QDialog):
         thread.finished.connect(lambda: self._login_thread_finished(thread))
         thread.start()
 
-    def _login_completed(self) -> None:
+    def _login_completed(self, result: object = None) -> None:
         self._end_action()
         self._account_email = self.login_email.text().strip()
         self._update_account_state()
         self.tabs.setCurrentIndex(0)
         self.refresh()
-        self._set_status("登录成功，邮箱确认已完成。")
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        self.login_streak_updated.emit(payload)
+        if payload.get("newly_unlocked"):
+            self._set_status("登录成功；连续登录 3 天，已解锁新娃衣「三日连登搭子」！")
+        else:
+            self._set_status("登录成功，邮箱确认已完成。")
         self.account_state_changed.emit(True)
 
     def _login_failed(self, error: object) -> None:
@@ -3448,4 +3668,5 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+
 

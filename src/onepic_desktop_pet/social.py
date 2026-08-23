@@ -131,13 +131,17 @@ def social_user_message(error: BaseException) -> str:
     raw = str(error or "")
     lowered = raw.casefold()
     if kind == "signup_timeout":
-        return "注册服务未在规定时间内返回，当前无法确认账号是否已创建；请不要重复注册或连续点击注册，先检查收件箱和垃圾邮件。“重新发送确认邮件”仅适用于账号已经创建的情况；如果没有收到邮件，稍后再尝试注册；若持续失败，请管理员检查或更换 Supabase Auth 的事务邮件 SMTP。"
+        return "注册服务未在规定时间内返回，当前无法确认账号是否已创建；请不要重复注册或连续点击注册。先检查收件箱和垃圾邮件，稍后使用“重新发送确认邮件”；如果账号已经存在，请切换到登录或使用“忘记密码”。"
     if kind == "confirmation_timeout" or code == "request_timeout":
-        return "确认邮件服务未在规定时间内返回，请稍后再试并检查收件箱和垃圾邮件；如果注册本身也未成功，请稍后重新注册。若持续失败，请管理员检查或更换 Supabase Auth 的事务邮件 SMTP。"
+        return "确认邮件服务未在规定时间内返回，请不要连续注册或重复点击；稍后再点“重新发送确认邮件”，并检查收件箱和垃圾邮件。如果这个邮箱已经注册，请切换到登录或使用“忘记密码”。若新账号仍始终收不到邮件，需要管理员检查 Supabase Auth 的事务邮件 SMTP。"
     if "email address not authorized" in lowered or "email not authorized" in lowered:
         return "当前 Supabase 邮件服务只允许项目团队邮箱收信，163/学校邮箱不会收到邮件；请为 Supabase Auth 配置自定义 SMTP 后重试。"
+    if "already confirmed" in lowered or "email already confirmed" in lowered:
+        return "这个邮箱已经确认过，不需要继续等待注册邮件；请直接登录。忘记密码可以使用“忘记密码？”发送重置邮件。"
+    if code in {"otp_expired", "otp_invalid", "invalid_otp", "one_time_token_not_found"} or "one-time token" in lowered or "otp" in lowered and ("expired" in lowered or "invalid" in lowered):
+        return "验证码无效或已过期。请重新发送验证码，10 分钟内输入最新验证码。"
     if code in {"invalid_credentials", "invalid_login_credentials"} or "invalid login credentials" in lowered:
-        return "邮箱或密码不正确；请确认邮箱已完成验证，并检查当前填写的邮箱和密码。重复注册不会修改已有账号密码，请使用该邮箱最初设置的密码。"
+        return "登录失败：邮箱或密码不匹配。请确认邮箱已经完成验证，并使用该邮箱原来设置的密码；重复注册不会覆盖原密码。忘记密码请点击“忘记密码？”通过邮箱重置。"
     if code in {"weak_password", "password_too_short", "password_strength"} or "password is too weak" in lowered or "password should be at least" in lowered:
         return "新密码至少需要 8 位，请换一个更长的密码；建议同时包含字母和数字。"
     if code in {"reauthentication_needed", "current_password_required"} or "current password" in lowered or "reauthentication" in lowered:
@@ -734,9 +738,12 @@ class SocialBackend(Protocol):
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult: ...
     def resend_confirmation(self, email: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
+    def record_login_streak(self) -> dict[str, Any]: ...
     def sign_out(self) -> None: ...
     def change_password(self, current_password: str, new_password: str) -> None: ...
     def request_password_reset(self, email: str) -> bool: ...
+    def verify_password_reset_otp(self, email: str, otp: str) -> bool: ...
+    def set_password_after_reset(self, new_password: str) -> None: ...
     def delete_account(self) -> None: ...
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
@@ -1002,6 +1009,20 @@ class HttpSocialBackend:
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
+    def record_login_streak(self) -> dict[str, Any]:
+        """Record one idempotent Beijing-calendar login for the signed-in account."""
+
+        if self.transport != "direct":
+            raise SocialError("连续登录奖励需要连接 Supabase，请稍后重试。", kind="config")
+        data = self._raw(
+            "POST",
+            "/rest/v1/rpc/lili_record_login",
+            {},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        )
+        return dict(data or {}) if isinstance(data, dict) else {}
+
     def _require_direct_security_transport(self) -> None:
         if self.transport != "direct":
             raise SocialError(
@@ -1048,6 +1069,40 @@ class HttpSocialBackend:
             body["redirect_to"] = self.password_reset_redirect_url
         self._raw("POST", "/auth/v1/recover", body, timeout=_auth_request_timeout())
         return True
+
+    def verify_password_reset_otp(self, email: str, otp: str) -> bool:
+        """Verify a recovery OTP and adopt the short-lived recovery session."""
+
+        self._require_direct_security_transport()
+        normalized_email = normalize_email(email)
+        token = str(otp or "").strip()
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        if not token.isdigit() or not 6 <= len(token) <= 10:
+            raise SocialError("请输入邮件中的数字验证码。", kind="validation")
+        data = self._raw(
+            "POST",
+            "/auth/v1/verify",
+            {"email": normalized_email, "token": token, "type": "recovery"},
+            timeout=_auth_request_timeout(),
+        )
+        if not self._accept_auth(data if isinstance(data, dict) else {}):
+            raise SocialError("验证码无效或已过期，请重新发送验证码。", kind="auth", error_code="otp_expired")
+        return True
+
+    def set_password_after_reset(self, new_password: str) -> None:
+        """Set a new password using the recovery session created by the OTP."""
+
+        self._require_direct_security_transport()
+        if len(new_password) < 8:
+            raise SocialError("新密码至少需要 8 位。", kind="weak_password", error_code="weak_password")
+        self._raw(
+            "PUT",
+            "/auth/v1/user",
+            {"password": new_password},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        )
 
     def delete_account(self) -> None:
         """Delete the current Auth user via a server-side security-definer RPC."""
@@ -1708,6 +1763,17 @@ class LegacyDirectSocialClient:
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
+    def record_login_streak(self) -> dict[str, Any]:
+        if self._http_backend is not None:
+            return dict(self._http_backend.record_login_streak() or {})
+        return dict(self._raw(
+            "POST",
+            "/rest/v1/rpc/lili_record_login",
+            {},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        ) or {})
+
     @property
     def account_email(self) -> str:
         if self._http_backend is not None:
@@ -1745,6 +1811,38 @@ class LegacyDirectSocialClient:
             timeout=_auth_request_timeout(),
         )
         return True
+
+    def verify_password_reset_otp(self, email: str, otp: str) -> bool:
+        if self._http_backend is not None:
+            return bool(self._http_backend.verify_password_reset_otp(email, otp))
+        normalized_email = normalize_email(email)
+        token = str(otp or "").strip()
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        if not token.isdigit() or not 6 <= len(token) <= 10:
+            raise SocialError("请输入邮件中的数字验证码。", kind="validation")
+        data = self._raw(
+            "POST",
+            "/auth/v1/verify",
+            {"email": normalized_email, "token": token, "type": "recovery"},
+            timeout=_auth_request_timeout(),
+        )
+        if not self._accept_auth(data if isinstance(data, dict) else {}):
+            raise SocialError("验证码无效或已过期，请重新发送验证码。", kind="auth", error_code="otp_expired")
+        return True
+
+    def set_password_after_reset(self, new_password: str) -> None:
+        if self._http_backend is not None:
+            return self._http_backend.set_password_after_reset(new_password)
+        if len(new_password) < 8:
+            raise SocialError("新密码至少需要 8 位。", kind="weak_password", error_code="weak_password")
+        self._raw(
+            "PUT",
+            "/auth/v1/user",
+            {"password": new_password},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        )
 
     def delete_account(self) -> None:
         if self._http_backend is not None:
@@ -2046,6 +2144,9 @@ class DashboardCacheClientBase:
     def sign_in(self, email: str, password: str) -> None:
         self._require_backend().sign_in(normalize_email(email), password)
 
+    def record_login_streak(self) -> dict[str, Any]:
+        return dict(self._require_backend().record_login_streak() or {})
+
     @property
     def account_email(self) -> str:
         return str(getattr(self._http_backend, "account_email", "") or "")
@@ -2100,9 +2201,10 @@ class BackendRouteManager:
     DIRECT_SUPABASE = "DIRECT_SUPABASE"
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
-    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation", "change_password", "request_password_reset", "delete_account"}
-    SECURITY_METHODS = {"change_password", "request_password_reset", "delete_account"}
-    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in", "resend_confirmation", "change_password", "request_password_reset", "delete_account"}
+    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation", "change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
+    SECURITY_METHODS = {"change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
+    DIRECT_ONLY_METHODS = {"record_login_streak"}
+    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "record_login_streak", "sign_up", "sign_in", "resend_confirmation", "change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend | None, *, persist_state: bool = True) -> None:
@@ -2352,6 +2454,13 @@ class BackendRouteManager:
             raise AttributeError(method)
         if method in self.AUTH_METHODS:
             return self._request_auth(method, *args, **kwargs)
+        if method in self.DIRECT_ONLY_METHODS:
+            # The login streak is an account reward, not room content. Never
+            # route it to the legacy proxy or silently count a second login.
+            started = time.monotonic()
+            result = getattr(self.direct, method)(*args, **kwargs)
+            self._mark_success(started)
+            return result
         self._probe_direct_recovery()
         backend = self.active
         self._sync_sessions(self.direct if backend is self.direct else self.proxy, backend)
@@ -2479,6 +2588,9 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         # successful auth response atomically replaces the stored session.
         self._manager.request("sign_in", normalize_email(email), password)
 
+    def record_login_streak(self) -> dict[str, Any]:
+        return dict(self._manager.request("record_login_streak") or {})
+
     @property
     def account_email(self) -> str:
         active = getattr(self._manager, "active", None)
@@ -2489,6 +2601,12 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
     def request_password_reset(self, email: str) -> bool:
         return bool(self._manager.request("request_password_reset", normalize_email(email)))
+
+    def verify_password_reset_otp(self, email: str, otp: str) -> bool:
+        return bool(self._manager.request("verify_password_reset_otp", normalize_email(email), str(otp or "").strip()))
+
+    def set_password_after_reset(self, new_password: str) -> None:
+        self._manager.request("set_password_after_reset", new_password)
 
     def delete_account(self) -> None:
         self._manager.request("delete_account")
@@ -2556,4 +2674,5 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
+
 

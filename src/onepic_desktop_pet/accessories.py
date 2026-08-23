@@ -37,6 +37,16 @@ OUTFITS = (
     Outfit("hour-12", "陈楚生歌王", "十二小时达成。六毛给我爹戴上歌王桂冠，陪你把今天唱到收尾。"),
 )
 
+# This reward is deliberately kept outside ``OUTFITS``. The hourly outfit
+# count is persisted in the local work timer and must remain exactly twelve;
+# login rewards have a different, account-bound unlock rule.
+LOGIN_REWARD_OUTFIT = Outfit(
+    "login-3-day",
+    "三日连登搭子",
+    "连续登录 3 天达成。六毛换上这套新衣，记得每天回来看看。",
+)
+ALL_OUTFITS = OUTFITS + (LOGIN_REWARD_OUTFIT,)
+
 
 SPECIAL_ACTIVITY_SPRITES = {
     key: f"assets/pet/daily-actions/{filename}"
@@ -51,6 +61,9 @@ SPECIAL_OUTFIT_SPRITES = {
     f"hour-{hour:02d}": f"assets/pet/hourly-outfits/{hour:02d}-hour.png"
     for hour in range(1, 13)
 }
+SPECIAL_OUTFIT_SPRITES[LOGIN_REWARD_OUTFIT.key] = (
+    "assets/pet/login-rewards/3-day-login.png"
+)
 
 
 def unlocked_outfits(count: int) -> tuple[Outfit, ...]:
@@ -206,3 +219,4 @@ def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:
         points = [QPointF(w*.30,h*.15), QPointF(w*.36,h*.025), QPointF(w*.45,h*.12), QPointF(w*.52,h*.015), QPointF(w*.61,h*.12), QPointF(w*.69,h*.025), QPointF(w*.74,h*.15)]
         painter.drawPolygon(points)
         painter.setBrush(QColor("#ef5b5b")); painter.drawEllipse(QRectF(w*.49,h*.08,w*.055,w*.055))
+

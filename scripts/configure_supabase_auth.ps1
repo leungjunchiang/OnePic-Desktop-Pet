@@ -77,6 +77,18 @@ $authConfig = [ordered]@{
     external_email_enabled = $true
     mailer_autoconfirm = $false
     password_min_length = 8
+    # Recovery is intentionally a six-digit email OTP. Supabase Auth keeps
+    # the temporary verifier server-side; Lili never persists the code.
+    mailer_otp_length = 6
+    mailer_otp_exp = 600
+    mailer_subjects_recovery = "Lili 密码重置验证码"
+    mailer_templates_recovery_content = @'
+<h2>Lili 密码重置验证码</h2>
+<p>你正在重置 Lili（六毛搭子自习室）的登录密码。</p>
+<p style="font-size:28px;font-weight:700;letter-spacing:6px;">{{ .Token }}</p>
+<p>验证码 10 分钟内有效，使用一次后立即失效。</p>
+<p>如果不是你本人操作，请忽略这封邮件。</p>
+'@
 }
 
 # HIBP protection is optional and is rejected by some Supabase plans. Keep it
@@ -155,4 +167,5 @@ try {
 }
 
 Write-Host "Supabase Auth custom SMTP configured for project $projectRef."
+
 

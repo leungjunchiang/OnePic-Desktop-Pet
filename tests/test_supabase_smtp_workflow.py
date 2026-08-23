@@ -37,6 +37,10 @@ def test_auth_config_includes_password_policy_and_recovery_redirect():
     config = (ROOT / "config" / "social_backend.json").read_text(encoding="utf-8")
 
     assert "password_min_length = 8" in script
+    assert "mailer_otp_length = 6" in script
+    assert "mailer_otp_exp = 600" in script
+    assert "mailer_templates_recovery_content" in script
+    assert "{{ .Token }}" in script
     assert "some Supabase plans" in script
     assert "uri_allow_list = $resolvedPasswordResetUrl.Trim()" in script
     assert "password_reset_redirect_to" in config
@@ -82,4 +86,5 @@ def test_focus_history_deployment_uses_existing_management_token_and_public_proj
     assert "config/social_backend.json" in script
     assert "database_write" in script
     assert "20260822000400_lili_focus_daily_visibility.sql" in script
+
 

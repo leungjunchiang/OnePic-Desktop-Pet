@@ -602,6 +602,37 @@ def test_account_security_uses_direct_auth_endpoints_and_never_proxy():
     ]
 
 
+def test_password_recovery_uses_email_otp_then_authenticated_update():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+            self.calls = []
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
+            self.calls.append((method, path, body, authenticated))
+            if path == "/auth/v1/verify":
+                return {
+                    "access_token": "recovery-access",
+                    "refresh_token": "recovery-refresh",
+                    "expires_in": 600,
+                    "user": {"id": "u", "email": "Alice@example.com"},
+                }
+            return {}
+
+    backend = Recording()
+    assert backend.verify_password_reset_otp("Alice@EXAMPLE.COM", "123456") is True
+    backend.set_password_after_reset("new-secret-123")
+    assert backend.calls == [
+        ("POST", "/auth/v1/verify", {"email": "Alice@example.com", "token": "123456", "type": "recovery"}, False),
+        ("PUT", "/auth/v1/user", {"password": "new-secret-123"}, True),
+    ]
+
+
 def test_security_actions_are_not_replayed_to_proxy_after_direct_failure():
     direct = FakeTransport("direct")
     proxy = FakeTransport("proxy")
@@ -993,3 +1024,4 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
+

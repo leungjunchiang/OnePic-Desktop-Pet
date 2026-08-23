@@ -11,6 +11,11 @@ on:
         description: "Optional Auth site URL; empty automatically uses config/social_backend.json"
         required: false
         type: string
+  # Keep production Auth email templates and OTP expiry in sync whenever a
+  # release branch is published. Credentials remain GitHub Secrets only.
+  push:
+    branches:
+      - "release/v*"
 
 permissions:
   contents: read
@@ -33,4 +38,5 @@ jobs:
       - name: Configure Supabase Auth custom SMTP
         shell: pwsh
         run: ./scripts/configure_supabase_auth.ps1
+
 

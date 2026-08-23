@@ -695,6 +695,7 @@ class FocusAnalyticsStore:
         # completion rate or average session length.
         session_records: dict[str, dict[str, Any]] = {}
         hourly_intervals: list[list[tuple[datetime, datetime]]] = [[] for _ in range(24)]
+        focus_intervals: list[dict[str, Any]] = []
         for index, raw in enumerate(self._state.get("records", [])):
             if not isinstance(raw, dict):
                 continue
@@ -723,6 +724,15 @@ class FocusAnalyticsStore:
             item["started"] = min(item["started"], started)
             item["ended"] = max(item["ended"], ended)
             item["intervals"].append((started, ended))
+            focus_intervals.append(
+                {
+                    "date": started.date().isoformat(),
+                    "started_at": started.isoformat(),
+                    "ended_at": ended.isoformat(),
+                    "seconds": seconds,
+                    "task": str(raw.get("task_title") or raw.get("task") or raw.get("title") or ""),
+                }
+            )
 
             clipped_start = max(started, range_start)
             clipped_end = min(ended, range_end)
@@ -822,6 +832,7 @@ class FocusAnalyticsStore:
                 {"hour": hour, "label": f"{hour:02d}:00", "seconds": union_seconds(intervals)}
                 for hour, intervals in enumerate(hourly_intervals)
             ],
+            "focus_intervals": focus_intervals,
             "daily": daily,
             "untrusted_days": untrusted_days,
             "data_quality": {
@@ -941,3 +952,4 @@ class FocusAnalyticsStore:
         temp = self.path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.path)
+

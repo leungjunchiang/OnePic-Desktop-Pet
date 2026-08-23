@@ -101,6 +101,8 @@ except ImportError:
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .alarm_ui import AlarmCard, AlarmCenterDialog
 from .accessories import (
+    ALL_OUTFITS,
+    LOGIN_REWARD_OUTFIT,
     OUTFITS,
     SPECIAL_LIMITED_ACTIVITY_SPRITES,
     draw_activity_overlay,
@@ -492,6 +494,7 @@ class PetWindow(QWidget):
         self._economy_sync_pending = False
         self._economy_sync_user_id = ""
         self._personal_outfit_sync_pending = False
+        self._login_reward_unlocked = False
         self._buddy_visit_window = BuddyVisitWindow()
         self.visit_status_bubble = VisitStatusBubble()
         self._seen_visit_ids: set[str] = set()
@@ -4303,6 +4306,7 @@ class PetWindow(QWidget):
             )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
             self._social_dialog.account_state_changed.connect(self._social_account_state_changed)
+            self._social_dialog.login_streak_updated.connect(self._login_streak_updated)
             self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
             self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
             self._social_dialog.buddy_request_received.connect(self._buddy_request_received)
@@ -4662,9 +4666,12 @@ class PetWindow(QWidget):
         if "outfit_key" not in profile:
             return
         remote_outfit = str(profile.get("outfit_key") or "")[:60]
-        if remote_outfit and remote_outfit not in {
+        allowed_outfits = {
             item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
-        }:
+        }
+        if self._login_reward_unlocked:
+            allowed_outfits.add(LOGIN_REWARD_OUTFIT.key)
+        if remote_outfit and remote_outfit not in allowed_outfits:
             return
         if remote_outfit == self.settings.equipped_outfit:
             return
@@ -4713,6 +4720,28 @@ class PetWindow(QWidget):
             return
         self._economy_sync_user_id = ""
         self._schedule_social_tick()
+
+    def _login_streak_updated(self, result: dict) -> None:
+        """Apply the server-authoritative three-day login wardrobe unlock."""
+
+        if not isinstance(result, dict):
+            return
+        unlocked = bool(result.get("reward_unlocked"))
+        newly_unlocked = bool(result.get("newly_unlocked"))
+        was_unlocked = self._login_reward_unlocked
+        self._login_reward_unlocked = unlocked
+        if newly_unlocked and not was_unlocked:
+            self._set_temporary_activity("happy", 30_000)
+            self.show_speech(
+                "连续登录 3 天，已解锁「三日连登搭子」！\n"
+                "可以在“换装与外观”里穿上它。",
+                8200,
+            )
+        # A server profile may already contain the reward outfit when this
+        # result arrives. Re-render immediately so the account-bound outfit
+        # does not wait for the next five-second social heartbeat.
+        if unlocked and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key:
+            self._refresh_pixmap()
 
     def _current_social_user_id(self) -> str:
         client = getattr(self, "social_client", None)
@@ -5111,8 +5140,13 @@ class PetWindow(QWidget):
         """装备已解锁娃衣；空字符串恢复经典外观。"""
 
         allowed = {item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())}
+        if self._login_reward_unlocked:
+            allowed.add(LOGIN_REWARD_OUTFIT.key)
         if outfit_key and outfit_key not in allowed:
-            self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
+            if outfit_key == LOGIN_REWARD_OUTFIT.key:
+                self.show_speech("连续登录 3 天后，这套娃衣就会解锁。", 5200)
+            else:
+                self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
             return
         self.settings.equipped_outfit = outfit_key
         save_settings(self.settings)
@@ -5125,7 +5159,7 @@ class PetWindow(QWidget):
         self._mask_cache.clear()
         self._refresh_pixmap()
         self.update()
-        label = next((item.name for item in OUTFITS if item.key == outfit_key), "经典六毛")
+        label = next((item.name for item in ALL_OUTFITS if item.key == outfit_key), "经典六毛")
         self.show_speech(f"已换上：{label}。", 3200)
 
     def open_size_control(self) -> None:
@@ -5145,12 +5179,17 @@ class PetWindow(QWidget):
         classic.triggered.connect(lambda: self.equip_outfit(""))
         menu.addSeparator()
         unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
-        for outfit in OUTFITS:
+        unlocked_keys = {item.key for item in unlocked}
+        if self._login_reward_unlocked:
+            unlocked_keys.add(LOGIN_REWARD_OUTFIT.key)
+        for outfit in ALL_OUTFITS:
             action = menu.addAction(outfit.name)
-            available = outfit in unlocked
+            available = outfit.key in unlocked_keys
             action.setEnabled(available)
             action.setCheckable(True)
             action.setChecked(outfit.key == self.settings.equipped_outfit)
+            if outfit.key == LOGIN_REWARD_OUTFIT.key and not available:
+                action.setToolTip("连续登录 3 天后解锁")
             if available:
                 action.triggered.connect(
                     lambda _checked=False, key=outfit.key: self.equip_outfit(key)
@@ -6143,3 +6182,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
