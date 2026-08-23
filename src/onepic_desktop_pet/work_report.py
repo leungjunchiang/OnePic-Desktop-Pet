@@ -377,7 +377,7 @@ class WorkReportDialog(QDialog):
             )
             layout.addWidget(session_card)
             extras = self._metric(
-                f"{self._pet_name()}陪伴",
+                f"{self._pet_name}陪伴",
                 f"摸摸 {int(data.get('touches', 0) or 0)} 次 · 六毛入睡动作 {int(data.get('pet_sleeps', 0) or 0)} 次",
             )
             layout.addWidget(extras)
