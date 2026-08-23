@@ -102,6 +102,36 @@ def test_period_summary_derives_report_metrics_from_account_records(tmp_path) ->
     assert day["daily"][-1]["is_today"] is True
 
 
+def test_period_summary_uses_one_session_grain_for_average_and_max(tmp_path) -> None:
+    now = datetime(2026, 8, 23, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.record_session(35 * 60, started_at=now - timedelta(hours=2), completed=False, record_id="first:1")
+    store.record_session(70 * 60, started_at=now - timedelta(hours=1), completed=False, record_id="second:1")
+
+    report = store.period_summary("day", now)
+
+    assert report["started_rounds"] == 2
+    assert report["average_session_seconds"] <= report["longest_focus_seconds"]
+    assert report["deep_focus_seconds"] <= report["total_seconds"]
+
+
+def test_month_includes_current_week_account_snapshot(tmp_path) -> None:
+    now = datetime(2026, 8, 23, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.merge_remote_state(
+        focus_date="2026-08-23",
+        today_seconds=2 * 3600,
+        week_start="2026-08-17",
+        week_seconds=53 * 3600,
+    )
+
+    week = store.period_summary("week", now)
+    month = store.period_summary("month", now)
+
+    assert week["total_seconds"] == 53 * 3600
+    assert month["total_seconds"] >= week["total_seconds"]
+
+
 def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) -> None:
     now = datetime(2026, 8, 13, 18, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
