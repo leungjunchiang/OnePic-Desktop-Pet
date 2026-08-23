@@ -48,6 +48,26 @@ def test_continuity_summary_and_next_day_review_are_local(tmp_path) -> None:
     assert tomorrow.today_first_task() == "先完成论文第三节"
 
 
+def test_period_summary_projects_day_week_and_month_without_network(tmp_path) -> None:
+    now = datetime(2026, 8, 13, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(40 * 60, started_at=now - timedelta(minutes=50), completed=True)
+    store.record_session(20 * 60, started_at=now - timedelta(days=1), completed=True)
+    store.record_session(30 * 60, started_at=now - timedelta(days=10), completed=True)
+
+    day = store.period_summary("day", now)
+    week = store.period_summary("week", now)
+    month = store.period_summary("month", now)
+
+    assert day["total_seconds"] == 40 * 60
+    assert day["completed_rounds"] == 1
+    assert week["total_seconds"] == 60 * 60
+    assert week["active_days"] == 2
+    assert month["total_seconds"] == 90 * 60
+    assert month["active_days"] == 3
+    assert month["daily"][-1]["date"] == "2026-08-13"
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

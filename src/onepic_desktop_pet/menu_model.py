@@ -60,7 +60,12 @@ class UnifiedMenuModel:
         return MenuItemSpec(title, command)
 
     def items(self, context: str = "pet") -> tuple[MenuItemSpec, ...]:
-        """Return the current menu projection for ``pet``, ``tray`` or ``dock``."""
+        """Return one menu projection for every platform entry point.
+
+        ``context`` remains available for callers and diagnostics, but the
+        macOS status item and Dock intentionally render this same sequence so
+        their right-click menus cannot drift apart.
+        """
 
         state = dict(self._state_provider())
         work_label = str(state.get("work_action_label") or "开始工作")
@@ -91,11 +96,10 @@ class UnifiedMenuModel:
         todo_children = [item for item in todo_children if item is not None]
 
         work_record_children = [
+            self._optional("工作报告…", "show_report"),
             self._optional("我的时光…", "time_memory"),
             self._optional("查看今日累计", "show_work_time"),
             self._optional("查看今日成长", "show_growth"),
-            self._optional("查看陪伴报告", "show_report"),
-            self._optional("设置工作报告时间…", "configure_daily_report"),
             self._optional("六毛钱包与工资条…", "economy"),
             self._optional(f"打开{self.pet_name}相册", "open_album"),
         ]

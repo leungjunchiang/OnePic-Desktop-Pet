@@ -29,7 +29,7 @@ from html import escape
 if TYPE_CHECKING:
     from .music_control import MusicProviderManager
 
-from PySide6.QtCore import QTime, QRect, QSize, QTimer, Qt, QThread, Signal
+from PySide6.QtCore import QRect, QSize, QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QCloseEvent, QFontMetrics, QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -48,7 +48,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QTimeEdit,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -1001,26 +1000,12 @@ class AISettingsDialog(QDialog):
         idle_hint.setWordWrap(True)
         idle_hint.setObjectName("muted")
         form.addRow("规则说明", idle_hint)
-        self.daily_report_enabled = QCheckBox("每天自动生成工作日报")
-        self.daily_report_enabled.setChecked(getattr(settings, "daily_report_enabled", True))
-        self.daily_report_enabled.setToolTip("默认开启；每天到设定时间生成一次，不再按累计 8 小时触发。")
-        self.daily_report_time = QTimeEdit()
-        report_time = QTime.fromString(getattr(settings, "daily_report_time", "22:30"), "HH:mm")
-        self.daily_report_time.setTime(report_time if report_time.isValid() else QTime(22, 30))
-        self.daily_report_time.setDisplayFormat("HH:mm")
-        self.daily_report_time.setWrapping(True)
-        self.daily_report_time.setToolTip("可用鼠标滚轮选择小时和分钟；日报会在当天这个时间生成。")
-        report_row = QWidget()
-        report_layout = QHBoxLayout(report_row)
-        report_layout.setContentsMargins(0, 0, 0, 0)
-        report_layout.addWidget(self.daily_report_enabled)
-        report_layout.addWidget(QLabel("截止当天"))
-        report_layout.addWidget(self.daily_report_time)
-        report_layout.addWidget(QLabel("生成"))
-        report_layout.addStretch(1)
-        self.daily_report_enabled.toggled.connect(self.daily_report_time.setEnabled)
-        self.daily_report_time.setEnabled(self.daily_report_enabled.isChecked())
-        form.addRow("工作日报", report_row)
+        report_hint = QLabel(
+            "工作报告改为按需打开的日度 / 本周 / 月度实时页签，不会每天生成或保存图片。"
+        )
+        report_hint.setWordWrap(True)
+        report_hint.setObjectName("muted")
+        form.addRow("工作报告", report_hint)
         self.music_service = QComboBox()
         for label, key in (
             ("自动选择（推荐）", "auto"),
@@ -1302,8 +1287,6 @@ class AISettingsDialog(QDialog):
         self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()
         self.settings.automatic_grumbling = self.grumbling.isChecked()
         self.settings.hourly_announcement = self.hourly.isChecked()
-        self.settings.daily_report_enabled = self.daily_report_enabled.isChecked()
-        self.settings.daily_report_time = self.daily_report_time.time().toString("HH:mm")
         self.settings.app_awareness = self.app_awareness.isChecked()
         self.settings.voice_enabled = self.voice.isChecked()
         self.settings.lyric_inspiration_enabled = self.lyric_inspiration.isChecked()

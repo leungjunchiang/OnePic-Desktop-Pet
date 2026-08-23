@@ -137,7 +137,15 @@ def social_user_message(error: BaseException) -> str:
     if "email address not authorized" in lowered or "email not authorized" in lowered:
         return "当前 Supabase 邮件服务只允许项目团队邮箱收信，163/学校邮箱不会收到邮件；请为 Supabase Auth 配置自定义 SMTP 后重试。"
     if code in {"invalid_credentials", "invalid_login_credentials"} or "invalid login credentials" in lowered:
-        return "邮箱或密码不正确；请确认邮箱已完成验证，并检查当前填写的邮箱和密码。"
+        return "邮箱或密码不正确；请确认邮箱已完成验证，并检查当前填写的邮箱和密码。重复注册不会修改已有账号密码，请使用该邮箱最初设置的密码。"
+    if code in {"weak_password", "password_too_short", "password_strength"} or "password is too weak" in lowered or "password should be at least" in lowered:
+        return "新密码至少需要 8 位，请换一个更长的密码；建议同时包含字母和数字。"
+    if code in {"reauthentication_needed", "current_password_required"} or "current password" in lowered or "reauthentication" in lowered:
+        return "为了保护账号，请填写当前密码后再修改密码。"
+    if "password" in lowered and ("same" in lowered or "match" in lowered or "identical" in lowered):
+        return "两次输入的新密码不一致，请重新检查。"
+    if code in {"same_password", "same_password_error"} or "different from the old password" in lowered:
+        return "新密码不能和当前密码相同，请换一个密码。"
     if code == "email_not_confirmed" or "email not confirmed" in lowered:
         return "这个邮箱还没有完成确认，请先打开确认邮件中的链接，再回到六毛登录。"
     if "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
@@ -332,6 +340,7 @@ class SocialSession:
     user_id: str
     expires_at: float
     generation: int = 0
+    email: str = ""
 
 
 @dataclass(frozen=True)
@@ -343,11 +352,16 @@ class SignupResult:
     session_active: bool = False
     confirmation_pending: bool = False
     confirmation_sent: bool = False
+    existing_account: bool = False
+    email_confirmed: bool = False
     redirect_url: str = ""
 
     @property
     def created(self) -> bool:
-        return bool(self.user_id or self.session_active)
+        # A user object without a session is also returned when Supabase
+        # receives a repeated signup for an existing email. That response
+        # must not be treated as a newly created/logged-in account.
+        return bool(self.session_active or self.confirmation_pending)
 
     def __bool__(self) -> bool:
         """Keep compatibility with older callers that treated signup as bool."""
@@ -439,6 +453,7 @@ class AuthSessionManager:
                 str(data.get("user_id", "")),
                 float(data.get("expires_at", 0)),
                 int(data.get("generation", 0) or 0),
+                str(data.get("email", "") or ""),
             )
         except Exception as exc:
             self._state.storage_error = type(exc).__name__
@@ -489,6 +504,7 @@ class AuthSessionManager:
                             "user_id": session.user_id,
                             "expires_at": session.expires_at,
                             "generation": session.generation,
+                            "email": session.email,
                         },
                         ensure_ascii=False,
                         separators=(",", ":"),
@@ -523,6 +539,7 @@ class AuthSessionManager:
                 str(user.get("id", data.get("user_id", ""))),
                 time.time() + int(data.get("expires_in", 3600)),
                 generation,
+                normalize_email(str(user.get("email") or data.get("email") or "")),
             )
             self.persist(session)
             # A successful password login is the recovery path after an
@@ -718,6 +735,9 @@ class SocialBackend(Protocol):
     def resend_confirmation(self, email: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
     def sign_out(self) -> None: ...
+    def change_password(self, current_password: str, new_password: str) -> None: ...
+    def request_password_reset(self, email: str) -> bool: ...
+    def delete_account(self) -> None: ...
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
@@ -742,11 +762,12 @@ class HttpSocialBackend:
     SERVICE_NAME = "LiliSocial"
     ACCOUNT_NAME = "supabase-session"
 
-    def __init__(self, base_url: str, *, client_key: str = "", persist_tokens: bool = True, email_redirect_url: str = "", transport: str = "proxy", auth_manager: AuthSessionManager | None = None) -> None:
+    def __init__(self, base_url: str, *, client_key: str = "", persist_tokens: bool = True, email_redirect_url: str = "", password_reset_redirect_url: str = "", transport: str = "proxy", auth_manager: AuthSessionManager | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.client_key = client_key
         self.persist_tokens = persist_tokens
         self.email_redirect_url = email_redirect_url
+        self.password_reset_redirect_url = password_reset_redirect_url or email_redirect_url
         self.transport = transport if transport in {"direct", "proxy"} else "proxy"
         self.last_server_timestamp = ""
         self.session: SocialSession | None = None
@@ -760,6 +781,11 @@ class HttpSocialBackend:
     @property
     def signed_in(self) -> bool:
         return (self.session is not None or self.auth_manager.current() is not None) and not self.auth_manager.requires_relogin
+
+    @property
+    def account_email(self) -> str:
+        session = self.auth_manager.current() or self.session
+        return normalize_email(session.email) if session is not None else ""
 
     @staticmethod
     def _keyring():
@@ -879,12 +905,24 @@ class HttpSocialBackend:
         payload = data if isinstance(data, dict) else {}
         user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
         user_id = str(user.get("id") or payload.get("user_id") or (session.user_id if session else ""))
+        email_confirmed = bool(user.get("email_confirmed_at"))
+        # GoTrue returns an empty identities array for an existing account on
+        # a repeated signup. The confirmed timestamp covers older responses
+        # and makes the classification safe even when identities is omitted.
+        existing_account = bool(
+            user_id
+            and session is None
+            and (email_confirmed or user.get("identities") == [])
+        )
+        confirmation_pending = bool(user_id and session is None and not existing_account)
         return SignupResult(
             email=email,
             user_id=user_id,
             session_active=session is not None,
-            confirmation_pending=bool(user_id and session is None and not user.get("email_confirmed_at")),
+            confirmation_pending=confirmation_pending,
             confirmation_sent=bool(user.get("confirmation_sent_at")),
+            existing_account=existing_account,
+            email_confirmed=email_confirmed,
             redirect_url=self.email_redirect_url,
         )
 
@@ -963,6 +1001,65 @@ class HttpSocialBackend:
         data = self._raw("POST", path, {"email": normalize_email(email), "password": password}, timeout=_auth_request_timeout())
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
+
+    def _require_direct_security_transport(self) -> None:
+        if self.transport != "direct":
+            raise SocialError(
+                "账号安全操作需要直连 Supabase，请稍后重试。",
+                kind="config",
+            )
+
+    def change_password(self, current_password: str, new_password: str) -> None:
+        """Change a password through GoTrue's current-password check.
+
+        Passwords are sent only to Supabase Auth over the direct HTTPS route;
+        they are never written to the application's database or keyring.
+        """
+
+        self._require_direct_security_transport()
+        if len(new_password) < 8:
+            raise SocialError("新密码至少需要 8 位。", kind="weak_password", error_code="weak_password")
+        if not current_password:
+            raise SocialError("请输入当前密码。", kind="validation")
+        email = self.account_email
+        if not email:
+            raise SocialError("当前登录状态缺少账号邮箱，请退出后重新登录再修改密码。", kind="auth")
+        # Verify the current password with Supabase Auth itself before the
+        # update. This keeps the safety property even when a hosted project's
+        # optional current-password update flag has not been enabled yet.
+        self.sign_in(email, current_password)
+        self._raw(
+            "PUT",
+            "/auth/v1/user",
+            {"current_password": current_password, "password": new_password},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        )
+
+    def request_password_reset(self, email: str) -> bool:
+        """Ask Supabase Auth to send a reset email with a neutral outcome."""
+
+        self._require_direct_security_transport()
+        normalized_email = normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        body: dict[str, Any] = {"email": normalized_email}
+        if self.password_reset_redirect_url:
+            body["redirect_to"] = self.password_reset_redirect_url
+        self._raw("POST", "/auth/v1/recover", body, timeout=_auth_request_timeout())
+        return True
+
+    def delete_account(self) -> None:
+        """Delete the current Auth user via a server-side security-definer RPC."""
+
+        self._require_direct_security_transport()
+        self._raw(
+            "POST",
+            "/rest/v1/rpc/lili_delete_my_account",
+            {},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        )
 
     def sign_out(self) -> None:
         self._clear_session()
@@ -1179,6 +1276,11 @@ class LegacyDirectSocialClient:
             or str(config.get("email_redirect_to", "")).strip()
             or "https://github.com/leungjunchiang/OnePic-Desktop-Pet"
         )
+        self.password_reset_redirect_url = (
+            os.environ.get("LILI_PASSWORD_RESET_REDIRECT_URL", "").strip()
+            or str(config.get("password_reset_redirect_to", "")).strip()
+            or self.email_redirect_url
+        )
         self.persist_tokens = persist_tokens
         self._dashboard_cache: dict[str, dict[str, Any]] = {}
         self._last_error = ""
@@ -1196,6 +1298,7 @@ class LegacyDirectSocialClient:
                 client_key=self.key,
                 persist_tokens=persist_tokens,
                 email_redirect_url=self.email_redirect_url,
+                password_reset_redirect_url=self.password_reset_redirect_url,
             )
         if self._http_backend is None:
             self._load_session()
@@ -1538,12 +1641,21 @@ class LegacyDirectSocialClient:
         payload = data if isinstance(data, dict) else {}
         user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
         user_id = str(user.get("id") or payload.get("user_id") or (session.user_id if session else ""))
+        email_confirmed = bool(user.get("email_confirmed_at"))
+        existing_account = bool(
+            user_id
+            and session is None
+            and (email_confirmed or user.get("identities") == [])
+        )
+        confirmation_pending = bool(user_id and session is None and not existing_account)
         return SignupResult(
             email=email,
             user_id=user_id,
             session_active=session is not None,
-            confirmation_pending=bool(user_id and session is None and not user.get("email_confirmed_at")),
+            confirmation_pending=confirmation_pending,
             confirmation_sent=bool(user.get("confirmation_sent_at")),
+            existing_account=existing_account,
+            email_confirmed=email_confirmed,
             redirect_url=self.email_redirect_url,
         )
 
@@ -1595,6 +1707,49 @@ class LegacyDirectSocialClient:
         data = self._raw("POST", "/auth/v1/token?grant_type=password", {"email": email.strip(), "password": password}, timeout=_auth_request_timeout())
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
+
+    @property
+    def account_email(self) -> str:
+        if self._http_backend is not None:
+            return str(getattr(self._http_backend, "account_email", "") or "")
+        session = self.auth_manager.current() or self.session
+        return normalize_email(session.email) if session is not None else ""
+
+    def change_password(self, current_password: str, new_password: str) -> None:
+        if self._http_backend is not None:
+            return self._http_backend.change_password(current_password, new_password)
+        if len(new_password) < 8:
+            raise SocialError("新密码至少需要 8 位。", kind="weak_password", error_code="weak_password")
+        email = self.account_email
+        if not email:
+            raise SocialError("当前登录状态缺少账号邮箱，请退出后重新登录再修改密码。", kind="auth")
+        self.sign_in(email, current_password)
+        self._raw(
+            "PUT",
+            "/auth/v1/user",
+            {"current_password": current_password, "password": new_password},
+            authenticated=True,
+            timeout=_auth_request_timeout(),
+        )
+
+    def request_password_reset(self, email: str) -> bool:
+        if self._http_backend is not None:
+            return bool(self._http_backend.request_password_reset(email))
+        normalized_email = normalize_email(email)
+        if not normalized_email or "@" not in normalized_email:
+            raise SocialError("请输入有效的邮箱地址。", kind="validation")
+        self._raw(
+            "POST",
+            "/auth/v1/recover",
+            {"email": normalized_email, "redirect_to": self.password_reset_redirect_url},
+            timeout=_auth_request_timeout(),
+        )
+        return True
+
+    def delete_account(self) -> None:
+        if self._http_backend is not None:
+            return self._http_backend.delete_account()
+        self._raw("POST", "/rest/v1/rpc/lili_delete_my_account", {}, authenticated=True, timeout=_auth_request_timeout())
 
     def sign_out(self) -> None:
         if self._http_backend is not None:
@@ -1735,13 +1890,14 @@ class DashboardCacheClientBase:
         )
         self.social_api_base_url = (os.environ.get("LILI_SOCIAL_API_BASE_URL", "").strip() or str(config.get("social_api_base_url", "")).strip()).rstrip("/")
         self.email_redirect_url = os.environ.get("LILI_AUTH_REDIRECT_URL", "").strip() or str(config.get("email_redirect_to", "")).strip()
+        self.password_reset_redirect_url = os.environ.get("LILI_PASSWORD_RESET_REDIRECT_URL", "").strip() or str(config.get("password_reset_redirect_to", "")).strip() or self.email_redirect_url
         self.persist_tokens = persist_tokens
         self._dashboard_cache: dict[str, dict[str, Any]] = {}
         self._last_error = ""
         self.connection = ConnectionStateStore()
         self._http_backend: SocialBackend | None = backend
         if self._http_backend is None and self.social_api_base_url:
-            self._http_backend = HttpSocialBackend(self.social_api_base_url, persist_tokens=persist_tokens, email_redirect_url=self.email_redirect_url)
+            self._http_backend = HttpSocialBackend(self.social_api_base_url, persist_tokens=persist_tokens, email_redirect_url=self.email_redirect_url, password_reset_redirect_url=self.password_reset_redirect_url)
         self._load_dashboard_cache()
 
     @property
@@ -1890,6 +2046,19 @@ class DashboardCacheClientBase:
     def sign_in(self, email: str, password: str) -> None:
         self._require_backend().sign_in(normalize_email(email), password)
 
+    @property
+    def account_email(self) -> str:
+        return str(getattr(self._http_backend, "account_email", "") or "")
+
+    def change_password(self, current_password: str, new_password: str) -> None:
+        self._require_backend().change_password(current_password, new_password)
+
+    def request_password_reset(self, email: str) -> bool:
+        return bool(self._require_backend().request_password_reset(email))
+
+    def delete_account(self) -> None:
+        self._require_backend().delete_account()
+
     def sign_out(self) -> None:
         backend = self._http_backend
         if backend is not None: backend.sign_out()
@@ -1931,8 +2100,9 @@ class BackendRouteManager:
     DIRECT_SUPABASE = "DIRECT_SUPABASE"
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
-    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation"}
-    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in", "resend_confirmation"}
+    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation", "change_password", "request_password_reset", "delete_account"}
+    SECURITY_METHODS = {"change_password", "request_password_reset", "delete_account"}
+    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "sign_up", "sign_in", "resend_confirmation", "change_password", "request_password_reset", "delete_account"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend | None, *, persist_state: bool = True) -> None:
@@ -2128,6 +2298,22 @@ class BackendRouteManager:
         route first, then send credentials once on that route; a network error
         may retry once on the proxy, while 401/403 and validation errors stop.
         """
+        # Password changes, recovery requests, and account deletion are never
+        # replayed to or routed through the legacy proxy. This keeps passwords
+        # inside Supabase Auth and avoids duplicate destructive operations after
+        # a timeout.
+        if method in self.SECURITY_METHODS:
+            backend = self.direct
+            self._sync_sessions(self.direct, self.proxy)
+            started = time.monotonic()
+            try:
+                result = getattr(backend, method)(*args, **kwargs)
+                self._mark_success(started)
+                return result
+            except SocialError:
+                self._mark_failure()
+                raise
+
         backend = self._select_auth_route()
         self._sync_sessions(self.direct if backend is self.direct else self.proxy, backend)
         started = time.monotonic()
@@ -2226,9 +2412,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         if backend is not None:
             self._manager = backend
         else:
-            direct = HttpSocialBackend(supabase_url, client_key=supabase_key, persist_tokens=persist_tokens, email_redirect_url=str(config.get("email_redirect_to", "")), transport="direct")
+            password_reset_redirect_url = str(config.get("password_reset_redirect_to", "")).strip() or str(config.get("email_redirect_to", ""))
+            direct = HttpSocialBackend(supabase_url, client_key=supabase_key, persist_tokens=persist_tokens, email_redirect_url=str(config.get("email_redirect_to", "")), password_reset_redirect_url=password_reset_redirect_url, transport="direct")
             proxy_enabled = bool(proxy_url) and str(config.get("social_backend", "")).strip().lower() in {"direct_with_cloudbase_fallback", "cloudbase_proxy"}
-            proxy = HttpSocialBackend(proxy_url, client_key="", persist_tokens=False, email_redirect_url=str(config.get("email_redirect_to", "")), transport="proxy") if proxy_enabled else None
+            proxy = HttpSocialBackend(proxy_url, client_key="", persist_tokens=False, email_redirect_url=str(config.get("email_redirect_to", "")), password_reset_redirect_url=password_reset_redirect_url, transport="proxy") if proxy_enabled else None
             self._manager = BackendRouteManager(direct, proxy, persist_state=persist_tokens)
         self._load_dashboard_cache()
 
@@ -2291,6 +2478,20 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         # usable session before Supabase has accepted the replacement.  The
         # successful auth response atomically replaces the stored session.
         self._manager.request("sign_in", normalize_email(email), password)
+
+    @property
+    def account_email(self) -> str:
+        active = getattr(self._manager, "active", None)
+        return normalize_email(str(getattr(active, "account_email", "") or ""))
+
+    def change_password(self, current_password: str, new_password: str) -> None:
+        self._manager.request("change_password", current_password, new_password)
+
+    def request_password_reset(self, email: str) -> bool:
+        return bool(self._manager.request("request_password_reset", normalize_email(email)))
+
+    def delete_account(self) -> None:
+        self._manager.request("delete_account")
 
     def sign_out(self) -> None:
         backend = self._manager.direct if hasattr(self._manager, "direct") else None

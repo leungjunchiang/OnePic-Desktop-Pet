@@ -4,7 +4,8 @@ Only coarse metrics are stored: duration, round count, away count and
 application *categories*.  Window titles, document names, keystrokes and
 mouse coordinates never enter this file.  The module is intentionally
 transport-free so the desktop pet remains useful when the social backend is
-offline.
+offline.  Period summaries are calculated on demand from the account-scoped
+history; no report images or extra server-side report rows are created.
 """
 
 from __future__ import annotations
@@ -571,6 +572,104 @@ class FocusAnalyticsStore:
             if seconds:
                 result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
         return result
+
+    def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
+        """Calculate a day/week/month report from the account's local history.
+
+        This is deliberately a read-only, on-demand projection.  The current
+        live timer is supplied by the caller because it is not yet a closed
+        analytics record; server-confirmed daily and weekly maxima are merged
+        into the same projection when available.
+        """
+
+        moment = _as_beijing(at or self._now())
+        today = moment.date()
+        normalized = str(period or "day").strip().casefold()
+        if normalized in {"week", "weekly", "本周", "周"}:
+            key = "week"
+            start = today - timedelta(days=today.weekday())
+        elif normalized in {"month", "monthly", "月度", "月"}:
+            key = "month"
+            start = today.replace(day=1)
+        else:
+            key = "day"
+            start = today
+
+        stored = self._state.get("days", {})
+        if not isinstance(stored, dict):
+            stored = {}
+        daily: list[dict[str, Any]] = []
+        total_seconds = 0
+        completed_rounds = 0
+        longest_focus_seconds = 0
+        interruptions = 0
+        untrusted_days: list[str] = []
+        cursor = start
+        while cursor <= today:
+            date_key = cursor.isoformat()
+            raw = stored.get(date_key, {})
+            raw = raw if isinstance(raw, dict) else {}
+            untrusted = bool(raw.get("seconds_untrusted"))
+            if untrusted:
+                seconds = 0
+                untrusted_days.append(date_key)
+            else:
+                try:
+                    seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
+                except (TypeError, ValueError, OverflowError):
+                    seconds = 0
+            try:
+                rounds = max(0, int(raw.get("rounds", 0) or 0))
+                longest = max(0, int(raw.get("longest", 0) or 0))
+                day_interruptions = max(0, int(raw.get("interruptions", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                rounds = longest = day_interruptions = 0
+            total_seconds += seconds
+            completed_rounds += rounds
+            longest_focus_seconds = max(longest_focus_seconds, longest)
+            interruptions += day_interruptions
+            daily.append({
+                "date": date_key,
+                "label": f"{cursor.month}/{cursor.day}",
+                "seconds": seconds,
+                "rounds": rounds,
+                "trusted": not untrusted,
+            })
+            cursor += timedelta(days=1)
+
+        account_state = self._state.get("account_state", {})
+        if not isinstance(account_state, dict):
+            account_state = {}
+        if key == "day" and str(account_state.get("focus_date") or "")[:10] == today.isoformat():
+            total_seconds = max(total_seconds, max(0, int(account_state.get("focus_today_seconds", 0) or 0)))
+        if key == "week" and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat():
+            total_seconds = max(total_seconds, max(0, int(account_state.get("focus_week_seconds", 0) or 0)))
+
+        quality_values: list[int] = []
+        for raw in self._state.get("records", []):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                value = int(raw.get("quality", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if start <= started.date() <= today and value > 0:
+                quality_values.append(max(0, min(100, value)))
+
+        return {
+            "period": key,
+            "start": start.isoformat(),
+            "end": today.isoformat(),
+            "total_seconds": total_seconds,
+            "completed_rounds": completed_rounds,
+            "longest_focus_seconds": longest_focus_seconds,
+            "interruptions": interruptions,
+            "average_quality": round(sum(quality_values) / len(quality_values)) if quality_values else 0,
+            "active_days": sum(1 for item in daily if item["seconds"] > 0),
+            "daily": daily,
+            "untrusted_days": untrusted_days,
+        }
 
     def _best_window(self, today: date) -> str:
         buckets: dict[int, list[int]] = {}

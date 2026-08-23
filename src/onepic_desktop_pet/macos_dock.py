@@ -95,7 +95,7 @@ class MacDockMenuController:
                 menu.addItem_(item)
 
         menu = NSMenu.alloc().initWithTitle_("六毛")
-        render(menu, self._model_provider().items("dock"))
+        render(menu, self._model_provider().items("macos"))
         return menu
 
     def close(self) -> None:
@@ -217,7 +217,7 @@ class MacStatusBarController:
                     item.setSubmenu_(submenu)
                 destination.addItem_(item)
 
-        render(self._model_provider().items("status"), menu)
+        render(self._model_provider().items("macos"), menu)
 
     def close(self) -> None:
         """Remove the native status item during application shutdown."""
@@ -235,4 +235,3 @@ def install_status_item(model_provider: Callable[[], UnifiedMenuModel]) -> MacSt
     """Create a native macOS menu-bar entry, or a no-op elsewhere."""
 
     return MacStatusBarController(model_provider)
-

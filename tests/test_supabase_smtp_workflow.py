@@ -32,6 +32,34 @@ def test_supabase_smtp_script_can_derive_public_defaults():
     assert '"587"' in script
 
 
+def test_auth_config_includes_password_policy_and_recovery_redirect():
+    script = (ROOT / "scripts" / "configure_supabase_auth.ps1").read_text(encoding="utf-8")
+    config = (ROOT / "config" / "social_backend.json").read_text(encoding="utf-8")
+
+    assert "password_min_length = 8" in script
+    assert "uri_allow_list = $resolvedPasswordResetUrl.Trim()" in script
+    assert "password_reset_redirect_to" in config
+
+
+def test_account_security_migration_is_authenticated_and_uid_scoped():
+    migration = (ROOT / "supabase" / "migrations" / "20260823000100_lili_account_security.sql").read_text(encoding="utf-8")
+
+    assert "security definer" in migration.lower()
+    assert "auth.uid()" in migration
+    assert "delete from auth.users" in migration.lower()
+    assert "revoke all on function public.lili_delete_my_account() from public, anon, authenticated" in migration
+    assert "grant execute on function public.lili_delete_my_account() to authenticated" in migration
+
+
+def test_password_reset_page_uses_publishable_client_and_update_user():
+    page = (ROOT / "docs" / "password-reset.html").read_text(encoding="utf-8")
+
+    assert "sb_publishable_" in page
+    assert "createClient" in page
+    assert "auth.updateUser({ password })" in page
+    assert "service_role" not in page
+
+
 def test_focus_history_deployment_uses_existing_management_token_and_public_project_ref():
     workflow = (ROOT / ".github" / "workflows" / "deploy-supabase-focus-history.yml").read_text(encoding="utf-8")
     script = (ROOT / "scripts" / "apply_supabase_focus_history.ps1").read_text(encoding="utf-8")

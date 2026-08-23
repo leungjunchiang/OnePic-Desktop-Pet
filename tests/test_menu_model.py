@@ -38,7 +38,7 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
             "size",
             "content_update",
             "program_update",
-            "configure_daily_report",
+            "show_report",
             "topmost",
             "visibility",
             "quit",
@@ -68,7 +68,8 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     assert settings_titles[:3] == ["主人称呼", "调整大小", "显示本轮工作时长"]
     assert "设置中心…" in settings_titles
     work_record = next(item for item in model.items() if item.title == "工作记录")
-    assert "设置工作报告时间…" in [item.title for item in work_record.children]
+    assert "工作报告…" in [item.title for item in work_record.children]
+    assert "设置工作报告时间…" not in [item.title for item in work_record.children]
     updates = next(item for item in settings.children if item.title == "更新与关于")
     assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "更新到最新版本…"]
     music = next(item for item in model.items() if item.title == "音乐")
@@ -79,6 +80,10 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         "随机听陈楚生",
     ]
     assert next(item for item in model.items() if item.title == "始终置顶（关闭即桌面模式）").checked
+
+    # The Dock and status-bar entry points must render the same model rather
+    # than maintaining separate macOS-specific command lists.
+    assert model.items("macos") == model.items("status") == model.items("dock")
 
     model.execute("topmost", False)
     model.execute("visibility")

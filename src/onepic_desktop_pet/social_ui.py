@@ -468,6 +468,80 @@ class SocialResendConfirmationThread(QThread):
             )
 
 
+class SocialChangePasswordThread(QThread):
+    """Change a password away from the Qt GUI thread."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, current_password: str, new_password: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self._current_password = current_password
+        self._new_password = new_password
+
+    def run(self) -> None:
+        try:
+            self.client.change_password(self._current_password, self._new_password)
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            self.failed.emit(SocialError("密码修改失败，请稍后重试。", kind="network", retryable=True))
+        finally:
+            self._current_password = ""
+            self._new_password = ""
+
+
+class SocialPasswordResetThread(QThread):
+    """Request a recovery email without blocking the GUI thread."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, email: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = email
+
+    def run(self) -> None:
+        try:
+            self.client.request_password_reset(self.email)
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            self.failed.emit(SocialError("密码重置邮件发送失败，请稍后重试。", kind="network", retryable=True))
+
+
+class SocialDeleteAccountThread(QThread):
+    """Re-authenticate and delete the current account away from the GUI."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, email: str, current_password: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = email
+        self._current_password = current_password
+
+    def run(self) -> None:
+        try:
+            # Require a fresh password check before the destructive RPC. The
+            # RPC itself derives the user from auth.uid(), never from client
+            # supplied IDs or email addresses.
+            self.client.sign_in(self.email, self._current_password)
+            self.client.delete_account()
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            self.failed.emit(SocialError("注销账号失败，请稍后重试。", kind="network", retryable=True))
+        finally:
+            self._current_password = ""
+
+
 class SocialEventThread(QThread):
     """Send a room event without freezing pet animation or the study window."""
 
@@ -1062,6 +1136,188 @@ class BuddyVisitWindow(QWidget):
         self.clock.setText(f"{h:02d}:{m:02d}:{s:02d}")
 
 
+class AccountSecurityDialog(QDialog):
+    """Small, explicit account-security surface for the desktop app."""
+
+    logout_requested = Signal()
+    account_deleted = Signal()
+
+    def __init__(self, client: SocialClient, email: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = str(email or getattr(client, "account_email", "") or "").strip()
+        self._change_thread: SocialChangePasswordThread | None = None
+        self._reset_thread: SocialPasswordResetThread | None = None
+        self._delete_thread: SocialDeleteAccountThread | None = None
+        self.setWindowTitle("账号与安全 - Lili")
+        self.setModal(True)
+        self.resize(480, 520)
+        self.setStyleSheet("""
+            QDialog { background:#edf4f7; }
+            QLabel { color:#263746; }
+            QLabel#title { font-size:22px; font-weight:700; }
+            QLabel#muted { color:#667984; }
+            QLabel#status { background:#e1efec; color:#087f74; border-radius:8px; padding:7px 10px; }
+            QLineEdit { background:white; border:1px solid #b8ccd6; border-radius:8px; padding:7px; }
+            QPushButton { background:#d8efeb; color:#075d57; border:0; border-radius:8px; padding:8px 12px; }
+            QPushButton:hover { background:#c7e5e1; }
+            QPushButton#danger { background:#f4dddd; color:#9f3030; }
+            QPushButton#link { background:transparent; color:#087f74; text-align:left; padding:2px; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        title = QLabel("账号与安全"); title.setObjectName("title"); layout.addWidget(title)
+        account_text = self.email or "当前已登录账号"
+        account = QLabel(f"当前账号：{account_text}"); account.setObjectName("muted"); account.setWordWrap(True); layout.addWidget(account)
+        form = QFormLayout()
+        self.current_password = QLineEdit(); self.current_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.new_password = QLineEdit(); self.new_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password = QLineEdit(); self.confirm_password.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("当前密码", self.current_password)
+        form.addRow("新密码", self.new_password)
+        form.addRow("确认新密码", self.confirm_password)
+        layout.addLayout(form)
+        hint = QLabel("至少 8 位，建议包含字母和数字。密码不会保存在 Lili。")
+        hint.setObjectName("muted"); hint.setWordWrap(True); layout.addWidget(hint)
+        self.status_label = QLabel(); self.status_label.setObjectName("status"); self.status_label.setWordWrap(True); self.status_label.hide(); layout.addWidget(self.status_label)
+        self.change_button = QPushButton("确认修改"); self.change_button.clicked.connect(self._change_password); layout.addWidget(self.change_button)
+        self.reset_button = QPushButton("忘记当前密码？通过邮箱重置"); self.reset_button.setObjectName("link"); self.reset_button.clicked.connect(self._request_reset); layout.addWidget(self.reset_button)
+        line = QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet("color:#d6e1e6;"); layout.addWidget(line)
+        self.logout_button = QPushButton("退出登录"); self.logout_button.clicked.connect(self._logout); layout.addWidget(self.logout_button)
+        self.delete_button = QPushButton("注销账号"); self.delete_button.setObjectName("danger"); self.delete_button.clicked.connect(self._delete_account); layout.addWidget(self.delete_button)
+        close = QPushButton("关闭"); close.clicked.connect(self.reject); layout.addWidget(close)
+        layout.addStretch()
+
+    def _set_busy(self, busy: bool) -> None:
+        for widget in (self.current_password, self.new_password, self.confirm_password, self.change_button, self.reset_button, self.logout_button, self.delete_button):
+            widget.setEnabled(not busy)
+
+    def _show_status(self, message: str, *, error: bool = False) -> None:
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet(
+            f"background:{'#f7e5e5' if error else '#e1efec'};color:{'#a33a3a' if error else '#087f74'};border-radius:8px;padding:7px 10px;"
+        )
+        self.status_label.show()
+
+    def _change_password(self) -> None:
+        current = self.current_password.text()
+        new = self.new_password.text()
+        confirm = self.confirm_password.text()
+        if not current:
+            self._show_status("请输入当前密码。", error=True); return
+        if len(new) < 8:
+            self._show_status("新密码至少需要 8 位。", error=True); return
+        if new != confirm:
+            self._show_status("两次输入的新密码不一致。", error=True); return
+        if self._change_thread is not None and self._change_thread.isRunning():
+            return
+        self._set_busy(True); self._show_status("正在修改密码…")
+        thread = SocialChangePasswordThread(self.client, current, new, self)
+        self._change_thread = thread
+        thread.completed.connect(self._password_changed)
+        thread.failed.connect(self._password_change_failed)
+        thread.finished.connect(lambda: self._password_thread_finished(thread))
+        thread.start()
+
+    def _password_changed(self) -> None:
+        self.current_password.clear(); self.new_password.clear(); self.confirm_password.clear()
+        self._show_status("密码已修改成功；为保护账号安全，其他设备可能需要重新登录。")
+        QMessageBox.information(self, "密码已修改", "密码已修改成功。其他设备可能需要重新登录。")
+
+    def _password_change_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._show_status(social_user_message(exc), error=True)
+
+    def _password_thread_finished(self, thread: SocialChangePasswordThread) -> None:
+        if self._change_thread is thread:
+            self._change_thread = None
+        self._set_busy(False); thread.deleteLater()
+
+    def _request_reset(self) -> None:
+        email = self.email
+        if not email:
+            email, accepted = QInputDialog.getText(self, "邮箱重置密码", "请输入注册邮箱：")
+            if not accepted:
+                return
+        email = email.strip()
+        if not email or "@" not in email:
+            self._show_status("请输入有效的邮箱地址。", error=True); return
+        if self._reset_thread is not None and self._reset_thread.isRunning():
+            return
+        self._set_busy(True); self._show_status("正在提交密码重置邮件…")
+        thread = SocialPasswordResetThread(self.client, email, self)
+        self._reset_thread = thread
+        thread.completed.connect(self._reset_requested)
+        thread.failed.connect(self._reset_failed)
+        thread.finished.connect(lambda: self._reset_thread_finished(thread))
+        thread.start()
+
+    def _reset_requested(self) -> None:
+        # Keep this response neutral even when the email is not registered.
+        self._show_status("如果该邮箱已注册，我们会向其发送密码重置邮件；请检查收件箱和垃圾邮件。")
+        QMessageBox.information(self, "密码重置邮件已提交", "如果该邮箱已注册，我们会向其发送密码重置邮件。请检查收件箱和垃圾邮件。")
+
+    def _reset_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._show_status(social_user_message(exc), error=True)
+
+    def _reset_thread_finished(self, thread: SocialPasswordResetThread) -> None:
+        if self._reset_thread is thread:
+            self._reset_thread = None
+        self._set_busy(False); thread.deleteLater()
+
+    def _logout(self) -> None:
+        if self._change_thread is not None and self._change_thread.isRunning():
+            return
+        self.client.sign_out()
+        self.logout_requested.emit()
+        self.accept()
+
+    def _delete_account(self) -> None:
+        if not self.email:
+            self._show_status("当前登录会话没有可用邮箱，暂时不能安全注销。", error=True); return
+        answer = QMessageBox.warning(
+            self,
+            "注销账号",
+            "注销会永久删除 Supabase 账号及六毛云端数据，不能恢复。确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        confirmation, accepted = QInputDialog.getText(self, "确认注销账号", "请输入 DELETE 以确认：")
+        if not accepted or confirmation.strip() != "DELETE":
+            self._show_status("未完成注销确认。", error=True); return
+        password, accepted = QInputDialog.getText(self, "验证当前密码", "请输入当前密码：", QLineEdit.EchoMode.Password)
+        if not accepted or not password:
+            return
+        if self._delete_thread is not None and self._delete_thread.isRunning():
+            return
+        self._set_busy(True); self._show_status("正在验证并注销账号…")
+        thread = SocialDeleteAccountThread(self.client, self.email, password, self)
+        self._delete_thread = thread
+        thread.completed.connect(self._account_deleted)
+        thread.failed.connect(self._delete_failed)
+        thread.finished.connect(lambda: self._delete_thread_finished(thread))
+        thread.start()
+
+    def _account_deleted(self) -> None:
+        self.account_deleted.emit()
+        QMessageBox.information(self, "账号已注销", "账号和六毛云端数据已删除。")
+        self.accept()
+
+    def _delete_failed(self, error: object) -> None:
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._show_status(social_user_message(exc), error=True)
+
+    def _delete_thread_finished(self, thread: SocialDeleteAccountThread) -> None:
+        if self._delete_thread is thread:
+            self._delete_thread = None
+        self._set_busy(False)
+        thread.deleteLater()
+        self._set_busy(False); thread.deleteLater()
+
+
 class SocialHubDialog(QDialog):
     """提供首页、互动、专注、我的四个清晰页面及统一操作反馈。"""
 
@@ -1104,6 +1360,7 @@ class SocialHubDialog(QDialog):
         self._focus_analytics: dict[str, Any] = {}
         self._last_ritual_notice = ""
         self._pending_signup_email = ""
+        self._account_email = str(getattr(client, "account_email", "") or "").strip()
         self._initial_refresh_timer = QTimer(self)
         self._initial_refresh_timer.setSingleShot(True)
         self._initial_refresh_timer.timeout.connect(self.refresh)
@@ -1116,6 +1373,7 @@ class SocialHubDialog(QDialog):
         self._login_thread: SocialLoginThread | None = None
         self._signup_thread: SocialSignupThread | None = None
         self._resend_thread: SocialResendConfirmationThread | None = None
+        self._password_reset_thread: SocialPasswordResetThread | None = None
         self._event_threads: list[SocialEventThread] = []
         self._buddy_rpc_threads: list[SocialBuddyRpcThread] = []
         self.setFont(_social_font())
@@ -2129,6 +2387,10 @@ class SocialHubDialog(QDialog):
         login_form.addRow("邮箱", self.login_email); login_form.addRow("密码", self.login_password)
         login_layout.addLayout(login_form); self.login_button = QPushButton("登录")
         self.login_button.clicked.connect(self._login); login_layout.addWidget(self.login_button); login_layout.addStretch()
+        self.forgot_password_button = QPushButton("忘记密码？")
+        self.forgot_password_button.setObjectName("link")
+        self.forgot_password_button.clicked.connect(self._request_password_reset)
+        login_layout.addWidget(self.forgot_password_button)
         register = QWidget(); register_layout = QVBoxLayout(register); register_form = QFormLayout()
         self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
         register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
@@ -2163,9 +2425,65 @@ class SocialHubDialog(QDialog):
         self.interaction_mode.setToolTip("决定好友敬茶、请吃蛋糕、请奶茶或邀请开工时如何到达你的六毛。")
         layout.addWidget(self.interaction_mode)
         save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile); layout.addWidget(save)
+        security = QPushButton("账号与安全…"); security.clicked.connect(self._open_account_security); layout.addWidget(security)
         logout = QPushButton("退出账号"); logout.clicked.connect(self._logout); layout.addWidget(logout)
         layout.addStretch()
         return card
+
+    def _open_account_security(self) -> None:
+        if not self._require_login():
+            return
+        email = self._account_email or str(getattr(self.client, "account_email", "") or "").strip()
+        dialog = AccountSecurityDialog(self.client, email, self)
+        dialog.logout_requested.connect(self._logout)
+        dialog.account_deleted.connect(self._account_deleted_from_security)
+        dialog.exec()
+
+    def _account_deleted_from_security(self) -> None:
+        self.client.sign_out()
+        self.data = {}
+        self._muted_buddy_ids.clear()
+        self._account_email = ""
+        self._update_account_state()
+        self.account_state_changed.emit(False)
+        self._set_status("账号已注销，六毛继续离线陪伴。")
+
+    def _request_password_reset(self) -> None:
+        if self._password_reset_thread is not None and self._password_reset_thread.isRunning():
+            return
+        initial = self.login_email.text().strip()
+        email, accepted = QInputDialog.getText(self, "忘记密码", "请输入注册邮箱：", QLineEdit.EchoMode.Normal, initial)
+        if not accepted:
+            return
+        email = email.strip()
+        if not email or "@" not in email:
+            self._error(SocialError("请输入有效的邮箱地址。", kind="validation"))
+            return
+        self._begin_action("正在提交密码重置邮件…")
+        self.forgot_password_button.setEnabled(False)
+        thread = SocialPasswordResetThread(self.client, email, self)
+        self._password_reset_thread = thread
+        thread.completed.connect(self._password_reset_completed)
+        thread.failed.connect(self._password_reset_failed)
+        thread.finished.connect(lambda: self._password_reset_thread_finished(thread))
+        thread.start()
+
+    def _password_reset_completed(self) -> None:
+        self._end_action()
+        self._set_status("如果该邮箱已注册，我们会向其发送密码重置邮件；请检查收件箱和垃圾邮件。")
+        QMessageBox.information(self, "密码重置邮件已提交", "如果该邮箱已注册，我们会向其发送密码重置邮件。请检查收件箱和垃圾邮件。")
+
+    def _password_reset_failed(self, error: object) -> None:
+        self._end_action()
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._error(exc)
+
+    def _password_reset_thread_finished(self, thread: SocialPasswordResetThread) -> None:
+        if self._password_reset_thread is thread:
+            self._password_reset_thread = None
+        if hasattr(self, "forgot_password_button"):
+            self.forgot_password_button.setEnabled(True)
+        thread.deleteLater()
 
     def _open_relogin(self) -> None:
         self.tabs.setCurrentIndex(3)
@@ -2281,9 +2599,35 @@ class SocialHubDialog(QDialog):
         self._end_action()
         if isinstance(result, SignupResult):
             self._pending_signup_email = result.email
-            self.signup_resend_button.setVisible(result.confirmation_pending)
+            self.signup_resend_button.setVisible(
+                result.confirmation_pending or (result.existing_account and not result.email_confirmed)
+            )
             self.login_email.setText(result.email)
-        if isinstance(result, SignupResult) and result.confirmation_pending:
+        if isinstance(result, SignupResult) and result.session_active:
+            self._update_account_state()
+            self.refresh()
+            self.account_state_changed.emit(True)
+            self._set_status("注册并登录成功，六毛自习室已准备好。")
+        elif isinstance(result, SignupResult) and result.existing_account:
+            if result.email_confirmed:
+                message = (
+                    f"账号 {result.email} 已经注册并完成验证。\n\n"
+                    "重复注册不会修改原账号密码，请切换到“登录”页，使用该邮箱最初设置的密码登录。"
+                )
+                title = "账号已存在"
+                status = "该邮箱已注册，请使用原密码登录；重复注册不会修改已有密码。"
+            else:
+                message = (
+                    f"账号 {result.email} 可能已经注册。\n\n"
+                    "为保护账号隐私，服务器不会在这里直接透露确认状态。重复注册不会修改原账号密码，"
+                    "请先使用该邮箱原来设置的密码登录；如果之前没有完成确认，请检查收件箱和垃圾邮件，"
+                    "或点击“重新发送确认邮件”，完成确认后再登录。"
+                )
+                title = "账号可能已存在"
+                status = "该邮箱可能已注册，请不要重复注册；先使用原密码登录或重新发送确认邮件。"
+            self._set_status(status)
+            QMessageBox.information(self, title, message)
+        elif isinstance(result, SignupResult) and result.confirmation_pending:
             self._set_status("注册成功，确认邮件已提交；请点击邮件后回到这里登录。")
             QMessageBox.information(
                 self,
@@ -2293,7 +2637,10 @@ class SocialHubDialog(QDialog):
                 "不是失败。然后回到 Lili，在“登录”页输入邮箱和密码即可。\n\n"
                 "如果 163 或学校邮箱暂时没有收到，请检查垃圾邮件/广告邮件，稍后点击“重新发送确认邮件”。",
             )
-        elif bool(result):
+        elif result:
+            # Compatibility path for legacy backends that still return a
+            # plain truthy value. SignupResult itself is handled explicitly
+            # above so a no-session response cannot log the user in accidentally.
             self._update_account_state()
             self.refresh()
             self.account_state_changed.emit(True)
@@ -2372,6 +2719,7 @@ class SocialHubDialog(QDialog):
 
     def _login_completed(self) -> None:
         self._end_action()
+        self._account_email = self.login_email.text().strip()
         self._update_account_state()
         self.tabs.setCurrentIndex(0)
         self.refresh()

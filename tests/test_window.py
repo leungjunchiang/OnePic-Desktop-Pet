@@ -931,26 +931,36 @@ def test_social_food_overrides_hourly_outfit_and_cake_keeps_focus_running(monkey
 
     window.close(); window.deleteLater(); app.processEvents()
 
-def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> None:
-    """快捷面板使用六个红黄蓝图标入口和悬停说明。"""
+def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> None:
+    """快捷面板有六个主入口，工作报告只作为悬停时的次级按钮。"""
 
     app, window = _create_window()
-    buttons = window.quick_panel.findChildren(QPushButton)
+    buttons = [
+        window.quick_panel.chat_button,
+        window.quick_panel.work_button,
+        window.quick_panel.report_button,
+        window.quick_panel.todo_button,
+        window.quick_panel.social_button,
+        window.quick_panel.music_button,
+        window.quick_panel.food_button,
+    ]
     assert [button.objectName() for button in buttons] == [
         "quickAction_chat",
         "quickAction_work",
+        "quickAction_report",
         "quickAction_todo",
         "quickAction_social",
         "quickAction_music",
         "quickAction_food",
     ]
-    assert [button.text() for button in buttons] == ["", "", "", "", "", ""]
-    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "待办", "搭子自习室", "音乐", "喂食"]
+    assert [button.text() for button in buttons] == ["", "", "", "", "", "", ""]
+    assert [button.toolTip() for button in buttons] == ["聊聊", "开始工作", "工作报告", "待办", "搭子自习室", "音乐", "喂食"]
     assert all(not button.icon().isNull() for button in buttons)
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
     assert all(button.size() == QSize(42, 42) for button in buttons)
-    for button, label in zip(buttons, ("聊聊", "开始工作", "待办", "搭子自习室", "音乐", "喂食")):
+    assert not window.quick_panel.report_button.isVisible()
+    for button, label in zip(buttons, ("聊聊", "开始工作", "工作报告", "待办", "搭子自习室", "音乐", "喂食")):
         window.quick_panel._show_hint(button)
         app.processEvents()
         assert window.quick_panel.hover_hint.text() == label
@@ -967,6 +977,10 @@ def test_quick_panel_has_six_high_frequency_entries_and_dynamic_work_label() -> 
     app.processEvents()
     assert window.quick_panel.pos() - window.pos() == first_offset
     assert window.quick_panel.y() + window.quick_panel.height() + 12 <= window.y()
+    window.quick_panel._set_hover_button(window.quick_panel.work_button)
+    assert window.quick_panel.report_button.isVisible()
+    window.quick_panel._set_hover_button(window.quick_panel.chat_button)
+    assert not window.quick_panel.report_button.isVisible()
     window.close(); window.deleteLater(); app.processEvents()
 
 

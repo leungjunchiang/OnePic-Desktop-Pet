@@ -333,6 +333,16 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
         painter.setPen(QPen(red, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(31, 6, 10, 13, 0, 180 * 16)
         painter.setBrush(QBrush(red)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(51, 8, 11, 11)
+    elif kind == "report":
+        painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QBrush(QColor("#eaf5f3")))
+        painter.drawRoundedRect(11, 10, 50, 53, 9, 9)
+        painter.setPen(QPen(red, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(21, 49, 21, 39)
+        painter.drawLine(35, 49, 35, 29)
+        painter.drawLine(49, 49, 49, 20)
+        painter.setPen(QPen(yellow, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(20, 22, 30, 22)
     else:  # settings compatibility icon
         painter.setPen(QPen(blue, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         for angle in range(0, 360, 45):
@@ -349,6 +359,7 @@ class QuickControlPanel(QWidget):
 
     chat_requested = Signal()
     work_requested = Signal()
+    work_report_requested = Signal()
     todo_requested = Signal()
     social_requested = Signal()
     music_requested = Signal()
@@ -408,6 +419,15 @@ class QuickControlPanel(QWidget):
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
+        self.report_button = self._button("report", "工作报告", self.work_report_requested)
+        self.report_button.setVisible(False)
+        work_column = QWidget(self)
+        work_column.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        work_layout = QVBoxLayout(work_column)
+        work_layout.setContentsMargins(0, 0, 0, 0)
+        work_layout.setSpacing(4)
+        work_layout.addWidget(self.work_button)
+        work_layout.addWidget(self.report_button)
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
@@ -416,14 +436,19 @@ class QuickControlPanel(QWidget):
         self.food_button.clicked.connect(self._show_food_menu)
         self._quick_buttons = (
             self.chat_button,
-            self.work_button,
             self.todo_button,
             self.social_button,
             self.music_button,
             self.food_button,
         )
+        self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button)
         for button in self._quick_buttons:
             layout.addWidget(button)
+            button.setMouseTracking(True)
+            button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+            button.installEventFilter(self)
+        layout.insertWidget(1, work_column)
+        for button in (self.work_button, self.report_button):
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             button.installEventFilter(self)
@@ -470,6 +495,18 @@ class QuickControlPanel(QWidget):
         if self._hint_button is self.work_button:
             self._show_hint(self.work_button)
 
+    def _set_report_button_visible(self, visible: bool) -> None:
+        """Show the work-report secondary action only while work is hovered."""
+
+        target = bool(visible)
+        if self.report_button.isVisible() == target:
+            return
+        self.report_button.setVisible(target)
+        self.adjustSize()
+        if target:
+            self._hover_poll_timer.start()
+
+
     def _show_hint(self, button: QPushButton) -> None:
         """Show a small six-mao label without changing the dock layout."""
 
@@ -514,7 +551,7 @@ class QuickControlPanel(QWidget):
     def _button_at_global_pos(self, position: QPoint) -> QPushButton | None:
         """Return the shortcut currently under the native pointer."""
 
-        for button in self._quick_buttons:
+        for button in self._hover_buttons:
             if button.rect().contains(button.mapFromGlobal(position)):
                 return button
         return None
@@ -537,7 +574,12 @@ class QuickControlPanel(QWidget):
         if button is None:
             if self._hint_button is not None:
                 self._hide_hint()
+            self._set_report_button_visible(False)
             return
+        if button not in (self.work_button, self.report_button):
+            self._set_report_button_visible(False)
+        elif button in (self.work_button, self.report_button):
+            self._set_report_button_visible(True)
         if self._hint_button is not button or not self.hover_hint.isVisible():
             self._show_hint(button)
 
@@ -556,13 +598,13 @@ class QuickControlPanel(QWidget):
             self._set_hover_button(
                 self._button_at_global_pos(self._event_global_position(event))
             )
-        if watched in getattr(self, "_quick_buttons", ()):
+        if watched in getattr(self, "_hover_buttons", ()):
             if event.type() in {
                 QEvent.Type.Enter,
                 QEvent.Type.HoverEnter,
                 QEvent.Type.MouseMove,
             }:
-                self._show_hint(watched)
+                self._set_hover_button(watched)
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
                 QTimer.singleShot(0, self._poll_hover_button)
         return super().eventFilter(watched, event)
@@ -677,6 +719,7 @@ class QuickControlPanel(QWidget):
     def hideEvent(self, event) -> None:
         self._hover_poll_timer.stop()
         self._hide_hint()
+        self._set_report_button_visible(False)
         super().hideEvent(event)
 
     def enterEvent(self, event) -> None:
@@ -690,6 +733,7 @@ class QuickControlPanel(QWidget):
         """鼠标离开后给用户三秒余量再收起。"""
 
         self.hide_timer.start(3000)
+        self._set_report_button_visible(False)
         super().leaveEvent(event)
 
 

@@ -180,7 +180,9 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["ai_provider"] == "offline"
     assert data["automatic_grumbling"] is True
     assert data["hourly_announcement"] is False
-    assert data["daily_report_enabled"] is True
+    # The legacy fields remain serializable for backwards compatibility, but
+    # scheduled PNG generation is disabled by default.
+    assert data["daily_report_enabled"] is False
     assert data["daily_report_time"] == "22:30"
     assert data["qq_music_path"].endswith("QQMusic.exe")
     assert data["kugou_music_path"].endswith("KuGou.exe")

@@ -479,6 +479,66 @@ def test_signup_reports_confirmation_pending_without_fabricating_a_session():
     assert backend.calls[0][1] == "/auth/v1/signup?redirect_to=https%3A%2F%2Fgithub.com%2Fleungjunchiang%2FOnePic-Desktop-Pet"
 
 
+def test_repeated_signup_for_confirmed_account_is_not_treated_as_login():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
+            return {
+                "user": {
+                    "id": "existing-user",
+                    "email": "Alice@example.com",
+                    "email_confirmed_at": "2026-08-22T00:00:00Z",
+                    "identities": [],
+                },
+                "session": None,
+            }
+
+    result = Recording().sign_up("Alice@example.com", "a-different-password", "搭子")
+
+    assert result.existing_account is True
+    assert result.email_confirmed is True
+    assert result.confirmation_pending is False
+    assert result.session_active is False
+    assert result.created is False
+    assert bool(result) is False
+
+
+def test_repeated_signup_for_unconfirmed_account_requires_resend_instead_of_new_registration():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
+            return {
+                "user": {
+                    "id": "existing-pending-user",
+                    "email": "Alice@example.com",
+                    "email_confirmed_at": None,
+                    "identities": [],
+                },
+                "session": None,
+            }
+
+    result = Recording().sign_up("Alice@example.com", "a-different-password", "搭子")
+
+    assert result.existing_account is True
+    assert result.email_confirmed is False
+    assert result.confirmation_pending is False
+    assert result.created is False
+
+
 def test_resend_confirmation_uses_supabase_resend_endpoint_and_redirect():
     class Recording(HttpSocialBackend):
         def __init__(self):
@@ -503,6 +563,55 @@ def test_resend_confirmation_uses_supabase_resend_endpoint_and_redirect():
         "email": "Alice@example.com",
         "options": {"emailRedirectTo": "https://github.com/leungjunchiang/OnePic-Desktop-Pet"},
     }
+
+
+def test_account_security_uses_direct_auth_endpoints_and_never_proxy():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+                password_reset_redirect_url="https://leungjunchiang.github.io/OnePic-Desktop-Pet/password-reset.html",
+            )
+            self.calls = []
+            self.session = SocialSession("a", "r", "u", 9_999_999_999, 1, "Alice@example.com")
+            self.auth_manager.adopt(self.session)
+
+        def _raw(self, method, path, body=None, *, authenticated=False, extra_headers=None, timeout=None):
+            self.calls.append((method, path, body, authenticated))
+            if path == "/auth/v1/token?grant_type=password":
+                return {
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "expires_in": 3600,
+                    "user": {"id": "u", "email": "Alice@example.com"},
+                }
+            return {}
+
+    backend = Recording()
+    backend.change_password("old-secret", "new-secret-123")
+    assert backend.request_password_reset("Alice@EXAMPLE.COM") is True
+    backend.delete_account()
+    assert backend.calls == [
+        ("POST", "/auth/v1/token?grant_type=password", {"email": "Alice@example.com", "password": "old-secret"}, False),
+        ("PUT", "/auth/v1/user", {"current_password": "old-secret", "password": "new-secret-123"}, True),
+        ("POST", "/auth/v1/recover", {"email": "Alice@example.com", "redirect_to": "https://leungjunchiang.github.io/OnePic-Desktop-Pet/password-reset.html"}, False),
+        ("POST", "/rest/v1/rpc/lili_delete_my_account", {}, True),
+    ]
+
+
+def test_security_actions_are_not_replayed_to_proxy_after_direct_failure():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    direct.change_password = lambda *_args, **_kwargs: (_ for _ in ()).throw(SocialError("timeout", kind="timeout", retryable=True))
+
+    with pytest.raises(SocialError):
+        manager.request("change_password", "old", "new-password")
+
+    assert not any(call == "change_password" for call in proxy.calls)
 
 
 def test_direct_presence_heartbeat_uses_postgrest_upsert_header():

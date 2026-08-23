@@ -54,6 +54,14 @@ $resolvedSiteUrl = if (-not [string]::IsNullOrWhiteSpace($SiteUrl)) {
     ""
 }
 
+$resolvedPasswordResetUrl = if (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_PASSWORD_RESET_URL)) {
+    $env:SUPABASE_PASSWORD_RESET_URL
+} elseif ($null -ne $publicConfig -and -not [string]::IsNullOrWhiteSpace($publicConfig.password_reset_redirect_to)) {
+    $publicConfig.password_reset_redirect_to
+} else {
+    ""
+}
+
 $resolvedPort = if (-not [string]::IsNullOrWhiteSpace($SmtpPort)) {
     $SmtpPort
 } elseif (-not [string]::IsNullOrWhiteSpace($env:SUPABASE_SMTP_PORT)) {
@@ -92,10 +100,17 @@ $authConfig = [ordered]@{
     smtp_user = $smtpUser
     smtp_pass = $smtpPassword
     smtp_sender_name = $smtpSenderName
+    password_min_length = 8
+    password_hibp_enabled = $true
 }
 
 if (-not [string]::IsNullOrWhiteSpace($resolvedSiteUrl)) {
     $authConfig.site_url = $resolvedSiteUrl.Trim()
+}
+
+if (-not [string]::IsNullOrWhiteSpace($resolvedPasswordResetUrl)) {
+    # The Management API accepts this as a comma-separated redirect allow list.
+    $authConfig.uri_allow_list = $resolvedPasswordResetUrl.Trim()
 }
 
 if ($DryRun) {

@@ -158,6 +158,7 @@ from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
 from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore, FocusQualityTracker
 from .focus_session import FocusSessionManager
+from .work_report import WorkReportDialog, build_work_report
 from .growth import (
     ACTION_GROUPS,
     ACTION_SPRITES,
@@ -394,6 +395,7 @@ class PetWindow(QWidget):
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
         self._food_scene_dialog: FoodSceneDialog | None = None
+        self._work_report_dialog: WorkReportDialog | None = None
         self._alarm_center_dialog: AlarmCenterDialog | None = None
         self._alarm_card: AlarmCard | None = None
         self.focus_analytics = FocusAnalyticsStore(
@@ -643,6 +645,7 @@ class PetWindow(QWidget):
         self.quick_panel.set_window_behavior_callback(self._apply_macos_window_behavior)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
+        self.quick_panel.work_report_requested.connect(self.show_work_report)
         self.quick_panel.todo_requested.connect(self.show_todo_center)
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
@@ -1570,6 +1573,8 @@ class PetWindow(QWidget):
             self._close_alarm_card()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
+        if self._work_report_dialog is not None:
+            self._work_report_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
             self._social_thread.wait(2500)
         if self._media_player is not None:
@@ -3703,10 +3708,64 @@ class PetWindow(QWidget):
         return self._generate_daily_report(show_dialog=False, mark_generated=True) is not None
 
     def show_daily_report(self) -> None:
-        """由菜单生成并打开今天的六毛工作日报。"""
+        """兼容旧菜单入口；报告现在改为实时页签窗口，不保存图片。"""
+
+        self.show_work_report()
+
+    def _best_buddy_for_report(self) -> str:
+        """Read the latest local self-study leaderboard snapshot only."""
+
+        dialog = self._social_dialog
+        rows = getattr(dialog, "_leaderboard_rows", []) if dialog is not None else []
+        if not isinstance(rows, list):
+            return "暂无自习室排行榜数据"
+        own_id = self._current_social_user_id()
+        candidates: list[tuple[int, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            user_id = str(row.get("user_id") or row.get("id") or "")
+            if own_id and user_id == own_id:
+                continue
+            try:
+                seconds = max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0))
+            except (TypeError, ValueError, OverflowError):
+                seconds = 0
+            name = social_pet_label(
+                row.get("owner_nickname") or row.get("nickname") or row.get("pet_name") or "搭子"
+            )
+            if seconds > 0:
+                candidates.append((seconds, name))
+        if not candidates:
+            return "暂无可用的本周排行榜数据"
+        seconds, name = max(candidates, key=lambda item: (item[0], item[1]))
+        return f"{name} · 本周 {format_work_duration(seconds)}"
+
+    def _work_report_snapshot(self) -> dict[str, object]:
+        """Build a fresh report from the currently active account namespace."""
+
+        return build_work_report(
+            self.focus_analytics,
+            self.work_timer,
+            self.daily_stats,
+            best_buddy=self._best_buddy_for_report(),
+            now=datetime.now(BEIJING_TIMEZONE),
+        )
+
+    def show_work_report(self) -> None:
+        """Open the live day/week/month report without creating a local image."""
 
         self._record_user_interaction()
-        self._generate_daily_report(show_dialog=True)
+        if self._work_report_dialog is None:
+            self._work_report_dialog = WorkReportDialog(
+                self._work_report_snapshot,
+                pet_name=self._pet_name(),
+                parent=None,
+            )
+        self._work_report_dialog.refresh()
+        self._work_report_dialog.show()
+        self._work_report_dialog.raise_()
+        self._work_report_dialog.activateWindow()
 
     def configure_daily_report(self) -> None:
         """从“工作记录”直接设置日报开关和每天的生成时间。"""
@@ -5557,11 +5616,10 @@ class PetWindow(QWidget):
             self._schedule_song_inspiration()
 
     def _hourly_tick(self) -> None:
-        """周期检查整点报时，关闭时不产生任何气泡。"""
+        """周期检查整点报时，工作报告改为用户按需打开。"""
 
         now = datetime.now()
         self._maybe_announce_hour(now)
-        self._maybe_generate_scheduled_daily_report(now)
 
     def _maybe_announce_hour(self, now: datetime) -> bool:
         """在每个整点窗口内只播报一次，返回是否实际播报。"""

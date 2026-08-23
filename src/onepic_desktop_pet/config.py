@@ -83,10 +83,10 @@ class PetSettings:
     codex_executable_path: str = ""
     automatic_grumbling: bool = True
     hourly_announcement: bool = False
-    # A daily report is generated once after this local clock time.  The
-    # default keeps the feature on while allowing users to choose another
-    # cutoff in Settings.
-    daily_report_enabled: bool = True
+    # Reports are generated on demand in a live day/week/month window.  Keep
+    # these legacy fields so older settings files still load, but do not
+    # schedule or save a local PNG report by default.
+    daily_report_enabled: bool = False
     daily_report_time: str = "22:30"
     # Show the current work-session duration in the pet work-control bubble.
     show_work_duration: bool = True
