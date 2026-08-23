@@ -76,6 +76,9 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert report["day"]["started_rounds"] == 1
     assert report["day"]["completion_rate"] == 100.0
     assert report["day"]["high_quality_seconds"] == 45 * 60
+    # The visible report uses period totals; high_quality_seconds remains an
+    # internal compatibility field for older callers and data migrations.
+    assert report["month"]["total_seconds"] == 45 * 60
     assert report["best_buddy"] == "小梁家的六毛"
     assert "不能测量" in report["sleep_note"]
     assert report["current_status"] == "idle"

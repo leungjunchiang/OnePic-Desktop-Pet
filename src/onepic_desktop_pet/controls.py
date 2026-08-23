@@ -447,6 +447,15 @@ class QuickControlPanel(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.report_button.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        # This is a top-level floating button rather than a child of the
+        # rounded quick-action dock.  Make its window surface transparent so
+        # the rounded QSS tile has no square backing/shadow at the corners.
+        self.report_button.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.report_button.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.report_button.setAutoFillBackground(False)
+        self.report_button.setFlat(True)
+        self.report_button.setContentsMargins(0, 0, 0, 0)
+        self.report_button.setGraphicsEffect(None)
         self.report_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.report_button.setMouseTracking(True)
         self.report_button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)

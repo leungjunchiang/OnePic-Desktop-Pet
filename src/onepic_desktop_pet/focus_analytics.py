@@ -631,9 +631,12 @@ class FocusAnalyticsStore:
             completed_rounds += rounds
             longest_focus_seconds = max(longest_focus_seconds, longest)
             interruptions += day_interruptions
+            weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[cursor.weekday()]
             daily.append({
                 "date": date_key,
                 "label": f"{cursor.month}/{cursor.day}",
+                "weekday": weekday,
+                "display_label": f"{cursor.month}/{cursor.day} {weekday}",
                 "seconds": seconds,
                 "rounds": rounds,
                 "trusted": not untrusted,

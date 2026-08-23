@@ -66,6 +66,8 @@ def test_period_summary_projects_day_week_and_month_without_network(tmp_path) ->
     assert month["total_seconds"] == 90 * 60
     assert month["active_days"] == 3
     assert month["daily"][-1]["date"] == "2026-08-13"
+    assert month["daily"][-1]["weekday"] == "周四"
+    assert month["daily"][-1]["display_label"] == "8/13 周四"
 
 
 def test_period_summary_derives_report_metrics_from_account_records(tmp_path) -> None:
@@ -114,6 +116,7 @@ def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) ->
     assert hourly[16] == 15 * 60
     assert sum(hourly.values()) == 75 * 60
     assert day["data_quality"]["trusted"] is True
+    assert day["hourly"][9]["label"] == "09:00"
 
 
 def test_period_summary_excludes_legacy_cumulative_records_from_charts(tmp_path) -> None:

@@ -959,6 +959,8 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
     assert all(button.size() == QSize(42, 42) for button in buttons)
+    assert window.quick_panel.report_button.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert window.quick_panel.report_button.graphicsEffect() is None
     assert not window.quick_panel.report_button.isVisible()
     for button, label in zip(buttons, ("聊聊", "开始工作", "工作报告", "待办", "搭子自习室", "音乐", "喂食")):
         window.quick_panel._show_hint(button)

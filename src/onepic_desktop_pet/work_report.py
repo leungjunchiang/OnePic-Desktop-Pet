@@ -10,8 +10,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+from PySide6.QtCore import QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -214,15 +215,61 @@ class ReportBarChart(QWidget):
         super().__init__(parent)
         self._rows = [row for row in rows if isinstance(row, dict)]
         self._hourly = bool(hourly)
+        self._bar_rects: list[QRect] = []
+        self._hover_index = -1
         self.setMinimumHeight(178)
         self.setMinimumWidth(360)
-        self.setToolTip("悬停图表可查看对应时段的工作时长")
+        self.setMouseTracking(True)
+
+    def _tooltip_for(self, index: int) -> str:
+        if not (0 <= index < len(self._rows)):
+            return ""
+        row = self._rows[index]
+        seconds = max(0, int(row.get("seconds", 0) or 0))
+        if self._hourly:
+            hour = max(0, min(23, int(row.get("hour", index) or 0)))
+            end_hour = (hour + 1) % 24
+            title = f"{hour:02d}:00–{end_hour:02d}:00"
+            detail = f"工作时长：{format_work_duration(seconds)}"
+        else:
+            date = str(row.get("date") or row.get("label") or "未知日期")
+            weekday = str(row.get("weekday") or "")
+            title = f"{date} {weekday}".strip()
+            detail = (
+                f"工作时长：{format_work_duration(seconds)}\n"
+                f"完成专注段：{int(row.get('rounds', 0) or 0)} 段"
+            )
+        if row.get("trusted") is False:
+            detail += "\n该日期数据已剔除（旧版异常记录）"
+        return f"{title}\n{detail}"
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        position = event.position().toPoint()
+        index = next(
+            (item for item, rect in enumerate(self._bar_rects) if rect.contains(position)),
+            -1,
+        )
+        if index != self._hover_index:
+            self._hover_index = index
+            self.update()
+        if index >= 0:
+            QToolTip.showText(QCursor.pos(), self._tooltip_for(index), self)
+        else:
+            QToolTip.hideText()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        self._hover_index = -1
+        QToolTip.hideText()
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        plot = self.rect().adjusted(34, 12, 12, 34)
+        plot = self.rect().adjusted(34, 12, 12, 50)
+        self._bar_rects = []
         values = [max(0, int(row.get("seconds", 0) or 0)) for row in self._rows]
         maximum = max(values or [1])
 
@@ -237,29 +284,55 @@ class ReportBarChart(QWidget):
         count = max(1, len(self._rows))
         gap = 4 if count <= 12 else 2
         bar_width = max(3, int((plot.width() - gap * (count - 1)) / count))
-        label_step = 1 if count <= 12 else 3
+        # Keep all daily labels readable, while still showing a useful set of
+        # hour ticks instead of squeezing 24 labels into a narrow card.
+        if self._hourly:
+            label_step = 3
+        else:
+            # Weekly charts can show every date; monthly charts use every
+            # third date so the date/weekday labels do not collide.
+            label_step = 1 if count <= 12 else 3
         for index, (row, value) in enumerate(zip(self._rows, values)):
             x = plot.left() + index * (bar_width + gap)
             height = int(plot.height() * value / maximum) if maximum else 0
             y = plot.bottom() - height
+            self._bar_rects.append(QRect(x, plot.top(), bar_width, plot.height()))
             color = QColor("#36a99d") if row.get("is_today") else QColor("#75c8bd")
             if self._hourly:
                 color = QColor("#4389ad") if value else QColor("#dfecef")
+            if index == self._hover_index:
+                color = QColor("#e19a62")
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(color))
             if height > 0:
                 painter.drawRoundedRect(x, y, bar_width, max(3, height), 4, 4)
-            if index % label_step == 0:
+            if index % label_step == 0 or index == count - 1:
                 painter.setPen(QColor("#647b88"))
-                label = str(row.get("label") or row.get("hour") or "")
+                if self._hourly:
+                    hour = max(0, min(23, int(row.get("hour", index) or 0)))
+                    label = f"{hour:02d}:00"
+                else:
+                    label = str(row.get("display_label") or row.get("label") or "")
                 painter.drawText(
                     x - 4,
-                    plot.bottom() + 20,
+                    plot.bottom() + 16,
                     bar_width + 8,
                     18,
                     Qt.AlignmentFlag.AlignCenter,
                     label,
                 )
+        # A direct x-axis caption makes the temporal grain explicit when the
+        # chart is read without hovering.
+        painter.setPen(QColor("#8a9aa2"))
+        axis_caption = "开始时间（小时）" if self._hourly else "日期 / 星期"
+        painter.drawText(
+            plot.left(),
+            self.height() - 16,
+            plot.width(),
+            16,
+            Qt.AlignmentFlag.AlignRight,
+            axis_caption,
+        )
         painter.end()
 
 
@@ -453,11 +526,16 @@ class WorkReportDialog(QDialog):
 
         core_grid = QGridLayout()
         core_grid.setSpacing(10)
+        period_total_label = {
+            "day": "今日累计专注时间",
+            "week": "本周累计专注时间",
+            "month": "累计月专注时间",
+        }[key]
         core_metrics = [
             ("完成专注段", f"{int(data.get('completed_rounds', 0) or 0)} 段"),
             ("最长连续专注", format_work_duration(int(data.get("longest_focus_seconds", 0) or 0))),
             ("中间打断次数", f"{int(data.get('interruptions', 0) or 0)} 次"),
-            ("高质量专注（≥25分钟）", format_work_duration(int(data.get("high_quality_seconds", 0) or 0))),
+            (period_total_label, format_work_duration(total)),
         ]
         for index, (label, value) in enumerate(core_metrics):
             core_grid.addWidget(self._metric(label, value), index // 2, index % 2)
