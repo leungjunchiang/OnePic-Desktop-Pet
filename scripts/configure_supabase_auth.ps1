@@ -77,7 +77,13 @@ $authConfig = [ordered]@{
     external_email_enabled = $true
     mailer_autoconfirm = $false
     password_min_length = 8
-    password_hibp_enabled = $true
+}
+
+# HIBP protection is optional and is rejected by some Supabase plans. Keep it
+# out of the baseline account-security patch so the supported password-length
+# and redirect settings can still be applied automatically.
+if (-not $SkipSmtp -and -not [string]::IsNullOrWhiteSpace($env:SUPABASE_ENABLE_HIBP)) {
+    $authConfig.password_hibp_enabled = $env:SUPABASE_ENABLE_HIBP.Trim().ToLowerInvariant() -eq "true"
 }
 
 if (-not $SkipSmtp) {
@@ -140,10 +146,12 @@ try {
     }
 
     if ($null -ne $statusCode) {
-        throw "Supabase Auth SMTP update failed with HTTP $statusCode. Check the project ref, token scopes, and SMTP settings."
+        $kind = if ($SkipSmtp) { "account-security" } else { "SMTP and account-security" }
+        throw "Supabase Auth $kind update failed with HTTP $statusCode. Check the project ref, token scopes, plan permissions, and settings."
     }
 
-    throw "Supabase Auth SMTP update failed. Check the project ref, token scopes, network access, and SMTP settings."
+    $kind = if ($SkipSmtp) { "account-security" } else { "SMTP and account-security" }
+    throw "Supabase Auth $kind update failed. Check the project ref, token scopes, network access, plan permissions, and settings."
 }
 
 Write-Host "Supabase Auth custom SMTP configured for project $projectRef."

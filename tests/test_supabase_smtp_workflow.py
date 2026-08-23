@@ -37,6 +37,7 @@ def test_auth_config_includes_password_policy_and_recovery_redirect():
     config = (ROOT / "config" / "social_backend.json").read_text(encoding="utf-8")
 
     assert "password_min_length = 8" in script
+    assert "some Supabase plans" in script
     assert "uri_allow_list = $resolvedPasswordResetUrl.Trim()" in script
     assert "password_reset_redirect_to" in config
 
