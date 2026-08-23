@@ -44,6 +44,12 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert report["day"]["completed_rounds"] == 1
     assert report["week"]["total_seconds"] == 45 * 60
     assert report["month"]["total_seconds"] == 45 * 60
+    assert report["current_streak_days"] == 1
+    assert report["day"]["week_total_seconds"] == report["week"]["total_seconds"]
+    assert report["day"]["rest_state"] == "清醒 / 暂未工作"
+    assert report["day"]["started_rounds"] == 1
+    assert report["day"]["completion_rate"] == 100.0
+    assert report["day"]["high_quality_seconds"] == 45 * 60
     assert report["best_buddy"] == "小梁家的六毛"
     assert "不能测量" in report["sleep_note"]
     assert report["current_status"] == "idle"

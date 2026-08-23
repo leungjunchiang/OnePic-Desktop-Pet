@@ -68,6 +68,38 @@ def test_period_summary_projects_day_week_and_month_without_network(tmp_path) ->
     assert month["daily"][-1]["date"] == "2026-08-13"
 
 
+def test_period_summary_derives_report_metrics_from_account_records(tmp_path) -> None:
+    now = datetime(2026, 8, 13, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    session_id = "session-with-pause"
+    store.record_session(
+        20 * 60,
+        started_at=now - timedelta(minutes=50),
+        completed=False,
+        record_id=f"{session_id}:1200",
+    )
+    store.record_session(
+        40 * 60,
+        started_at=now - timedelta(minutes=25),
+        completed=True,
+        record_id=f"{session_id}:3600",
+    )
+    store.record_session(30 * 60, started_at=now - timedelta(days=1), completed=False)
+
+    day = store.period_summary("day", now)
+
+    # The two paused/resumed segments are one started session, not two.
+    assert day["started_rounds"] == 1
+    assert day["completed_rounds"] == 1
+    assert day["completion_rate"] == 100.0
+    assert day["average_session_seconds"] == 60 * 60
+    assert day["high_quality_seconds"] == 60 * 60
+    assert day["longest_focus_seconds"] == 60 * 60
+    assert day["first_started_at"] != "暂无记录"
+    assert day["last_ended_at"] != "暂无记录"
+    assert day["daily"][-1]["is_today"] is True
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

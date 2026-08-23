@@ -591,23 +591,22 @@ class QuickControlPanel(QWidget):
         self._hint_button = button
         self.hover_hint.setText(text)
         self.hover_hint.adjustSize()
-        hint_anchor = button
-        # Once the report action is floating above the work button, keep the
-        # primary label above that action as well so the two hover surfaces do
-        # not cover one another.
-        if button is self.work_button and self.report_button.isVisible():
-            hint_anchor = self.report_button
-        above = hint_anchor.mapToGlobal(QPoint(hint_anchor.width() // 2, -self.hover_hint.height() - 7))
+        is_secondary = button is self.report_button
+        above = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7))
         below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
-        x = above.x() - self.hover_hint.width() // 2
-        y = above.y()
+        preferred = above if is_secondary else below
+        fallback = below if is_secondary else above
+        x = preferred.x() - self.hover_hint.width() // 2
+        y = preferred.y()
         app = QGuiApplication.instance()
-        screen = app.screenAt(above) if app is not None else None
+        screen = app.screenAt(preferred) if app is not None else None
         if screen is not None:
             area = screen.availableGeometry()
             x = min(max(x, area.left() + 4), area.right() - self.hover_hint.width() - 4)
-            if y < area.top() + 4:
-                y = below.y()
+            if is_secondary and y < area.top() + 4:
+                y = fallback.y()
+            elif not is_secondary and y + self.hover_hint.height() > area.bottom() - 4:
+                y = fallback.y()
             y = min(max(y, area.top() + 4), area.bottom() - self.hover_hint.height() - 4)
         self.hover_hint.move(x, y)
         # Configure the native window before showing it.  Reconfiguring a

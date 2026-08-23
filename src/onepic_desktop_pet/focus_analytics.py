@@ -634,6 +634,7 @@ class FocusAnalyticsStore:
                 "seconds": seconds,
                 "rounds": rounds,
                 "trusted": not untrusted,
+                "is_today": cursor == today,
             })
             cursor += timedelta(days=1)
 
@@ -657,16 +658,97 @@ class FocusAnalyticsStore:
             if start <= started.date() <= today and value > 0:
                 quality_values.append(max(0, min(100, value)))
 
+        # Derive report-only metrics from the raw account-scoped records. A
+        # paused/resumed work session writes several segments with the same
+        # session prefix in record_id, so group those segments before showing
+        # completion rate or average session length.
+        session_records: dict[str, dict[str, Any]] = {}
+        for index, raw in enumerate(self._state.get("records", [])):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                seconds = max(0, int(raw.get("seconds", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not (start <= started.date() <= today):
+                continue
+            record_id = str(raw.get("record_id") or "").strip()
+            session_key = record_id.split(":", 1)[0] if record_id else f"record:{index}"
+            ended = started + timedelta(seconds=seconds)
+            item = session_records.setdefault(
+                session_key,
+                {
+                    "seconds": 0,
+                    "completed": False,
+                    "started": started,
+                    "ended": ended,
+                    "intervals": [],
+                },
+            )
+            item["seconds"] += seconds
+            item["completed"] = bool(item["completed"] or raw.get("completed"))
+            item["started"] = min(item["started"], started)
+            item["ended"] = max(item["ended"], ended)
+            item["intervals"].append((started, ended))
+
+        def continuous_seconds(intervals: list[tuple[datetime, datetime]]) -> int:
+            """Merge short pause gaps while keeping active time as the value."""
+
+            if not intervals:
+                return 0
+            ordered = sorted(intervals)
+            best = current = max(0, int((ordered[0][1] - ordered[0][0]).total_seconds()))
+            previous_end = ordered[0][1]
+            for started, ended in ordered[1:]:
+                duration = max(0, int((ended - started).total_seconds()))
+                gap = max(0, int((started - previous_end).total_seconds()))
+                if gap <= INTERRUPTION_GRACE_SECONDS:
+                    current += duration
+                else:
+                    best = max(best, current)
+                    current = duration
+                previous_end = max(previous_end, ended)
+            return max(best, current)
+
+        started_rounds = len(session_records)
+        completed_sessions = sum(1 for item in session_records.values() if item["completed"])
+        session_seconds = sum(max(0, int(item["seconds"])) for item in session_records.values())
+        longest_session_seconds = max(
+            (continuous_seconds(item["intervals"]) for item in session_records.values()),
+            default=0,
+        )
+        first_started = min((item["started"] for item in session_records.values()), default=None)
+        last_ended = max((item["ended"] for item in session_records.values()), default=None)
+        completion_rate = round(completed_sessions / started_rounds * 100, 1) if started_rounds else 0.0
+        high_quality_seconds = sum(
+            max(0, int(item["seconds"]))
+            for item in session_records.values()
+            if int(item["seconds"]) >= 25 * 60
+        )
+        if first_started is not None:
+            first_started_text = first_started.strftime("%H:%M")
+            last_ended_text = last_ended.strftime("%H:%M") if last_ended is not None else "--:--"
+        else:
+            first_started_text = last_ended_text = "暂无记录"
+
         return {
             "period": key,
             "start": start.isoformat(),
             "end": today.isoformat(),
             "total_seconds": total_seconds,
             "completed_rounds": completed_rounds,
-            "longest_focus_seconds": longest_focus_seconds,
+            "longest_focus_seconds": max(longest_focus_seconds, longest_session_seconds),
             "interruptions": interruptions,
             "average_quality": round(sum(quality_values) / len(quality_values)) if quality_values else 0,
             "active_days": sum(1 for item in daily if item["seconds"] > 0),
+            "started_rounds": started_rounds,
+            "completion_rate": completion_rate,
+            "average_session_seconds": round(session_seconds / started_rounds) if started_rounds else 0,
+            "high_quality_seconds": high_quality_seconds,
+            "first_started_at": first_started_text,
+            "last_ended_at": last_ended_text,
+            "strongest_window": self._best_window(today),
             "daily": daily,
             "untrusted_days": untrusted_days,
         }

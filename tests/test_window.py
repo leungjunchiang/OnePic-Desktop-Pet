@@ -965,6 +965,15 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
         app.processEvents()
         assert window.quick_panel.hover_hint.text() == label
         window.quick_panel._hide_hint()
+    # Primary labels are below their icon when the screen has room.
+    window.quick_panel._show_hint(window.quick_panel.chat_button)
+    app.processEvents()
+    chat_top = window.quick_panel.chat_button.mapToGlobal(QPoint(0, 0))
+    hint_top = window.quick_panel.hover_hint.pos()
+    area = app.screenAt(chat_top).availableGeometry()
+    if chat_top.y() + window.quick_panel.chat_button.height() + window.quick_panel.hover_hint.height() + 7 <= area.bottom():
+        assert hint_top.y() >= chat_top.y() + window.quick_panel.chat_button.height()
+    window.quick_panel._hide_hint()
     assert "color: #111111" in window.quick_panel.hover_hint.styleSheet()
     window.quick_panel._hide_hint()
     assert not window.quick_panel.hover_hint.isVisible()
@@ -988,6 +997,12 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert report_global_bottom.y() <= work_global_top.y()
     window.quick_panel._set_hover_button(window.quick_panel.report_button)
     assert window.quick_panel.hover_hint.text() == "工作报告"
+    app.processEvents()
+    report_top = window.quick_panel.report_button.mapToGlobal(QPoint(0, 0))
+    report_hint_bottom = window.quick_panel.hover_hint.pos().y() + window.quick_panel.hover_hint.height()
+    area = app.screenAt(report_top).availableGeometry()
+    if report_top.y() - window.quick_panel.hover_hint.height() - 7 >= area.top():
+        assert report_hint_bottom <= report_top.y()
     window.quick_panel._set_hover_button(window.quick_panel.chat_button)
     window.quick_panel._set_report_button_visible(False)
     assert not window.quick_panel.report_button.isVisible()
