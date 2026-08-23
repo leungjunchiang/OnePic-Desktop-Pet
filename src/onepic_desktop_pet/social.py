@@ -136,6 +136,10 @@ def social_user_message(error: BaseException) -> str:
         return "确认邮件服务未在规定时间内返回，请稍后再试并检查收件箱和垃圾邮件；如果注册本身也未成功，请稍后重新注册。若持续失败，请管理员检查或更换 Supabase Auth 的事务邮件 SMTP。"
     if "email address not authorized" in lowered or "email not authorized" in lowered:
         return "当前 Supabase 邮件服务只允许项目团队邮箱收信，163/学校邮箱不会收到邮件；请为 Supabase Auth 配置自定义 SMTP 后重试。"
+    if code in {"invalid_credentials", "invalid_login_credentials"} or "invalid login credentials" in lowered:
+        return "邮箱或密码不正确；请确认邮箱已完成验证，并检查当前填写的邮箱和密码。"
+    if code == "email_not_confirmed" or "email not confirmed" in lowered:
+        return "这个邮箱还没有完成确认，请先打开确认邮件中的链接，再回到六毛登录。"
     if "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
         return "确认邮件发送次数已达到服务限额，请稍后再试；生产环境建议为 Supabase Auth 配置自定义 SMTP。"
     if "lili_buddy_pair_unique" in lowered or "duplicate key" in lowered:
@@ -521,6 +525,11 @@ class AuthSessionManager:
                 generation,
             )
             self.persist(session)
+            # A successful password login is the recovery path after an
+            # invalid/rotated refresh token.  Clear the old relogin marker or
+            # ``signed_in`` would remain false even though Auth accepted the
+            # new credentials.
+            self._state.last_error = None
             return session
 
     def clear(self) -> None:
@@ -581,15 +590,23 @@ class AuthSessionManager:
         *,
         requested_by: str,
         safety_seconds: float = 90,
+        force_refresh: bool = False,
     ) -> SocialSession | None:
-        """Return a usable session; only one process may rotate the token."""
+        """Return a usable session; only one process may rotate the token.
+
+        ``force_refresh`` is used after the server rejects an access token that
+        the local expiry timestamp still considers valid.  This can happen
+        after a desktop app was suspended, a JWT key/configuration change, or
+        another client rotated the session.  It must still go through the
+        same single-flight and cross-process lock as normal refreshes.
+        """
         with self._state.condition:
             latest = self._read_store() if self.persist_tokens else self._state.session
             if latest is not None:
                 self._state.session = latest
                 self._state.generation = max(self._state.generation, latest.generation)
             session = self._state.session
-            if session is None or session.expires_at > time.time() + safety_seconds:
+            if session is None or (not force_refresh and session.expires_at > time.time() + safety_seconds):
                 return session
             if self._state.refreshing:
                 LOGGER.info(
@@ -600,7 +617,10 @@ class AuthSessionManager:
                 while self._state.refreshing:
                     self._state.condition.wait()
                 latest = self._read_store() if self.persist_tokens else self._state.session
-                if latest is not None and latest.expires_at > time.time() + safety_seconds:
+                if latest is not None and (
+                    (not force_refresh and latest.expires_at > time.time() + safety_seconds)
+                    or (force_refresh and latest.generation > session.generation)
+                ):
                     self._state.session = latest
                     return latest
                 if self._state.last_error is not None:
@@ -614,7 +634,10 @@ class AuthSessionManager:
         try:
             with self._refresh_file_lock():
                 latest = self._read_store() if self.persist_tokens else self._state.session
-                if latest is not None and latest.expires_at > time.time() + safety_seconds:
+                if latest is not None and (
+                    (not force_refresh and latest.expires_at > time.time() + safety_seconds)
+                    or (force_refresh and latest.generation > candidate.generation)
+                ):
                     with self._state.condition:
                         self._state.session = latest
                         self._state.generation = max(self._state.generation, latest.generation)
@@ -762,6 +785,7 @@ class HttpSocialBackend:
         authenticated: bool = False,
         extra_headers: dict[str, str] | None = None,
         timeout: float | None = None,
+        _retry_auth: bool = True,
     ) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -810,6 +834,29 @@ class HttpSocialBackend:
             ):
                 message = "登录状态已失效，请重新登录。"
                 kind = "auth_refresh_reused" if error_code == "refresh_token_already_used" else "auth_refresh"
+            # A valid refresh token can outlive an access token that the
+            # client still believes is valid.  Retry one authenticated request
+            # after a forced refresh.  Without this, every dashboard/RPC call
+            # turns a recoverable 401 into the red “请重新登录” banner.
+            if authenticated and _retry_auth and status == 401 and not is_refresh_endpoint:
+                previous = self.auth_manager.current()
+                try:
+                    self._ensure_fresh(force=True)
+                    current = self.auth_manager.current()
+                    if current is not None and (
+                        previous is None or current.generation > previous.generation
+                    ):
+                        return self._raw(
+                            method,
+                            path,
+                            body,
+                            authenticated=authenticated,
+                            extra_headers=extra_headers,
+                            timeout=timeout,
+                            _retry_auth=False,
+                        )
+                except SocialError:
+                    raise
             raise SocialError(
                 str(message)[:300],
                 kind=kind,
@@ -841,7 +888,7 @@ class HttpSocialBackend:
             redirect_url=self.email_redirect_url,
         )
 
-    def _ensure_fresh(self) -> None:
+    def _ensure_fresh(self, *, force: bool = False) -> None:
         managed = self.auth_manager.current()
         if self.session is not None and (managed is None or self.session.generation >= managed.generation):
             self.auth_manager.adopt(self.session)
@@ -851,6 +898,7 @@ class HttpSocialBackend:
         session = self.auth_manager.get_valid_session(
             lambda current: self._raw("POST", path, {"refresh_token": current.refresh_token}, authenticated=False),
             requested_by=f"{self.transport}:authenticated-request",
+            force_refresh=force,
         )
         self.session = session
 
@@ -912,7 +960,7 @@ class HttpSocialBackend:
 
     def sign_in(self, email: str, password: str) -> None:
         path = "/auth/v1/token?grant_type=password" if self.transport == "direct" else "/auth/signin"
-        data = self._raw("POST", path, {"email": email.strip(), "password": password}, timeout=_auth_request_timeout())
+        data = self._raw("POST", path, {"email": normalize_email(email), "password": password}, timeout=_auth_request_timeout())
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
 
@@ -1412,7 +1460,7 @@ class LegacyDirectSocialClient:
         if isinstance(summary, dict):
             summary["presence_uncertain"] = True
 
-    def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None, timeout: float | None = None) -> Any:
+    def _raw(self, method: str, path: str, body: Any = None, *, authenticated: bool = False, extra_headers: dict[str, str] | None = None, timeout: float | None = None, _retry_auth: bool = True) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {"apikey": self.key, "Content-Type": "application/json", "Accept": "application/json"}
         if authenticated:
@@ -1449,6 +1497,25 @@ class LegacyDirectSocialClient:
             ):
                 message = "登录状态已失效，请重新登录。"
                 kind = "auth_refresh_reused" if error_code == "refresh_token_already_used" else "auth_refresh"
+            if authenticated and _retry_auth and status == 401 and not is_refresh_endpoint:
+                previous = self.auth_manager.current()
+                try:
+                    self._ensure_fresh(force=True)
+                    current = self.auth_manager.current()
+                    if current is not None and (
+                        previous is None or current.generation > previous.generation
+                    ):
+                        return self._raw(
+                            method,
+                            path,
+                            body,
+                            authenticated=authenticated,
+                            extra_headers=extra_headers,
+                            timeout=timeout,
+                            _retry_auth=False,
+                        )
+                except SocialError:
+                    raise
             raise SocialError(
                 str(message)[:300],
                 kind=kind,
@@ -1480,7 +1547,7 @@ class LegacyDirectSocialClient:
             redirect_url=self.email_redirect_url,
         )
 
-    def _ensure_fresh(self) -> None:
+    def _ensure_fresh(self, *, force: bool = False) -> None:
         managed = self.auth_manager.current()
         if self.session is not None and (managed is None or self.session.generation >= managed.generation):
             self.auth_manager.adopt(self.session)
@@ -1489,6 +1556,7 @@ class LegacyDirectSocialClient:
         session = self.auth_manager.get_valid_session(
             lambda current: self._raw("POST", "/auth/v1/token?grant_type=refresh_token", {"refresh_token": current.refresh_token}, authenticated=False),
             requested_by="legacy:supabase-request",
+            force_refresh=force,
         )
         self.session = session
 
@@ -1820,7 +1888,7 @@ class DashboardCacheClientBase:
         return self._require_backend().resend_confirmation(email)
 
     def sign_in(self, email: str, password: str) -> None:
-        self._require_backend().sign_in(email, password)
+        self._require_backend().sign_in(normalize_email(email), password)
 
     def sign_out(self) -> None:
         backend = self._http_backend
@@ -2219,10 +2287,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return bool(self._manager.request("resend_confirmation", email))
 
     def sign_in(self, email: str, password: str) -> None:
-        # Treat sign-in as an account switch.  Do not let a failed attempt
-        # leave a previous user's token active in the desktop session.
-        self.sign_out()
-        self._manager.request("sign_in", email, password)
+        # Stage account switches: a mistyped password must not erase the last
+        # usable session before Supabase has accepted the replacement.  The
+        # successful auth response atomically replaces the stored session.
+        self._manager.request("sign_in", normalize_email(email), password)
 
     def sign_out(self) -> None:
         backend = self._manager.direct if hasattr(self._manager, "direct") else None

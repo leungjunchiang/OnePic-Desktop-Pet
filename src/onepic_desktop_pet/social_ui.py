@@ -380,6 +380,34 @@ class SocialHealthThread(QThread):
             self.failed.emit(SocialError(f"健康检查失败：{exc}", kind="network"))
 
 
+class SocialLoginThread(QThread):
+    """Authenticate without blocking the Qt GUI thread."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, email: str, password: str, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.email = email
+        self._password = password
+
+    def run(self) -> None:
+        try:
+            self.client.sign_in(self.email, self._password)
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception:
+            # Never surface an unexpected transport exception or credentials
+            # from the worker thread.  The UI can still offer a retry.
+            self.failed.emit(
+                SocialError("登录请求失败，请稍后重试。", kind="network", retryable=True)
+            )
+        finally:
+            self._password = ""
+
+
 class SocialSignupThread(QThread):
     """Create an account without blocking the Qt GUI thread on SMTP."""
 
@@ -1085,6 +1113,7 @@ class SocialHubDialog(QDialog):
         self._dashboard_thread: SocialDashboardThread | None = None
         self._room_refresh_pending = False
         self._health_thread: SocialHealthThread | None = None
+        self._login_thread: SocialLoginThread | None = None
         self._signup_thread: SocialSignupThread | None = None
         self._resend_thread: SocialResendConfirmationThread | None = None
         self._event_threads: list[SocialEventThread] = []
@@ -2098,8 +2127,8 @@ class SocialHubDialog(QDialog):
         login = QWidget(); login_layout = QVBoxLayout(login); login_form = QFormLayout()
         self.login_email = QLineEdit(); self.login_password = QLineEdit(); self.login_password.setEchoMode(QLineEdit.EchoMode.Password)
         login_form.addRow("邮箱", self.login_email); login_form.addRow("密码", self.login_password)
-        login_layout.addLayout(login_form); login_button = QPushButton("登录")
-        login_button.clicked.connect(self._login); login_layout.addWidget(login_button); login_layout.addStretch()
+        login_layout.addLayout(login_form); self.login_button = QPushButton("登录")
+        self.login_button.clicked.connect(self._login); login_layout.addWidget(self.login_button); login_layout.addStretch()
         register = QWidget(); register_layout = QVBoxLayout(register); register_form = QFormLayout()
         self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
         register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
@@ -2325,14 +2354,40 @@ class SocialHubDialog(QDialog):
         thread.deleteLater()
 
     def _login(self) -> None:
+        if self._login_thread is not None and self._login_thread.isRunning():
+            return
+        email = self.login_email.text().strip()
+        password = self.login_password.text()
+        if not email or not password:
+            self._error(SocialError("请输入邮箱和密码。", kind="validation"))
+            return
         self._begin_action("正在登录搭子自习室…")
-        try:
-            self.client.sign_in(self.login_email.text(), self.login_password.text())
-            self._end_action(); self._update_account_state(); self.tabs.setCurrentIndex(0); self.refresh()
-            self._set_status("登录成功，邮箱确认已完成。")
-            self.account_state_changed.emit(True)
-        except SocialError as exc:
-            self._error(exc)
+        self.login_button.setEnabled(False)
+        thread = SocialLoginThread(self.client, email, password, self)
+        self._login_thread = thread
+        thread.completed.connect(self._login_completed)
+        thread.failed.connect(self._login_failed)
+        thread.finished.connect(lambda: self._login_thread_finished(thread))
+        thread.start()
+
+    def _login_completed(self) -> None:
+        self._end_action()
+        self._update_account_state()
+        self.tabs.setCurrentIndex(0)
+        self.refresh()
+        self._set_status("登录成功，邮箱确认已完成。")
+        self.account_state_changed.emit(True)
+
+    def _login_failed(self, error: object) -> None:
+        self._end_action()
+        exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        self._error(exc)
+
+    def _login_thread_finished(self, thread: SocialLoginThread) -> None:
+        if self._login_thread is thread:
+            self._login_thread = None
+        self.login_button.setEnabled(True)
+        thread.deleteLater()
 
     def _logout(self) -> None:
         self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")

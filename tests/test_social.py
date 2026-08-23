@@ -1,11 +1,14 @@
 """Tests for Supabase-first routing and the CloudBase proxy fallback."""
 
 import json
+import io
 import pytest
 import ssl
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
 from pathlib import Path
 
 from onepic_desktop_pet.social import (
@@ -99,6 +102,66 @@ def test_refresh_token_reuse_error_has_user_safe_message():
             error_code="refresh_token_already_used",
         )
     ) == "登录状态已失效，请重新登录。"
+
+
+def test_authenticated_401_refreshes_once_and_retries_request(monkeypatch):
+    """A server-side access-token rejection must recover via refresh token."""
+
+    import onepic_desktop_pet.social as social_module
+
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.auth_manager.adopt(
+        SocialSession("old-access", "old-refresh", "user-1", time.time() + 3600, 1)
+    )
+    backend.session = backend.auth_manager.current()
+    requests: list[str] = []
+
+    class Response:
+        headers = {}
+
+        def __init__(self, payload: dict):
+            self.payload = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self.payload
+
+    def fake_urlopen(request, **_kwargs):
+        path = urllib.parse.urlsplit(request.full_url).path
+        requests.append(path)
+        if path == "/rest/v1/test" and requests.count(path) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "Unauthorized",
+                {},
+                io.BytesIO(b'{"code":"PGRST301","message":"JWT expired"}'),
+            )
+        if path == "/auth/v1/token":
+            return Response(
+                {
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "expires_in": 3600,
+                    "user": {"id": "user-1"},
+                }
+            )
+        return Response({"ok": True})
+
+    monkeypatch.setattr(social_module, "_verified_urlopen", fake_urlopen)
+    assert backend._raw("GET", "/rest/v1/test", authenticated=True) == {"ok": True}
+    assert requests == ["/rest/v1/test", "/auth/v1/token", "/rest/v1/test"]
+    assert backend.auth_manager.current().access_token == "new-access"
 
 
 def test_private_buddy_notes_decorate_all_local_dashboard_projections():
@@ -745,6 +808,38 @@ def test_refresh_token_reuse_keeps_last_session_and_requests_relogin():
     assert manager.current() is not None
     assert manager.current().refresh_token == "old-refresh"
     assert manager.requires_relogin
+
+
+def test_successful_password_login_clears_stale_relogin_marker():
+    manager = AuthSessionManager(
+        service_name="LiliSocialTest",
+        account_name="relogin-recovery",
+        persist_tokens=False,
+    )
+    manager.adopt(SocialSession("old-access", "old-refresh", "user-1", time.time() - 1, 1))
+
+    def refresh(_current: SocialSession) -> dict:
+        raise SocialError(
+            "Invalid Refresh Token",
+            kind="auth_refresh",
+            error_code="invalid_refresh_token",
+        )
+
+    with pytest.raises(SocialError):
+        manager.get_valid_session(refresh, requested_by="test")
+    assert manager.requires_relogin
+
+    recovered = manager.accept_auth(
+        {
+            "access_token": "fresh-access",
+            "refresh_token": "fresh-refresh",
+            "expires_in": 3600,
+            "user": {"id": "user-1"},
+        }
+    )
+    assert recovered is not None
+    assert manager.requires_relogin is False
+    assert manager.current().access_token == "fresh-access"
 
 def test_presence_transitions_are_not_persisted_as_room_history():
     root = Path(__file__).resolve().parents[1]
