@@ -392,6 +392,7 @@ class PetWindow(QWidget):
         self._today_note_window: TodayNoteWindow | None = None
         self._compact_todo_panel: CompactTodoPanel | None = None
         self._restore_compact_todos_after_show = False
+        self._restore_compact_todos_after_report = False
         self._time_memory_window: TimeMemoryWindow | None = None
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
@@ -2872,6 +2873,10 @@ class PetWindow(QWidget):
         """Show the frameless Todo strip directly below the pet."""
 
         self._record_user_interaction()
+        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
+            # The report is a normal independent window; its content must not
+            # be covered by the desktop Todo accessory while it is open.
+            return
         if self._today_note_window is not None:
             self._today_note_window.hide()
         self._restore_compact_todos_after_show = True
@@ -3747,14 +3752,29 @@ class PetWindow(QWidget):
     def _work_report_snapshot(self) -> dict[str, object]:
         """Build a fresh report from the currently active account namespace."""
 
+        moment = datetime.now(BEIJING_TIMEZONE)
+        current_date = moment.date()
         return build_work_report(
             self.focus_analytics,
             self.work_timer,
             self.daily_stats,
             best_buddy=self._best_buddy_for_report(),
             focus_snapshot=self.focus_session.snapshot(),
-            now=datetime.now(BEIJING_TIMEZONE),
+            task_stats={
+                "day": self.time_memory.records.stats(start=current_date, end=current_date),
+                "week": self.time_memory.records.week_stats(current_date.isoformat()),
+                "month": self.time_memory.records.month_stats(current_date.isoformat()),
+            },
+            now=moment,
         )
+
+    def _restore_compact_todos_after_report_close(self) -> None:
+        """Restore the Todo strip only if it was visible before the report."""
+
+        should_restore = bool(self._restore_compact_todos_after_report)
+        self._restore_compact_todos_after_report = False
+        if should_restore and not bool(getattr(self, "_manually_hidden", False)):
+            self.show_compact_todos()
 
     def show_work_report(self) -> None:
         """Open the live day/week/month report without creating a local image."""
@@ -3763,6 +3783,9 @@ class PetWindow(QWidget):
         # Close the floating shortcut first. Showing both top-level windows
         # in one mouse event can leave the report behind the dock on macOS.
         self.quick_panel.hide()
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_report = self._compact_todo_panel.isVisible()
+            self._compact_todo_panel.hide()
         if self._work_report_dialog is None:
             self._work_report_dialog = WorkReportDialog(
                 self._work_report_snapshot,
@@ -3770,6 +3793,7 @@ class PetWindow(QWidget):
                 parent=None,
             )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
+            self._work_report_dialog.closed.connect(self._restore_compact_todos_after_report_close)
         self._work_report_dialog.refresh()
         self._work_report_dialog.showNormal()
         self._work_report_dialog.raise_()

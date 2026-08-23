@@ -651,6 +651,22 @@ class FocusAnalyticsStore:
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_today_seconds", 0) or 0)))
         if key == "week" and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat():
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_week_seconds", 0) or 0)))
+        # A weekly server snapshot can arrive before all of its daily rows are
+        # present on a newly opened device.  When the current week is wholly
+        # inside the current month, include that same authoritative weekly
+        # total in the month projection as well.  This prevents impossible
+        # displays such as “本周 53 小时 / 本月 25 小时”.
+        current_week_start = today - timedelta(days=today.weekday())
+        if (
+            key == "month"
+            and current_week_start >= start
+            and str(account_state.get("focus_week_start") or "")[:10]
+            == current_week_start.isoformat()
+        ):
+            total_seconds = max(
+                total_seconds,
+                max(0, int(account_state.get("focus_week_seconds", 0) or 0)),
+            )
 
         trusted_days = {
             str(item.get("date") or "")
@@ -755,18 +771,22 @@ class FocusAnalyticsStore:
 
         started_rounds = len(session_records)
         completed_sessions = sum(1 for item in session_records.values() if item["completed"])
-        session_seconds = sum(union_seconds(item["intervals"]) for item in session_records.values())
+        session_durations = [
+            continuous_seconds(item["intervals"])
+            for item in session_records.values()
+            if continuous_seconds(item["intervals"]) > 0
+        ]
         longest_session_seconds = max(
-            (continuous_seconds(item["intervals"]) for item in session_records.values()),
+            session_durations,
             default=0,
         )
         first_started = min((item["started"] for item in session_records.values()), default=None)
         last_ended = max((item["ended"] for item in session_records.values()), default=None)
         completion_rate = round(completed_sessions / started_rounds * 100, 1) if started_rounds else 0.0
         high_quality_seconds = sum(
-            union_seconds(item["intervals"])
+            continuous_seconds(item["intervals"])
             for item in session_records.values()
-            if union_seconds(item["intervals"]) >= 25 * 60
+            if continuous_seconds(item["intervals"]) >= 25 * 60
         )
         high_quality_seconds = min(high_quality_seconds, total_seconds)
         if first_started is not None:
@@ -787,8 +807,14 @@ class FocusAnalyticsStore:
             "active_days": sum(1 for item in daily if item["seconds"] > 0),
             "started_rounds": started_rounds,
             "completion_rate": completion_rate,
-            "average_session_seconds": round(session_seconds / started_rounds) if started_rounds else 0,
+            # Average and maximum now use the same session grain.  Previously
+            # average used unioned segment time while maximum used continuous
+            # session time, which could make the average larger than the max.
+            "average_session_seconds": round(sum(session_durations) / len(session_durations))
+            if session_durations
+            else 0,
             "high_quality_seconds": high_quality_seconds,
+            "deep_focus_seconds": high_quality_seconds,
             "first_started_at": first_started_text,
             "last_ended_at": last_ended_text,
             "strongest_window": self._best_window(today, start=start),
