@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -45,6 +45,9 @@ QProgressBar#reportBar { background: #e7eff1; border: none; border-radius: 5px; 
 QProgressBar#reportBar::chunk { background: #51b8aa; border-radius: 5px; }
 QPushButton#reportClose { background: #cfece7; color: #1f5d57; border: none; border-radius: 10px; padding: 8px 20px; }
 QPushButton#reportClose:hover { background: #bce3dc; }
+QPushButton#reportFinish { background: #fff0d7; color: #8a5b25; border: 1px solid #edcf9c; border-radius: 10px; padding: 8px 16px; }
+QPushButton#reportFinish:hover { background: #ffe4b4; }
+QPushButton#reportFinish:disabled { background: #edf1f2; color: #91a0a6; border-color: #dbe3e5; }
 """
 
 
@@ -95,6 +98,11 @@ def build_work_report(
         "generated_at": moment.astimezone(BEIJING_TIMEZONE).strftime("%H:%M:%S"),
         "best_buddy": str(best_buddy or "暂无自习室排行榜数据"),
         "sleep_note": _sleep_inference(summary, moment.astimezone(BEIJING_TIMEZONE)),
+        "current_status": (
+            "focus" if bool(timer.is_running)
+            else "rest" if bool(timer.has_active_session)
+            else "idle"
+        ),
         "day": analytics.period_summary("day", moment),
         "week": analytics.period_summary("week", moment),
         "month": analytics.period_summary("month", moment),
@@ -142,6 +150,8 @@ def _clear_layout(layout: QVBoxLayout) -> None:
 class WorkReportDialog(QDialog):
     """Live day/week/month report window with no image-generation side effect."""
 
+    finish_requested = Signal()
+
     def __init__(
         self,
         snapshot_provider: Callable[[], dict[str, Any]],
@@ -183,6 +193,10 @@ class WorkReportDialog(QDialog):
         root.addWidget(self.tabs, 1)
         footer = QHBoxLayout()
         footer.addStretch(1)
+        self.finish_button = QPushButton("结束本轮工作")
+        self.finish_button.setObjectName("reportFinish")
+        self.finish_button.clicked.connect(self.finish_requested.emit)
+        footer.addWidget(self.finish_button)
         close = QPushButton("关闭")
         close.setObjectName("reportClose")
         close.clicked.connect(self.close)
@@ -207,6 +221,11 @@ class WorkReportDialog(QDialog):
             report = self._snapshot_provider()
         except Exception as exc:  # pragma: no cover - defensive UI boundary
             report = {"error": f"报告暂时无法读取：{exc}"}
+        self.finish_button.setEnabled(
+            report.get("current_status") in {"focus", "rest"}
+            if not report.get("error")
+            else False
+        )
         for key, layout in self._pages.items():
             _clear_layout(layout)
             if report.get("error"):

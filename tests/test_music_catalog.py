@@ -8,9 +8,13 @@ from onepic_desktop_pet.music import (
     SongEntry,
     ShuffleBag,
     artist_collection_url,
+    chen_artist_url,
+    identify_music_service,
     load_song_catalog,
     music_search_url,
+    open_chen_artist_page,
     open_music_url,
+    resolve_artist_music_service,
     song_deep_link,
 )
 
@@ -133,3 +137,41 @@ def test_catalog_persists_only_shuffle_state_in_settings() -> None:
 def test_collection_fallback_is_an_official_artist_page() -> None:
     assert artist_collection_url("netease") == "https://music.163.com/#/artist?id=2124"
     assert artist_collection_url("apple").startswith("https://music.apple.com/")
+
+
+def test_artist_shortcut_uses_canonical_web_destinations() -> None:
+    assert chen_artist_url("netease") == "https://music.163.com/#/artist?id=2124"
+    assert chen_artist_url("qq").endswith("/singer/002PZBgg1S9xPX")
+    assert chen_artist_url("apple").endswith("/930912184")
+    assert chen_artist_url("kugou").endswith("/435-0-0-all.html")
+    assert chen_artist_url("qishui") == "https://www.qishui.com/"
+
+
+def test_artist_shortcut_detects_handler_and_allows_manual_override(monkeypatch) -> None:
+    assert identify_music_service("CloudMusic.exe") == "netease"
+    assert identify_music_service("QQMusic.exe") == "qq"
+    assert identify_music_service("com.apple.Music") == "apple"
+    assert identify_music_service("VLC") is None
+
+    settings = PetSettings(artist_music_service="auto")
+    monkeypatch.setattr(
+        "onepic_desktop_pet.music.detect_default_music_service",
+        lambda _platform=None: "qq",
+    )
+    assert resolve_artist_music_service(settings) == ("qq", True)
+    settings.artist_music_service = "apple"
+    assert resolve_artist_music_service(settings) == ("apple", False)
+
+
+def test_artist_shortcut_falls_back_to_netease_for_unknown_player() -> None:
+    settings = PetSettings(artist_music_service="auto")
+    opened: list[str] = []
+    result = open_chen_artist_page(
+        settings,
+        browser_opener=lambda url: opened.append(url) or True,
+        platform_name="linux",
+    )
+    assert result.success is True
+    assert result.service == "netease"
+    assert result.used_auto_detection is True
+    assert opened == ["https://music.163.com/#/artist?id=2124"]

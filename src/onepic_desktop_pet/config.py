@@ -111,6 +111,9 @@ class PetSettings:
     # are deliberately small and local-only: ``rest`` or ``focus``.
     idle_classification_rules: dict[str, str] = field(default_factory=dict)
     music_service: str = "auto"
+    # Browser destination for the quick “听陈楚生” artist shortcut. ``auto``
+    # follows the system's current .mp3 association and falls back to NetEase.
+    artist_music_service: str = "auto"
     music_provider_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Shuffle-bag state only prevents immediate repeats; it is not a play log.
     music_shuffle_bag: list[str] = field(default_factory=list)
@@ -246,6 +249,8 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.idle_classification_rules = rules
     if settings.music_service not in {"auto", "qq", "netease", "kugou", "apple", "spotify"}:
         settings.music_service = "auto"
+    if settings.artist_music_service not in {"auto", "qq", "netease", "apple", "kugou", "qishui"}:
+        settings.artist_music_service = "auto"
     def safe_int(value: Any, default: int = 0) -> int:
         try:
             return int(value)
@@ -355,6 +360,7 @@ def load_settings(
                 "work_timer_policy_version",
                 "idle_classification_rules",
                 "music_service",
+                "artist_music_service",
                 "music_provider_history",
                 "music_shuffle_bag",
                 "music_recent_history",
@@ -447,6 +453,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "work_timer_policy_version": settings.work_timer_policy_version,
         "idle_classification_rules": settings.idle_classification_rules,
         "music_service": settings.music_service,
+        "artist_music_service": settings.artist_music_service,
         "music_provider_history": settings.music_provider_history,
         "music_shuffle_bag": settings.music_shuffle_bag,
         "music_recent_history": settings.music_recent_history,

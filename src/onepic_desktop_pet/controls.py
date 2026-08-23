@@ -11,7 +11,7 @@ import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from .work_timer import format_elapsed_clock
 
 from PySide6.QtWidgets import (
@@ -355,7 +355,7 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
 
 
 class QuickControlPanel(QWidget):
-    """跟随六毛移动的六项图标快捷坞；选择后或闲置八秒会自动收起。"""
+    """跟随六毛移动的图标快捷坞；选择后或闲置八秒会自动收起。"""
 
     chat_requested = Signal()
     work_requested = Signal()
@@ -364,6 +364,8 @@ class QuickControlPanel(QWidget):
     social_requested = Signal()
     music_requested = Signal()
     music_playlist_requested = Signal()
+    chen_artist_requested = Signal()
+    artist_music_service_requested = Signal(str)
     music_control_requested = Signal(str)
     food_requested = Signal(str)
     supply_requested = Signal()
@@ -402,6 +404,7 @@ class QuickControlPanel(QWidget):
         self.hover_hint.hide()
         self._hint_button: QPushButton | None = None
         self._window_behavior_callback: Callable[..., object] | None = None
+        self._artist_music_service = "auto"
         # Native macOS Qt windows can omit Enter/Leave delivery until the
         # first click when the panel is a non-activating Tool window. Polling
         # the pointer over our six known buttons keeps the label a true hover
@@ -409,6 +412,10 @@ class QuickControlPanel(QWidget):
         self._hover_poll_timer = QTimer(self)
         self._hover_poll_timer.setInterval(60)
         self._hover_poll_timer.timeout.connect(self._poll_hover_button)
+        self._report_hide_timer = QTimer(self)
+        self._report_hide_timer.setSingleShot(True)
+        self._report_hide_timer.setInterval(160)
+        self._report_hide_timer.timeout.connect(self._hide_report_if_pointer_outside)
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
@@ -420,14 +427,24 @@ class QuickControlPanel(QWidget):
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
         self.report_button = self._button("report", "工作报告", self.work_report_requested)
-        self.report_button.setVisible(False)
+        self.report_button.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.report_button.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.report_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.report_button.setMouseTracking(True)
+        self.report_button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.report_button.setStyleSheet(CONTROL_STYLE)
+        self.report_button.clicked.connect(self.hide)
+        self.report_button.hide()
         work_column = QWidget(self)
         work_column.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         work_layout = QVBoxLayout(work_column)
         work_layout.setContentsMargins(0, 0, 0, 0)
-        work_layout.setSpacing(4)
         work_layout.addWidget(self.work_button)
-        work_layout.addWidget(self.report_button)
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
@@ -485,6 +502,14 @@ class QuickControlPanel(QWidget):
 
         self._window_behavior_callback = callback
 
+    def set_artist_music_service(self, service: str) -> None:
+        """Refresh the check mark used by the quick music submenu."""
+
+        value = str(service or "auto").strip().casefold()
+        self._artist_music_service = value if value in {
+            "auto", "netease", "qq", "apple", "kugou", "qishui"
+        } else "auto"
+
     def set_work_action_label(self, label: str) -> None:
         """Refresh the dynamic work action shown in the shortcut panel."""
 
@@ -501,10 +526,60 @@ class QuickControlPanel(QWidget):
         target = bool(visible)
         if self.report_button.isVisible() == target:
             return
-        self.report_button.setVisible(target)
-        self.adjustSize()
         if target:
+            self._report_hide_timer.stop()
+            self._position_report_button()
+            if sys.platform == "darwin" and self._window_behavior_callback is not None:
+                self._window_behavior_callback(self.report_button, always_on_top=True)
+            self.report_button.show()
+            if sys.platform != "darwin":
+                self.report_button.raise_()
             self._hover_poll_timer.start()
+        else:
+            if self._hint_button is self.report_button:
+                self._hide_hint()
+            self.report_button.hide()
+
+    def _schedule_report_hide(self) -> None:
+        """Give the pointer a short bridge from the main button to the report."""
+
+        if self.report_button.isVisible():
+            self._report_hide_timer.start()
+
+    def _hide_report_if_pointer_outside(self) -> None:
+        """Hide the floating report button only after leaving both hover targets."""
+
+        button = self._button_at_global_pos(QCursor.pos())
+        if button in (self.work_button, self.report_button):
+            return
+        self._set_report_button_visible(False)
+
+    def _position_report_button(self) -> None:
+        """Place the report action above the work action without changing layout."""
+
+        if not self.work_button.isVisible():
+            return
+        report_size = self.report_button.size()
+        anchor = self.work_button.mapToGlobal(QPoint(self.work_button.width() // 2, 0))
+        x = anchor.x() - report_size.width() // 2
+        y = anchor.y() - report_size.height() - 9
+        app = QGuiApplication.instance()
+        screen = app.screenAt(anchor) if app is not None else None
+        if screen is not None:
+            area = screen.availableGeometry()
+            if y < area.top() + 4:
+                y = self.work_button.mapToGlobal(
+                    QPoint(self.work_button.width() // 2, self.work_button.height() + 9)
+                ).y()
+            x = min(max(x, area.left() + 4), area.right() - report_size.width() - 4)
+            y = min(max(y, area.top() + 4), area.bottom() - report_size.height() - 4)
+        self.report_button.move(x, y)
+
+    def position_report_button(self) -> None:
+        """Reposition the floating secondary action after its dock moves."""
+
+        if self.report_button.isVisible():
+            self._position_report_button()
 
 
     def _show_hint(self, button: QPushButton) -> None:
@@ -516,16 +591,24 @@ class QuickControlPanel(QWidget):
         self._hint_button = button
         self.hover_hint.setText(text)
         self.hover_hint.adjustSize()
+        hint_anchor = button
+        # Once the report action is floating above the work button, keep the
+        # primary label above that action as well so the two hover surfaces do
+        # not cover one another.
+        if button is self.work_button and self.report_button.isVisible():
+            hint_anchor = self.report_button
+        above = hint_anchor.mapToGlobal(QPoint(hint_anchor.width() // 2, -self.hover_hint.height() - 7))
         below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
-        x = below.x() - self.hover_hint.width() // 2
-        y = below.y()
+        x = above.x() - self.hover_hint.width() // 2
+        y = above.y()
         app = QGuiApplication.instance()
-        screen = app.screenAt(below) if app is not None else None
+        screen = app.screenAt(above) if app is not None else None
         if screen is not None:
             area = screen.availableGeometry()
             x = min(max(x, area.left() + 4), area.right() - self.hover_hint.width() - 4)
-            if y + self.hover_hint.height() > area.bottom() - 4:
-                y = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7)).y()
+            if y < area.top() + 4:
+                y = below.y()
+            y = min(max(y, area.top() + 4), area.bottom() - self.hover_hint.height() - 4)
         self.hover_hint.move(x, y)
         # Configure the native window before showing it.  Reconfiguring a
         # visible macOS Tool/ToolTip window can make AppKit hide the first
@@ -552,6 +635,8 @@ class QuickControlPanel(QWidget):
         """Return the shortcut currently under the native pointer."""
 
         for button in self._hover_buttons:
+            if not button.isVisible():
+                continue
             if button.rect().contains(button.mapFromGlobal(position)):
                 return button
         return None
@@ -574,12 +659,13 @@ class QuickControlPanel(QWidget):
         if button is None:
             if self._hint_button is not None:
                 self._hide_hint()
-            self._set_report_button_visible(False)
+            self._schedule_report_hide()
             return
-        if button not in (self.work_button, self.report_button):
-            self._set_report_button_visible(False)
-        elif button in (self.work_button, self.report_button):
+        if button in (self.work_button, self.report_button):
+            self._report_hide_timer.stop()
             self._set_report_button_visible(True)
+        else:
+            self._schedule_report_hide()
         if self._hint_button is not button or not self.hover_hint.isVisible():
             self._show_hint(button)
 
@@ -617,21 +703,36 @@ class QuickControlPanel(QWidget):
             ("播放 / 暂停", "toggle"),
             ("上一首", "previous"),
             ("下一首", "next"),
-            ("随机听陈楚生", "random"),
         ):
             action = menu.addAction(label)
-            if command == "random":
-                action.triggered.connect(lambda: self._choose(self.music_requested))
-            elif command == "playlist":
-                action.triggered.connect(lambda: self._choose(self.music_playlist_requested))
-            else:
-                action.triggered.connect(
-                    lambda _checked=False, value=command: self._choose(
-                        self.music_control_requested, value
-                    )
+            action.triggered.connect(
+                lambda _checked=False, value=command: self._choose(
+                    self.music_control_requested, value
                 )
-        playlist = menu.addAction("\u9648\u695a\u751f\u968f\u673a\u7535\u53f0")
-        playlist.triggered.connect(lambda: self._choose(self.music_playlist_requested))
+            )
+        menu.addSeparator()
+        artist = menu.addAction("听陈楚生…")
+        artist.triggered.connect(lambda _checked=False: self._choose(self.chen_artist_requested))
+        platform_menu = menu.addMenu("音乐平台")
+        platform_group = QActionGroup(platform_menu)
+        platform_group.setExclusive(True)
+        for key, label in (
+            ("auto", "跟随系统默认"),
+            ("netease", "网易云音乐"),
+            ("qq", "QQ 音乐"),
+            ("apple", "Apple Music"),
+            ("kugou", "酷狗音乐"),
+            ("qishui", "汽水音乐"),
+        ):
+            action = platform_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._artist_music_service == key)
+            platform_group.addAction(action)
+            action.triggered.connect(
+                lambda _checked=False, value=key: self._choose(
+                    self.artist_music_service_requested, value
+                )
+            )
         menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
 
     def _show_settings_menu(self) -> None:
@@ -718,6 +819,7 @@ class QuickControlPanel(QWidget):
 
     def hideEvent(self, event) -> None:
         self._hover_poll_timer.stop()
+        self._report_hide_timer.stop()
         self._hide_hint()
         self._set_report_button_visible(False)
         super().hideEvent(event)
@@ -733,8 +835,12 @@ class QuickControlPanel(QWidget):
         """鼠标离开后给用户三秒余量再收起。"""
 
         self.hide_timer.start(3000)
-        self._set_report_button_visible(False)
+        self._schedule_report_hide()
         super().leaveEvent(event)
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._position_report_button()
 
 
 class SizeControlDialog(QDialog):

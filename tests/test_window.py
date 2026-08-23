@@ -977,9 +977,19 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     app.processEvents()
     assert window.quick_panel.pos() - window.pos() == first_offset
     assert window.quick_panel.y() + window.quick_panel.height() + 12 <= window.y()
+    panel_size = window.quick_panel.size()
     window.quick_panel._set_hover_button(window.quick_panel.work_button)
     assert window.quick_panel.report_button.isVisible()
+    assert window.quick_panel.size() == panel_size
+    work_global_top = window.quick_panel.work_button.mapToGlobal(QPoint(0, 0))
+    report_global_bottom = window.quick_panel.report_button.mapToGlobal(
+        QPoint(0, window.quick_panel.report_button.height())
+    )
+    assert report_global_bottom.y() <= work_global_top.y()
+    window.quick_panel._set_hover_button(window.quick_panel.report_button)
+    assert window.quick_panel.hover_hint.text() == "工作报告"
     window.quick_panel._set_hover_button(window.quick_panel.chat_button)
+    window.quick_panel._set_report_button_visible(False)
     assert not window.quick_panel.report_button.isVisible()
     window.close(); window.deleteLater(); app.processEvents()
 
@@ -1177,7 +1187,16 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
-    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听陈楚生"]
+    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "听陈楚生…", "音乐平台"]
+    platform_menu = next(action for action in music.menu().actions() if action.text() == "音乐平台")
+    assert [action.text() for action in platform_menu.menu().actions()] == [
+        "跟随系统默认",
+        "网易云音乐",
+        "QQ 音乐",
+        "Apple Music",
+        "酷狗音乐",
+        "汽水音乐",
+    ]
     interaction = next(action for action in menu.actions() if action.text() == "六毛互动")
     assert [action.text() for action in interaction.menu().actions()] == [
         "给我一个抱抱",

@@ -168,6 +168,19 @@ MUSIC_SERVICE_LABELS = {
     "spotify": "Spotify",
 }
 
+# These are web-only artist destinations. They deliberately stay separate
+# from MUSIC_SERVICE_LABELS because the latter also drives local playback and
+# media-session selection.
+ARTIST_MUSIC_SERVICE_LABELS = {
+    "auto": "跟随系统默认",
+    "netease": "网易云音乐",
+    "qq": "QQ 音乐",
+    "apple": "Apple Music",
+    "kugou": "酷狗音乐",
+    "qishui": "汽水音乐",
+}
+ARTIST_MUSIC_SERVICE_KEYS = frozenset(ARTIST_MUSIC_SERVICE_LABELS) - {"auto"}
+
 
 _DEFAULT_SHUFFLE_BAG = ShuffleBag()
 
@@ -208,6 +221,193 @@ def artist_collection_url(service: str, artist: str = "陈楚生") -> str:
     if normalized == "apple" and artist == "陈楚生":
         return "https://music.apple.com/cn/artist/%E9%99%88%E6%A5%9A%E7%94%9F/930912184"
     return music_search_url(normalized, artist)
+
+
+def identify_music_service(value: str) -> str | None:
+    """Classify a default ``.mp3`` handler/ProgID/bundle name.
+
+    The value is intentionally treated as an opaque display or registry
+    string. We do not launch the application and we never infer a service
+    from the mere presence of an installed client.
+    """
+
+    token = str(value or "").strip().casefold()
+    if not token:
+        return None
+    if any(item in token for item in ("qishui", "汽水", "soda_music", "sodamusic")):
+        return "qishui"
+    if any(item in token for item in ("netease", "cloudmusic", "163.com", "orpheus", "网易云")):
+        return "netease"
+    if any(item in token for item in ("qqmusic", "qq 音乐", "qq音乐", "tencent.music", "tencentqqmusic")):
+        return "qq"
+    if any(item in token for item in ("kugou", "kgmusic", "酷狗")):
+        return "kugou"
+    if any(item in token for item in ("apple.music", "applemusic", "com.apple.music", "itunes", "苹果音乐")):
+        return "apple"
+    return None
+
+
+def _windows_mp3_handler_values() -> tuple[str, ...]:
+    """Read the current Windows ``.mp3`` association without opening it."""
+
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - only reachable off Windows
+        return ()
+
+    values: list[str] = []
+
+    def query(root, path: str, name: str = "") -> str:
+        try:
+            with winreg.OpenKey(root, path) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+                return str(value or "")
+        except (FileNotFoundError, OSError, TypeError):
+            return ""
+
+    user_choice = query(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.mp3\UserChoice",
+        "ProgId",
+    )
+    if user_choice:
+        values.append(user_choice)
+    for root, path in (
+        (winreg.HKEY_CURRENT_USER, r"Software\Classes\.mp3"),
+        (winreg.HKEY_CLASSES_ROOT, r".mp3"),
+    ):
+        value = query(root, path)
+        if value:
+            values.append(value)
+
+    # A ProgID often has no descriptive name in the association key. Reading
+    # its open command captures paths such as QQMusic.exe or cloudmusic.exe.
+    for prog_id in tuple(values):
+        for path in (
+            rf"Software\Classes\{prog_id}\shell\open\command",
+            rf"{prog_id}\shell\open\command",
+        ):
+            command = query(winreg.HKEY_CURRENT_USER, path)
+            if not command:
+                command = query(winreg.HKEY_CLASSES_ROOT, path)
+            if command:
+                values.append(command)
+    return tuple(values)
+
+
+def _macos_mp3_handler_values() -> tuple[str, ...]:
+    """Read LaunchServices' current MP3 handler on macOS."""
+
+    try:
+        result = subprocess.run(
+            [
+                "defaults",
+                "read",
+                "com.apple.LaunchServices/com.apple.launchservices.secure",
+                "LSHandlers",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    output = str(result.stdout or "")
+    # ``LSHandlers`` contains handlers for every media type. Restrict the
+    # returned evidence to the public MP3 entry so a PDF/audio association
+    # cannot accidentally select Apple Music for this shortcut.
+    blocks = tuple(
+        match.group(0)
+        for match in re.finditer(
+            r"(?ms)\(\s*LSHandlerContentType\s*=\s*\"public\.mp3\";.*?\n\s*\)",
+            output,
+        )
+    )
+    return blocks or ((output,) if "public.mp3" in output else ())
+
+
+def detect_default_music_service(platform_name: str | None = None) -> str | None:
+    """Detect the service associated with MP3 files on the current desktop."""
+
+    platform = str(platform_name or sys.platform).casefold()
+    if platform == "win32":
+        values = _windows_mp3_handler_values()
+    elif platform == "darwin":
+        values = _macos_mp3_handler_values()
+    else:
+        values = ()
+    for value in values:
+        service = identify_music_service(value)
+        if service in ARTIST_MUSIC_SERVICE_KEYS:
+            return service
+    return None
+
+
+def resolve_artist_music_service(
+    settings: object,
+    *,
+    platform_name: str | None = None,
+) -> tuple[str, bool]:
+    """Return ``(service, used_auto_detection)`` for the artist shortcut."""
+
+    preferred = str(getattr(settings, "artist_music_service", "auto") or "auto").casefold()
+    if preferred in ARTIST_MUSIC_SERVICE_KEYS:
+        return preferred, False
+    detected = detect_default_music_service(platform_name)
+    if detected in ARTIST_MUSIC_SERVICE_KEYS:
+        return detected, True
+    # NetEase has the most stable public artist page and is the documented
+    # fallback for unknown players such as VLC.
+    return "netease", True
+
+
+def chen_artist_url(service: str) -> str:
+    """Return the official HTTPS artist destination for Chen Chusheng."""
+
+    normalized = str(service or "netease").casefold()
+    if normalized == "qq":
+        return "https://y.qq.com/n/ryqq/singer/002PZBgg1S9xPX"
+    if normalized == "apple":
+        return "https://music.apple.com/cn/artist/%E9%99%88%E6%A5%9A%E7%94%9F/930912184"
+    if normalized == "kugou":
+        return "https://www2.kugou.kugou.com/yueku/v9/singer/home/435-0-0-all.html"
+    if normalized == "qishui":
+        # Qishui does not expose a stable public artist URL; its official
+        # homepage is safer than fabricating an expired artist identifier.
+        return "https://www.qishui.com/"
+    return "https://music.163.com/#/artist?id=2124"
+
+
+@dataclass(frozen=True)
+class ArtistPageLaunch:
+    """Result of opening the browser-based Chen Chusheng shortcut."""
+
+    success: bool
+    service: str
+    url: str
+    used_auto_detection: bool
+
+
+def open_chen_artist_page(
+    settings: object,
+    *,
+    browser_opener: Callable[[str], object] | None = None,
+    platform_name: str | None = None,
+) -> ArtistPageLaunch:
+    """Open the selected/default service in the system browser."""
+
+    service, used_auto_detection = resolve_artist_music_service(
+        settings,
+        platform_name=platform_name,
+    )
+    url = chen_artist_url(service)
+    opener = browser_opener or webbrowser.open
+    try:
+        success = bool(opener(url))
+    except Exception:  # pragma: no cover - defensive boundary around browsers
+        success = False
+    return ArtistPageLaunch(success, service, url, used_auto_detection)
 
 
 def music_client_uri(service: str, title: str) -> str:

@@ -46,3 +46,4 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert report["month"]["total_seconds"] == 45 * 60
     assert report["best_buddy"] == "小梁家的六毛"
     assert "不能测量" in report["sleep_note"]
+    assert report["current_status"] == "idle"

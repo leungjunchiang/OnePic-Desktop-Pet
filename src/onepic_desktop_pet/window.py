@@ -174,6 +174,7 @@ from .growth import (
 )
 from .local_content import find_audio_variants, load_local_lines
 from .liumao_worldview import family_music_mode
+from .music import ARTIST_MUSIC_SERVICE_LABELS, open_chen_artist_page as launch_chen_artist_page
 from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .social import SocialClient
@@ -646,11 +647,11 @@ class PetWindow(QWidget):
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
         self.quick_panel.work_report_requested.connect(self.show_work_report)
+        self.quick_panel.chen_artist_requested.connect(self.open_chen_artist_page)
+        self.quick_panel.artist_music_service_requested.connect(self.set_artist_music_service)
         self.quick_panel.todo_requested.connect(self.show_todo_center)
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
-        self.quick_panel.music_requested.connect(self.play_random_song)
-        self.quick_panel.music_playlist_requested.connect(self.open_music_collection)
         self.quick_panel.food_requested.connect(self._quick_food_action)
         self.quick_panel.supply_requested.connect(self.show_food_scene_dialog)
         self.quick_panel.size_requested.connect(self.open_size_control)
@@ -2798,6 +2799,8 @@ class PetWindow(QWidget):
         if food_scene and str(food_scene.get("scene_type") or "") in {"focus", "deep_focus"}:
             self.economy.finish_food_scene("work_finished")
             self.food_scene_timer.stop()
+        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
+            self._work_report_dialog.refresh()
         return reply
 
     # Public state-machine commands.  The older *_work_timer names remain as
@@ -3762,6 +3765,7 @@ class PetWindow(QWidget):
                 pet_name=self._pet_name(),
                 parent=None,
             )
+            self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
         self._work_report_dialog.refresh()
         self._work_report_dialog.show()
         self._work_report_dialog.raise_()
@@ -4970,22 +4974,40 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """从本地曲库挑一首并交给音乐客户端尝试打开。"""
+        """兼容旧调用：统一转到浏览器歌手主页，不再随机唤起播放器。"""
 
-        if self.music_controller.play_song("", "陈楚生", random_artist=True):
-            self.show_speech("六毛来挑一首，马上给你打开♪", 2800)
-        else:
-            self.show_speech("音乐操作正在处理中，请稍等一下。", 3200)
-        return "陈楚生随机歌曲"
+        return self.open_chen_artist_page()
 
     def open_music_collection(self) -> str:
-        """打开歌手曲库，后续随机播放与暂停交给音乐客户端。"""
+        """兼容旧调用：保留方法名，但行为与新入口完全一致。"""
 
-        if self.music_provider_manager.catalog_music_service.open_artist_collection():
-            self.show_speech("已打开陈楚生曲库，后面交给播放器随机播放♪", 3600)
+        return self.open_chen_artist_page()
+
+    def open_chen_artist_page(self) -> str:
+        """按手动选择或 MP3 默认关联，用系统浏览器打开陈楚生主页。"""
+
+        launch = launch_chen_artist_page(self.settings)
+        label = ARTIST_MUSIC_SERVICE_LABELS.get(launch.service, launch.service)
+        if launch.success:
+            suffix = "（自动识别）" if launch.used_auto_detection else ""
+            self.show_speech(f"已打开{label} · 陈楚生{suffix}", 3200)
         else:
-            self.show_speech("暂时没能打开陈楚生曲库，请确认浏览器可用。", 3600)
-        return "陈楚生随机电台"
+            self.show_speech("暂时没能打开音乐网页，请确认系统浏览器可用。", 3600)
+        return "听陈楚生"
+
+    def set_artist_music_service(self, service: str) -> None:
+        """Persist the platform used by the browser-based artist shortcut."""
+
+        value = str(service or "auto").strip().casefold()
+        if value not in {"auto", "netease", "qq", "apple", "kugou", "qishui"}:
+            value = "auto"
+        self.settings.artist_music_service = value
+        save_settings(self.settings)
+        self.quick_panel.set_artist_music_service(value)
+        self.show_speech(
+            f"听陈楚生已设为{ARTIST_MUSIC_SERVICE_LABELS.get(value, '跟随系统默认')}。",
+            2600,
+        )
 
     def _play_random_song_legacy(self) -> str:
         """从搜索结果中的陈楚生歌曲行随机选择，再执行播放与媒体校验。"""
@@ -5178,6 +5200,7 @@ class PetWindow(QWidget):
                 panel.height(),
             )
         panel.move(chosen.topLeft())
+        panel.position_report_button()
 
     def _position_work_controls(self) -> None:
         """Keep the right-click work controls above the pet with edge fallback."""
@@ -5405,6 +5428,9 @@ class PetWindow(QWidget):
         self.quick_panel.set_work_action_label(
             labels.get(self.focus_session.snapshot().status, "开始工作")
         )
+        self.quick_panel.set_artist_music_service(
+            getattr(self.settings, "artist_music_service", "auto")
+        )
 
     def set_menu_external_callbacks(
         self, callbacks: dict[str, Callable[[bool], object]]
@@ -5435,6 +5461,7 @@ class PetWindow(QWidget):
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
             "show_work_duration": bool(self.settings.show_work_duration),
+            "artist_music_service": getattr(self.settings, "artist_music_service", "auto"),
             "program_version": __version__,
             "content_version": "内置内容",
         }
@@ -5453,7 +5480,13 @@ class PetWindow(QWidget):
             "music_toggle": lambda _checked=False: self.control_music("toggle"),
             "music_previous": lambda _checked=False: self.control_music("previous"),
             "music_next": lambda _checked=False: self.control_music("next"),
-            "music_random": lambda _checked=False: self.play_random_song(),
+            "chen_artist": lambda _checked=False: self.open_chen_artist_page(),
+            "artist_music_auto": lambda _checked=False: self.set_artist_music_service("auto"),
+            "artist_music_netease": lambda _checked=False: self.set_artist_music_service("netease"),
+            "artist_music_qq": lambda _checked=False: self.set_artist_music_service("qq"),
+            "artist_music_apple": lambda _checked=False: self.set_artist_music_service("apple"),
+            "artist_music_kugou": lambda _checked=False: self.set_artist_music_service("kugou"),
+            "artist_music_qishui": lambda _checked=False: self.set_artist_music_service("qishui"),
             "companion_love": lambda _checked=False: self.perform_companion_action("love"),
             "companion_encourage": lambda _checked=False: self.perform_companion_action("encourage"),
             "companion_rest": lambda _checked=False: self.perform_companion_action("rest"),

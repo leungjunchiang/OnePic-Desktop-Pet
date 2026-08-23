@@ -13,6 +13,7 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         "work_status_text": "⏱ 已工作 12:43",
         "visible": False,
         "always_on_top": True,
+        "artist_music_service": "qq",
     }
     called: list[tuple[str, bool]] = []
     callbacks = {
@@ -27,7 +28,13 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
             "music_toggle",
             "music_previous",
             "music_next",
-            "music_random",
+            "chen_artist",
+            "artist_music_auto",
+            "artist_music_netease",
+            "artist_music_qq",
+            "artist_music_apple",
+            "artist_music_kugou",
+            "artist_music_qishui",
             "companion_love",
             "companion_encourage",
             "companion_rest",
@@ -83,8 +90,20 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
         "播放 / 暂停",
         "上一首",
         "下一首",
-        "随机听陈楚生",
+        "",
+        "听陈楚生…",
+        "音乐平台",
     ]
+    platform = next(item for item in music.children if item.title == "音乐平台")
+    assert [item.title for item in platform.children] == [
+        "跟随系统默认",
+        "网易云音乐",
+        "QQ 音乐",
+        "Apple Music",
+        "酷狗音乐",
+        "汽水音乐",
+    ]
+    assert platform.children[2].checked is True
     display_mode = next(item for item in model.items() if item.title == "显示模式")
     assert [item.title for item in display_mode.children] == ["始终置顶", "桌面模式"]
     assert display_mode.children[0].checked is True

@@ -71,11 +71,52 @@ class UnifiedMenuModel:
         state = dict(self._state_provider())
         work_status = str(state.get("work_status") or "idle")
         visible = bool(state.get("visible", True))
+        artist_service = str(state.get("artist_music_service") or "auto").casefold()
+        music_platform_children = [
+            MenuItemSpec(
+                "跟随系统默认",
+                "artist_music_auto",
+                checkable=True,
+                checked=artist_service == "auto",
+            ),
+            MenuItemSpec(
+                "网易云音乐",
+                "artist_music_netease",
+                checkable=True,
+                checked=artist_service == "netease",
+            ),
+            MenuItemSpec(
+                "QQ 音乐",
+                "artist_music_qq",
+                checkable=True,
+                checked=artist_service == "qq",
+            ),
+            MenuItemSpec(
+                "Apple Music",
+                "artist_music_apple",
+                checkable=True,
+                checked=artist_service == "apple",
+            ),
+            MenuItemSpec(
+                "酷狗音乐",
+                "artist_music_kugou",
+                checkable=True,
+                checked=artist_service == "kugou",
+            ),
+            MenuItemSpec(
+                "汽水音乐",
+                "artist_music_qishui",
+                checkable=True,
+                checked=artist_service == "qishui",
+            ),
+        ]
         music_children = [
             MenuItemSpec("播放 / 暂停", "music_toggle"),
             MenuItemSpec("上一首", "music_previous"),
             MenuItemSpec("下一首", "music_next"),
-            MenuItemSpec("随机听陈楚生", "music_random"),
+            MenuItemSpec.divider(),
+            MenuItemSpec("听陈楚生…", "chen_artist"),
+            MenuItemSpec("音乐平台", children=tuple(music_platform_children)),
         ]
 
         interaction_children = [
