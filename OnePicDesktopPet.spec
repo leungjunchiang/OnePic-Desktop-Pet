@@ -16,6 +16,11 @@ except Exception:
     # release builds do, and the explicit certifi dependency is still loaded.
     pass
 hiddenimports = ["winrt.windows.media.control", "uiautomation"] if sys.platform == "win32" else []
+if sys.platform == "darwin":
+    # These imports are intentionally performed at runtime so Windows/Linux
+    # builds do not load AppKit.  PyInstaller therefore needs the native
+    # modules listed explicitly for the macOS Dock/status-item bridge.
+    hiddenimports += ["AppKit", "Foundation", "objc", "Quartz"]
 # These are development/build or optional data-science packages.  Nothing in
 # main.py or the runtime package imports them; excluding them prevents a
 # local dev environment from silently inflating the public artifact.  The
