@@ -17,6 +17,64 @@ from .resources import resource_path
 ModelSource = UnifiedMenuModel | Callable[[], UnifiedMenuModel]
 
 
+_DOCK_TARGET_CLASS = None
+_DOCK_DELEGATE_CLASS = None
+
+
+def _dock_native_classes():
+    """Return process-wide PyObjC classes used by Dock menu controllers.
+
+    PyObjC registers Python subclasses with the Objective-C runtime by class
+    name. Defining the subclasses inside every controller instance therefore
+    raises ``objc.error`` when a second controller is created in the same
+    process (and is common in tests or during a Qt reinitialisation).
+    """
+
+    global _DOCK_TARGET_CLASS, _DOCK_DELEGATE_CLASS
+    if _DOCK_TARGET_CLASS is not None and _DOCK_DELEGATE_CLASS is not None:
+        return _DOCK_TARGET_CLASS, _DOCK_DELEGATE_CLASS
+
+    from AppKit import NSMenu, NSMenuItem
+    from Foundation import NSObject
+
+    class DockTarget(NSObject):
+        def triggerCommand_(self, item) -> None:
+            controller = getattr(self, "_onepic_controller", None)
+            command = str(item.representedObject() or "")
+            if controller is not None and command:
+                controller._model_provider().execute(command, bool(item.state()))
+
+    class DockApplicationDelegate(NSObject):
+        def applicationDockMenu_(self, _application):
+            controller = getattr(self, "_onepic_controller", None)
+            if controller is None:
+                return None
+            return controller._build_native_menu(NSMenu, NSMenuItem, DockTarget)
+
+        def respondsToSelector_(self, selector) -> bool:
+            controller = getattr(self, "_onepic_controller", None)
+            if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
+                return True
+            previous = getattr(controller, "_previous_delegate", None)
+            if previous is not None:
+                try:
+                    return bool(previous.respondsToSelector_(selector))
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            return False
+
+        def forwardingTargetForSelector_(self, selector):
+            """Keep Qt's existing delegate behavior for unrelated selectors."""
+            if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
+                return self
+            controller = getattr(self, "_onepic_controller", None)
+            return getattr(controller, "_previous_delegate", None)
+
+    _DOCK_TARGET_CLASS = DockTarget
+    _DOCK_DELEGATE_CLASS = DockApplicationDelegate
+    return _DOCK_TARGET_CLASS, _DOCK_DELEGATE_CLASS
+
+
 def _coerce_model_provider(source: ModelSource) -> Callable[[], UnifiedMenuModel]:
     if callable(source):
         return source
@@ -37,46 +95,17 @@ class MacDockMenuController:
         if sys.platform != "darwin":
             return
         try:
-            from AppKit import NSApplication, NSMenu, NSMenuItem
-            from Foundation import NSObject
+            from AppKit import NSApplication
         except ImportError:
             return
 
-        controller = self
-
-        class _DockTarget(NSObject):
-            def triggerCommand_(self, item) -> None:
-                command = str(item.representedObject() or "")
-                if command:
-                    controller._model_provider().execute(command, bool(item.state()))
-
-        class _DockApplicationDelegate(NSObject):
-            def applicationDockMenu_(self, _application):
-                return controller._build_native_menu(NSMenu, NSMenuItem, _DockTarget)
-
-            def respondsToSelector_(self, selector) -> bool:
-                if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
-                    return True
-                previous = controller._previous_delegate
-                if previous is not None:
-                    try:
-                        return bool(previous.respondsToSelector_(selector))
-                    except (AttributeError, TypeError, ValueError):
-                        pass
-                return False
-
-            def forwardingTargetForSelector_(self, selector):
-                """Keep Qt's existing delegate behavior for unrelated selectors."""
-                if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
-                    return self
-                return controller._previous_delegate
-
-        self._target_class = _DockTarget
-        self._delegate_class = _DockApplicationDelegate
+        self._target_class, self._delegate_class = _dock_native_classes()
         self._application = NSApplication.sharedApplication()
         self._previous_delegate = self._application.delegate()
-        self._target = _DockTarget.alloc().init()
-        self._delegate = _DockApplicationDelegate.alloc().init()
+        self._target = self._target_class.alloc().init()
+        self._delegate = self._delegate_class.alloc().init()
+        self._target._onepic_controller = self
+        self._delegate._onepic_controller = self
         self._application.setDelegate_(self._delegate)
         self._native = True
 
