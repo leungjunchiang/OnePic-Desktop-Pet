@@ -141,14 +141,14 @@ def build_work_report(
     # aggregate from an older release, so using ``max(timer, records)`` here
     # would reintroduce the very 5h/53h reports this window is meant to fix.
     day_preview = analytics.period_summary("day", moment)
-    local_evidence = bool(day_preview.get("local_evidence"))
-    if local_evidence:
-        recorded_session = max(0, int(timer.analytics_recorded_session_seconds()))
-        live_unrecorded = (
-            max(0, snapshot_session - recorded_session)
-            if snapshot_status == "focus" else 0
-        )
-        live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + live_unrecorded
+    local_record_count = max(0, int(day_preview.get("local_record_count", 0) or 0))
+    if local_record_count > 0:
+        # Raw local FocusSession records are the authoritative day total.
+        # Only add the segment that is actually running now.  The cumulative
+        # session snapshot includes earlier paused/checkpointed segments and
+        # must never be rendered as a new three-hour live interval.
+        live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
+        live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + live_elapsed
     else:
         live_today = max(0, int(timer.today_seconds()), snapshot_today)
     current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
@@ -178,7 +178,8 @@ def build_work_report(
             if isinstance(focus_snapshot, dict)
             else getattr(focus_snapshot, "session_started_at", None)
         )
-    if live_started_value and snapshot_session > 0:
+    live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
+    if live_started_value and snapshot_status == "focus" and live_elapsed > 0:
         try:
             live_started = datetime.fromisoformat(str(live_started_value).replace("Z", "+00:00"))
             if live_started.tzinfo is None:
@@ -188,7 +189,7 @@ def build_work_report(
                 "date": live_started.date().isoformat(),
                 "started_at": live_started.isoformat(),
                 "ended_at": moment.astimezone(BEIJING_TIMEZONE).isoformat(),
-                "seconds": snapshot_session,
+                "seconds": live_elapsed,
                 "task": str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
             }
             for period in ("day", "week", "month"):
@@ -219,7 +220,7 @@ def build_work_report(
     day["current_streak_days"] = int(summary.current_streak_days)
     day["rest_state"] = report["rest_state"]
     day["current_status_label"] = report["current_status_label"]
-    day["focus_session_seconds"] = snapshot_session
+    day["focus_session_seconds"] = live_elapsed if timer.is_running else snapshot_session
     day["focus_room_id"] = snapshot_room
     if day.get("daily"):
         today_row = next((row for row in day["daily"] if row.get("is_today")), None)
@@ -302,12 +303,14 @@ def _nice_duration_ticks(maximum: int, count: int = 4) -> list[int]:
     if maximum <= 0:
         return [0, 60 * 60]
     # For the report's daily and hourly bars, one hour is the most useful
-    # unit.  Round the observed maximum up to a whole hour and then reserve
-    # one additional hour above it so the tallest bar never touches the
-    # chart ceiling (3h -> 4h, 2h09m -> 4h).
+    # unit. Round the observed maximum up to a whole hour and reserve one
+    # additional hour above it so the tallest bar never touches the ceiling.
     hour = 60 * 60
     rounded_hours = (maximum + hour - 1) // hour
-    upper_hours = max(2, rounded_hours + 1)
+    # A value just above N hours already has headroom when the next whole-hour
+    # tick is used; an exact N-hour maximum needs one extra tick explicitly.
+    # This keeps 3h02m at a readable 4h ceiling instead of jumping to 5h.
+    upper_hours = max(2, rounded_hours + (1 if maximum % hour == 0 else 0))
     if upper_hours <= 12:
         return [value * hour for value in range(upper_hours + 1)]
     target = maximum / max(1, count)
@@ -461,6 +464,8 @@ class ReportBarChart(QWidget):
         self._rows = [row for row in rows if isinstance(row, dict)]
         self._hourly = bool(hourly)
         self._bar_rects: list[QRect] = []
+        self._plot_rect = QRect()
+        self._axis_upper = 0
         self._hover_index = -1
         # Leave enough room for a real x-axis: daily charts show date +
         # weekday, hourly charts show the hour tick.  The old 178px height
@@ -539,9 +544,11 @@ class ReportBarChart(QWidget):
         # reductions for the right/bottom arguments, so keep them negative.
         bottom_axis = 34 if self._hourly else 50
         plot = self.rect().adjusted(tick_label_width, 14, -18, -bottom_axis)
+        self._plot_rect = plot
 
         painter.setPen(QPen(QColor("#e3edef"), 1))
         upper = max(ticks[-1], 1)
+        self._axis_upper = upper
         for tick in ticks:
             ratio = tick / upper
             y = plot.bottom() - int(plot.height() * ratio)
@@ -575,7 +582,10 @@ class ReportBarChart(QWidget):
             label_step = 1
         for index, (row, value) in enumerate(zip(self._rows, values)):
             x = plot.left() + index * (bar_width + gap)
-            height = int(plot.height() * value / maximum) if value is not None and maximum else 0
+            # Scale bars against the axis upper bound, not the observed
+            # maximum. This leaves the requested visual headroom above the
+            # tallest bar.
+            height = int(plot.height() * value / upper) if value is not None and upper else 0
             y = plot.bottom() - height
             self._bar_rects.append(QRect(x, y, bar_width, max(4, height)) if value is not None else QRect())
             color = QColor("#36a99d") if row.get("is_today") else QColor("#75c8bd")
@@ -1118,4 +1128,3 @@ class WorkReportDialog(QDialog):
             line.addWidget(bar, 1)
             line.addWidget(value)
             layout.addLayout(line)
-

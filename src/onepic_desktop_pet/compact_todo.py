@@ -3,14 +3,14 @@
 The compact Todo surface is deliberately separate from ``TodayNoteWindow``.
 It is a frameless tool window with no title, statistics, chat text, or
 dashboard chrome.  ``PetWindow`` owns its lifetime and repositions it below
-the pet whenever the pet moves.
+the pet whenever the pet moves.  The accessory hides itself when there are no
+unfinished/unread entries, and is restored when a new visible Todo is added.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date
-from time import monotonic
 from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
@@ -288,8 +288,6 @@ class CompactTodoPanel(QWidget):
     TEXT_MEASURE_SAFETY = 14
     ROW_HEIGHT = TodoRow.MIN_HEIGHT
     MAX_SCROLL_HEIGHT = 360
-    COMPLETION_PREVIEW_SECONDS = 1.1
-
     def __init__(
         self,
         memory: TimeMemory,
@@ -305,8 +303,8 @@ class CompactTodoPanel(QWidget):
         self.settings = settings
         self.save_settings_callback = save_settings_callback
         self.selected_task_id = str(memory.current_task_id or "")
-        self._just_completed: dict[str, float] = {}
         self._rows: dict[str, TodoRow] = {}
+        self._visible_task_ids: frozenset[str] = frozenset()
         self._list_width = 100
         self.setObjectName("compactTodoPanel")
         self.setWindowTitle("")
@@ -386,6 +384,12 @@ class CompactTodoPanel(QWidget):
     def rows(self) -> dict[str, TodoRow]:
         return self._rows
 
+    @property
+    def visible_task_ids(self) -> frozenset[str]:
+        """IDs currently eligible for the compact desktop strip."""
+
+        return self._visible_task_ids
+
     def set_companion_topmost(self, enabled: bool) -> None:
         """Apply the same topmost choice as the pet without a title bar."""
 
@@ -410,14 +414,12 @@ class CompactTodoPanel(QWidget):
         self.refresh()
 
     def _visible_tasks(self) -> list[Any]:
-        now = monotonic()
-        self._just_completed = {
-            key: deadline for key, deadline in self._just_completed.items() if deadline > now
-        }
-        tasks = [
-            item for item in self.memory.todo_view_upcoming()
-            if not item.completed or item.id in self._just_completed
-        ]
+        # ``todo_view_upcoming`` already applies the shared visibility rules,
+        # including completed/read items and auto-hidden entries.  Do not keep
+        # a completed row around just to animate it: when the last visible
+        # item is checked, the whole accessory (including ⋯ and ＋) should
+        # disappear immediately.
+        tasks = [item for item in self.memory.todo_view_upcoming() if not item.completed]
         return sorted(tasks, key=self._task_priority_key)
 
     def _task_priority_key(self, task: Any) -> tuple[object, ...]:
@@ -460,7 +462,7 @@ class CompactTodoPanel(QWidget):
             str(getattr(task, "created_at", "") or ""),
         )
 
-    def refresh(self) -> None:
+    def refresh(self) -> bool:
         for row in tuple(self._rows.values()):
             row.deleteLater()
         self._rows.clear()
@@ -469,6 +471,12 @@ class CompactTodoPanel(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         tasks = self._visible_tasks()
+        self._visible_task_ids = frozenset(str(getattr(task, "id", "")) for task in tasks)
+        if not tasks:
+            self.rows_scroll.hide()
+            self.action_column.hide()
+            self.hide()
+            return False
         self._resize_width(tasks[: self.MAX_VISIBLE_ROWS])
         for task in tasks:
             row = TodoRow(
@@ -480,8 +488,10 @@ class CompactTodoPanel(QWidget):
             row.checked.connect(self._check_task)
             self._rows[task.id] = row
             self.rows_layout.addWidget(row)
-        self.rows_scroll.setVisible(True)
+        self.rows_scroll.show()
+        self.action_column.show()
         self._resize_to_content()
+        return True
 
     def _resize_to_content(self) -> None:
         """Measure rows first, then size the scroll host and native window."""
@@ -650,16 +660,9 @@ class CompactTodoPanel(QWidget):
             return
         if not self.memory.complete_todo_view_item(task_id, completed):
             return
-        if completed:
-            self._just_completed[task_id] = monotonic() + self.COMPLETION_PREVIEW_SECONDS
-            QTimer.singleShot(
-                int(self.COMPLETION_PREVIEW_SECONDS * 1000) + 60,
-                self.refresh,
-            )
         self.task_checked.emit(task_id, completed)
         self.task_changed.emit()
-        if not completed:
-            self.refresh()
+        self.refresh()
 
     def add_task(self) -> None:
         from PySide6.QtWidgets import QInputDialog

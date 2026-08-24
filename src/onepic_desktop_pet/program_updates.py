@@ -548,4 +548,3 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
         return ProgramUpdateResult(release=release, installer_path=final_path)
-

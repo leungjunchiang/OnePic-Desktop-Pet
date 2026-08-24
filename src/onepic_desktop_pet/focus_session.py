@@ -48,7 +48,13 @@ class FocusSessionSnapshot:
                 current = current.replace(tzinfo=BEIJING_TIMEZONE)
             else:
                 current = current.astimezone(BEIJING_TIMEZONE)
-            started_at = (current - timedelta(seconds=session_seconds)).isoformat()
+            # ``session_seconds`` includes earlier segments separated by a
+            # pause/checkpoint.  Presence and live charts need the start of
+            # the currently running segment, otherwise an old cumulative
+            # total is rendered as one continuous interval.
+            started_at = (
+                current - timedelta(seconds=timer.current_elapsed_seconds())
+            ).isoformat()
         status = "focus" if timer.is_running else (
             "rest" if timer.has_active_session or resting else "idle"
         )

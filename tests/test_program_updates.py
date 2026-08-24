@@ -414,4 +414,3 @@ def test_desktop_pet_application_is_a_qt_object_for_worker_callbacks() -> None:
     from onepic_desktop_pet.app import DesktopPetApplication
 
     assert issubclass(DesktopPetApplication, QObject)
-

@@ -243,18 +243,54 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
     panel.rows[task.id].checkbox.setChecked(True)
     app.processEvents()
     assert memory.todos.get(task.id).completed is True
-    assert panel.rows[task.id].checkbox.isChecked() is True
-    assert panel.rows_scroll.isVisible() is True
-    assert set(panel.rows) == {task.id}
-    assert panel.rows[task.id].label.isVisible()
+    assert not panel.isVisible()
+    assert not panel.rows_scroll.isVisible()
+    assert not panel.action_column.isVisible()
+    assert set(panel.rows) == set()
     assert not hasattr(panel, "expand_button")
-    assert not hasattr(panel.rows[task.id], "more_button")
+    assert not panel.more_button.isVisible()
+    assert not panel.add_button.isVisible()
+
+    replacement = memory.todos.add("重新出现")
+    panel.refresh()
+    panel.show()
+    app.processEvents()
+    assert panel.isVisible()
+    assert set(panel.rows) == {replacement.id}
     assert panel.more_button.isVisible()
     assert panel.add_button.isVisible()
-    app.processEvents()
-    assert panel.rows_scroll.isVisible() is True
     panel.close()
     panel.deleteLater()
+    app.processEvents()
+
+
+def test_compact_todo_panel_reappears_after_todo_center_write(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show()
+    app.processEvents()
+
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None
+    assert not panel.isVisible()
+
+    memory.todos.add("从空状态恢复")
+    window._refresh_todo_surfaces()
+    app.processEvents()
+
+    assert panel.isVisible()
+    assert panel.more_button.isVisible()
+    assert panel.add_button.isVisible()
+    assert len(panel.rows) == 1
+    window.close()
+    window.deleteLater()
     app.processEvents()
 
 
@@ -1904,4 +1940,3 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
-

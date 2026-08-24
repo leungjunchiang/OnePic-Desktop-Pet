@@ -339,6 +339,17 @@ class WorkTimerModel:
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
 
+    def current_elapsed_seconds(self) -> int:
+        """Return only the currently running segment.
+
+        A FocusSession can contain several paused/checkpointed segments.  A
+        report or presence heartbeat must not mistake that cumulative session
+        total for the interval that is currently running.
+        """
+
+        self._rollover_if_needed()
+        return self._current_elapsed()
+
     @property
     def focus_session_id(self) -> str:
         """Stable identifier for the current session across app restarts."""

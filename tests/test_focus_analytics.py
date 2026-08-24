@@ -406,4 +406,3 @@ def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypa
 
     assert store.switch_account("account-a")
     assert store.summary().weekly_total_seconds == 90
-

@@ -2895,7 +2895,14 @@ class PetWindow(QWidget):
             self._compact_todo_panel.set_companion_topmost(
                 bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
             )
-        self._compact_todo_panel.refresh()
+        has_visible_tasks = self._compact_todo_panel.refresh()
+        if not has_visible_tasks:
+            # An empty compact strip is not a useful accessory.  Keep the
+            # widget instance so a later Todo write can reuse it, but do not
+            # show it (or its ⋯/＋ action rail).
+            self._restore_compact_todos_after_show = False
+            self._compact_todo_panel.hide()
+            return
         self._show_nonactivating(
             self._compact_todo_panel,
             always_on_top=bool(
@@ -3099,6 +3106,11 @@ class PetWindow(QWidget):
         self.show_compact_todos()
         if self._compact_todo_panel is not None:
             self._compact_todo_panel.add_task()
+            # ``add_task`` refreshes before emitting its change signal.  The
+            # window therefore needs one explicit show pass after the modal
+            # input closes so a previously empty strip reappears immediately.
+            if self._compact_todo_panel.visible_task_ids:
+                self.show_compact_todos()
 
     def hide_sticky_note(self) -> None:
         if self._today_note_window is not None:
@@ -3107,13 +3119,32 @@ class PetWindow(QWidget):
     def _refresh_todo_surfaces(self) -> None:
         if self._today_note_window is not None:
             self._today_note_window.refresh()
-        if self._compact_todo_panel is not None:
-            self._compact_todo_panel.refresh()
-            if self._compact_todo_panel.isVisible():
-                # A longer/shorter task changes the panel width, so its
-                # pet-relative position must be recalculated in the same UI
-                # turn rather than waiting for the next pet movement.
-                self._position_compact_todos()
+        compact_mode = str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
+        display_mode = str(getattr(self.settings, "today_note_display_mode", "always"))
+        if self._compact_todo_panel is None:
+            # A Todo can be created from the center window before the compact
+            # accessory has ever been instantiated.  In compact mode, create
+            # it lazily as soon as there is something eligible to display.
+            if compact_mode and display_mode != "hidden" and self.time_memory.todo_view_upcoming():
+                self.show_compact_todos()
+        else:
+            panel = self._compact_todo_panel
+            before_ids = panel.visible_task_ids
+            was_visible = panel.isVisible()
+            has_visible_tasks = panel.refresh()
+            after_ids = panel.visible_task_ids
+            if has_visible_tasks:
+                # Re-show only when a newly visible Todo was added.  This
+                # preserves an explicit user hide while still making the
+                # empty-strip -> new-Todo transition automatic.
+                new_visible_task = bool(after_ids - before_ids)
+                if compact_mode and display_mode != "hidden" and new_visible_task:
+                    self.show_compact_todos()
+                elif was_visible:
+                    # A longer/shorter task changes the panel width, so its
+                    # pet-relative position must be recalculated in the same
+                    # UI turn rather than waiting for the next pet movement.
+                    self._position_compact_todos()
 
         if self._todo_center_window is not None:
             self._todo_center_window.refresh()
@@ -3758,7 +3789,7 @@ class PetWindow(QWidget):
         moment = datetime.now(BEIJING_TIMEZONE)
         current_date = moment.date()
         day_projection = self.focus_analytics.period_summary("day", moment)
-        if bool(day_projection.get("local_evidence")):
+        if int(day_projection.get("local_record_count", 0) or 0) > 0:
             # One-time repair for timer files that inherited a stale remote
             # maximum.  Do this only when detailed local records exist; a new
             # device without history must still be able to use the server
@@ -4468,13 +4499,11 @@ class PetWindow(QWidget):
         day_projection = self.focus_analytics.period_summary("day")
         week_projection = self.focus_analytics.period_summary("week")
         local_today = max(0, int(day_projection.get("total_seconds", 0) or 0))
-        if bool(day_projection.get("local_evidence")):
-            recorded_session = max(0, int(self.work_timer.analytics_recorded_session_seconds()))
-            live_unrecorded = (
-                max(0, int(snapshot.session_seconds or 0) - recorded_session)
-                if snapshot.is_running else 0
-            )
-            today_seconds = min(24 * 60 * 60, local_today + live_unrecorded)
+        if int(day_projection.get("local_record_count", 0) or 0) > 0:
+            # Use only the current monotonic segment.  ``snapshot.session_seconds``
+            # is cumulative across pauses/checkpoints and is not a live delta.
+            live_elapsed = self.work_timer.current_elapsed_seconds() if snapshot.is_running else 0
+            today_seconds = min(24 * 60 * 60, local_today + live_elapsed)
         else:
             today_seconds = max(0, int(snapshot.today_seconds or 0))
         week_seconds = max(0, int(week_projection.get("total_seconds", 0) or 0))
@@ -4682,7 +4711,7 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         local_day = self.focus_analytics.period_summary("day")
-        if bool(local_day.get("local_evidence")):
+        if int(local_day.get("local_record_count", 0) or 0) > 0:
             self.work_timer.reconcile_today_seconds(
                 int(local_day.get("total_seconds", 0) or 0)
             )
@@ -6219,4 +6248,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-
