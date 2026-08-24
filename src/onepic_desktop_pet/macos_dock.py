@@ -107,6 +107,7 @@ class MacDockMenuController:
         # it with a second PyObjC delegate is racy because Qt may restore its
         # own delegate after startup, leaving the Dock with the default menu.
         if self._install_qt_dock_menu():
+            self._schedule_dock_reassertion()
             return
 
         # Keep the AppKit implementation as a compatibility fallback for
@@ -125,6 +126,47 @@ class MacDockMenuController:
         _ACTIVE_DOCK_CONTROLLER = self
         self._application.setDelegate_(self._delegate)
         self._native = True
+        # Qt may finish installing/restoring its Cocoa delegate during the
+        # first event-loop turn.  Re-assert our delegate after Qt is settled;
+        # otherwise macOS silently falls back to the standard Dock menu.
+        self._schedule_dock_reassertion()
+
+    def _schedule_dock_reassertion(self) -> None:
+        """Re-assert the Dock bridge after Qt finishes Cocoa setup."""
+
+        try:
+            from PySide6.QtCore import QTimer
+        except ImportError:
+            return
+        # Run once immediately after construction and once after native
+        # application objects have had a chance to settle.  The callbacks are
+        # harmless after close() because ensure_installed() checks _native.
+        QTimer.singleShot(0, self.ensure_installed)
+        QTimer.singleShot(500, self.ensure_installed)
+
+    def ensure_installed(self) -> None:
+        """Keep the actual macOS Dock hook installed after Qt startup."""
+
+        if not self._native:
+            return
+        if self._qt_menu is not None:
+            try:
+                self._refresh_qt_dock_menu()
+                set_as_dock_menu = getattr(self._qt_menu, "setAsDockMenu", None)
+                if callable(set_as_dock_menu):
+                    set_as_dock_menu()
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+            return
+        if self._application is None or self._delegate is None:
+            return
+        try:
+            if self._application.delegate() is not self._delegate:
+                global _ACTIVE_DOCK_CONTROLLER
+                _ACTIVE_DOCK_CONTROLLER = self
+                self._application.setDelegate_(self._delegate)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
 
     def _install_qt_dock_menu(self) -> bool:
         """Install the Dock menu through Qt's native Cocoa bridge.
