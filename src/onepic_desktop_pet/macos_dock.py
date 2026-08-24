@@ -14,6 +14,15 @@ from .menu_model import MenuItemSpec, UnifiedMenuModel
 from .resources import resource_path
 
 
+ModelSource = UnifiedMenuModel | Callable[[], UnifiedMenuModel]
+
+
+def _coerce_model_provider(source: ModelSource) -> Callable[[], UnifiedMenuModel]:
+    if callable(source):
+        return source
+    return lambda: source
+
+
 class MacDockMenuController:
     """Expose the unified Lili menu from the macOS Dock icon."""
 
@@ -45,38 +54,11 @@ class MacDockMenuController:
             def applicationDockMenu_(self, _application):
                 return controller._build_native_menu(NSMenu, NSMenuItem, _DockTarget)
 
-            def respondsToSelector_(self, selector) -> bool:
+            def forwardingTargetForSelector_(self, selector):
+                """Keep Qt's existing delegate behavior for unrelated selectors."""
                 if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
-                    return True
-                previous = controller._previous_delegate
-                if previous is not None:
-                    try:
-                        return bool(previous.respondsToSelector_(selector))
-                    except (AttributeError, TypeError, ValueError):
-                        pass
-                return bool(super().respondsToSelector_(selector))
-
-            def methodSignatureForSelector_(self, selector):
-                previous = controller._previous_delegate
-                if previous is not None:
-                    try:
-                        signature = previous.methodSignatureForSelector_(selector)
-                    except (AttributeError, TypeError, ValueError):
-                        signature = None
-                    if signature is not None:
-                        return signature
-                return super().methodSignatureForSelector_(selector)
-
-            def forwardInvocation_(self, invocation) -> None:
-                previous = controller._previous_delegate
-                if previous is not None:
-                    try:
-                        if previous.respondsToSelector_(invocation.selector()):
-                            invocation.invokeWithTarget_(previous)
-                            return
-                    except (AttributeError, TypeError, ValueError):
-                        pass
-                self.doesNotRecognizeSelector_(invocation.selector())
+                    return self
+                return controller._previous_delegate
 
         self._target_class = _DockTarget
         self._delegate_class = _DockApplicationDelegate
@@ -136,7 +118,7 @@ class MacDockMenuController:
         self._native = False
 
 
-def install_dock_menu(model_provider: Callable[[], UnifiedMenuModel]) -> MacDockMenuController:
+def install_dock_menu(model_provider: ModelSource) -> MacDockMenuController:
     """Install a native Dock menu on macOS, or a no-op elsewhere."""
 
     return MacDockMenuController(model_provider)
@@ -151,8 +133,8 @@ class MacStatusBarController:
     and Windows tray.
     """
 
-    def __init__(self, model_provider: Callable[[], UnifiedMenuModel]) -> None:
-        self._model_provider = model_provider
+    def __init__(self, model_provider: ModelSource) -> None:
+        self._model_provider = _coerce_model_provider(model_provider)
         self._status_bar = None
         self._status_item = None
         self._menu = None
@@ -262,7 +244,7 @@ class MacStatusBarController:
         self._native = False
 
 
-def install_status_item(model_provider: Callable[[], UnifiedMenuModel]) -> MacStatusBarController:
+def install_status_item(model_provider: ModelSource) -> MacStatusBarController:
     """Create a native macOS menu-bar entry, or a no-op elsewhere."""
 
     return MacStatusBarController(model_provider)
