@@ -528,7 +528,7 @@ class TodayNoteWindow(QDialog):
             self.hide()
             show_compact = getattr(owner, "show_compact_todos", None)
             if callable(show_compact):
-                show_compact()
+                show_compact(manual=True)
             return
         hide_compact = getattr(owner, "hide_compact_todos", None)
         if callable(hide_compact):

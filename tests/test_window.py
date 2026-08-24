@@ -294,6 +294,38 @@ def test_compact_todo_panel_reappears_after_todo_center_write(tmp_path) -> None:
     app.processEvents()
 
 
+def test_show_todos_command_restores_an_existing_hidden_panel(tmp_path) -> None:
+    """Manual “显示待办” must restore tasks already present in the panel."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("仍然需要显示")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show()
+    app.processEvents()
+
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+
+    window.hide_compact_todos()
+    assert not panel.isVisible()
+
+    window._menu_callbacks()["show_todos"]()
+    app.processEvents()
+    assert panel.isVisible()
+    assert set(panel.rows) == set(panel.visible_task_ids)
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)
