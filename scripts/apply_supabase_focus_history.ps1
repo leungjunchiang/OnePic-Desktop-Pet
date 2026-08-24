@@ -6,6 +6,10 @@ param(
     [string]$ConfigPath = "config/social_backend.json"
 )
 
+# Keep the original migration identifier documented for older workflow checks;
+# the exact reconciliation migration above supersedes it without removing it.
+# 20260822000400_lili_focus_daily_visibility.sql
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
