@@ -3758,7 +3758,7 @@ class PetWindow(QWidget):
         moment = datetime.now(BEIJING_TIMEZONE)
         current_date = moment.date()
         day_projection = self.focus_analytics.period_summary("day", moment)
-        if int(day_projection.get("local_record_count", 0) or 0) > 0:
+        if bool(day_projection.get("local_evidence")):
             # One-time repair for timer files that inherited a stale remote
             # maximum.  Do this only when detailed local records exist; a new
             # device without history must still be able to use the server
@@ -4468,7 +4468,7 @@ class PetWindow(QWidget):
         day_projection = self.focus_analytics.period_summary("day")
         week_projection = self.focus_analytics.period_summary("week")
         local_today = max(0, int(day_projection.get("total_seconds", 0) or 0))
-        if int(day_projection.get("local_record_count", 0) or 0) > 0:
+        if bool(day_projection.get("local_evidence")):
             recorded_session = max(0, int(self.work_timer.analytics_recorded_session_seconds()))
             live_unrecorded = (
                 max(0, int(snapshot.session_seconds or 0) - recorded_session)
@@ -4682,7 +4682,7 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         local_day = self.focus_analytics.period_summary("day")
-        if int(local_day.get("local_record_count", 0) or 0) > 0:
+        if bool(local_day.get("local_evidence")):
             self.work_timer.reconcile_today_seconds(
                 int(local_day.get("total_seconds", 0) or 0)
             )
@@ -5581,10 +5581,6 @@ class PetWindow(QWidget):
             "artist_music_apple": lambda _checked=False: self.set_artist_music_service("apple"),
             "artist_music_kugou": lambda _checked=False: self.set_artist_music_service("kugou"),
             "artist_music_qishui": lambda _checked=False: self.set_artist_music_service("qishui"),
-            "companion_love": lambda _checked=False: self.perform_companion_action("love"),
-            "companion_encourage": lambda _checked=False: self.perform_companion_action("encourage"),
-            "companion_rest": lambda _checked=False: self.perform_companion_action("rest"),
-            "companion_status": lambda _checked=False: self.show_companion_status(),
             "outfit": lambda _checked=False: self.show_outfit_menu(),
             "rename": lambda _checked=False: self.rename_pet(),
             "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),
@@ -5671,6 +5667,18 @@ class PetWindow(QWidget):
         self.activity_timer.stop()
         self._change_ambient_activity(selected)
 
+    def _automatic_work_companion_tick(self) -> bool:
+        """偶尔在工作中主动给出拥抱或加油，不再要求用户点菜单。"""
+
+        if not self.work_timer.is_running or random.random() >= 0.42:
+            return False
+        action_key = random.choice(("love", "encourage"))
+        reply = self.companion.perform_action(action_key)
+        option = ACTION_BY_KEY[action_key]
+        self._play_action_sequence(option.sequence or (reply.state,), option.duration_ms)
+        self.show_speech(reply.text, max(5200, option.duration_ms + 1800))
+        return True
+
     def _ambient_tick(self) -> None:
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
@@ -5680,6 +5688,9 @@ class PetWindow(QWidget):
                 return
             busy = self.chat_manager.busy
             if self.isVisible() and not self.dragging and not busy:
+                if self._automatic_work_companion_tick():
+                    self.daily_stats.record_event("work_companion")
+                    return
                 idle_seconds = time.monotonic() - self._last_user_interaction
                 if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
                     activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"

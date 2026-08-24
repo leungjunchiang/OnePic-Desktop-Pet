@@ -218,7 +218,7 @@ class FocusAnalyticsStore:
         # particular, never let an old server-side ``greatest`` snapshot
         # overwrite a corrected local day and then feed that value back to the
         # server on the next heartbeat.
-        has_local_today = self._has_local_records(now, now)
+        has_local_today = self._has_local_evidence(now, now)
         if remote_date == today_key and not has_local_today:
             value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(today_seconds or 0)))
             if value > max(0, int(state.get("focus_today_seconds", 0) or 0)):
@@ -234,7 +234,7 @@ class FocusAnalyticsStore:
             changed = True
 
         remote_week = str(week_start or "")[:10]
-        has_local_week = self._has_local_records(
+        has_local_week = self._has_local_evidence(
             now - timedelta(days=now.weekday()), now
         )
         if remote_week == current_week_key and not has_local_week:
@@ -512,14 +512,14 @@ class FocusAnalyticsStore:
             account_state = {}
         if (
             str(account_state.get("focus_date") or "")[:10] == today.isoformat()
-            and not self._has_local_records(today, today)
+            and not self._has_local_evidence(today, today)
         ):
             account_today = max(0, int(account_state.get("focus_today_seconds", 0) or 0))
             today_seconds = max(today_seconds or 0, account_today)
         current_week_key = (today - timedelta(days=today.weekday())).isoformat()
         if (
             str(account_state.get("focus_week_start") or "")[:10] == current_week_key
-            and not self._has_local_records(
+            and not self._has_local_evidence(
                 today - timedelta(days=today.weekday()), today
             )
         ):
@@ -701,16 +701,21 @@ class FocusAnalyticsStore:
         account_state = self._state.get("account_state", {})
         if not isinstance(account_state, dict):
             account_state = {}
-        local_period_records = self._has_local_records(start, today)
+        # A day row can come from a trusted cross-device history sync without
+        # having a raw FocusSession record on this computer.  It is still
+        # stronger evidence than a server-side weekly ``greatest`` snapshot;
+        # otherwise an old aggregate can make Monday show more time than the
+        # seven daily rows that produced it.
+        local_period_evidence = self._has_local_evidence(start, today)
         if (
             key == "day"
-            and not local_period_records
+            and not local_period_evidence
             and str(account_state.get("focus_date") or "")[:10] == today.isoformat()
         ):
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_today_seconds", 0) or 0)))
         if (
             key == "week"
-            and not local_period_records
+            and not local_period_evidence
             and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat()
         ):
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_week_seconds", 0) or 0)))
@@ -722,7 +727,7 @@ class FocusAnalyticsStore:
         current_week_start = today - timedelta(days=today.weekday())
         if (
             key == "month"
-            and not local_period_records
+            and not local_period_evidence
             and current_week_start >= start
             and str(account_state.get("focus_week_start") or "")[:10]
             == current_week_start.isoformat()
@@ -913,6 +918,7 @@ class FocusAnalyticsStore:
                 and self._record_date(raw) is not None
                 and start <= self._record_date(raw) <= today
             ),
+            "local_evidence": local_period_evidence,
         }
 
     def _best_window(self, today: date, *, start: date | None = None) -> str:
@@ -1024,6 +1030,33 @@ class FocusAnalyticsStore:
             and start <= record_date <= end
             for raw in self._state.get("records", [])
         )
+
+    def _has_observed_days(self, start: date, end: date) -> bool:
+        """Return whether the local cache has a trusted observed day row.
+
+        ``days`` may be populated by the cross-device history sync before a
+        raw FocusSession is written on this machine.  Those rows are valid
+        report evidence, while future and legacy-untrusted rows are not.
+        """
+
+        days = self._state.get("days", {})
+        if not isinstance(days, dict):
+            return False
+        cursor = start
+        while cursor <= end:
+            raw = days.get(cursor.isoformat())
+            if isinstance(raw, dict) and not bool(raw.get("seconds_untrusted")):
+                try:
+                    seconds = int(raw.get("seconds", 0) or 0)
+                except (TypeError, ValueError, OverflowError):
+                    seconds = -1
+                if 0 <= seconds <= MAX_ANALYTICS_DAY_SECONDS:
+                    return True
+            cursor += timedelta(days=1)
+        return False
+
+    def _has_local_evidence(self, start: date, end: date) -> bool:
+        return self._has_local_records(start, end) or self._has_observed_days(start, end)
 
     def _trim_days(self) -> bool:
         days = self._state.setdefault("days", {})

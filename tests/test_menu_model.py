@@ -35,10 +35,6 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
             "artist_music_apple",
             "artist_music_kugou",
             "artist_music_qishui",
-            "companion_love",
-            "companion_encourage",
-            "companion_rest",
-            "companion_status",
             "outfit",
             "rename",
             "settings",
@@ -74,9 +70,9 @@ def test_unified_menu_model_shares_dynamic_work_and_visibility_state() -> None:
     assert "显示六毛" in titles
     assert "检查补充内容更新" not in titles
     assert "检查程序更新" not in titles
-    work_record = next(item for item in model.items() if item.title == "工作记录")
-    assert "工作报告…" in [item.title for item in work_record.children]
-    assert "设置工作报告时间…" not in [item.title for item in work_record.children]
+    assert "工作报告…" in titles
+    assert "工作记录" not in titles
+    assert "六毛互动" not in titles
     shortcuts = next(item for item in model.items() if item.title == "快捷工具")
     shortcut_titles = [item.title for item in shortcuts.children]
     assert shortcut_titles[:4] == [

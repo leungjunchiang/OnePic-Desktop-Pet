@@ -184,6 +184,26 @@ def test_beijing_raw_timestamp_and_stale_remote_snapshot_do_not_inflate_today(tm
     assert store.period_summary("day", now)["daily"][0]["display_label"] == "8/24 周一"
 
 
+def test_synced_daily_history_wins_over_stale_week_snapshot(tmp_path) -> None:
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    # This is the order used by the social refresh: the profile aggregate can
+    # arrive before the per-day history payload.  The aggregate belongs to an
+    # older/stale projection and must not survive once the daily row arrives.
+    store.merge_remote_state(
+        focus_date="2026-08-24",
+        today_seconds=2 * 3600,
+        week_start="2026-08-24",
+        week_seconds=15 * 3600 + 24 * 60,
+    )
+    store.merge_remote_history([{"focus_date": "2026-08-24", "seconds": 2 * 3600}])
+
+    assert store.period_summary("day", now)["total_seconds"] == 2 * 3600
+    assert store.period_summary("week", now)["total_seconds"] == 2 * 3600
+    assert store.period_summary("month", now)["total_seconds"] == 2 * 3600
+    assert store.period_summary("day", now)["local_evidence"] is True
+
+
 def test_week_and_month_keep_future_dates_as_missing_values(tmp_path) -> None:
     now = datetime(2026, 8, 24, 9, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

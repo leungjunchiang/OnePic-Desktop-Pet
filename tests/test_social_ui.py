@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget, QSizePolicy
 
 from onepic_desktop_pet.social import SignupResult, SocialError
 from onepic_desktop_pet.social_ui import (
@@ -119,6 +119,8 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     assert [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())] == [
         "首页", "互动", "专注", "我的"
     ]
+    assert dialog.tabs.tabBar().expanding() is True
+    assert dialog.tabs.tabBar().sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     auth_tabs = [tab for tab in dialog.findChildren(QTabWidget) if tab is not dialog.tabs]
     assert any(
         [tab.tabText(index) for index in range(tab.count())] == ["登录", "注册"]

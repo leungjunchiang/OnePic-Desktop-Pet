@@ -119,16 +119,6 @@ class UnifiedMenuModel:
             MenuItemSpec("音乐平台", children=tuple(music_platform_children)),
         ]
 
-        interaction_children = [
-            MenuItemSpec("给我一个抱抱", "companion_love"),
-            MenuItemSpec("为我加油", "companion_encourage"),
-            MenuItemSpec("提醒我休息", "companion_rest"),
-            MenuItemSpec("查看心情与能量", "companion_status"),
-        ]
-        interaction_children = [
-            item for item in interaction_children if item.command in self._callbacks
-        ]
-
         todo_children = [
             self._optional("显示待办", "show_todos"),
             self._optional("隐藏待办", "hide_todos"),
@@ -136,15 +126,7 @@ class UnifiedMenuModel:
         ]
         todo_children = [item for item in todo_children if item is not None]
 
-        work_record_children = [
-            self._optional("工作报告…", "show_report"),
-            self._optional("我的时光…", "time_memory"),
-            self._optional("查看今日累计", "show_work_time"),
-            self._optional("查看今日成长", "show_growth"),
-            self._optional("六毛钱包与工资条…", "economy"),
-            self._optional(f"打开{self.pet_name}相册", "open_album"),
-        ]
-        work_record_children = [item for item in work_record_children if item is not None]
+        report_item = self._optional("工作报告…", "show_report")
 
         update_children = [
             self._optional("检查补充内容更新", "content_update"),
@@ -222,6 +204,8 @@ class UnifiedMenuModel:
             MenuItemSpec(f"和{self.pet_name}聊聊…", "chat"),
         ]
         entries.extend(work_entries)
+        if report_item is not None:
+            entries.append(report_item)
 
         entries.append(MenuItemSpec.divider())
         entries.extend(
@@ -233,12 +217,8 @@ class UnifiedMenuModel:
         entries.append(MenuItemSpec.divider())
         if todo_children:
             entries.append(MenuItemSpec("待办", children=tuple(todo_children)))
-        if work_record_children:
-            entries.append(MenuItemSpec("工作记录", children=tuple(work_record_children)))
         if shortcut_children:
             entries.append(MenuItemSpec("快捷工具", children=tuple(shortcut_children)))
-        if interaction_children:
-            entries.append(MenuItemSpec("六毛互动", children=tuple(interaction_children)))
 
         entries.append(MenuItemSpec.divider())
         if "outfit" in self._callbacks:

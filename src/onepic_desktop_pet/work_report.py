@@ -141,8 +141,8 @@ def build_work_report(
     # aggregate from an older release, so using ``max(timer, records)`` here
     # would reintroduce the very 5h/53h reports this window is meant to fix.
     day_preview = analytics.period_summary("day", moment)
-    local_record_count = int(day_preview.get("local_record_count", 0) or 0)
-    if local_record_count > 0:
+    local_evidence = bool(day_preview.get("local_evidence"))
+    if local_evidence:
         recorded_session = max(0, int(timer.analytics_recorded_session_seconds()))
         live_unrecorded = (
             max(0, snapshot_session - recorded_session)

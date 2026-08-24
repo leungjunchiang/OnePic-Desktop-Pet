@@ -1624,8 +1624,16 @@ class SocialHubDialog(QDialog):
         status_row.addWidget(self.relogin_button)
         root.addLayout(status_row)
         self.tabs = QTabWidget()
-        self.tabs.tabBar().setExpanding(True)
-        self.tabs.tabBar().setUsesScrollButtons(False)
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        tab_bar = self.tabs.tabBar()
+        # The study-room tabs are the primary navigation, so they must share
+        # the full available width instead of keeping their content width.
+        # This also makes narrow-window resizing predictable on both Qt
+        # platforms.
+        tab_bar.setExpanding(True)
+        tab_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        tab_bar.setUsesScrollButtons(False)
+        tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
         self.tabs.addTab(self._home_page(), "首页")
         self.tabs.addTab(self._chat_page(), "互动")
         self.tabs.addTab(self._focus_page(), "专注")

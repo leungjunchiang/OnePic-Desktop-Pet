@@ -1224,13 +1224,9 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "酷狗音乐",
         "汽水音乐",
     ]
-    interaction = next(action for action in menu.actions() if action.text() == "六毛互动")
-    assert [action.text() for action in interaction.menu().actions()] == [
-        "给我一个抱抱",
-        "为我加油",
-        "提醒我休息",
-        "查看心情与能量",
-    ]
+    assert "工作报告…" in labels
+    assert "工作记录" not in labels
+    assert "六毛互动" not in labels
     shortcuts = next(action for action in menu.actions() if action.text() == "快捷工具")
     shortcut_labels = [action.text() for action in shortcuts.menu().actions()]
     assert "六毛快捷口袋…" not in shortcut_labels
