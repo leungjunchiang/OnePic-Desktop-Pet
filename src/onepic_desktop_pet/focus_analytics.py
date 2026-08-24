@@ -211,7 +211,12 @@ class FocusAnalyticsStore:
         changed = False
 
         remote_date = str(focus_date or "")[:10]
-        if remote_date == today_key:
+        # A local raw record is more precise than the profile aggregate.  In
+        # particular, never let an old server-side ``greatest`` snapshot
+        # overwrite a corrected local day and then feed that value back to the
+        # server on the next heartbeat.
+        has_local_today = self._has_local_records(now, now)
+        if remote_date == today_key and not has_local_today:
             value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(today_seconds or 0)))
             if value > max(0, int(state.get("focus_today_seconds", 0) or 0)):
                 state["focus_today_seconds"] = value
@@ -226,7 +231,10 @@ class FocusAnalyticsStore:
             changed = True
 
         remote_week = str(week_start or "")[:10]
-        if remote_week == current_week_key:
+        has_local_week = self._has_local_records(
+            now - timedelta(days=now.weekday()), now
+        )
+        if remote_week == current_week_key and not has_local_week:
             value = max(0, min(7 * MAX_ANALYTICS_DAY_SECONDS, int(week_seconds or 0)))
             if value > max(0, int(state.get("focus_week_seconds", 0) or 0)):
                 state["focus_week_seconds"] = value
@@ -275,7 +283,16 @@ class FocusAnalyticsStore:
             except (AttributeError, TypeError, ValueError):
                 local_value = 0
             local_untrusted = bool(day.get("seconds_untrusted"))
-            merged = value if local_untrusted else max(local_value, value)
+            has_local_record = self._has_local_records(focus_date, focus_date)
+            # Daily rows are a cross-device fallback only when this account
+            # has no detailed local record for that date.  Once a local raw
+            # record exists, accepting a remote maximum would resurrect a
+            # stale/corrupt total in the report.
+            merged = (
+                local_value
+                if has_local_record and not local_untrusted
+                else value
+            )
             if local_value != merged:
                 day["seconds"] = merged
                 changed = True
@@ -490,11 +507,19 @@ class FocusAnalyticsStore:
         account_state = self._state.get("account_state", {})
         if not isinstance(account_state, dict):
             account_state = {}
-        if str(account_state.get("focus_date") or "")[:10] == today.isoformat():
+        if (
+            str(account_state.get("focus_date") or "")[:10] == today.isoformat()
+            and not self._has_local_records(today, today)
+        ):
             account_today = max(0, int(account_state.get("focus_today_seconds", 0) or 0))
             today_seconds = max(today_seconds or 0, account_today)
         current_week_key = (today - timedelta(days=today.weekday())).isoformat()
-        if str(account_state.get("focus_week_start") or "")[:10] == current_week_key:
+        if (
+            str(account_state.get("focus_week_start") or "")[:10] == current_week_key
+            and not self._has_local_records(
+                today - timedelta(days=today.weekday()), today
+            )
+        ):
             weekly_total = max(
                 weekly_total,
                 max(0, int(account_state.get("focus_week_seconds", 0) or 0)),
@@ -562,15 +587,22 @@ class FocusAnalyticsStore:
         stored = self._state.get("days", {})
         for offset in range(count - 1, -1, -1):
             focus_date = today - timedelta(days=offset)
-            raw = stored.get(focus_date.isoformat(), {})
+            key = focus_date.isoformat()
+            if key not in stored:
+                # A new device must not send synthetic zeros for days it has
+                # never observed; that would erase valid remote history.
+                continue
+            raw = stored.get(key, {})
             if not isinstance(raw, dict) or bool(raw.get("seconds_untrusted")):
                 continue
             try:
                 seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
             except (TypeError, ValueError, OverflowError):
                 continue
-            if seconds:
-                result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
+            # Include trustworthy zero days as well.  The exact reconciliation
+            # RPC needs those rows to clear a previously inflated daily value;
+            # omitting them would leave the old server maximum permanently.
+            result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
         return result
 
     def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
@@ -595,6 +627,13 @@ class FocusAnalyticsStore:
             key = "day"
             start = today
 
+        if key == "day":
+            period_end = today
+        elif key == "week":
+            period_end = start + timedelta(days=6)
+        else:
+            next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            period_end = next_month - timedelta(days=1)
         range_start = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
         range_end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=BEIJING_TIMEZONE)
 
@@ -608,27 +647,37 @@ class FocusAnalyticsStore:
         interruptions = 0
         untrusted_days: list[str] = []
         cursor = start
-        while cursor <= today:
+        while cursor <= period_end:
             date_key = cursor.isoformat()
             raw = stored.get(date_key, {})
             raw = raw if isinstance(raw, dict) else {}
+            is_future = cursor > today
             untrusted = bool(raw.get("seconds_untrusted"))
-            if untrusted:
-                seconds = 0
+            if is_future:
+                seconds = None
+                rounds = None
+                longest = 0
+                day_interruptions = 0
+            elif untrusted:
+                seconds = None
+                rounds = None
+                longest = 0
+                day_interruptions = 0
                 untrusted_days.append(date_key)
             else:
                 try:
                     seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
                 except (TypeError, ValueError, OverflowError):
                     seconds = 0
-            try:
-                rounds = max(0, int(raw.get("rounds", 0) or 0))
-                longest = max(0, int(raw.get("longest", 0) or 0))
-                day_interruptions = max(0, int(raw.get("interruptions", 0) or 0))
-            except (TypeError, ValueError, OverflowError):
-                rounds = longest = day_interruptions = 0
-            total_seconds += seconds
-            completed_rounds += rounds
+            if not is_future and not untrusted:
+                try:
+                    rounds = max(0, int(raw.get("rounds", 0) or 0))
+                    longest = max(0, int(raw.get("longest", 0) or 0))
+                    day_interruptions = max(0, int(raw.get("interruptions", 0) or 0))
+                except (TypeError, ValueError, OverflowError):
+                    rounds = longest = day_interruptions = 0
+            total_seconds += int(seconds or 0)
+            completed_rounds += int(rounds or 0)
             longest_focus_seconds = max(longest_focus_seconds, longest)
             interruptions += day_interruptions
             weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[cursor.weekday()]
@@ -639,17 +688,28 @@ class FocusAnalyticsStore:
                 "display_label": f"{cursor.month}/{cursor.day} {weekday}",
                 "seconds": seconds,
                 "rounds": rounds,
-                "trusted": not untrusted,
+                "trusted": not untrusted and not is_future,
                 "is_today": cursor == today,
+                "is_future": is_future,
+                "status": "future" if is_future else "untrusted" if untrusted else "observed",
             })
             cursor += timedelta(days=1)
 
         account_state = self._state.get("account_state", {})
         if not isinstance(account_state, dict):
             account_state = {}
-        if key == "day" and str(account_state.get("focus_date") or "")[:10] == today.isoformat():
+        local_period_records = self._has_local_records(start, today)
+        if (
+            key == "day"
+            and not local_period_records
+            and str(account_state.get("focus_date") or "")[:10] == today.isoformat()
+        ):
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_today_seconds", 0) or 0)))
-        if key == "week" and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat():
+        if (
+            key == "week"
+            and not local_period_records
+            and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat()
+        ):
             total_seconds = max(total_seconds, max(0, int(account_state.get("focus_week_seconds", 0) or 0)))
         # A weekly server snapshot can arrive before all of its daily rows are
         # present on a newly opened device.  When the current week is wholly
@@ -659,6 +719,7 @@ class FocusAnalyticsStore:
         current_week_start = today - timedelta(days=today.weekday())
         if (
             key == "month"
+            and not local_period_records
             and current_week_start >= start
             and str(account_state.get("focus_week_start") or "")[:10]
             == current_week_start.isoformat()
@@ -814,7 +875,7 @@ class FocusAnalyticsStore:
             "longest_focus_seconds": max(longest_focus_seconds, longest_session_seconds),
             "interruptions": interruptions,
             "average_quality": round(sum(quality_values) / len(quality_values)) if quality_values else 0,
-            "active_days": sum(1 for item in daily if item["seconds"] > 0),
+            "active_days": sum(1 for item in daily if int(item.get("seconds") or 0) > 0),
             "started_rounds": started_rounds,
             "completion_rate": completion_rate,
             # Average and maximum now use the same session grain.  Previously
@@ -843,6 +904,12 @@ class FocusAnalyticsStore:
                     if untrusted_days else "本周期数据口径正常。"
                 ),
             },
+            "local_record_count": sum(
+                1 for raw in self._state.get("records", [])
+                if isinstance(raw, dict)
+                and self._record_date(raw) is not None
+                and start <= self._record_date(raw) <= today
+            ),
         }
 
     def _best_window(self, today: date, *, start: date | None = None) -> str:
@@ -874,17 +941,26 @@ class FocusAnalyticsStore:
 
         intervals: dict[str, list[tuple[datetime, datetime]]] = {}
         raw_durations: dict[str, list[int]] = {}
+        changed = False
         for raw in self._state.get("records", []):
             if not isinstance(raw, dict):
                 continue
             try:
-                started = datetime.fromisoformat(str(raw.get("started_at", "")))
+                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
                 duration = max(0, min(int(raw.get("seconds", 0)), MAX_ANALYTICS_DAY_SECONDS))
             except (TypeError, ValueError, OverflowError):
                 continue
             if duration <= 0:
                 continue
-            raw_durations.setdefault(started.date().isoformat(), []).append(duration)
+            day_key = started.date().isoformat()
+            if raw.get("date") != day_key:
+                raw["date"] = day_key
+                changed = True
+            canonical_started = started.isoformat()
+            if raw.get("started_at") != canonical_started:
+                raw["started_at"] = canonical_started
+                changed = True
+            raw_durations.setdefault(day_key, []).append(duration)
             end = started + timedelta(seconds=duration)
             cursor = started
             while cursor.date() < end.date():
@@ -896,7 +972,6 @@ class FocusAnalyticsStore:
             intervals.setdefault(cursor.date().isoformat(), []).append((cursor, end))
 
         days = self._state.setdefault("days", {})
-        changed = False
         for day_key, pieces in intervals.items():
             pieces.sort(key=lambda item: item[0])
             merged: list[list[datetime]] = []
@@ -928,6 +1003,24 @@ class FocusAnalyticsStore:
                 day["seconds_untrusted"] = seconds_untrusted
                 changed = True
         return changed
+
+    @staticmethod
+    def _record_date(raw: dict[str, Any]) -> date | None:
+        try:
+            value = raw.get("started_at") or raw.get("date") or ""
+            if "T" in str(value):
+                return _as_beijing(datetime.fromisoformat(str(value).replace("Z", "+00:00"))).date()
+            return date.fromisoformat(str(value)[:10])
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _has_local_records(self, start: date, end: date) -> bool:
+        return any(
+            isinstance(raw, dict)
+            and (record_date := self._record_date(raw)) is not None
+            and start <= record_date <= end
+            for raw in self._state.get("records", [])
+        )
 
     def _trim_days(self) -> bool:
         days = self._state.setdefault("days", {})

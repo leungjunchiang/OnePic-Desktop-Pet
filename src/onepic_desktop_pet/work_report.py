@@ -135,7 +135,21 @@ def build_work_report(
             snapshot_today = max(0, int(getattr(focus_snapshot, "today_seconds", 0) or 0))
             snapshot_session = max(0, int(getattr(focus_snapshot, "session_seconds", 0) or 0))
             snapshot_room = str(getattr(focus_snapshot, "room_id", "") or "")
-    live_today = max(0, int(timer.today_seconds()), snapshot_today)
+    # When detailed local records exist, they are the authoritative source
+    # for the calendar day.  A timer can still contain a stale server
+    # aggregate from an older release, so using ``max(timer, records)`` here
+    # would reintroduce the very 5h/53h reports this window is meant to fix.
+    day_preview = analytics.period_summary("day", moment)
+    local_record_count = int(day_preview.get("local_record_count", 0) or 0)
+    if local_record_count > 0:
+        recorded_session = max(0, int(timer.analytics_recorded_session_seconds()))
+        live_unrecorded = (
+            max(0, snapshot_session - recorded_session)
+            if snapshot_status == "focus" else 0
+        )
+        live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + live_unrecorded
+    else:
+        live_today = max(0, int(timer.today_seconds()), snapshot_today)
     current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
         "focus" if bool(timer.is_running)
         else "rest" if bool(timer.has_active_session)
@@ -207,7 +221,10 @@ def build_work_report(
     day["focus_session_seconds"] = snapshot_session
     day["focus_room_id"] = snapshot_room
     if day.get("daily"):
-        day["daily"][-1]["seconds"] = max(int(day["daily"][-1].get("seconds", 0) or 0), live_today)
+        today_row = next((row for row in day["daily"] if row.get("is_today")), None)
+        if isinstance(today_row, dict):
+            today_row["seconds"] = live_today
+            today_row["status"] = "observed" if live_today else today_row.get("status", "observed")
 
     def overlay_live_today(item: dict[str, Any]) -> None:
         """Overlay the open timer once, without double-counting a period."""
@@ -233,7 +250,11 @@ def build_work_report(
             overlay_live_today(item)
         item["total_seconds"] = max(
             int(item.get("total_seconds", 0) or 0),
-            sum(max(0, int(row.get("seconds", 0) or 0)) for row in item.get("daily") or []),
+            sum(
+                max(0, int(row.get("seconds", 0) or 0))
+                for row in item.get("daily") or []
+                if row.get("seconds") is not None
+            ),
         )
         longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
         item["average_session_seconds"] = min(
@@ -303,10 +324,18 @@ def _parse_interval(value: Any) -> datetime | None:
 class ReportTimeIntervalChart(QWidget):
     """Apple-Sleep-like interval chart for real FocusSession time ranges."""
 
-    def __init__(self, intervals: list[dict[str, Any]], *, period: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        intervals: list[dict[str, Any]],
+        *,
+        period: str,
+        start_date: date | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._intervals = [item for item in intervals if isinstance(item, dict)]
         self._period = period
+        self._start_date = start_date
         self._hover: tuple[QRect, str] | None = None
         self.setMouseTracking(True)
         self.setMinimumWidth(460)
@@ -315,19 +344,27 @@ class ReportTimeIntervalChart(QWidget):
     def _visible_segments(self) -> list[tuple[QRect, str]]:
         if self._period == "day":
             anchor = next((_parse_interval(item.get("started_at")) for item in self._intervals if _parse_interval(item.get("started_at"))), None)
-            day = anchor.date() if anchor else datetime.now(BEIJING_TIMEZONE).date()
+            day = self._start_date or (anchor.date() if anchor else datetime.now(BEIJING_TIMEZONE).date())
             day_start = datetime.combine(day, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
             day_end = day_start + timedelta(days=1)
             rows = [(0, day_start, day_end)]
         else:
-            dates = sorted({str(item.get("date") or "")[:10] for item in self._intervals if str(item.get("date") or "")})
-            if dates:
-                try:
-                    first = date.fromisoformat(dates[0])
-                except ValueError:
-                    first = datetime.now(BEIJING_TIMEZONE).date()
+            if self._start_date is not None:
+                first = self._start_date
             else:
-                first = datetime.now(BEIJING_TIMEZONE).date()
+                dates = sorted({str(item.get("date") or "")[:10] for item in self._intervals if str(item.get("date") or "")})
+                if dates:
+                    try:
+                        first = date.fromisoformat(dates[0])
+                    except ValueError:
+                        first = datetime.now(BEIJING_TIMEZONE).date()
+                else:
+                    first = datetime.now(BEIJING_TIMEZONE).date()
+            if first is not None:
+                try:
+                    first = date.fromisoformat(first.isoformat())
+                except (AttributeError, ValueError):
+                    first = datetime.now(BEIJING_TIMEZONE).date()
             first -= timedelta(days=first.weekday())
             rows = [(index, datetime.combine(first + timedelta(days=index), datetime.min.time(), tzinfo=BEIJING_TIMEZONE), datetime.combine(first + timedelta(days=index + 1), datetime.min.time(), tzinfo=BEIJING_TIMEZONE)) for index in range(7)]
         left = 78
@@ -370,17 +407,19 @@ class ReportTimeIntervalChart(QWidget):
             painter.setPen(QPen(QColor("#dbe8eb"), 1))
         segments = self._visible_segments(); painter.setPen(Qt.PenStyle.NoPen)
         if self._period == "day":
-            day = next((_parse_interval(item.get("started_at")).date() for item in self._intervals if _parse_interval(item.get("started_at"))), datetime.now(BEIJING_TIMEZONE).date())
+            day = self._start_date or next((_parse_interval(item.get("started_at")).date() for item in self._intervals if _parse_interval(item.get("started_at"))), datetime.now(BEIJING_TIMEZONE).date())
             weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[day.weekday()]
             painter.setPen(QColor("#647b88")); painter.drawText(0, top + 4, left - 10, 22, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{day.month}/{day.day} {weekday}")
         else:
             today = datetime.now(BEIJING_TIMEZONE).date()
+            week_start = self._start_date or (today - timedelta(days=today.weekday()))
             for index, name in enumerate(("周一", "周二", "周三", "周四", "周五", "周六", "周日")):
                 y = top + index * max(28, (bottom - top) // 7) + 6
                 row_height = max(28, (bottom - top) // 7)
                 if today.weekday() == index:
                     painter.fillRect(left, y - 2, right - left, row_height - 4, QColor("#f1faf8"))
-                painter.setPen(QColor("#647b88")); painter.drawText(0, y, left - 10, 22, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, name)
+                row_date = week_start + timedelta(days=index)
+                painter.setPen(QColor("#647b88")); painter.drawText(0, y - 8, left - 10, 36, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{row_date.month}/{row_date.day}\n{name}")
         for rect, _label in segments:
             color = QColor("#4389ad")
             if self._hover is not None and rect == self._hover[0]: color = QColor("#e19a62")
@@ -425,7 +464,10 @@ class ReportBarChart(QWidget):
         if not (0 <= index < len(self._rows)):
             return ""
         row = self._rows[index]
-        seconds = max(0, int(row.get("seconds", 0) or 0))
+        raw_seconds = row.get("seconds")
+        if row.get("is_future") or raw_seconds is None:
+            return f"{row.get('display_label') or row.get('label') or '未知日期'}\n该日期尚未到达，暂无数据"
+        seconds = max(0, int(raw_seconds or 0))
         if self._hourly:
             hour = max(0, min(23, int(row.get("hour", index) or 0)))
             end_hour = (hour + 1) % 24
@@ -469,14 +511,19 @@ class ReportBarChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._bar_rects = []
-        values = [max(0, int(row.get("seconds", 0) or 0)) for row in self._rows]
-        maximum = max(values or [1])
+        values: list[int | None] = [
+            None if row.get("seconds") is None or row.get("is_future")
+            else max(0, int(row.get("seconds", 0) or 0))
+            for row in self._rows
+        ]
+        numeric_values = [value for value in values if value is not None]
+        maximum = max(numeric_values or [1])
         ticks = _nice_duration_ticks(maximum)
         tick_label_width = max(
             46,
             max((painter.fontMetrics().horizontalAdvance(format_work_duration(value)) for value in ticks), default=46) + 14,
         )
-        plot = self.rect().adjusted(tick_label_width, 14, 18, 62)
+        plot = self.rect().adjusted(tick_label_width, 14, 18, 78)
 
         painter.setPen(QPen(QColor("#e3edef"), 1))
         upper = max(ticks[-1], 1)
@@ -511,9 +558,9 @@ class ReportBarChart(QWidget):
             label_step = 1
         for index, (row, value) in enumerate(zip(self._rows, values)):
             x = plot.left() + index * (bar_width + gap)
-            height = int(plot.height() * value / maximum) if maximum else 0
+            height = int(plot.height() * value / maximum) if value is not None and maximum else 0
             y = plot.bottom() - height
-            self._bar_rects.append(QRect(x, plot.top(), bar_width, plot.height()))
+            self._bar_rects.append(QRect(x, y, bar_width, max(4, height)) if value is not None else QRect())
             color = QColor("#36a99d") if row.get("is_today") else QColor("#75c8bd")
             if self._hourly:
                 color = QColor("#4389ad") if value else QColor("#dfecef")
@@ -523,18 +570,22 @@ class ReportBarChart(QWidget):
             painter.setBrush(QBrush(color))
             if height > 0:
                 painter.drawRoundedRect(x, y, bar_width, max(3, height), 4, 4)
+            elif value is None:
+                painter.setPen(QColor("#9caeb4"))
+                painter.drawText(x, plot.bottom() - 14, bar_width, 16, Qt.AlignmentFlag.AlignHCenter, "—")
             if index % label_step == 0 or index == count - 1:
                 painter.setPen(QColor("#647b88"))
                 if self._hourly:
                     hour = max(0, min(23, int(row.get("hour", index) or 0)))
-                    label = f"{hour:02d}:00"
+                    end_hour = (hour + 1) % 24
+                    label = f"{hour:02d}–{end_hour:02d}时\n{hour:02d}:00–{end_hour:02d}:00"
                 else:
                     # Keep date and weekday on separate lines so the x-axis
                     # remains readable at the normal report width.
                     label = str(row.get("label") or row.get("display_label") or "")
                 if self._hourly:
                     label_text = label
-                    label_height = 20
+                    label_height = 38
                 else:
                     weekday = str(row.get("weekday") or "")
                     label_text = f"{label}\n{weekday}" if weekday else label
@@ -572,7 +623,15 @@ class ReportCalendarHeatmap(QWidget):
         left = bounds.left() + 28
         top = bounds.top() + header_height
         columns = 7
-        weeks = max(1, (len(self._rows) + 6) // 7 + 1)
+        slots: list[tuple[date, int]] = []
+        for row in self._rows:
+            try:
+                focus_date = date.fromisoformat(str(row.get("date") or ""))
+            except ValueError:
+                continue
+            first = date(focus_date.year, focus_date.month, 1)
+            slots.append((focus_date, focus_date.day - 1 + first.weekday()))
+        weeks = max(1, ((max((slot for _day, slot in slots), default=0) // 7) + 1))
         cell_width = max(22, (bounds.width() - 28) // columns)
         cell_height = max(22, (bounds.height() - header_height) // weeks)
         self._cells = []
@@ -586,8 +645,12 @@ class ReportCalendarHeatmap(QWidget):
                 Qt.AlignmentFlag.AlignCenter,
                 label,
             )
-        values = [max(0, int(row.get("seconds", 0) or 0)) for row in self._rows]
-        maximum = max(values or [1])
+        values = [
+            None if row.get("seconds") is None or row.get("is_future")
+            else max(0, int(row.get("seconds", 0) or 0))
+            for row in self._rows
+        ]
+        maximum = max((value for value in values if value is not None), default=1)
         for index, row in enumerate(self._rows):
             try:
                 focus_date = date.fromisoformat(str(row.get("date") or ""))
@@ -603,9 +666,11 @@ class ReportCalendarHeatmap(QWidget):
                 max(16, cell_height - 4),
             )
             self._cells.append((cell, row))
-            value = values[index] if index < len(values) else 0
-            ratio = value / maximum if maximum else 0
-            if value <= 0:
+            value = values[index] if index < len(values) else None
+            ratio = value / maximum if value is not None and maximum else 0
+            if value is None:
+                color = QColor("#f5f7f7")
+            elif value <= 0:
                 color = QColor("#edf3f4")
             elif ratio < 0.25:
                 color = QColor("#cfe9e4")
@@ -630,11 +695,17 @@ class ReportCalendarHeatmap(QWidget):
             if cell.contains(position):
                 focus_date = str(row.get("date") or "未知日期")
                 weekday = str(row.get("weekday") or "")
+                if row.get("is_future"):
+                    tooltip = f"{focus_date} {weekday}\n该日期尚未到达，暂无数据"
+                else:
+                    tooltip = (
+                        f"{focus_date} {weekday}\n"
+                        f"工作时长：{format_work_duration(int(row.get('seconds', 0) or 0))}\n"
+                        f"专注段：{int(row.get('rounds', 0) or 0)} 段"
+                    )
                 QToolTip.showText(
                     QCursor.pos(),
-                    f"{focus_date} {weekday}\n"
-                    f"工作时长：{format_work_duration(int(row.get('seconds', 0) or 0))}\n"
-                    f"专注段：{int(row.get('rounds', 0) or 0)} 段",
+                    tooltip,
                     self,
                 )
                 return
@@ -805,12 +876,18 @@ class WorkReportDialog(QDialog):
         return frame
 
     @staticmethod
-    def _interval_card(title: str, subtitle: str, intervals: list[dict[str, Any]], period: str) -> QFrame:
+    def _interval_card(
+        title: str,
+        subtitle: str,
+        intervals: list[dict[str, Any]],
+        period: str,
+        start_date: date | None = None,
+    ) -> QFrame:
         frame = QFrame(); frame.setObjectName("reportChart")
         box = QVBoxLayout(frame); box.setContentsMargins(14, 12, 14, 10); box.setSpacing(4)
         heading = QLabel(title); heading.setObjectName("reportSection"); box.addWidget(heading)
         note = QLabel(subtitle); note.setObjectName("reportHint"); note.setWordWrap(True); box.addWidget(note)
-        box.addWidget(ReportTimeIntervalChart(intervals, period=period), 1)
+        box.addWidget(ReportTimeIntervalChart(intervals, period=period, start_date=start_date), 1)
         return frame
 
     def _render_period(self, layout: QVBoxLayout, key: str, report: dict[str, Any]) -> None:
@@ -862,6 +939,10 @@ class WorkReportDialog(QDialog):
             layout.addWidget(warning)
 
         daily_rows = data.get("daily") or []
+        try:
+            period_start = date.fromisoformat(str(data.get("start") or ""))
+        except ValueError:
+            period_start = None
         if key == "month":
             layout.addWidget(
                 self._heatmap_card(
@@ -885,6 +966,7 @@ class WorkReportDialog(QDialog):
                     "按真实开始/结束时间显示工作区间；暂停和中断会保留为空白。悬停区间查看时间、时长和任务。",
                     data.get("focus_intervals") or [],
                     "day",
+                    period_start,
                 )
             )
         else:
@@ -901,6 +983,7 @@ class WorkReportDialog(QDialog):
                     "横轴为 0:00–24:00，纵轴为周一至周日；每个区间来自真实 FocusSession，当前日期高亮。",
                     data.get("focus_intervals") or [],
                     "week",
+                    period_start,
                 )
             )
 

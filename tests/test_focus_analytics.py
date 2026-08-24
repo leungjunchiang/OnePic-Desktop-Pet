@@ -65,9 +65,11 @@ def test_period_summary_projects_day_week_and_month_without_network(tmp_path) ->
     assert week["active_days"] == 2
     assert month["total_seconds"] == 90 * 60
     assert month["active_days"] == 3
-    assert month["daily"][-1]["date"] == "2026-08-13"
-    assert month["daily"][-1]["weekday"] == "周四"
-    assert month["daily"][-1]["display_label"] == "8/13 周四"
+    assert len(month["daily"]) == 31
+    today_row = next(row for row in month["daily"] if row["date"] == "2026-08-13")
+    assert today_row["weekday"] == "周四"
+    assert today_row["display_label"] == "8/13 周四"
+    assert all(row["seconds"] is None for row in month["daily"] if row["date"] > "2026-08-13")
 
 
 def test_period_summary_derives_report_metrics_from_account_records(tmp_path) -> None:
@@ -147,6 +149,39 @@ def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) ->
     assert sum(hourly.values()) == 75 * 60
     assert day["data_quality"]["trusted"] is True
     assert day["hourly"][9]["label"] == "09:00"
+
+
+def test_beijing_raw_timestamp_and_stale_remote_snapshot_do_not_inflate_today(tmp_path) -> None:
+    now = datetime(2026, 8, 24, 9, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    # 00:30Z is 08:30 in Beijing.  A legacy parser that used the machine
+    # timezone could put this interval on the wrong calendar day.
+    store.record_session(
+        60 * 60,
+        started_at=datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc),
+        record_id="beijing:1",
+    )
+    store.merge_remote_state(
+        focus_date="2026-08-24",
+        today_seconds=5 * 3600 + 11 * 60,
+        week_start="2026-08-24",
+        week_seconds=53 * 3600,
+    )
+    assert store.period_summary("day", now)["total_seconds"] == 60 * 60
+    assert store.period_summary("week", now)["total_seconds"] == 60 * 60
+    assert store.period_summary("day", now)["daily"][0]["display_label"] == "8/24 周一"
+
+
+def test_week_and_month_keep_future_dates_as_missing_values(tmp_path) -> None:
+    now = datetime(2026, 8, 24, 9, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    week = store.period_summary("week", now)
+    month = store.period_summary("month", now)
+    assert len(week["daily"]) == 7
+    assert all(row["seconds"] is None for row in week["daily"][1:])
+    assert len(month["daily"]) == 31
+    assert all(row["seconds"] is None for row in month["daily"][24:])
+    assert all(row["status"] == "future" for row in month["daily"][24:])
 
 
 def test_period_summary_excludes_legacy_cumulative_records_from_charts(tmp_path) -> None:
@@ -339,3 +374,4 @@ def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypa
 
     assert store.switch_account("account-a")
     assert store.summary().weekly_total_seconds == 90
+

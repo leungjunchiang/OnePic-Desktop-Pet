@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, Signal
 
+from .focus_analytics import BEIJING_TIMEZONE
 from .work_timer import WorkTimerModel
 
 
@@ -42,7 +43,11 @@ class FocusSessionSnapshot:
         today_seconds = timer.today_seconds()
         started_at = None
         if timer.is_running:
-            current = now or datetime.now().astimezone()
+            current = now or datetime.now(BEIJING_TIMEZONE)
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=BEIJING_TIMEZONE)
+            else:
+                current = current.astimezone(BEIJING_TIMEZONE)
             started_at = (current - timedelta(seconds=session_seconds)).isoformat()
         status = "focus" if timer.is_running else (
             "rest" if timer.has_active_session or resting else "idle"
@@ -123,3 +128,4 @@ class FocusSessionManager(QObject):
         self._resting = False
         self.refresh()
         return total
+

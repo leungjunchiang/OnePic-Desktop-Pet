@@ -1601,7 +1601,7 @@ class SocialHubDialog(QDialog):
             QTabWidget::pane { border:0; }
             QTabBar::tab { min-width:105px; padding:10px 16px; color:#526872; }
             QTabBar::tab:selected { color:#087f74; font-weight:700; border-bottom:3px solid #38a397; }
-            QPushButton { min-height:20px; padding:8px 14px; border:0; border-radius:9px; background:#d7ece8; color:#204c4a; font-weight:600; }
+            QPushButton { min-width:0px; max-width:16777215px; min-height:20px; padding:8px 14px; border:0; border-radius:9px; background:#d7ece8; color:#204c4a; font-weight:600; text-align:center; }
             QPushButton:hover { background:#c2e2dd; }
             QPushButton:disabled { color:#91a1a8; background:#e8eef0; }
         """)
@@ -1795,6 +1795,8 @@ class SocialHubDialog(QDialog):
     def _card(title: str, description: str = "") -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
         card.setObjectName("card")
+        card.setMinimumWidth(0)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
@@ -1812,6 +1814,7 @@ class SocialHubDialog(QDialog):
     def _scroll_page(page: QWidget) -> QScrollArea:
         """Keep dense pages usable when the utility window is made smaller."""
 
+        page.setMinimumSize(0, 0)
         page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         scroll = QScrollArea()
         scroll.setObjectName("pageScroll")
@@ -2559,6 +2562,7 @@ class SocialHubDialog(QDialog):
     def _mine_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         self.account_stack = QStackedWidget()
+        self.account_stack.setMinimumWidth(0)
         self.account_stack.addWidget(self._auth_card())
         self.account_stack.addWidget(self._profile_card())
         layout.addWidget(self.account_stack)
@@ -2581,6 +2585,7 @@ class SocialHubDialog(QDialog):
         self.login_email = QLineEdit(); self.login_password = QLineEdit(); self.login_password.setEchoMode(QLineEdit.EchoMode.Password)
         login_form.addRow("邮箱", self.login_email); login_form.addRow("密码", self.login_password)
         login_layout.addLayout(login_form); self.login_button = QPushButton("登录")
+        self.login_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.login_button.clicked.connect(self._login); login_layout.addWidget(self.login_button); login_layout.addStretch()
         self.forgot_password_button = QPushButton("忘记密码？")
         self.forgot_password_button.setObjectName("link")
@@ -2590,6 +2595,7 @@ class SocialHubDialog(QDialog):
         self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
         register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
         register_layout.addLayout(register_form); self.signup_button = QPushButton("注册")
+        self.signup_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.signup_button.clicked.connect(self._signup); register_layout.addWidget(self.signup_button)
         self.signup_resend_button = QPushButton("重新发送确认邮件")
         self.signup_resend_button.setVisible(False)
@@ -2619,9 +2625,13 @@ class SocialHubDialog(QDialog):
         self.interaction_mode.addItem("免打扰", "do_not_disturb")
         self.interaction_mode.setToolTip("决定好友敬茶、请吃蛋糕、请奶茶或邀请开工时如何到达你的六毛。")
         layout.addWidget(self.interaction_mode)
-        save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile); layout.addWidget(save)
-        security = QPushButton("账号与安全…"); security.clicked.connect(self._open_account_security); layout.addWidget(security)
-        logout = QPushButton("退出账号"); logout.clicked.connect(self._logout); layout.addWidget(logout)
+        save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile)
+        security = QPushButton("账号与安全…"); security.clicked.connect(self._open_account_security)
+        logout = QPushButton("退出账号"); logout.clicked.connect(self._logout)
+        for button in (save, security, logout):
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            layout.addWidget(button)
         layout.addStretch()
         return card
 

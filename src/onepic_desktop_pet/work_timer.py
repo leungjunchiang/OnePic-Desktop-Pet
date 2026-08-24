@@ -416,6 +416,25 @@ class WorkTimerModel:
             self._save()
         return changed
 
+    def reconcile_today_seconds(self, recorded_seconds: int) -> bool:
+        """Repair a stale daily aggregate from the local raw focus ledger.
+
+        Older builds could persist a server-side maximum in the timer file.
+        When the account has a trustworthy local analytics record, the raw
+        ledger is the only safe baseline; the currently running monotonic
+        segment remains separate and is still added by ``today_seconds()``.
+        """
+
+        self._rollover_if_needed()
+        target = max(0, min(24 * 60 * 60, int(recorded_seconds or 0)))
+        elapsed = self._current_elapsed()
+        desired_accumulated = max(0, target - elapsed) if self.is_running else target
+        if desired_accumulated == self._accumulated_seconds:
+            return False
+        self._accumulated_seconds = desired_accumulated
+        self._save()
+        return True
+
     def unlocked_outfit_count(self) -> int:
         """每累计一小时解锁一套娃衣，最多十二套。"""
 
@@ -574,3 +593,4 @@ class WorkTimerModel:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+

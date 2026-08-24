@@ -2,7 +2,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$MigrationPath = "supabase/migrations/20260822000400_lili_focus_daily_visibility.sql",
+    [string]$MigrationPath = "supabase/migrations/20260824000100_lili_focus_exact_reconciliation.sql",
     [string]$ConfigPath = "config/social_backend.json"
 )
 
@@ -65,3 +65,4 @@ try {
 }
 
 Write-Host "Supabase focus-history migration applied to project $projectRef."
+
