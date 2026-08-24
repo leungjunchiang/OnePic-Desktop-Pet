@@ -1,4 +1,4 @@
-"""Non-modal UI for managing and handling Lili alarms."""
+"""Non-modal UI for managing alarms and showing alarm-style recovery cards."""
 
 from __future__ import annotations
 
@@ -449,6 +449,113 @@ class AlarmCard(QDialog):
             self._suppress_close_action = True
             self.dismiss_requested.emit(self.alarm.id)
         super().closeEvent(event)
+
+
+class AwayRecoveryCard(QDialog):
+    """Show an alarm-style card when an automatic pause ends."""
+
+    continue_requested = Signal()
+    dismiss_requested = Signal()
+
+    def __init__(self, reason: str, away_seconds: int, parent=None) -> None:
+        # Keep this as a top-level card, just like AlarmCard, so it remains
+        # visible after the pet is temporarily hidden by a fullscreen app.
+        super().__init__(None)
+        self._suppress_close_action = False
+        self.setObjectName("alarmCard")
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
+        )
+        self.setModal(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setStyleSheet(ALARM_STYLE)
+        self.setMinimumWidth(420)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(22)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor("#9bb5bf"))
+        self.setGraphicsEffect(shadow)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(7)
+        title = QLabel("六毛发现你回来啦")
+        title.setStyleSheet("font-size: 18px; font-weight: 700;")
+        layout.addWidget(title)
+        self.trigger_label = QLabel()
+        self.trigger_label.setStyleSheet(
+            "font-size: 28px; font-weight: 800; color:#24475b;"
+        )
+        layout.addWidget(self.trigger_label)
+        self.detail_label = QLabel()
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setStyleSheet("color:#607985;font-size:12px;")
+        layout.addWidget(self.detail_label)
+
+        actions = QVBoxLayout()
+        actions.setSpacing(6)
+        continue_button = QPushButton("继续工作")
+        continue_button.setObjectName("primary")
+        continue_button.clicked.connect(self._request_continue)
+        actions.addWidget(continue_button)
+        dismiss = QPushButton("暂不继续")
+        dismiss.setObjectName("quiet")
+        dismiss.clicked.connect(self._request_dismiss)
+        actions.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addLayout(actions)
+
+        self._close_shortcuts = []
+        for sequence in ("Ctrl+W", "Meta+W"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(self._request_dismiss)
+            self._close_shortcuts.append(shortcut)
+        self.set_away_context(reason, away_seconds)
+
+    def set_away_context(self, reason: str, away_seconds: int) -> None:
+        seconds = max(1, int(away_seconds))
+        minutes, remainder = divmod(seconds, 60)
+        duration = f"{minutes} 分钟"
+        if remainder:
+            duration += f" {remainder} 秒"
+        if minutes == 0:
+            duration = f"{remainder} 秒"
+        self.trigger_label.setText("要继续工作吗？")
+        if str(reason or "") == "fullscreen_video":
+            detail = "刚才检测到视频或游戏全屏，六毛已经帮你暂停计时。"
+        else:
+            detail = f"刚才离开屏幕约 {duration}，六毛已经帮你暂停计时。"
+        self.detail_label.setText(detail)
+
+    def center_on_current_screen(self) -> None:
+        self.adjustSize()
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.move(
+            area.left() + max(0, (area.width() - self.width()) // 2),
+            area.top() + max(0, (area.height() - self.height()) // 2),
+        )
+
+    def close_from_app(self) -> None:
+        self._suppress_close_action = True
+        self.close()
+
+    def _request_continue(self) -> None:
+        self._suppress_close_action = True
+        self.continue_requested.emit()
+
+    def _request_dismiss(self) -> None:
+        self._suppress_close_action = True
+        self.dismiss_requested.emit()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self._suppress_close_action:
+            self._suppress_close_action = True
+            self.dismiss_requested.emit()
+        event.accept()
 
 
 class AlarmEditDialog(QDialog):

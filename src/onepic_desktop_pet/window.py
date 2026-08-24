@@ -16,6 +16,7 @@
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
+- 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -99,7 +100,7 @@ except ImportError:
     QAudioOutput = QMediaPlayer = None
 
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
-from .alarm_ui import AlarmCard, AlarmCenterDialog
+from .alarm_ui import AlarmCard, AlarmCenterDialog, AwayRecoveryCard
 from .accessories import (
     ALL_OUTFITS,
     LOGIN_REWARD_OUTFIT,
@@ -403,6 +404,7 @@ class PetWindow(QWidget):
         self._work_report_dialog: WorkReportDialog | None = None
         self._alarm_center_dialog: AlarmCenterDialog | None = None
         self._alarm_card: AlarmCard | None = None
+        self._away_recovery_card: AwayRecoveryCard | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
@@ -454,6 +456,9 @@ class PetWindow(QWidget):
         self._last_session_probe = {"locked": False, "sleeping": False}
         self._fullscreen_video_started_at: float | None = None
         self._pause_notice_shown = False
+        self._away_recovery_reason: str | None = None
+        self._away_recovery_started_at: float | None = None
+        self._away_recovery_prompt_shown = False
         self._fullscreen_hidden = False
         self._manually_hidden = False
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
@@ -1514,6 +1519,7 @@ class PetWindow(QWidget):
             self._compact_todo_panel,
             self._alarm_card,
             self._idle_recovery_dialog,
+            self._away_recovery_card,
         ):
             if optional is not None:
                 surfaces.append(optional)
@@ -1548,6 +1554,11 @@ class PetWindow(QWidget):
             if was_visible and not self._manually_hidden:
                 self._show_nonactivating(widget)
         self._position_accessories()
+        if (
+            self.work_timer.has_active_session
+            and self.work_timer.pause_reason == "fullscreen_video"
+        ):
+            self._show_away_recovery_prompt("fullscreen_video")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
@@ -1578,6 +1589,8 @@ class PetWindow(QWidget):
             self._alarm_center_dialog.close()
         if self._alarm_card is not None:
             self._close_alarm_card()
+        if self._away_recovery_card is not None:
+            self._close_away_recovery_card()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
         if self._work_report_dialog is not None:
@@ -1696,6 +1709,56 @@ class PetWindow(QWidget):
             self.idle_recovery_timer.stop()
         if self._idle_recovery_dialog is not None:
             self._idle_recovery_dialog.hide()
+        self._away_recovery_reason = None
+        self._away_recovery_started_at = None
+        self._away_recovery_prompt_shown = False
+        self._close_away_recovery_card()
+
+    def _close_away_recovery_card(self) -> None:
+        """Close the transient return-to-work card without changing focus."""
+
+        card = self._away_recovery_card
+        self._away_recovery_card = None
+        if card is not None:
+            self._fullscreen_restore_visible.pop(card, None)
+            card.close_from_app()
+            card.deleteLater()
+
+    def _show_away_recovery_prompt(self, reason: str) -> None:
+        """Offer an explicit resume action after an automatic away pause."""
+
+        reason = str(reason or "").strip().casefold()
+        if reason not in {"idle_10m", "fullscreen_video"}:
+            return
+        if not bool(getattr(self.settings, "show_away_recovery_prompt", True)):
+            return
+        if not self.work_timer.has_active_session:
+            return
+        if self.work_timer.pause_reason != reason:
+            return
+        if self._away_recovery_prompt_shown:
+            return
+        self._away_recovery_prompt_shown = True
+        started = self._away_recovery_started_at or time.monotonic()
+        away_seconds = max(1, round(time.monotonic() - started))
+        self._close_away_recovery_card()
+        card = AwayRecoveryCard(reason, away_seconds)
+        card.continue_requested.connect(self._continue_from_away_recovery)
+        card.dismiss_requested.connect(self._dismiss_away_recovery)
+        self._away_recovery_card = card
+        card.center_on_current_screen()
+        self._show_nonactivating(card, always_on_top=True)
+
+    def _continue_from_away_recovery(self) -> None:
+        """Resume the shared focus session only after an explicit click."""
+
+        self._close_away_recovery_card()
+        self.start_work_timer()
+
+    def _dismiss_away_recovery(self) -> None:
+        """Keep the session paused when the user closes the return card."""
+
+        self._close_away_recovery_card()
 
     def _idle_history_path(self) -> Path:
         """Return the local, non-synced idle classification history path."""
@@ -1860,7 +1923,12 @@ class PetWindow(QWidget):
             and not self._pause_notice_shown
         ):
             self._pause_notice_shown = True
-            self.show_speech("回来啦，刚才十分钟没动，我帮你停表了。点‘继续工作’再开。", 6200)
+            self._show_away_recovery_prompt("idle_10m")
+            if not bool(getattr(self.settings, "show_away_recovery_prompt", True)):
+                self.show_speech(
+                    "回来啦，刚才十分钟没动，我帮你停表了。点‘继续工作’再开。",
+                    6200,
+                )
 
     def _ask_idle_recovery(self) -> None:
         """Automatically classify once; show a single hint only if uncertain."""
@@ -2711,6 +2779,11 @@ class PetWindow(QWidget):
             self._reset_idle_episode()
         session_seconds = self.work_timer.session_seconds()
         was_running = self.focus_session.pause(reason)
+        if was_running and reason in {"idle_10m", "fullscreen_video"}:
+            self._away_recovery_reason = reason
+            self._away_recovery_started_at = time.monotonic()
+            self._away_recovery_prompt_shown = False
+            self._close_away_recovery_card()
         if was_running:
             self.focus_analytics.pause_focus_session()
             self._record_focus_segment(session_seconds, completed=False)
@@ -4356,6 +4429,9 @@ class PetWindow(QWidget):
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
             return True
+        if not bool(getattr(self.settings, "show_away_recovery_prompt", True)):
+            self._away_recovery_prompt_shown = True
+            self._close_away_recovery_card()
         self.ai_service.codex_path = str(
             getattr(self.settings, "codex_executable_path", "") or ""
         ).strip()

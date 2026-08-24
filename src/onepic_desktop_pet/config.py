@@ -6,6 +6,7 @@
 - 从当前用户本地应用数据目录读取上次窗口位置、显示尺寸和非敏感体验设置；
 - 持久化“始终置顶/桌面模式”，默认采用不抢焦点的 QQ 宠物式置顶行为；
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
+- 持久化键鼠空闲/视频全屏自动暂停及返回后的“继续工作”提醒偏好；
 - 仅在用户配置目录保存窗口、AI 提供方、陪伴开关和音乐 Provider 成败统计，不保存任何 API 令牌。
 
 Agent 快速定位：
@@ -104,6 +105,9 @@ class PetSettings:
     # A known video player or a browser's borderless video fullscreen can
     # trigger this optional pause. Ordinary maximised documents do not.
     auto_pause_on_fullscreen_video: bool = True
+    # After an automatic away pause, offer a non-modal card with an explicit
+    # “继续工作” action when the user returns. Keep this on for new installs.
+    show_away_recovery_prompt: bool = True
     # Distinguishes the new explicit pause-policy choice from the old builds
     # that persisted a legacy ``auto_pause_on_idle=false`` while ignoring it.
     work_timer_policy_version: int = 1
@@ -238,6 +242,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
     settings.idle_pause_seconds = min(7200, max(300, int(settings.idle_pause_seconds)))
     settings.auto_pause_on_fullscreen_video = bool(settings.auto_pause_on_fullscreen_video)
+    settings.show_away_recovery_prompt = bool(settings.show_away_recovery_prompt)
     settings.work_timer_policy_version = max(1, int(settings.work_timer_policy_version))
     rules: dict[str, str] = {}
     if isinstance(settings.idle_classification_rules, dict):
@@ -357,6 +362,7 @@ def load_settings(
                 "auto_pause_on_idle",
                 "idle_pause_seconds",
                 "auto_pause_on_fullscreen_video",
+                "show_away_recovery_prompt",
                 "work_timer_policy_version",
                 "idle_classification_rules",
                 "music_service",
@@ -450,6 +456,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "auto_pause_on_idle": settings.auto_pause_on_idle,
         "idle_pause_seconds": settings.idle_pause_seconds,
         "auto_pause_on_fullscreen_video": settings.auto_pause_on_fullscreen_video,
+        "show_away_recovery_prompt": settings.show_away_recovery_prompt,
         "work_timer_policy_version": settings.work_timer_policy_version,
         "idle_classification_rules": settings.idle_classification_rules,
         "music_service": settings.music_service,

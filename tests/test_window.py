@@ -1581,6 +1581,9 @@ def test_input_idle_at_ten_minutes_pauses_without_auto_resume(monkeypatch) -> No
     monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
     window._check_input_idle()
     assert not window.work_timer.is_running
+    assert window._away_recovery_card is not None
+    window._continue_from_away_recovery()
+    assert window.work_timer.is_running
     window.close(); window.deleteLater(); app.processEvents()
 
 

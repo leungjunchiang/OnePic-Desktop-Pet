@@ -13,6 +13,7 @@
 - 只把 API 令牌交给系统安全凭据库，不显示或持久化令牌明文；
 - 为复杂离线请求提供“重新连接 AI”和“去设置”按钮，但绝不自动打开设置窗口；
 - 手动连接检测放入 QThread；聊天请求和自动重连由 chat_manager.py 管理。
+- 工作设置包含离开屏幕后返回时的“继续工作”提醒开关，默认开启且可持久化。
 
 聊天窗口只保留当前显示的渲染内容；有限的聊天会话由窗口层分开保存在本机，
 用户可以清空显示、开始新对话或删除全部聊天记录。待办和提醒不属于聊天记录。
@@ -994,6 +995,14 @@ class AISettingsDialog(QDialog):
             "浏览器、PDF、VS Code 不会误判。"
         )
         form.addRow("", self.auto_pause_on_fullscreen_video)
+        self.show_away_recovery_prompt = QCheckBox("离开屏幕后回来时显示‘继续工作’提醒")
+        self.show_away_recovery_prompt.setChecked(
+            getattr(settings, "show_away_recovery_prompt", True)
+        )
+        self.show_away_recovery_prompt.setToolTip(
+            "自动暂停后检测到你回来时，显示类似六毛闹钟的提醒卡；关闭后仍会自动暂停，但不弹出这张卡。"
+        )
+        form.addRow("", self.show_away_recovery_prompt)
         idle_hint = QLabel(
             "锁屏和睡眠会立即暂停。所有自动暂停都不会自动恢复；点击继续工作才会重新计时。"
         )
@@ -1294,6 +1303,7 @@ class AISettingsDialog(QDialog):
         self.settings.stand_reminder_enabled = self.stand.isChecked()
         self.settings.auto_pause_on_idle = self.auto_pause_on_idle.isChecked()
         self.settings.auto_pause_on_fullscreen_video = self.auto_pause_on_fullscreen_video.isChecked()
+        self.settings.show_away_recovery_prompt = self.show_away_recovery_prompt.isChecked()
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
         self.settings.music_service = str(self.music_service.currentData())

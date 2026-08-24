@@ -143,11 +143,14 @@ def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
     assert settings.auto_pause_on_idle is True
     assert settings.idle_pause_seconds == 600
     assert settings.auto_pause_on_fullscreen_video is True
+    assert settings.show_away_recovery_prompt is True
+    settings.show_away_recovery_prompt = False
     settings.idle_pause_seconds = 5
     settings.idle_classification_rules = {"WINWORD.EXE": "focus", "bad": "ignore"}
     path = save_settings(settings, tmp_path / "settings.json")
     loaded = load_settings(override_path=path)
     assert loaded.idle_pause_seconds == 300
+    assert loaded.show_away_recovery_prompt is False
     assert loaded.idle_classification_rules == {"winword.exe": "focus"}
 
 
