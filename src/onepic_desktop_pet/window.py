@@ -5550,6 +5550,10 @@ class PetWindow(QWidget):
     def _show_work_controls(self) -> None:
         """Show the work dock above the pet using the shared focus state."""
 
+        # The right-click work dock and the double-click shortcut dock are
+        # mutually exclusive.  In particular, hide the detached report
+        # button owned by the shortcut dock before placing this control bar.
+        self.quick_panel.hide()
         snapshot = self.focus_session.snapshot()
         self._update_work_duration_bubble(snapshot)
         self.work_controls.set_session_status(snapshot.status)
@@ -5577,6 +5581,11 @@ class PetWindow(QWidget):
     def _quick_work_action(self) -> None:
         """快捷入口直接切换开始、暂停和继续，不再弹出第三层控制。"""
 
+        # The report shortcut is a detached top-level window above the work
+        # button. Collapse the whole shortcut dock before changing focus
+        # state so macOS cannot leave that secondary button behind while the
+        # primary start/pause shortcut disappears.
+        self.quick_panel.hide()
         if self.focus_session.snapshot().status == "focus":
             self.pause_work_timer()
         else:
