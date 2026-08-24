@@ -1112,6 +1112,7 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert window._work_report_dialog is not None
     assert window._work_report_dialog.isVisible()
     assert not window.quick_panel.isVisible()
+    assert not window.quick_panel.report_button.isVisible()
     window._work_report_dialog.close()
     window.quick_panel._set_hover_button(window.quick_panel.chat_button)
     window.quick_panel._set_report_button_visible(False)

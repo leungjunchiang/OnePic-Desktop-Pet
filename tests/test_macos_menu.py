@@ -41,6 +41,21 @@ def test_dock_menu_uses_the_unified_model(monkeypatch) -> None:
     controller.close()
 
 
+def test_dock_projection_uses_pet_context_as_canonical(monkeypatch) -> None:
+    """Dock and pet right-click menus must render the same model context."""
+
+    monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {"visible": True},
+        callbacks={"chat": lambda _checked=False: None},
+    )
+    controller = macos_dock.install_dock_menu(model)
+    assert controller._model_provider().items("pet") == model.items("pet")
+    assert controller._model_provider().items("dock") == model.items("pet")
+    controller.close()
+
+
 def test_macos_uses_native_status_item_for_tray(monkeypatch) -> None:
     monkeypatch.setattr(application.sys, "platform", "darwin")
     assert application._uses_qt_system_tray() is False

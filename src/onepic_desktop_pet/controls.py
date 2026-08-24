@@ -848,10 +848,15 @@ class QuickControlPanel(QWidget):
         self._ignore_initial_enter = False
 
     def hideEvent(self, event) -> None:
+        # ``report_button`` is deliberately a top-level native window so it
+        # can float above the work icon. Hiding the dock itself therefore does
+        # not hide that button automatically on macOS. Always collapse both
+        # surfaces together; otherwise only the report icon can remain stuck
+        # on the desktop after the other shortcuts disappear.
         self._hover_poll_timer.stop()
         self._report_hide_timer.stop()
         self._hide_hint()
-        self._set_report_button_visible(False)
+        self.report_button.hide()
         super().hideEvent(event)
 
     def enterEvent(self, event) -> None:

@@ -406,6 +406,7 @@ class PetWindow(QWidget):
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.focus_session.set_today_seconds_provider(self._shared_today_focus_seconds)
         self._focus_quality_tracker = FocusQualityTracker()
         self._active_focus_account_id = ""
         # session_seconds() is cumulative across pauses/resumes.  This cursor
@@ -2713,6 +2714,10 @@ class PetWindow(QWidget):
         if was_running:
             self.focus_analytics.pause_focus_session()
             self._record_focus_segment(session_seconds, completed=False)
+            # FocusSession emits its pause snapshot before the analytics
+            # segment is committed. Publish one more snapshot so the study
+            # room and report immediately see the same reconciled day total.
+            self.focus_session.refresh()
             self._pause_notice_shown = False
             if automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
                 self._pause_notice_shown = reason != "idle_10m"
@@ -3642,6 +3647,24 @@ class PetWindow(QWidget):
         self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
         return seconds
+
+    def _shared_today_focus_seconds(self) -> int:
+        """Return the reconciled day total used by every focus surface.
+
+        FocusAnalytics contains the durable account-scoped segments while
+        WorkTimer contributes only the currently running monotonic segment.
+        This prevents stale cumulative checkpoint values from inflating the
+        report and makes the study-room card, report, heartbeat, and duration
+        bubble agree on the same number.
+        """
+
+        moment = datetime.now(BEIJING_TIMEZONE)
+        projection = self.focus_analytics.period_summary("day", moment)
+        recorded = max(0, int(projection.get("total_seconds", 0) or 0))
+        if int(projection.get("local_record_count", 0) or 0) > 0:
+            live = self.work_timer.current_elapsed_seconds() if self.work_timer.is_running else 0
+            return min(24 * 60 * 60, recorded + max(0, int(live)))
+        return max(0, int(self.work_timer.today_seconds()))
 
     def _record_economy_performance(self, title: str, task_id: str) -> None:
         events = []

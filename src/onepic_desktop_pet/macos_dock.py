@@ -110,7 +110,11 @@ class MacDockMenuController:
                     item.setSubmenu_(submenu)
                 destination.addItem_(item)
 
-        render(self._model_provider().items("dock"), menu)
+        # The pet context menu is the canonical menu. Keep the Dock
+        # projection on that exact context so a future platform-specific
+        # branch cannot silently make the Dock right-click list diverge from
+        # the menu users see on 六毛 itself.
+        render(self._model_provider().items("pet"), menu)
         return menu
 
     def close(self) -> None:

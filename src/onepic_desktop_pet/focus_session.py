@@ -7,7 +7,8 @@ same local :class:`WorkTimerModel` session.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, Signal
@@ -79,6 +80,18 @@ class FocusSessionManager(QObject):
         self.timer = timer
         self._room_id: str | None = None
         self._resting = bool(timer.has_active_session and not timer.is_running)
+        # The timer remains the owner of session state. A caller may provide
+        # a reconciled calendar-day projection so every surface displays the
+        # same day total without introducing a second timer or mutating it.
+        self._today_seconds_provider: Callable[[], int | None] | None = None
+
+    def set_today_seconds_provider(
+        self, provider: Callable[[], int | None] | None
+    ) -> None:
+        """Use one optional calendar-day projection for all FocusSession views."""
+
+        self._today_seconds_provider = provider
+        self.refresh()
 
     @property
     def room_id(self) -> str | None:
@@ -99,11 +112,25 @@ class FocusSessionManager(QObject):
         return changed
 
     def snapshot(self) -> FocusSessionSnapshot:
-        return FocusSessionSnapshot.from_timer(
+        snapshot = FocusSessionSnapshot.from_timer(
             self.timer,
             room_id=self._room_id,
             resting=self._resting,
         )
+        provider = self._today_seconds_provider
+        if provider is not None:
+            try:
+                projected = provider()
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                projected = None
+            if projected is not None:
+                try:
+                    projected_seconds = max(0, int(projected))
+                except (TypeError, ValueError, OverflowError):
+                    projected_seconds = None
+                if projected_seconds is not None:
+                    snapshot = replace(snapshot, today_seconds=projected_seconds)
+        return snapshot
 
     def refresh(self) -> FocusSessionSnapshot:
         snapshot = self.snapshot()
