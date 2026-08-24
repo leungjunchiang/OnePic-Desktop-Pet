@@ -16,7 +16,7 @@ import platform
 import re
 import sys
 import tempfile
-from time import monotonic
+from time import monotonic, sleep
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -50,6 +50,8 @@ _SHA256_PATTERN = re.compile(r"\b([0-9a-fA-F]{64})\b")
 _TRUSTED_API_HOSTS = {"api.github.com"}
 _MAX_METADATA_BYTES = 5 * 1024 * 1024
 _MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+_OPEN_ATTEMPTS = 3
+_OPEN_RETRY_DELAY_SECONDS = 0.15
 
 
 def _is_github_host(host: str) -> bool:
@@ -158,14 +160,35 @@ class ProgramUpdateManager:
     def _open(self, request: urllib.request.Request):
         """Open updater HTTPS requests with the bundled/OS verified CA set."""
 
-        if self._uses_verified_default_opener:
-            return self._opener(
-                request,
-                timeout=self.timeout,
-                context=verified_ssl_context(),
-            )
-        # Test and embedding openers keep their existing small interface.
-        return self._opener(request, timeout=self.timeout)
+        # GitHub occasionally closes an otherwise valid TLS connection while
+        # Python is reading the response (notably on Windows networks and
+        # proxies).  Retrying the same HTTPS request is safe here because all
+        # updater requests are GETs, and avoids turning a transient
+        # ``UNEXPECTED_EOF_WHILE_READING`` into a blocking update error.
+        for attempt in range(1, _OPEN_ATTEMPTS + 1):
+            try:
+                if self._uses_verified_default_opener:
+                    return self._opener(
+                        request,
+                        timeout=self.timeout,
+                        context=verified_ssl_context(),
+                    )
+                # Test and embedding openers keep their existing small
+                # interface.
+                return self._opener(request, timeout=self.timeout)
+            except urllib.error.HTTPError:
+                raise
+            except (OSError, urllib.error.URLError) as exc:
+                if attempt >= _OPEN_ATTEMPTS:
+                    raise
+                LOGGER.warning(
+                    "[Update] HTTPS request attempt %s/%s failed; retrying: %s",
+                    attempt,
+                    _OPEN_ATTEMPTS,
+                    exc,
+                )
+                sleep(_OPEN_RETRY_DELAY_SECONDS * attempt)
+        raise RuntimeError("unreachable updater retry state")
 
     @staticmethod
     def _derive_release_page_url(api_url: str) -> str:
@@ -189,7 +212,14 @@ class ProgramUpdateManager:
         if parsed.netloc.casefold() not in _TRUSTED_API_HOSTS and not _is_github_host(parsed.netloc):
             raise ProgramUpdateError("程序更新地址不是受信任的 GitHub 地址")
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "Lili-Desktop-Pet"})
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Lili-Desktop-Pet",
+                    "Accept": "application/vnd.github+json",
+                    "Connection": "close",
+                },
+            )
             response = self._open(request)
             with response:
                 chunks: list[bytes] = []
@@ -518,3 +548,4 @@ class ProgramUpdateManager:
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
         return ProgramUpdateResult(release=release, installer_path=final_path)
+

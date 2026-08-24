@@ -300,19 +300,16 @@ def _nice_duration_ticks(maximum: int, count: int = 4) -> list[int]:
 
     maximum = max(0, int(maximum))
     if maximum <= 0:
-        return [0]
-    # Keep visible headroom above the tallest bar. In particular, a three
-    # hour day should be drawn against a four hour axis rather than touching
-    # the chart ceiling.
+        return [0, 60 * 60]
+    # For the report's daily and hourly bars, one hour is the most useful
+    # unit.  Round the observed maximum up to a whole hour and then reserve
+    # one additional hour above it so the tallest bar never touches the
+    # chart ceiling (3h -> 4h, 2h09m -> 4h).
     hour = 60 * 60
-    if maximum <= hour:
-        return [0, hour, 2 * hour]
-    if maximum <= 2 * hour:
-        return [0, hour, 2 * hour, 3 * hour]
-    if maximum <= 3 * hour:
-        return [0, hour, 2 * hour, 3 * hour, 4 * hour]
-    if maximum <= 4 * hour:
-        return [0, hour, 2 * hour, 3 * hour, 4 * hour, 5 * hour]
+    rounded_hours = (maximum + hour - 1) // hour
+    upper_hours = max(2, rounded_hours + 1)
+    if upper_hours <= 12:
+        return [value * hour for value in range(upper_hours + 1)]
     target = maximum / max(1, count)
     steps = (
         60, 5 * 60, 10 * 60, 15 * 60, 30 * 60,
@@ -536,11 +533,12 @@ class ReportBarChart(QWidget):
             46,
             max((painter.fontMetrics().horizontalAdvance(format_work_duration(value)) for value in ticks), default=46) + 14,
         )
-        # Reserve a real bottom axis area. QRect.adjusted() adds the last two
-        # arguments to right/bottom, so the reductions must be negative. A
-        # previous positive bottom value expanded the plot below the widget,
-        # putting every date/hour label outside the paintable area.
-        plot = self.rect().adjusted(tick_label_width, 14, -18, -82)
+        # Reserve only the space actually needed by the x-axis labels.  The
+        # previous fixed 82px bottom reserve made the chart look top-heavy,
+        # especially for the monthly hourly view. QRect.adjusted() takes
+        # reductions for the right/bottom arguments, so keep them negative.
+        bottom_axis = 34 if self._hourly else 50
+        plot = self.rect().adjusted(tick_label_width, 14, -18, -bottom_axis)
 
         painter.setPen(QPen(QColor("#e3edef"), 1))
         upper = max(ticks[-1], 1)

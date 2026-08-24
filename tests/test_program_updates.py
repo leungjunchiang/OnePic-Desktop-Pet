@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ssl
 import urllib.error
 from urllib.parse import urlparse
 
@@ -97,6 +98,27 @@ def test_default_updater_opener_uses_verified_ssl_context(monkeypatch) -> None:
 
     assert captured["context"] is sentinel
     assert captured["timeout"] == manager.timeout
+
+
+def test_updater_retries_transient_tls_eof(monkeypatch) -> None:
+    import onepic_desktop_pet.program_updates as module
+
+    calls = 0
+
+    def opener(request, timeout=0, context=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise urllib.error.URLError(ssl.SSLEOFError("UNEXPECTED_EOF_WHILE_READING"))
+        return Response(b"{}")
+
+    monkeypatch.setattr(module, "sleep", lambda _seconds: None)
+    manager = ProgramUpdateManager(app_version="0.22.82", opener=opener)
+    assert manager._read_url(
+        "https://api.github.com/repos/example/releases/latest",
+        max_bytes=1024,
+    ) == b"{}"
+    assert calls == 2
 
 
 def test_fetch_and_verify_platform_installer(tmp_path, monkeypatch) -> None:
@@ -392,3 +414,4 @@ def test_desktop_pet_application_is_a_qt_object_for_worker_callbacks() -> None:
     from onepic_desktop_pet.app import DesktopPetApplication
 
     assert issubclass(DesktopPetApplication, QObject)
+

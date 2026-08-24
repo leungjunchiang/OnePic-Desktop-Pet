@@ -1655,18 +1655,26 @@ class SocialHubDialog(QDialog):
 
         if not hasattr(self, "tabs") or self.tabs.count() <= 0:
             return
-        available = max(0, self.tabs.width() - 2)
+        # QTabWidget normally sizes its QTabBar to the combined size hints of
+        # its labels.  That is why the bar can stop after the third tab while
+        # the page itself continues across the window.  Pin the bar to the
+        # actual tab-widget width first, then give every tab the same width.
+        # Repeating this after resize keeps the four navigation targets
+        # equal on both platforms and at every supported window size.
+        available = max(0, self.tabs.contentsRect().width() - 2)
         if available <= 0:
             return
         tab_width = max(1, available // self.tabs.count())
-        self.tabs.tabBar().setStyleSheet(
+        tab_bar = self.tabs.tabBar()
+        tab_bar.setFixedWidth(available)
+        tab_bar.setStyleSheet(
             "QTabBar::tab {"
             f"width:{tab_width}px; min-width:{tab_width}px; max-width:{tab_width}px;"
             "padding:10px 8px; color:#526872; }"
             "QTabBar::tab:selected { color:#087f74; font-weight:700; "
             "border-bottom:3px solid #38a397; }"
         )
-        self.tabs.tabBar().updateGeometry()
+        tab_bar.updateGeometry()
 
     def resizeEvent(self, event) -> None:  # pragma: no cover - Qt layout hook
         super().resizeEvent(event)

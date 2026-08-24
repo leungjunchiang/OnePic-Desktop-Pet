@@ -123,7 +123,7 @@ def test_report_bar_chart_keeps_axis_labels_inside_widget() -> None:
     # The x-axis/date labels are painted below the plot. If the bottom
     # adjustment accidentally expands the plot, the bars reach outside the
     # widget and those labels are clipped again.
-    assert max(rect.bottom() for rect in visible_bars) <= chart.rect().bottom() - 82
+    assert max(rect.bottom() for rect in visible_bars) <= chart.rect().bottom() - 50
 
     chart.close()
     chart.deleteLater()
@@ -133,6 +133,7 @@ def test_report_bar_chart_keeps_axis_labels_inside_widget() -> None:
 def test_report_duration_ticks_leave_headroom_and_hourly_tooltip_is_explicit() -> None:
     assert _nice_duration_ticks(60 * 60)[-1] == 2 * 60 * 60
     assert _nice_duration_ticks(3 * 60 * 60)[-1] == 4 * 60 * 60
+    assert _nice_duration_ticks(2 * 60 * 60 + 9 * 60)[-1] == 4 * 60 * 60
 
     app = QApplication.instance() or QApplication([])
     chart = ReportBarChart(
