@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
-from .menu_model import MenuItemSpec, UnifiedMenuModel
+from .menu_model import MenuItemSpec, UnifiedMenuModel, populate_qmenu
 from .resources import resource_path
 
 
@@ -96,10 +96,22 @@ class MacDockMenuController:
         self._previous_delegate = None
         self._delegate = None
         self._target = None
+        self._qt_menu = None
         self._native = False
 
         if sys.platform != "darwin":
             return
+
+        # Qt owns the NSApplication delegate in a PySide application.  Using
+        # QMenu's supported Dock bridge keeps that delegate intact; replacing
+        # it with a second PyObjC delegate is racy because Qt may restore its
+        # own delegate after startup, leaving the Dock with the default menu.
+        if self._install_qt_dock_menu():
+            return
+
+        # Keep the AppKit implementation as a compatibility fallback for
+        # environments where the Qt binding does not expose setAsDockMenu().
+        # Normal PySide6 macOS builds take the Qt path above.
         try:
             from AppKit import NSApplication
         except ImportError:
@@ -113,6 +125,58 @@ class MacDockMenuController:
         _ACTIVE_DOCK_CONTROLLER = self
         self._application.setDelegate_(self._delegate)
         self._native = True
+
+    def _install_qt_dock_menu(self) -> bool:
+        """Install the Dock menu through Qt's native Cocoa bridge.
+
+        ``QMenu.setAsDockMenu()`` registers the menu with Qt's existing
+        ``NSApplicationDelegate``.  This is the important distinction from
+        replacing the delegate ourselves: Qt keeps all of its normal Cocoa
+        lifecycle callbacks while the Dock receives this exact QMenu.
+        """
+
+        try:
+            from PySide6.QtWidgets import QApplication, QMenu
+        except ImportError:
+            return False
+
+        # QMenu must be created after QApplication.  Unit tests and library
+        # imports can inspect this controller before Qt has been started; in
+        # that case leave installation to the AppKit fallback (or no-op)
+        # instead of letting Qt abort the process with a fatal constructor
+        # error.
+        if QApplication.instance() is None:
+            return False
+
+        try:
+            menu = QMenu()
+            self._qt_menu = menu
+            self._refresh_qt_dock_menu()
+            set_as_dock_menu = getattr(menu, "setAsDockMenu", None)
+            if not callable(set_as_dock_menu):
+                self._qt_menu = None
+                return False
+            set_as_dock_menu()
+            about_to_show = getattr(menu, "aboutToShow", None)
+            connect = getattr(about_to_show, "connect", None)
+            if callable(connect):
+                connect(self._refresh_qt_dock_menu)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            self._qt_menu = None
+            return False
+
+        self._native = True
+        return True
+
+    def _refresh_qt_dock_menu(self) -> None:
+        """Refresh the QMenu before the Dock opens it."""
+
+        if self._qt_menu is None:
+            return
+        self._qt_menu.clear()
+        # The pet projection is the canonical right-click menu.  The same
+        # model object is used by the pet window and by the status item.
+        populate_qmenu(self._qt_menu, self._model_provider(), "pet")
 
     @property
     def installed(self) -> bool:
@@ -158,6 +222,15 @@ class MacDockMenuController:
         """Restore the previous application delegate during shutdown."""
 
         global _ACTIVE_DOCK_CONTROLLER
+        if self._qt_menu is not None:
+            try:
+                self._qt_menu.hide()
+                delete_later = getattr(self._qt_menu, "deleteLater", None)
+                if callable(delete_later):
+                    delete_later()
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+            self._qt_menu = None
         if self._native and self._application is not None:
             try:
                 if self._application.delegate() is self._delegate:
