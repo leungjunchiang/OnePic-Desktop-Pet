@@ -1,8 +1,8 @@
-"""Native macOS status-item integration.
+"""Native macOS status-item and Dock-menu integration.
 
-The Dock menu is deliberately not customized. macOS owns that menu and adds
-its standard window/application commands there; Lili's cross-platform menu is
-provided by the pet window, Windows tray, and macOS menu-bar status item.
+The menu-bar status item and the Dock icon both project the same
+UnifiedMenuModel. This keeps the Windows tray, macOS Dock, macOS status
+item, and pet context menu aligned while retaining native menu rendering.
 """
 
 from __future__ import annotations
@@ -15,24 +15,129 @@ from .resources import resource_path
 
 
 class MacDockMenuController:
-    """Keep the macOS Dock menu native and separate from Lili's app menu."""
+    """Expose the unified Lili menu from the macOS Dock icon."""
 
     def __init__(self, model_provider: Callable[[], UnifiedMenuModel]) -> None:
         self._model_provider = model_provider
+        self._application = None
+        self._previous_delegate = None
+        self._delegate = None
+        self._target = None
         self._native = False
+
+        if sys.platform != "darwin":
+            return
+        try:
+            from AppKit import NSApplication, NSMenu, NSMenuItem
+            from Foundation import NSObject
+        except ImportError:
+            return
+
+        controller = self
+
+        class _DockTarget(NSObject):
+            def triggerCommand_(self, item) -> None:
+                command = str(item.representedObject() or "")
+                if command:
+                    controller._model_provider().execute(command, bool(item.state()))
+
+        class _DockApplicationDelegate(NSObject):
+            def applicationDockMenu_(self, _application):
+                return controller._build_native_menu(NSMenu, NSMenuItem, _DockTarget)
+
+            def respondsToSelector_(self, selector) -> bool:
+                if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
+                    return True
+                previous = controller._previous_delegate
+                if previous is not None:
+                    try:
+                        return bool(previous.respondsToSelector_(selector))
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                return bool(super().respondsToSelector_(selector))
+
+            def methodSignatureForSelector_(self, selector):
+                previous = controller._previous_delegate
+                if previous is not None:
+                    try:
+                        signature = previous.methodSignatureForSelector_(selector)
+                    except (AttributeError, TypeError, ValueError):
+                        signature = None
+                    if signature is not None:
+                        return signature
+                return super().methodSignatureForSelector_(selector)
+
+            def forwardInvocation_(self, invocation) -> None:
+                previous = controller._previous_delegate
+                if previous is not None:
+                    try:
+                        if previous.respondsToSelector_(invocation.selector()):
+                            invocation.invokeWithTarget_(previous)
+                            return
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                self.doesNotRecognizeSelector_(invocation.selector())
+
+        self._target_class = _DockTarget
+        self._delegate_class = _DockApplicationDelegate
+        self._application = NSApplication.sharedApplication()
+        self._previous_delegate = self._application.delegate()
+        self._target = _DockTarget.alloc().init()
+        self._delegate = _DockApplicationDelegate.alloc().init()
+        self._application.setDelegate_(self._delegate)
+        self._native = True
 
     @property
     def installed(self) -> bool:
         return self._native
 
-    def close(self) -> None:
-        """No-op: macOS remains responsible for the Dock menu lifecycle."""
+    def _build_native_menu(self, NSMenu, NSMenuItem, target_class):
+        menu = NSMenu.alloc().initWithTitle_("六毛")
+        target = self._target or target_class.alloc().init()
 
+        def render(items: tuple[MenuItemSpec, ...], destination) -> None:
+            for spec in items:
+                if spec.separator:
+                    destination.addItem_(NSMenuItem.separatorItem())
+                    continue
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    spec.title,
+                    "triggerCommand:",
+                    "",
+                )
+                item.setTarget_(target)
+                if spec.command:
+                    item.setRepresentedObject_(spec.command)
+                item.setEnabled_(spec.enabled)
+                if spec.checkable:
+                    item.setState_(1 if spec.checked else 0)
+                if spec.children:
+                    submenu = NSMenu.alloc().initWithTitle_(spec.title)
+                    render(spec.children, submenu)
+                    item.setSubmenu_(submenu)
+                destination.addItem_(item)
+
+        render(self._model_provider().items("dock"), menu)
+        return menu
+
+    def close(self) -> None:
+        """Restore the previous application delegate during shutdown."""
+
+        if self._native and self._application is not None:
+            try:
+                if self._application.delegate() is self._delegate:
+                    self._application.setDelegate_(self._previous_delegate)
+            except (AttributeError, TypeError, ValueError):
+                pass
+        self._application = None
+        self._previous_delegate = None
+        self._delegate = None
+        self._target = None
         self._native = False
 
 
 def install_dock_menu(model_provider: Callable[[], UnifiedMenuModel]) -> MacDockMenuController:
-    """Create an installed controller on macOS and a harmless no-op elsewhere."""
+    """Install a native Dock menu on macOS, or a no-op elsewhere."""
 
     return MacDockMenuController(model_provider)
 
@@ -40,7 +145,7 @@ def install_dock_menu(model_provider: Callable[[], UnifiedMenuModel]) -> MacDock
 class MacStatusBarController:
     """Provide the same unified commands from a native macOS status item.
 
-    The status item is deliberately only a projection of ``UnifiedMenuModel``.
+    The status item is deliberately only a projection of UnifiedMenuModel.
     It does not own update, visibility, Todo, or settings logic; all actions
     are dispatched through the same command callbacks used by the pet window
     and Windows tray.

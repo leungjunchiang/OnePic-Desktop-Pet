@@ -3,7 +3,7 @@
 The menu is deliberately represented as small, platform-neutral specifications.
 Windows and Qt render the same specs as ``QMenu`` actions, while the macOS
 status item can render them as ``NSMenu`` items without maintaining another
-command list. The macOS Dock menu is intentionally owned by macOS itself.
+command list. The macOS Dock menu is another projection of this same model.
 """
 
 from __future__ import annotations
@@ -120,9 +120,9 @@ class UnifiedMenuModel:
         ]
 
         todo_children = [
-            self._optional("显示待办", "show_todos"),
-            self._optional("隐藏待办", "hide_todos"),
-            self._optional("添加待办…", "add_todo"),
+            self._optional("查看待办…", "show_todos"),
+            self._optional("新建待办…", "add_todo"),
+            self._optional("六毛闹钟…", "alarms"),
         ]
         todo_children = [item for item in todo_children if item is not None]
 
@@ -151,13 +151,29 @@ class UnifiedMenuModel:
             if "show_work_duration" in self._callbacks
             else None
         )
-        shortcut_children = [
-            self._optional("调整大小…", "size"),
-            self._optional("六毛闹钟…", "alarms"),
-            self._optional("主人称呼…", "rename"),
+        display_children = [
+            self._optional("六毛大小…", "size"),
             duration_item,
+            MenuItemSpec(
+                "始终置顶",
+                "topmost_on",
+                checkable=True,
+                checked=bool(state.get("always_on_top", False)),
+            ),
+            MenuItemSpec(
+                "桌面模式",
+                "topmost_off",
+                checkable=True,
+                checked=not bool(state.get("always_on_top", False)),
+            ),
         ]
-        shortcut_children = [item for item in shortcut_children if item is not None]
+        display_children = [item for item in display_children if item is not None]
+
+        settings_children = [
+            self._optional("主人称呼…", "rename"),
+            self._optional("设置…", "settings"),
+        ]
+        settings_children = [item for item in settings_children if item is not None]
 
         work_entries: list[MenuItemSpec] = []
         if work_status == "focus":
@@ -185,21 +201,6 @@ class UnifiedMenuModel:
         else:
             work_entries.append(MenuItemSpec("开始工作", "work"))
 
-        display_mode_children = (
-            MenuItemSpec(
-                "始终置顶",
-                "topmost_on",
-                checkable=True,
-                checked=bool(state.get("always_on_top", False)),
-            ),
-            MenuItemSpec(
-                "桌面模式",
-                "topmost_off",
-                checkable=True,
-                checked=not bool(state.get("always_on_top", False)),
-            ),
-        )
-
         entries: list[MenuItemSpec] = [
             MenuItemSpec(f"和{self.pet_name}聊聊…", "chat"),
         ]
@@ -216,18 +217,19 @@ class UnifiedMenuModel:
         )
         entries.append(MenuItemSpec.divider())
         if todo_children:
-            entries.append(MenuItemSpec("待办", children=tuple(todo_children)))
-        if shortcut_children:
-            entries.append(MenuItemSpec("快捷工具", children=tuple(shortcut_children)))
+            entries.append(MenuItemSpec("待办与提醒", children=tuple(todo_children)))
 
         entries.append(MenuItemSpec.divider())
         if "outfit" in self._callbacks:
             entries.append(MenuItemSpec("换装与外观…", "outfit"))
+        if display_children:
+            entries.append(MenuItemSpec("显示与窗口", children=tuple(display_children)))
+        entries.append(MenuItemSpec.divider())
+        if settings_children:
+            entries.append(MenuItemSpec("设置", children=tuple(settings_children)))
+        entries.append(MenuItemSpec("更新与关于", children=tuple(update_children)))
         entries.extend(
             (
-                MenuItemSpec("显示模式", children=display_mode_children),
-                MenuItemSpec("更新与关于", children=tuple(update_children)),
-                MenuItemSpec("设置…", "settings"),
                 MenuItemSpec.divider(),
                 MenuItemSpec("隐藏六毛" if visible else "显示六毛", "visibility"),
                 MenuItemSpec("退出六毛", "quit"),

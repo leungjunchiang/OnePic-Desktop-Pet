@@ -6,8 +6,6 @@ from onepic_desktop_pet.menu_model import UnifiedMenuModel
 
 
 def test_status_item_is_a_noop_off_macos(monkeypatch) -> None:
-    """Windows/Linux must not import or create a native menu-bar item."""
-
     monkeypatch.setattr(macos_dock.sys, "platform", "win32")
     model = UnifiedMenuModel(
         pet_name="六毛",
@@ -19,10 +17,8 @@ def test_status_item_is_a_noop_off_macos(monkeypatch) -> None:
     controller.close()
 
 
-def test_dock_menu_stays_native_on_macos(monkeypatch) -> None:
-    """The Lili menu belongs to the pet/status item, not the Dock menu."""
-
-    monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+def test_dock_menu_is_a_noop_off_native_macos(monkeypatch) -> None:
+    monkeypatch.setattr(macos_dock.sys, "platform", "win32")
     model = UnifiedMenuModel(
         pet_name="六毛",
         state_provider=lambda: {},
@@ -33,7 +29,19 @@ def test_dock_menu_stays_native_on_macos(monkeypatch) -> None:
     controller.close()
 
 
-def test_macos_uses_only_native_status_item(monkeypatch) -> None:
+def test_dock_menu_uses_the_unified_model(monkeypatch) -> None:
+    monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {},
+        callbacks={},
+    )
+    controller = macos_dock.install_dock_menu(model)
+    assert controller._model_provider().items("dock") == model.items("tray")
+    controller.close()
+
+
+def test_macos_uses_native_status_item_for_tray(monkeypatch) -> None:
     monkeypatch.setattr(application.sys, "platform", "darwin")
     assert application._uses_qt_system_tray() is False
 
