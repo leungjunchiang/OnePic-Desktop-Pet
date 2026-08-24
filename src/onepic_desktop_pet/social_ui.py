@@ -242,9 +242,10 @@ class EqualWidthTabBar(QTabBar):
         size = super().tabSizeHint(index)
         count = max(1, self.count())
         host = self.parentWidget()
-        available = self.width()
-        if host is not None:
-            available = max(available, host.width() - 2)
+        # Use the tab bar's actual width.  The navigation controller may
+        # be a few pixels wider than the bar; using the host width here would
+        # make Qt distribute a remainder and alternate tab widths (e.g. 288/289).
+        available = max(1, self.width())
         size.setWidth(max(1, available // count))
         return size
 
@@ -1684,8 +1685,10 @@ class SocialHubDialog(QDialog):
         tab_width = max(1, available // count)
         usable = tab_width * count
         tab_bar = self.tabs.tabBar()
+        # Leave at most the remainder (1–3 px) outside the tab bar so each
+        # tab has exactly the same integer width at every window size.
         if tab_bar.width() != usable:
-            tab_bar.setFixedWidth(available)
+            tab_bar.setFixedWidth(usable)
         tab_bar.setStyleSheet(
             "QTabBar::tab {"
             f"min-width:{tab_width}px; max-width:{tab_width}px;"

@@ -128,7 +128,8 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     wide_widths = [dialog.tabs.tabBar().tabRect(index).width() for index in range(4)]
     assert len(set(wide_widths)) == 1
     assert wide_widths[0] > 120
-    assert dialog.tabs.tabBar().width() >= dialog.tabs.width() - 2
+    assert dialog.tabs.tabBar().width() <= dialog.tabs.width()
+    assert dialog.tabs.tabBar().width() % 4 == 0
     for current_index in range(4):
         dialog.tabs.setCurrentIndex(current_index)
         app.processEvents()
@@ -139,7 +140,8 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     narrow_widths = [dialog.tabs.tabBar().tabRect(index).width() for index in range(4)]
     assert len(set(narrow_widths)) == 1
     assert 0 < narrow_widths[0] < wide_widths[0]
-    assert dialog.tabs.tabBar().width() >= dialog.tabs.width() - 2
+    assert dialog.tabs.tabBar().width() <= dialog.tabs.width()
+    assert dialog.tabs.tabBar().width() % 4 == 0
     for current_index in range(4):
         dialog.tabs.setCurrentIndex(current_index)
         app.processEvents()
