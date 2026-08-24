@@ -532,7 +532,7 @@ class PetWindow(QWidget):
         )
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
-            self.work_timer.status_text,
+            self._shared_work_status_text,
             lambda: self._shared_today_focus_seconds() // 3600,
             local_context=self.time_memory.summary.context,
             lyrics_path=lambda: self.settings.local_lyrics_path,
@@ -3328,9 +3328,8 @@ class PetWindow(QWidget):
         state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
         self._show_emotion(state, 2600)
         today_seconds = self._shared_today_focus_seconds()
-        suffix = " · 正在计时" if self.work_timer.is_running else " · 已暂停"
         text = (
-            f"今日工作 {format_work_duration(today_seconds)}{suffix}\n"
+            f"{self._shared_work_status_text()}\n"
             f"{growth_progress_text(today_seconds)}\n"
             f"六毛心情：{positive_mood(today_seconds, self.work_timer.session_seconds())}"
         )
@@ -3692,6 +3691,12 @@ class PetWindow(QWidget):
         """Backward-compatible day-only accessor for legacy callers."""
 
         return self._shared_focus_period_seconds()["today_seconds"]
+
+    def _shared_work_status_text(self) -> str:
+        """Return the user-facing work status with the canonical day total."""
+
+        suffix = " · 正在计时" if self.work_timer.is_running else " · 已暂停"
+        return f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}{suffix}"
 
     def _record_economy_performance(self, title: str, task_id: str) -> None:
         events = []
