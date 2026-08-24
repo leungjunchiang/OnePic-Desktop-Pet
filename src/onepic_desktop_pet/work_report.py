@@ -526,10 +526,11 @@ class ReportBarChart(QWidget):
             46,
             max((painter.fontMetrics().horizontalAdvance(format_work_duration(value)) for value in ticks), default=46) + 14,
         )
-        # Reserve a real bottom axis area. The previous chart could paint the
-        # date labels outside the card when the report was narrow, making the
-        # weekly bars look like an unlabeled single block.
-        plot = self.rect().adjusted(tick_label_width, 14, 18, 82)
+        # Reserve a real bottom axis area. QRect.adjusted() adds the last two
+        # arguments to right/bottom, so the reductions must be negative. A
+        # previous positive bottom value expanded the plot below the widget,
+        # putting every date/hour label outside the paintable area.
+        plot = self.rect().adjusted(tick_label_width, 14, -18, -82)
 
         painter.setPen(QPen(QColor("#e3edef"), 1))
         upper = max(ticks[-1], 1)

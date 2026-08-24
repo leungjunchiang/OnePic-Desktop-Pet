@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.diary import DailyCompanionStats
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
-from onepic_desktop_pet.work_report import WorkReportDialog, build_work_report
+from onepic_desktop_pet.work_report import ReportBarChart, WorkReportDialog, build_work_report
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -98,3 +98,28 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert room_report["current_status"] == "focus"
     assert room_report["day"]["focus_session_seconds"] == 12 * 60
     assert room_report["day"]["focus_room_id"] == "room-1"
+
+
+def test_report_bar_chart_keeps_axis_labels_inside_widget() -> None:
+    app = QApplication.instance() or QApplication([])
+    chart = ReportBarChart(
+        [
+            {"date": "2026-08-24", "label": "8/24", "weekday": "周一", "seconds": 2 * 60 * 60},
+            {"date": "2026-08-25", "label": "8/25", "weekday": "周二", "seconds": None, "is_future": True},
+            {"date": "2026-08-26", "label": "8/26", "weekday": "周三", "seconds": None, "is_future": True},
+        ]
+    )
+    chart.resize(720, 320)
+    chart.show()
+    app.processEvents()
+
+    visible_bars = [rect for rect in chart._bar_rects if not rect.isNull()]
+    assert visible_bars
+    # The x-axis/date labels are painted below the plot. If the bottom
+    # adjustment accidentally expands the plot, the bars reach outside the
+    # widget and those labels are clipped again.
+    assert max(rect.bottom() for rect in visible_bars) <= chart.rect().bottom() - 82
+
+    chart.close()
+    chart.deleteLater()
+    app.processEvents()
