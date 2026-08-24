@@ -76,7 +76,10 @@ def _backup_if_present(path: Path) -> None:
         return
     backup_root = USER_ROOT / "backups"
     backup_root.mkdir(parents=True, exist_ok=True)
-    stamp = now_utc().replace(":", "-")
+    # Keep private backup paths short enough for Windows temporary roots.
+    # The full ISO timestamp could push an otherwise valid path over the
+    # legacy MAX_PATH limit during tests or portable builds.
+    stamp = now_utc().replace("+00:00", "Z").replace("-", "").replace(":", "")
     shutil.copy2(path, backup_root / f"{path.stem}-{stamp}{path.suffix}")
 
 
@@ -446,3 +449,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

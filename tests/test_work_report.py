@@ -7,7 +7,12 @@ from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.diary import DailyCompanionStats
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
-from onepic_desktop_pet.work_report import ReportBarChart, WorkReportDialog, build_work_report
+from onepic_desktop_pet.work_report import (
+    ReportBarChart,
+    WorkReportDialog,
+    _nice_duration_ticks,
+    build_work_report,
+)
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
 
@@ -123,3 +128,17 @@ def test_report_bar_chart_keeps_axis_labels_inside_widget() -> None:
     chart.close()
     chart.deleteLater()
     app.processEvents()
+
+
+def test_report_duration_ticks_leave_headroom_and_hourly_tooltip_is_explicit() -> None:
+    assert _nice_duration_ticks(60 * 60)[-1] == 2 * 60 * 60
+    assert _nice_duration_ticks(3 * 60 * 60)[-1] == 4 * 60 * 60
+
+    app = QApplication.instance() or QApplication([])
+    chart = ReportBarChart(
+        [{"hour": hour, "seconds": 68 * 60 if hour == 16 else 0} for hour in range(24)],
+        hourly=True,
+    )
+    assert chart._tooltip_for(16) == "16:00–17:00\n本月累计专注：1小时8分钟"
+    chart.close(); chart.deleteLater(); app.processEvents()
+

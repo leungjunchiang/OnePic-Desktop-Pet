@@ -982,6 +982,7 @@ class BuddyCardWidget(QWidget):
             ("food_coffee", "请咖啡"),
             ("food_milk_tea", "请奶茶"),
             ("food_tea", "敬茶"),
+            ("food_cake", "请蛋糕"),
         )
         for index, (kind, label) in enumerate(action_specs):
             button = QPushButton(label)
@@ -1112,7 +1113,11 @@ class RoomPetCardWidget(QWidget):
         actions.setHorizontalSpacing(3)
         actions.setVerticalSpacing(3)
         is_self = bool(buddy.get("is_self"))
-        specs = (("visit", "串门"), ("cheer", "加油"), ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"))
+        specs = (
+            ("visit", "串门"), ("cheer", "加油"),
+            ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"),
+            ("food_cake", "蛋糕"),
+        )
         for index, (kind, label) in enumerate(specs):
             button = QPushButton(label)
             button.setEnabled(not is_self)
@@ -1639,10 +1644,33 @@ class SocialHubDialog(QDialog):
         self.tabs.addTab(self._focus_page(), "专注")
         self.tabs.addTab(self._mine_page(), "我的")
         root.addWidget(self.tabs, 1)
+        QTimer.singleShot(0, self._apply_adaptive_tab_widths)
         self._update_account_state()
         if client.signed_in:
             self._initial_refresh_timer.start(50)
             QTimer.singleShot(180, self._record_login_streak)
+
+    def _apply_adaptive_tab_widths(self) -> None:
+        """Make the four primary tabs fill the available window width."""
+
+        if not hasattr(self, "tabs") or self.tabs.count() <= 0:
+            return
+        available = max(0, self.tabs.width() - 2)
+        if available <= 0:
+            return
+        tab_width = max(1, available // self.tabs.count())
+        self.tabs.tabBar().setStyleSheet(
+            "QTabBar::tab {"
+            f"width:{tab_width}px; min-width:{tab_width}px; max-width:{tab_width}px;"
+            "padding:10px 8px; color:#526872; }"
+            "QTabBar::tab:selected { color:#087f74; font-weight:700; "
+            "border-bottom:3px solid #38a397; }"
+        )
+        self.tabs.tabBar().updateGeometry()
+
+    def resizeEvent(self, event) -> None:  # pragma: no cover - Qt layout hook
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._apply_adaptive_tab_widths)
 
     def set_focus_snapshot(self, snapshot: Any) -> None:
         """Render the desktop timer state without creating a second timer."""
@@ -3701,4 +3729,5 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+
 

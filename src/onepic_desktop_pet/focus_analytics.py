@@ -1081,3 +1081,4 @@ class FocusAnalyticsStore:
         temp = self.path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.path)
+

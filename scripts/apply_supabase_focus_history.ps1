@@ -69,3 +69,4 @@ try {
 }
 
 Write-Host "Supabase focus-history migration applied to project $projectRef."
+

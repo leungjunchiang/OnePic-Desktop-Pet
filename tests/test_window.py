@@ -1904,3 +1904,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+

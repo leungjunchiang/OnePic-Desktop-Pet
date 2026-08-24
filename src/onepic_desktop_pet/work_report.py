@@ -301,14 +301,26 @@ def _nice_duration_ticks(maximum: int, count: int = 4) -> list[int]:
     maximum = max(0, int(maximum))
     if maximum <= 0:
         return [0]
+    # Keep visible headroom above the tallest bar. In particular, a three
+    # hour day should be drawn against a four hour axis rather than touching
+    # the chart ceiling.
+    hour = 60 * 60
+    if maximum <= hour:
+        return [0, hour, 2 * hour]
+    if maximum <= 2 * hour:
+        return [0, hour, 2 * hour, 3 * hour]
+    if maximum <= 3 * hour:
+        return [0, hour, 2 * hour, 3 * hour, 4 * hour]
+    if maximum <= 4 * hour:
+        return [0, hour, 2 * hour, 3 * hour, 4 * hour, 5 * hour]
     target = maximum / max(1, count)
     steps = (
         60, 5 * 60, 10 * 60, 15 * 60, 30 * 60,
-        60 * 60, 2 * 60 * 60, 3 * 60 * 60, 4 * 60 * 60,
+        hour, 2 * hour, 3 * hour, 4 * hour,
         6 * 60 * 60, 8 * 60 * 60, 12 * 60 * 60, 24 * 60 * 60,
     )
     step = next((value for value in steps if value >= target), steps[-1])
-    upper = ((maximum + step - 1) // step) * step
+    upper = ((maximum + step - 1) // step) * step + step
     return list(range(0, upper + 1, step))
 
 
@@ -418,8 +430,6 @@ class ReportTimeIntervalChart(QWidget):
             for index, name in enumerate(("周一", "周二", "周三", "周四", "周五", "周六", "周日")):
                 y = top + index * max(28, (bottom - top) // 7) + 6
                 row_height = max(28, (bottom - top) // 7)
-                if today.weekday() == index:
-                    painter.fillRect(left, y - 2, right - left, row_height - 4, QColor("#f1faf8"))
                 row_date = week_start + timedelta(days=index)
                 painter.setPen(QColor("#647b88")); painter.drawText(0, y - 4, left - 10, 24, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{row_date.month}/{row_date.day}")
         for rect, _label in segments:
@@ -475,7 +485,7 @@ class ReportBarChart(QWidget):
             hour = max(0, min(23, int(row.get("hour", index) or 0)))
             end_hour = (hour + 1) % 24
             title = f"{hour:02d}:00–{end_hour:02d}:00"
-            detail = f"工作时长：{format_work_duration(seconds)}"
+            detail = f"本月累计专注：{format_work_duration(seconds)}"
         else:
             date = str(row.get("date") or row.get("label") or "未知日期")
             weekday = str(row.get("weekday") or "")
@@ -582,37 +592,42 @@ class ReportBarChart(QWidget):
             elif value is None:
                 painter.setPen(QColor("#9caeb4"))
                 painter.drawText(x, plot.bottom() - 14, bar_width, 16, Qt.AlignmentFlag.AlignHCenter, "—")
-            if index % label_step == 0 or index == count - 1:
+            if not self._hourly and (index % label_step == 0 or index == count - 1):
                 painter.setPen(QColor("#647b88"))
-                if self._hourly:
-                    hour = max(0, min(23, int(row.get("hour", index) or 0)))
-                    end_hour = (hour + 1) % 24
-                    label = f"{hour:02d}–{end_hour:02d}时\n{hour:02d}:00–{end_hour:02d}:00"
-                else:
-                    # Always use the actual calendar date on the x-axis. The
-                    # full date and weekday remain available in the tooltip.
-                    label = str(row.get("label") or "")
-                    if not label:
-                        raw_date = str(row.get("date") or "")[:10]
-                        try:
-                            parsed_date = date.fromisoformat(raw_date)
-                            label = f"{parsed_date.month}/{parsed_date.day}"
-                        except ValueError:
-                            label = str(row.get("display_label") or "")
-                if self._hourly:
-                    label_text = label
-                    label_height = 38
-                else:
-                    weekday = str(row.get("weekday") or "")
-                    label_text = f"{label}\n{weekday}" if weekday else label
-                    label_height = 38
+                # Always use the actual calendar date on the x-axis. The
+                # full date and weekday remain available in the tooltip.
+                label = str(row.get("label") or "")
+                if not label:
+                    raw_date = str(row.get("date") or "")[:10]
+                    try:
+                        parsed_date = date.fromisoformat(raw_date)
+                        label = f"{parsed_date.month}/{parsed_date.day}"
+                    except ValueError:
+                        label = str(row.get("display_label") or "")
+                weekday = str(row.get("weekday") or "")
+                label_text = f"{label}\n{weekday}" if weekday else label
                 painter.drawText(
                     x - 8,
                     plot.bottom() + 6,
                     bar_width + 16,
-                    label_height,
+                    38,
                     Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                     label_text,
+                )
+        if self._hourly:
+            # Keep all 24 hourly bars, but show only a clean three-hour axis.
+            # Full hour ranges remain available in the hover tooltip.
+            painter.setPen(QColor("#647b88"))
+            for hour in range(0, 25, 3):
+                x = plot.left() + int(plot.width() * hour / 24)
+                label = "24:00" if hour == 24 else f"{hour:02d}:00"
+                painter.drawText(
+                    x - 28,
+                    plot.bottom() + 6,
+                    56,
+                    20,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                    label,
                 )
         painter.end()
 
@@ -971,7 +986,7 @@ class WorkReportDialog(QDialog):
             layout.addWidget(
                 self._chart_card(
                     "本月典型工作节律",
-                    "横轴为 0:00–24:00；柱高表示该小时累计有效工作时间，用于观察本月常见工作时段。悬停可查看数值。",
+                    "每根柱子代表 1 小时；横轴每 3 小时显示一个刻度，悬停可查看完整时间段和本月累计专注。",
                     data.get("hourly") or [],
                     hourly=True,
                 )
@@ -1105,3 +1120,4 @@ class WorkReportDialog(QDialog):
             line.addWidget(bar, 1)
             line.addWidget(value)
             layout.addLayout(line)
+

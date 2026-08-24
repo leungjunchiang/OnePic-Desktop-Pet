@@ -121,6 +121,18 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     ]
     assert dialog.tabs.tabBar().expanding() is True
     assert dialog.tabs.tabBar().sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    dialog.show()
+    app.processEvents()
+    dialog.resize(1200, 760)
+    app.processEvents()
+    wide_widths = [dialog.tabs.tabBar().tabRect(index).width() for index in range(4)]
+    assert len(set(wide_widths)) == 1
+    assert wide_widths[0] > 120
+    dialog.resize(520, 480)
+    app.processEvents()
+    narrow_widths = [dialog.tabs.tabBar().tabRect(index).width() for index in range(4)]
+    assert len(set(narrow_widths)) == 1
+    assert 0 < narrow_widths[0] < wide_widths[0]
     auth_tabs = [tab for tab in dialog.findChildren(QTabWidget) if tab is not dialog.tabs]
     assert any(
         [tab.tabText(index) for index in range(tab.count())] == ["登录", "注册"]
@@ -276,8 +288,7 @@ def test_supply_actions_are_large_inline_buttons() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
     buttons = {button.text() for button in widget.findChildren(QPushButton)}
-    assert {"请咖啡", "请奶茶", "敬茶"} <= buttons
-    assert "请蛋糕" not in buttons
+    assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= buttons
     assert "送补给 ▼" not in buttons
     assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton) if button.text() in buttons)
     widget.close(); widget.deleteLater(); app.processEvents()
@@ -528,3 +539,4 @@ def test_local_focus_wins_and_missing_leaderboard_does_not_clear_cache() -> None
     app.processEvents()
     assert "暂无可展示" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
