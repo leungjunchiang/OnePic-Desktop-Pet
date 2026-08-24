@@ -19,6 +19,7 @@ ModelSource = UnifiedMenuModel | Callable[[], UnifiedMenuModel]
 
 _DOCK_TARGET_CLASS = None
 _DOCK_DELEGATE_CLASS = None
+_ACTIVE_DOCK_CONTROLLER = None
 
 
 def _dock_native_classes():
@@ -39,20 +40,24 @@ def _dock_native_classes():
 
     class DockTarget(NSObject):
         def triggerCommand_(self, item) -> None:
-            controller = getattr(self, "_onepic_controller", None)
+            # Keep the controller lookup outside the PyObjC instance.  Some
+            # macOS/PyObjC combinations do not reliably retain arbitrary
+            # Python attributes on Objective-C proxy objects, which could
+            # make Dock actions silently fall back to Qt's default menu.
+            controller = _ACTIVE_DOCK_CONTROLLER
             command = str(item.representedObject() or "")
             if controller is not None and command:
                 controller._model_provider().execute(command, bool(item.state()))
 
     class DockApplicationDelegate(NSObject):
         def applicationDockMenu_(self, _application):
-            controller = getattr(self, "_onepic_controller", None)
+            controller = _ACTIVE_DOCK_CONTROLLER
             if controller is None:
                 return None
             return controller._build_native_menu(NSMenu, NSMenuItem, DockTarget)
 
         def respondsToSelector_(self, selector) -> bool:
-            controller = getattr(self, "_onepic_controller", None)
+            controller = _ACTIVE_DOCK_CONTROLLER
             if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
                 return True
             previous = getattr(controller, "_previous_delegate", None)
@@ -67,7 +72,7 @@ def _dock_native_classes():
             """Keep Qt's existing delegate behavior for unrelated selectors."""
             if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
                 return self
-            controller = getattr(self, "_onepic_controller", None)
+            controller = _ACTIVE_DOCK_CONTROLLER
             return getattr(controller, "_previous_delegate", None)
 
     _DOCK_TARGET_CLASS = DockTarget
@@ -85,6 +90,7 @@ class MacDockMenuController:
     """Expose the unified Lili menu from the macOS Dock icon."""
 
     def __init__(self, model_provider: ModelSource) -> None:
+        global _ACTIVE_DOCK_CONTROLLER
         self._model_provider = _coerce_model_provider(model_provider)
         self._application = None
         self._previous_delegate = None
@@ -104,8 +110,7 @@ class MacDockMenuController:
         self._previous_delegate = self._application.delegate()
         self._target = self._target_class.alloc().init()
         self._delegate = self._delegate_class.alloc().init()
-        self._target._onepic_controller = self
-        self._delegate._onepic_controller = self
+        _ACTIVE_DOCK_CONTROLLER = self
         self._application.setDelegate_(self._delegate)
         self._native = True
 
@@ -143,18 +148,24 @@ class MacDockMenuController:
         # projection on that exact context so a future platform-specific
         # branch cannot silently make the Dock right-click list diverge from
         # the menu users see on 六毛 itself.
+        # The pet context is the canonical user-facing menu.  Render that
+        # exact projection for Dock instead of relying on a platform context
+        # name that could later grow divergent entries.
         render(self._model_provider().items("pet"), menu)
         return menu
 
     def close(self) -> None:
         """Restore the previous application delegate during shutdown."""
 
+        global _ACTIVE_DOCK_CONTROLLER
         if self._native and self._application is not None:
             try:
                 if self._application.delegate() is self._delegate:
                     self._application.setDelegate_(self._previous_delegate)
             except (AttributeError, TypeError, ValueError):
                 pass
+        if _ACTIVE_DOCK_CONTROLLER is self:
+            _ACTIVE_DOCK_CONTROLLER = None
         self._application = None
         self._previous_delegate = None
         self._delegate = None
@@ -274,7 +285,10 @@ class MacStatusBarController:
                     item.setSubmenu_(submenu)
                 destination.addItem_(item)
 
-        render(self._model_provider().items("macos"), menu)
+        # Keep the menu-bar item on the same canonical projection as the pet
+        # and Dock.  It is native-rendered, but its commands and ordering must
+        # not drift by context.
+        render(self._model_provider().items("pet"), menu)
 
     def close(self) -> None:
         """Remove the native status item during application shutdown."""

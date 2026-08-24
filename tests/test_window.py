@@ -1143,6 +1143,39 @@ def test_quick_panel_hover_label_switches_without_click() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_quick_panel_hides_detached_report_with_work_shortcut() -> None:
+    """工作报告按钮必须和开始/暂停快捷面板同步移动、收起。"""
+
+    app, window = _create_window()
+    window.move(320, 220)
+    window.show_quick_panel()
+    app.processEvents()
+    panel = window.quick_panel
+
+    panel._set_hover_button(panel.work_button)
+    app.processEvents()
+    assert panel.report_button.isVisible()
+    first_work_top = panel.work_button.mapToGlobal(QPoint(0, 0))
+    first_report_top = panel.report_button.mapToGlobal(QPoint(0, 0))
+
+    window.move(380, 260)
+    app.processEvents()
+    moved_work_top = panel.work_button.mapToGlobal(QPoint(0, 0))
+    moved_report_top = panel.report_button.mapToGlobal(QPoint(0, 0))
+    assert moved_report_top - moved_work_top == first_report_top - first_work_top
+
+    # The primary work action collapses the whole dock, including its
+    # detached report button, before changing the shared focus state.
+    panel.work_button.click()
+    app.processEvents()
+    assert not panel.isVisible()
+    assert not panel.report_button.isVisible()
+    assert not panel.hover_hint.isVisible()
+    assert window.focus_session.snapshot().status == "focus"
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_macos_hover_hint_is_configured_before_show(monkeypatch) -> None:
     """Native macOS hint setup must not hide the first unclicked tooltip."""
 

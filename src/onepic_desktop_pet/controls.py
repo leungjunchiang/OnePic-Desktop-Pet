@@ -549,6 +549,27 @@ class QuickControlPanel(QWidget):
         self.hide()
         QTimer.singleShot(0, self.work_report_requested.emit)
 
+    def _collapse_report_surface(self) -> None:
+        """Hide every top-level surface owned by the shortcut dock.
+
+        ``report_button`` is intentionally a separate top-level window so it
+        can float above the work shortcut.  Qt does not hide such a window
+        when its owner is hidden, and macOS can deliver one queued hover event
+        after the dock has already disappeared.  Collapse the timers and both
+        floating surfaces together before every hide operation.
+        """
+
+        self._hover_poll_timer.stop()
+        self._report_hide_timer.stop()
+        self._hide_hint()
+        self.report_button.hide()
+
+    def hide(self) -> None:
+        """Hide the shortcut dock and its detached report action together."""
+
+        self._collapse_report_surface()
+        super().hide()
+
     def _set_report_button_visible(self, visible: bool) -> None:
         """Show the work-report secondary action only while work is hovered."""
 
@@ -853,10 +874,7 @@ class QuickControlPanel(QWidget):
         # not hide that button automatically on macOS. Always collapse both
         # surfaces together; otherwise only the report icon can remain stuck
         # on the desktop after the other shortcuts disappear.
-        self._hover_poll_timer.stop()
-        self._report_hide_timer.stop()
-        self._hide_hint()
-        self.report_button.hide()
+        self._collapse_report_surface()
         super().hideEvent(event)
 
     def enterEvent(self, event) -> None:
