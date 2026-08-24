@@ -164,7 +164,7 @@ class WorkControlBubble(QWidget):
 
 
 class WorkDurationBubble(QLabel):
-    """跟随六毛脚边显示真实工作 Session 时长的轻量状态标签。"""
+    """跟随六毛脚边显示统一的本日工作时长的轻量状态标签。"""
 
     def __init__(self) -> None:
         super().__init__(None)
@@ -184,14 +184,14 @@ class WorkDurationBubble(QLabel):
         self.hide()
 
     def set_session(self, status: str, seconds: int, visible: bool) -> None:
-        """Project the shared FocusSession snapshot; never owns a timer."""
+        """Project the shared calendar-day snapshot; never owns a timer."""
 
         normalized = status if status in {"focus", "rest"} else "idle"
         active = bool(visible) and normalized in {"focus", "rest"}
         if active:
             paused = normalized == "rest"
             self.setProperty("paused", paused)
-            text = f"已工作 {format_elapsed_clock(seconds)}"
+            text = f"今日已工作 {format_elapsed_clock(seconds)}"
             if paused:
                 text += " · 已暂停"
             self.setText(text)

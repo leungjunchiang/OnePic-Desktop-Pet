@@ -533,7 +533,7 @@ class PetWindow(QWidget):
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
             self.work_timer.status_text,
-            lambda: self.work_timer.today_seconds() // 3600,
+            lambda: self._shared_today_focus_seconds() // 3600,
             local_context=self.time_memory.summary.context,
             lyrics_path=lambda: self.settings.local_lyrics_path,
         )
@@ -576,7 +576,7 @@ class PetWindow(QWidget):
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
-        self._last_growth_hour = stage_for_seconds(self.work_timer.today_seconds()).hour
+        self._last_growth_hour = stage_for_seconds(self._shared_today_focus_seconds()).hour
         self._long_press_triggered = False
         self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
         self._babuda_variant_index = 0
@@ -2724,7 +2724,7 @@ class PetWindow(QWidget):
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("thermos", 25_000)
-        duration = format_work_duration(self.work_timer.today_seconds())
+        duration = format_work_duration(self._shared_today_focus_seconds())
         if was_running and reason in {"sleep", "lock"}:
             system_event = "电脑已锁屏" if reason == "lock" else "电脑进入睡眠"
             reply = CompanionReply(
@@ -2782,8 +2782,12 @@ class PetWindow(QWidget):
         # Commit the final analytics segment while the timer still owns its
         # stable session ID.  The timer is reset immediately afterwards.
         self._record_focus_segment(session_seconds, completed=True, session_id=session_id)
-        total = self.focus_session.finish()
+        self.focus_session.finish()
         self.focus_analytics.finish_focus_session(completed=True)
+        # The timer is reset by ``finish``; read the just-committed analytics
+        # projection so the completion message uses the same day total as the
+        # study room and work report.
+        total = self._shared_today_focus_seconds()
         self._award_focus_rewards()
         self.set_paused(False)
         self._recorded_focus_session_seconds = 0
@@ -3323,10 +3327,12 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
         self._show_emotion(state, 2600)
+        today_seconds = self._shared_today_focus_seconds()
+        suffix = " · 正在计时" if self.work_timer.is_running else " · 已暂停"
         text = (
-            f"{self.work_timer.status_text()}\n"
-            f"{growth_progress_text(self.work_timer.today_seconds())}\n"
-            f"六毛心情：{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
+            f"今日工作 {format_work_duration(today_seconds)}{suffix}\n"
+            f"{growth_progress_text(today_seconds)}\n"
+            f"六毛心情：{positive_mood(today_seconds, self.work_timer.session_seconds())}"
         )
         self.show_speech(text, 6800)
 
@@ -3348,7 +3354,7 @@ class PetWindow(QWidget):
     def show_daily_growth(self) -> None:
         """显示今天 0–8 小时成长节点和下一个可见奖励。"""
 
-        seconds = self.work_timer.today_seconds()
+        seconds = self._shared_today_focus_seconds()
         stage = stage_for_seconds(seconds)
         self._set_temporary_activity(stage.activity, 35_000)
         self.show_speech(
@@ -3553,7 +3559,7 @@ class PetWindow(QWidget):
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
 
-        stage = stage_for_seconds(self.work_timer.today_seconds())
+        stage = stage_for_seconds(self._shared_today_focus_seconds())
         if stage.hour <= self._last_growth_hour:
             return
         self._last_growth_hour = stage.hour
@@ -3583,7 +3589,7 @@ class PetWindow(QWidget):
     def _award_focus_rewards(self) -> None:
         """把今日专注时间换成正向的默契奖励，不制造饥饿惩罚。"""
 
-        completed_blocks = self.work_timer.today_seconds() // 600
+        completed_blocks = self._shared_today_focus_seconds() // 600
         new_blocks = max(0, completed_blocks - self._rewarded_focus_blocks)
         if new_blocks:
             self.mood.receive_focus_reward(new_blocks)
@@ -3777,7 +3783,7 @@ class PetWindow(QWidget):
         photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
         try:
             path = render_daily_report(
-                self.work_timer.today_seconds(),
+                self._shared_today_focus_seconds(),
                 self.daily_stats.snapshot(),
                 photo,
             )
@@ -4878,7 +4884,7 @@ class PetWindow(QWidget):
         self._recorded_focus_session_seconds = (
             self.work_timer.analytics_recorded_session_seconds()
         )
-        self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
+        self._rewarded_focus_blocks = self._shared_today_focus_seconds() // 600
         self._focus_quality_tracker.reset()
         self._last_focus_quality = None
         self._seen_buddy_request_ids.clear()
@@ -5492,7 +5498,7 @@ class PetWindow(QWidget):
             )
         self.work_duration_bubble.set_session(
             str(getattr(current, "status", "idle")),
-            int(getattr(current, "session_seconds", 0) or 0),
+            int(getattr(current, "today_seconds", 0) or 0),
             show_duration,
         )
         if getattr(self, "_manually_hidden", False) or getattr(self, "_fullscreen_hidden", False):
@@ -5624,7 +5630,7 @@ class PetWindow(QWidget):
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
         work_status_text = ""
         if snapshot.status in {"focus", "rest"}:
-            work_status_text = f"⏱ 已工作 {format_elapsed_clock(snapshot.session_seconds)}"
+            work_status_text = f"⏱ 今日已工作 {format_elapsed_clock(snapshot.today_seconds)}"
         return {
             "work_action_label": labels.get(snapshot.status, "开始工作"),
             "work_status": snapshot.status,
@@ -5773,14 +5779,14 @@ class PetWindow(QWidget):
                     activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"
                 elif idle_seconds >= 30 * 60:
                     activity, text = "pointing", "你很久没动啦，六毛偷偷探头看看你还在不在。"
-                elif self.work_timer.today_seconds() >= 3 * 3600 and random.random() < 0.06:
+                elif self._shared_today_focus_seconds() >= 3 * 3600 and random.random() < 0.06:
                     activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
                 elif random.random() < 0.55:
                     decision = self.companion_behavior.decide(
                         now_hour=datetime.now().hour,
                         working=self.work_timer.is_running,
                         session_seconds=self.work_timer.session_seconds(),
-                        today_seconds=self.work_timer.today_seconds(),
+                        today_seconds=self._shared_today_focus_seconds(),
                         idle_seconds=int(idle_seconds),
                         music_playing=self._manual_activity_until > time.monotonic(),
                     )
@@ -5865,7 +5871,7 @@ class PetWindow(QWidget):
             remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
             next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
         self.show_speech(
-            f"{self.companion.status_text(self.work_timer.today_seconds() // 600)}\n{next_text}",
+            f"{self.companion.status_text(self._shared_today_focus_seconds() // 600)}\n{next_text}",
             6200,
         )
 
@@ -5887,7 +5893,7 @@ class PetWindow(QWidget):
             not self._late_wakeup_shown
             and self.settings.lyric_inspiration_enabled
             and 10 <= now.hour < 13
-            and self.work_timer.today_seconds() == 0
+            and self._shared_today_focus_seconds() == 0
         ):
             self._late_wakeup_shown = True
             reply = self.companion.song_inspiration(late_wakeup=True)

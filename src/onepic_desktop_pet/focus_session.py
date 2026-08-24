@@ -3,6 +3,9 @@
 The study room never owns a second timer.  It receives a lightweight snapshot
 from this manager and may ask the desktop pet to start, pause, or finish the
 same local :class:`WorkTimerModel` session.
+
+日度和周度展示使用窗口提供的同一份日历周期投影；计时器仍只负责本地
+工作状态，避免自习室、工作报告和桌面提示各自维护一套累计时间。
 """
 
 from __future__ import annotations
