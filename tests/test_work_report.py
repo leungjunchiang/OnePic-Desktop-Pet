@@ -96,11 +96,14 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
             "status": "focus",
             "session_seconds": 12 * 60,
             "today_seconds": 60 * 60,
+            "week_seconds": 2 * 60 * 60,
             "room_id": "room-1",
         },
         now=now,
     )
     assert room_report["current_status"] == "focus"
+    assert room_report["day"]["total_seconds"] == 60 * 60
+    assert room_report["week"]["total_seconds"] == 2 * 60 * 60
     assert room_report["day"]["focus_session_seconds"] == 12 * 60
     assert room_report["day"]["focus_room_id"] == "room-1"
 

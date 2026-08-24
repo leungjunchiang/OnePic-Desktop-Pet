@@ -3,11 +3,14 @@
 The study room never owns a second timer.  It receives a lightweight snapshot
 from this manager and may ask the desktop pet to start, pause, or finish the
 same local :class:`WorkTimerModel` session.
+
+日度和周度展示使用窗口提供的同一份日历周期投影；计时器仍只负责本地
+工作状态，避免自习室、工作报告和桌面提示各自维护一套累计时间。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -26,6 +29,10 @@ class FocusSessionSnapshot:
     room_id: str | None = None
     state: str = "idle"
     pause_reason: str | None = None
+    # Reconciled calendar totals. ``None`` means the caller did not provide a
+    # shared projection, preserving the lightweight timer-only API for tests
+    # and integrations that do not own FocusAnalyticsStore.
+    week_seconds: int | None = None
 
     @property
     def is_running(self) -> bool:
@@ -84,6 +91,7 @@ class FocusSessionManager(QObject):
         # a reconciled calendar-day projection so every surface displays the
         # same day total without introducing a second timer or mutating it.
         self._today_seconds_provider: Callable[[], int | None] | None = None
+        self._period_seconds_provider: Callable[[], Mapping[str, int | None] | None] | None = None
 
     def set_today_seconds_provider(
         self, provider: Callable[[], int | None] | None
@@ -91,6 +99,15 @@ class FocusSessionManager(QObject):
         """Use one optional calendar-day projection for all FocusSession views."""
 
         self._today_seconds_provider = provider
+        self.refresh()
+
+    def set_period_seconds_provider(
+        self,
+        provider: Callable[[], Mapping[str, int | None] | None] | None,
+    ) -> None:
+        """Provide one reconciled calendar-day/week projection for all views."""
+
+        self._period_seconds_provider = provider
         self.refresh()
 
     @property
@@ -118,18 +135,52 @@ class FocusSessionManager(QObject):
             resting=self._resting,
         )
         provider = self._today_seconds_provider
-        if provider is not None:
+        period_provider = self._period_seconds_provider
+        projected_today = None
+        projected_week = None
+        if period_provider is not None:
             try:
-                projected = provider()
+                values = period_provider()
             except (AttributeError, TypeError, ValueError, OverflowError):
-                projected = None
-            if projected is not None:
-                try:
-                    projected_seconds = max(0, int(projected))
-                except (TypeError, ValueError, OverflowError):
-                    projected_seconds = None
-                if projected_seconds is not None:
-                    snapshot = replace(snapshot, today_seconds=projected_seconds)
+                values = None
+            if isinstance(values, Mapping):
+                projected_today = values.get("today_seconds", values.get("today"))
+                projected_week = values.get("week_seconds", values.get("week"))
+        if projected_today is None and provider is not None:
+            try:
+                projected_today = provider()
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                projected_today = None
+
+        normalized_today = None
+        normalized_week = None
+        for value_name, value in (("today", projected_today), ("week", projected_week)):
+            if value is None:
+                continue
+            try:
+                normalized = max(0, int(value))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if value_name == "today":
+                normalized_today = normalized
+            else:
+                normalized_week = normalized
+
+        if normalized_today is not None:
+            # A recovered timer can contain stale cumulative checkpoints from
+            # before the analytics cursor was introduced. It is impossible
+            # for the current session to exceed the same calendar day's total;
+            # cap that one field while retaining the real session semantics
+            # whenever it is smaller than today's total.
+            session_seconds = min(snapshot.session_seconds, normalized_today)
+            snapshot = replace(
+                snapshot,
+                session_seconds=session_seconds,
+                today_seconds=normalized_today,
+                week_seconds=normalized_week,
+            )
+        elif normalized_week is not None:
+            snapshot = replace(snapshot, week_seconds=normalized_week)
         return snapshot
 
     def refresh(self) -> FocusSessionSnapshot:

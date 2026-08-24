@@ -124,17 +124,32 @@ def build_work_report(
     snapshot_status = ""
     snapshot_today = 0
     snapshot_session = 0
+    snapshot_week: int | None = None
+    snapshot_has_reconciled_day = False
     snapshot_room = ""
     if focus_snapshot is not None:
         if isinstance(focus_snapshot, dict):
             snapshot_status = str(focus_snapshot.get("status") or "")
             snapshot_today = max(0, int(focus_snapshot.get("today_seconds") or 0))
             snapshot_session = max(0, int(focus_snapshot.get("session_seconds") or 0))
+            if "week_seconds" in focus_snapshot:
+                try:
+                    snapshot_week = max(0, int(focus_snapshot.get("week_seconds") or 0))
+                    snapshot_has_reconciled_day = True
+                except (TypeError, ValueError, OverflowError):
+                    snapshot_week = None
             snapshot_room = str(focus_snapshot.get("room_id") or "")
         else:
             snapshot_status = str(getattr(focus_snapshot, "status", "") or "")
             snapshot_today = max(0, int(getattr(focus_snapshot, "today_seconds", 0) or 0))
             snapshot_session = max(0, int(getattr(focus_snapshot, "session_seconds", 0) or 0))
+            raw_week = getattr(focus_snapshot, "week_seconds", None)
+            if raw_week is not None:
+                try:
+                    snapshot_week = max(0, int(raw_week))
+                    snapshot_has_reconciled_day = True
+                except (TypeError, ValueError, OverflowError):
+                    snapshot_week = None
             snapshot_room = str(getattr(focus_snapshot, "room_id", "") or "")
     # When detailed local records exist, they are the authoritative source
     # for the calendar day.  A timer can still contain a stale server
@@ -151,6 +166,11 @@ def build_work_report(
         live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + live_elapsed
     else:
         live_today = max(0, int(timer.today_seconds()), snapshot_today)
+    if snapshot_has_reconciled_day:
+        # A live FocusSession supplied by PetWindow already contains the
+        # canonical day projection. Reusing it here keeps the report card and
+        # study-room card byte-for-byte consistent during an open session.
+        live_today = snapshot_today
     current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
         "focus" if bool(timer.is_running)
         else "rest" if bool(timer.has_active_session)
@@ -198,7 +218,7 @@ def build_work_report(
         except (TypeError, ValueError, OverflowError):
             pass
     day = report["day"]
-    day["total_seconds"] = max(int(day["total_seconds"]), live_today)
+    day["total_seconds"] = live_today if snapshot_has_reconciled_day else max(int(day["total_seconds"]), live_today)
     day["completed_rounds"] = max(
         int(day["completed_rounds"]),
         int(daily_stats_snapshot.get("completed_tasks", 0) or 0),
@@ -250,14 +270,15 @@ def build_work_report(
             )
         if key != "day":
             overlay_live_today(item)
-        item["total_seconds"] = max(
-            int(item.get("total_seconds", 0) or 0),
-            sum(
-                max(0, int(row.get("seconds", 0) or 0))
-                for row in item.get("daily") or []
-                if row.get("seconds") is not None
-            ),
+        rows_total = sum(
+            max(0, int(row.get("seconds", 0) or 0))
+            for row in item.get("daily") or []
+            if row.get("seconds") is not None
         )
+        if key == "week" and snapshot_week is not None:
+            item["total_seconds"] = snapshot_week
+        else:
+            item["total_seconds"] = max(int(item.get("total_seconds", 0) or 0), rows_total)
         longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
         item["average_session_seconds"] = min(
             max(0, int(item.get("average_session_seconds", 0) or 0)),

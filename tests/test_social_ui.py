@@ -480,6 +480,29 @@ def test_focus_weekly_total_does_not_become_yesterday_difference() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_focus_weekly_total_uses_shared_snapshot_projection() -> None:
+    """The study-room weekly label follows the desktop's canonical total."""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.set_focus_snapshot({
+        "status": "focus",
+        "session_seconds": 42 * 60,
+        "today_seconds": 35 * 60,
+        "week_seconds": 21 * 3600 + 41 * 60,
+    })
+    dialog.set_focus_analytics({
+        "today_seconds": 35 * 60,
+        "weekly_total_seconds": 39 * 3600 + 8 * 60,
+        "yesterday_seconds": 0,
+    })
+    app.processEvents()
+
+    assert "本周 21小时41分钟" in dialog.focus_insights.text()
+    assert "本周 39小时8分钟" not in dialog.focus_insights.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_recent_cached_presence_is_not_rendered_as_peer_offline() -> None:
     app = QApplication.instance() or QApplication([])
     client = UncertainRoomClient()

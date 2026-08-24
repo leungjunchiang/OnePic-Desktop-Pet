@@ -1738,6 +1738,23 @@ class SocialHubDialog(QDialog):
         except (TypeError, ValueError):
             return 0
 
+    def _local_week_seconds(self) -> int | None:
+        """Return the shared calendar-week total when the desktop provides it."""
+
+        snapshot = self._focus_snapshot
+        if snapshot is None:
+            return None
+        if isinstance(snapshot, dict):
+            value = snapshot.get("week_seconds")
+        else:
+            value = getattr(snapshot, "week_seconds", None)
+        if value is None:
+            return None
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
     def _refresh_own_focus_labels(self) -> None:
         """Refresh both focus surfaces from the shared local snapshot."""
 
@@ -1774,8 +1791,14 @@ class SocialHubDialog(QDialog):
             weekly = max(0, int(summary.get("weekly_total_seconds") or 0))
         except (TypeError, ValueError):
             return summary
+        local_week = self._local_week_seconds()
+        if local_week is not None:
+            # The desktop FocusSession projection is the canonical live
+            # calendar-week value. Do not add a second live supplement to it.
+            summary["weekly_total_seconds"] = local_week
+            weekly = local_week
         unrecorded_today = max(0, int(local_today) - recorded_today)
-        if unrecorded_today > 0:
+        if local_week is None and unrecorded_today > 0:
             summary["weekly_total_seconds"] = weekly + unrecorded_today
 
         # This is a day-vs-day metric, never a weekly total.  Do not add the
