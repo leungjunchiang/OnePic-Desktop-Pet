@@ -3136,20 +3136,18 @@ class PetWindow(QWidget):
                 self.show_compact_todos()
         else:
             panel = self._compact_todo_panel
-            before_ids = panel.visible_task_ids
             was_visible = panel.isVisible()
             has_visible_tasks = panel.refresh()
-            after_ids = panel.visible_task_ids
             if has_visible_tasks:
-                # Re-show only when a newly visible Todo was added.  This
-                # preserves an explicit user hide while still making the
-                # empty-strip -> new-Todo transition automatic.
-                new_visible_task = bool(after_ids - before_ids)
+                # Pending Todos are authoritative: if any unfinished item
+                # remains, a hidden compact panel must recover automatically.
+                # Manual hiding is only effective while there are no pending
+                # items; this prevents the panel from silently disappearing
+                # while the user still has work to do.
                 if (
                     compact_mode
                     and display_mode != "hidden"
-                    and new_visible_task
-                    and not self._compact_todos_manually_hidden
+                    and not panel.isVisible()
                 ):
                     self.show_compact_todos()
                 elif was_visible:

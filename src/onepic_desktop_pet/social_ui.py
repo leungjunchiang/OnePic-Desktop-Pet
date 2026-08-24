@@ -20,7 +20,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QMenu,
+    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabBar, QTabWidget, QMenu,
     QVBoxLayout, QWidget, QSizePolicy,
 )
 
@@ -226,6 +226,27 @@ def _social_font() -> QFont:
             families = QFontDatabase.applicationFontFamilies(font_id)
             if families: family = families[0]; break
     return QFont(family or "sans-serif", 10)
+
+
+class EqualWidthTabBar(QTabBar):
+    """Keep the four primary navigation tabs equal during every layout pass."""
+
+    def sizeHint(self) -> QSize:
+        size = super().sizeHint()
+        host = self.parentWidget()
+        if host is not None:
+            size.setWidth(max(size.width(), host.width() - 2))
+        return size
+
+    def tabSizeHint(self, index: int) -> QSize:
+        size = super().tabSizeHint(index)
+        count = max(1, self.count())
+        host = self.parentWidget()
+        available = self.width()
+        if host is not None:
+            available = max(available, host.width() - 2)
+        size.setWidth(max(1, available // count))
+        return size
 
 
 class SocialSyncThread(QThread):
@@ -1629,6 +1650,7 @@ class SocialHubDialog(QDialog):
         status_row.addWidget(self.relogin_button)
         root.addLayout(status_row)
         self.tabs = QTabWidget()
+        self.tabs.setTabBar(EqualWidthTabBar())
         self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         tab_bar = self.tabs.tabBar()
         # The study-room tabs are the primary navigation, so they must share
@@ -1651,25 +1673,22 @@ class SocialHubDialog(QDialog):
             QTimer.singleShot(180, self._record_login_streak)
 
     def _apply_adaptive_tab_widths(self) -> None:
-        """Make the four primary tabs fill the available window width."""
+        """Make all four primary tabs equal and fill the available width."""
 
         if not hasattr(self, "tabs") or self.tabs.count() <= 0:
             return
-        # QTabWidget normally sizes its QTabBar to the combined size hints of
-        # its labels.  That is why the bar can stop after the third tab while
-        # the page itself continues across the window.  Pin the bar to the
-        # actual tab-widget width first, then give every tab the same width.
-        # Repeating this after resize keeps the four navigation targets
-        # equal on both platforms and at every supported window size.
         available = max(0, self.tabs.contentsRect().width() - 2)
         if available <= 0:
             return
-        tab_width = max(1, available // self.tabs.count())
+        count = self.tabs.count()
+        tab_width = max(1, available // count)
+        usable = tab_width * count
         tab_bar = self.tabs.tabBar()
-        tab_bar.setFixedWidth(available)
+        if tab_bar.width() != usable:
+            tab_bar.setFixedWidth(usable)
         tab_bar.setStyleSheet(
             "QTabBar::tab {"
-            f"width:{tab_width}px; min-width:{tab_width}px; max-width:{tab_width}px;"
+            f"min-width:{tab_width}px; max-width:{tab_width}px;"
             "padding:10px 8px; color:#526872; }"
             "QTabBar::tab:selected { color:#087f74; font-weight:700; "
             "border-bottom:3px solid #38a397; }"

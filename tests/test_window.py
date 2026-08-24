@@ -294,6 +294,38 @@ def test_compact_todo_panel_reappears_after_todo_center_write(tmp_path) -> None:
     app.processEvents()
 
 
+def test_pending_todos_restore_a_hidden_compact_panel_automatically(tmp_path) -> None:
+    """An unfinished Todo must remain visible without requiring a manual restore."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("仍然需要显示")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show()
+    app.processEvents()
+
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+
+    window.hide_compact_todos()
+    assert not panel.isVisible()
+
+    window._refresh_todo_surfaces()
+    app.processEvents()
+    assert panel.isVisible()
+    assert set(panel.rows) == set(panel.visible_task_ids)
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_show_todos_command_restores_an_existing_hidden_panel(tmp_path) -> None:
     """Manual “显示待办” must restore tasks already present in the panel."""
 
