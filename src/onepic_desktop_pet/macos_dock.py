@@ -26,8 +26,8 @@ def _coerce_model_provider(source: ModelSource) -> Callable[[], UnifiedMenuModel
 class MacDockMenuController:
     """Expose the unified Lili menu from the macOS Dock icon."""
 
-    def __init__(self, model_provider: Callable[[], UnifiedMenuModel]) -> None:
-        self._model_provider = model_provider
+    def __init__(self, model_provider: ModelSource) -> None:
+        self._model_provider = _coerce_model_provider(model_provider)
         self._application = None
         self._previous_delegate = None
         self._delegate = None
@@ -53,6 +53,17 @@ class MacDockMenuController:
         class _DockApplicationDelegate(NSObject):
             def applicationDockMenu_(self, _application):
                 return controller._build_native_menu(NSMenu, NSMenuItem, _DockTarget)
+
+            def respondsToSelector_(self, selector) -> bool:
+                if selector in ("applicationDockMenu:", b"applicationDockMenu:"):
+                    return True
+                previous = controller._previous_delegate
+                if previous is not None:
+                    try:
+                        return bool(previous.respondsToSelector_(selector))
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                return False
 
             def forwardingTargetForSelector_(self, selector):
                 """Keep Qt's existing delegate behavior for unrelated selectors."""
