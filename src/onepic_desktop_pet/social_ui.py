@@ -1599,7 +1599,7 @@ class SocialHubDialog(QDialog):
             QLineEdit, QListWidget { background:#ffffff; border:1px solid #b9c8d0; border-radius:10px; padding:7px; }
             QScrollArea#pageScroll { background:transparent; border:0; }
             QTabWidget::pane { border:0; }
-            QTabBar::tab { min-width:105px; padding:10px 16px; color:#526872; }
+            QTabBar::tab { min-width:0px; padding:10px 12px; color:#526872; }
             QTabBar::tab:selected { color:#087f74; font-weight:700; border-bottom:3px solid #38a397; }
             QPushButton { min-width:0px; max-width:16777215px; min-height:20px; padding:8px 14px; border:0; border-radius:9px; background:#d7ece8; color:#204c4a; font-weight:600; text-align:center; }
             QPushButton:hover { background:#c2e2dd; }
@@ -1796,7 +1796,10 @@ class SocialHubDialog(QDialog):
         card = QFrame()
         card.setObjectName("card")
         card.setMinimumWidth(0)
-        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # Ignore child size hints here. A long label or form control must not
+        # make the page wider than the scroll viewport.
+        card.setMaximumWidth(16777215)
+        card.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
@@ -1815,10 +1818,12 @@ class SocialHubDialog(QDialog):
         """Keep dense pages usable when the utility window is made smaller."""
 
         page.setMinimumSize(0, 0)
-        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         scroll = QScrollArea()
         scroll.setObjectName("pageScroll")
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setMinimumSize(0, 0)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(page)
@@ -2562,7 +2567,8 @@ class SocialHubDialog(QDialog):
     def _mine_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         self.account_stack = QStackedWidget()
-        self.account_stack.setMinimumWidth(0)
+        self.account_stack.setMinimumSize(0, 0)
+        self.account_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.account_stack.addWidget(self._auth_card())
         self.account_stack.addWidget(self._profile_card())
         layout.addWidget(self.account_stack)
@@ -2581,7 +2587,12 @@ class SocialHubDialog(QDialog):
             "邮箱只用于登录；密码不会保存在 Lili。网络暂时不可达时会显示最近状态，恢复后自动同步。",
         )
         auth_tabs = QTabWidget()
+        auth_tabs.setMinimumSize(0, 0)
+        auth_tabs.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        auth_tabs.tabBar().setExpanding(False)
         login = QWidget(); login_layout = QVBoxLayout(login); login_form = QFormLayout()
+        login.setMinimumSize(0, 0)
+        login.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.login_email = QLineEdit(); self.login_password = QLineEdit(); self.login_password.setEchoMode(QLineEdit.EchoMode.Password)
         login_form.addRow("邮箱", self.login_email); login_form.addRow("密码", self.login_password)
         login_layout.addLayout(login_form); self.login_button = QPushButton("登录")
@@ -2592,6 +2603,8 @@ class SocialHubDialog(QDialog):
         self.forgot_password_button.clicked.connect(self._request_password_reset)
         login_layout.addWidget(self.forgot_password_button)
         register = QWidget(); register_layout = QVBoxLayout(register); register_form = QFormLayout()
+        register.setMinimumSize(0, 0)
+        register.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.signup_nickname = QLineEdit(self.owner_nickname or "搭子"); self.signup_email = QLineEdit(); self.signup_password = QLineEdit(); self.signup_password.setEchoMode(QLineEdit.EchoMode.Password)
         register_form.addRow("主人称呼", self.signup_nickname); register_form.addRow("邮箱", self.signup_email); register_form.addRow("密码", self.signup_password)
         register_layout.addLayout(register_form); self.signup_button = QPushButton("注册")
@@ -2623,6 +2636,8 @@ class SocialHubDialog(QDialog):
         self.interaction_mode.addItem("欢迎互动", "welcome")
         self.interaction_mode.addItem("专注优先（推荐）", "focus_priority")
         self.interaction_mode.addItem("免打扰", "do_not_disturb")
+        self.interaction_mode.setMinimumWidth(0)
+        self.interaction_mode.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.interaction_mode.setToolTip("决定好友敬茶、请吃蛋糕、请奶茶或邀请开工时如何到达你的六毛。")
         layout.addWidget(self.interaction_mode)
         save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile)

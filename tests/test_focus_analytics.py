@@ -151,6 +151,18 @@ def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) ->
     assert day["hourly"][9]["label"] == "09:00"
 
 
+def test_long_daily_focus_above_eight_hours_is_still_trusted(tmp_path) -> None:
+    now = datetime(2026, 8, 13, 23, 30)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(12 * 60 * 60, started_at=datetime(2026, 8, 13, 8, 0), completed=True)
+
+    day = store.period_summary("day", now)
+
+    assert day["total_seconds"] == 12 * 60 * 60
+    assert day["data_quality"]["trusted"] is True
+    assert day["data_quality"]["untrusted_days"] == []
+
+
 def test_beijing_raw_timestamp_and_stale_remote_snapshot_do_not_inflate_today(tmp_path) -> None:
     now = datetime(2026, 8, 24, 9, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)

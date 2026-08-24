@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60
+# A day may legitimately contain a very long work period.  The only hard
+# upper bound is an impossible full 24-hour day; older releases incorrectly
+# treated anything above eight hours as anomalous.
+MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60 - 1
 INTERRUPTION_GRACE_SECONDS = 10 * 60
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QToolTip,
     QVBoxLayout,
@@ -338,7 +339,8 @@ class ReportTimeIntervalChart(QWidget):
         self._start_date = start_date
         self._hover: tuple[QRect, str] | None = None
         self.setMouseTracking(True)
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setMinimumHeight(170 if period == "day" else 310)
 
     def _visible_segments(self) -> list[tuple[QRect, str]]:
@@ -419,7 +421,7 @@ class ReportTimeIntervalChart(QWidget):
                 if today.weekday() == index:
                     painter.fillRect(left, y - 2, right - left, row_height - 4, QColor("#f1faf8"))
                 row_date = week_start + timedelta(days=index)
-                painter.setPen(QColor("#647b88")); painter.drawText(0, y - 8, left - 10, 36, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{row_date.month}/{row_date.day}\n{name}")
+                painter.setPen(QColor("#647b88")); painter.drawText(0, y - 4, left - 10, 24, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{row_date.month}/{row_date.day}")
         for rect, _label in segments:
             color = QColor("#4389ad")
             if self._hover is not None and rect == self._hover[0]: color = QColor("#e19a62")
@@ -456,8 +458,9 @@ class ReportBarChart(QWidget):
         # Leave enough room for a real x-axis: daily charts show date +
         # weekday, hourly charts show the hour tick.  The old 178px height
         # clipped those labels and left only the misleading caption visible.
-        self.setMinimumHeight(220)
-        self.setMinimumWidth(360)
+        self.setMinimumHeight(250)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setMouseTracking(True)
 
     def _tooltip_for(self, index: int) -> str:
@@ -523,7 +526,10 @@ class ReportBarChart(QWidget):
             46,
             max((painter.fontMetrics().horizontalAdvance(format_work_duration(value)) for value in ticks), default=46) + 14,
         )
-        plot = self.rect().adjusted(tick_label_width, 14, 18, 78)
+        # Reserve a real bottom axis area. The previous chart could paint the
+        # date labels outside the card when the report was narrow, making the
+        # weekly bars look like an unlabeled single block.
+        plot = self.rect().adjusted(tick_label_width, 14, 18, 82)
 
         painter.setPen(QPen(QColor("#e3edef"), 1))
         upper = max(ticks[-1], 1)
@@ -543,6 +549,8 @@ class ReportBarChart(QWidget):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 format_work_duration(tick_value),
             )
+        painter.setPen(QPen(QColor("#b9cbd0"), 1))
+        painter.drawLine(plot.left(), plot.bottom(), plot.right(), plot.bottom())
 
         count = max(1, len(self._rows))
         gap = 4 if count <= 12 else 2
@@ -580,9 +588,16 @@ class ReportBarChart(QWidget):
                     end_hour = (hour + 1) % 24
                     label = f"{hour:02d}–{end_hour:02d}时\n{hour:02d}:00–{end_hour:02d}:00"
                 else:
-                    # Keep date and weekday on separate lines so the x-axis
-                    # remains readable at the normal report width.
-                    label = str(row.get("label") or row.get("display_label") or "")
+                    # Always use the actual calendar date on the x-axis. The
+                    # full date and weekday remain available in the tooltip.
+                    label = str(row.get("label") or "")
+                    if not label:
+                        raw_date = str(row.get("date") or "")[:10]
+                        try:
+                            parsed_date = date.fromisoformat(raw_date)
+                            label = f"{parsed_date.month}/{parsed_date.day}"
+                        except ValueError:
+                            label = str(row.get("display_label") or "")
                 if self._hourly:
                     label_text = label
                     label_height = 38
@@ -611,7 +626,8 @@ class ReportCalendarHeatmap(QWidget):
         self._rows = [row for row in rows if isinstance(row, dict)]
         self._cells: list[tuple[QRect, dict[str, Any]]] = []
         self.setMinimumHeight(178)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setMouseTracking(True)
 
     def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
@@ -973,14 +989,14 @@ class WorkReportDialog(QDialog):
             layout.addWidget(
                 self._chart_card(
                     "本周工作时长",
-                    "横轴显示日期和星期，纵轴显示易读的有效工作时长；悬停柱子可查看精确值。",
+                    "横轴显示月/日和星期，纵轴显示易读的有效工作时长；悬停柱子可查看精确值。",
                     daily_rows,
                 )
             )
             layout.addWidget(
                 self._interval_card(
                     "本周工作节律",
-                    "横轴为 0:00–24:00，纵轴为周一至周日；每个区间来自真实 FocusSession，当前日期高亮。",
+                    "横轴为 0:00–24:00，纵轴显示每个日期；每个区间来自真实 FocusSession，当前日期高亮。",
                     data.get("focus_intervals") or [],
                     "week",
                     period_start,
