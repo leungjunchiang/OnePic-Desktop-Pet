@@ -1152,6 +1152,10 @@ def test_quick_panel_hides_detached_report_with_work_shortcut() -> None:
     app.processEvents()
     panel = window.quick_panel
 
+    # Keep the synthetic pointer over the work shortcut while the real hover
+    # poll timer runs; otherwise a headless runner may quite correctly hide
+    # the report button before this lifecycle assertion executes.
+    panel._button_at_global_pos = lambda _position: panel.work_button
     panel._set_hover_button(panel.work_button)
     app.processEvents()
     assert panel.report_button.isVisible()
