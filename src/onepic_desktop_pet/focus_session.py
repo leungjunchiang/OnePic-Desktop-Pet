@@ -128,4 +128,3 @@ class FocusSessionManager(QObject):
         self._resting = False
         self.refresh()
         return total
-

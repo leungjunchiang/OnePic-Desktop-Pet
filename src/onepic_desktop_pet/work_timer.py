@@ -593,4 +593,3 @@ class WorkTimerModel:
             encoding="utf-8",
         )
         temporary.replace(self.path)
-

@@ -1088,4 +1088,3 @@ class WorkReportDialog(QDialog):
             line.addWidget(bar, 1)
             line.addWidget(value)
             layout.addLayout(line)
-

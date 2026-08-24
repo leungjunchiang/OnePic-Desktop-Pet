@@ -136,4 +136,3 @@ $$;
 
 revoke execute on function public.lili_sync_focus_history(jsonb) from public, anon;
 grant execute on function public.lili_sync_focus_history(jsonb) to authenticated;
-

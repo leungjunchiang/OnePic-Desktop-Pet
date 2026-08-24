@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 69981)
-Total output lines: 6211
-
 """
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
@@ -2321,7 +2318,1734 @@ class PetWindow(QWidget):
         consume_inventory: bool = True,
         source: str = "food_scene",
     ) -> bool:
-        """Tu…19981 tokens truncated…alse
+        """Turn a food item into a real focus/rest/companion scene."""
+        item_key = str(item_key or "").strip()
+        if item_key == "cake" and consume_inventory:
+            self.show_food_scene_dialog()
+            return False
+        snapshot = self.focus_session.snapshot()
+        status = str(getattr(snapshot, "status", "") or "")
+        start_error = self.economy.food_scene_start_error(
+            item_key, consume_inventory=consume_inventory,
+        )
+        if start_error == "inventory":
+            spec = self.economy.catalog().get(item_key) or {}
+            name = str(spec.get("name") or item_key)
+            self.show_speech(
+                f"仓库里没有「{name}」。补给站已经按最新库存刷新，请先购买或等待补给。",
+                5200,
+            )
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        if start_error == "active_scene":
+            current = self.economy.active_food_scene() or {}
+            current_name = str(current.get("name") or "上一段补给场景")
+            self.show_speech(
+                f"六毛正在{current_name}场景里，先等这一段结束再用新的补给。",
+                5200,
+            )
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        if start_error == "invalid_item":
+            self.show_speech("这个补给暂时不能使用。", 4200)
+            return False
+        resume_after_rest = item_key == "milk_tea" and status == "focus"
+        if resume_after_rest:
+            self.pause_work_timer(reason="food")
+        coffee_scene_started_work_timer = bool(
+            item_key in {"coffee", "expensive_coffee"}
+            and not self.work_timer.is_running
+        )
+        scene_metadata: dict[str, object] | None = None
+        if item_key == "milk_tea":
+            scene_metadata = {"resume_work": resume_after_rest}
+        elif item_key in {"coffee", "expensive_coffee"}:
+            scene_metadata = {
+                "coffee_scene_started_work_timer": coffee_scene_started_work_timer,
+            }
+            if item_key == "expensive_coffee":
+                # If coffee starts a new work episode, a previously paused
+                # episode must not be inherited. When the user is already
+                # working, count the threshold from the moment it is used.
+                scene_metadata["work_episode_seconds_at_start"] = (
+                    self.work_timer.episode_seconds()
+                    if self.work_timer.is_running
+                    else 0
+                )
+        result = self.economy.start_food_scene(
+            item_key,
+            duration_minutes=int(duration_minutes) if int(duration_minutes or 0) > 0 else None,
+            todo_id=todo_id,
+            todo_title=todo_title,
+            consume_inventory=consume_inventory,
+            source=source,
+            scene_metadata=scene_metadata,
+        )
+        if result is None:
+            if resume_after_rest:
+                self.start_work_timer()
+            self.show_speech("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        scene = dict(result.get("scene") or {})
+        self._sync_economy_events([dict(result.get("event") or {})])
+        if item_key in {"coffee", "expensive_coffee"}:
+            if todo_title:
+                self._set_focus_task(todo_title, 0)
+            self.start_work_timer()
+            activity = "deep-focus" if item_key == "expensive_coffee" else "work-study"
+            minutes = int(scene.get("duration_minutes") or (150 if item_key == "expensive_coffee" else 30))
+            self._set_temporary_activity(activity, minutes * 60 * 1000)
+            self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
+            label = "☕ 喝贵的 · 深度工作中" if item_key == "expensive_coffee" else "☕ 咖啡开工"
+            detail = f"\n{todo_title[:80]}" if todo_title else "\n无任务开工"
+            self.show_speech(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
+        elif item_key == "milk_tea":
+            minutes = int(scene.get("duration_minutes") or 10)
+            self._set_temporary_activity("milk-tea", minutes * 60 * 1000)
+            self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
+            self.show_speech(f"🧋 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
+        elif item_key == "cake":
+            self._set_temporary_activity("feast", 20_000)
+            self.food_scene_timer.start(20_000)
+            title = todo_title or "今天完成的一件事"
+            self.show_speech(f"🍰 今天庆祝过\n{title[:100]}", 6200)
+        else:
+            self._set_temporary_activity("tea", 60_000)
+            self.show_speech("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
+        self._refresh_pixmap()
+        return True
+
+    def _food_scene_timeout(self) -> None:
+        scene = self.economy.active_food_scene()
+        if not scene:
+            return
+        item_key = str(scene.get("item_key") or "")
+        if item_key in {"coffee", "expensive_coffee"}:
+            metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+            # This flag is intentionally read from the persisted scene for
+            # auditing and future receipts. It does not grant the timeout
+            # permission to finish a shared Work Session.
+            _started_by_coffee = bool(metadata.get("coffee_scene_started_work_timer"))
+            if not self.economy.finish_food_scene("timer"):
+                return
+            self.food_scene_timer.stop()
+            if self.work_timer.is_running:
+                message = "咖啡喝完啦，半小时到了。\n要继续工作，还是结束这一轮？"
+            elif self.work_timer.has_active_session:
+                message = "咖啡喝完啦，半小时到了。\n当前工作还暂停着，要继续还是结束这一轮？"
+            else:
+                message = "咖啡喝完啦，半小时到了。\n要开始工作，还是结束这一轮？"
+            self._show_coffee_scene_prompt(message)
+            return
+        finished = self.economy.finish_food_scene("timer")
+        if not finished:
+            return
+        if item_key == "milk_tea":
+            # Ending a break is not permission to restart the work timer.
+            # The user must explicitly press “继续工作”.
+            self.show_speech("奶茶喝完了。\n工作还暂停着，要继续时点‘继续工作’。", 5200)
+        elif item_key == "cake":
+            self.show_speech("庆祝结束，今天这件事已经被六毛记下来了。", 4200)
+
+    def _show_coffee_scene_prompt(self, message: str) -> None:
+        """Ask what to do next without changing the user's work decision."""
+
+        self.coffee_scene_prompt.set_message(message)
+        self._position_coffee_scene_prompt()
+        self._show_nonactivating(self.coffee_scene_prompt)
+        self._raise_accessory(self.coffee_scene_prompt)
+
+    def _continue_after_coffee_scene(self) -> None:
+        self.coffee_scene_prompt.hide()
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+        else:
+            self.show_speech("好，继续工作。", 3200)
+
+    def _finish_after_coffee_scene(self) -> None:
+        self.coffee_scene_prompt.hide()
+        if self.work_timer.has_active_session:
+            self.finish_work_timer()
+
+    def _send_food_interaction(self, buddy: dict, kind: str) -> None:
+        """Send a food scene invitation; gifts are charged locally and never create income."""
+        if not self.social_client.signed_in:
+            self.show_speech("先登录搭子自习室，才能给搭子送吃的。", 4200)
+            return
+        target = str(buddy.get("user_id") or buddy.get("id") or "").strip()
+        if not target:
+            self.show_speech("没找到这位搭子的账号。", 4200)
+            return
+        item_key = {
+            "food_coffee": "coffee",
+            "food_milk_tea": "milk_tea",
+            "food_tea": "tea",
+            "food_cake": "cake",
+        }.get(str(kind))
+        if not item_key:
+            return
+        if item_key == "cake":
+            self.show_speech("小蛋糕不能单独请一位搭子；请打开补给站，邀请 1～3 位好友一起分享。", 5200)
+            return
+        catalog = self.economy.catalog().get(item_key) or {}
+        price = int(catalog.get("price") or 0)
+        if self.economy.balance < price:
+            self.show_speech("哥们，钱袋有点瘪。", 4200)
+            return
+        recipient_label = str(
+            buddy.get("private_note_name")
+            or buddy.get("owner_nickname")
+            or buddy.get("nickname")
+            or "搭子"
+        )[:80]
+        duration = {"coffee": 30, "milk_tea": 10, "tea": 0, "cake": 0}.get(item_key, 0)
+        operation_key = uuid.uuid4().hex
+        payload = {
+            "item_key": item_key,
+            "duration_minutes": duration,
+            "operation_key": operation_key,
+            "message": {
+                "coffee": "要不要一起干 30 分钟？",
+                "milk_tea": "一起歇会儿？",
+                "tea": "过来坐会儿？",
+                "cake": "这件事值得庆祝一下。",
+            }.get(item_key, ""),
+        }
+        try:
+            self.social_client.rpc(
+                "lili_send_food_interaction",
+                {"p_target": target, "p_kind": str(kind), "p_payload": payload},
+            )
+        except Exception as exc:
+            self.show_speech(f"没送出去：{str(exc)[:120]}", 5200)
+            return
+        event = self.economy.record_food_gift_sent(
+            target,
+            recipient_label,
+            item_key,
+            operation_key=operation_key,
+        )
+        if event is None:
+            self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
+            return
+        self._sync_economy_events([event.as_dict()])
+        # A drink invitation is a shared visual moment, not a local break:
+        # the sender changes into the same limited food pose immediately and
+        # keeps any active focus timer running.
+        self._set_social_food_activity(item_key, duration)
+        text = {
+            "coffee": f"☕ 已邀请 {recipient_label} 一起开工 30 分钟。",
+            "milk_tea": f"🧋 已邀请 {recipient_label} 一起歇会儿。",
+            "tea": f"🍵 已给 {recipient_label} 敬茶。",
+            "cake": f"🍰 已请 {recipient_label} 庆祝一下。",
+        }.get(item_key, "互动已经送出。")
+        self.show_speech(text, 5200)
+
+    def _set_social_food_activity(self, item_key: str, duration_minutes: int = 0) -> None:
+        """Show a food-interaction pose without pausing or starting focus."""
+
+        item_key = str(item_key or "")
+        activity = {
+            "coffee": "work-study",
+            "milk_tea": "milk-tea",
+            "tea": "tea",
+            "cake": "feast",
+        }.get(item_key)
+        if not activity:
+            return
+        if item_key == "cake" and not duration_minutes:
+            duration_ms = 20_000
+        else:
+            default_minutes = {"coffee": 30, "milk_tea": 10, "tea": 1}
+            minutes = max(1, int(duration_minutes or default_minutes.get(item_key, 1)))
+            duration_ms = minutes * 60 * 1000
+        self._social_food_activity_until = time.monotonic() + duration_ms / 1000
+        self._set_temporary_activity(activity, duration_ms)
+        self._refresh_pixmap()
+
+    def _handle_food_interaction_accepted(self, event: dict) -> None:
+        kind = str(event.get("kind") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        item_key = {
+            "food_coffee": "coffee",
+            "food_milk_tea": "milk_tea",
+            "food_tea": "tea",
+            "food_cake": "cake",
+            "food_cake_share": "cake",
+        }.get(kind)
+        if not item_key:
+            return
+        duration = int(payload.get("duration_minutes") or 0)
+        # Accepted social food is always a shared visual moment.  Do not
+        # start a local inventory scene here: that would pause focus for some
+        # items and could make an incoming cake look like local inventory.
+        self._set_social_food_activity(item_key, duration)
+        labels = {
+            "coffee": "☕ 一起喝咖啡",
+            "milk_tea": "🧋 一起喝奶茶",
+            "tea": "🍵 一起喝茶",
+            "cake": "🍰 一起吃蛋糕",
+        }
+        self.show_speech(f"{labels[item_key]}，六毛继续陪你专注。", 4800)
+
+    def talk_to_pet(self, message: str) -> CompanionReply:
+        """在本地处理一条对话，并显示 Lili 的回复。"""
+
+        self._record_user_interaction()
+        reply = self.companion.reply_to(message)
+        self._show_emotion(reply.state, 2600)
+        self.show_speech(reply.text, 5600)
+        return reply
+
+    def perform_companion_action(self, action_key: str) -> CompanionReply:
+        """播放用户选择的工作、爱意、鼓励、庆祝或安慰动作。"""
+
+        self._record_user_interaction()
+        reply = self.companion.perform_action(action_key)
+        option = ACTION_BY_KEY[action_key]
+        duration_ms = option.duration_ms
+        self._play_action_sequence(option.sequence or (reply.state,), duration_ms)
+        self.show_speech(reply.text, max(5200, duration_ms + 1800))
+        return reply
+
+    def _play_action_sequence(
+        self,
+        states: tuple[PetState, ...],
+        duration_ms: int,
+    ) -> None:
+        """用现有且已验收的动作帧组成多段陪伴动作。"""
+
+        if not states:
+            return
+        self._action_sequence_id += 1
+        sequence_id = self._action_sequence_id
+        step_ms = max(450, duration_ms // len(states))
+        self.state_timer.stop()
+        self.interaction_timer.stop()
+        self.set_state(states[0])
+        for index, state in enumerate(states[1:], start=1):
+            QTimer.singleShot(
+                index * step_ms,
+                lambda value=state, marker=sequence_id: self._continue_action_sequence(
+                    marker,
+                    value,
+                ),
+            )
+        self.interaction_timer.start(max(800, duration_ms))
+
+    def _continue_action_sequence(self, sequence_id: int, state: PetState) -> None:
+        """仅在动作序列仍有效时播放下一段，避免旧计时器抢状态。"""
+
+        if sequence_id == self._action_sequence_id and not self.dragging:
+            self.set_state(state)
+
+    def start_work_timer(self) -> CompanionReply:
+        """开始今日工作计时，并让六毛进入安静陪伴动作。"""
+
+        self._record_user_interaction()
+        self._reset_idle_episode()
+        self._pause_notice_shown = False
+        self._fullscreen_video_started_at = None
+        if not self.work_timer.has_active_session:
+            self._recorded_focus_session_seconds = 0
+        self._focus_quality_tracker.start(active_application_category())
+        # The paper window selects a real Todo; keep the existing focus
+        # analytics task for compatibility, but attribute new seconds to the
+        # same local task record as soon as the session starts.
+        started = self.focus_session.start()
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
+        self.focus_analytics.begin_focus_session()
+        if started:
+            self.set_paused(True)
+        self._change_ambient_activity("computer")
+        self._schedule_work_activity(25_000)
+        reply = self.companion.work_started(resumed=not started)
+        self._show_emotion(reply.state, 3600)
+        self.show_speech(reply.text, 5600)
+        self.work_timer_changed.emit(self.work_timer.is_running)
+        self._schedule_social_tick()
+        self._refresh_pixmap()
+        if self.work_controls.isVisible():
+            self._show_work_controls()
+        return reply
+
+    def _handle_chat_local_command(self, message: str) -> ManagedChatReply | None:
+        """Route explicit work controls through the existing shared session."""
+
+        text = " ".join(str(message or "").replace("六毛", "", 1).split())
+        text = text.strip(" ，,。.!！")
+        reply: CompanionReply | None = None
+        if text in {"开始工作", "开工", "开始计时"}:
+            reply = self.start_work_timer()
+        elif text in {"暂停", "暂停工作", "暂停计时"}:
+            reply = self.pause_work_timer()
+        elif text in {"继续", "继续工作", "恢复计时"}:
+            reply = self.resume_work()
+        elif text in {"结束工作", "结束计时", "收工"}:
+            reply = self.finish_work_timer()
+        if reply is None:
+            return None
+        return ManagedChatReply(reply.text, reply.state, "local-action")
+
+    def pause_work_timer(self, reason: str = "") -> CompanionReply:
+        """Pause the shared timer through one path, preserving the reason."""
+
+        reason = str(reason or "manual").strip().casefold()
+        automatic_reason = reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}
+        if not automatic_reason:
+            self._record_user_interaction()
+            self._reset_idle_episode()
+        session_seconds = self.work_timer.session_seconds()
+        was_running = self.focus_session.pause(reason)
+        if was_running:
+            self.focus_analytics.pause_focus_session()
+            self._record_focus_segment(session_seconds, completed=False)
+            self._pause_notice_shown = False
+            if automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
+                self._pause_notice_shown = reason != "idle_10m"
+        self._award_focus_rewards()
+        self.work_activity_timer.stop()
+        self._set_temporary_activity("thermos", 25_000)
+        duration = format_work_duration(self.work_timer.today_seconds())
+        if was_running and reason in {"sleep", "lock"}:
+            system_event = "电脑已锁屏" if reason == "lock" else "电脑进入睡眠"
+            reply = CompanionReply(
+                f"{system_event}，六毛已暂停这轮计时；回来后点继续工作就好。",
+                PetState.SLEEPY,
+            )
+        elif was_running and reason in {"idle", "idle_10m"}:
+            reply = CompanionReply(
+                "十分钟没有键鼠操作，六毛先帮你停表了；回来后点继续工作。",
+                PetState.CURIOUS,
+            )
+        elif was_running and reason in {"fullscreen_video", "video"}:
+            reply = CompanionReply(
+                "检测到视频或游戏全屏，六毛先帮你停表了；结束后点继续工作。",
+                PetState.CURIOUS,
+            )
+        elif was_running:
+            reply = self.companion.work_paused(duration)
+        else:
+            reply = CompanionReply(
+                f"计时现在是暂停状态，今天累计工作 {duration}。",
+                PetState.CURIOUS,
+            )
+        self._show_emotion(reply.state, 3200)
+        quality_text = (
+            f"\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）"
+            if self._last_focus_quality else ""
+        )
+        self.show_speech(reply.text + quality_text, 5600)
+        self.work_timer_changed.emit(False)
+        self._schedule_social_tick()
+        # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
+        self.work_controls.hide()
+        self._refresh_pixmap()
+        if was_running and automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
+            # A food-led work scene is an active commitment, not a second
+            # timer.  Once the system has auto-paused, close that scene so its
+            # visual state cannot claim that coffee work is still active.
+            scene = self.economy.active_food_scene()
+            if scene and str(scene.get("item_key") or "") in {"coffee", "expensive_coffee"}:
+                self.economy.finish_food_scene(f"work_paused:{reason}")
+                self.food_scene_timer.stop()
+        return reply
+
+    def finish_work_timer(self) -> CompanionReply:
+        """完成本次工作、保留今日累计并播放庆祝动作。"""
+
+        self._record_user_interaction()
+        self._reset_idle_episode()
+        self._pause_notice_shown = False
+        self._fullscreen_video_started_at = None
+        room_id = self.focus_session.room_id
+        session_seconds = self.work_timer.session_seconds()
+        session_id = self.work_timer.focus_session_id
+        # Commit the final analytics segment while the timer still owns its
+        # stable session ID.  The timer is reset immediately afterwards.
+        self._record_focus_segment(session_seconds, completed=True, session_id=session_id)
+        total = self.focus_session.finish()
+        self.focus_analytics.finish_focus_session(completed=True)
+        self._award_focus_rewards()
+        self.set_paused(False)
+        self._recorded_focus_session_seconds = 0
+        reply = self.companion.work_finished(format_work_duration(total))
+        self._show_emotion(reply.state, 3400)
+        quality_text = (
+            f"\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）"
+            if self._last_focus_quality else ""
+        )
+        self.show_speech(
+            reply.text + quality_text,
+            6200,
+        )
+        self.work_timer_changed.emit(False)
+        self._schedule_social_tick()
+        self.work_controls.hide()
+        self.work_activity_timer.stop()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
+        self._show_new_outfit_unlock()
+        if room_id:
+            self._record_social_room_event(room_id, "focus_finish")
+        food_scene = self.economy.active_food_scene()
+        if food_scene and str(food_scene.get("scene_type") or "") in {"focus", "deep_focus"}:
+            self.economy.finish_food_scene("work_finished")
+            self.food_scene_timer.stop()
+        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
+            self._work_report_dialog.refresh()
+        return reply
+
+    # Public state-machine commands.  The older *_work_timer names remain as
+    # compatibility entry points for menus and plugins, while all callers
+    # still share the same timer/session implementation above.
+    def pause_work(self, reason: str = "manual") -> CompanionReply:
+        return self.pause_work_timer(reason=reason)
+
+    def resume_work(self, source: str = "user") -> CompanionReply:
+        del source
+        return self.start_work_timer()
+
+    def finish_work(self, source: str = "user") -> CompanionReply:
+        del source
+        return self.finish_work_timer()
+
+    def show_today_note(self, *, passive: bool = False) -> None:
+        """Open the configured surface without stealing focus when passive."""
+
+        if str(getattr(self.settings, "today_note_mode", "compact")) == "compact":
+            self.show_compact_todos()
+        else:
+            self.show_sticky_note(passive=passive)
+
+    def show_sticky_note(self, *, passive: bool = False) -> None:
+        """Open the independent free-form 便利贴 window in detailed mode."""
+
+        if not passive:
+            self._record_user_interaction()
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_show = False
+            self._compact_todo_panel.hide()
+        if self._today_note_window is None:
+            self._today_note_window = TodayNoteWindow(
+                self.time_memory,
+                None,
+                owner=self,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            if getattr(self.settings, "today_note_always_on_top", False):
+                self._today_note_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self._today_note_window.start_requested.connect(self._start_todo_from_note)
+            self._today_note_window.select_requested.connect(self._select_todo_from_note)
+            self._today_note_window.complete_requested.connect(self._complete_todo_from_note)
+            self._today_note_window.task_checked.connect(self._set_todo_completion_from_note)
+            self._today_note_window.checkout_requested.connect(self.checkout_today)
+            self._today_note_window.rest_requested.connect(self.rest_today)
+            self._today_note_window.memory_requested.connect(self.show_time_memory)
+        self._today_note_window.set_mode("detailed", persist=False)
+        self._today_note_window.refresh()
+        self._today_note_window.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            bool(passive),
+        )
+        if passive:
+            self._today_note_window.show()
+            self._position_sticky_note()
+            return
+        if self._today_note_window.isMinimized():
+            self._today_note_window.showNormal()
+        else:
+            self._today_note_window.show()
+        self._today_note_window.raise_()
+        self._today_note_window.activateWindow()
+        self._position_sticky_note()
+
+    def show_compact_todos(self) -> None:
+        """Show the frameless Todo strip directly below the pet."""
+
+        self._record_user_interaction()
+        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
+            # The report is a normal independent window; its content must not
+            # be covered by the desktop Todo accessory while it is open.
+            return
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+        self._restore_compact_todos_after_show = True
+        if self._compact_todo_panel is None:
+            self._compact_todo_panel = CompactTodoPanel(
+                self.time_memory,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            self._compact_todo_panel.task_selected.connect(self._select_todo_from_note)
+            self._compact_todo_panel.task_checked.connect(self._set_todo_completion_from_panel)
+            self._compact_todo_panel.task_changed.connect(self._refresh_todo_surfaces)
+            self._compact_todo_panel.set_companion_topmost(
+                bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
+            )
+        self._compact_todo_panel.refresh()
+        self._show_nonactivating(
+            self._compact_todo_panel,
+            always_on_top=bool(
+                self.settings.always_on_top
+                or getattr(self.settings, "today_note_always_on_top", False)
+            ),
+        )
+        self._position_compact_todos()
+        # The pet and the compact panel are separate native windows.  Raise
+        # the panel after positioning so a transient pet repaint cannot cover
+        # the label or the trailing menu button.  The panel itself never
+        # accepts focus, so this does not steal keyboard input.
+        self._raise_accessory(self._compact_todo_panel)
+
+    def _position_compact_todos(self) -> None:
+        """Keep the Todo strip close to the pet, preferring its left side.
+
+        The compact Todo panel is a pet accessory rather than an independent
+        dashboard.  It therefore uses the visible pet mask as its anchor and
+        chooses a side in a deterministic order: left, right, then below.  A
+        final clamp keeps the companion inside the active monitor's work area.
+        """
+
+        panel = self._compact_todo_panel
+        if panel is None:
+            return
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            left = self.x()
+            right = self.x() + self.width()
+            top = self.y()
+            bottom = self.y() + self.height()
+        else:
+            left = self.x() + visible_bounds.left()
+            right = self.x() + visible_bounds.right() + 1
+            top = self.y() + visible_bounds.top()
+            bottom = self.y() + visible_bounds.bottom() + 1
+
+        # A mask can end a few pixels before the visible anti-aliased sprite
+        # edge on Windows/DPI-scaled displays.  Reserve that edge explicitly;
+        # otherwise the pet can visually sit on top of the panel's final
+        # characters and its ⋯ button even when the Qt rectangles do not
+        # mathematically intersect.
+        pet_safety = 6
+        left -= pet_safety
+        right += pet_safety
+        top -= pet_safety
+        bottom += pet_safety
+        gap_x = 8
+        gap_y = 6
+        panel_width = panel.width()
+        panel_height = panel.height()
+        center_y = (top + bottom - panel_height) // 2
+        left_x = left - panel_width - gap_x
+        right_x = right + gap_x
+        can_place_left = left_x >= available.left()
+        can_place_right = right_x + panel_width <= available.right() + 1
+
+        pet_rect = QRect(left, top, max(1, right - left), max(1, bottom - top))
+        candidates = []
+        if can_place_left:
+            candidates.append((left_x, center_y))
+        if can_place_right:
+            candidates.append((right_x, center_y))
+        # Both sides can be unavailable near a monitor edge.  Use a below or
+        # above placement only then, but still reject any rectangle touching
+        # the pet.  This is a real non-overlap guarantee, not just a visual
+        # offset guess.
+        candidates.extend(
+            [
+                ((left + right - panel_width) // 2, bottom + gap_y),
+                ((left + right - panel_width) // 2, top - panel_height - gap_y),
+            ]
+        )
+        x = y = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+            if not available.contains(candidate):
+                continue
+            if candidate.intersects(pet_rect):
+                continue
+            x, y = candidate_x, candidate_y
+            break
+        if x is None or y is None:
+            # Extremely small work areas can make every ideal placement
+            # impossible.  Clamp to the monitor as a last resort, then raise
+            # the panel so its controls remain usable.
+            x = max(available.left(), min(left_x, available.right() - panel_width + 1))
+            y = max(available.top(), min(center_y, available.bottom() - panel_height + 1))
+        x = max(available.left(), min(x, available.right() - panel_width + 1))
+        y = max(available.top(), min(y, available.bottom() - panel_height + 1))
+        panel.move(x, y)
+        self._raise_accessory(panel)
+        LOGGER.debug(
+            "[TodoLayout] host=(x=%s,y=%s,w=%s,h=%s) panel=(x=%s,y=%s,w=%s,h=%s) "
+            "available=(x=%s,y=%s,w=%s,h=%s) pet_bounds=(left=%s,top=%s,right=%s,bottom=%s)",
+            self.x(), self.y(), self.width(), self.height(),
+            panel.x(), panel.y(), panel.width(), panel.height(),
+            available.x(), available.y(), available.width(), available.height(),
+            left, top, right, bottom,
+        )
+
+    def _position_sticky_note(self) -> None:
+        """Place the detailed 便利贴 beside the pet, with screen-edge fallback."""
+
+        note = self._today_note_window
+        if note is None or not note.isVisible():
+            return
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            left = self.x()
+            right = self.x() + self.width()
+            top = self.y()
+        else:
+            left = self.x() + visible_bounds.left()
+            right = self.x() + visible_bounds.right() + 1
+            top = self.y() + visible_bounds.top()
+        gap = 10
+        x = right + gap
+        if x + note.width() > available.right() + 1:
+            x = left - note.width() - gap
+        x = max(available.left(), min(x, available.right() - note.width() + 1))
+        y = max(available.top(), min(top, available.bottom() - note.height() + 1))
+        note.move(x, y)
+
+    def _position_visit_status_bubble(self) -> None:
+        """Place the visit label in the lower red-zone beside work duration.
+
+        The compact todo panel occupies the pet's upper-left area.  Putting
+        the visit label at "bottom - height" made it float over those todo
+        rows, especially when the pet was dragged to the lower-right corner.
+        Keep it on the same baseline as the work-duration bubble, immediately
+        to that bubble's left, so both status labels share one reserved row.
+        """
+
+        bubble = self.visit_status_bubble
+        if not bubble.isVisible():
+            return
+        bubble.adjustSize()
+        area = self._screen_geometry()
+        bounds = self.mask().boundingRect()
+        left = self.x() + (bounds.left() if not bounds.isEmpty() else 0)
+        right = self.x() + (bounds.right() + 1 if not bounds.isEmpty() else self.width())
+        bottom = self.y() + (bounds.bottom() + 1 if not bounds.isEmpty() else self.height())
+        gap = 7
+        duration_bubble = getattr(self, "work_duration_bubble", None)
+        if duration_bubble is not None and duration_bubble.isVisible():
+            duration_bubble.adjustSize()
+            x = duration_bubble.x() - bubble.width() - gap
+            y = duration_bubble.y()
+        else:
+            x = left - bubble.width() - gap
+            y = bottom + gap
+        if area is not None:
+            if x < area.left():
+                x = max(area.left(), right + gap)
+            x = min(max(x, area.left()), area.right() - bubble.width() + 1)
+            y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
+        bubble.move(x, y)
+
+    def _position_accessories(self) -> None:
+        """Reflow every pet accessory from the pet as its single anchor."""
+
+        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
+            self._position_speech_bubble()
+        if hasattr(self, "quick_panel") and self.quick_panel.isVisible():
+            self._position_quick_panel()
+        if hasattr(self, "work_controls") and self.work_controls.isVisible():
+            self._position_work_controls()
+        if hasattr(self, "coffee_scene_prompt") and self.coffee_scene_prompt.isVisible():
+            self._position_coffee_scene_prompt()
+        if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
+            self._position_work_duration_bubble()
+        if hasattr(self, "visit_status_bubble") and self.visit_status_bubble.isVisible():
+            self._position_visit_status_bubble()
+        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
+            self._position_compact_todos()
+        self._position_sticky_note()
+
+    def hide_today_note(self) -> None:
+        self._restore_compact_todos_after_show = False
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.hide()
+
+    def hide_compact_todos(self) -> None:
+        self._restore_compact_todos_after_show = False
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.hide()
+
+    def add_compact_todo(self) -> None:
+        self.show_compact_todos()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.add_task()
+
+    def hide_sticky_note(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+
+    def _refresh_todo_surfaces(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.refresh()
+            if self._compact_todo_panel.isVisible():
+                # A longer/shorter task changes the panel width, so its
+                # pet-relative position must be recalculated in the same UI
+                # turn rather than waiting for the next pet movement.
+                self._position_compact_todos()
+
+        if self._todo_center_window is not None:
+            self._todo_center_window.refresh()
+
+    def _chat_action_executed(self, result: object) -> None:
+        """Refresh every Todo surface after a real chat-side local write."""
+
+        action = str(getattr(result, "action", "") or "")
+        if action in {
+            "create_todo", "update_todo", "complete_todo", "delete_todo",
+            "create_countdown", "update_countdown", "delete_countdown",
+            "complete_countdown", "create_anniversary", "update_anniversary",
+            "delete_anniversary", "move_pending_to_today",
+        }:
+            self._refresh_todo_surfaces()
+            # Respect an intentionally hidden panel.  If compact mode is the
+            # configured surface, create it lazily so a successful chat action
+            # becomes visible without requiring a manual refresh.
+            if (
+                self._compact_todo_panel is None
+                and str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
+                and str(getattr(self.settings, "today_note_display_mode", "always")) != "hidden"
+            ):
+                self.show_compact_todos()
+
+    def _select_todo_from_note(self, task_id: str) -> None:
+        item = self.time_memory.todos.get(task_id)
+        if item is None:
+            return
+        self.time_memory.select_task(item.id)
+        self.focus_analytics.set_current_task(item.title)
+
+    def _start_todo_from_note(self, task_id: str) -> None:
+        self._select_todo_from_note(task_id)
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+
+    def _complete_todo_from_note(self, task_id: str) -> None:
+        task = self.time_memory.get_todo_view_item(task_id)
+        was_open = task is not None and not bool(getattr(task, "completed", False))
+        if not self.time_memory.complete_todo_view_item(task_id, True):
+            return
+        if was_open and task is not None:
+            self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+        self.show_speech("这项做完了，给你记上。", 4200)
+
+    def _set_todo_completion_from_note(self, task_id: str, completed: bool) -> None:
+        task = self.time_memory.get_todo_view_item(task_id)
+        if task is None:
+            return
+        if completed:
+            was_open = not bool(getattr(task, "completed", False))
+            self.time_memory.complete_todo_view_item(task_id, True)
+            if was_open:
+                self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
+            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+            self.show_speech("这项做完了，给你记上。", 4200)
+        else:
+            self.time_memory.complete_todo_view_item(task_id, False)
+            self.time_memory.summary.refresh_tasks()
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def _set_todo_completion_from_panel(self, task_id: str, completed: bool) -> None:
+        """Reflect a compact checkbox in the real local Todo store."""
+
+        task = self.time_memory.get_todo_view_item(task_id)
+        if task is None:
+            return
+        if completed:
+            was_open = not bool(getattr(task, "completed", False))
+            self.time_memory.complete_todo_view_item(task_id, True)
+            if was_open:
+                self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
+            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+            self.show_speech("这项做完了，给你记上。", 4200)
+        else:
+            self.time_memory.complete_todo_view_item(task_id, False)
+            self.time_memory.summary.refresh_tasks()
+        self._refresh_todo_surfaces()
+
+    def checkout_today(self) -> None:
+        """Persist a real end-of-day record without requiring network access."""
+
+        if self.work_timer.is_running:
+            self.pause_work_timer(reason="checkout")
+        summary = self.time_memory.finish_today()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 30_000)
+        self.show_speech(
+            f"今天收工：专注{summary['focus']}，完成{summary['completed_tasks']}/{summary['total_tasks']}项。",
+            6200,
+        )
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def rest_today(self) -> None:
+        self.time_memory.records.set_rest_day(True)
+        self._set_temporary_activity("daydream", 20_000)
+        self.show_speech("行，那今天不算旷工。", 4200)
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def show_todo_center(self) -> None:
+        """Open the full TodoCenter while keeping CompactTodo as the light view."""
+
+        self._record_user_interaction()
+        if self._todo_center_window is None:
+            self._todo_center_window = TodoCenterWindow(self.time_memory)
+            self._todo_center_window.changed.connect(self._refresh_todo_surfaces)
+        self._todo_center_window.refresh()
+        if self._todo_center_window.isMinimized():
+            self._todo_center_window.showNormal()
+        else:
+            self._todo_center_window.show()
+        self._todo_center_window.raise_()
+        self._todo_center_window.activateWindow()
+
+    def show_alarm_center(self) -> None:
+        """Open the local alarm editor without creating a second reminder system."""
+
+        self._record_user_interaction()
+        todos = list(self.time_memory.todos.items)
+        if self._alarm_center_dialog is None:
+            self._alarm_center_dialog = AlarmCenterDialog(
+                self.time_memory.alarms,
+                todos,
+                parent=None,
+                sound_library=self.time_memory.alarm_sounds,
+            )
+        else:
+            self._alarm_center_dialog.todos = todos
+            self._alarm_center_dialog.refresh()
+        if self._alarm_center_dialog.isMinimized():
+            self._alarm_center_dialog.showNormal()
+        else:
+            self._alarm_center_dialog.show()
+        self._alarm_center_dialog.raise_()
+        self._alarm_center_dialog.activateWindow()
+
+    def show_time_memory(self) -> None:
+        if self._time_memory_window is None:
+            self._time_memory_window = TimeMemoryWindow(self.time_memory)
+        self._time_memory_window.refresh()
+        if self._time_memory_window.isMinimized():
+            self._time_memory_window.showNormal()
+        else:
+            self._time_memory_window.show()
+        self._time_memory_window.raise_()
+        self._time_memory_window.activateWindow()
+
+    def show_work_time(self) -> None:
+        """显示今日累计工作时长和当前计时状态。"""
+
+        self._record_user_interaction()
+        state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
+        self._show_emotion(state, 2600)
+        text = (
+            f"{self.work_timer.status_text()}\n"
+            f"{growth_progress_text(self.work_timer.today_seconds())}\n"
+            f"六毛心情：{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
+        )
+        self.show_speech(text, 6800)
+
+    def show_economy(self) -> None:
+        """Open the local wallet and month-end salary slip."""
+
+        self._record_user_interaction()
+        if self._economy_dialog is None:
+            self._economy_dialog = EconomyDialog(self.economy, None)
+            self._economy_dialog.changed.connect(self._on_economy_changed)
+        self._economy_dialog.refresh()
+        if self._economy_dialog.isMinimized():
+            self._economy_dialog.showNormal()
+        else:
+            self._economy_dialog.show()
+        self._economy_dialog.raise_()
+        self._economy_dialog.activateWindow()
+
+    def show_daily_growth(self) -> None:
+        """显示今天 0–8 小时成长节点和下一个可见奖励。"""
+
+        seconds = self.work_timer.today_seconds()
+        stage = stage_for_seconds(seconds)
+        self._set_temporary_activity(stage.activity, 35_000)
+        self.show_speech(
+            f"今日成长 {stage.hour}/8：{stage.title}\n"
+            f"当前奖励：{stage.reward}\n{growth_progress_text(seconds)}",
+            7600,
+        )
+
+    def _schedule_work_activity(self, delay_ms: int | None = None) -> None:
+        """计时期间安排下一次陪伴工作动作。"""
+
+        self.work_activity_timer.stop()
+        if self.work_timer.is_running:
+            self.work_activity_timer.start(delay_ms or random.randint(150_000, 300_000))
+
+    def _work_activity_tick(self) -> None:
+        """在专注动作间轮换，让用户工作时六毛也持续工作。"""
+
+        # A shared drink or cake takes precedence over the normal focus
+        # animation rotation until its visual moment expires.
+        if time.monotonic() < self._social_food_activity_until:
+            self._schedule_work_activity()
+            return
+        if night_limited_activity(datetime.now()) is not None:
+            self._night_limited_tick()
+            self._schedule_work_activity()
+            return
+        if not self.work_timer.is_running:
+            return
+        session = self.work_timer.session_seconds()
+        choices = FOCUS_ACTIONS
+        if session >= 45 * 60 and random.random() < 0.35:
+            choices = ("thermos", "sleep", "daydream")
+        self._change_ambient_activity(random.choice(choices))
+        self._manual_activity_until = time.monotonic() + 120
+        self._schedule_work_activity()
+
+    def _set_temporary_activity(self, activity: str, duration_ms: int = 30_000) -> None:
+        """显示一张完整动作图，结束后回到工作或普通待机。"""
+
+        self._change_ambient_activity(activity)
+        self._manual_activity_until = time.monotonic() + duration_ms / 1000
+        self.activity_timer.start(max(1500, duration_ms))
+
+    def _activity_timeout(self) -> None:
+        """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
+
+        self._social_food_activity_until = 0.0
+        if night_limited_activity(datetime.now()) is not None:
+            self._night_limited_tick()
+            return
+        self._change_ambient_activity(
+            random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+        )
+
+    def _work_timer_tick(self) -> None:
+        """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
+
+        self._check_local_alarms()
+        self._check_local_reminders()
+        self.work_timer.checkpoint()
+        snapshot = self.focus_session.refresh()
+        self._update_work_duration_bubble(snapshot)
+        if self.work_controls.isVisible():
+            self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
+            self.work_controls.set_session_duration(
+                "本轮 " + format_work_duration(snapshot.session_seconds)
+                if snapshot.status in {"focus", "rest"} else "本轮未开始"
+            )
+        self._award_focus_rewards()
+        self._check_expensive_coffee_reward()
+        self._sync_hourly_outfit(announce=True)
+        self._show_new_outfit_unlock()
+        quiet = detect_quiet_mode()
+        food_scene = self.economy.active_food_scene() or {}
+        deep_food_scene = bool(food_scene.get("deep_focus"))
+        wellness_kind = None if quiet.blocked or deep_food_scene else self.wellness.take_due(
+            self.settings.water_reminder_enabled,
+            self.settings.stand_reminder_enabled,
+            self.settings.water_interval_minutes,
+            self.settings.stand_interval_minutes,
+        )
+        if wellness_kind == "water":
+            self._set_temporary_activity("thermos", 35_000)
+            self.show_speech("喝口水吧。六毛替你把这一小会儿守住。", 6200)
+        elif wellness_kind == "stand":
+            self._set_temporary_activity("football", 35_000)
+            self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
+        reminder_kind = None if quiet.blocked or deep_food_scene else self.work_timer.take_due_reminder()
+        if reminder_kind is None:
+            return
+        duration = format_work_duration(self.work_timer.session_seconds())
+        reply = self.companion.work_reminder(reminder_kind, duration)
+        self._show_emotion(reply.state, 3600)
+        self.show_speech(reply.text, 7200)
+
+    def _check_expensive_coffee_reward(self) -> None:
+        """Reward one ordinary coffee after two real continuous work hours."""
+
+        if not self.work_timer.is_running:
+            return
+        scene = self.economy.active_food_scene() or {}
+        if str(scene.get("item_key") or "") != "expensive_coffee":
+            return
+        metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+        try:
+            baseline = max(0, int(metadata.get("work_episode_seconds_at_start", 0) or 0))
+        except (TypeError, ValueError):
+            baseline = 0
+        episode_seconds = self.work_timer.episode_seconds()
+        if episode_seconds < baseline:
+            # An explicit pause/resume starts a new uninterrupted episode.
+            # Reset the coffee baseline instead of allowing the old episode's
+            # seconds to make the two-hour reward arrive too early.
+            baseline = episode_seconds
+            self.economy.update_active_food_scene_metadata(
+                {"work_episode_seconds_at_start": baseline}
+            )
+        if episode_seconds - baseline < 2 * 60 * 60:
+            return
+        event = self.economy.grant_expensive_coffee_focus_reward(str(scene.get("id") or ""))
+        if event is None:
+            return
+        self._sync_economy_events([event.as_dict()])
+        self.show_speech("☕ 这场深度工作超过 2 小时了。普通咖啡 ×1，六毛给你留着。", 6500)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
+
+    def _check_local_reminders(self) -> None:
+        """Run the local reminder queue once per existing one-second timer."""
+
+        if detect_quiet_mode().blocked or bool((self.economy.active_food_scene() or {}).get("deep_focus")):
+            return
+        for reminder in self.time_memory.reminders.due()[:3]:
+            self.time_memory.reminders.mark_notified(reminder.id)
+            self._set_temporary_activity("curious", 12_000)
+            self.show_speech(f"提醒：{reminder.title}", 5600)
+
+    def _check_local_alarms(self) -> None:
+        """Present due alarms as a non-modal card, never by stealing focus."""
+
+        quiet = detect_quiet_mode()
+        deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
+        claimed = self.time_memory.alarms.claim_due(
+            allow_during_dnd=not (quiet.blocked or deep_food_scene),
+        )
+        if self._alarm_card is not None and self._alarm_card.isVisible():
+            return
+        candidates = claimed or self.time_memory.alarms.active()
+        if candidates:
+            self._show_alarm_card(candidates[0])
+
+    def _show_alarm_card(self, alarm) -> None:
+        """Show one normal alarm window; queued alarms remain persisted/local."""
+
+        if self._alarm_card is not None:
+            self._close_alarm_card()
+        self._alarm_card = AlarmCard(
+            alarm,
+            sound_library=self.time_memory.alarm_sounds,
+        )
+        self._alarm_card.start_requested.connect(self._start_alarm_work)
+        self._alarm_card.snooze_requested.connect(self._snooze_alarm)
+        self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
+        # Center only once.  After the user drags or minimizes the native
+        # window, accessory reflows must never move it back to the pet.
+        self._alarm_card.center_on_current_screen()
+        self._alarm_card.show()
+
+    def _close_alarm_card(self) -> None:
+        card = self._alarm_card
+        self._alarm_card = None
+        if card is not None:
+            card.close_from_app()
+            card.deleteLater()
+
+    def _start_alarm_work(self, alarm_id: str) -> None:
+        alarm = self.time_memory.alarms.get(alarm_id)
+        if alarm is None:
+            self._close_alarm_card()
+            return
+        self.time_memory.alarms.dismiss(alarm_id)
+        if alarm.linked_todo_id:
+            self.time_memory.select_task(alarm.linked_todo_id)
+        self._close_alarm_card()
+        self.start_work_timer()
+
+    def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
+        try:
+            self.time_memory.alarms.snooze(alarm_id, minutes)
+        except KeyError:
+            pass
+        self._close_alarm_card()
+
+    def _dismiss_alarm(self, alarm_id: str) -> None:
+        try:
+            self.time_memory.alarms.dismiss(alarm_id)
+        except KeyError:
+            pass
+        self._close_alarm_card()
+
+    def _show_new_outfit_unlock(self) -> None:
+        """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
+
+        stage = stage_for_seconds(self.work_timer.today_seconds())
+        if stage.hour <= self._last_growth_hour:
+            return
+        self._last_growth_hour = stage.hour
+        self._set_temporary_activity(stage.activity, 60_000)
+        self.show_speech(f"今日成长：{stage.title}\n解锁：{stage.reward}\n{stage.message}", 8200)
+
+    def _sync_hourly_outfit(self, *, announce: bool) -> None:
+        """同步小时娃衣解锁，不覆盖用户主动选择的当前装备。
+
+        工作时长只决定哪些套装可用；装备本身是用户偏好，必须一直保留。
+        这样累计到 10 小时会解锁荒野相关套装，但不会把用户正在穿的
+        一小时兔兔装、经典外观或其他已解锁套装强行替换掉。
+        """
+
+        count = self.work_timer.unlocked_outfit_count()
+        latest = OUTFITS[count - 1] if count else None
+        newly_unlocked = self.work_timer.take_new_outfit_unlock()
+        if not announce or newly_unlocked is None or latest is None:
+            return
+        self._change_ambient_activity("none")
+        self.show_speech(
+            f"累计专注 {newly_unlocked} 小时，已解锁「{latest.name}」！\n"
+            f"你可以在“换装与外观”里选择，当前装备保持不变。",
+            8200,
+        )
+
+    def _award_focus_rewards(self) -> None:
+        """把今日专注时间换成正向的默契奖励，不制造饥饿惩罚。"""
+
+        completed_blocks = self.work_timer.today_seconds() // 600
+        new_blocks = max(0, completed_blocks - self._rewarded_focus_blocks)
+        if new_blocks:
+            self.mood.receive_focus_reward(new_blocks)
+            self._rewarded_focus_blocks = completed_blocks
+
+    def _record_economy_focus(self, seconds: int, started_at: datetime) -> None:
+        """Credit a real focus segment locally and sync only its safe ledger rows."""
+
+        result = self.economy.record_focus(seconds, started_at=started_at)
+        events = list(result.get("events") or [])
+        self._sync_economy_events(events)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
+
+    def _record_focus_segment(
+        self,
+        session_seconds: int,
+        *,
+        completed: bool,
+        session_id: str | None = None,
+    ) -> int:
+        """Credit only newly completed WORKING seconds in this session.
+
+        ``WorkTimerModel.session_seconds()`` remains cumulative across a
+        pause/resume cycle.  All wage, daily-stat, and focus-quality sinks
+        must receive the delta since the previous pause/finish checkpoint,
+        otherwise a resumed session would be counted more than once.
+        """
+
+        total = max(0, int(session_seconds))
+        seconds = max(0, total - self._recorded_focus_session_seconds)
+        if seconds <= 0:
+            if completed:
+                # The actual WORKING seconds may already have been credited
+                # at an earlier pause, but finishing the Session still needs
+                # to be represented once in the local daily card.
+                self.daily_stats.record_focus(0, completed=True)
+            return 0
+        started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
+        self.time_memory.record_focus(
+            seconds,
+            completed_session=completed,
+            started_at=started_at,
+        )
+        self._record_economy_focus(seconds, started_at)
+        self._last_focus_quality = self.focus_analytics.record_session(
+            seconds,
+            started_at=started_at,
+            completed=completed,
+            application_switches=self._focus_quality_tracker.application_switches,
+            away_count=self._focus_quality_tracker.away_count,
+            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            record_id=(
+                f"{session_id or self.work_timer.focus_session_id}:{total}"
+                if (session_id or self.work_timer.focus_session_id)
+                else None
+            ),
+        )
+        self.focus_analytics.update_current_task_progress(seconds)
+        self.daily_stats.record_focus(seconds, completed=completed)
+        self.work_timer.mark_analytics_recorded(total)
+        self._recorded_focus_session_seconds = total
+        return seconds
+
+    def _record_economy_performance(self, title: str, task_id: str) -> None:
+        events = []
+        event = self.economy.record_performance(
+            f"任务绩效：{title[:90]}",
+            source_key=f"todo:{task_id}:{datetime.now().date().isoformat()}",
+        )
+        if event is not None:
+            events.append(event.as_dict())
+        task = self.time_memory.get_todo_view_item(task_id)
+        if bool(getattr(task, "important", False)):
+            cake = self.economy.record_important_todo_completion(task_id, title)
+            if cake is not None:
+                events.append(cake.as_dict())
+        self._sync_economy_events(events)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
+
+    def _on_economy_changed(self) -> None:
+        """同步钱袋新增/消费事件；服务端按 source_key 幂等去重。"""
+        self._sync_economy_events(
+            [event.as_dict() for event in self.economy.events]
+        )
+
+    def _sync_economy_events(self, events: list[dict]) -> None:
+        if not events or not getattr(self.social_client, "signed_in", False):
+            return
+        recorder = getattr(self.social_client, "record_economy_event", None)
+        if not callable(recorder):
+            return
+        normalized = [
+            dict(event)
+            for event in events
+            if isinstance(event, dict) and int(event.get("amount") or 0) != 0
+        ]
+        if not normalized:
+            return
+        with self._economy_sync_lock:
+            if self._economy_sync_inflight:
+                self._economy_sync_pending = True
+                return
+            self._economy_sync_inflight = True
+
+        def sync() -> None:
+            try:
+                for event in normalized:
+                    try:
+                        recorder(
+                            event_id=str(event.get("event_id") or ""),
+                            category=str(event.get("category") or "other"),
+                            amount=int(event.get("amount") or 0),
+                            label=str(event.get("label") or "")[:120],
+                            source_key=str(event.get("source_key") or "")[:160],
+                            occurred_on=str(event.get("occurred_on") or "")[:10],
+                        )
+                    except Exception:
+                        LOGGER.info("economy event sync deferred", exc_info=True)
+            finally:
+                with self._economy_sync_lock:
+                    rerun = self._economy_sync_pending
+                    self._economy_sync_pending = False
+                    self._economy_sync_inflight = False
+                if rerun and getattr(self.social_client, "signed_in", False):
+                    self._sync_economy_events(
+                        [event.as_dict() for event in self.economy.events]
+                    )
+
+        threading.Thread(target=sync, name="lili-economy-sync", daemon=True).start()
+
+    def shutdown_work_timer(self) -> None:
+        """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
+
+        self._reset_idle_episode()
+        if hasattr(self, "work_timer"):
+            if self.work_timer.is_running:
+                session_seconds = self.work_timer.session_seconds()
+                # Persist the same final running segment in the local time-memory
+                # store before the shared timer is paused.  Without this, a
+                # normal app close could update the legacy daily card while
+                # losing the Todo attribution and daily check-in record.
+                self._record_focus_segment(session_seconds, completed=False)
+            self.focus_session.pause()
+
+    def _generate_daily_report(self, *, show_dialog: bool, mark_generated: bool = False) -> Path | None:
+        """生成只保存在本机的工作日报；可选展示预览窗口。"""
+
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1" and not show_dialog:
+            return None
+        photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
+        try:
+            path = render_daily_report(
+                self.work_timer.today_seconds(),
+                self.daily_stats.snapshot(),
+                photo,
+            )
+        except OSError as exc:
+            if show_dialog:
+                self.show_speech(f"工作日报暂时没保存成功：{exc}", 6200)
+            return None
+        if show_dialog:
+            self._show_daily_report_dialog(path)
+        if mark_generated:
+            self.daily_stats.mark_report_generated()
+        return path
+
+    def _maybe_generate_scheduled_daily_report(self, now: datetime) -> bool:
+        """Generate one local report after the configured daily cutoff."""
+
+        if not getattr(self.settings, "daily_report_enabled", True):
+            return False
+        try:
+            hour, minute = (int(part) for part in str(getattr(self.settings, "daily_report_time", "22:30")).split(":", 1))
+        except (TypeError, ValueError):
+            hour, minute = 22, 30
+        cutoff = hour * 60 + minute
+        if now.hour * 60 + now.minute < cutoff:
+            return False
+        if self.daily_stats.report_generated_for(now.date().isoformat()):
+            return False
+        return self._generate_daily_report(show_dialog=False, mark_generated=True) is not None
+
+    def show_daily_report(self) -> None:
+        """兼容旧菜单入口；报告现在改为实时页签窗口，不保存图片。"""
+
+        self.show_work_report()
+
+    def _best_buddy_for_report(self) -> str:
+        """Read the latest local self-study leaderboard snapshot only."""
+
+        dialog = self._social_dialog
+        rows = getattr(dialog, "_leaderboard_rows", []) if dialog is not None else []
+        if not isinstance(rows, list):
+            return "暂无自习室排行榜数据"
+        own_id = self._current_social_user_id()
+        candidates: list[tuple[int, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            user_id = str(row.get("user_id") or row.get("id") or "")
+            if own_id and user_id == own_id:
+                continue
+            try:
+                seconds = max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0))
+            except (TypeError, ValueError, OverflowError):
+                seconds = 0
+            name = social_pet_label(
+                row.get("owner_nickname") or row.get("nickname") or row.get("pet_name") or "搭子"
+            )
+            if seconds > 0:
+                candidates.append((seconds, name))
+        if not candidates:
+            return "暂无可用的本周排行榜数据"
+        seconds, name = max(candidates, key=lambda item: (item[0], item[1]))
+        return f"{name} · 本周 {format_work_duration(seconds)}"
+
+    def _work_report_snapshot(self) -> dict[str, object]:
+        """Build a fresh report from the currently active account namespace."""
+
+        moment = datetime.now(BEIJING_TIMEZONE)
+        current_date = moment.date()
+        day_projection = self.focus_analytics.period_summary("day", moment)
+        if int(day_projection.get("local_record_count", 0) or 0) > 0:
+            # One-time repair for timer files that inherited a stale remote
+            # maximum.  Do this only when detailed local records exist; a new
+            # device without history must still be able to use the server
+            # fallback.
+            self.work_timer.reconcile_today_seconds(
+                int(day_projection.get("total_seconds", 0) or 0)
+            )
+        return build_work_report(
+            self.focus_analytics,
+            self.work_timer,
+            self.daily_stats,
+            best_buddy=self._best_buddy_for_report(),
+            focus_snapshot=self.focus_session.snapshot(),
+            task_stats={
+                "day": self.time_memory.records.stats(start=current_date, end=current_date),
+                "week": self.time_memory.records.week_stats(current_date.isoformat()),
+                "month": self.time_memory.records.month_stats(current_date.isoformat()),
+            },
+            now=moment,
+        )
+
+    def _restore_compact_todos_after_report_close(self) -> None:
+        """Restore the Todo strip only if it was visible before the report."""
+
+        should_restore = bool(self._restore_compact_todos_after_report)
+        self._restore_compact_todos_after_report = False
+        if should_restore and not bool(getattr(self, "_manually_hidden", False)):
+            self.show_compact_todos()
+
+    def show_work_report(self) -> None:
+        """Open the live day/week/month report without creating a local image."""
+
+        self._record_user_interaction()
+        # Close the floating shortcut first. Showing both top-level windows
+        # in one mouse event can leave the report behind the dock on macOS.
+        self.quick_panel.hide()
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_report = self._compact_todo_panel.isVisible()
+            self._compact_todo_panel.hide()
+        if self._work_report_dialog is None:
+            self._work_report_dialog = WorkReportDialog(
+                self._work_report_snapshot,
+                pet_name=self._pet_name(),
+                parent=None,
+            )
+            self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
+            self._work_report_dialog.closed.connect(self._restore_compact_todos_after_report_close)
+        self._work_report_dialog.refresh()
+        self._work_report_dialog.showNormal()
+        self._work_report_dialog.raise_()
+        self._work_report_dialog.activateWindow()
+
+    def configure_daily_report(self) -> None:
+        """从“工作记录”直接设置日报开关和每天的生成时间。"""
+
+        self._record_user_interaction()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("设置工作报告总结时间")
+        dialog.setMinimumWidth(390)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel("日报会在当天设定时间后自动生成一次；不会再按累计 8 小时触发。")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        enabled = QCheckBox("每天自动生成工作日报")
+        enabled.setChecked(bool(getattr(self.settings, "daily_report_enabled", True)))
+        time_edit = QTimeEdit()
+        report_time = QTime.fromString(
+            str(getattr(self.settings, "daily_report_time", "22:30")),
+            "HH:mm",
+        )
+        time_edit.setTime(report_time if report_time.isValid() else QTime(22, 30))
+        time_edit.setDisplayFormat("HH:mm")
+        time_edit.setWrapping(True)
+        time_edit.setToolTip("鼠标滚轮选择小时和分钟")
+        enabled.toggled.connect(time_edit.setEnabled)
+        time_edit.setEnabled(enabled.isChecked())
+        form.addRow(enabled)
+        form.addRow("每天截止", time_edit)
+        layout.addLayout(form)
+        hint = QLabel("时间按本机时区计算。关闭后只保留手动生成日报。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#667784;font-size:11px;")
+        layout.addWidget(hint)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Ok,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.settings.daily_report_enabled = enabled.isChecked()
+        self.settings.daily_report_time = time_edit.time().toString("HH:mm")
+        save_settings(self.settings)
+        if self.settings.daily_report_enabled:
+            self.show_speech(
+                f"工作日报已设置为每天 {self.settings.daily_report_time} 自动生成。",
+                4200,
+            )
+        else:
+            self.show_speech("自动工作日报已关闭，仍可从工作记录手动生成。", 4200)
+
+    def _show_daily_report_dialog(self, path: Path) -> None:
+        """在应用内预览工作卡，并提供打开本机相册的按钮。"""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"今天{self._pet_name()}陪你做了什么")
+        layout = QVBoxLayout(dialog)
+        preview = QLabel(dialog); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card = QPixmap(str(path)).scaled(430, 570, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        preview.setPixmap(card); layout.addWidget(preview)
+        open_button = QPushButton(f"打开{self._pet_name()}相册", dialog)
+        open_button.clicked.connect(self.open_daily_album)
+        layout.addWidget(open_button)
+        dialog.exec()
+
+    def open_daily_album(self) -> None:
+        """打开本机六毛相册文件夹，不访问网络。"""
+
+        directory = album_directory(self._active_focus_account_id); directory.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
+
+    def prompt_dialogue(self) -> None:
+        """打开新版聊天面板；离线和在线模式共用同一个入口。"""
+
+        self._record_user_interaction()
+        if self._chat_dialog is None:
+            # Keep chat as an independent utility window so it has a normal
+            # taskbar/Dock entry and can be minimized without affecting pet.
+            self._chat_dialog = ChatDialog(None, self._pet_name())
+            # Opening the chat repeatedly must not add another signal
+            # connection.  A duplicate connection would submit one user
+            # message multiple times and make every retry look like a second
+            # pet or a second conversation.
+            self._chat_dialog.message_submitted.connect(
+                self._submit_chat_message,
+                Qt.ConnectionType.UniqueConnection,
+            )
+            self._chat_dialog.stop_requested.connect(self._interrupt_chat)
+            self._chat_dialog.settings_requested.connect(self.open_settings)
+            self._chat_dialog.rename_requested.connect(self.rename_pet)
+            self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
+            self._chat_dialog.clear_display_requested.connect(self._clear_chat_display)
+            self._chat_dialog.new_conversation_requested.connect(self._start_new_conversation)
+            self._chat_dialog.history_requested.connect(self._show_chat_history)
+            if not self._chat_history.sessions():
+                self._chat_history.bootstrap(self._chat_memory.recent)
+            saved_messages = self._chat_history.current_messages()
+            if saved_messages:
+                self._chat_dialog.load_transcript(
+                    [
+                        ("你" if role == "user" else self._pet_name(), text)
+                        for role, text in saved_messages
+                    ]
+                )
+            else:
+                self._chat_dialog.append_message(
+                    self._pet_name(),
+                    "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
+                )
+        status = self.agent_manager.status(self.settings.ai_provider)
+        self._chat_dialog.set_provider(
+            self.settings.ai_provider,
+            status.state.value,
+            status.detail,
+        )
+        if self._chat_dialog.isMinimized():
+            self._chat_dialog.showNormal()
+        else:
+            self._chat_dialog.show()
+        self._chat_dialog.raise_()
+        self._chat_dialog.activateWindow()
+
+    def rename_pet(self) -> None:
+        """Edit the owner's social nickname; the pet remains 六毛 forever."""
+
+        self._record_user_interaction()
+        name, accepted = QInputDialog.getText(
+            self,
+            "修改主人称呼",
+            "主人称呼\n用于自习室、串门和搭子互动时区分不同六毛。\n例如填写“小梁”，其他搭子将看到“小梁家的六毛”。",
+            text=self._owner_nickname(),
+        )
+        if not accepted:
+            return
+        name = clean_owner_nickname(name)
+        previous_name = self._owner_nickname()
+        self.settings.owner_nickname = name
+        self.settings.pet_name = PET_NAME
+        save_settings(self.settings)
+        if name != previous_name:
+            self.owner_nickname_changed.emit(name)
+            self._sync_owner_nickname(name)
+            if self._social_dialog is not None:
+                self._social_dialog.set_owner_nickname(name)
+        label = social_pet_label(name)
+        self.show_speech(f"好，社交场景里就叫{label}。我还是六毛。", 4200)
+
+    def _sync_owner_nickname(self, nickname: str) -> None:
+        """Persist the social-only nickname without blocking the desktop pet."""
+
+        if not self.social_client.signed_in:
+            return
+        session = getattr(self.social_client, "session", None)
+        user_id = str(getattr(session, "user_id", "") or "")
+        if not user_id or self._owner_nickname_sync_inflight:
+            return
+        clean = clean_owner_nickname(nickname)
+        key = (user_id, clean)
+        if self._owner_nickname_sync_key == key:
+            return
+        updater = getattr(self.social_client, "update_owner_nickname", None)
+        if not callable(updater):
+            return
+        self._owner_nickname_sync_inflight = True
+        thread = SocialProfileThread(self.social_client, clean, self)
+        self._social_profile_threads.append(thread)
+        thread.completed.connect(lambda sync_key=key: self._owner_nickname_sync_succeeded(sync_key))
+        thread.failed.connect(self._owner_nickname_sync_failed)
+        thread.finished.connect(
+            lambda: self._social_profile_thread_finished(thread)
+        )
+        thread.start()
+
+    def _maybe_sync_owner_nickname(self) -> None:
+        """Sync a locally configured owner nickname after every account login."""
+
+        if self.social_client.signed_in:
+            self._sync_owner_nickname(self._owner_nickname())
+
+    def _owner_nickname_sync_succeeded(self, key: tuple[str, str]) -> None:
+        self._owner_nickname_sync_inflight = False
+        self._owner_nickname_sync_key = key
+        self._schedule_social_tick()
+
+    def _owner_nickname_sync_failed(self, _message: str) -> None:
+        self._owner_nickname_sync_inflight = False
+        if self._social_dialog is not None:
+            self._social_dialog._set_status("主人称呼已保存在本机，但云端同步失败，请稍后重试。", error=True)
+
+    def _social_profile_thread_finished(self, thread: SocialProfileThread) -> None:
+        if thread in self._social_profile_threads:
+            self._social_profile_threads.remove(thread)
+        thread.deleteLater()
+
+    def _submit_chat_message(self, message: str) -> None:
+        """把消息交给 ChatManager；路由只读取缓存，不做同步检测。"""
+
+        if self._chat_dialog is None:
+            return
+        message = " ".join(str(message or "").split())
+        if not message:
+            return
+        now = time.monotonic()
+        if (
+            message == self._last_chat_submission
+            and (
+                self._chat_submission_active
+                or now - self._last_chat_submission_at < 1.5
+            )
+        ):
+            LOGGER.debug("suppressed duplicate chat submission")
+            return
+        self._record_user_interaction()
+        if self.chat_manager.busy:
+            self._chat_dialog.append_message(self._pet_name(), "上一句话还在路上，稍等我一下。")
+            return
+        self._last_chat_submission = message
+        self._last_chat_submission_at = now
+        self._chat_submission_active = True
+        self._chat_dialog.append_message("你", message)
+        history_before = self._chat_memory.snapshot().as_history()
+        self._chat_memory.add("user", message)
+        self._chat_history.append("user", message)
+        self._chat_dialog.show_recovery_actions(False)
+        if not self.chat_manager.submit(message, history_before):
+            self._chat_submission_active = False
+
+    def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
+        """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
+
+        self._chat_memory.add("assistant", reply.text)
+        self._chat_history.append("assistant", reply.text)
+        self._chat_submission_active = False
         if self._chat_dialog is not None:
             if self._chat_streaming_active:
                 self._chat_dialog.finish_streaming_message(reply.text)
@@ -4484,4 +6208,3 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-
