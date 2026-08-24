@@ -1685,7 +1685,7 @@ class SocialHubDialog(QDialog):
         usable = tab_width * count
         tab_bar = self.tabs.tabBar()
         if tab_bar.width() != usable:
-            tab_bar.setFixedWidth(usable)
+            tab_bar.setFixedWidth(available)
         tab_bar.setStyleSheet(
             "QTabBar::tab {"
             f"min-width:{tab_width}px; max-width:{tab_width}px;"
