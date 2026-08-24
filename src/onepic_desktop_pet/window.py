@@ -406,7 +406,7 @@ class PetWindow(QWidget):
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
-        self.focus_session.set_today_seconds_provider(self._shared_today_focus_seconds)
+        self.focus_session.set_period_seconds_provider(self._shared_focus_period_seconds)
         self._focus_quality_tracker = FocusQualityTracker()
         self._active_focus_account_id = ""
         # session_seconds() is cumulative across pauses/resumes.  This cursor
@@ -3648,23 +3648,44 @@ class PetWindow(QWidget):
         self._recorded_focus_session_seconds = total
         return seconds
 
-    def _shared_today_focus_seconds(self) -> int:
-        """Return the reconciled day total used by every focus surface.
+    def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
+        """Return one reconciled day/week total for every focus surface.
 
         FocusAnalytics contains the durable account-scoped segments while
         WorkTimer contributes only the currently running monotonic segment.
         This prevents stale cumulative checkpoint values from inflating the
-        report and makes the study-room card, report, heartbeat, and duration
-        bubble agree on the same number.
+        report and makes the study-room card, report, heartbeat, and status
+        bubble agree on the same calendar-day and calendar-week numbers.
         """
 
-        moment = datetime.now(BEIJING_TIMEZONE)
-        projection = self.focus_analytics.period_summary("day", moment)
-        recorded = max(0, int(projection.get("total_seconds", 0) or 0))
-        if int(projection.get("local_record_count", 0) or 0) > 0:
+        moment = moment or datetime.now(BEIJING_TIMEZONE)
+        day_projection = self.focus_analytics.period_summary("day", moment)
+        week_projection = self.focus_analytics.period_summary("week", moment)
+        recorded_day = max(0, int(day_projection.get("total_seconds", 0) or 0))
+        has_local_day_records = int(day_projection.get("local_record_count", 0) or 0) > 0
+        if has_local_day_records:
             live = self.work_timer.current_elapsed_seconds() if self.work_timer.is_running else 0
-            return min(24 * 60 * 60, recorded + max(0, int(live)))
-        return max(0, int(self.work_timer.today_seconds()))
+            today = min(24 * 60 * 60, recorded_day + max(0, int(live)))
+        else:
+            today = max(0, int(self.work_timer.today_seconds()))
+
+        week = max(0, int(week_projection.get("total_seconds", 0) or 0))
+        # The current running segment has not been committed to analytics yet;
+        # add exactly that delta once to the weekly total. If no local records
+        # exist (for example on a new device), the timer's day value is still
+        # a stronger local signal than a missing/stale weekly aggregate.
+        if has_local_day_records and today > recorded_day:
+            week += today - recorded_day
+        week = max(week, today)
+        return {
+            "today_seconds": min(24 * 60 * 60, today),
+            "week_seconds": min(7 * 24 * 60 * 60, week),
+        }
+
+    def _shared_today_focus_seconds(self) -> int:
+        """Backward-compatible day-only accessor for legacy callers."""
+
+        return self._shared_focus_period_seconds()["today_seconds"]
 
     def _record_economy_performance(self, title: str, task_id: str) -> None:
         events = []
@@ -4533,19 +4554,9 @@ class PetWindow(QWidget):
         # projection used by the UI.  ``focus_analytics.snapshot()`` may
         # contain an old server maximum; echoing that maximum here creates a
         # feedback loop that permanently republishes bad 5h/53h values.
-        day_projection = self.focus_analytics.period_summary("day")
-        week_projection = self.focus_analytics.period_summary("week")
-        local_today = max(0, int(day_projection.get("total_seconds", 0) or 0))
-        if int(day_projection.get("local_record_count", 0) or 0) > 0:
-            # Use only the current monotonic segment.  ``snapshot.session_seconds``
-            # is cumulative across pauses/checkpoints and is not a live delta.
-            live_elapsed = self.work_timer.current_elapsed_seconds() if snapshot.is_running else 0
-            today_seconds = min(24 * 60 * 60, local_today + live_elapsed)
-        else:
-            today_seconds = max(0, int(snapshot.today_seconds or 0))
-        week_seconds = max(0, int(week_projection.get("total_seconds", 0) or 0))
-        if today_seconds > local_today:
-            week_seconds += today_seconds - local_today
+        period_totals = self._shared_focus_period_seconds()
+        today_seconds = period_totals["today_seconds"]
+        week_seconds = period_totals["week_seconds"]
         analytics = self.focus_analytics.snapshot()
         focus_history = self.focus_analytics.daily_history(days=8)
         today_key = today.isoformat()

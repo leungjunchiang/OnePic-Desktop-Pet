@@ -33,3 +33,20 @@ def test_focus_session_snapshot_can_use_reconciled_day_projection(tmp_path) -> N
     assert manager.snapshot().today_seconds == 1234
     assert manager.start() is True
     assert manager.snapshot().today_seconds == 1234
+
+
+def test_focus_session_snapshot_reconciles_day_week_and_stale_session(tmp_path) -> None:
+    """A stale cumulative session cannot exceed the shared day total."""
+
+    timer = WorkTimerModel(path=tmp_path / "timer.json")
+    manager = FocusSessionManager(timer)
+    assert manager.start() is True
+    timer._session_accumulated_seconds = 8 * 3600 + 24 * 60  # type: ignore[attr-defined]
+    manager.set_period_seconds_provider(
+        lambda: {"today_seconds": 8 * 3600 + 22 * 60, "week_seconds": 21 * 3600 + 41 * 60}
+    )
+
+    snapshot = manager.snapshot()
+    assert snapshot.session_seconds == 8 * 3600 + 22 * 60
+    assert snapshot.today_seconds == 8 * 3600 + 22 * 60
+    assert snapshot.week_seconds == 21 * 3600 + 41 * 60
