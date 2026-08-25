@@ -315,7 +315,7 @@ def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) ->
         if not item.separator and item.title not in {"隐藏六毛", "退出六毛"}
     ]
     assert native_titles == expected_titles
-    assert native_menu.items[-1].title == "更新与关于"
+    assert native_menu.items[-1].title == "更多设置"
     controller.close()
 
 

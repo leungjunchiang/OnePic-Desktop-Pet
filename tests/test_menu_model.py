@@ -73,11 +73,13 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
     assert "音乐" in titles
     assert "快捷工具" not in titles
     assert "显示与窗口" in titles
-    assert "百变六毛…" in titles
+    assert "百变六毛" in titles
+    assert "百变六毛…" not in titles
     assert "换装与外观…" not in titles
     assert "显示模式" not in titles
-    assert "设置" in titles
-    assert "更新与关于" in titles
+    assert "更多设置" in titles
+    assert "设置" not in titles
+    assert "更新与关于" not in titles
     assert "工作记录" not in titles
     assert "六毛互动" not in titles
     assert "显示六毛" in titles
@@ -101,10 +103,13 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
     assert display.children[2].checked is True
     assert display.children[3].checked is False
 
-    settings = next(item for item in model.items() if item.title == "设置")
-    assert [item.title for item in settings.children] == ["主人称呼…", "设置…"]
+    outfit = next(item for item in model.items() if item.title == "百变六毛")
+    assert [item.title for item in outfit.children] == ["换装…"]
 
-    updates = next(item for item in model.items() if item.title == "更新与关于")
+    settings = next(item for item in model.items() if item.title == "更多设置")
+    assert [item.title for item in settings.children[:2]] == ["主人称呼…", "设置…"]
+
+    updates = next(item for item in settings.children if item.title == "更新与关于")
     assert [item.title for item in updates.children[:2]] == ["检查补充内容更新", "更新到最新版本…"]
 
     music = next(item for item in model.items() if item.title == "音乐")

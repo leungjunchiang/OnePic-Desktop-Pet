@@ -1426,10 +1426,9 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "开始工作",
     ]
     assert "待办与提醒" in labels
-    assert "更新与关于" in labels
-    assert labels.index("更新与关于") > labels.index("设置")
+    assert "更新与关于" not in labels
     assert "显示与窗口" in labels
-    assert "设置" in labels
+    assert "更多设置" in labels
     assert "隐藏六毛" in labels
     assert "退出六毛" in labels
     assert not any("快捷工具" in label for label in labels)
@@ -1460,8 +1459,12 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert [action.text() for action in display.menu().actions()] == [
         "六毛大小…", "显示本轮工作时长", "始终置顶", "桌面模式"
     ]
-    settings = next(action for action in menu.actions() if action.text() == "设置")
-    assert [action.text() for action in settings.menu().actions()] == ["主人称呼…", "设置…"]
+    outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
+    assert [action.text() for action in outfit.menu().actions()] == ["换装…"]
+    settings = next(action for action in menu.actions() if action.text() == "更多设置")
+    assert [action.text() for action in settings.menu().actions()] == [
+        "主人称呼…", "设置…", "更新与关于"
+    ]
     separators = [index for index, action in enumerate(menu.actions()) if action.isSeparator()]
     assert len(separators) == 5
     pet_menu = window._build_context_menu()

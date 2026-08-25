@@ -127,6 +127,9 @@ class UnifiedMenuModel:
         ]
         todo_children = [item for item in todo_children if item is not None]
 
+        outfit_children = [self._optional("换装…", "outfit")]
+        outfit_children = [item for item in outfit_children if item is not None]
+
         report_item = self._optional("工作报告…", "show_report")
 
         update_children = [
@@ -175,6 +178,7 @@ class UnifiedMenuModel:
             self._optional("设置…", "settings"),
         ]
         settings_children = [item for item in settings_children if item is not None]
+        settings_children.append(MenuItemSpec("更新与关于", children=tuple(update_children)))
 
         work_entries: list[MenuItemSpec] = []
         if work_status == "focus":
@@ -221,14 +225,12 @@ class UnifiedMenuModel:
             entries.append(MenuItemSpec("待办与提醒", children=tuple(todo_children)))
 
         entries.append(MenuItemSpec.divider())
-        if "outfit" in self._callbacks:
-            entries.append(MenuItemSpec("百变六毛…", "outfit"))
+        if outfit_children:
+            entries.append(MenuItemSpec("百变六毛", children=tuple(outfit_children)))
         if display_children:
             entries.append(MenuItemSpec("显示与窗口", children=tuple(display_children)))
         entries.append(MenuItemSpec.divider())
-        if settings_children:
-            entries.append(MenuItemSpec("设置", children=tuple(settings_children)))
-        entries.append(MenuItemSpec("更新与关于", children=tuple(update_children)))
+        entries.append(MenuItemSpec("更多设置", children=tuple(settings_children)))
         entries.extend(
             (
                 MenuItemSpec.divider(),
