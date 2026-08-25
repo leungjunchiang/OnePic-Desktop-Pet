@@ -227,7 +227,13 @@ def _live_session_seconds(record: dict[str, Any]) -> int | None:
         return int(value) if value is not None else None
 
 
+_SOCIAL_FONT_CACHE: QFont | None = None
+
+
 def _social_font() -> QFont:
+    global _SOCIAL_FONT_CACHE
+    if _SOCIAL_FONT_CACHE is not None:
+        return QFont(_SOCIAL_FONT_CACHE)
     candidates = (
         (Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/simhei.ttf"))
         if sys.platform == "win32"
@@ -239,7 +245,8 @@ def _social_font() -> QFont:
             font_id = QFontDatabase.addApplicationFont(str(path))
             families = QFontDatabase.applicationFontFamilies(font_id)
             if families: family = families[0]; break
-    return QFont(family or "sans-serif", 10)
+    _SOCIAL_FONT_CACHE = QFont(family or "sans-serif", 10)
+    return QFont(_SOCIAL_FONT_CACHE)
 
 
 class EqualWidthTabBar(QTabBar):
@@ -275,6 +282,7 @@ class SocialSyncThread(QThread):
         try:
             heartbeat_error = ""
             focus_history_result = None
+            personal_state_result = None
             taunt_state_result = None
             personal_state = self.presence.get("personal_state")
             heartbeat_presence = _heartbeat_payload(self.presence)
@@ -292,7 +300,7 @@ class SocialSyncThread(QThread):
                 sync_rpc = getattr(self.client, "rpc", None)
                 if callable(sync_rpc):
                     try:
-                        sync_rpc(
+                        personal_state_result = sync_rpc(
                             "lili_sync_personal_state",
                             {
                                 "p_focus_date": str(personal_state.get("focus_date") or ""),
@@ -351,6 +359,13 @@ class SocialSyncThread(QThread):
             if isinstance(focus_history_result, dict):
                 data = dict(data or {})
                 data["_focus_history"] = focus_history_result
+            if isinstance(personal_state_result, dict):
+                data = dict(data or {})
+                # The dashboard function on older deployments does not yet
+                # expose the account lifetime/outfit columns.  Keep the
+                # merged RPC response alongside it so a second computer can
+                # still recover the unlock count and selected wardrobe.
+                data["_personal_state"] = personal_state_result
             if isinstance(taunt_state_result, dict):
                 data = dict(data or {})
                 data["_taunt_state"] = taunt_state_result
@@ -383,16 +398,6 @@ class SocialDashboardThread(QThread):
                 # Keep small offline/test backends compatible with the room
                 # scoped dashboard while the real request stays off the GUI.
                 data = self.client.dashboard()
-            leaderboard = getattr(self.client, "focus_leaderboard", None)
-            if callable(leaderboard) and getattr(self.client, "signed_in", True):
-                try:
-                    data = dict(data or {})
-                    data["leaderboard"] = leaderboard(period="week")
-                except (SocialError, TypeError):
-                    # Older deployments can run without the economy migration.
-                    # The room dashboard remains usable while the migration is
-                    # rolled out.
-                    pass
             self.completed.emit(dict(data or {}))
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -401,6 +406,27 @@ class SocialDashboardThread(QThread):
                 self.completed.emit(cached)
             else:
                 self.failed.emit(exc)
+
+
+class SocialLeaderboardThread(QThread):
+    """Load the optional leaderboard after the main room snapshot renders."""
+
+    completed = Signal(list)
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+
+    def run(self) -> None:
+        try:
+            leaderboard = getattr(self.client, "focus_leaderboard", None)
+            rows = leaderboard(period="week") if callable(leaderboard) else []
+            self.completed.emit(list(rows or []) if isinstance(rows, list) else [])
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception as exc:
+            self.failed.emit(SocialError(str(exc), kind="network", retryable=True))
 
 
 class SocialHealthThread(QThread):
@@ -1664,6 +1690,7 @@ class SocialHubDialog(QDialog):
         self._room_refresh_timer.setSingleShot(True)
         self._room_refresh_timer.timeout.connect(self._refresh_selected_room)
         self._dashboard_thread: SocialDashboardThread | None = None
+        self._leaderboard_thread: SocialLeaderboardThread | None = None
         self._room_refresh_pending = False
         self._health_thread: SocialHealthThread | None = None
         self._login_thread: SocialLoginThread | None = None
@@ -1750,6 +1777,18 @@ class SocialHubDialog(QDialog):
         QTimer.singleShot(0, self._apply_adaptive_tab_widths)
         self._update_account_state()
         if client.signed_in:
+            # Paint the last local snapshot before the first network round
+            # trip.  It is explicitly marked as offline/cache data, so this
+            # only improves perceived startup and never triggers visit or
+            # notification side effects; the live refresh below replaces it.
+            cached_loader = getattr(client, "cached_dashboard", None)
+            if callable(cached_loader):
+                try:
+                    cached = cached_loader(None)
+                except Exception:
+                    cached = None
+                if isinstance(cached, dict):
+                    self.apply_dashboard(cached)
             self._initial_refresh_timer.start(50)
             QTimer.singleShot(180, self._record_login_streak)
 
@@ -2355,6 +2394,7 @@ class SocialHubDialog(QDialog):
                 return
             self._end_action()
             self.apply_dashboard(data)
+            self._start_leaderboard_refresh()
             return
 
         self._begin_action(message)
@@ -2375,6 +2415,40 @@ class SocialHubDialog(QDialog):
             self._room_refresh_timer.start(0)
             return
         self.apply_dashboard(data)
+        self._start_leaderboard_refresh()
+
+    def _start_leaderboard_refresh(self) -> None:
+        """Fetch the optional leaderboard without delaying the room snapshot."""
+
+        if not self.client.signed_in:
+            return
+        if "leaderboard" in self.data:
+            return
+        thread = self._leaderboard_thread
+        if thread is not None and thread.isRunning():
+            return
+        thread = SocialLeaderboardThread(self.client, self)
+        self._leaderboard_thread = thread
+        thread.completed.connect(self._leaderboard_received)
+        thread.failed.connect(self._leaderboard_failed)
+        thread.finished.connect(lambda: self._leaderboard_thread_finished(thread))
+        thread.start()
+
+    def _leaderboard_received(self, rows: list) -> None:
+        self._leaderboard_rows = self._decorate_leaderboard_rows(rows or [])
+        self._leaderboard_loaded = True
+        self._leaderboard_error = False
+        self._render_wealth_leaderboard(self._leaderboard_rows)
+
+    def _leaderboard_failed(self, error: object) -> None:
+        self._leaderboard_error = True
+        self._render_wealth_leaderboard(self._leaderboard_rows)
+        LOGGER.info("weekly focus leaderboard deferred: %s", error)
+
+    def _leaderboard_thread_finished(self, thread: SocialLeaderboardThread) -> None:
+        if self._leaderboard_thread is thread:
+            self._leaderboard_thread = None
+        thread.deleteLater()
 
     def _dashboard_failed(self, error: object) -> None:
         self._end_action()

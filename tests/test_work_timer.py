@@ -210,6 +210,22 @@ def test_remote_focus_totals_merge_without_double_counting_live_seconds(tmp_path
     )
 
 
+def test_remote_lifetime_unlocks_survive_a_server_date_boundary(tmp_path) -> None:
+    """A UTC/Beijing date mismatch must not hide cross-device outfit unlocks."""
+
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.merge_remote_state(
+        today_seconds=900,
+        lifetime_seconds=12 * 3600,
+        date_key="2026-08-09",
+    )
+    # The stale daily bucket is intentionally ignored, while lifetime remains
+    # available for the outfit unlock calculation.
+    assert timer.today_seconds() == 0
+    assert timer.lifetime_seconds() == 12 * 3600
+
+
 def test_work_timer_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     clock = FakeClock()

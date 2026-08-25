@@ -407,19 +407,24 @@ class WorkTimerModel:
         """
 
         self._rollover_if_needed()
-        if date_key and str(date_key)[:10] != self._date_key:
-            return False
+        # A server snapshot can legitimately straddle midnight (and older
+        # deployments used UTC for the profile date).  A date mismatch means
+        # the daily bucket must not be merged into today's counter, but the
+        # account-wide lifetime total is still authoritative and is needed to
+        # calculate cross-device wardrobe unlocks.
+        date_matches = not date_key or str(date_key)[:10] == self._date_key
         remote_today = max(0, int(today_seconds or 0))
         remote_lifetime = max(0, int(lifetime_seconds or 0))
         elapsed = self._current_elapsed()
         local_today = self._accumulated_seconds + elapsed
         local_lifetime = self._lifetime_seconds + elapsed
-        target_today = max(local_today, remote_today)
         target_lifetime = max(local_lifetime, remote_lifetime)
         changed = False
-        if target_today > local_today:
-            self._accumulated_seconds = max(0, target_today - elapsed)
-            changed = True
+        if date_matches:
+            target_today = max(local_today, remote_today)
+            if target_today > local_today:
+                self._accumulated_seconds = max(0, target_today - elapsed)
+                changed = True
         if target_lifetime > local_lifetime:
             self._lifetime_seconds = max(0, target_lifetime - elapsed)
             changed = True

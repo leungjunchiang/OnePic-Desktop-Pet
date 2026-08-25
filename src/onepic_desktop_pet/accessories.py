@@ -224,13 +224,23 @@ def _remove_taunt_background(image: QImage) -> QImage:
         sum(color.green() for color in corners) // len(corners),
         sum(color.blue() for color in corners) // len(corners),
     )
+    key_luminance = (key.red() + key.green() + key.blue()) // 3
 
     def close_to_key(color: QColor) -> bool:
+        # The supplied JPEG has a light-grey matte and a thick white sticker
+        # outline.  The old RGB-only threshold treated that white outline as
+        # matte (the channels are equally close to the grey corner colour), so
+        # flood-fill ate holes in the silhouette.  Restrict the fill to the
+        # matte's luminance band; bright near-white outline pixels remain
+        # connected artwork and are preserved.
+        luminance = (color.red() + color.green() + color.blue()) // 3
+        if luminance > key_luminance + 18:
+            return False
         return max(
             abs(color.red() - key.red()),
             abs(color.green() - key.green()),
             abs(color.blue() - key.blue()),
-        ) <= 36
+        ) <= 30
 
     queue = deque()
     seen: set[tuple[int, int]] = set()

@@ -4973,11 +4973,23 @@ class PetWindow(QWidget):
             self._owner_nickname_remote_loaded_for = user_id
         presence = data.get("me_presence") if isinstance(data, dict) else None
         presence = presence if isinstance(presence, dict) else {}
-        remote_date = profile.get("focus_today_date")
-        remote_today = profile.get("focus_today_seconds")
+        # The personal-state RPC returns the server's merged values even when
+        # an older dashboard function omits the newer profile columns.  Prefer
+        # that response, then fall back to the dashboard/profile payload for
+        # compatibility with older relays.
+        personal_state = data.get("_personal_state") if isinstance(data, dict) else None
+        personal_state = personal_state if isinstance(personal_state, dict) else {}
+        remote_date = personal_state.get("focus_today_date")
+        if remote_date is None:
+            remote_date = profile.get("focus_today_date")
+        remote_today = personal_state.get("focus_today_seconds")
+        if remote_today is None:
+            remote_today = profile.get("focus_today_seconds")
         if remote_today is None:
             remote_today = presence.get("today_seconds")
-        remote_lifetime = profile.get("focus_lifetime_seconds")
+        remote_lifetime = personal_state.get("focus_lifetime_seconds")
+        if remote_lifetime is None:
+            remote_lifetime = profile.get("focus_lifetime_seconds")
         if remote_date is not None or remote_today is not None or remote_lifetime is not None:
             self.work_timer.merge_remote_state(
                 today_seconds=int(remote_today or 0),
@@ -4985,8 +4997,12 @@ class PetWindow(QWidget):
                 date_key=str(remote_date or datetime.now(BEIJING_TIMEZONE).date().isoformat()),
             )
 
-        remote_week_start = profile.get("focus_week_start_date")
-        remote_week_seconds = profile.get("focus_week_seconds")
+        remote_week_start = personal_state.get("focus_week_start_date")
+        if remote_week_start is None:
+            remote_week_start = profile.get("focus_week_start_date")
+        remote_week_seconds = personal_state.get("focus_week_seconds")
+        if remote_week_seconds is None:
+            remote_week_seconds = profile.get("focus_week_seconds")
         if remote_week_seconds is None:
             remote_week_seconds = presence.get("week_seconds")
         analytics_changed = self.focus_analytics.merge_remote_state(
@@ -5008,9 +5024,14 @@ class PetWindow(QWidget):
         if (analytics_changed or history_changed) and self._social_dialog is not None:
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
 
-        if "outfit_key" not in profile:
+        if "outfit_key" not in profile and "outfit_key" not in personal_state:
             return
-        remote_outfit = str(profile.get("outfit_key") or "")[:60]
+        remote_outfit_value = (
+            personal_state.get("outfit_key")
+            if "outfit_key" in personal_state
+            else profile.get("outfit_key")
+        )
+        remote_outfit = str(remote_outfit_value or "")[:60]
         allowed_outfits = {
             item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
         }
