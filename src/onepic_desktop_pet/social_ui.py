@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import time
 import logging
+import json
 from functools import cmp_to_key
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,6 +33,64 @@ from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .work_timer import format_work_duration
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _unwrap_reaction_payload(payload: object) -> dict[str, Any] | None:
+    """Normalize direct PostgREST and relay responses for reaction state.
+
+    JSONB RPCs normally arrive as a dictionary, but older relay builds and a
+    few HTTP clients wrap the same value in ``data``/``result`` or encode it
+    as a JSON string/one-item list.  Treat those representations identically
+    so a valid server taunt cannot be silently dropped by the UI.
+    """
+
+    value: object = payload
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, list):
+        if len(value) != 1:
+            return None
+        value = value[0]
+    if not isinstance(value, dict):
+        return None
+    # Edge relays may wrap the RPC result while direct PostgREST returns it
+    # directly. Only unwrap when the nested value is itself a state object.
+    for key in ("data", "result", "payload"):
+        nested = value.get(key)
+        if isinstance(nested, (dict, list, str)):
+            unwrapped = _unwrap_reaction_payload(nested)
+            if unwrapped is not None and (
+                "taunt" in unwrapped or "encouragement" in unwrapped
+            ):
+                return unwrapped
+    return value
+
+
+def _unwrap_single_reaction_state(payload: object) -> dict[str, Any] | None:
+    """Normalize a taunt/encouragement state JSONB RPC response."""
+
+    value: object = payload
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, list):
+        if len(value) != 1:
+            return None
+        value = value[0]
+    if not isinstance(value, dict):
+        return None
+    for key in ("data", "result", "payload"):
+        nested = value.get(key)
+        if isinstance(nested, (dict, list, str)):
+            unwrapped = _unwrap_single_reaction_state(nested)
+            if unwrapped is not None and "active" in unwrapped:
+                return unwrapped
+    return value if "active" in value else None
 
 # Supabase returns timestamptz values with their UTC offset.  The room UI is
 # intentionally fixed to China Standard Time instead of inheriting the
@@ -335,17 +394,32 @@ class SocialSyncThread(QThread):
             taunt_rpc = getattr(self.client, "rpc", None)
             if callable(taunt_rpc):
                 try:
-                    reaction_state = taunt_rpc("lili_reaction_state", {})
-                    if isinstance(reaction_state, dict):
-                        taunt_state_result = reaction_state.get("taunt")
-                        encouragement_state_result = reaction_state.get("encouragement")
+                    reaction_state = _unwrap_reaction_payload(
+                        taunt_rpc("lili_reaction_state", {})
+                    )
+                    if reaction_state is not None:
+                        taunt_state_result = _unwrap_single_reaction_state(
+                            reaction_state.get("taunt")
+                        )
+                        encouragement_state_result = _unwrap_single_reaction_state(
+                            reaction_state.get("encouragement")
+                        )
+                    # A mixed-version relay can return HTTP 200 with a
+                    # partial/empty combined snapshot.  Do one compatibility
+                    # read instead of silently dropping an active punishment.
+                    if taunt_state_result is None:
+                        taunt_state_result = _unwrap_single_reaction_state(
+                            taunt_rpc("lili_taunt_state", {})
+                        )
                 except (SocialError, AttributeError, TypeError) as exc:
                     # Older relays know the original taunt RPC but not the
                     # combined reaction snapshot. Keep those clients usable
                     # without adding another request on the current backend.
                     LOGGER.info("combined reaction state deferred: %s", exc)
                     try:
-                        taunt_state_result = taunt_rpc("lili_taunt_state", {})
+                        taunt_state_result = _unwrap_single_reaction_state(
+                            taunt_rpc("lili_taunt_state", {})
+                        )
                     except (SocialError, AttributeError, TypeError) as fallback_exc:
                         LOGGER.info("taunt state sync deferred: %s", fallback_exc)
             room_id = self.presence.get("room_id")

@@ -1,5 +1,6 @@
 """验证搭子自习室四标签布局和未登录交互反馈。"""
 
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -18,6 +19,8 @@ from onepic_desktop_pet.social_ui import (
     SocialHubDialog,
     SocialSignupThread,
     SocialVisitResponseThread,
+    _unwrap_reaction_payload,
+    _unwrap_single_reaction_state,
 )
 
 
@@ -495,6 +498,15 @@ def test_buddy_visit_is_a_normal_minimizable_taskbar_window() -> None:
     assert visit.isMinimized()
     visit.hide_visit()
     visit.close(); visit.deleteLater(); app.processEvents()
+
+
+def test_reaction_state_normalizes_direct_and_legacy_wrapped_rpc_payloads() -> None:
+    active = {"active": True, "id": "taunt-1", "message": "就这？"}
+    direct = {"taunt": active, "encouragement": {"active": False}}
+    assert _unwrap_reaction_payload(direct) == direct
+    assert _unwrap_reaction_payload({"data": [direct]}) == direct
+    assert _unwrap_reaction_payload(json.dumps(direct)) == direct
+    assert _unwrap_single_reaction_state({"result": [active]}) == active
 
 
 def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
