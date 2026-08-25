@@ -299,7 +299,6 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
         painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(10, 13, 48, 36, 13, 13)
         painter.drawPolygon([QPoint(20, 47), QPoint(18, 61), QPoint(34, 49)])
-        painter.setBrush(QBrush(red)); painter.drawEllipse(48, 8, 15, 15)
     elif kind == "work":
         painter.drawEllipse(10, 10, 52, 52)
         painter.setPen(QPen(red, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
@@ -309,12 +308,20 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
     elif kind == "social":
         painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(8, 13, 25, 25); painter.drawEllipse(39, 13, 25, 25)
         painter.setBrush(QBrush(blue)); painter.drawRoundedRect(7, 39, 28, 20, 9, 9); painter.drawRoundedRect(37, 39, 28, 20, 9, 9)
-        painter.setBrush(QBrush(red)); painter.drawEllipse(51, 6, 14, 14)
     elif kind == "music":
-        painter.setPen(QPen(red, 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(43, 13, 43, 49); painter.drawLine(43, 13, 59, 9); painter.drawEllipse(17, 43, 25, 16); painter.drawEllipse(40, 43, 25, 16)
-        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(7, 7, 13, 13)
-        painter.setBrush(QBrush(yellow)); painter.drawEllipse(55, 52, 10, 10)
+        # A bold pair of connected eighth notes reads clearly even when the
+        # 72px source is rendered as a 22px shortcut icon.
+        painter.setPen(QPen(blue, 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawLine(30, 18, 30, 50)
+        painter.drawLine(30, 18, 57, 12)
+        painter.drawLine(57, 12, 57, 43)
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(10, 45, 25, 16)
+        painter.drawEllipse(37, 38, 25, 16)
+        painter.setPen(QPen(red, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(8, 8, 17, 17, 35 * 16, 105 * 16)
+        painter.setPen(QPen(yellow, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(48, 49, 16, 12, 205 * 16, 120 * 16)
     elif kind == "todo":
         painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
@@ -328,19 +335,22 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
         painter.drawLine(22, 53, 28, 59)
         painter.drawLine(28, 59, 39, 48)
     elif kind == "food":
-        # Small tray + cup: the same red/yellow/blue line language as the
-        # other shortcut icons, without turning the shortcut into a menu of
-        # every food item.
+        # Make the action unmistakably food: a steaming bowl framed by a
+        # fork and spoon, rather than a tiny cup that looked decorative.
         painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(QBrush(QColor("#d9eef1")))
-        painter.drawRoundedRect(10, 39, 52, 13, 6, 6)
-        painter.drawArc(18, 39, 36, 16, 0, 180 * 16)
-        painter.setBrush(QBrush(yellow)); painter.setPen(QPen(blue, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawRoundedRect(24, 15, 24, 24, 6, 6)
-        painter.drawArc(44, 20, 16, 14, -90 * 16, 180 * 16)
-        painter.setPen(QPen(red, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawArc(31, 6, 10, 13, 0, 180 * 16)
-        painter.setBrush(QBrush(red)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(51, 8, 11, 11)
+        painter.drawRoundedRect(17, 35, 39, 24, 10, 10)
+        painter.drawArc(17, 42, 39, 22, 0, -180 * 16)
+        painter.setPen(QPen(yellow, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(24, 12, 11, 20, 35 * 16, 125 * 16)
+        painter.drawArc(39, 8, 11, 24, 35 * 16, 125 * 16)
+        painter.setPen(QPen(blue, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(8, 12, 8, 48)
+        painter.drawLine(4, 12, 4, 25)
+        painter.drawLine(8, 12, 8, 25)
+        painter.drawLine(12, 12, 12, 25)
+        painter.drawLine(62, 12, 62, 55)
+        painter.drawEllipse(55, 9, 14, 16)
     elif kind == "report":
         painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(QBrush(QColor("#eaf5f3")))
