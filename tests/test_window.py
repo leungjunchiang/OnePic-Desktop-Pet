@@ -86,6 +86,34 @@ def test_taunt_state_schedules_periodic_followup_speech() -> None:
     app.processEvents()
 
 
+def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
+    app, window = _create_window()
+    window._apply_taunt_state(
+        {
+            "active": True,
+            "id": "taunt-many",
+            "sender_nickname": "小梁",
+            "sender_nicknames": ["小梁", "大毛"],
+            "support_count": 2,
+            "message": "工位有人，工作没人。",
+            "messages": ["工位有人，工作没人。", "就这？"],
+        }
+    )
+    app.processEvents()
+    assert window.visit_status_bubble.isVisible()
+    assert window.visit_status_bubble.text() == "小梁和大毛正在嘲讽你"
+    assert window.speech_bubble.isVisible()
+    assert window.speech_bubble.text().startswith("小梁和大毛：")
+
+    window._taunt_chatter_tick()
+    assert window.speech_bubble.text().startswith("小梁和大毛：")
+    window._apply_taunt_state({"active": False})
+    assert not window.visit_status_bubble.isVisible()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_macos_pet_does_not_poll_native_topmost_layer(monkeypatch) -> None:
     """macOS must not re-apply the native level while another app is active."""
 

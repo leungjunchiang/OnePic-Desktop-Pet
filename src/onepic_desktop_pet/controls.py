@@ -73,6 +73,8 @@ border: 1px solid rgba(231, 74, 79, 155); }
 QLabel#visitStatusHint { background: rgba(246, 251, 251, 235); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 86); border-radius: 10px;
 padding: 3px 8px; font-size: 11px; }
+QLabel#visitStatusHint[taunt="true"] { background: rgba(255, 240, 238, 242); color: #b94b51;
+border: 1px solid rgba(231, 74, 79, 155); }
 """
 
 
@@ -221,12 +223,20 @@ class VisitStatusBubble(QLabel):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setWordWrap(True)
+        self.setMaximumWidth(320)
         self.setStyleSheet(CONTROL_STYLE)
         self.hide()
+
+    def _set_taunt_style(self, active: bool) -> None:
+        self.setProperty("taunt", bool(active))
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def set_visitor(self, nickname: str | None) -> None:
         """Show or hide the current visitor label."""
 
+        self._set_taunt_style(False)
         name = str(nickname or "搭子").strip()[:40]
         if not name:
             self.hide()
@@ -239,7 +249,8 @@ class VisitStatusBubble(QLabel):
     def set_taunter(self, nickname: str | None, support_count: int = 1) -> None:
         """Show the server-authoritative punishment state beside the pet."""
 
-        name = str(nickname or "搭子").strip()[:40]
+        self._set_taunt_style(True)
+        name = str(nickname or "搭子").strip()[:180]
         if not name:
             self.hide()
             self.setText("")
@@ -252,6 +263,7 @@ class VisitStatusBubble(QLabel):
     def set_encourager(self, nickname: str | None) -> None:
         """Show the persistent one-hour working encouragement beside the pet."""
 
+        self._set_taunt_style(False)
         name = str(nickname or "搭子").strip()[:40]
         if not name:
             self.hide()
