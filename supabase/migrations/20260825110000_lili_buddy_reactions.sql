@@ -108,7 +108,6 @@ begin
     select 1 from public.lili_buddy_taunts t
     where t.sender_id = me and t.receiver_id = p_target
       and t.created_at > now() - interval '30 minutes'
-      and t.released_at is null
   ) then
     raise exception '同一位搭子 30 分钟内只能成功嘲讽一次';
   end if;
@@ -213,7 +212,6 @@ begin
     select 1 from public.lili_buddy_encouragements e
     where e.sender_id = me and e.receiver_id = p_target
       and e.created_at > now() - interval '30 minutes'
-      and e.ended_at is null and e.expires_at > now()
   ) then
     raise exception '同一位搭子 30 分钟内只能送一次持续加油';
   end if;
