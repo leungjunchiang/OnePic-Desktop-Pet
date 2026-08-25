@@ -3654,7 +3654,7 @@ class PetWindow(QWidget):
         self._change_ambient_activity("none")
         self.show_speech(
             f"累计专注 {newly_unlocked} 小时，已解锁「{latest.name}」！\n"
-            f"你可以在“换装与外观”里选择，当前装备保持不变。",
+            f"你可以在“百变六毛”里选择，当前装备保持不变。",
             8200,
         )
 
@@ -4924,7 +4924,7 @@ class PetWindow(QWidget):
             self._set_temporary_activity("happy", 30_000)
             self.show_speech(
                 "连续登录 3 天，已解锁「三日连登搭子」！\n"
-                "可以在“换装与外观”里穿上它。",
+                "可以在“百变六毛”里穿上它。",
                 8200,
             )
         # A server profile may already contain the reward outfit when this

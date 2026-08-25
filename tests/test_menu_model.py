@@ -72,6 +72,8 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
     assert "音乐" in titles
     assert "快捷工具" not in titles
     assert "显示与窗口" in titles
+    assert "百变六毛…" in titles
+    assert "换装与外观…" not in titles
     assert "显示模式" not in titles
     assert "设置" in titles
     assert "更新与关于" in titles

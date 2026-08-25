@@ -221,7 +221,7 @@ class UnifiedMenuModel:
 
         entries.append(MenuItemSpec.divider())
         if "outfit" in self._callbacks:
-            entries.append(MenuItemSpec("换装与外观…", "outfit"))
+            entries.append(MenuItemSpec("百变六毛…", "outfit"))
         if display_children:
             entries.append(MenuItemSpec("显示与窗口", children=tuple(display_children)))
         entries.append(MenuItemSpec.divider())
