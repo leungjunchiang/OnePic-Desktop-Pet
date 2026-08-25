@@ -441,6 +441,12 @@ class PetWindow(QWidget):
         # separate from the local inventory scene so accepting a buddy's
         # drink/cake never pauses or rewrites the local focus session.
         self._social_food_activity_until = 0.0
+        # The taunt is server-authoritative and survives local animation or
+        # focus transitions.  It is cleared only when the taunt RPC says the
+        # target's start+20 minute punishment window has ended.
+        self._taunt_active = False
+        self._taunt_id = ""
+        self._taunt_sender_nickname = ""
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
         self._auto_paused_for_idle = False
@@ -1076,6 +1082,12 @@ class PetWindow(QWidget):
             and time.monotonic() < self._social_food_activity_until
         ):
             food_scene_active = True
+        # A punishment outfit is deliberately stronger than ordinary ambient
+        # or food animations: the server state, bubble, and sprite must end
+        # together instead of one local timer restoring the old outfit early.
+        if self._taunt_active:
+            activity = "taunt"
+            food_scene_active = False
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
         composed = draw_activity_overlay(
@@ -4759,6 +4771,8 @@ class PetWindow(QWidget):
         if self._social_dialog is not None:
             self._social_dialog.apply_dashboard(data)
 
+        taunt_active = self._apply_taunt_state(data.get("_taunt_state"))
+
         # A cached snapshot is useful for explaining the last known state,
         # but it is not permission to reopen a visit window or emit a new
         # interaction.  Only a server-confirmed payload may trigger social
@@ -4805,10 +4819,50 @@ class PetWindow(QWidget):
                 if sender_id(item) not in self._muted_buddy_ids
             ]
         )
-        if active:
+        if taunt_active:
+            # The compact bubble is shared with normal串门状态.  A taunt is
+            # intentionally the higher-priority label while its punishment is
+            # active, and the historical two-pet visit window stays closed.
+            self._buddy_visit_window.hide_visit()
+        elif active:
             self._show_buddy_visit(active[0])
         else:
             self._hide_buddy_visit()
+
+    def _apply_taunt_state(self, state: object) -> bool:
+        """Render the receiver's persistent taunt and return whether active."""
+
+        if not isinstance(state, dict) or "active" not in state:
+            # Older relays may omit the optional RPC.  Never clear a valid
+            # punishment merely because a compatibility response was sparse.
+            return self._taunt_active
+        active = bool(state.get("active"))
+        if active:
+            taunt_id = str(state.get("id") or state.get("taunt_id") or "")
+            sender = str(
+                state.get("sender_nickname")
+                or state.get("nickname")
+                or state.get("sender_name")
+                or "搭子"
+            ).strip()[:40]
+            self._taunt_active = True
+            self._taunt_id = taunt_id
+            self._taunt_sender_nickname = sender
+            self._change_ambient_activity("taunt")
+            if sys.platform == "darwin":
+                self._apply_macos_window_behavior(self.visit_status_bubble)
+            self.visit_status_bubble.set_taunter(sender)
+            self._position_visit_status_bubble()
+            self._raise_accessory(self.visit_status_bubble)
+            return True
+        if self._taunt_active:
+            self._taunt_active = False
+            self._taunt_id = ""
+            self._taunt_sender_nickname = ""
+            if self._ambient_activity == "taunt":
+                self._change_ambient_activity("none")
+            self.visit_status_bubble.hide()
+        return False
 
     @staticmethod
     def _buddy_request_id(request: dict) -> str:
@@ -5132,6 +5186,8 @@ class PetWindow(QWidget):
 
     def _show_buddy_visit(self, peer: dict) -> None:
         if detect_quiet_mode().blocked:
+            return
+        if self._taunt_active:
             return
         # Active visits normally carry a database id.  Keep a deterministic
         # fallback for older backend responses so a 30-second heartbeat does

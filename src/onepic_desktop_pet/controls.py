@@ -236,6 +236,18 @@ class VisitStatusBubble(QLabel):
         self.adjustSize()
         self.show()
 
+    def set_taunter(self, nickname: str | None) -> None:
+        """Show the server-authoritative punishment state beside the pet."""
+
+        name = str(nickname or "搭子").strip()[:40]
+        if not name:
+            self.hide()
+            self.setText("")
+            return
+        self.setText(f"{name}正在嘲讽你")
+        self.adjustSize()
+        self.show()
+
 
 class CoffeeScenePrompt(QWidget):
     """Non-modal coffee timeout prompt that never decides work for the user."""

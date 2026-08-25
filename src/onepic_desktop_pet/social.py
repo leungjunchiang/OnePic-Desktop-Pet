@@ -1204,6 +1204,8 @@ class HttpSocialBackend:
             "lili_set_buddy_subscription": "/buddies/subscription",
             "lili_send_visit": "/visits/send",
             "lili_respond_visit": "/visits/accept",
+            "lili_send_taunt": "/buddies/taunt",
+            "lili_taunt_state": "/buddies/taunt-state",
             "lili_create_room": "/rooms/create",
             "lili_join_room": "/rooms/join",
             "lili_set_room_goal": "/rooms/goal",

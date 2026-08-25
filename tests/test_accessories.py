@@ -48,3 +48,19 @@ def test_night_limited_activity_uses_the_dedicated_transparent_sprite() -> None:
     assert SPECIAL_LIMITED_ACTIVITY_SPRITES["night-study-limited"] == (
         "assets/pet/night-limited/00-night-study-clean.png"
     )
+
+
+def test_taunt_activity_uses_the_server_punishment_sprite() -> None:
+    from onepic_desktop_pet.accessories import SPECIAL_LIMITED_ACTIVITY_SPRITES
+
+    assert SPECIAL_LIMITED_ACTIVITY_SPRITES["taunt"] == "assets/pet/special/taunt-pet.jpg"
+
+
+def test_taunt_sprite_removes_the_reference_matte() -> None:
+    app = QApplication.instance() or QApplication([])
+    source = QPixmap(300, 300)
+    source.fill(Qt.GlobalColor.transparent)
+    result = draw_activity_overlay(source, activity="taunt")
+    assert app is not None
+    assert result.toImage().pixelColor(0, 0).alpha() == 0
+    assert _alpha_bbox(result) is not None

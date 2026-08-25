@@ -261,6 +261,7 @@ class SocialSyncThread(QThread):
         try:
             heartbeat_error = ""
             focus_history_result = None
+            taunt_state_result = None
             personal_state = self.presence.get("personal_state")
             heartbeat_presence = _heartbeat_payload(self.presence)
             if self.send_heartbeat:
@@ -304,6 +305,16 @@ class SocialSyncThread(QThread):
                         # received this migration yet, the existing profile
                         # sync and local cache continue to work.
                         LOGGER.info("daily focus history sync deferred: %s", exc)
+            # Taunts are separate from room events because the receiver must
+            # keep the state across devices until the first work heartbeat
+            # plus twenty minutes.  Older relays may not know this optional
+            # RPC yet; in that case the rest of the dashboard remains usable.
+            taunt_rpc = getattr(self.client, "rpc", None)
+            if callable(taunt_rpc):
+                try:
+                    taunt_state_result = taunt_rpc("lili_taunt_state", {})
+                except (SocialError, AttributeError, TypeError) as exc:
+                    LOGGER.info("taunt state sync deferred: %s", exc)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -326,6 +337,9 @@ class SocialSyncThread(QThread):
             if isinstance(focus_history_result, dict):
                 data = dict(data or {})
                 data["_focus_history"] = focus_history_result
+            if isinstance(taunt_state_result, dict):
+                data = dict(data or {})
+                data["_taunt_state"] = taunt_state_result
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -992,15 +1006,19 @@ class BuddyCardWidget(QWidget):
         footer = QLabel(f"娃衣：{outfit}")
         footer.setStyleSheet("color:#61727d;font-size:11px;")
         footer.setWordWrap(False)
-        footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、加油或送补给")
+        footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
         root.addWidget(footer)
         actions = QGridLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setHorizontalSpacing(4)
         actions.setVerticalSpacing(3)
+        # “加油” now doubles as a playful punishment when a buddy is not
+        # working.  The server still checks the state, while this label gives
+        # the user an immediate, honest affordance in the card.
+        taunt_available = _presence_status(buddy) != "focus" and not bool(buddy.get("working"))
         action_specs = (
             ("visit", "串门"),
-            ("cheer", "加油"),
+            ("cheer", "嘲讽" if taunt_available else "加油"),
             ("food_coffee", "请咖啡"),
             ("food_milk_tea", "请奶茶"),
             ("food_tea", "敬茶"),
@@ -1068,7 +1086,8 @@ class BuddyCardWidget(QWidget):
         if button is None:
             return
         labels = {
-            "visit": "串门", "cheer": "加油",
+            "visit": "串门",
+            "cheer": "嘲讽" if _presence_status(self.buddy) != "focus" and not bool(self.buddy.get("working")) else "加油",
             "food_coffee": "请咖啡", "food_milk_tea": "请奶茶",
             "food_tea": "敬茶", "food_cake": "请蛋糕",
         }
@@ -1135,8 +1154,9 @@ class RoomPetCardWidget(QWidget):
         actions.setHorizontalSpacing(3)
         actions.setVerticalSpacing(3)
         is_self = bool(buddy.get("is_self"))
+        taunt_available = _presence_status(buddy) != "focus" and not bool(buddy.get("working"))
         specs = (
-            ("visit", "串门"), ("cheer", "加油"),
+            ("visit", "串门"), ("cheer", "嘲讽" if taunt_available else "加油"),
             ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"),
             ("food_cake", "蛋糕"),
         )
@@ -2379,6 +2399,17 @@ class SocialHubDialog(QDialog):
             except SocialError as exc:
                 self._error(exc)
             return
+        if kind == "cheer":
+            # Outside a focus session this is a playful, persistent taunt.
+            # The RPC repeats the state check server-side so stale cards or a
+            # second device cannot punish somebody who has already started.
+            if _presence_status(buddy) != "focus" and not bool(buddy.get("working")):
+                try:
+                    self.client.rpc("lili_send_taunt", {"p_target": target})
+                    self._interaction_sent(nickname, "taunt")
+                except SocialError as exc:
+                    self._error(exc)
+                return
         if not self.current_room_id:
             self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
             return
@@ -2514,8 +2545,12 @@ class SocialHubDialog(QDialog):
             self._error(exc)
 
     def _interaction_sent(self, nickname: str, kind: str) -> None:
-        labels = {"poke": "戳了一下", "cheer": "送上加油", "drink": "递了一杯奶茶", "phrase": "发送了快速短语"}
-        self._set_status(f"{PET_NAME}已向 {nickname} {labels.get(kind, '送出互动')}；对方房间动态会显示这次互动。")
+        labels = {
+            "poke": "戳了一下", "cheer": "送上加油", "taunt": "发起嘲讽",
+            "drink": "递了一杯奶茶", "phrase": "发送了快速短语",
+        }
+        suffix = "；对方会在开始工作后保留惩罚造型 20 分钟。" if kind == "taunt" else "；对方房间动态会显示这次互动。"
+        self._set_status(f"{PET_NAME}已向 {nickname} {labels.get(kind, '送出互动')}{suffix}")
         QTimer.singleShot(0, self._refresh_selected_room)
 
     def _event_thread_finished(self, thread: SocialEventThread) -> None:

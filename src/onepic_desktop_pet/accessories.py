@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 
 from .growth import ACTION_SPRITES
 from .resources import resource_path
@@ -55,6 +56,10 @@ SPECIAL_ACTIVITY_SPRITES = {
 
 SPECIAL_LIMITED_ACTIVITY_SPRITES = {
     "night-study-limited": "assets/pet/night-limited/00-night-study-clean.png",
+    # Server-authoritative punishment state.  This is intentionally a
+    # complete sprite rather than an overlay so the outfit and expression
+    # switch together on every platform.
+    "taunt": "assets/pet/special/taunt-pet.jpg",
 }
 
 SPECIAL_OUTFIT_SPRITES = {
@@ -64,6 +69,8 @@ SPECIAL_OUTFIT_SPRITES = {
 SPECIAL_OUTFIT_SPRITES[LOGIN_REWARD_OUTFIT.key] = (
     "assets/pet/login-rewards/3-day-login.png"
 )
+
+_FULL_SPRITE_CACHE: dict[str, QPixmap] = {}
 
 
 def unlocked_outfits(count: int) -> tuple[Outfit, ...]:
@@ -164,7 +171,13 @@ def draw_activity_overlay(
 def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
     """把完整透明动作素材按源画布等比居中，保持桌宠窗口大小恒定。"""
 
-    sprite = QPixmap(str(resource_path(relative_path)))
+    sprite = _FULL_SPRITE_CACHE.get(relative_path)
+    if sprite is None:
+        sprite = QPixmap(str(resource_path(relative_path)))
+        if relative_path.endswith("taunt-pet.jpg") and not sprite.isNull():
+            sprite = QPixmap.fromImage(_remove_taunt_background(sprite.toImage()))
+        if not sprite.isNull():
+            _FULL_SPRITE_CACHE[relative_path] = QPixmap(sprite)
     if sprite.isNull():
         return QPixmap(source)
     result = QPixmap(source.size())
@@ -186,6 +199,60 @@ def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
     )
     painter.end()
     return result
+
+
+def _remove_taunt_background(image: QImage) -> QImage:
+    """Turn the supplied grey matte into alpha without touching the artwork.
+
+    The user-provided reference is a JPEG, so it has no alpha channel.  A
+    border flood-fill removes only pixels close to the corner's flat grey
+    colour; the white outline remains protected behind that matte.
+    """
+
+    image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    width, height = image.width(), image.height()
+    if width <= 2 or height <= 2:
+        return image
+    corners = [
+        image.pixelColor(0, 0),
+        image.pixelColor(width - 1, 0),
+        image.pixelColor(0, height - 1),
+        image.pixelColor(width - 1, height - 1),
+    ]
+    key = QColor(
+        sum(color.red() for color in corners) // len(corners),
+        sum(color.green() for color in corners) // len(corners),
+        sum(color.blue() for color in corners) // len(corners),
+    )
+
+    def close_to_key(color: QColor) -> bool:
+        return max(
+            abs(color.red() - key.red()),
+            abs(color.green() - key.green()),
+            abs(color.blue() - key.blue()),
+        ) <= 36
+
+    queue = deque()
+    seen: set[tuple[int, int]] = set()
+    for x in range(width):
+        queue.extend(((x, 0), (x, height - 1)))
+    for y in range(height):
+        queue.extend(((0, y), (width - 1, y)))
+    while queue:
+        x, y = queue.popleft()
+        if (x, y) in seen or not close_to_key(image.pixelColor(x, y)):
+            continue
+        seen.add((x, y))
+        image.setPixelColor(x, y, QColor(0, 0, 0, 0))
+        if x:
+            queue.append((x - 1, y))
+        if x + 1 < width:
+            queue.append((x + 1, y))
+        if y:
+            queue.append((x, y - 1))
+        if y + 1 < height:
+            queue.append((x, y + 1))
+    return image
 
 
 def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:

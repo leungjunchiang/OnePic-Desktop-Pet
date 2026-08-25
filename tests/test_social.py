@@ -794,6 +794,27 @@ def test_buddy_controls_migration_and_proxy_routes_are_present():
         assert "/buddies/remove" in source
 
 
+def test_taunt_migration_is_persistent_and_presence_started():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260825094744_lili_taunt_state.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.lili_buddy_taunts" in migration
+    assert "started_working_at" in migration
+    assert "lili_mark_taunt_started_on_presence" in migration
+    assert "lili_send_taunt" in migration
+    assert "lili_taunt_state" in migration
+    assert "interval '20 minutes'" in migration
+    assert "lili_are_buddies" in migration
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_send_taunt" in source
+        assert "lili_taunt_state" in source
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
