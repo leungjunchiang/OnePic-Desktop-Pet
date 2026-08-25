@@ -1791,6 +1791,18 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_normal_maximized_window_does_not_hide_pet(monkeypatch) -> None:
+    """A screen-sized Word/browser window is not a media/game takeover."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    window._sync_fullscreen_visibility()
+    assert not window._fullscreen_hidden
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_shared_focus_totals_include_checkpointed_current_session(monkeypatch) -> None:
     """A checkpointed live session is counted once in report and study-room totals."""
 

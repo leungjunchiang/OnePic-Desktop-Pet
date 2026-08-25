@@ -2,6 +2,7 @@
 
 报告只读取当前登录账号的本地专注历史、当前计时器和最近一次自习室同步
 快照。日度、本周和月度页签在窗口打开时计算，并在窗口保持打开时定时刷新；
+正在工作的当前专注段会按真实开始时间实时叠加到小时节奏图；
 不会为每一天创建 PNG，也不会因为打开报告额外请求 Supabase。
 """
 
@@ -215,6 +216,27 @@ def build_work_report(
             for period in ("day", "week", "month"):
                 if not any(item.get("started_at") == live_interval["started_at"] for item in report[period].get("focus_intervals") or []):
                     report[period].setdefault("focus_intervals", []).append(dict(live_interval))
+                # ``FocusAnalyticsStore`` only writes a raw interval when a
+                # running segment is paused/checkpointed.  The report is also
+                # refreshed while the user is still working, so add this live
+                # interval to the hourly rhythm chart without creating a
+                # synthetic history row. Split at hour boundaries to keep the
+                # 00:00–24:00 chart anchored to the real start time.
+                hourly = report[period].get("hourly") or []
+                cursor = live_started
+                live_end = moment.astimezone(BEIJING_TIMEZONE)
+                while cursor < live_end:
+                    next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                    part_end = min(live_end, next_hour)
+                    part_seconds = max(0, int((part_end - cursor).total_seconds()))
+                    if part_seconds:
+                        bucket = next(
+                            (item for item in hourly if int(item.get("hour", -1) or -1) == cursor.hour),
+                            None,
+                        )
+                        if isinstance(bucket, dict):
+                            bucket["seconds"] = max(0, int(bucket.get("seconds", 0) or 0)) + part_seconds
+                    cursor = part_end
         except (TypeError, ValueError, OverflowError):
             pass
     day = report["day"]

@@ -17,6 +17,7 @@
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
 - 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
+- Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -1298,6 +1299,29 @@ class PetWindow(QWidget):
                     0,
                     0x0001 | 0x0002 | 0x0010 | 0x0040,
                 )
+                # The pet owns several detached, non-activating top-level
+                # surfaces (status bubbles, controls and the quick panel).
+                # Qt's WindowStaysOnTopHint is not consistently retained for
+                # those windows after a hide/show cycle on Windows. Reapply
+                # the same native z-order to every visible surface so Word or
+                # a normal maximised browser cannot cover only part of Lili.
+                if self.settings.always_on_top:
+                    for accessory in self._fullscreen_surfaces():
+                        if accessory is self or not accessory.isVisible():
+                            continue
+                        try:
+                            accessory_hwnd = int(accessory.winId())
+                            user32.SetWindowPos(
+                                accessory_hwnd,
+                                -1,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0x0001 | 0x0002 | 0x0010 | 0x0040,
+                            )
+                        except (AttributeError, OSError, TypeError, ValueError):
+                            continue
                 return
             except (AttributeError, OSError, ValueError):
                 pass
@@ -1572,10 +1596,11 @@ class PetWindow(QWidget):
         keep the existing conservative geometry fallback for compatibility.
         """
 
-        if sys.platform == "darwin":
-            fullscreen = bool(active_fullscreen_video() or active_fullscreen_game())
-        else:
-            fullscreen = bool(active_window_is_fullscreen())
+        # A screen-sized Word, browser or terminal window is still an ordinary
+        # desktop window. Use the same process-aware media/game policy on every
+        # desktop platform; only a known video player/browser video fullscreen
+        # or a known game fullscreen may temporarily cover the pet.
+        fullscreen = bool(active_fullscreen_video() or active_fullscreen_game())
         if fullscreen:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
@@ -4783,7 +4808,13 @@ class PetWindow(QWidget):
                 "outfit_set": self._personal_outfit_sync_pending,
             },
         }
-        send_heartbeat = self._social_heartbeat_due or time.monotonic() - self._last_social_heartbeat_at >= 90.0
+        # Presence is also the server-side permission check for taunts. A
+        # ninety-second cadence left a large stale window in which a user who
+        # had just started working could still be treated as resting. Keep the
+        # dashboard poll at five seconds, but refresh the authoritative
+        # heartbeat at most every fifteen seconds and immediately on work
+        # transitions.
+        send_heartbeat = self._social_heartbeat_due or time.monotonic() - self._last_social_heartbeat_at >= 15.0
         if send_heartbeat:
             self._last_social_heartbeat_at = time.monotonic()
             self._social_heartbeat_due = False

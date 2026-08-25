@@ -1,6 +1,7 @@
 """Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
-只发送账号认证、昵称、六毛外观、工作状态、累计秒数、房间与串门事件。密码从不保存；
+只发送账号认证、昵称、六毛外观、实时工作状态、累计秒数、房间与串门事件。工作心跳
+包含会话/暂停状态并以短间隔刷新，避免正在工作时被误判为可嘲讽。密码从不保存；
 刷新令牌保存在系统凭据库。邮箱注册明确区分“已创建、等待确认”和“已登录”，并支持
 重新发送确认邮件；网络失败不会影响离线桌宠、计时、AI 或本地素材。
 """
@@ -47,6 +48,9 @@ BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 HEARTBEAT_FIELDS = frozenset(
     {
         "working",
+        "session_active",
+        "work_state",
+        "pause_reason",
         "today_seconds",
         "session_started_at",
         "outfit_key",
@@ -755,7 +759,7 @@ class SocialBackend(Protocol):
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None: ...
+    def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
@@ -1241,14 +1245,14 @@ class HttpSocialBackend:
         else:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
+    def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if not self.session:
             return
         # Presence freshness is assigned by the Supabase database clock.  Do not
         # send a client last_seen value: a user's incorrect Windows clock would
         # otherwise make an active buddy look offline for the whole room.
         now = datetime.now(BEIJING_TIMEZONE)
-        body = {"working": bool(working), "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
+        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
         if self.transport == "direct":
             body["user_id"] = self.session.user_id
             # PostgREST only turns the on_conflict query into an upsert when
@@ -1941,14 +1945,14 @@ class LegacyDirectSocialClient:
         body = {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
-    def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
+    def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if self._http_backend is not None:
-            return self._http_backend.heartbeat(working=working, today_seconds=today_seconds, session_started_at=session_started_at, outfit_key=outfit_key, room_id=room_id, quick_status=quick_status, quick_status_expires_at=quick_status_expires_at)
+            return self._http_backend.heartbeat(working=working, session_active=session_active, work_state=work_state, pause_reason=pause_reason, today_seconds=today_seconds, session_started_at=session_started_at, outfit_key=outfit_key, room_id=room_id, quick_status=quick_status, quick_status_expires_at=quick_status_expires_at)
         if not self.session:
             return
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
+        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
         self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
 
     def update_owner_nickname(self, nickname: str) -> None:

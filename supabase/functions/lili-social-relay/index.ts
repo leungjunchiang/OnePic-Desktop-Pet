@@ -217,6 +217,9 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
   const now = new Date().toISOString();
   const payload: Record<string, unknown> = {
     working: Boolean(body.working),
+    session_active: Boolean(body.session_active),
+    work_state: String(body.work_state || "idle").slice(0, 32),
+    pause_reason: body.pause_reason ? String(body.pause_reason).slice(0, 32) : null,
     session_started_at: body.session_started_at || null,
     focus_date: String(body.focus_date || now.slice(0, 10)),
     today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)),

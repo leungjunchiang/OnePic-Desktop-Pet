@@ -155,6 +155,43 @@ def test_report_does_not_render_cumulative_checkpoint_as_live_today(tmp_path) ->
     assert all(int(item.get("seconds", 0) or 0) < 3 * 60 * 60 for item in report["day"]["focus_intervals"])
 
 
+def test_report_live_segment_updates_hourly_rhythm_from_real_start(tmp_path) -> None:
+    """The open work segment must appear in the current hour, not its old row."""
+
+    now = datetime(2026, 8, 24, 10, 20)
+    analytics = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+    )
+    analytics.record_session(30 * 60, started_at=now - timedelta(hours=1), completed=True)
+    timer = WorkTimerModel(
+        path=tmp_path / "timer.json",
+        now_provider=lambda: now,
+        monotonic_provider=lambda: 100.0,
+        persist=True,
+    )
+    assert timer.start()
+    timer._monotonic = lambda: 100.0 + 20 * 60  # type: ignore[method-assign]
+
+    report = build_work_report(
+        analytics,
+        timer,
+        DailyCompanionStats(path=tmp_path / "daily.json", now_provider=lambda: now, persist=True),
+        focus_snapshot={
+            "status": "focus",
+            "session_seconds": timer.session_seconds(),
+            "today_seconds": timer.today_seconds(),
+            "session_started_at": (now - timedelta(minutes=20)).isoformat(),
+        },
+        now=now,
+    )
+
+    hourly = {int(item["hour"]): int(item["seconds"] or 0) for item in report["day"]["hourly"]}
+    assert hourly[9] == 30 * 60
+    assert hourly[10] >= 20 * 60
+
+
 def test_report_bar_chart_keeps_axis_labels_inside_widget() -> None:
     app = QApplication.instance() or QApplication([])
     chart = ReportBarChart(
