@@ -5788,6 +5788,31 @@ class PetWindow(QWidget):
         work_status_text = ""
         if snapshot.status in {"focus", "rest"}:
             work_status_text = f"⏱ 今日已工作 {format_elapsed_clock(snapshot.today_seconds)}"
+        unlocked_keys = {
+            item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        }
+        if self._login_reward_unlocked:
+            unlocked_keys.add(LOGIN_REWARD_OUTFIT.key)
+        outfit_options: list[dict[str, object]] = [
+            {
+                "title": f"经典{self._pet_name()}",
+                "command": "outfit_classic",
+                "enabled": True,
+                "checkable": True,
+                "checked": not bool(self.settings.equipped_outfit),
+            },
+            {"separator": True},
+        ]
+        outfit_options.extend(
+            {
+                "title": outfit.name,
+                "command": f"outfit_{outfit.key}",
+                "enabled": outfit.key in unlocked_keys,
+                "checkable": True,
+                "checked": outfit.key == self.settings.equipped_outfit,
+            }
+            for outfit in ALL_OUTFITS
+        )
         return {
             "work_action_label": labels.get(snapshot.status, "开始工作"),
             "work_status": snapshot.status,
@@ -5798,6 +5823,7 @@ class PetWindow(QWidget):
             "artist_music_service": getattr(self.settings, "artist_music_service", "auto"),
             "program_version": __version__,
             "content_version": "内置内容",
+            "outfit_options": outfit_options,
         }
 
     def _menu_callbacks(self) -> dict[str, Callable[[bool], object]]:
@@ -5844,6 +5870,15 @@ class PetWindow(QWidget):
             else self.hide_pet(),
             "quit": lambda _checked=False: self.quit_requested.emit(),
         }
+        callbacks["outfit_classic"] = lambda _checked=False: self.equip_outfit("")
+        callbacks.update(
+            {
+                f"outfit_{outfit.key}": (
+                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
+                )
+                for outfit in ALL_OUTFITS
+            }
+        )
         callbacks.update(self._menu_external_callbacks)
         return callbacks
 

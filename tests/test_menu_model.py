@@ -169,3 +169,34 @@ def test_unified_menu_model_exposes_optional_duration_in_display_menu() -> None:
     assert duration.title == "显示本轮工作时长"
     assert duration.checkable is True
     assert duration.checked is False
+
+
+def test_unified_menu_model_projects_outfits_as_hover_submenu_items() -> None:
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {
+            "outfit_options": [
+                {
+                    "title": "经典六毛",
+                    "command": "outfit_classic",
+                    "checked": True,
+                },
+                {"separator": True},
+                {
+                    "title": "兔兔搭子",
+                    "command": "outfit_hour-01",
+                    "enabled": False,
+                },
+            ]
+        },
+        callbacks={
+            "outfit": lambda _checked=False: None,
+            "outfit_classic": lambda _checked=False: None,
+            "outfit_hour-01": lambda _checked=False: None,
+        },
+    )
+
+    outfit = next(item for item in model.items() if item.title == "百变六毛")
+    assert [item.title for item in outfit.children] == ["经典六毛", "", "兔兔搭子"]
+    assert outfit.children[0].checked is True
+    assert outfit.children[2].enabled is False

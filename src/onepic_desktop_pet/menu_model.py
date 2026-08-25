@@ -127,8 +127,35 @@ class UnifiedMenuModel:
         ]
         todo_children = [item for item in todo_children if item is not None]
 
-        outfit_children = [self._optional("换装…", "outfit")]
-        outfit_children = [item for item in outfit_children if item is not None]
+        outfit_children: list[MenuItemSpec] = []
+        outfit_options = state.get("outfit_options")
+        if isinstance(outfit_options, (list, tuple)):
+            for option in outfit_options:
+                if not isinstance(option, Mapping):
+                    continue
+                if bool(option.get("separator", False)):
+                    outfit_children.append(MenuItemSpec.divider())
+                    continue
+                title = str(option.get("title") or "").strip()
+                command = str(option.get("command") or "").strip()
+                if not title or not command:
+                    continue
+                outfit_children.append(
+                    MenuItemSpec(
+                        title,
+                        command,
+                        enabled=bool(option.get("enabled", True)),
+                        checkable=bool(option.get("checkable", True)),
+                        checked=bool(option.get("checked", False)),
+                    )
+                )
+        # Keep the platform-neutral model useful to integrations that only
+        # expose the original dialog callback (and to older callers that do
+        # not provide the optional outfit projection yet).
+        if not outfit_children:
+            fallback_outfit = self._optional("换装…", "outfit")
+            if fallback_outfit is not None:
+                outfit_children.append(fallback_outfit)
 
         report_item = self._optional("工作报告…", "show_report")
 

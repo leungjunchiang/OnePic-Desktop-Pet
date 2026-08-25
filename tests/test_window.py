@@ -1460,7 +1460,10 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "六毛大小…", "显示本轮工作时长", "始终置顶", "桌面模式"
     ]
     outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
-    assert [action.text() for action in outfit.menu().actions()] == ["换装…"]
+    outfit_labels = [action.text() for action in outfit.menu().actions()]
+    assert outfit_labels[:2] == ["经典六毛", ""]
+    assert "兔兔搭子" in outfit_labels
+    assert "三日连登搭子" in outfit_labels
     settings = next(action for action in menu.actions() if action.text() == "更多设置")
     assert [action.text() for action in settings.menu().actions()] == [
         "主人称呼…", "设置…", "更新与关于"
