@@ -396,6 +396,31 @@ def test_show_todos_command_restores_an_existing_hidden_panel(tmp_path) -> None:
     app.processEvents()
 
 
+def test_show_todos_command_overrides_auto_hide_policy(tmp_path) -> None:
+    """右键“显示待办”应能恢复有任务但被设置为不自动显示的面板。"""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("手动显示的待办")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact", today_note_display_mode="hidden"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show()
+    app.processEvents()
+
+    window._menu_callbacks()["show_todos"]()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+    assert set(panel.visible_task_ids) == {next(iter(memory.todos.items)).id}
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)
@@ -1140,8 +1165,8 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     )
     primary_tops = [button.mapToGlobal(QPoint(0, 0)).y() for button in primary_buttons]
     assert max(primary_tops) - min(primary_tops) <= 1
-    assert window.quick_panel.layout().horizontalSpacing() == 8
-    assert window.quick_panel.layout().verticalSpacing() == 8
+    assert window.quick_panel.layout().horizontalSpacing() == 6
+    assert window.quick_panel.layout().verticalSpacing() == 6
     work_global_top = window.quick_panel.work_button.mapToGlobal(QPoint(0, 0))
     report_global_bottom = window.quick_panel.report_button.mapToGlobal(
         QPoint(0, window.quick_panel.report_button.height())
@@ -1425,7 +1450,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert "工作记录" not in labels
     assert "六毛互动" not in labels
     todo = next(action for action in menu.actions() if action.text() == "待办与提醒")
-    assert [action.text() for action in todo.menu().actions()] == ["查看待办…", "新建待办…", "六毛闹钟…"]
+    assert [action.text() for action in todo.menu().actions()] == ["显示待办", "新建待办…", "六毛闹钟…"]
     display = next(action for action in menu.actions() if action.text() == "显示与窗口")
     assert [action.text() for action in display.menu().actions()] == [
         "六毛大小…", "显示本轮工作时长", "始终置顶", "桌面模式"

@@ -450,7 +450,7 @@ class QuickControlPanel(QWidget):
         # shortcut as adjacent primary shortcuts (for example music/food).
         # Using one shared gap also keeps the geometry stable when the report
         # row appears or disappears on macOS.
-        shortcut_gap = 8
+        shortcut_gap = 6
         layout.setHorizontalSpacing(shortcut_gap)
         layout.setVerticalSpacing(shortcut_gap)
         self.title = QLabel(f"{pet_name}快捷口袋")

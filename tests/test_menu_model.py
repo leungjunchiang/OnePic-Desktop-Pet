@@ -82,7 +82,7 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
     assert "显示六毛" in titles
 
     todo = next(item for item in model.items() if item.title == "待办与提醒")
-    assert [item.title for item in todo.children] == ["查看待办…", "新建待办…", "六毛闹钟…"]
+    assert [item.title for item in todo.children] == ["显示待办", "新建待办…", "六毛闹钟…"]
 
     display = next(item for item in model.items() if item.title == "显示与窗口")
     assert [item.title for item in display.children] == [
