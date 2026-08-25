@@ -137,3 +137,26 @@ def test_item_editor_uses_wheel_date_time_controls_and_round_trips_values(tmp_pa
     editor.close()
     editor.deleteLater()
     app.processEvents()
+
+
+def test_item_editor_round_trips_desktop_highlight(tmp_path) -> None:
+    app = _qt_app()
+    memory = TimeMemory(
+        tmp_path,
+        now_provider=lambda: datetime(2026, 8, 19, 12, 0),
+    )
+    task = memory.todos.add("高亮这项")
+    center = TodoCenterWindow(memory)
+    center_item = next(row for row in center._all_items() if row.id == task.id)
+    editor = _ItemEditor(memory, center_item)
+    assert editor.highlight.isChecked() is False
+    editor.highlight.setChecked(True)
+    editor.save()
+    saved = memory.todos.get(task.id)
+    assert saved is not None and saved.highlight is True
+
+    editor.close()
+    editor.deleteLater()
+    center.close()
+    center.deleteLater()
+    app.processEvents()

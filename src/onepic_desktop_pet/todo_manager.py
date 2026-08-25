@@ -112,6 +112,9 @@ class TodoItem:
     date_explicit: bool = False
     time: str | None = None
     important: bool = False
+    # Whether the compact desktop Todo row should use the soft blue highlight.
+    # This is intentionally separate from ``important``/queue priority.
+    highlight: bool = False
     completed: bool = False
     reminder: bool = False
     created_at: str = ""
@@ -239,6 +242,7 @@ class TodoItem:
             date_explicit=date_explicit,
             time=time_value,
             important=bool(value.get("important", False)),
+            highlight=bool(value.get("highlight", False)),
             completed=bool(value.get("completed", False)),
             reminder=reminder,
             created_at=created_at,
@@ -302,6 +306,7 @@ class TodoManager:
         time: str | None = None,
         date_explicit: bool | None = None,
         important: bool = False,
+        highlight: bool = False,
         reminder: bool = False,
         item_id: str | None = None,
         due_at: str | None = None,
@@ -378,6 +383,7 @@ class TodoManager:
             date_explicit=explicit_schedule,
             time=display_time,
             important=bool(important),
+            highlight=bool(highlight),
             reminder=clean_mode != REMINDER_NONE,
             created_at=now_local(self._now).isoformat(),
             due_at=due_value,
@@ -458,7 +464,7 @@ class TodoManager:
         if item is None:
             raise KeyError(item_id)
         allowed = {
-            "title", "date", "date_explicit", "time", "important", "completed", "reminder",
+            "title", "date", "date_explicit", "time", "important", "highlight", "completed", "reminder",
             "work_seconds", "due_at", "remind_at", "priority", "read",
             "queue_position",
             "read_at", "reminder_minutes_before", "reminder_mode", "alarm_sound_id",
@@ -485,7 +491,7 @@ class TodoManager:
                 if value and "date_explicit" not in changes:
                     item.date_explicit = True
                 changed_date_or_time = True
-            elif key in {"important", "completed", "reminder"}:
+            elif key in {"important", "highlight", "completed", "reminder"}:
                 value = bool(value)
             elif key == "reminder_mode":
                 value = normalize_reminder_mode(value, legacy_reminder=item.reminder)

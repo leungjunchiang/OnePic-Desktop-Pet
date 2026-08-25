@@ -99,6 +99,19 @@ def test_todo_priority_and_default_reminder_lead_time_persist(tmp_path) -> None:
     assert reloaded.get(task.id).reminder_minutes_before == 10
 
 
+def test_todo_highlight_is_independent_and_persists(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 18, 9, 0))
+    manager = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    task = manager.add("需要强调", highlight=True)
+    assert task.highlight is True
+    view = TimeMemory(tmp_path, now_provider=clock).get_todo_view_item(task.id)
+    assert view is not None and view.highlight is True
+
+    manager.update(task.id, highlight=False)
+    reloaded = TodoManager(tmp_path / "todos.json", now_provider=clock)
+    assert reloaded.get(task.id).highlight is False
+
+
 def test_todo_views_show_event_time_not_reminder_time(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 18, 9, 0))
     memory = TimeMemory(tmp_path, now_provider=clock)

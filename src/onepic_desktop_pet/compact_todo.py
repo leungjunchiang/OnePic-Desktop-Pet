@@ -248,12 +248,20 @@ class TodoRow(QWidget):
             self.label.setFixedWidth(available)
             self._update_text_layout()
 
+    def set_highlighted(self, highlighted: bool) -> None:
+        """Paint the user-selected desktop highlight, if enabled."""
+
+        self.setStyleSheet(
+            "background:rgba(190, 231, 224, 150);border-radius:8px;"
+            if highlighted
+            else "background:transparent;border-radius:0;"
+        )
+
     def set_selected(self, selected: bool) -> None:
-        # Keep the semantic selection for menu actions, but do not paint it
-        # as a pale-blue bar. This compact accessory is not a list view and
-        # the highlight makes a normal pending task look like a status strip.
+        """Compatibility shim: row selection no longer controls styling."""
+
         del selected
-        self.setStyleSheet("background:transparent;border-radius:0;")
+        self.set_highlighted(False)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if (watched is self or watched is self.label) and event.type() == QEvent.Type.MouseButtonPress:
@@ -483,7 +491,7 @@ class CompactTodoPanel(QWidget):
                 task,
                 self.rows_container,
             )
-            row.set_selected(task.id == self.selected_task_id)
+            row.set_highlighted(bool(getattr(task, "highlight", False)))
             row.selected.connect(self._select_task)
             row.checked.connect(self._check_task)
             self._rows[task.id] = row
@@ -651,7 +659,7 @@ class CompactTodoPanel(QWidget):
             self.memory.select_task(task.source_id)
         self.selected_task_id = task.id
         for key, row in self._rows.items():
-            row.set_selected(key == task.id)
+            row.set_highlighted(bool(getattr(task, "highlight", False)))
         self.task_selected.emit(task.id)
 
     def _check_task(self, task_id: str, completed: bool) -> None:
@@ -752,6 +760,8 @@ class CompactTodoPanel(QWidget):
         time.setPlaceholderText("可选，例如 20:00")
         important = QCheckBox("置顶", dialog)
         important.setChecked(task.important)
+        highlight = QCheckBox("在桌面待办条中高亮", dialog)
+        highlight.setChecked(bool(getattr(task, "highlight", False)))
         reminder_mode = QComboBox(dialog)
         reminder_mode.addItem("不提醒", REMINDER_NONE)
         reminder_mode.addItem("六毛提醒（无声音）", REMINDER_PET)
@@ -773,6 +783,7 @@ class CompactTodoPanel(QWidget):
             form.addRow("任务", title)
             form.addRow("时间", time)
             form.addRow("", important)
+            form.addRow("", highlight)
             form.addRow("提醒方式", reminder_mode)
             form.addRow("提前提醒", reminder_minutes)
         else:
@@ -793,6 +804,7 @@ class CompactTodoPanel(QWidget):
             changes.update(
                 title=title.text().strip(),
                 important=important.isChecked(),
+                highlight=highlight.isChecked(),
                 reminder_mode=reminder_mode.currentData(),
                 reminder=reminder_mode.currentData() != REMINDER_NONE,
                 reminder_minutes_before=reminder_minutes.value(),

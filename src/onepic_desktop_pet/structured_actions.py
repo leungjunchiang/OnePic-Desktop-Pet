@@ -113,7 +113,7 @@ class LocalActionExecutor:
                 existing = self.todos.find_similar_pending(title, date)
                 changes = {
                     key: raw[key]
-                    for key in ("title", "date", "time", "important", "reminder", "reminder_mode", "due_at", "remind_at", "priority", "queue_position", "reminder_minutes_before", "alarm_sound_id", "alarm_volume", "alarm_snooze_minutes", "source")
+                    for key in ("title", "date", "time", "important", "highlight", "reminder", "reminder_mode", "due_at", "remind_at", "priority", "queue_position", "reminder_minutes_before", "alarm_sound_id", "alarm_volume", "alarm_snooze_minutes", "source")
                     if key in raw
                 }
                 if existing is not None and not bool(raw.get("force_new", False)):
@@ -129,6 +129,7 @@ class LocalActionExecutor:
                         reminder=bool(raw.get("reminder", bool(raw.get("remind_at") or raw.get("time")))),
                         reminder_mode=raw.get("reminder_mode", "pet"),
                         important=bool(raw.get("important", False)),
+                        highlight=bool(raw.get("highlight", False)),
                         due_at=raw.get("due_at"),
                         remind_at=raw.get("remind_at"),
                         priority=raw.get("priority"),
@@ -162,7 +163,7 @@ class LocalActionExecutor:
                 return ActionResult(action, "没找到对应的待办，我没有改动任何东西。", {"saved": False}, False)
             changes = {
                 key: value[key]
-                for key in ("title", "date", "time", "important", "reminder", "reminder_mode", "due_at", "remind_at", "priority", "queue_position", "reminder_minutes_before", "alarm_sound_id", "alarm_volume", "alarm_snooze_minutes", "source")
+                for key in ("title", "date", "time", "important", "highlight", "reminder", "reminder_mode", "due_at", "remind_at", "priority", "queue_position", "reminder_minutes_before", "alarm_sound_id", "alarm_volume", "alarm_snooze_minutes", "source")
                 if key in value
             }
             if not changes:

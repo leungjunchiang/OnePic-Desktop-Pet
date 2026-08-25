@@ -38,6 +38,7 @@ class TodoViewItem:
     reminder: bool = False
     reminder_minutes_before: int = 10
     reminder_mode: str = "none"
+    highlight: bool = False
 
 
 def _event_label(remaining_days: int, *, annual: bool = False) -> str:
@@ -144,6 +145,7 @@ def collect_todo_view(
                 id=str(item.id), title=title, date=event_date,
                 time=event_time,
                 important=bool(getattr(item, "important", False)),
+                highlight=bool(getattr(item, "highlight", False)),
                 completed=bool(getattr(item, "completed", False)),
                 created_at=str(getattr(item, "created_at", "") or ""),
                 work_seconds=max(0, int(getattr(item, "work_seconds", 0) or 0)),

@@ -152,6 +152,7 @@ class _ItemEditor(QDialog):
         self.kind.addItem("倒计时", "countdown")
         self.kind.addItem("纪念日", "anniversary")
         self.title = QLineEdit(self)
+        self.highlight = QCheckBox("在桌面待办条中高亮", self)
         self.date = QDateEdit(self)
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("yyyy-MM-dd")
@@ -208,6 +209,7 @@ class _ItemEditor(QDialog):
         self.no_time.setChecked(True)
         form.addRow("类型", self.kind)
         form.addRow("标题", self.title)
+        form.addRow("", self.highlight)
         form.addRow("日期", self.date_row)
         form.addRow("时间", self.time_row)
         form.addRow("重复", self.repeat)
@@ -260,6 +262,7 @@ class _ItemEditor(QDialog):
         self.no_time.setChecked(not bool(item.time_text.strip()))
         source = self._source()
         if source is not None:
+            self.highlight.setChecked(bool(getattr(source, "highlight", False)))
             self.note.setText(str(getattr(source, "note", "") or ""))
             self.show_before.setText(str(getattr(source, "show_before_days", 7)))
             if item.source_type == "anniversary":
@@ -298,6 +301,7 @@ class _ItemEditor(QDialog):
         self.no_date.setVisible(not is_event)
         self.date.setEnabled(not self.no_date.isChecked())
         self._set_row_visible(self.time_row, not is_event)
+        self._set_row_visible(self.highlight, not is_event)
         self._set_row_visible(self.repeat, kind == "anniversary")
         self._set_row_visible(self.reminder_mode, not is_event)
         self._set_row_visible(self.reminder_minutes_before, not is_event)
@@ -337,6 +341,7 @@ class _ItemEditor(QDialog):
         if kind in {"todo", "reminder"}:
             values = {
                 "title": title,
+                "highlight": self.highlight.isChecked(),
                 "date": day,
                 "time": self._time_text(),
                 # ``提醒`` is a record type, not a reminder level.  Preserve
