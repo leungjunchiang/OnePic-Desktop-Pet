@@ -128,6 +128,20 @@ def _presence_status(presence: dict[str, Any]) -> str:
     return "rest"
 
 
+def _taunt_available(presence: dict[str, Any]) -> bool:
+    """Whether the buddy card should expose the persistent taunt action.
+
+    ``working`` is retained in a few legacy/cached dashboard payloads after a
+    buddy goes offline.  The normalized presence status already resolves that
+    contradiction (an explicit offline flag and stale presence win), so using
+    the raw boolean here could hide the action indefinitely.  Unknown state is
+    intentionally excluded: when the connection is uncertain, the UI should
+    not encourage an action that the server may reject.
+    """
+
+    return _presence_status(presence) in {"rest", "offline"}
+
+
 def _wealth_leaderboard_enabled(profile: dict[str, Any] | None) -> bool:
     """Keep the leaderboard opt-in default for legacy profiles.
 
@@ -1015,7 +1029,7 @@ class BuddyCardWidget(QWidget):
         # “加油” now doubles as a playful punishment when a buddy is not
         # working.  The server still checks the state, while this label gives
         # the user an immediate, honest affordance in the card.
-        taunt_available = _presence_status(buddy) != "focus" and not bool(buddy.get("working"))
+        taunt_available = _taunt_available(buddy)
         action_specs = (
             ("visit", "串门"),
             ("cheer", "嘲讽" if taunt_available else "加油"),
@@ -1087,7 +1101,7 @@ class BuddyCardWidget(QWidget):
             return
         labels = {
             "visit": "串门",
-            "cheer": "嘲讽" if _presence_status(self.buddy) != "focus" and not bool(self.buddy.get("working")) else "加油",
+            "cheer": "嘲讽" if _taunt_available(self.buddy) else "加油",
             "food_coffee": "请咖啡", "food_milk_tea": "请奶茶",
             "food_tea": "敬茶", "food_cake": "请蛋糕",
         }
@@ -1154,7 +1168,7 @@ class RoomPetCardWidget(QWidget):
         actions.setHorizontalSpacing(3)
         actions.setVerticalSpacing(3)
         is_self = bool(buddy.get("is_self"))
-        taunt_available = _presence_status(buddy) != "focus" and not bool(buddy.get("working"))
+        taunt_available = _taunt_available(buddy)
         specs = (
             ("visit", "串门"), ("cheer", "嘲讽" if taunt_available else "加油"),
             ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"),
@@ -2403,7 +2417,7 @@ class SocialHubDialog(QDialog):
             # Outside a focus session this is a playful, persistent taunt.
             # The RPC repeats the state check server-side so stale cards or a
             # second device cannot punish somebody who has already started.
-            if _presence_status(buddy) != "focus" and not bool(buddy.get("working")):
+            if _taunt_available(buddy):
                 try:
                     self.client.rpc("lili_send_taunt", {"p_target": target})
                     self._interaction_sent(nickname, "taunt")

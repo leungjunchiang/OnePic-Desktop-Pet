@@ -14,6 +14,7 @@ from onepic_desktop_pet.social_ui import (
     BuddyProfileDialog,
     BuddyVisitWindow,
     IncomingVisitNotice,
+    RoomPetCardWidget,
     SocialHubDialog,
     SocialSignupThread,
     SocialVisitResponseThread,
@@ -443,6 +444,30 @@ def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
     assert any("已离线" in text for text in labels)
     assert all("正在工作" not in text for text in labels)
     widget.close(); widget.deleteLater(); app.processEvents()
+
+
+def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies() -> None:
+    """A stale legacy ``working`` flag must not hide the taunt affordance."""
+
+    app = QApplication.instance() or QApplication([])
+    payloads = (
+        {"nickname": "休息搭子", "online": True, "status": "rest", "working": True},
+        {"nickname": "离线搭子", "online": False, "status": "focus", "working": True},
+    )
+    for payload in payloads:
+        card = BuddyCardWidget(payload)
+        assert any(button.text() == "嘲讽" for button in card.findChildren(QPushButton))
+        card.close(); card.deleteLater()
+    app.processEvents()
+
+
+def test_room_pet_taunt_action_is_visible_for_stale_rest_payload() -> None:
+    app = QApplication.instance() or QApplication([])
+    card = RoomPetCardWidget(
+        {"nickname": "休息搭子", "online": True, "status": "rest", "working": True}
+    )
+    assert any(button.text() == "嘲讽" for button in card.findChildren(QPushButton))
+    card.close(); card.deleteLater(); app.processEvents()
 
 
 def test_buddy_visit_is_a_normal_minimizable_taskbar_window() -> None:
