@@ -175,6 +175,47 @@ def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(PrivateNoteRoomClient())
+    data = dialog.client.dashboard()
+    data["leaderboard"] = [{"user_id": "buddy-1", "nickname": "公开昵称", "week_seconds": 3600}]
+    dialog.apply_dashboard(data)
+    app.processEvents()
+
+    assert "论文搭子家的六毛" in dialog.wealth_leaderboard.item(0).text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_account_page_can_copy_buddy_code() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard(dialog.client.dashboard())
+    dialog.copy_buddy_code_button.click()
+    app.processEvents()
+
+    assert QApplication.clipboard().text() == "AB12CD34"
+    assert "已复制" in dialog.copy_buddy_code_button.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_pending_request_is_rendered_as_an_action_card() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard({
+        "me": {"nickname": "六毛搭子", "invite_code": "AB12CD34"},
+        "buddies": [], "room_people": [], "requests": [
+            {"id": "request-1", "user_id": "buddy-1", "nickname": "胡老师"}
+        ], "visits": [],
+    })
+    app.processEvents()
+
+    card = dialog.inbox.itemWidget(dialog.inbox.item(0))
+    assert card is not None
+    assert {button.text() for button in card.findChildren(QPushButton)} >= {"接受", "拒绝"}
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_outgoing_buddy_request_has_retract_action_and_is_not_acceptable() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())

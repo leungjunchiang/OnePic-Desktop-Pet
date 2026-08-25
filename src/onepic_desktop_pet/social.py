@@ -237,7 +237,12 @@ def _apply_buddy_private_notes(data: dict[str, Any], notes: dict[str, str]) -> d
                     item["private_note_name"] = notes[str(user_id)]
                     break
 
-    for key in ("buddies", "room_people", "active_visits", "visits", "requests"):
+    # ``focus_leaderboard`` is fetched by a separate RPC after the dashboard
+    # snapshot.  Decorating it here keeps private labels available even when
+    # the relay replaces the dashboard's embedded leaderboard with that raw
+    # RPC result.  The labels are applied only to the current user's payload;
+    # they are never stored in the shared profile or sent back to peers.
+    for key in ("buddies", "room_people", "active_visits", "visits", "requests", "leaderboard"):
         decorate(data.get(key))
     current_room = data.get("current_room")
     if isinstance(current_room, dict):

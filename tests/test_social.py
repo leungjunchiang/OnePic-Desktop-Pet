@@ -729,6 +729,16 @@ def test_daily_focus_history_is_account_scoped_and_allowlisted() -> None:
         assert "lili_sync_focus_history" in path.read_text(encoding="utf-8")
 
 
+def test_weekly_leaderboard_uses_canonical_daily_focus_totals() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260825075419_lili_focus_weekly_leaderboard_daily_source.sql").read_text(encoding="utf-8")
+    assert "create or replace function public.lili_focus_weekly_leaderboard" in migration
+    assert "public.lili_focus_daily" in migration
+    assert "sum(greatest(0, least(86400, d.seconds)))" in migration
+    assert "when coalesce(d.day_count, 0) > 0" in migration
+    assert "least(604800" in migration
+
+
 def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000400_lili_focus_daily_visibility.sql").read_text(encoding="utf-8")

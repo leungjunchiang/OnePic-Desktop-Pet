@@ -1532,6 +1532,52 @@ class AccountSecurityDialog(QDialog):
         self._set_busy(False); thread.deleteLater()
 
 
+class InboxEntryWidget(QFrame):
+    """A visible, self-contained action card for one pending interaction."""
+
+    accept_requested = Signal()
+    reject_requested = Signal()
+    cancel_requested = Signal()
+
+    def __init__(self, title: str, detail: str, actions: tuple[str, ...], parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("inboxEntry")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet(
+            "QFrame#inboxEntry { background:#f7fbfc; border:1px solid #c6dfe5; "
+            "border-radius:10px; }"
+            "QLabel#inboxEntryTitle { color:#164b66; font-size:15px; font-weight:650; }"
+            "QLabel#inboxEntryDetail { color:#668393; font-size:12px; }"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
+        title_label = QLabel(str(title))
+        title_label.setObjectName("inboxEntryTitle")
+        title_label.setWordWrap(True)
+        layout.addWidget(title_label)
+        if detail:
+            detail_label = QLabel(str(detail))
+            detail_label.setObjectName("inboxEntryDetail")
+            detail_label.setWordWrap(True)
+            layout.addWidget(detail_label)
+        if actions:
+            action_row = QHBoxLayout()
+            action_row.setSpacing(6)
+            for action in actions:
+                button = QPushButton(action)
+                button.setMinimumHeight(28)
+                button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                if action == "接受":
+                    button.clicked.connect(self.accept_requested)
+                elif action == "拒绝":
+                    button.clicked.connect(self.reject_requested)
+                else:
+                    button.clicked.connect(self.cancel_requested)
+                action_row.addWidget(button)
+            layout.addLayout(action_row)
+
+
 class SocialHubDialog(QDialog):
     """提供首页、互动、专注、我的四个清晰页面及统一操作反馈。"""
 
@@ -1989,7 +2035,7 @@ class SocialHubDialog(QDialog):
     def _chat_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         inbox_card, inbox_layout = self._card("待处理", "搭子申请、成果见证和串门都会在这里等待你的明确决定。添加搭子请回到首页“我的搭子”。")
-        self.inbox = QListWidget(); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
+        self.inbox = QListWidget(); self.inbox.setSpacing(6); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
         self.inbox.currentItemChanged.connect(self._update_inbox_actions)
         inbox_layout.addWidget(self.inbox)
         inbox_buttons = QHBoxLayout()
@@ -2568,6 +2614,87 @@ class SocialHubDialog(QDialog):
             else:
                 self.wealth_leaderboard.addItem("暂无可展示的榜单成员。")
 
+    def _decorate_leaderboard_rows(self, rows: Any) -> list[dict[str, Any]]:
+        """Apply this viewer's private buddy remarks to raw leaderboard rows.
+
+        The leaderboard RPC intentionally returns only public nicknames.  A
+        private remark is looked up from the already-authorized dashboard
+        snapshot and overlaid in memory, so it can never leak to another
+        account or be written to the shared leaderboard data.
+        """
+
+        note_by_user: dict[str, str] = {}
+
+        def collect(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                note = str(item.get("private_note_name") or "").strip()
+                if not note:
+                    continue
+                for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id"):
+                    value = item.get(field)
+                    if value is not None and str(value).strip():
+                        note_by_user[str(value)] = note[:40]
+                        break
+
+        for key in ("buddies", "room_people", "active_visits", "visits", "requests", "leaderboard"):
+            collect(self.data.get(key))
+        current_room = self.data.get("current_room")
+        if isinstance(current_room, dict):
+            for key in ("room_people", "active_visits", "visits"):
+                collect(current_room.get(key))
+
+        decorated: list[dict[str, Any]] = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            copy = dict(row)
+            user_id = next(
+                (str(copy.get(field)).strip() for field in ("user_id", "buddy_id", "peer_id") if copy.get(field) is not None),
+                "",
+            )
+            private_note = note_by_user.get(user_id)
+            if private_note:
+                copy["private_note_name"] = private_note
+            else:
+                # Never trust a private label that arrived with the raw RPC;
+                # only the current viewer's authorized dashboard can supply it.
+                copy.pop("private_note_name", None)
+            decorated.append(copy)
+        return decorated
+
+    def _add_inbox_item(
+        self,
+        kind: str,
+        data: dict[str, Any],
+        title: str,
+        detail: str,
+        actions: tuple[str, ...],
+    ) -> None:
+        """Add an actionable card while preserving the list item's payload."""
+
+        item = QListWidgetItem(title)
+        item.setData(Qt.ItemDataRole.UserRole, (kind, data))
+        widget = InboxEntryWidget(title, detail, actions, self.inbox)
+        self.inbox.addItem(item)
+        self.inbox.setItemWidget(item, widget)
+        item.setSizeHint(QSize(0, max(86, widget.sizeHint().height())))
+        widget.accept_requested.connect(lambda item=item: self._inbox_item_action(item, "accept"))
+        widget.reject_requested.connect(lambda item=item: self._inbox_item_action(item, "reject"))
+        widget.cancel_requested.connect(lambda item=item: self._inbox_item_action(item, "cancel"))
+
+    def _inbox_item_action(self, item: QListWidgetItem, action: str) -> None:
+        self.inbox.setCurrentItem(item)
+        if action == "accept":
+            self._accept_inbox()
+        elif action == "reject":
+            self._reject_inbox()
+        else:
+            self._cancel_buddy_request()
+
     def _refresh_room_goal_text(self) -> None:
         if not hasattr(self, "room_goal"):
             return
@@ -2712,7 +2839,15 @@ class SocialHubDialog(QDialog):
     def _profile_card(self) -> QWidget:
         card, layout = self._card("我的账号", "管理搭子码、可见性和串门权限。")
         self.identity = QLabel(); self.identity.setStyleSheet("font-size:18px;font-weight:650;"); self.identity.setWordWrap(True)
-        layout.addWidget(self.identity)
+        identity_row = QHBoxLayout()
+        identity_row.setSpacing(8)
+        identity_row.addWidget(self.identity, 1)
+        self.copy_buddy_code_button = QPushButton("复制搭子码")
+        self.copy_buddy_code_button.setEnabled(False)
+        self.copy_buddy_code_button.setToolTip("复制你的 8 位搭子码，发给想一起自习的朋友。")
+        self.copy_buddy_code_button.clicked.connect(self._copy_buddy_code)
+        identity_row.addWidget(self.copy_buddy_code_button)
+        layout.addLayout(identity_row)
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
@@ -2738,6 +2873,21 @@ class SocialHubDialog(QDialog):
             layout.addWidget(button)
         layout.addStretch()
         return card
+
+    def _copy_buddy_code(self) -> None:
+        me = self.data.get("me") or {}
+        code = str(me.get("invite_code") or "").strip().upper()
+        if not code or code == "--------":
+            self._set_status("当前还没有可复制的搭子码，请先登录并刷新。", error=True)
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self._set_status("系统剪贴板暂不可用，请稍后再试。", error=True)
+            return
+        clipboard.setText(code)
+        self._set_status(f"搭子码 {code} 已复制。")
+        self.copy_buddy_code_button.setText("已复制")
+        QTimer.singleShot(1600, lambda: self.copy_buddy_code_button.setText("复制搭子码"))
 
     def _open_account_security(self) -> None:
         if not self._require_login():
@@ -2822,6 +2972,9 @@ class SocialHubDialog(QDialog):
     def _fill_signed_out_placeholders(self) -> None:
         self.buddies.clear(); self.buddies.addItem("登录后，这里会显示搭子的在线与专注状态。")
         self.inbox.clear(); self.inbox.addItem("登录后可接收搭子申请与串门邀请。")
+        if hasattr(self, "copy_buddy_code_button"):
+            self.copy_buddy_code_button.setEnabled(False)
+            self.copy_buddy_code_button.setText("复制搭子码")
         if hasattr(self, "inbox_accept_button"):
             self._update_inbox_actions(None, None)
         self.rooms.clear(); self.rooms.addItem("登录后可创建或加入私人自习室。")
@@ -3107,7 +3260,7 @@ class SocialHubDialog(QDialog):
         # while the room dashboard remains healthy.  Preserve the last known
         # board until an explicit ``leaderboard=[]`` arrives.
         if "leaderboard" in self.data:
-            self._leaderboard_rows = list(self.data.get("leaderboard") or [])
+            self._leaderboard_rows = self._decorate_leaderboard_rows(self.data.get("leaderboard") or [])
             self._leaderboard_loaded = True
             self._leaderboard_error = False
             self._render_wealth_leaderboard(self._leaderboard_rows)
@@ -3116,7 +3269,10 @@ class SocialHubDialog(QDialog):
             self.owner_nickname = clean_owner_nickname(me.get("owner_nickname") or me.get("nickname"))
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
-        self.identity.setText(f"{own_label} · 我的搭子码：{me.get('invite_code','--------')}")
+        invite_code = str(me.get("invite_code") or "--------").strip().upper()
+        self.identity.setText(f"{own_label} · 我的搭子码：{invite_code}")
+        if hasattr(self, "copy_buddy_code_button"):
+            self.copy_buddy_code_button.setEnabled(bool(invite_code and invite_code != "--------"))
         for request in self.data.get("requests") or []:
             if not isinstance(request, dict) or _notification_sender_id(request) in self._muted_buddy_ids:
                 continue
@@ -3193,13 +3349,23 @@ class SocialHubDialog(QDialog):
         for request in self.data.get("requests") or []:
             if _notification_sender_id(request) in self._muted_buddy_ids:
                 continue
-            item=QListWidgetItem(f"搭子申请：{_owner_label(request)}"); item.setData(Qt.ItemDataRole.UserRole,("buddy",request)); self.inbox.addItem(item)
+            self._add_inbox_item(
+                "buddy",
+                request,
+                f"搭子申请 · {_owner_label(request)}",
+                "对方想和你成为搭子；接受后可以看到彼此的自习状态。",
+                ("接受", "拒绝"),
+            )
         for request in self.data.get("outgoing_requests") or []:
             if not isinstance(request, dict):
                 continue
-            item = QListWidgetItem(f"我发出的搭子申请：{_owner_label(request)}\n等待对方回应")
-            item.setData(Qt.ItemDataRole.UserRole, ("buddy_outgoing", request))
-            self.inbox.addItem(item)
+            self._add_inbox_item(
+                "buddy_outgoing",
+                request,
+                f"已发出的搭子申请 · {_owner_label(request)}",
+                "等待对方回应；如果不想继续，可以撤回这条申请。",
+                ("撤回申请",),
+            )
         for visit in self.data.get("visits") or []:
             if _notification_sender_id(visit) in self._muted_buddy_ids:
                 continue
@@ -3213,7 +3379,13 @@ class SocialHubDialog(QDialog):
             }
             label = labels.get(visit_kind, "串门邀请")
             inbox_kind = "food" if visit_kind.startswith("food_") else "visit"
-            item=QListWidgetItem(f"{label}：{_owner_label(visit)}"); item.setData(Qt.ItemDataRole.UserRole,(inbox_kind,visit)); self.inbox.addItem(item)
+            self._add_inbox_item(
+                inbox_kind,
+                visit,
+                f"{label} · {_owner_label(visit)}",
+                "对方正在等你的决定；接受后六毛会把这次互动标记为已处理。",
+                ("接受", "拒绝"),
+            )
         if hasattr(self, "recent_interactions"):
             self.recent_interactions.clear()
             for share in self.data.get("cake_shares") or []:
@@ -3229,9 +3401,13 @@ class SocialHubDialog(QDialog):
         for request in self.data.get("achievement_witness_requests") or []:
             title = str(request.get("name") or "未命名成果")[:90]
             owner = _owner_label(request)
-            item = QListWidgetItem(f"成果见证：{owner} · {title} · 固定奖励 200 吉他拨片")
-            item.setData(Qt.ItemDataRole.UserRole, ("achievement_witness", request))
-            self.inbox.addItem(item)
+            self._add_inbox_item(
+                "achievement_witness",
+                request,
+                f"成果见证 · {owner}",
+                f"{title} · 接受后会记录这次成果见证，并发放固定奖励。",
+                ("接受", "拒绝"),
+            )
         if self.inbox.count() == 0:
             empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
@@ -3581,7 +3757,7 @@ class SocialHubDialog(QDialog):
                     else:
                         item.pop("private_note_name", None)
 
-        for key in ("buddies", "room_people", "active_visits", "visits", "requests"):
+        for key in ("buddies", "room_people", "active_visits", "visits", "requests", "leaderboard"):
             update(self.data.get(key))
         current_room = self.data.get("current_room")
         if isinstance(current_room, dict):
