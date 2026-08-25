@@ -5,7 +5,7 @@
 
 const RPC_ALLOWLIST = new Set([
   "lili_add_buddy_by_code", "lili_lookup_buddy_by_code", "lili_buddy_requests", "lili_respond_buddy", "lili_cancel_buddy_request", "lili_remove_buddy", "lili_create_room", "lili_join_room",
-  "lili_send_visit", "lili_respond_visit", "lili_send_taunt", "lili_taunt_state", "lili_dashboard", "lili_room_dashboard",
+  "lili_send_visit", "lili_respond_visit", "lili_send_taunt", "lili_taunt_state", "lili_send_encouragement", "lili_encouragement_state", "lili_reaction_state", "lili_dashboard", "lili_room_dashboard",
   "lili_record_room_event", "lili_send_interaction", "lili_create_cake_share", "lili_set_room_goal", "lili_leave_room",
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
@@ -17,7 +17,7 @@ const ROUTE_TO_RPC = new Map([
   ["/buddies/request", "lili_add_buddy_by_code"], ["/buddies/lookup", "lili_lookup_buddy_by_code"], ["/buddies/requests", "lili_buddy_requests"], ["/buddies/accept", "lili_respond_buddy"], ["/buddies/cancel", "lili_cancel_buddy_request"],
   ["/buddies/remove", "lili_remove_buddy"], ["/buddies/subscription", "lili_set_buddy_subscription"],
   ["/visits/send", "lili_send_visit"], ["/visits/accept", "lili_respond_visit"],
-  ["/buddies/taunt", "lili_send_taunt"], ["/buddies/taunt-state", "lili_taunt_state"],
+  ["/buddies/taunt", "lili_send_taunt"], ["/buddies/taunt-state", "lili_taunt_state"], ["/buddies/encouragement", "lili_send_encouragement"], ["/buddies/encouragement-state", "lili_encouragement_state"], ["/buddies/reaction-state", "lili_reaction_state"],
   ["/rooms/create", "lili_create_room"], ["/rooms/join", "lili_join_room"],
   ["/rooms/goal", "lili_set_room_goal"], ["/rooms/schedule", "lili_set_room_schedule"],
   ["/rooms/challenge", "lili_set_room_challenge"], ["/rooms/leave", "lili_leave_room"],
@@ -155,7 +155,7 @@ async function handleRequest(event, env) {
   if (roomMatch && method === "GET") return response(event, env, await handleDashboard(env, event, decodeURIComponent(roomMatch[1])));
   if (path === "/profile" && method === "PATCH") {
     const userId = userIdFromBearer(bearer(event)); const body = bodyOf(event); const clean = {};
-    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) if (Object.prototype.hasOwnProperty.call(body, key)) clean[key] = body[key];
+    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "allow_buddy_taunts", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) if (Object.prototype.hasOwnProperty.call(body, key)) clean[key] = body[key];
     if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";
     if (clean.owner_nickname !== undefined) clean.owner_nickname = String(clean.owner_nickname).trim().slice(0, 24);
     return response(event, env, await supabaseFetch(env, event, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(userId)}`, { method: "PATCH", body: clean }));

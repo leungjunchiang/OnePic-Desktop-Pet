@@ -1003,6 +1003,16 @@ class AISettingsDialog(QDialog):
             "自动暂停后检测到你回来时，显示类似六毛闹钟的提醒卡；关闭后仍会自动暂停，但不弹出这张卡。"
         )
         form.addRow("", self.show_away_recovery_prompt)
+        self.show_buddy_reactions_in_quiet_mode = QCheckBox(
+            "免打扰时显示搭子嘲讽/加油提示"
+        )
+        self.show_buddy_reactions_in_quiet_mode.setChecked(
+            getattr(settings, "show_buddy_reactions_in_quiet_mode", False)
+        )
+        self.show_buddy_reactions_in_quiet_mode.setToolTip(
+            "关闭后，会议、演示或其他免打扰场景仍会同步状态，但不弹出搭子互动气泡。"
+        )
+        form.addRow("搭子互动", self.show_buddy_reactions_in_quiet_mode)
         idle_hint = QLabel(
             "锁屏和睡眠会立即暂停。所有自动暂停都不会自动恢复；点击继续工作才会重新计时。"
         )
@@ -1304,6 +1314,7 @@ class AISettingsDialog(QDialog):
         self.settings.auto_pause_on_idle = self.auto_pause_on_idle.isChecked()
         self.settings.auto_pause_on_fullscreen_video = self.auto_pause_on_fullscreen_video.isChecked()
         self.settings.show_away_recovery_prompt = self.show_away_recovery_prompt.isChecked()
+        self.settings.show_buddy_reactions_in_quiet_mode = self.show_buddy_reactions_in_quiet_mode.isChecked()
         self.settings.water_interval_minutes = self.water_minutes.value()
         self.settings.stand_interval_minutes = self.stand_minutes.value()
         self.settings.music_service = str(self.music_service.currentData())

@@ -284,6 +284,7 @@ class SocialSyncThread(QThread):
             focus_history_result = None
             personal_state_result = None
             taunt_state_result = None
+            encouragement_state_result = None
             personal_state = self.presence.get("personal_state")
             heartbeat_presence = _heartbeat_payload(self.presence)
             if self.send_heartbeat:
@@ -334,9 +335,19 @@ class SocialSyncThread(QThread):
             taunt_rpc = getattr(self.client, "rpc", None)
             if callable(taunt_rpc):
                 try:
-                    taunt_state_result = taunt_rpc("lili_taunt_state", {})
+                    reaction_state = taunt_rpc("lili_reaction_state", {})
+                    if isinstance(reaction_state, dict):
+                        taunt_state_result = reaction_state.get("taunt")
+                        encouragement_state_result = reaction_state.get("encouragement")
                 except (SocialError, AttributeError, TypeError) as exc:
-                    LOGGER.info("taunt state sync deferred: %s", exc)
+                    # Older relays know the original taunt RPC but not the
+                    # combined reaction snapshot. Keep those clients usable
+                    # without adding another request on the current backend.
+                    LOGGER.info("combined reaction state deferred: %s", exc)
+                    try:
+                        taunt_state_result = taunt_rpc("lili_taunt_state", {})
+                    except (SocialError, AttributeError, TypeError) as fallback_exc:
+                        LOGGER.info("taunt state sync deferred: %s", fallback_exc)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -369,6 +380,9 @@ class SocialSyncThread(QThread):
             if isinstance(taunt_state_result, dict):
                 data = dict(data or {})
                 data["_taunt_state"] = taunt_state_result
+            if isinstance(encouragement_state_result, dict):
+                data = dict(data or {})
+                data["_encouragement_state"] = encouragement_state_result
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -2498,6 +2512,20 @@ class SocialHubDialog(QDialog):
                 except SocialError as exc:
                     self._error(exc)
                 return
+            if _presence_working(buddy):
+                try:
+                    self.client.rpc("lili_send_encouragement", {"p_target": target})
+                    self._interaction_sent(nickname, "encouragement")
+                except SocialError as exc:
+                    # A relay/database that predates the reaction migration
+                    # can still accept the original short room cheer. Do not
+                    # turn an otherwise working button into a hard failure.
+                    unsupported = getattr(exc, "status", None) in {404, 405} or "不支持" in str(exc)
+                    if not unsupported:
+                        self._error(exc)
+                        return
+                else:
+                    return
         if not self.current_room_id:
             self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
             return
@@ -2634,10 +2662,16 @@ class SocialHubDialog(QDialog):
 
     def _interaction_sent(self, nickname: str, kind: str) -> None:
         labels = {
-            "poke": "戳了一下", "cheer": "送上加油", "taunt": "发起嘲讽",
+            "poke": "戳了一下", "cheer": "送上加油", "taunt": "发起嘲讽", "encouragement": "送来鼓励",
             "drink": "递了一杯奶茶", "phrase": "发送了快速短语",
         }
-        suffix = "；对方会在开始工作后保留惩罚造型 20 分钟。" if kind == "taunt" else "；对方房间动态会显示这次互动。"
+        suffix = (
+            "；连续有效工作 20 分钟即可赎身。"
+            if kind == "taunt"
+            else "；鼓励状态最多持续 1 小时，期间暂停工作会立即结束。"
+            if kind == "encouragement"
+            else "；对方房间动态会显示这次互动。"
+        )
         self._set_status(f"{PET_NAME}已向 {nickname} {labels.get(kind, '送出互动')}{suffix}")
         QTimer.singleShot(0, self._refresh_selected_room)
 
@@ -2965,10 +2999,12 @@ class SocialHubDialog(QDialog):
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
+        self.taints_allowed = QCheckBox("接受搭子嘲讽/加油")
+        self.taints_allowed.setToolTip("关闭后，搭子不能向你发送‘被搭子抓包’或持续加油状态。")
         self.wealth_opt_in = QCheckBox("参加本周专注排行榜")
         self.wealth_opt_in.setChecked(True)
         self.wealth_opt_in.setToolTip("默认参加；仅已接受的搭子可见，可随时关闭。")
-        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
+        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.taints_allowed); layout.addWidget(self.wealth_opt_in)
         layout.addWidget(QLabel("搭子互动："))
         self.interaction_mode = QComboBox()
         self.interaction_mode.addItem("欢迎互动", "welcome")
@@ -3386,7 +3422,7 @@ class SocialHubDialog(QDialog):
             if request_id and request_id not in self._seen_buddy_request_ids:
                 self._seen_buddy_request_ids.add(request_id)
                 self.buddy_request_received.emit(dict(request))
-        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
+        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.taints_allowed.setChecked(bool(me.get("allow_buddy_taunts", True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
         mode = str(me.get("buddy_interaction_mode") or "focus_priority")
         mode_index = self.interaction_mode.findData(mode)
         self.interaction_mode.setCurrentIndex(mode_index if mode_index >= 0 else 1)
@@ -3716,7 +3752,7 @@ class SocialHubDialog(QDialog):
         self._begin_action("正在保存隐私设置…")
         try:
             me=self.data.get("me") or {}
-            self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
+            self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),allow_buddy_taunts=self.taints_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
             self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": str(self.interaction_mode.currentData() or "focus_priority")})
             self.refresh()
         except SocialError as exc: self._error(exc)

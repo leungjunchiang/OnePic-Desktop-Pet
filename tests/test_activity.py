@@ -177,3 +177,20 @@ def test_windows_fullscreen_game_with_window_style_is_treated_as_fullscreen(monk
 
     assert activity.active_window_is_fullscreen() is True
     assert activity.active_fullscreen_game() is True
+
+
+def test_macos_fullscreen_yield_is_limited_to_media_and_games(monkeypatch) -> None:
+    """Ordinary macOS apps must not make the pet yield merely when maximised."""
+
+    import onepic_desktop_pet.activity as activity
+
+    monkeypatch.setattr(activity.sys, "platform", "darwin")
+    monkeypatch.setattr(activity, "active_window_is_fullscreen", lambda: True)
+    monkeypatch.setattr(activity, "active_application_name", lambda: "PotPlayer")
+    assert activity.active_fullscreen_video() is True
+
+    monkeypatch.setattr(activity, "active_application_name", lambda: "Microsoft Word")
+    assert activity.active_fullscreen_video() is False
+
+    monkeypatch.setattr(activity, "active_application_name", lambda: "Minecraft")
+    assert activity.active_fullscreen_game() is True

@@ -236,7 +236,7 @@ class VisitStatusBubble(QLabel):
         self.adjustSize()
         self.show()
 
-    def set_taunter(self, nickname: str | None) -> None:
+    def set_taunter(self, nickname: str | None, support_count: int = 1) -> None:
         """Show the server-authoritative punishment state beside the pet."""
 
         name = str(nickname or "搭子").strip()[:40]
@@ -244,7 +244,20 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        self.setText(f"{name}正在嘲讽你")
+        count = max(1, int(support_count or 1))
+        self.setText(f"{name}{f'等{count}位搭子' if count > 1 else ''}正在嘲讽你")
+        self.adjustSize()
+        self.show()
+
+    def set_encourager(self, nickname: str | None) -> None:
+        """Show the persistent one-hour working encouragement beside the pet."""
+
+        name = str(nickname or "搭子").strip()[:40]
+        if not name:
+            self.hide()
+            self.setText("")
+            return
+        self.setText(f"{name}送来鼓励")
         self.adjustSize()
         self.show()
 

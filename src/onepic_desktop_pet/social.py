@@ -753,7 +753,7 @@ class SocialBackend(Protocol):
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: ...
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, allow_buddy_taunts: bool = True, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
@@ -1206,6 +1206,9 @@ class HttpSocialBackend:
             "lili_respond_visit": "/visits/accept",
             "lili_send_taunt": "/buddies/taunt",
             "lili_taunt_state": "/buddies/taunt-state",
+            "lili_send_encouragement": "/buddies/encouragement",
+            "lili_encouragement_state": "/buddies/encouragement-state",
+            "lili_reaction_state": "/buddies/reaction-state",
             "lili_create_room": "/rooms/create",
             "lili_join_room": "/rooms/join",
             "lili_set_room_goal": "/rooms/goal",
@@ -1221,8 +1224,8 @@ class HttpSocialBackend:
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
-        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, allow_buddy_taunts: bool = True, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
+        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "allow_buddy_taunts": bool(allow_buddy_taunts), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
@@ -1926,14 +1929,14 @@ class LegacyDirectSocialClient:
             return self._http_backend.rpc(name, body)
         return self._raw("POST", f"/rest/v1/rpc/{name}", body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, allow_buddy_taunts: bool = True, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
         if self._http_backend is not None:
-            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set)
+            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, allow_buddy_taunts=allow_buddy_taunts, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set)
         if not self.session:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "allow_buddy_taunts": bool(allow_buddy_taunts), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if self._http_backend is not None:
@@ -2187,7 +2190,7 @@ class DashboardCacheClientBase:
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._require_backend().rpc(name, body)
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set)
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, allow_buddy_taunts: bool = True, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, allow_buddy_taunts=allow_buddy_taunts, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set)
     def update_owner_nickname(self, nickname: str) -> None: self._require_backend().update_owner_nickname(nickname)
     def heartbeat(self, **kwargs: Any) -> None: self._require_backend().heartbeat(**kwargs)
     def send_interaction(self, **kwargs: Any) -> None: self._require_backend().send_interaction(**kwargs)

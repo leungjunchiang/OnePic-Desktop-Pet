@@ -108,6 +108,9 @@ class PetSettings:
     # After an automatic away pause, offer a non-modal card with an explicit
     # “继续工作” action when the user returns. Keep this on for new installs.
     show_away_recovery_prompt: bool = True
+    # Social reactions remain available online, but their floating pet
+    # bubbles stay quiet while the local do-not-disturb heuristic is active.
+    show_buddy_reactions_in_quiet_mode: bool = False
     # Distinguishes the new explicit pause-policy choice from the old builds
     # that persisted a legacy ``auto_pause_on_idle=false`` while ignoring it.
     work_timer_policy_version: int = 1
@@ -246,6 +249,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.idle_pause_seconds = min(7200, max(600, int(settings.idle_pause_seconds)))
     settings.auto_pause_on_fullscreen_video = bool(settings.auto_pause_on_fullscreen_video)
     settings.show_away_recovery_prompt = bool(settings.show_away_recovery_prompt)
+    settings.show_buddy_reactions_in_quiet_mode = bool(settings.show_buddy_reactions_in_quiet_mode)
     settings.work_timer_policy_version = max(1, int(settings.work_timer_policy_version))
     rules: dict[str, str] = {}
     if isinstance(settings.idle_classification_rules, dict):
@@ -366,6 +370,7 @@ def load_settings(
                 "idle_pause_seconds",
                 "auto_pause_on_fullscreen_video",
                 "show_away_recovery_prompt",
+                "show_buddy_reactions_in_quiet_mode",
                 "work_timer_policy_version",
                 "idle_classification_rules",
                 "music_service",
@@ -460,6 +465,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "idle_pause_seconds": settings.idle_pause_seconds,
         "auto_pause_on_fullscreen_video": settings.auto_pause_on_fullscreen_video,
         "show_away_recovery_prompt": settings.show_away_recovery_prompt,
+        "show_buddy_reactions_in_quiet_mode": settings.show_buddy_reactions_in_quiet_mode,
         "work_timer_policy_version": settings.work_timer_policy_version,
         "idle_classification_rules": settings.idle_classification_rules,
         "music_service": settings.music_service,

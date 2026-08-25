@@ -13,6 +13,9 @@ const RPC_ALLOWLIST = new Set([
   "lili_respond_visit",
   "lili_send_taunt",
   "lili_taunt_state",
+  "lili_send_encouragement",
+  "lili_encouragement_state",
+  "lili_reaction_state",
   "lili_dashboard",
   "lili_room_dashboard",
   "lili_record_room_event",
@@ -45,6 +48,9 @@ const ROUTE_TO_RPC = new Map([
   ["/visits/accept", "lili_respond_visit"],
   ["/buddies/taunt", "lili_send_taunt"],
   ["/buddies/taunt-state", "lili_taunt_state"],
+  ["/buddies/encouragement", "lili_send_encouragement"],
+  ["/buddies/encouragement-state", "lili_encouragement_state"],
+  ["/buddies/reaction-state", "lili_reaction_state"],
   ["/rooms/create", "lili_create_room"],
   ["/rooms/join", "lili_join_room"],
   ["/rooms/goal", "lili_set_room_goal"],
@@ -304,7 +310,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const user = await requireUser(request, env);
     const body = await parseBody(request);
     const clean: Record<string, unknown> = {};
-    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
+    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "allow_buddy_taunts", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
       if (key in body) clean[key] = body[key];
     }
     if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";
