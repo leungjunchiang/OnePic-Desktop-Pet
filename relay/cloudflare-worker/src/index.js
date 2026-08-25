@@ -282,7 +282,7 @@ async function handleRequest(request, env) {
     const auth = bearer(request);
     const userId = userIdFromBearer(auth);
     const body = await parseJsonBody(request);
-    const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "allow_buddy_taunts", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]);
+    const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]);
     if (profile.owner_nickname !== undefined) profile.owner_nickname = String(profile.owner_nickname).trim().slice(0, 24);
     if (profile.nickname !== undefined) profile.nickname = String(profile.nickname).trim().slice(0, 24) || "搭子";
     if (profile.outfit_key !== undefined) profile.outfit_key = String(profile.outfit_key).slice(0, 60);

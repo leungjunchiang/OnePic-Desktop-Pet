@@ -155,7 +155,7 @@ async function handleRequest(event, env) {
   if (roomMatch && method === "GET") return response(event, env, await handleDashboard(env, event, decodeURIComponent(roomMatch[1])));
   if (path === "/profile" && method === "PATCH") {
     const userId = userIdFromBearer(bearer(event)); const body = bodyOf(event); const clean = {};
-    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "allow_buddy_taunts", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) if (Object.prototype.hasOwnProperty.call(body, key)) clean[key] = body[key];
+    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) if (Object.prototype.hasOwnProperty.call(body, key)) clean[key] = body[key];
     if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";
     if (clean.owner_nickname !== undefined) clean.owner_nickname = String(clean.owner_nickname).trim().slice(0, 24);
     return response(event, env, await supabaseFetch(env, event, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(userId)}`, { method: "PATCH", body: clean }));

@@ -310,7 +310,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const user = await requireUser(request, env);
     const body = await parseBody(request);
     const clean: Record<string, unknown> = {};
-    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "allow_buddy_taunts", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
+    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
       if (key in body) clean[key] = body[key];
     }
     if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";

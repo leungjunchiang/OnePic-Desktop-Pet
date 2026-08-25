@@ -6,9 +6,6 @@
 -- that continuous-work counter. Encouragement ends as soon as the receiver's
 -- fresh working presence becomes false.
 
-alter table public.lili_profiles
-  add column if not exists allow_buddy_taunts boolean not null default true;
-
 alter table public.lili_buddy_taunts
   add column if not exists message text not null default '',
   add column if not exists work_started_at timestamptz,
@@ -95,9 +92,6 @@ begin
   if me is null then raise exception '请先登录'; end if;
   if p_target is null or p_target = me then raise exception '不能嘲讽自己'; end if;
   if not public.lili_are_buddies(me, p_target) then raise exception '只能嘲讽已确认的搭子'; end if;
-  if not exists (select 1 from public.lili_profiles where user_id = p_target and allow_buddy_taunts) then
-    raise exception '对方暂时不接受搭子嘲讽';
-  end if;
   if exists (
     select 1 from public.lili_focus_presence f
     where f.user_id = p_target and f.working and f.last_seen > now() - interval '2 minutes'
@@ -107,9 +101,18 @@ begin
   if exists (
     select 1 from public.lili_buddy_taunts t
     where t.sender_id = me and t.receiver_id = p_target
-      and t.created_at > now() - interval '30 minutes'
+      and t.created_at > now() - interval '1 hour'
   ) then
-    raise exception '同一位搭子 30 分钟内只能成功嘲讽一次';
+    raise exception '同一位搭子两次嘲讽至少间隔 1 小时';
+  end if;
+  if (
+    select count(*)
+    from public.lili_buddy_taunts t
+    where t.sender_id = me
+      and t.receiver_id = p_target
+      and t.created_at >= date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+  ) >= 3 then
+    raise exception '同一位搭子每天最多嘲讽 3 次';
   end if;
   taunt_message := case message_index
     when 0 then '怎么，今天准备靠意念完成？'
@@ -199,14 +202,17 @@ begin
   if me is null then raise exception '请先登录'; end if;
   if p_target is null or p_target = me then raise exception '不能给自己加油'; end if;
   if not public.lili_are_buddies(me, p_target) then raise exception '只能给已确认的搭子加油'; end if;
-  if not exists (select 1 from public.lili_profiles where user_id = p_target and allow_buddy_taunts) then
-    raise exception '对方暂时不接受搭子互动';
-  end if;
   if not exists (
     select 1 from public.lili_focus_presence f
     where f.user_id = p_target and f.working and f.last_seen > now() - interval '2 minutes'
   ) then
     raise exception '对方已经暂停工作，请改为嘲讽';
+  end if;
+  if exists (
+    select 1 from public.lili_buddy_taunts t
+    where t.receiver_id = p_target and t.released_at is null
+  ) then
+    raise exception '对方正在被搭子抓包，等惩罚结束后再加油';
   end if;
   if exists (
     select 1 from public.lili_buddy_encouragements e

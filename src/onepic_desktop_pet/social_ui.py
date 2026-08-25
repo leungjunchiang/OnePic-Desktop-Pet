@@ -2999,12 +2999,10 @@ class SocialHubDialog(QDialog):
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
-        self.taints_allowed = QCheckBox("接受搭子嘲讽/加油")
-        self.taints_allowed.setToolTip("关闭后，搭子不能向你发送‘被搭子抓包’或持续加油状态。")
         self.wealth_opt_in = QCheckBox("参加本周专注排行榜")
         self.wealth_opt_in.setChecked(True)
         self.wealth_opt_in.setToolTip("默认参加；仅已接受的搭子可见，可随时关闭。")
-        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.taints_allowed); layout.addWidget(self.wealth_opt_in)
+        layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
         layout.addWidget(QLabel("搭子互动："))
         self.interaction_mode = QComboBox()
         self.interaction_mode.addItem("欢迎互动", "welcome")
@@ -3422,7 +3420,7 @@ class SocialHubDialog(QDialog):
             if request_id and request_id not in self._seen_buddy_request_ids:
                 self._seen_buddy_request_ids.add(request_id)
                 self.buddy_request_received.emit(dict(request))
-        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.taints_allowed.setChecked(bool(me.get("allow_buddy_taunts", True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
+        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
         mode = str(me.get("buddy_interaction_mode") or "focus_priority")
         mode_index = self.interaction_mode.findData(mode)
         self.interaction_mode.setCurrentIndex(mode_index if mode_index >= 0 else 1)
@@ -3752,7 +3750,7 @@ class SocialHubDialog(QDialog):
         self._begin_action("正在保存隐私设置…")
         try:
             me=self.data.get("me") or {}
-            self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),allow_buddy_taunts=self.taints_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
+            self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
             self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": str(self.interaction_mode.currentData() or "focus_priority")})
             self.refresh()
         except SocialError as exc: self._error(exc)

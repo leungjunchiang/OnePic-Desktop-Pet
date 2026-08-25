@@ -4897,15 +4897,9 @@ class PetWindow(QWidget):
             self._change_ambient_activity("taunt")
             if sys.platform == "darwin":
                 self._apply_macos_window_behavior(self.visit_status_bubble)
-            if (
-                getattr(self.settings, "show_buddy_reactions_in_quiet_mode", False)
-                or not detect_quiet_mode().blocked
-            ):
-                self.visit_status_bubble.set_taunter(sender, int(state.get("support_count") or 1))
-                if is_new_taunt:
-                    self.show_speech(f"{sender}：{self._taunt_message}", 5200)
-            else:
-                self.visit_status_bubble.hide()
+            self.visit_status_bubble.set_taunter(sender, int(state.get("support_count") or 1))
+            if is_new_taunt:
+                self.show_speech(f"{sender}：{self._taunt_message}", 5200)
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
             return True
@@ -4944,16 +4938,15 @@ class PetWindow(QWidget):
             self._encouragement_id = encouragement_id
             self._encouragement_sender_nickname = sender
             self._encouragement_message = str(state.get("message") or "抓到一个真在干活的。")[:120]
+            # A redeemable taunt always wins. Keep the encouragement state in
+            # memory so it can appear after the debt is cleared, but never
+            # replace the taunt sprite, bubble, or ambient activity.
+            if self._taunt_active:
+                return False
             self._change_ambient_activity("work-cheer")
-            if (
-                getattr(self.settings, "show_buddy_reactions_in_quiet_mode", False)
-                or not detect_quiet_mode().blocked
-            ):
-                self.visit_status_bubble.set_encourager(sender)
-                if is_new_encouragement:
-                    self.show_speech(f"{sender}：{self._encouragement_message}", 5200)
-            else:
-                self.visit_status_bubble.hide()
+            self.visit_status_bubble.set_encourager(sender)
+            if is_new_encouragement:
+                self.show_speech(f"{sender}：{self._encouragement_message}", 5200)
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
             return True
@@ -4964,7 +4957,8 @@ class PetWindow(QWidget):
             self._encouragement_message = ""
             if self._ambient_activity == "work-cheer":
                 self._change_ambient_activity("computer" if self.work_timer.is_running else "none")
-            self.visit_status_bubble.hide()
+            if not self._taunt_active:
+                self.visit_status_bubble.hide()
         return False
 
     @staticmethod
