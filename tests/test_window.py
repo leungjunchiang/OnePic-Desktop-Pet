@@ -1008,6 +1008,42 @@ def test_inactivity_progresses_from_sit_to_sleep() -> None:
     app.processEvents()
 
 
+def test_working_pet_uses_system_input_before_entering_sleep(monkeypatch) -> None:
+    """Typing in another app counts as activity for a running work session."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 2)
+    window.settings.inactive_sit_ms = 10_000
+    window.settings.inactive_sleep_ms = 20_000
+    window.start_work_timer()
+    window._last_user_interaction = time.monotonic() - 21
+    window.behavior.next_autonomous_state = (
+        lambda _current, allow_walk: StateDecision(PetState.IDLE, 1000)
+    )
+    window.set_state(PetState.IDLE)
+
+    window._state_timeout()
+
+    assert window.state is PetState.IDLE
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_work_activity_rotation_never_selects_rest_actions(monkeypatch) -> None:
+    """Automatic work animation must stay in the focus/action sprite set."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    captured: list[str] = []
+    monkeypatch.setattr(window, "_change_ambient_activity", captured.append)
+    monkeypatch.setattr("onepic_desktop_pet.window.random.choice", lambda choices: choices[-1])
+
+    window._work_activity_tick()
+
+    assert captured
+    assert captured[-1] not in {"sleep", "daydream", "coconut", "sunbath", "movie"}
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_pause_disables_running_but_keeps_ambient_state_timer() -> None:
     """暂停跑动时应进入生活状态并继续计时，而不是冻结在站立帧。"""
 

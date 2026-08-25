@@ -249,11 +249,11 @@ class TodoRow(QWidget):
             self._update_text_layout()
 
     def set_selected(self, selected: bool) -> None:
-        self.setStyleSheet(
-            "background:rgba(190, 231, 224, 150);border-radius:8px;"
-            if selected
-            else "background:transparent;"
-        )
+        # Keep the semantic selection for menu actions, but do not paint it
+        # as a pale-blue bar. This compact accessory is not a list view and
+        # the highlight makes a normal pending task look like a status strip.
+        del selected
+        self.setStyleSheet("background:transparent;border-radius:0;")
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if (watched is self or watched is self.label) and event.type() == QEvent.Type.MouseButtonPress:

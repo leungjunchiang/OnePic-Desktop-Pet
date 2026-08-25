@@ -1705,9 +1705,26 @@ class PetWindow(QWidget):
         return StateDecision(state, max(500, duration_ms))
 
     def _inactive_ms(self) -> int:
-        """返回距离最近一次鼠标或菜单互动的毫秒数。"""
+        """返回用户无输入时长，工作中优先采用系统键鼠事件时钟。
 
-        return max(0, round((time.monotonic() - self._last_user_interaction) * 1000))
+        The local cursor/menu clock only sees interactions with 六毛 itself.
+        During a focus session, that would make the pet sit or sleep even
+        while the user is typing in another app. The native system probe
+        aggregates keyboard and mouse input across applications; when it is
+        unavailable it returns zero, which is the safe choice for a running
+        work session rather than inferring that the user stopped working.
+        """
+
+        local_ms = max(0, round((time.monotonic() - self._last_user_interaction) * 1000))
+        if not self.work_timer.is_running:
+            return local_ms
+        try:
+            system_seconds = max(0.0, float(system_idle_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            system_seconds = 0.0
+        if system_seconds <= 0:
+            return 0
+        return min(local_ms, round(system_seconds * 1000))
 
     def _record_user_interaction(self) -> None:
         """重置无互动计时，并取消尚未开始的自动入睡意图。"""
@@ -3478,10 +3495,10 @@ class PetWindow(QWidget):
             return
         if not self.work_timer.is_running:
             return
-        session = self.work_timer.session_seconds()
+        # Keep automatic work rotation strictly in the work set. The former
+        # 45-minute branch randomly selected sleep/daydream even while the
+        # user was actively typing, which looked like an unsolicited pause.
         choices = FOCUS_ACTIONS
-        if session >= 45 * 60 and random.random() < 0.35:
-            choices = ("thermos", "sleep", "daydream")
         self._change_ambient_activity(random.choice(choices))
         self._manual_activity_until = time.monotonic() + 120
         self._schedule_work_activity()
@@ -6061,7 +6078,10 @@ class PetWindow(QWidget):
                 if self._automatic_work_companion_tick():
                     self.daily_stats.record_event("work_companion")
                     return
-                idle_seconds = time.monotonic() - self._last_user_interaction
+                # Use the same cross-application input clock as the work
+                # safety net. A user typing in another app must not look
+                # idle merely because the pet itself was not clicked.
+                idle_seconds = self._inactive_ms() / 1000.0
                 if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
                     activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"
                 elif idle_seconds >= 30 * 60:
@@ -6093,6 +6113,21 @@ class PetWindow(QWidget):
                 else:
                     activity = random.choice(RANDOM_ACTIONS)
                     text = self.companion.ambient_grumble(self.work_timer.is_running).text
+                # Automatic companion animations must not announce a rest
+                # state while the shared work timer is still running. A
+                # deliberate pause/food scene remains unaffected because it
+                # does not pass through this ambient path.
+                if self.work_timer.is_running and activity in {
+                    "sleep",
+                    "sleepy",
+                    "daydream",
+                    "coconut",
+                    "sunbath",
+                    "movie",
+                    "pointing",
+                }:
+                    activity = "office"
+                    text = "六毛继续陪你专注，等你一起完成这一小段。"
                 self.daily_stats.record_event(activity)
                 if activity == "sleep":
                     self.daily_stats.record_sleep()
