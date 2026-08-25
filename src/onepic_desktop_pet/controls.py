@@ -40,9 +40,8 @@ QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228)
 border: 1px solid rgba(231, 74, 79, 145); }
 QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
 border: 1px solid rgba(40, 125, 158, 135); }
-/* The report action is a top-level floating button, so it cannot inherit the
-   quickActionDock descendant selector. Keep its icon tile identical to the
-   six buttons in the dock. */
+/* Keep the report action's icon tile identical to the other shortcuts even
+   when a native style does not inherit the dock selector. */
 QPushButton#quickAction_report { background: rgba(239, 246, 247, 150); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
 QPushButton#quickAction_report:hover { background: rgba(255, 244, 216, 228);
@@ -416,7 +415,7 @@ class QuickControlPanel(QWidget):
         self._artist_music_service = "auto"
         # Native macOS Qt windows can omit Enter/Leave delivery until the
         # first click when the panel is a non-activating Tool window. Polling
-        # the pointer over our six known buttons keeps the label a true hover
+        # the pointer over our shortcuts keeps the label a true hover
         # affordance on both macOS and Windows, without relying on clicks.
         self._hover_poll_timer = QTimer(self)
         self._hover_poll_timer.setInterval(60)
@@ -435,38 +434,19 @@ class QuickControlPanel(QWidget):
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
-        # Keep this as a top-level button so it can float above the work
-        # button without changing the dock's row height. It has its own
-        # click bridge because hiding the dock and opening a second window
-        # in the same native mouse event is unreliable on macOS/Windows.
-        self.report_button = self._button("report", "工作报告", None)
-        self.report_button.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        self.report_button.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        # This is a top-level floating button rather than a child of the
-        # rounded quick-action dock.  Make its window surface transparent so
-        # the rounded QSS tile has no square backing/shadow at the corners.
-        self.report_button.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.report_button.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.report_button.setAutoFillBackground(False)
-        self.report_button.setFlat(True)
-        self.report_button.setContentsMargins(0, 0, 0, 0)
-        self.report_button.setGraphicsEffect(None)
-        self.report_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.report_button.setMouseTracking(True)
-        self.report_button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.report_button.setStyleSheet(CONTROL_STYLE)
-        self.report_button.clicked.connect(self._open_report_from_button)
-        self.report_button.hide()
         work_column = QWidget(self)
         work_column.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         work_layout = QVBoxLayout(work_column)
         work_layout.setContentsMargins(0, 0, 0, 0)
+        work_layout.setSpacing(4)
         work_layout.addWidget(self.work_button)
+        # Keep the report action inside the same dock and layout as the work
+        # action.  A separate top-level window could survive the dock's hide
+        # event on macOS and drift away from the work shortcut after a move.
+        self.report_button = self._button("report", "工作报告", None)
+        self.report_button.clicked.connect(self._open_report_from_button)
+        self.report_button.hide()
+        work_layout.addWidget(self.report_button)
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
@@ -543,29 +523,23 @@ class QuickControlPanel(QWidget):
             self._show_hint(self.work_button)
 
     def _open_report_from_button(self) -> None:
-        """Close the floating dock, then open the report on the next Qt turn."""
+        """Close the shortcut dock, then open the report on the next Qt turn."""
 
         self._report_hide_timer.stop()
         self.hide()
         QTimer.singleShot(0, self.work_report_requested.emit)
 
     def _collapse_report_surface(self) -> None:
-        """Hide every top-level surface owned by the shortcut dock.
-
-        ``report_button`` is intentionally a separate top-level window so it
-        can float above the work shortcut.  Qt does not hide such a window
-        when its owner is hidden, and macOS can deliver one queued hover event
-        after the dock has already disappeared.  Collapse the timers and both
-        floating surfaces together before every hide operation.
-        """
+        """Hide the report action together with its parent shortcut dock."""
 
         self._hover_poll_timer.stop()
         self._report_hide_timer.stop()
         self._hide_hint()
         self.report_button.hide()
+        self.adjustSize()
 
     def hide(self) -> None:
-        """Hide the shortcut dock and its detached report action together."""
+        """Hide the shortcut dock and its report action together."""
 
         self._collapse_report_surface()
         super().hide()
@@ -578,17 +552,17 @@ class QuickControlPanel(QWidget):
             return
         if target:
             self._report_hide_timer.stop()
-            self._position_report_button()
-            if sys.platform == "darwin" and self._window_behavior_callback is not None:
-                self._window_behavior_callback(self.report_button, always_on_top=True)
             self.report_button.show()
-            if sys.platform != "darwin":
-                self.report_button.raise_()
+            # The report button is a child of ``work_column``. Resize the
+            # dock immediately so its position and auto-hide geometry include
+            # the newly visible row on every platform.
+            self.adjustSize()
             self._hover_poll_timer.start()
         else:
             if self._hint_button is self.report_button:
                 self._hide_hint()
             self.report_button.hide()
+            self.adjustSize()
 
     def _schedule_report_hide(self) -> None:
         """Give the pointer a short bridge from the main button to the report."""
@@ -605,28 +579,15 @@ class QuickControlPanel(QWidget):
         self._set_report_button_visible(False)
 
     def _position_report_button(self) -> None:
-        """Place the report action above the work action without changing layout."""
+        """Keep the legacy positioning hook harmless after layout integration."""
 
-        if not self.work_button.isVisible():
-            return
-        report_size = self.report_button.size()
-        anchor = self.work_button.mapToGlobal(QPoint(self.work_button.width() // 2, 0))
-        x = anchor.x() - report_size.width() // 2
-        y = anchor.y() - report_size.height() - 9
-        app = QGuiApplication.instance()
-        screen = app.screenAt(anchor) if app is not None else None
-        if screen is not None:
-            area = screen.availableGeometry()
-            if y < area.top() + 4:
-                y = self.work_button.mapToGlobal(
-                    QPoint(self.work_button.width() // 2, self.work_button.height() + 9)
-                ).y()
-            x = min(max(x, area.left() + 4), area.right() - report_size.width() - 4)
-            y = min(max(y, area.top() + 4), area.bottom() - report_size.height() - 4)
-        self.report_button.move(x, y)
+        # ``report_button`` now lives in ``work_column`` and follows normal
+        # Qt layout geometry.  Callers from older window-positioning code can
+        # still invoke this method safely.
+        self.adjustSize()
 
     def position_report_button(self) -> None:
-        """Reposition the floating secondary action after its dock moves."""
+        """Compatibility hook for callers that reposition the shortcut dock."""
 
         if self.report_button.isVisible():
             self._position_report_button()
@@ -641,6 +602,8 @@ class QuickControlPanel(QWidget):
         self._hint_button = button
         self.hover_hint.setText(text)
         self.hover_hint.adjustSize()
+        # Keep the report label above its tile so it does not add another
+        # visual row below the shortcut dock near the bottom edge of a screen.
         is_secondary = button is self.report_button
         above = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7))
         below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
@@ -869,11 +832,9 @@ class QuickControlPanel(QWidget):
         self._ignore_initial_enter = False
 
     def hideEvent(self, event) -> None:
-        # ``report_button`` is deliberately a top-level native window so it
-        # can float above the work icon. Hiding the dock itself therefore does
-        # not hide that button automatically on macOS. Always collapse both
-        # surfaces together; otherwise only the report icon can remain stuck
-        # on the desktop after the other shortcuts disappear.
+        # Collapse the child report action and hover surfaces along with the
+        # dock. This is intentionally done on the parent hide event as well as
+        # in ``hide()`` so every auto-hide path has the same result.
         self._collapse_report_surface()
         super().hideEvent(event)
 
@@ -893,7 +854,8 @@ class QuickControlPanel(QWidget):
 
     def moveEvent(self, event) -> None:
         super().moveEvent(event)
-        self._position_report_button()
+        # The report action is laid out inside the dock and therefore moves
+        # with it automatically; no detached native window needs repositioning.
 
 
 class SizeControlDialog(QDialog):

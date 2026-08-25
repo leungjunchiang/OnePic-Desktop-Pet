@@ -1059,8 +1059,10 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
     assert all(button.size() == QSize(42, 42) for button in buttons)
-    assert window.quick_panel.report_button.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-    assert window.quick_panel.report_button.graphicsEffect() is None
+    # The report action is a child of the same work column, never a detached
+    # top-level window that can remain stuck on the desktop.
+    assert window.quick_panel.report_button.parent() is not None
+    assert window.quick_panel.report_button.window() is window.quick_panel
     assert not window.quick_panel.report_button.isVisible()
     for button, label in zip(buttons, ("聊聊", "开始工作", "工作报告", "待办", "搭子自习室", "音乐", "喂食")):
         window.quick_panel._show_hint(button)
@@ -1088,15 +1090,13 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     app.processEvents()
     assert window.quick_panel.pos() - window.pos() == first_offset
     assert window.quick_panel.y() + window.quick_panel.height() + 12 <= window.y()
-    panel_size = window.quick_panel.size()
     window.quick_panel._set_hover_button(window.quick_panel.work_button)
     assert window.quick_panel.report_button.isVisible()
-    assert window.quick_panel.size() == panel_size
-    work_global_top = window.quick_panel.work_button.mapToGlobal(QPoint(0, 0))
-    report_global_bottom = window.quick_panel.report_button.mapToGlobal(
-        QPoint(0, window.quick_panel.report_button.height())
+    work_global_bottom = window.quick_panel.work_button.mapToGlobal(
+        QPoint(0, window.quick_panel.work_button.height())
     )
-    assert report_global_bottom.y() <= work_global_top.y()
+    report_global_top = window.quick_panel.report_button.mapToGlobal(QPoint(0, 0))
+    assert 0 <= report_global_top.y() - work_global_bottom.y() <= 8
     window.quick_panel._set_hover_button(window.quick_panel.report_button)
     assert window.quick_panel.hover_hint.text() == "工作报告"
     app.processEvents()
@@ -1143,7 +1143,7 @@ def test_quick_panel_hover_label_switches_without_click() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
-def test_quick_panel_hides_detached_report_with_work_shortcut() -> None:
+def test_quick_panel_hides_report_with_work_shortcut() -> None:
     """工作报告按钮必须和开始/暂停快捷面板同步移动、收起。"""
 
     app, window = _create_window()
@@ -1168,8 +1168,8 @@ def test_quick_panel_hides_detached_report_with_work_shortcut() -> None:
     moved_report_top = panel.report_button.mapToGlobal(QPoint(0, 0))
     assert moved_report_top - moved_work_top == first_report_top - first_work_top
 
-    # The primary work action collapses the whole dock, including its
-    # detached report button, before changing the shared focus state.
+    # The primary work action collapses the whole dock, including its child
+    # report button, before changing the shared focus state.
     panel.work_button.click()
     app.processEvents()
     assert not panel.isVisible()

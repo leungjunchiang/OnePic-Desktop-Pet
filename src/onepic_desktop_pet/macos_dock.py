@@ -152,9 +152,6 @@ class MacDockMenuController:
         if self._qt_menu is not None:
             try:
                 self._refresh_qt_dock_menu()
-                set_as_dock_menu = getattr(self._qt_menu, "setAsDockMenu", None)
-                if callable(set_as_dock_menu):
-                    set_as_dock_menu()
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 pass
             return
@@ -198,7 +195,6 @@ class MacDockMenuController:
             if not callable(set_as_dock_menu):
                 self._qt_menu = None
                 return False
-            set_as_dock_menu()
             about_to_show = getattr(menu, "aboutToShow", None)
             connect = getattr(about_to_show, "connect", None)
             if callable(connect):
@@ -216,9 +212,16 @@ class MacDockMenuController:
         if self._qt_menu is None:
             return
         self._qt_menu.clear()
-        # The pet projection is the canonical right-click menu.  The same
-        # model object is used by the pet window and by the status item.
+        # The pet projection is the canonical right-click menu. The same
+        # snapshot is used by the pet window, status item, and Dock so a
+        # dynamic work-state refresh cannot accidentally switch contexts.
         populate_qmenu(self._qt_menu, self._model_provider(), "pet")
+        # Qt can let the Cocoa Dock bridge go stale after another native menu
+        # is opened. Re-register the exact same QMenu whenever Dock asks for
+        # a refresh, not only during application startup.
+        set_as_dock_menu = getattr(self._qt_menu, "setAsDockMenu", None)
+        if callable(set_as_dock_menu):
+            set_as_dock_menu()
 
     @property
     def installed(self) -> bool:
@@ -250,11 +253,7 @@ class MacDockMenuController:
                     item.setSubmenu_(submenu)
                 destination.addItem_(item)
 
-        # The pet context menu is the canonical menu. Keep the Dock
-        # projection on that exact context so a future platform-specific
-        # branch cannot silently make the Dock right-click list diverge from
-        # the menu users see on 六毛 itself.
-        # The pet context is the canonical user-facing menu.  Render that
+        # The pet context is the canonical user-facing menu. Render that
         # exact projection for Dock instead of relying on a platform context
         # name that could later grow divergent entries.
         render(self._model_provider().items("pet"), menu)

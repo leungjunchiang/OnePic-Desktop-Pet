@@ -1053,7 +1053,10 @@ class WorkReportDialog(QDialog):
         core_metrics = [
             ("有效专注段", f"{int(data.get('started_rounds', 0) or 0)} 段"),
             ("最长连续专注", format_work_duration(int(data.get("longest_focus_seconds", 0) or 0))),
-            ("中间打断次数", f"{int(data.get('interruptions', 0) or 0)} 次"),
+            (
+                "暂停超过10分钟",
+                f"{int(data.get('interruptions', 0) or 0)} 次",
+            ),
             ("平均专注段时长", format_work_duration(int(data.get("average_session_seconds", 0) or 0))),
             (
                 "累计月专注时间" if key == "month" else "深度专注时间",
@@ -1115,11 +1118,6 @@ class WorkReportDialog(QDialog):
             current_task = data.get("current_task") or {}
             task_text = str(current_task.get("title") or "当前没有绑定专注任务") if isinstance(current_task, dict) else "当前没有绑定专注任务"
             layout.addWidget(self._metric("当前任务", task_text))
-
-        hint = QLabel("报告在窗口打开时实时刷新；关闭窗口不会生成 PNG，也不会增加服务器报告数据。")
-        hint.setObjectName("reportHint")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
 
     @staticmethod
     def _render_daily_bars(layout: QVBoxLayout, rows: list[dict[str, Any]]) -> None:
