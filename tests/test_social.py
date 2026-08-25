@@ -815,6 +815,30 @@ def test_taunt_migration_is_persistent_and_presence_started():
         assert "lili_taunt_state" in source
 
 
+def test_buddy_reaction_migration_supports_redeemable_taunts_and_encouragement():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260825110000_lili_buddy_reactions.sql").read_text(encoding="utf-8")
+    assert "lili_buddy_encouragements" in migration
+    assert "lili_send_encouragement" in migration
+    assert "lili_encouragement_state" in migration
+    assert "lili_reaction_state" in migration
+    assert "interval '1 hour'" in migration
+    assert "每天最多嘲讽 3 次" in migration
+    assert "对方正在被搭子抓包，等惩罚结束后再加油" in migration
+    assert "interval '30 minutes'" in migration
+    assert "worked_seconds" in migration
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_send_encouragement" in source
+        assert "lili_encouragement_state" in source
+        assert "lili_reaction_state" in source
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
