@@ -4980,7 +4980,7 @@ class PetWindow(QWidget):
             self._change_ambient_activity("taunt")
             if sys.platform == "darwin":
                 self._apply_macos_window_behavior(self.visit_status_bubble)
-            self.visit_status_bubble.set_taunter(sender, int(state.get("support_count") or 1))
+            # Keep this call compatible with older builds whose bubble only accepts the taunter nickname.\n            # The server still carries the supporter count, while the compact bubble text remains stable.\n            self.visit_status_bubble.set_taunter(sender)
             if is_new_taunt:
                 self._taunt_chatter_last_message = self._taunt_message
                 self.show_speech(f"{sender}：{self._taunt_message}", 5200)
