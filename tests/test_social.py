@@ -842,6 +842,16 @@ def test_buddy_reaction_migration_supports_redeemable_taunts_and_encouragement()
         assert "lili_reaction_state" in source
 
 
+def test_taunt_time_window_migration_switches_to_after_hours_encouragement():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260825190000_lili_taunt_time_window.sql").read_text(encoding="utf-8")
+    assert "local_minutes between 480 and 1350" in migration
+    assert "kind', 'encouragement'" in migration
+    assert "created_at >= day_start" in migration
+    assert "lili_send_encouragement" in migration
+    assert "taunt_window and not exists" in migration
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
