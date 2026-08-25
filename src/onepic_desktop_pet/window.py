@@ -447,6 +447,11 @@ class PetWindow(QWidget):
         self._taunt_active = False
         self._taunt_id = ""
         self._taunt_sender_nickname = ""
+        self._taunt_message = ""
+        self._encouragement_active = False
+        self._encouragement_id = ""
+        self._encouragement_sender_nickname = ""
+        self._encouragement_message = ""
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
         self._auto_paused_for_idle = False
@@ -1088,6 +1093,11 @@ class PetWindow(QWidget):
         if self._taunt_active:
             activity = "taunt"
             food_scene_active = False
+        elif self._encouragement_active:
+            # A persistent encouragement uses the normal work-cheer sprite,
+            # but keeps it pinned until the receiver pauses or the hour ends.
+            activity = "work-cheer"
+            food_scene_active = False
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
         composed = draw_activity_overlay(
@@ -1519,8 +1529,12 @@ class PetWindow(QWidget):
         """Explicitly show the pet again, respecting an active full-screen app."""
 
         self._manually_hidden = False
-        if active_window_is_fullscreen():
-            self._sync_fullscreen_visibility()
+        # Use the same platform-aware policy as the polling timer.  On macOS
+        # a normal maximised Word/browser window can be screen-sized without
+        # being a media/game takeover, so the raw geometry helper is too broad
+        # here and could leave the pet hidden after an explicit Show action.
+        self._sync_fullscreen_visibility()
+        if self._fullscreen_hidden:
             return
         self.show()
 
@@ -1548,9 +1562,20 @@ class PetWindow(QWidget):
         return list(dict.fromkeys(surfaces))
 
     def _sync_fullscreen_visibility(self) -> None:
-        """Temporarily yield the display to any real fullscreen foreground app."""
+        """Temporarily yield only to fullscreen media or games.
 
-        fullscreen = bool(active_window_is_fullscreen())
+        macOS exposes many ordinary maximised windows as screen-sized Quartz
+        windows.  Treating the geometry alone as a fullscreen takeover makes
+        the desktop pet disappear behind Word, browsers, terminals, and
+        other everyday apps.  On macOS we therefore require both the native
+        fullscreen geometry and a known media/game process.  Other platforms
+        keep the existing conservative geometry fallback for compatibility.
+        """
+
+        if sys.platform == "darwin":
+            fullscreen = bool(active_fullscreen_video() or active_fullscreen_game())
+        else:
+            fullscreen = bool(active_window_is_fullscreen())
         if fullscreen:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
@@ -4789,6 +4814,7 @@ class PetWindow(QWidget):
             self._social_dialog.apply_dashboard(data)
 
         taunt_active = self._apply_taunt_state(data.get("_taunt_state"))
+        encouragement_active = self._apply_encouragement_state(data.get("_encouragement_state"))
 
         # A cached snapshot is useful for explaining the last known state,
         # but it is not permission to reopen a visit window or emit a new
@@ -4836,10 +4862,11 @@ class PetWindow(QWidget):
                 if sender_id(item) not in self._muted_buddy_ids
             ]
         )
-        if taunt_active:
+        if taunt_active or encouragement_active:
             # The compact bubble is shared with normal串门状态.  A taunt is
             # intentionally the higher-priority label while its punishment is
-            # active, and the historical two-pet visit window stays closed.
+            # active; both persistent reactions keep the historical two-pet
+            # visit window closed.
             self._buddy_visit_window.hide_visit()
         elif active:
             self._show_buddy_visit(active[0])
@@ -4856,6 +4883,7 @@ class PetWindow(QWidget):
         active = bool(state.get("active"))
         if active:
             taunt_id = str(state.get("id") or state.get("taunt_id") or "")
+            is_new_taunt = not self._taunt_active or taunt_id != self._taunt_id
             sender = str(
                 state.get("sender_nickname")
                 or state.get("nickname")
@@ -4865,10 +4893,13 @@ class PetWindow(QWidget):
             self._taunt_active = True
             self._taunt_id = taunt_id
             self._taunt_sender_nickname = sender
+            self._taunt_message = str(state.get("message") or "怎么，今天准备靠意念完成？")[:120]
             self._change_ambient_activity("taunt")
             if sys.platform == "darwin":
                 self._apply_macos_window_behavior(self.visit_status_bubble)
-            self.visit_status_bubble.set_taunter(sender)
+            self.visit_status_bubble.set_taunter(sender, int(state.get("support_count") or 1))
+            if is_new_taunt:
+                self.show_speech(f"{sender}：{self._taunt_message}", 5200)
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
             return True
@@ -4876,9 +4907,58 @@ class PetWindow(QWidget):
             self._taunt_active = False
             self._taunt_id = ""
             self._taunt_sender_nickname = ""
+            self._taunt_message = ""
             if self._ambient_activity == "taunt":
                 self._change_ambient_activity("none")
             self.visit_status_bubble.hide()
+            if not detect_quiet_mode().blocked:
+                self.show_speech(random.choice((
+                    "行，20分钟到了，放你一马。",
+                    "这次算你还清了。",
+                    "嘲讽解除，勉强合格。",
+                    "赎身成功，下次别让我抓到。",
+                )), 5200)
+        return False
+
+    def _apply_encouragement_state(self, state: object) -> bool:
+        """Render the one-hour working encouragement from a buddy."""
+
+        if not isinstance(state, dict) or "active" not in state:
+            return self._encouragement_active
+        active = bool(state.get("active"))
+        if active:
+            encouragement_id = str(state.get("id") or state.get("encouragement_id") or "")
+            is_new_encouragement = not self._encouragement_active or encouragement_id != self._encouragement_id
+            sender = str(
+                state.get("sender_nickname")
+                or state.get("nickname")
+                or "搭子"
+            ).strip()[:40]
+            self._encouragement_active = True
+            self._encouragement_id = encouragement_id
+            self._encouragement_sender_nickname = sender
+            self._encouragement_message = str(state.get("message") or "抓到一个真在干活的。")[:120]
+            # A redeemable taunt always wins. Keep the encouragement state in
+            # memory so it can appear after the debt is cleared, but never
+            # replace the taunt sprite, bubble, or ambient activity.
+            if self._taunt_active:
+                return False
+            self._change_ambient_activity("work-cheer")
+            self.visit_status_bubble.set_encourager(sender)
+            if is_new_encouragement:
+                self.show_speech(f"{sender}：{self._encouragement_message}", 5200)
+            self._position_visit_status_bubble()
+            self._raise_accessory(self.visit_status_bubble)
+            return True
+        if self._encouragement_active:
+            self._encouragement_active = False
+            self._encouragement_id = ""
+            self._encouragement_sender_nickname = ""
+            self._encouragement_message = ""
+            if self._ambient_activity == "work-cheer":
+                self._change_ambient_activity("computer" if self.work_timer.is_running else "none")
+            if not self._taunt_active:
+                self.visit_status_bubble.hide()
         return False
 
     @staticmethod

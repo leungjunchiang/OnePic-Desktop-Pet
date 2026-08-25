@@ -284,6 +284,7 @@ class SocialSyncThread(QThread):
             focus_history_result = None
             personal_state_result = None
             taunt_state_result = None
+            encouragement_state_result = None
             personal_state = self.presence.get("personal_state")
             heartbeat_presence = _heartbeat_payload(self.presence)
             if self.send_heartbeat:
@@ -334,9 +335,19 @@ class SocialSyncThread(QThread):
             taunt_rpc = getattr(self.client, "rpc", None)
             if callable(taunt_rpc):
                 try:
-                    taunt_state_result = taunt_rpc("lili_taunt_state", {})
+                    reaction_state = taunt_rpc("lili_reaction_state", {})
+                    if isinstance(reaction_state, dict):
+                        taunt_state_result = reaction_state.get("taunt")
+                        encouragement_state_result = reaction_state.get("encouragement")
                 except (SocialError, AttributeError, TypeError) as exc:
-                    LOGGER.info("taunt state sync deferred: %s", exc)
+                    # Older relays know the original taunt RPC but not the
+                    # combined reaction snapshot. Keep those clients usable
+                    # without adding another request on the current backend.
+                    LOGGER.info("combined reaction state deferred: %s", exc)
+                    try:
+                        taunt_state_result = taunt_rpc("lili_taunt_state", {})
+                    except (SocialError, AttributeError, TypeError) as fallback_exc:
+                        LOGGER.info("taunt state sync deferred: %s", fallback_exc)
             room_id = self.presence.get("room_id")
             try:
                 data = self.client.dashboard(room_id=room_id)
@@ -369,6 +380,9 @@ class SocialSyncThread(QThread):
             if isinstance(taunt_state_result, dict):
                 data = dict(data or {})
                 data["_taunt_state"] = taunt_state_result
+            if isinstance(encouragement_state_result, dict):
+                data = dict(data or {})
+                data["_encouragement_state"] = encouragement_state_result
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -2498,6 +2512,20 @@ class SocialHubDialog(QDialog):
                 except SocialError as exc:
                     self._error(exc)
                 return
+            if _presence_working(buddy):
+                try:
+                    self.client.rpc("lili_send_encouragement", {"p_target": target})
+                    self._interaction_sent(nickname, "encouragement")
+                except SocialError as exc:
+                    # A relay/database that predates the reaction migration
+                    # can still accept the original short room cheer. Do not
+                    # turn an otherwise working button into a hard failure.
+                    unsupported = getattr(exc, "status", None) in {404, 405} or "不支持" in str(exc)
+                    if not unsupported:
+                        self._error(exc)
+                        return
+                else:
+                    return
         if not self.current_room_id:
             self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
             return
@@ -2634,10 +2662,16 @@ class SocialHubDialog(QDialog):
 
     def _interaction_sent(self, nickname: str, kind: str) -> None:
         labels = {
-            "poke": "戳了一下", "cheer": "送上加油", "taunt": "发起嘲讽",
+            "poke": "戳了一下", "cheer": "送上加油", "taunt": "发起嘲讽", "encouragement": "送来鼓励",
             "drink": "递了一杯奶茶", "phrase": "发送了快速短语",
         }
-        suffix = "；对方会在开始工作后保留惩罚造型 20 分钟。" if kind == "taunt" else "；对方房间动态会显示这次互动。"
+        suffix = (
+            "；连续有效工作 20 分钟即可赎身。"
+            if kind == "taunt"
+            else "；鼓励状态最多持续 1 小时，期间暂停工作会立即结束。"
+            if kind == "encouragement"
+            else "；对方房间动态会显示这次互动。"
+        )
         self._set_status(f"{PET_NAME}已向 {nickname} {labels.get(kind, '送出互动')}{suffix}")
         QTimer.singleShot(0, self._refresh_selected_room)
 

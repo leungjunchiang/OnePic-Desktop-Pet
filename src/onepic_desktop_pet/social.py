@@ -1206,6 +1206,9 @@ class HttpSocialBackend:
             "lili_respond_visit": "/visits/accept",
             "lili_send_taunt": "/buddies/taunt",
             "lili_taunt_state": "/buddies/taunt-state",
+            "lili_send_encouragement": "/buddies/encouragement",
+            "lili_encouragement_state": "/buddies/encouragement-state",
+            "lili_reaction_state": "/buddies/reaction-state",
             "lili_create_room": "/rooms/create",
             "lili_join_room": "/rooms/join",
             "lili_set_room_goal": "/rooms/goal",
@@ -1225,9 +1228,10 @@ class HttpSocialBackend:
         body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
-            self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
+            path = f"/rest/v1/lili_profiles?user_id=eq.{user_id}"
         else:
-            self._raw("PATCH", "/profile", body, authenticated=True)
+            path = "/profile"
+        self._raw("PATCH", path, body, authenticated=True)
 
     def update_owner_nickname(self, nickname: str) -> None:
         body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24]}
@@ -1933,7 +1937,9 @@ class LegacyDirectSocialClient:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        path = f"/rest/v1/lili_profiles?{query}"
+        body = {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
+        self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def heartbeat(self, *, working: bool, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
         if self._http_backend is not None:
