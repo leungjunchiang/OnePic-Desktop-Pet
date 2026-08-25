@@ -125,7 +125,7 @@ def test_dock_menu_uses_qt_native_dock_bridge(monkeypatch) -> None:
     monkeypatch.setattr(
         macos_dock,
         "populate_qmenu",
-        lambda _menu, _model, context: rendered_contexts.append(context),
+        lambda _menu, _model, context, **_kwargs: rendered_contexts.append(context),
     )
 
     controller = macos_dock.install_dock_menu(model)
@@ -197,13 +197,15 @@ def test_dock_menu_reasserts_qt_bridge_after_startup(monkeypatch) -> None:
     monkeypatch.setattr(
         macos_dock,
         "populate_qmenu",
-        lambda _menu, _model, _context: None,
+        lambda _menu, _model, _context, **_kwargs: None,
     )
 
     model = UnifiedMenuModel(
         pet_name="六毛",
         state_provider=lambda: {"visible": True},
-        callbacks={"chat": lambda _checked=False: None},
+        callbacks={
+            "chat": lambda _checked=False: None,
+        },
     )
     controller = macos_dock.install_dock_menu(model)
     assert controller._qt_menu.set_calls == 3
@@ -294,7 +296,11 @@ def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) ->
     model = UnifiedMenuModel(
         pet_name="六毛",
         state_provider=lambda: {"visible": True},
-        callbacks={"chat": lambda _checked=False: None},
+        callbacks={
+            "chat": lambda _checked=False: None,
+            "visibility": lambda _checked=False: None,
+            "quit": lambda _checked=False: None,
+        },
     )
     controller = macos_dock.install_dock_menu(model)
     assert controller.installed is True
@@ -303,8 +309,13 @@ def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) ->
 
     native_menu = controller._delegate.applicationDockMenu_(fake_application)
     native_titles = [item.title for item in native_menu.items if hasattr(item, "title")]
-    expected_titles = [item.title for item in model.items("pet") if not item.separator]
+    expected_titles = [
+        item.title
+        for item in model.items("pet")
+        if not item.separator and item.title not in {"隐藏六毛", "退出六毛"}
+    ]
     assert native_titles == expected_titles
+    assert native_menu.items[-1].title == "更新与关于"
     controller.close()
 
 
@@ -397,7 +408,7 @@ def test_dock_menu_reasserts_appkit_delegate_when_qt_bridge_is_missing(monkeypat
     monkeypatch.setattr(
         macos_dock,
         "populate_qmenu",
-        lambda _menu, _model, _context: None,
+        lambda _menu, _model, _context, **_kwargs: None,
     )
 
     model = UnifiedMenuModel(

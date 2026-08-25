@@ -230,7 +230,13 @@ class MacDockMenuController:
         # The pet projection is the canonical right-click menu. The same
         # snapshot is used by the pet window, status item, and Dock so a
         # dynamic work-state refresh cannot accidentally switch contexts.
-        populate_qmenu(self._qt_menu, self._model_provider(), "pet")
+        model = self._model_provider()
+        populate_qmenu(
+            self._qt_menu,
+            model,
+            "pet",
+            items=self._dock_menu_items(model),
+        )
         # Qt can let the Cocoa Dock bridge go stale after another native menu
         # is opened. Re-register the exact same QMenu whenever Dock asks for
         # a refresh, not only during application startup.
@@ -269,10 +275,28 @@ class MacDockMenuController:
                 destination.addItem_(item)
 
         # The pet context is the canonical user-facing menu. Render that
-        # exact projection for Dock instead of relying on a platform context
-        # name that could later grow divergent entries.
-        render(self._model_provider().items("pet"), menu)
+        # projection for Dock instead of relying on a platform context name
+        # that could later grow divergent entries. macOS appends its own
+        # Hide/Quit entries below this menu, so omit only the two duplicate
+        # Lili entries and leave the pet menu itself unchanged.
+        render(self._dock_menu_items(), menu)
         return menu
+
+    def _dock_menu_items(self, model: UnifiedMenuModel | None = None) -> tuple[MenuItemSpec, ...]:
+        """Return the pet menu minus entries macOS supplies below the Dock menu."""
+
+        duplicate_titles = {"隐藏六毛", "退出六毛"}
+        model = model or self._model_provider()
+        items = [
+            spec
+            for spec in model.items("pet")
+            if spec.title not in duplicate_titles
+        ]
+        # Removing the final two commands would otherwise leave the divider
+        # immediately above macOS's own Dock commands.
+        while items and items[-1].separator:
+            items.pop()
+        return tuple(items)
 
     def close(self) -> None:
         """Restore the previous application delegate during shutdown."""

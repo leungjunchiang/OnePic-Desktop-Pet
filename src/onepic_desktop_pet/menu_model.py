@@ -239,8 +239,18 @@ class UnifiedMenuModel:
         return tuple(entries)
 
 
-def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
-    """Render a :class:`UnifiedMenuModel` into a fresh Qt menu."""
+def populate_qmenu(
+    menu,
+    model: UnifiedMenuModel,
+    context: str = "pet",
+    *,
+    items: tuple[MenuItemSpec, ...] | None = None,
+) -> None:
+    """Render a :class:`UnifiedMenuModel` into a fresh Qt menu.
+
+    ``items`` is an optional filtered projection for native integrations such
+    as the macOS Dock. Normal callers keep the model's complete context.
+    """
 
     from PySide6.QtGui import QActionGroup
     from PySide6.QtWidgets import QMenu
@@ -271,4 +281,4 @@ def populate_qmenu(menu, model: UnifiedMenuModel, context: str = "pet") -> None:
             for action in checkable_actions:
                 group.addAction(action)
 
-    add_items(menu, model.items(context))
+    add_items(menu, model.items(context) if items is None else items)
