@@ -465,7 +465,9 @@ class PetWindow(QWidget):
         self._taunt_active = False
         self._taunt_id = ""
         self._taunt_sender_nickname = ""
+        self._taunt_sender_names: list[str] = []
         self._taunt_message = ""
+        self._taunt_messages: list[str] = []
         self._taunt_chatter_last_message = ""
         self._encouragement_active = False
         self._encouragement_id = ""
@@ -2361,13 +2363,17 @@ class PetWindow(QWidget):
         if not self._taunt_active:
             self.taunt_chatter_timer.stop()
             return
+        # Include the messages returned for each active taunt when the
+        # backend provides them, while retaining the local catalogue for
+        # mixed-version relays.
+        message_pool = list(dict.fromkeys((*self._taunt_messages, *_TAUNT_FOLLOWUP_MESSAGES)))
         candidates = [
             message
-            for message in _TAUNT_FOLLOWUP_MESSAGES
+            for message in message_pool
             if message not in {self._taunt_chatter_last_message, self._taunt_message}
         ]
         if not candidates:
-            candidates = list(_TAUNT_FOLLOWUP_MESSAGES)
+            candidates = message_pool
         message = random.choice(candidates)
         self._taunt_chatter_last_message = message
         sender = self._taunt_sender_nickname or "搭子"
@@ -4956,38 +4962,97 @@ class PetWindow(QWidget):
         else:
             self._hide_buddy_visit()
 
+    @staticmethod
+    def _taunt_text_list(value: object, *, limit: int = 6) -> list[str]:
+        """Normalize a server list (or an older JSON/string fallback)."""
+
+        candidate = value
+        if isinstance(candidate, str):
+            raw = candidate.strip()
+            if raw.startswith("["):
+                try:
+                    candidate = json.loads(raw)
+                except (TypeError, ValueError):
+                    candidate = [raw]
+            else:
+                candidate = [raw]
+        if not isinstance(candidate, (list, tuple)):
+            return []
+        result: list[str] = []
+        for item in candidate:
+            text = str(item or "").strip()
+            if text and text not in result:
+                result.append(text[:120])
+            if len(result) >= limit:
+                break
+        return result
+
+    @staticmethod
+    def _format_taunt_senders(names: list[str], support_count: int) -> str:
+        """Return the compact label shown beside today's work duration."""
+
+        clean = [str(name).strip()[:40] for name in names if str(name).strip()]
+        if not clean:
+            return "搭子"
+        if len(clean) == 1:
+            count = max(1, int(support_count or 1))
+            return f"{clean[0]}等{count}位搭子" if count > 1 else clean[0]
+        if len(clean) == 2:
+            return f"{clean[0]}和{clean[1]}"
+        return "、".join(clean[:-1]) + f"和{clean[-1]}"
+
     def _apply_taunt_state(self, state: object) -> bool:
         """Render the receiver's persistent taunt and return whether active."""
 
         if not isinstance(state, dict) or "active" not in state:
-            # Older relays may omit the optional RPC.  Never clear a valid
-            # punishment merely because a compatibility response was sparse.
             return self._taunt_active
         active = bool(state.get("active"))
         if active:
             taunt_id = str(state.get("id") or state.get("taunt_id") or "")
             is_new_taunt = not self._taunt_active or taunt_id != self._taunt_id
-            sender = str(
+            sender_names = self._taunt_text_list(
+                state.get("sender_nicknames")
+                or state.get("taunter_nicknames")
+                or state.get("sender_names")
+            )
+            fallback_sender = str(
                 state.get("sender_nickname")
                 or state.get("nickname")
                 or state.get("sender_name")
                 or "搭子"
             ).strip()[:40]
+            if not sender_names and fallback_sender:
+                sender_names = [fallback_sender]
+            try:
+                support_count = int(state.get("support_count") or len(sender_names) or 1)
+            except (TypeError, ValueError):
+                support_count = len(sender_names) or 1
+            sender = self._format_taunt_senders(sender_names, support_count)
+            taunt_messages = self._taunt_text_list(
+                state.get("messages") or state.get("taunt_messages"),
+                limit=14,
+            )
             self._taunt_active = True
             self._taunt_id = taunt_id
             self._taunt_sender_nickname = sender
-            self._taunt_message = str(state.get("message") or "怎么，今天准备靠意念完成？")[:120]
+            self._taunt_sender_names = sender_names
+            self._taunt_message = str(
+                state.get("message") or "怎么，今天准备靠意念完成？"
+            )[:120]
+            self._taunt_messages = taunt_messages
             self._change_ambient_activity("taunt")
             if sys.platform == "darwin":
                 self._apply_macos_window_behavior(self.visit_status_bubble)
-            # Keep this call compatible with older builds whose bubble only accepts the taunter nickname.\n            # The server still carries the supporter count, while the compact bubble text remains stable.\n            self.visit_status_bubble.set_taunter(sender)
+            self.visit_status_bubble.set_taunter(sender)
+            # Re-run the non-activating setup after changing the text. This is
+            # important on macOS where a detached panel can otherwise stay
+            # behind a later-created duration bubble.
+            self._show_nonactivating(self.visit_status_bubble)
             if is_new_taunt:
                 self._taunt_chatter_last_message = self._taunt_message
                 self.show_speech(f"{sender}：{self._taunt_message}", 5200)
                 self._schedule_taunt_chatter()
             elif not self.taunt_chatter_timer.isActive():
-                # Recover the periodic chatter after a sleep/resume or a
-                # transient timer reset without repeating the current line.
                 self._schedule_taunt_chatter()
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
@@ -4997,7 +5062,9 @@ class PetWindow(QWidget):
             self.taunt_chatter_timer.stop()
             self._taunt_id = ""
             self._taunt_sender_nickname = ""
+            self._taunt_sender_names = []
             self._taunt_message = ""
+            self._taunt_messages = []
             self._taunt_chatter_last_message = ""
             if self._ambient_activity == "taunt":
                 self._change_ambient_activity("none")
