@@ -47,6 +47,9 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
 
     assert payload == {
         "working": True,
+        "session_active": True,
+        "work_state": "working",
+        "pause_reason": None,
         "today_seconds": 120,
         "session_started_at": "2026-08-21T08:00:00+08:00",
         "outfit_key": "hour-01",

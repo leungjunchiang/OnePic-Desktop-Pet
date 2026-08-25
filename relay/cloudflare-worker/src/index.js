@@ -211,7 +211,7 @@ async function handlePresence(env, request, body) {
   const now = new Date().toISOString();
   const payload = {
     ...safeBody(body, [
-      "working", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "quick_status", "quick_status_expires_at",
+      "working", "session_active", "work_state", "pause_reason", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "quick_status", "quick_status_expires_at",
     ]),
     user_id: userId,
     focus_date: String(body.focus_date || now.slice(0, 10)),
@@ -225,6 +225,9 @@ async function handlePresence(env, request, body) {
   payload.outfit_key = String(payload.outfit_key || "").slice(0, 60);
   payload.quick_status = String(payload.quick_status || "").trim().slice(0, 40);
   payload.quick_status_expires_at = payload.quick_status_expires_at ? String(payload.quick_status_expires_at) : null;
+  payload.session_active = Boolean(payload.session_active);
+  payload.work_state = String(payload.work_state || "idle").slice(0, 32);
+  payload.pause_reason = payload.pause_reason ? String(payload.pause_reason).slice(0, 32) : null;
   return callSupabase(env, request, "/rest/v1/lili_focus_presence?on_conflict=user_id", {
     body: payload,
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
