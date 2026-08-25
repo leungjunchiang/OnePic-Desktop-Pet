@@ -1605,6 +1605,91 @@ def test_input_idle_at_ten_minutes_pauses_without_auto_resume(monkeypatch) -> No
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_idle_return_uses_the_same_away_recovery_card_as_fullscreen(monkeypatch) -> None:
+    """Returning from a ten-minute away pause offers the explicit same card."""
+
+    app, window = _create_window()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.system_session_state",
+        lambda: {"locked": False, "sleeping": False},
+    )
+    window.start_work_timer()
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 600)
+    window._check_input_idle()
+    assert window.work_timer.pause_reason == "idle_10m"
+
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 0)
+    window._check_input_idle()
+    app.processEvents()
+    card = window._away_recovery_card
+    assert card is not None
+    assert card.isVisible()
+    assert card.trigger_label.text() == "要继续工作吗？"
+    card.close_from_app()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None:
+    """Leaving video/game fullscreen also presents the explicit resume card."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    window.pause_work_timer(reason="fullscreen_video")
+    assert window.work_timer.pause_reason == "fullscreen_video"
+
+    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
+    window._sync_fullscreen_visibility()
+    assert window._fullscreen_hidden
+
+    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
+    window._sync_fullscreen_visibility()
+    app.processEvents()
+    card = window._away_recovery_card
+    assert card is not None
+    assert card.isVisible()
+    assert card.trigger_label.text() == "要继续工作吗？"
+    card.close_from_app()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_shared_focus_totals_include_checkpointed_current_session(monkeypatch) -> None:
+    """A checkpointed live session is counted once in report and study-room totals."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    # Simulate 50 minutes in the active timer.  The analytics ledger already
+    # contains the first 30 minutes, while the current session cursor has not
+    # yet been flushed with the remaining 20 minutes.
+    window.work_timer._running_since -= 50 * 60
+    window.work_timer._last_checkpoint -= 50 * 60
+    assert window.work_timer.checkpoint(minimum_interval_seconds=1)
+    window._recorded_focus_session_seconds = 30 * 60
+
+    def period_summary(period, _moment=None):
+        return {
+            "total_seconds": 30 * 60,
+            "local_record_count": 1,
+        }
+
+    monkeypatch.setattr(window.focus_analytics, "period_summary", period_summary)
+    totals = window._shared_focus_period_seconds()
+    assert totals == {"today_seconds": 50 * 60, "week_seconds": 50 * 60}
+
+    reconcile_calls = []
+    monkeypatch.setattr(
+        window.work_timer,
+        "reconcile_today_seconds",
+        lambda seconds: reconcile_calls.append(seconds),
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.build_work_report",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+    assert window._work_report_snapshot() == {"ok": True}
+    assert reconcile_calls == []
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_browser_video_fullscreen_pauses_after_short_confirmation(monkeypatch) -> None:
     """Real video fullscreen hides the pet and pauses work after confirmation."""
 

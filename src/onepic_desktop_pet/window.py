@@ -3731,10 +3731,10 @@ class PetWindow(QWidget):
         """Return one reconciled day/week total for every focus surface.
 
         FocusAnalytics contains the durable account-scoped segments while
-        WorkTimer contributes only the currently running monotonic segment.
-        This prevents stale cumulative checkpoint values from inflating the
-        report and makes the study-room card, report, heartbeat, and status
-        bubble agree on the same calendar-day and calendar-week numbers.
+        WorkTimer contributes the not-yet-recorded part of the current
+        session. A checkpoint can already have moved seconds into the timer's
+        persisted aggregate without creating an analytics row; using only the
+        current monotonic slice made the live bubble repeat an old value.
         """
 
         moment = moment or datetime.now(BEIJING_TIMEZONE)
@@ -3742,17 +3742,45 @@ class PetWindow(QWidget):
         week_projection = self.focus_analytics.period_summary("week", moment)
         recorded_day = max(0, int(day_projection.get("total_seconds", 0) or 0))
         has_local_day_records = int(day_projection.get("local_record_count", 0) or 0) > 0
+        timer_today = max(0, int(self.work_timer.today_seconds()))
+        session_total = (
+            max(0, int(self.work_timer.session_seconds()))
+            if self.work_timer.has_active_session
+            else 0
+        )
+        recorded_session = max(
+            0,
+            int(
+                getattr(
+                    self,
+                    "_recorded_focus_session_seconds",
+                    self.work_timer.analytics_recorded_session_seconds(),
+                )
+                or 0
+            ),
+        )
+        # ``session_seconds`` includes checkpointed segments and the current
+        # monotonic slice. Only the portion beyond the analytics cursor is
+        # still missing from ``recorded_day``.
+        unrecorded_session = max(0, session_total - recorded_session)
         if has_local_day_records:
-            live = self.work_timer.current_elapsed_seconds() if self.work_timer.is_running else 0
-            today = min(24 * 60 * 60, recorded_day + max(0, int(live)))
+            # Local records are authoritative for completed sessions. While a
+            # session is active, retain its uncommitted delta instead of
+            # falling back to a stale remote timer maximum.
+            today = (
+                recorded_day + unrecorded_session
+                if self.work_timer.has_active_session
+                else recorded_day
+            )
         else:
-            today = max(0, int(self.work_timer.today_seconds()))
+            # On a new device there may be no local rows yet. The timer and
+            # server projection are then the only safe baselines.
+            today = max(recorded_day + unrecorded_session, timer_today)
 
         week = max(0, int(week_projection.get("total_seconds", 0) or 0))
-        # The current running segment has not been committed to analytics yet;
-        # add exactly that delta once to the weekly total. If no local records
-        # exist (for example on a new device), the timer's day value is still
-        # a stronger local signal than a missing/stale weekly aggregate.
+        # Add the same unrecorded day delta to the weekly projection exactly
+        # once. If no local records exist, the day value remains the stronger
+        # signal than a missing/stale weekly aggregate.
         if has_local_day_records and today > recorded_day:
             week += today - recorded_day
         week = max(week, today)
@@ -3932,7 +3960,10 @@ class PetWindow(QWidget):
         moment = datetime.now(BEIJING_TIMEZONE)
         current_date = moment.date()
         day_projection = self.focus_analytics.period_summary("day", moment)
-        if int(day_projection.get("local_record_count", 0) or 0) > 0:
+        if (
+            int(day_projection.get("local_record_count", 0) or 0) > 0
+            and not self.work_timer.has_active_session
+        ):
             # One-time repair for timer files that inherited a stale remote
             # maximum.  Do this only when detailed local records exist; a new
             # device without history must still be able to use the server
@@ -4847,7 +4878,10 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         local_day = self.focus_analytics.period_summary("day")
-        if int(local_day.get("local_record_count", 0) or 0) > 0:
+        if (
+            int(local_day.get("local_record_count", 0) or 0) > 0
+            and not self.work_timer.has_active_session
+        ):
             self.work_timer.reconcile_today_seconds(
                 int(local_day.get("total_seconds", 0) or 0)
             )
