@@ -64,6 +64,28 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     app.processEvents()
 
 
+def test_taunt_state_schedules_periodic_followup_speech() -> None:
+    app, window = _create_window()
+    window._apply_taunt_state(
+        {
+            "active": True,
+            "id": "taunt-1",
+            "sender_nickname": "搭子",
+            "message": "就这？",
+        }
+    )
+    assert window.taunt_chatter_timer.isActive()
+    window._taunt_chatter_tick()
+    assert window.taunt_chatter_timer.isActive()
+    assert window.speech_bubble.text().startswith("搭子：")
+
+    window._apply_taunt_state({"active": False})
+    assert not window.taunt_chatter_timer.isActive()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_macos_pet_does_not_poll_native_topmost_layer(monkeypatch) -> None:
     """macOS must not re-apply the native level while another app is active."""
 

@@ -207,6 +207,23 @@ from .night_limited import night_limited_activity
 from . import __version__
 
 
+_TAUNT_FOLLOWUP_MESSAGES = (
+    "工位有人，工作没人。",
+    "不急，DDL会替你急。",
+    "任务还在，你倒先下线了。",
+    "今日研究方法：观察任务自然消失。",
+    "样本没跑，你先跑了。",
+    "论文没动，鼠标倒挺活跃。",
+    "Codex都醒了，你还没开工？",
+    "任务：0%，精神内耗：100%。",
+    "就这？",
+    "离开工只差一个开始按钮。",
+    "恭喜，被搭子当场抓获。",
+    "有人已经发现你没在干活了。",
+    "还欠20分钟，别装作没看见。",
+)
+
+
 def clamp_global_popup_position(global_pos: QPoint, popup_size: QSize, available: QRect) -> QPoint:
     """Clamp a Qt logical global popup point to one monitor, including negatives."""
 
@@ -449,6 +466,7 @@ class PetWindow(QWidget):
         self._taunt_id = ""
         self._taunt_sender_nickname = ""
         self._taunt_message = ""
+        self._taunt_chatter_last_message = ""
         self._encouragement_active = False
         self._encouragement_id = ""
         self._encouragement_sender_nickname = ""
@@ -730,6 +748,10 @@ class PetWindow(QWidget):
         self.speech_timer = QTimer(self)
         self.speech_timer.setSingleShot(True)
         self.speech_timer.timeout.connect(self.speech_bubble.hide)
+
+        self.taunt_chatter_timer = QTimer(self)
+        self.taunt_chatter_timer.setSingleShot(True)
+        self.taunt_chatter_timer.timeout.connect(self._taunt_chatter_tick)
 
         self.effect_timer = QTimer(self)
         self.effect_timer.setInterval(90)
@@ -2321,6 +2343,36 @@ class PetWindow(QWidget):
         self._show_nonactivating(self.speech_bubble)
         self._position_speech_bubble()
         self.speech_timer.start(max(1200, duration_ms))
+
+    def _schedule_taunt_chatter(self) -> None:
+        """在惩罚持续期间隔几分钟再说一句随机嘲讽。"""
+
+        if not self._taunt_active:
+            self.taunt_chatter_timer.stop()
+            return
+        # Keep the cadence playful rather than machine-like: one line every
+        # 2.5–3.5 minutes, while the server remains the authority on when the
+        # punishment ends.
+        self.taunt_chatter_timer.start(random.randint(150_000, 210_000))
+
+    def _taunt_chatter_tick(self) -> None:
+        """Show a follow-up taunt and schedule the next one if still active."""
+
+        if not self._taunt_active:
+            self.taunt_chatter_timer.stop()
+            return
+        candidates = [
+            message
+            for message in _TAUNT_FOLLOWUP_MESSAGES
+            if message not in {self._taunt_chatter_last_message, self._taunt_message}
+        ]
+        if not candidates:
+            candidates = list(_TAUNT_FOLLOWUP_MESSAGES)
+        message = random.choice(candidates)
+        self._taunt_chatter_last_message = message
+        sender = self._taunt_sender_nickname or "搭子"
+        self.show_speech(f"{sender}：{message}", 5200)
+        self._schedule_taunt_chatter()
 
     def feed_pet(self, food_key: str) -> CompanionReply:
         """喂给 Lili 一种菜单食物，并播放对应表情与文字反馈。"""
@@ -4930,15 +4982,23 @@ class PetWindow(QWidget):
                 self._apply_macos_window_behavior(self.visit_status_bubble)
             self.visit_status_bubble.set_taunter(sender, int(state.get("support_count") or 1))
             if is_new_taunt:
+                self._taunt_chatter_last_message = self._taunt_message
                 self.show_speech(f"{sender}：{self._taunt_message}", 5200)
+                self._schedule_taunt_chatter()
+            elif not self.taunt_chatter_timer.isActive():
+                # Recover the periodic chatter after a sleep/resume or a
+                # transient timer reset without repeating the current line.
+                self._schedule_taunt_chatter()
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
             return True
         if self._taunt_active:
             self._taunt_active = False
+            self.taunt_chatter_timer.stop()
             self._taunt_id = ""
             self._taunt_sender_nickname = ""
             self._taunt_message = ""
+            self._taunt_chatter_last_message = ""
             if self._ambient_activity == "taunt":
                 self._change_ambient_activity("none")
             self.visit_status_bubble.hide()
