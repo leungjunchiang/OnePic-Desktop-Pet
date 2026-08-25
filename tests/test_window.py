@@ -1059,7 +1059,7 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
     assert all(button.size() == QSize(42, 42) for button in buttons)
-    # The report action is a child of the same work column, never a detached
+    # The report action is a child of the same dock, never a detached
     # top-level window that can remain stuck on the desktop.
     assert window.quick_panel.report_button.parent() is not None
     assert window.quick_panel.report_button.window() is window.quick_panel
@@ -1092,11 +1092,21 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert window.quick_panel.y() + window.quick_panel.height() + 12 <= window.y()
     window.quick_panel._set_hover_button(window.quick_panel.work_button)
     assert window.quick_panel.report_button.isVisible()
-    work_global_bottom = window.quick_panel.work_button.mapToGlobal(
-        QPoint(0, window.quick_panel.work_button.height())
+    primary_buttons = (
+        window.quick_panel.chat_button,
+        window.quick_panel.work_button,
+        window.quick_panel.todo_button,
+        window.quick_panel.social_button,
+        window.quick_panel.music_button,
+        window.quick_panel.food_button,
     )
-    report_global_top = window.quick_panel.report_button.mapToGlobal(QPoint(0, 0))
-    assert 0 <= report_global_top.y() - work_global_bottom.y() <= 8
+    primary_tops = [button.mapToGlobal(QPoint(0, 0)).y() for button in primary_buttons]
+    assert max(primary_tops) - min(primary_tops) <= 1
+    work_global_top = window.quick_panel.work_button.mapToGlobal(QPoint(0, 0))
+    report_global_bottom = window.quick_panel.report_button.mapToGlobal(
+        QPoint(0, window.quick_panel.report_button.height())
+    )
+    assert 0 <= work_global_top.y() - report_global_bottom.y() <= 8
     window.quick_panel._set_hover_button(window.quick_panel.report_button)
     assert window.quick_panel.hover_hint.text() == "工作报告"
     app.processEvents()
@@ -1116,6 +1126,14 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     window._work_report_dialog.close()
     window.quick_panel._set_hover_button(window.quick_panel.chat_button)
     window.quick_panel._set_report_button_visible(False)
+    assert not window.quick_panel.report_button.isVisible()
+
+    # A different primary shortcut must dismiss the secondary report action
+    # immediately; only moving between work/report keeps the bridge timer.
+    window.show_quick_panel()
+    window.quick_panel._set_hover_button(window.quick_panel.work_button)
+    assert window.quick_panel.report_button.isVisible()
+    window.quick_panel._set_hover_button(window.quick_panel.social_button)
     assert not window.quick_panel.report_button.isVisible()
     window.close(); window.deleteLater(); app.processEvents()
 

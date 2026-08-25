@@ -655,6 +655,7 @@ class PetWindow(QWidget):
         self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
         self.quick_panel = QuickControlPanel(self._pet_name())
         self.quick_panel.set_window_behavior_callback(self._apply_macos_window_behavior)
+        self.quick_panel.layout_changed.connect(self._position_quick_panel)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
         self.quick_panel.work_report_requested.connect(self.show_work_report)

@@ -17,6 +17,7 @@ from .work_timer import format_elapsed_clock
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -392,6 +393,7 @@ class QuickControlPanel(QWidget):
     rename_requested = Signal()
     content_update_requested = Signal()
     program_update_requested = Signal()
+    layout_changed = Signal()
 
     def __init__(self, pet_name: str = "六毛") -> None:
         super().__init__(None)
@@ -439,24 +441,23 @@ class QuickControlPanel(QWidget):
         self.hide_timer.timeout.connect(self.hide)
         self.hide_timer.timeout.connect(self._hide_hint)
         self._ignore_initial_enter = False
-        layout = QHBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9); layout.setSpacing(8)
+        # Row 1 is the complete primary shortcut row.  The report action is
+        # placed in row 0, directly above the work column, so showing it can
+        # never push the other primary buttons sideways or onto another level.
+        layout = QGridLayout(self)
+        layout.setContentsMargins(10, 9, 10, 9)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(0)
         self.title = QLabel(f"{pet_name}快捷口袋")
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
         self.work_button = self._button("work", "开始工作", self.work_requested)
-        work_column = QWidget(self)
-        work_column.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        work_layout = QVBoxLayout(work_column)
-        work_layout.setContentsMargins(0, 0, 0, 0)
-        work_layout.setSpacing(4)
-        work_layout.addWidget(self.work_button)
-        # Keep the report action inside the same dock and layout as the work
-        # action.  A separate top-level window could survive the dock's hide
-        # event on macOS and drift away from the work shortcut after a move.
+        # Keep the report action inside the same dock as the work action. A
+        # separate top-level window could survive the dock's hide event on
+        # macOS and drift away from the work shortcut after a move.
         self.report_button = self._button("report", "工作报告", None)
         self.report_button.clicked.connect(self._open_report_from_button)
         self.report_button.hide()
-        work_layout.addWidget(self.report_button)
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
@@ -471,12 +472,20 @@ class QuickControlPanel(QWidget):
             self.food_button,
         )
         self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button)
-        for button in self._quick_buttons:
-            layout.addWidget(button)
+        primary_buttons = (
+            self.chat_button,
+            self.work_button,
+            self.todo_button,
+            self.social_button,
+            self.music_button,
+            self.food_button,
+        )
+        for column, button in enumerate(primary_buttons):
+            layout.addWidget(button, 1, column, Qt.AlignmentFlag.AlignHCenter)
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             button.installEventFilter(self)
-        layout.insertWidget(1, work_column)
+        layout.addWidget(self.report_button, 0, 1, Qt.AlignmentFlag.AlignHCenter)
         for button in (self.work_button, self.report_button):
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -563,9 +572,8 @@ class QuickControlPanel(QWidget):
         if target:
             self._report_hide_timer.stop()
             self.report_button.show()
-            # The report button is a child of ``work_column``. Resize the
-            # dock immediately so its position and auto-hide geometry include
-            # the newly visible row on every platform.
+            # Resize the dock immediately so its position and auto-hide
+            # geometry include the newly visible secondary row.
             self.adjustSize()
             self._hover_poll_timer.start()
         else:
@@ -573,6 +581,10 @@ class QuickControlPanel(QWidget):
                 self._hide_hint()
             self.report_button.hide()
             self.adjustSize()
+        if self.isVisible():
+            # The owning window keeps the whole dock centered over the pet
+            # after the secondary row changes the panel height.
+            self.layout_changed.emit()
 
     def _schedule_report_hide(self) -> None:
         """Give the pointer a short bridge from the main button to the report."""
@@ -591,9 +603,8 @@ class QuickControlPanel(QWidget):
     def _position_report_button(self) -> None:
         """Keep the legacy positioning hook harmless after layout integration."""
 
-        # ``report_button`` now lives in ``work_column`` and follows normal
-        # Qt layout geometry.  Callers from older window-positioning code can
-        # still invoke this method safely.
+        # ``report_button`` follows normal grid-layout geometry. Callers from
+        # older window-positioning code can still invoke this method safely.
         self.adjustSize()
 
     def position_report_button(self) -> None:
@@ -687,7 +698,10 @@ class QuickControlPanel(QWidget):
             self._report_hide_timer.stop()
             self._set_report_button_visible(True)
         else:
-            self._schedule_report_hide()
+            # Moving to any other primary shortcut immediately removes the
+            # secondary report action. The short timer is reserved for the
+            # tiny pointer bridge between work and report themselves.
+            self._set_report_button_visible(False)
         if self._hint_button is not button or not self.hover_hint.isVisible():
             self._show_hint(button)
 
