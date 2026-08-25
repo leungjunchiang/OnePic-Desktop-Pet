@@ -745,7 +745,12 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     assert window.quick_panel.isVisible()
     assert window.work_duration_bubble.isVisible()
 
+    # macOS deliberately ignores generic screen-sized windows and only
+    # yields to a detected media/game fullscreen surface.  Patch both paths
+    # so this test exercises the same transition on every CI runner.
     monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
     window._sync_fullscreen_visibility()
     app.processEvents()
     assert window._fullscreen_hidden
@@ -760,6 +765,8 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     assert not window.work_duration_bubble.isVisible()
 
     monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
     window._sync_fullscreen_visibility()
     app.processEvents()
     assert not window._fullscreen_hidden
@@ -1766,10 +1773,14 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     assert window.work_timer.pause_reason == "fullscreen_video"
 
     monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
     window._sync_fullscreen_visibility()
     assert window._fullscreen_hidden
 
     monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
+    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
     window._sync_fullscreen_visibility()
     app.processEvents()
     card = window._away_recovery_card
