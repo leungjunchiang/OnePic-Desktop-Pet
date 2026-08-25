@@ -201,6 +201,20 @@ def _taunt_available(presence: dict[str, Any]) -> bool:
     return _presence_status(presence) in {"rest", "offline"}
 
 
+def _taunt_window_open(now: datetime | None = None) -> bool:
+    """Return whether Beijing local time currently permits playful taunts."""
+
+    current = now or _beijing_now()
+    minutes = current.hour * 60 + current.minute
+    return 8 * 60 <= minutes <= 22 * 60 + 30
+
+
+def _reaction_label(presence: dict[str, Any], now: datetime | None = None) -> str:
+    """Show the action that the server will accept at this time of day."""
+
+    return "嘲讽" if _taunt_available(presence) and _taunt_window_open(now) else "加油"
+
+
 def _wealth_leaderboard_enabled(profile: dict[str, Any] | None) -> bool:
     """Keep the leaderboard opt-in default for legacy profiles.
 
@@ -1143,10 +1157,9 @@ class BuddyCardWidget(QWidget):
         # “加油” now doubles as a playful punishment when a buddy is not
         # working.  The server still checks the state, while this label gives
         # the user an immediate, honest affordance in the card.
-        taunt_available = _taunt_available(buddy)
         action_specs = (
             ("visit", "串门"),
-            ("cheer", "嘲讽" if taunt_available else "加油"),
+            ("cheer", _reaction_label(buddy)),
             ("food_coffee", "请咖啡"),
             ("food_milk_tea", "请奶茶"),
             ("food_tea", "敬茶"),
@@ -1215,7 +1228,7 @@ class BuddyCardWidget(QWidget):
             return
         labels = {
             "visit": "串门",
-            "cheer": "嘲讽" if _taunt_available(self.buddy) else "加油",
+            "cheer": _reaction_label(self.buddy),
             "food_coffee": "请咖啡", "food_milk_tea": "请奶茶",
             "food_tea": "敬茶", "food_cake": "请蛋糕",
         }
@@ -1282,9 +1295,8 @@ class RoomPetCardWidget(QWidget):
         actions.setHorizontalSpacing(3)
         actions.setVerticalSpacing(3)
         is_self = bool(buddy.get("is_self"))
-        taunt_available = _taunt_available(buddy)
         specs = (
-            ("visit", "串门"), ("cheer", "嘲讽" if taunt_available else "加油"),
+            ("visit", "串门"), ("cheer", _reaction_label(buddy)),
             ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"),
             ("food_cake", "蛋糕"),
         )
@@ -2579,14 +2591,14 @@ class SocialHubDialog(QDialog):
             # Outside a focus session this is a playful, persistent taunt.
             # The RPC repeats the state check server-side so stale cards or a
             # second device cannot punish somebody who has already started.
-            if _taunt_available(buddy):
+            if _taunt_available(buddy) and _taunt_window_open():
                 try:
                     self.client.rpc("lili_send_taunt", {"p_target": target})
                     self._interaction_sent(nickname, "taunt")
                 except SocialError as exc:
                     self._error(exc)
                 return
-            if _presence_working(buddy):
+            if _presence_working(buddy) or not _taunt_window_open():
                 try:
                     self.client.rpc("lili_send_encouragement", {"p_target": target})
                     self._interaction_sent(nickname, "encouragement")

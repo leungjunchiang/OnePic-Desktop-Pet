@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -19,6 +20,8 @@ from onepic_desktop_pet.social_ui import (
     SocialHubDialog,
     SocialSignupThread,
     SocialVisitResponseThread,
+    _reaction_label,
+    _taunt_window_open,
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
 )
@@ -449,10 +452,25 @@ def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
-def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies() -> None:
+def test_reaction_label_switches_to_encouragement_outside_beijing_taunt_window() -> None:
+    tz = timezone(timedelta(hours=8))
+    rest = {"online": False, "status": "offline", "working": False}
+    assert _taunt_window_open(datetime(2026, 8, 26, 8, 0, tzinfo=tz))
+    assert _taunt_window_open(datetime(2026, 8, 26, 22, 30, tzinfo=tz))
+    assert not _taunt_window_open(datetime(2026, 8, 26, 7, 59, tzinfo=tz))
+    assert not _taunt_window_open(datetime(2026, 8, 26, 22, 31, tzinfo=tz))
+    assert _reaction_label(rest, datetime(2026, 8, 26, 12, 0, tzinfo=tz)) == "嘲讽"
+    assert _reaction_label(rest, datetime(2026, 8, 26, 23, 0, tzinfo=tz)) == "加油"
+
+
+def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch) -> None:
     """A stale legacy ``working`` flag must not hide the taunt affordance."""
 
     app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._beijing_now",
+        lambda: datetime(2026, 8, 26, 12, 0, tzinfo=timezone(timedelta(hours=8))),
+    )
     payloads = (
         {"nickname": "休息搭子", "online": True, "status": "rest", "working": True},
         {"nickname": "离线搭子", "online": False, "status": "focus", "working": True},
@@ -464,8 +482,12 @@ def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies() -> None:
     app.processEvents()
 
 
-def test_room_pet_taunt_action_is_visible_for_stale_rest_payload() -> None:
+def test_room_pet_taunt_action_is_visible_for_stale_rest_payload(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._beijing_now",
+        lambda: datetime(2026, 8, 26, 12, 0, tzinfo=timezone(timedelta(hours=8))),
+    )
     card = RoomPetCardWidget(
         {"nickname": "休息搭子", "online": True, "status": "rest", "working": True}
     )
