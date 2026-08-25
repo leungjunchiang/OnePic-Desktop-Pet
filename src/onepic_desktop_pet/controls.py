@@ -446,8 +446,13 @@ class QuickControlPanel(QWidget):
         # never push the other primary buttons sideways or onto another level.
         layout = QGridLayout(self)
         layout.setContentsMargins(10, 9, 10, 9)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(0)
+        # Keep the secondary report shortcut the same distance from the work
+        # shortcut as adjacent primary shortcuts (for example music/food).
+        # Using one shared gap also keeps the geometry stable when the report
+        # row appears or disappears on macOS.
+        shortcut_gap = 8
+        layout.setHorizontalSpacing(shortcut_gap)
+        layout.setVerticalSpacing(shortcut_gap)
         self.title = QLabel(f"{pet_name}快捷口袋")
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)

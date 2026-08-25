@@ -176,6 +176,44 @@ def test_owner_nickname_changes_social_identity_without_changing_pet_name() -> N
     app.processEvents()
 
 
+def test_owner_nickname_restores_account_value_before_local_sync(monkeypatch) -> None:
+    """登录新电脑时先读云端昵称，不能用空白本地默认值覆盖它。"""
+
+    app, window = _create_window()
+
+    class Session:
+        user_id = "account-owner"
+
+    class Client:
+        signed_in = True
+        session = Session()
+
+    window.social_client = Client()
+    window.settings.owner_nickname = ""
+    window._switch_focus_account("account-owner")
+    uploads: list[str] = []
+    monkeypatch.setattr(window, "_sync_owner_nickname", uploads.append)
+
+    # Before the first server dashboard arrives, the local default must not be
+    # uploaded over the account's existing nickname.
+    window._maybe_sync_owner_nickname()
+    assert uploads == []
+
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window._merge_remote_personal_state(
+        {
+            "data_source": "server",
+            "me": {"owner_nickname": "小梁", "nickname": "小梁"},
+        }
+    )
+    assert window.settings.owner_nickname == "小梁"
+    assert window._owner_nickname_remote_loaded_for == "account-owner"
+
+    window._maybe_sync_owner_nickname()
+    assert uploads == ["小梁"]
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
     app, window = _create_window()
     assert window.settings.allow_autonomous_walk is False
@@ -1102,6 +1140,8 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     )
     primary_tops = [button.mapToGlobal(QPoint(0, 0)).y() for button in primary_buttons]
     assert max(primary_tops) - min(primary_tops) <= 1
+    assert window.quick_panel.layout().horizontalSpacing() == 8
+    assert window.quick_panel.layout().verticalSpacing() == 8
     work_global_top = window.quick_panel.work_button.mapToGlobal(QPoint(0, 0))
     report_global_bottom = window.quick_panel.report_button.mapToGlobal(
         QPoint(0, window.quick_panel.report_button.height())

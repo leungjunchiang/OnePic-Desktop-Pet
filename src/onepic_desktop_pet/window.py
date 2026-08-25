@@ -492,6 +492,10 @@ class PetWindow(QWidget):
         self._social_profile_threads: list[SocialProfileThread] = []
         self._owner_nickname_sync_key: tuple[str, str] | None = None
         self._owner_nickname_sync_inflight = False
+        # A fresh computer must first read the account profile before its
+        # empty local setting is allowed to sync back to the server.  Keep the
+        # cursor account-scoped so switching accounts cannot leak a nickname.
+        self._owner_nickname_remote_loaded_for = ""
         # Economy events are an append-only local ledger.  A complete,
         # idempotent replay is used when an account becomes available so a
         # transient offline period cannot leave the leaderboard behind the
@@ -4195,6 +4199,13 @@ class PetWindow(QWidget):
         """Sync a locally configured owner nickname after every account login."""
 
         if self.social_client.signed_in:
+            user_id = self._current_social_user_id()
+            # The first heartbeat on a new computer also carries the local
+            # defaults.  Wait for the server profile to arrive or it could
+            # overwrite a nickname such as “小梁” with an empty value before
+            # the dashboard has a chance to restore it.
+            if not user_id or self._owner_nickname_remote_loaded_for != user_id:
+                return
             self._sync_owner_nickname(self._owner_nickname())
 
     def _owner_nickname_sync_succeeded(self, key: tuple[str, str]) -> None:
@@ -4845,12 +4856,31 @@ class PetWindow(QWidget):
         return fresh
 
     def _merge_remote_personal_state(self, data: dict) -> None:
-        """Merge same-account focus and outfit state from the server."""
+        """Merge same-account nickname, focus and outfit state from the server."""
 
         if data.get("_sync_offline") or data.get("data_source") == "local_cache":
             return
         profile = data.get("me") if isinstance(data, dict) else None
         profile = profile if isinstance(profile, dict) else {}
+        user_id = self._current_social_user_id()
+        if user_id:
+            remote_raw_nickname = profile.get("owner_nickname")
+            if remote_raw_nickname is None:
+                remote_raw_nickname = profile.get("nickname")
+            remote_nickname = clean_owner_nickname(remote_raw_nickname)
+            # An explicit rename is already being uploaded; do not let a
+            # stale in-flight dashboard response undo that local action.
+            if not self._owner_nickname_sync_inflight:
+                if remote_nickname != self._owner_nickname():
+                    self.settings.owner_nickname = remote_nickname
+                    self.settings.pet_name = PET_NAME
+                    save_settings(self.settings)
+                    self.owner_nickname_changed.emit(remote_nickname)
+                    if self._social_dialog is not None:
+                        self._social_dialog.set_owner_nickname(remote_nickname)
+                elif self._social_dialog is not None:
+                    self._social_dialog.set_owner_nickname(remote_nickname)
+            self._owner_nickname_remote_loaded_for = user_id
         presence = data.get("me_presence") if isinstance(data, dict) else None
         presence = presence if isinstance(presence, dict) else {}
         remote_date = profile.get("focus_today_date")
@@ -4981,6 +5011,8 @@ class PetWindow(QWidget):
         clean = str(account_id or "").strip()
         if clean == self._active_focus_account_id:
             return
+        if hasattr(self, "_owner_nickname_remote_loaded_for"):
+            self._owner_nickname_remote_loaded_for = ""
         self.focus_session.switch_account(clean or None)
         self.focus_analytics.switch_account(clean or None)
         self.daily_stats.switch_account(clean or None)
