@@ -223,10 +223,25 @@ class VisitStatusBubble(QLabel):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setWordWrap(True)
-        self.setMaximumWidth(320)
+        self.setWordWrap(False)
+        self.setMaximumWidth(640)
         self.setStyleSheet(CONTROL_STYLE)
         self.hide()
+
+    def _set_content(self, text: str, *, allow_wrap: bool = False) -> None:
+        """Render a status line without wrapping ordinary single-sender text.
+
+        A single taunter/encourager should stay on one compact line beside the
+        pet.  Long multi-sender labels may wrap so the bubble remains usable on
+        narrow screens.
+        """
+
+        self.setWordWrap(bool(allow_wrap))
+        self.setMaximumWidth(320 if allow_wrap else 640)
+        self.setMinimumWidth(0)
+        self.setText(text)
+        self.adjustSize()
+        self.show()
 
     def _set_taunt_style(self, active: bool) -> None:
         self.setProperty("taunt", bool(active))
@@ -242,9 +257,7 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        self.setText(f"{name}正在串门")
-        self.adjustSize()
-        self.show()
+        self._set_content(f"{name}正在串门")
 
     def set_taunter(self, nickname: str | None, support_count: int = 1) -> None:
         """Show the server-authoritative punishment state beside the pet."""
@@ -256,9 +269,10 @@ class VisitStatusBubble(QLabel):
             self.setText("")
             return
         count = max(1, int(support_count or 1))
-        self.setText(f"{name}{f'等{count}位搭子' if count > 1 else ''}正在嘲讽你")
-        self.adjustSize()
-        self.show()
+        display = f"{name}{f'等{count}位搭子' if count > 1 else ''}正在嘲讽你"
+        # _format_taunt_senders uses 和/、 only when there are multiple
+        # distinct names; preserve one-line rendering for the common case.
+        self._set_content(display, allow_wrap=("和" in name or "、" in name))
 
     def set_encourager(self, nickname: str | None) -> None:
         """Show the persistent one-hour working encouragement beside the pet."""
@@ -269,9 +283,7 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        self.setText(f"{name}送来鼓励")
-        self.adjustSize()
-        self.show()
+        self._set_content(f"{name}送来鼓励")
 
 
 class CoffeeScenePrompt(QWidget):
