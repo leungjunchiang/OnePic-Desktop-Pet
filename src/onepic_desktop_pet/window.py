@@ -1529,8 +1529,12 @@ class PetWindow(QWidget):
         """Explicitly show the pet again, respecting an active full-screen app."""
 
         self._manually_hidden = False
-        if active_window_is_fullscreen():
-            self._sync_fullscreen_visibility()
+        # Use the same platform-aware policy as the polling timer.  On macOS
+        # a normal maximised Word/browser window can be screen-sized without
+        # being a media/game takeover, so the raw geometry helper is too broad
+        # here and could leave the pet hidden after an explicit Show action.
+        self._sync_fullscreen_visibility()
+        if self._fullscreen_hidden:
             return
         self.show()
 
