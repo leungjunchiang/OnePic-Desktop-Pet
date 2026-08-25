@@ -254,8 +254,13 @@ class VisitStatusBubble(QLabel):
             return
         self._set_content(f"{name}正在串门")
 
-    def set_taunter(self, nickname: str | None) -> None:
-        """Show the server-authoritative punishment state beside the pet."""
+    def set_taunter(
+        self,
+        nickname: str | None,
+        support_count: int = 1,
+        remaining_seconds: int | None = None,
+    ) -> None:
+        """Show the punishment state and its live redemption countdown."""
 
         self._set_taunt_style(True)
         name = str(nickname or "搭子").strip()[:180]
@@ -263,10 +268,17 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        # Multiple display names are joined with 和/、 by the window; allow
-        # those longer labels to wrap while keeping one sender on one line.
+        count = max(1, int(support_count or 1))
+        display = f"{name}{f'等{count}位搭子' if count > 1 else ''}正在嘲讽你"
+        if remaining_seconds is not None:
+            try:
+                seconds = max(0, int(remaining_seconds))
+            except (TypeError, ValueError):
+                seconds = 0
+            minutes, remainder = divmod(seconds, 60)
+            display += f" · 还剩 {minutes}:{remainder:02d}"
         self._set_content(
-            f"{name}正在嘲讽你",
+            display,
             allow_wrap=("和" in name or "、" in name),
         )
 
