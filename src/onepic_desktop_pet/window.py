@@ -5011,12 +5011,15 @@ class PetWindow(QWidget):
             taunt_id = str(state.get("id") or state.get("taunt_id") or "")
             is_new_taunt = not self._taunt_active or taunt_id != self._taunt_id
             sender_names = self._taunt_text_list(
-                state.get("sender_nicknames")
+                state.get("sender_display_names")
+                or state.get("sender_nicknames")
                 or state.get("taunter_nicknames")
                 or state.get("sender_names")
             )
             fallback_sender = str(
-                state.get("sender_nickname")
+                state.get("sender_display_name")
+                or state.get("private_note_name")
+                or state.get("sender_nickname")
                 or state.get("nickname")
                 or state.get("sender_name")
                 or "搭子"
@@ -5088,7 +5091,9 @@ class PetWindow(QWidget):
             encouragement_id = str(state.get("id") or state.get("encouragement_id") or "")
             is_new_encouragement = not self._encouragement_active or encouragement_id != self._encouragement_id
             sender = str(
-                state.get("sender_nickname")
+                state.get("sender_display_name")
+                or state.get("private_note_name")
+                or state.get("sender_nickname")
                 or state.get("nickname")
                 or "搭子"
             ).strip()[:40]
