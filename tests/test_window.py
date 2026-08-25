@@ -114,6 +114,29 @@ def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
     app.processEvents()
 
 
+def test_single_taunt_status_stays_on_one_line() -> None:
+    app, window = _create_window()
+    window._apply_taunt_state(
+        {
+            "active": True,
+            "id": "taunt-single",
+            "sender_display_name": "dahao",
+            "message": "怎么，今天准备靠意念完成？",
+        }
+    )
+    app.processEvents()
+
+    bubble = window.visit_status_bubble
+    assert bubble.text() == "dahao正在嘲讽你"
+    assert bubble.wordWrap() is False
+    assert bubble.height() <= bubble.fontMetrics().height() + 12
+
+    window._apply_taunt_state({"active": False})
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_encouragement_uses_private_display_name() -> None:
     app, window = _create_window()
     window._apply_encouragement_state(
