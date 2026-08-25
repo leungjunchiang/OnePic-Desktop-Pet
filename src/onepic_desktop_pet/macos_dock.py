@@ -102,34 +102,49 @@ class MacDockMenuController:
         if sys.platform != "darwin":
             return
 
-        # Qt owns the NSApplication delegate in a PySide application.  Using
-        # QMenu's supported Dock bridge keeps that delegate intact; replacing
-        # it with a second PyObjC delegate is racy because Qt may restore its
-        # own delegate after startup, leaving the Dock with the default menu.
+        # Install the AppKit delegate first.  QMenu.setAsDockMenu() is
+        # available only in some PySide/macOS combinations and can silently
+        # leave the Dock showing Qt's stale/default menu even though the call
+        # succeeds.  The AppKit applicationDockMenu: callback is the actual
+        # macOS Dock hook, so it is the authoritative path and always renders
+        # the current pet projection from UnifiedMenuModel.
+        if self._install_appkit_dock_menu():
+            self._schedule_dock_reassertion()
+            return
+
+        # Keep Qt's native bridge as a compatibility fallback for unusual
+        # environments where PyObjC/AppKit is unavailable (for example, a
+        # test harness or a stripped-down Python runtime).
         if self._install_qt_dock_menu():
             self._schedule_dock_reassertion()
             return
 
-        # Keep the AppKit implementation as a compatibility fallback for
-        # environments where the Qt binding does not expose setAsDockMenu().
-        # Normal PySide6 macOS builds take the Qt path above.
+    def _install_appkit_dock_menu(self) -> bool:
+        """Install the real macOS ``applicationDockMenu:`` callback."""
+
         try:
             from AppKit import NSApplication
         except ImportError:
-            return
+            return False
 
-        self._target_class, self._delegate_class = _dock_native_classes()
-        self._application = NSApplication.sharedApplication()
-        self._previous_delegate = self._application.delegate()
-        self._target = self._target_class.alloc().init()
-        self._delegate = self._delegate_class.alloc().init()
-        _ACTIVE_DOCK_CONTROLLER = self
-        self._application.setDelegate_(self._delegate)
+        try:
+            self._target_class, self._delegate_class = _dock_native_classes()
+            self._application = NSApplication.sharedApplication()
+            self._previous_delegate = self._application.delegate()
+            self._target = self._target_class.alloc().init()
+            self._delegate = self._delegate_class.alloc().init()
+            global _ACTIVE_DOCK_CONTROLLER
+            _ACTIVE_DOCK_CONTROLLER = self
+            self._application.setDelegate_(self._delegate)
+        except (AttributeError, ImportError, RuntimeError, TypeError, ValueError):
+            self._application = None
+            self._previous_delegate = None
+            self._target = None
+            self._delegate = None
+            return False
+
         self._native = True
-        # Qt may finish installing/restoring its Cocoa delegate during the
-        # first event-loop turn.  Re-assert our delegate after Qt is settled;
-        # otherwise macOS silently falls back to the standard Dock menu.
-        self._schedule_dock_reassertion()
+        return True
 
     def _schedule_dock_reassertion(self) -> None:
         """Re-assert the Dock bridge after Qt finishes Cocoa setup."""

@@ -63,6 +63,13 @@ def test_dock_menu_uses_qt_native_dock_bridge(monkeypatch) -> None:
     """The real macOS path must register QMenu with Qt's Dock bridge."""
 
     monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+    # AppKit is authoritative in production. Force the compatibility path so
+    # this test remains focused on Qt's bridge behavior.
+    monkeypatch.setattr(
+        macos_dock.MacDockMenuController,
+        "_install_appkit_dock_menu",
+        lambda _self: False,
+    )
 
     class Signal:
         def __init__(self) -> None:
@@ -138,6 +145,11 @@ def test_dock_menu_reasserts_qt_bridge_after_startup(monkeypatch) -> None:
     """A late Qt delegate change must not discard the Dock menu."""
 
     monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        macos_dock.MacDockMenuController,
+        "_install_appkit_dock_menu",
+        lambda _self: False,
+    )
 
     class Signal:
         def connect(self, _callback) -> None:
@@ -195,6 +207,104 @@ def test_dock_menu_reasserts_qt_bridge_after_startup(monkeypatch) -> None:
     )
     controller = macos_dock.install_dock_menu(model)
     assert controller._qt_menu.set_calls == 3
+    controller.close()
+
+
+def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) -> None:
+    """macOS must use the native Dock callback with the pet menu exactly."""
+
+    monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+
+    class FakeQObject:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def init(self):
+            return self
+
+    class FakeApplication:
+        def __init__(self) -> None:
+            self.current_delegate = object()
+
+        def delegate(self):
+            return self.current_delegate
+
+        def setDelegate_(self, delegate) -> None:
+            self.current_delegate = delegate
+
+    fake_application = FakeApplication()
+
+    class FakeNSApplication:
+        @staticmethod
+        def sharedApplication():
+            return fake_application
+
+    class FakeNSMenu:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def initWithTitle_(self, _title):
+            self.items = []
+            return self
+
+        def addItem_(self, item) -> None:
+            self.items.append(item)
+
+    class FakeNSMenuItem:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        @staticmethod
+        def separatorItem():
+            return object()
+
+        def initWithTitle_action_keyEquivalent_(self, title, _action, _key):
+            self.title = title
+            return self
+
+        def setTarget_(self, _target):
+            pass
+
+        def setRepresentedObject_(self, _command):
+            pass
+
+        def setEnabled_(self, _enabled):
+            pass
+
+        def setState_(self, _state):
+            pass
+
+        def setSubmenu_(self, _submenu):
+            pass
+
+    appkit = types.ModuleType("AppKit")
+    appkit.NSApplication = FakeNSApplication
+    appkit.NSMenu = FakeNSMenu
+    appkit.NSMenuItem = FakeNSMenuItem
+    foundation = types.ModuleType("Foundation")
+    foundation.NSObject = FakeQObject
+    monkeypatch.setitem(sys.modules, "AppKit", appkit)
+    monkeypatch.setitem(sys.modules, "Foundation", foundation)
+    monkeypatch.setattr(macos_dock, "_DOCK_TARGET_CLASS", None)
+    monkeypatch.setattr(macos_dock, "_DOCK_DELEGATE_CLASS", None)
+
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {"visible": True},
+        callbacks={"chat": lambda _checked=False: None},
+    )
+    controller = macos_dock.install_dock_menu(model)
+    assert controller.installed is True
+    assert controller._qt_menu is None
+    assert fake_application.current_delegate is controller._delegate
+
+    native_menu = controller._delegate.applicationDockMenu_(fake_application)
+    native_titles = [item.title for item in native_menu.items if hasattr(item, "title")]
+    expected_titles = [item.title for item in model.items("pet") if not item.separator]
+    assert native_titles == expected_titles
     controller.close()
 
 

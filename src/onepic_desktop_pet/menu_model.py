@@ -121,6 +121,7 @@ class UnifiedMenuModel:
 
         todo_children = [
             self._optional("显示待办", "show_todos"),
+            self._optional("隐藏待办", "hide_todos"),
             self._optional("新建待办…", "add_todo"),
             self._optional("六毛闹钟…", "alarms"),
         ]
