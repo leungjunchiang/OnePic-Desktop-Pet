@@ -469,6 +469,8 @@ class PetWindow(QWidget):
         self._taunt_message = ""
         self._taunt_messages: list[str] = []
         self._taunt_chatter_last_message = ""
+        self._taunt_remaining_work_seconds = 1200
+        self._taunt_countdown_last_tick = time.monotonic()
         self._encouragement_active = False
         self._encouragement_id = ""
         self._encouragement_sender_nickname = ""
@@ -2357,6 +2359,24 @@ class PetWindow(QWidget):
         # punishment ends.
         self.taunt_chatter_timer.start(random.randint(150_000, 210_000))
 
+    def _update_taunt_countdown(self) -> None:
+        """Keep the visible redemption countdown moving once per second."""
+
+        now = time.monotonic()
+        elapsed = max(0, int(now - self._taunt_countdown_last_tick))
+        self._taunt_countdown_last_tick = now
+        if not self._taunt_active or elapsed <= 0 or not self.work_timer.is_running:
+            return
+        previous = self._taunt_remaining_work_seconds
+        self._taunt_remaining_work_seconds = max(0, previous - elapsed)
+        if self._taunt_remaining_work_seconds == previous:
+            return
+        self.visit_status_bubble.set_taunter(
+            self._taunt_sender_nickname,
+            remaining_seconds=self._taunt_remaining_work_seconds,
+        )
+        self._position_visit_status_bubble()
+
     def _taunt_chatter_tick(self) -> None:
         """Show a follow-up taunt and schedule the next one if still active."""
 
@@ -3637,6 +3657,7 @@ class PetWindow(QWidget):
         self._check_local_reminders()
         self.work_timer.checkpoint()
         snapshot = self.focus_session.refresh()
+        self._update_taunt_countdown()
         self._update_work_duration_bubble(snapshot)
         if self.work_controls.isVisible():
             self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
@@ -5031,6 +5052,15 @@ class PetWindow(QWidget):
                 sender_names = [fallback_sender]
             support_count = int(state.get("support_count") or len(sender_names) or 1)
             sender = self._format_taunt_senders(sender_names, support_count)
+            raw_remaining = state.get("remaining_work_seconds")
+            if raw_remaining is not None:
+                try:
+                    self._taunt_remaining_work_seconds = max(0, int(raw_remaining))
+                except (TypeError, ValueError):
+                    pass
+            elif is_new_taunt:
+                self._taunt_remaining_work_seconds = 1200
+            self._taunt_countdown_last_tick = time.monotonic()
             taunt_messages = self._taunt_text_list(
                 state.get("messages") or state.get("taunt_messages"),
                 limit=14,
@@ -5047,7 +5077,11 @@ class PetWindow(QWidget):
             # Keep this call compatible with older builds whose bubble only
             # accepts the taunter nickname.  The server still carries the
             # supporter count, while the compact bubble text remains stable.
-            self.visit_status_bubble.set_taunter(sender)
+            self.visit_status_bubble.set_taunter(
+                sender,
+                support_count=support_count,
+                remaining_seconds=self._taunt_remaining_work_seconds,
+            )
             if is_new_taunt:
                 self._taunt_chatter_last_message = self._taunt_message
                 self.show_speech(f"{sender}：{self._taunt_message}", 5200)
@@ -5068,6 +5102,8 @@ class PetWindow(QWidget):
             self._taunt_message = ""
             self._taunt_messages = []
             self._taunt_chatter_last_message = ""
+            self._taunt_remaining_work_seconds = 1200
+            self._taunt_countdown_last_tick = time.monotonic()
             if self._ambient_activity == "taunt":
                 self._change_ambient_activity("none")
             self.visit_status_bubble.hide()

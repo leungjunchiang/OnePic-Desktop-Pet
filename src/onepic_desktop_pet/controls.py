@@ -259,7 +259,12 @@ class VisitStatusBubble(QLabel):
             return
         self._set_content(f"{name}正在串门")
 
-    def set_taunter(self, nickname: str | None, support_count: int = 1) -> None:
+    def set_taunter(
+        self,
+        nickname: str | None,
+        support_count: int = 1,
+        remaining_seconds: int | None = None,
+    ) -> None:
         """Show the server-authoritative punishment state beside the pet."""
 
         self._set_taunt_style(True)
@@ -272,6 +277,13 @@ class VisitStatusBubble(QLabel):
         display = f"{name}{f'等{count}位搭子' if count > 1 else ''}正在嘲讽你"
         # _format_taunt_senders uses 和/、 only when there are multiple
         # distinct names; preserve one-line rendering for the common case.
+        if remaining_seconds is not None:
+            try:
+                seconds = max(0, int(remaining_seconds))
+            except (TypeError, ValueError):
+                seconds = 0
+            minutes, remainder = divmod(seconds, 60)
+            display += f" · 还剩 {minutes}:{remainder:02d}"
         self._set_content(display, allow_wrap=("和" in name or "、" in name))
 
     def set_encourager(self, nickname: str | None) -> None:

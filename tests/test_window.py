@@ -95,13 +95,14 @@ def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
             "sender_nickname": "小梁",
             "sender_display_names": ["小梁", "大毛"],
             "support_count": 2,
+            "remaining_work_seconds": 113,
             "message": "工位有人，工作没人。",
             "messages": ["工位有人，工作没人。", "就这？"],
         }
     )
     app.processEvents()
     assert window.visit_status_bubble.isVisible()
-    assert window.visit_status_bubble.text() == "小梁和大毛正在嘲讽你"
+    assert window.visit_status_bubble.text() == "小梁和大毛正在嘲讽你 · 还剩 1:53"
     assert window.speech_bubble.isVisible()
     assert window.speech_bubble.text().startswith("小梁和大毛：")
 
@@ -121,15 +122,23 @@ def test_single_taunt_status_stays_on_one_line() -> None:
             "active": True,
             "id": "taunt-single",
             "sender_display_name": "dahao",
+            "remaining_work_seconds": 1187,
             "message": "怎么，今天准备靠意念完成？",
         }
     )
     app.processEvents()
 
     bubble = window.visit_status_bubble
-    assert bubble.text() == "dahao正在嘲讽你"
+    assert bubble.text() == "dahao正在嘲讽你 · 还剩 19:47"
     assert bubble.wordWrap() is False
     assert bubble.height() <= bubble.fontMetrics().height() + 12
+
+    window.work_timer.start()
+    window._taunt_remaining_work_seconds = 3
+    window._taunt_countdown_last_tick = time.monotonic() - 2
+    window._update_taunt_countdown()
+    assert bubble.text().endswith("还剩 0:01")
+    window.work_timer.pause()
 
     window._apply_taunt_state({"active": False})
     window.close()
