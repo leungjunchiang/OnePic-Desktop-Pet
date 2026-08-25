@@ -93,7 +93,7 @@ def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
             "active": True,
             "id": "taunt-many",
             "sender_nickname": "小梁",
-            "sender_nicknames": ["小梁", "大毛"],
+            "sender_display_names": ["小梁", "大毛"],
             "support_count": 2,
             "message": "工位有人，工作没人。",
             "messages": ["工位有人，工作没人。", "就这？"],
@@ -109,6 +109,27 @@ def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
     assert window.speech_bubble.text().startswith("小梁和大毛：")
     window._apply_taunt_state({"active": False})
     assert not window.visit_status_bubble.isVisible()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_encouragement_uses_private_display_name() -> None:
+    app, window = _create_window()
+    window._apply_encouragement_state(
+        {
+            "active": True,
+            "id": "encouragement-note",
+            "sender_display_name": "小梁",
+            "sender_nickname": "公开昵称",
+            "message": "抓到一个真在干活的。",
+        }
+    )
+    app.processEvents()
+    assert window.visit_status_bubble.isVisible()
+    assert window.visit_status_bubble.text() == "小梁送来鼓励"
+    assert window.speech_bubble.text().startswith("小梁：")
+    window._apply_encouragement_state({"active": False})
     window.close()
     window.deleteLater()
     app.processEvents()
