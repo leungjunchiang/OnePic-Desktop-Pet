@@ -697,6 +697,22 @@ def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
     app.processEvents()
 
 
+def test_pending_visit_notice_closes_when_server_no_longer_lists_invitation() -> None:
+    app, window = _create_window()
+    event = {"id": "visit-pending", "nickname": "搭子", "kind": "visit"}
+    window._enqueue_incoming_visit_notice(event)
+    app.processEvents()
+    assert window._incoming_visit_notice is not None
+
+    window._social_dashboard_received({"visits": [], "active_visits": []})
+    app.processEvents()
+    assert window._incoming_visit_notice is None
+    assert not window._incoming_visit_queue
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 
 def test_visit_status_bubble_sits_below_todo_and_left_of_work_duration() -> None:
     """串门标签使用六毛下方的状态行，不遮挡待办内容。"""

@@ -227,8 +227,10 @@ def test_outgoing_buddy_request_has_retract_action_and_is_not_acceptable() -> No
     })
     dialog.inbox.setCurrentRow(0)
     assert dialog.inbox.item(0).data(Qt.ItemDataRole.UserRole)[0] == "buddy_outgoing"
-    assert not dialog.inbox_cancel_button.isHidden()
-    assert dialog.inbox_accept_button.isHidden()
+    card = dialog.inbox.itemWidget(dialog.inbox.item(0))
+    assert card is not None
+    assert "撤回申请" in {button.text() for button in card.findChildren(QPushButton)}
+    assert "接受" not in {button.text() for button in card.findChildren(QPushButton)}
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

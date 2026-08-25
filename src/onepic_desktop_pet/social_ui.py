@@ -2038,15 +2038,6 @@ class SocialHubDialog(QDialog):
         self.inbox = QListWidget(); self.inbox.setSpacing(6); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
         self.inbox.currentItemChanged.connect(self._update_inbox_actions)
         inbox_layout.addWidget(self.inbox)
-        inbox_buttons = QHBoxLayout()
-        self.inbox_accept_button = QPushButton("接受"); self.inbox_accept_button.clicked.connect(self._accept_inbox)
-        self.inbox_reject_button = QPushButton("拒绝"); self.inbox_reject_button.clicked.connect(self._reject_inbox)
-        self.inbox_cancel_button = QPushButton("撤回申请"); self.inbox_cancel_button.clicked.connect(self._cancel_buddy_request)
-        inbox_buttons.addWidget(self.inbox_accept_button)
-        inbox_buttons.addWidget(self.inbox_reject_button)
-        inbox_buttons.addWidget(self.inbox_cancel_button)
-        inbox_layout.addLayout(inbox_buttons)
-        self._update_inbox_actions(None, None)
         layout.addWidget(inbox_card)
         recent_card, recent_layout = self._card("最近互动", "已处理的事件会保留一条轻量记录。")
         self.recent_interactions = QListWidget(); self.recent_interactions.setMaximumHeight(180)
@@ -2991,20 +2982,12 @@ class SocialHubDialog(QDialog):
             self._render_wealth_leaderboard(self._leaderboard_rows)
 
     def _update_inbox_actions(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
-        """Only show actions that match the selected notification state."""
+        """Keep actions inside each card; the old duplicate footer is gone."""
 
-        if not hasattr(self, "inbox_accept_button"):
-            return
-        kind = ""
-        if current is not None:
-            payload = current.data(Qt.ItemDataRole.UserRole)
-            if isinstance(payload, tuple) and payload:
-                kind = str(payload[0])
-        incoming_buddy = kind == "buddy"
-        outgoing_buddy = kind == "buddy_outgoing"
-        self.inbox_accept_button.setVisible(incoming_buddy or kind in {"food", "visit", "achievement_witness"})
-        self.inbox_reject_button.setVisible(incoming_buddy or kind in {"food", "visit", "achievement_witness"})
-        self.inbox_cancel_button.setVisible(outgoing_buddy)
+        # The list rows now own their Accept/Reject/Cancel buttons.  Keeping
+        # this slot connected preserves selection handling for older callers,
+        # but it deliberately does not create or reveal a second action bar.
+        del current, _previous
 
     def _error(self, exc: Exception) -> None:
         self._end_action()

@@ -509,6 +509,11 @@ class PetWindow(QWidget):
         self._buddy_visit_window = BuddyVisitWindow()
         self.visit_status_bubble = VisitStatusBubble()
         self._seen_visit_ids: set[str] = set()
+        # A notification that the user has accepted, rejected, or explicitly
+        # deferred must not be recreated from the same dashboard snapshot.
+        # The server remains the source of truth; this is only a short-lived
+        # UI fence for the current account/process.
+        self._handled_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
         self._seen_buddy_request_ids: set[str] = set()
         self._muted_buddy_ids: set[str] = set()
@@ -4777,8 +4782,22 @@ class PetWindow(QWidget):
         for request in data.get("requests") or []:
             if sender_id(request) not in self._muted_buddy_ids:
                 self._enqueue_buddy_request_notice(request)
-        for visit in data.get("visits") or []:
-            if sender_id(visit) not in self._muted_buddy_ids:
+        pending_visits = [item for item in (data.get("visits") or []) if isinstance(item, dict)]
+        pending_visit_ids = {self._incoming_visit_id(item) for item in pending_visits}
+        # If the response was handled on another device, or the ten-minute
+        # invitation expired while this window was open, close the old prompt
+        # as soon as the next authoritative dashboard arrives.
+        current_notice = self._incoming_visit_notice
+        if "visits" in data and current_notice is not None:
+            current_id = self._incoming_visit_id(current_notice._event_payload)
+            if current_id and current_id not in pending_visit_ids:
+                self._finish_incoming_visit_notice(current_notice._event_payload)
+        for visit in pending_visits:
+            visit_id = self._incoming_visit_id(visit) if isinstance(visit, dict) else ""
+            if (
+                sender_id(visit) not in self._muted_buddy_ids
+                and visit_id not in self._handled_visit_ids
+            ):
                 self._enqueue_incoming_visit_notice(visit)
         active = self._active_visits_after_startup(
             [
@@ -5036,6 +5055,8 @@ class PetWindow(QWidget):
         self._focus_quality_tracker.reset()
         self._last_focus_quality = None
         self._seen_buddy_request_ids.clear()
+        self._seen_visit_ids.clear()
+        self._handled_visit_ids.clear()
         self._muted_buddy_ids.clear()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
@@ -5182,12 +5203,22 @@ class PetWindow(QWidget):
         notice.activateWindow()
 
     def _finish_incoming_visit_notice(self, event: dict) -> None:
+        event_id = self._incoming_visit_id(event)
+        if event_id:
+            self._handled_visit_ids.add(event_id)
         notice = self._incoming_visit_notice
-        if notice is None or self._incoming_visit_id(notice._event_payload) != self._incoming_visit_id(event):
+        if notice is None:
+            return
+        current_id = self._incoming_visit_id(notice._event_payload)
+        if event_id and current_id and current_id != event_id:
             return
         self._incoming_visit_notice = None
         notice.hide()
         notice.deleteLater()
+        self._incoming_visit_queue = [
+            item for item in self._incoming_visit_queue
+            if self._incoming_visit_id(item) != event_id
+        ]
         if self._incoming_visit_queue:
             self._present_incoming_visit_notice(self._incoming_visit_queue.pop(0))
 
@@ -5228,7 +5259,15 @@ class PetWindow(QWidget):
 
     def _incoming_visit_response_failed(self, event: dict, message: str) -> None:
         notice = self._incoming_visit_notice
-        if notice is not None and self._incoming_visit_id(notice._event_payload) == self._incoming_visit_id(event):
+        expired_or_already_handled = any(
+            marker in str(message)
+            for marker in ("已过期", "已处理", "无权处理", "不存在")
+        )
+        if expired_or_already_handled:
+            # A stale pending row should not pin a desktop notification
+            # forever after the server has already invalidated it.
+            self._finish_incoming_visit_notice(event)
+        elif notice is not None and self._incoming_visit_id(notice._event_payload) == self._incoming_visit_id(event):
             notice.set_busy(False)
         self.show_speech(f"处理互动失败：{message[:120]}", 5200)
 
