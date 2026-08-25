@@ -1450,7 +1450,12 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert "工作记录" not in labels
     assert "六毛互动" not in labels
     todo = next(action for action in menu.actions() if action.text() == "待办与提醒")
-    assert [action.text() for action in todo.menu().actions()] == ["显示待办", "新建待办…", "六毛闹钟…"]
+    assert [action.text() for action in todo.menu().actions()] == [
+        "显示待办",
+        "隐藏待办",
+        "新建待办…",
+        "六毛闹钟…",
+    ]
     display = next(action for action in menu.actions() if action.text() == "显示与窗口")
     assert [action.text() for action in display.menu().actions()] == [
         "六毛大小…", "显示本轮工作时长", "始终置顶", "桌面模式"
