@@ -223,10 +223,20 @@ class VisitStatusBubble(QLabel):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setWordWrap(True)
-        self.setMaximumWidth(320)
+        self.setWordWrap(False)
+        self.setMaximumWidth(640)
         self.setStyleSheet(CONTROL_STYLE)
         self.hide()
+
+    def _set_content(self, text: str, *, allow_wrap: bool = False) -> None:
+        """Render a compact one-line status unless multiple names need wrapping."""
+
+        self.setWordWrap(bool(allow_wrap))
+        self.setMaximumWidth(320 if allow_wrap else 640)
+        self.setMinimumWidth(0)
+        self.setText(text)
+        self.adjustSize()
+        self.show()
 
     def _set_taunt_style(self, active: bool) -> None:
         self.setProperty("taunt", bool(active))
@@ -242,9 +252,7 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        self.setText(f"{name}正在串门")
-        self.adjustSize()
-        self.show()
+        self._set_content(f"{name}正在串门")
 
     def set_taunter(self, nickname: str | None) -> None:
         """Show the server-authoritative punishment state beside the pet."""
@@ -255,9 +263,12 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        self.setText(f"{name}正在嘲讽你")
-        self.adjustSize()
-        self.show()
+        # Multiple display names are joined with 和/、 by the window; allow
+        # those longer labels to wrap while keeping one sender on one line.
+        self._set_content(
+            f"{name}正在嘲讽你",
+            allow_wrap=("和" in name or "、" in name),
+        )
 
     def set_encourager(self, nickname: str | None) -> None:
         """Show the persistent one-hour working encouragement beside the pet."""
@@ -268,10 +279,7 @@ class VisitStatusBubble(QLabel):
             self.hide()
             self.setText("")
             return
-        self.setText(f"{name}送来鼓励")
-        self.adjustSize()
-        self.show()
-
+        self._set_content(f"{name}送来鼓励")
 
 class CoffeeScenePrompt(QWidget):
     """Non-modal coffee timeout prompt that never decides work for the user."""
