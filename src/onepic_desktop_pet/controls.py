@@ -269,7 +269,12 @@ class VisitStatusBubble(QLabel):
             self.setText("")
             return
         count = max(1, int(support_count or 1))
-        display = f"{name}{f'等{count}位搭子' if count > 1 else ''}正在嘲讽你"
+        count_suffix = (
+            f"等{count}位搭子"
+            if count > 1 and "和" not in name and "、" not in name
+            else ""
+        )
+        display = f"{name}{count_suffix}正在嘲讽你"
         if remaining_seconds is not None:
             try:
                 seconds = max(0, int(remaining_seconds))
