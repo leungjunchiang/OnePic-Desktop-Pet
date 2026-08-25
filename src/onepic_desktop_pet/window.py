@@ -1911,7 +1911,7 @@ class PetWindow(QWidget):
             else:
                 self._fullscreen_video_started_at = None
 
-            threshold = max(300, int(getattr(self.settings, "idle_pause_seconds", 600)))
+            threshold = max(600, int(getattr(self.settings, "idle_pause_seconds", 600)))
             if bool(getattr(self.settings, "auto_pause_on_idle", True)) and system_idle_seconds() >= threshold:
                 self._focus_quality_tracker.note_away()
                 self.pause_work_timer(reason="idle_10m")
@@ -1924,7 +1924,7 @@ class PetWindow(QWidget):
         if (
             self.work_timer.has_active_session
             and self.work_timer.pause_reason == "idle_10m"
-            and system_idle_seconds() < max(300, int(getattr(self.settings, "idle_pause_seconds", 600)))
+            and system_idle_seconds() < max(600, int(getattr(self.settings, "idle_pause_seconds", 600)))
             and not self._pause_notice_shown
         ):
             self._pause_notice_shown = True

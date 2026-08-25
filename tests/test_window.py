@@ -1633,14 +1633,14 @@ def test_daily_report_uses_configured_cutoff_once_per_day(monkeypatch) -> None:
     assert calls == [(False, True)]
     window.close(); window.deleteLater(); app.processEvents()
 
-def test_input_idle_under_ten_minutes_keeps_working(monkeypatch) -> None:
-    """The ten-minute grace period does not pause early."""
+def test_input_idle_after_fifteen_seconds_keeps_working(monkeypatch) -> None:
+    """A short away period never pauses; the grace period is ten minutes."""
     app, window = _create_window()
     monkeypatch.setattr(
         "onepic_desktop_pet.window.system_session_state",
         lambda: {"locked": False, "sleeping": False},
     )
-    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 599)
+    monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 15)
     window.settings.auto_pause_on_idle = True
     window.start_work_timer()
     window._check_input_idle()

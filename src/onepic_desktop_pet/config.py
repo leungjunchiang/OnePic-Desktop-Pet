@@ -240,7 +240,10 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.water_interval_minutes = min(240, max(10, int(settings.water_interval_minutes)))
     settings.stand_interval_minutes = min(240, max(10, int(settings.stand_interval_minutes)))
     settings.auto_pause_on_idle = bool(settings.auto_pause_on_idle)
-    settings.idle_pause_seconds = min(7200, max(300, int(settings.idle_pause_seconds)))
+    # Keyboard/mouse inactivity is deliberately a ten-minute safety net. A
+    # short value such as 15 seconds can make a normal reading pause look like
+    # lost work, so older persisted values are raised to the product minimum.
+    settings.idle_pause_seconds = min(7200, max(600, int(settings.idle_pause_seconds)))
     settings.auto_pause_on_fullscreen_video = bool(settings.auto_pause_on_fullscreen_video)
     settings.show_away_recovery_prompt = bool(settings.show_away_recovery_prompt)
     settings.work_timer_policy_version = max(1, int(settings.work_timer_policy_version))
