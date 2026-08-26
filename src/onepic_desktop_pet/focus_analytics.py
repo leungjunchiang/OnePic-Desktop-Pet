@@ -857,7 +857,7 @@ class FocusAnalyticsStore:
         # otherwise an old aggregate can make Monday show more time than the
         # seven daily rows that produced it.
         local_period_evidence = self._has_local_evidence(start, today) or interval_evidence
-        if local_period_evidence:
+        if interval_evidence:
             # All report totals now come from the same unioned interval set.
             # ``days`` remains a migration cache only.
             total_seconds = aggregate.total_seconds
@@ -1061,13 +1061,13 @@ class FocusAnalyticsStore:
             "last_ended_at": last_ended_text,
             "strongest_window": self._best_window(today, start=start),
             "hourly": [dict(item) for item in aggregate.hourly]
-            if local_period_evidence
+            if interval_evidence
             else [
                 {"hour": hour, "label": f"{hour:02d}:00", "seconds": union_seconds(intervals)}
                 for hour, intervals in enumerate(hourly_intervals)
             ],
             "focus_intervals": [dict(item) for item in aggregate.intervals]
-            if local_period_evidence else focus_intervals,
+            if interval_evidence else focus_intervals,
             "daily": daily,
             "untrusted_days": untrusted_days,
             "data_quality": {
@@ -1251,4 +1251,3 @@ class FocusAnalyticsStore:
         temp = self.path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.path)
-
