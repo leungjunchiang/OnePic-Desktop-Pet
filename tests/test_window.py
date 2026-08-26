@@ -424,6 +424,28 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
     app.processEvents()
 
 
+def test_compact_todo_panel_hides_when_all_todos_are_read(tmp_path) -> None:
+    """Read Todos should no longer leave an empty accessory beside the pet."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("已读待办")
+    memory.todos.mark_read(task.id, True)
+
+    panel = CompactTodoPanel(memory, settings=PetSettings(today_note_mode="compact"))
+    panel.show()
+    app.processEvents()
+
+    assert not panel.refresh()
+    assert not panel.isVisible()
+    assert panel.visible_task_ids == frozenset()
+    assert not panel.more_button.isVisible()
+    assert not panel.add_button.isVisible()
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
 def test_compact_todo_panel_reappears_after_todo_center_write(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)

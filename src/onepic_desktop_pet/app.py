@@ -11,6 +11,7 @@
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
 - 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
+- 启动时使用与桌面待办小窗相同的近期待办投影，只在有未读待办时自动展示；
 - 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
 Agent 快速定位：
@@ -45,6 +46,7 @@ from . import __version__
 from .config import PET_NAME, PetSettings, load_settings, save_settings
 from .local_data import platform_app_data_root
 from .companion import APP_DISPLAY_NAME
+from .compact_todo import compact_todo_candidates
 from .content_updates import (
     ContentUpdateResult,
     reload_runtime_content,
@@ -199,10 +201,14 @@ class DesktopPetApplication(QObject):
 
         self.window.place_at_start()
         self.show_window()
-        paper_mode = getattr(self.settings, "today_note_display_mode", "always")
+        paper_mode = getattr(self.settings, "today_note_display_mode", "pending")
         note_style = getattr(self.settings, "today_note_mode", "compact")
+        # Use the same upcoming projection as the compact strip. The old
+        # ``todos.pending()`` check only looked at today's raw records and
+        # could disagree with the panel for near-term/read transitions.
+        has_pending_todos = bool(compact_todo_candidates(self.window.time_memory))
         should_show_paper = paper_mode == "always" or (
-            paper_mode == "pending" and bool(self.window.time_memory.todos.pending())
+            paper_mode == "pending" and has_pending_todos
         ) or bool(getattr(self.settings, "today_note_autoshow", False))
         if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
             # A pending note may be shown at startup, but startup UI must

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from PySide6.QtCore import QDateTime, QEvent, QUrl, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QKeySequence, QShortcut
+from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -16,7 +17,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -49,6 +49,14 @@ QDialog#alarmCard QPushButton#primary { background: #d0e9ef; font-weight: 700; }
 QDialog#alarmCard QPushButton#quiet { background: transparent; border-color: transparent; color: #607985; }
 QListWidget { background: rgba(255,255,255,210); border: 1px solid #b4ccd5; border-radius: 10px; }
 """
+
+
+class AlarmPopupState(str, Enum):
+    """Lifecycle of a firing alarm card's window-level behavior."""
+
+    UNSEEN = "unseen"
+    ACKNOWLEDGED = "acknowledged"
+    DISMISSED = "dismissed"
 
 
 class AlarmSoundSelector(QWidget):
@@ -177,8 +185,10 @@ class AlarmCard(QDialog):
     """A frameless, movable, non-modal top-level alarm card.
 
     The card keeps the QuickAction visual language instead of showing a
-    second native title bar.  It is still a normal top-level window: it does
-    not stay on top, does not become modal, and never re-activates itself.
+    second native title bar. A newly fired card is brought to the foreground
+    once with a temporary topmost flag so a reminder cannot ring behind Word
+    or a browser. The first real interaction acknowledges it and immediately
+    restores normal window ordering; snoozing creates a new ``UNSEEN`` card.
     """
 
     start_requested = Signal(str)
@@ -195,6 +205,8 @@ class AlarmCard(QDialog):
         super().__init__(None)
         self.alarm = alarm
         self.sound_library = sound_library
+        self._state = AlarmPopupState.UNSEEN
+        self._audio_started = False
         self._suppress_close_action = False
         self._drag_offset = None
         self.setObjectName("alarmCard")
@@ -206,11 +218,6 @@ class AlarmCard(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setStyleSheet(ALARM_STYLE)
         self.setMinimumWidth(420)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(22)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor("#9bb5bf"))
-        self.setGraphicsEffect(shadow)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(7)
@@ -303,6 +310,7 @@ class AlarmCard(QDialog):
     def eventFilter(self, watched: object, event: object) -> bool:
         event_type = getattr(event, "type", lambda: None)()
         if event_type == QEvent.Type.MouseButtonPress and getattr(event, "button", lambda: None)() == Qt.MouseButton.LeftButton:
+            self._acknowledge_alarm()
             widget = watched if isinstance(watched, QWidget) else self
             if not self._is_interactive_widget(widget):
                 self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -317,19 +325,57 @@ class AlarmCard(QDialog):
         return super().eventFilter(watched, event)
 
     def _request_start(self) -> None:
+        self._acknowledge_alarm()
         self._stop_sound()
         self._suppress_close_action = True
+        self._state = AlarmPopupState.DISMISSED
         self.start_requested.emit(self.alarm.id)
 
     def _request_snooze(self, minutes: int) -> None:
+        self._acknowledge_alarm()
         self._stop_sound()
         self._suppress_close_action = True
+        self._state = AlarmPopupState.DISMISSED
         self.snooze_requested.emit(self.alarm.id, int(minutes))
 
     def _request_dismiss(self) -> None:
+        self._acknowledge_alarm()
         self._stop_sound()
         self._suppress_close_action = True
+        self._state = AlarmPopupState.DISMISSED
         self.dismiss_requested.emit(self.alarm.id)
+
+    @property
+    def popup_state(self) -> AlarmPopupState:
+        return self._state
+
+    def show_alarm_foreground(self) -> None:
+        """Show once in front of the active app, then start the sound."""
+
+        self._state = AlarmPopupState.UNSEEN
+        self._set_temporary_topmost(True)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        # Let the native window manager commit the show/activation before the
+        # first sound. This is important for both AppKit and Windows.
+        QTimer.singleShot(120, self._start_alarm_audio)
+
+    def _acknowledge_alarm(self) -> None:
+        """Release temporary topmost as soon as the user touches the card."""
+
+        if self._state != AlarmPopupState.UNSEEN:
+            return
+        self._state = AlarmPopupState.ACKNOWLEDGED
+        self._set_temporary_topmost(False)
+
+    def _set_temporary_topmost(self, enabled: bool) -> None:
+        was_visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(enabled))
+        # Changing a window flag can hide a visible Qt window. Re-show it, but
+        # never call activateWindow while removing topmost after a click.
+        if was_visible and not self.isVisible():
+            self.show()
 
     @staticmethod
     def _display_trigger(value: str) -> str:
@@ -349,7 +395,6 @@ class AlarmCard(QDialog):
             self._custom_audio = True
             self._using_system_sound = False
             self._media_player.setSource(QUrl.fromLocalFile(str(path)))
-            self._media_player.play()
             return
         # System/default sounds are short platform alerts.  Missing custom
         # files intentionally fall back to this same bounded behavior.
@@ -361,19 +406,27 @@ class AlarmCard(QDialog):
         self._sound_stop_timer.setSingleShot(True)
         self._sound_stop_timer.setInterval(max(1, int(alarm.max_ring_seconds or 60)) * 1_000)
         self._sound_stop_timer.timeout.connect(self._stop_sound)
-        self._sound_stop_timer.start()
-        self._sound_timer.start()
+
+    def _start_alarm_audio(self) -> None:
+        """Start audio only after the first foreground presentation."""
+
+        if self._state == AlarmPopupState.DISMISSED or self._audio_started:
+            return
+        self._audio_started = True
+        if not self.alarm.sound_enabled:
+            return
+        if self._custom_audio and self._media_player is not None:
+            self._media_player.play()
+            return
+        if self._sound_stop_timer is not None:
+            self._sound_stop_timer.start()
+        if self._sound_timer is not None:
+            self._sound_timer.start()
         self._play_system_sound()
 
     def _start_sound(self) -> None:
         """Compatibility entry point for callers from older builds."""
-        path = self.sound_library.resolve_path(self.alarm.sound_id) if self.sound_library else None
-        if path is not None and self._media_player is not None:
-            self._using_system_sound = False
-            self._media_player.setSource(QUrl.fromLocalFile(str(path)))
-            self._media_player.play()
-            return
-        self._fallback_to_system()
+        self._start_alarm_audio()
 
     def _media_status_changed(self, status) -> None:
         if self._custom_audio and not self._using_system_sound and self._media_player is not None:
@@ -429,6 +482,7 @@ class AlarmCard(QDialog):
         """Close without treating application cleanup as user dismissal."""
 
         self._suppress_close_action = True
+        self._state = AlarmPopupState.DISMISSED
         self.close()
 
     def _stop_sound(self) -> None:
@@ -447,6 +501,7 @@ class AlarmCard(QDialog):
             # Closing the frameless card means “dismiss this firing”, not
             # “quit Lili”. Repeating alarms remain scheduled for next time.
             self._suppress_close_action = True
+            self._state = AlarmPopupState.DISMISSED
             self.dismiss_requested.emit(self.alarm.id)
         super().closeEvent(event)
 
@@ -472,11 +527,6 @@ class AwayRecoveryCard(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setStyleSheet(ALARM_STYLE)
         self.setMinimumWidth(420)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(22)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor("#9bb5bf"))
-        self.setGraphicsEffect(shadow)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)

@@ -42,6 +42,22 @@ from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
 LOGGER = logging.getLogger(__name__)
 
 
+def compact_todo_candidates(memory: TimeMemory) -> list[Any]:
+    """Return unfinished, unread items eligible for the desktop strip.
+
+    ``TimeMemory.todo_view_upcoming`` is the shared projection used by the
+    detailed Todo view.  Keep the final guard here as well so the panel and
+    the owning window always agree about whether there is anything to show.
+    """
+
+    return [
+        item
+        for item in memory.todo_view_upcoming()
+        if not bool(getattr(item, "completed", False))
+        and not bool(getattr(item, "read", False))
+    ]
+
+
 COMPACT_TODO_STYLE = """
 QWidget#compactTodoPanel {
     background: rgba(247, 252, 251, 242);
@@ -422,12 +438,9 @@ class CompactTodoPanel(QWidget):
         self.refresh()
 
     def _visible_tasks(self) -> list[Any]:
-        # ``todo_view_upcoming`` already applies the shared visibility rules,
-        # including completed/read items and auto-hidden entries.  Do not keep
-        # a completed row around just to animate it: when the last visible
-        # item is checked, the whole accessory (including ⋯ and ＋) should
-        # disappear immediately.
-        tasks = [item for item in self.memory.todo_view_upcoming() if not item.completed]
+        # When the last unfinished unread item is consumed, the whole
+        # accessory (including ⋯ and ＋) should disappear immediately.
+        tasks = compact_todo_candidates(self.memory)
         return sorted(tasks, key=self._task_priority_key)
 
     def _task_priority_key(self, task: Any) -> tuple[object, ...]:

@@ -201,7 +201,7 @@ from .today_note import TimeMemoryWindow, TodayNoteWindow
 from .todo_center import TodoCenterWindow
 
 
-from .compact_todo import CompactTodoPanel
+from .compact_todo import CompactTodoPanel, compact_todo_candidates
 from .menu_model import UnifiedMenuModel, populate_qmenu
 from .night_limited import night_limited_activity
 from . import __version__
@@ -1652,6 +1652,9 @@ class PetWindow(QWidget):
             if was_visible and not self._manually_hidden:
                 self._show_nonactivating(widget)
         self._position_accessories()
+        # A Todo may have changed while media/game fullscreen was covering
+        # the desktop. Re-evaluate the unread projection after restoring.
+        self._refresh_todo_surfaces()
         if (
             self.work_timer.has_active_session
             and self.work_timer.pause_reason == "fullscreen_video"
@@ -3408,12 +3411,16 @@ class PetWindow(QWidget):
         if self._today_note_window is not None:
             self._today_note_window.refresh()
         compact_mode = str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
-        display_mode = str(getattr(self.settings, "today_note_display_mode", "always"))
+        display_mode = str(getattr(self.settings, "today_note_display_mode", "pending"))
         if self._compact_todo_panel is None:
             # A Todo can be created from the center window before the compact
             # accessory has ever been instantiated.  In compact mode, create
             # it lazily as soon as there is something eligible to display.
-            if compact_mode and display_mode != "hidden" and self.time_memory.todo_view_upcoming():
+            if (
+                compact_mode
+                and display_mode != "hidden"
+                and compact_todo_candidates(self.time_memory)
+            ):
                 self.show_compact_todos()
         else:
             panel = self._compact_todo_panel
@@ -3461,7 +3468,7 @@ class PetWindow(QWidget):
             if (
                 self._compact_todo_panel is None
                 and str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
-                and str(getattr(self.settings, "today_note_display_mode", "always")) != "hidden"
+                and str(getattr(self.settings, "today_note_display_mode", "pending")) != "hidden"
             ):
                 self.show_compact_todos()
 
@@ -3766,7 +3773,7 @@ class PetWindow(QWidget):
             self.show_speech(f"提醒：{reminder.title}", 5600)
 
     def _check_local_alarms(self) -> None:
-        """Present due alarms as a non-modal card, never by stealing focus."""
+        """Present due alarms as a focused, one-time foreground card."""
 
         quiet = detect_quiet_mode()
         deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
@@ -3780,7 +3787,7 @@ class PetWindow(QWidget):
             self._show_alarm_card(candidates[0])
 
     def _show_alarm_card(self, alarm) -> None:
-        """Show one normal alarm window; queued alarms remain persisted/local."""
+        """Show one alarm window; queued alarms remain persisted/local."""
 
         if self._alarm_card is not None:
             self._close_alarm_card()
@@ -3794,7 +3801,7 @@ class PetWindow(QWidget):
         # Center only once.  After the user drags or minimizes the native
         # window, accessory reflows must never move it back to the pet.
         self._alarm_card.center_on_current_screen()
-        self._alarm_card.show()
+        self._alarm_card.show_alarm_foreground()
 
     def _close_alarm_card(self) -> None:
         card = self._alarm_card
