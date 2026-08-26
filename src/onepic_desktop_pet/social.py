@@ -1225,6 +1225,7 @@ class HttpSocialBackend:
             "lili_record_economy_event": "/economy/events",
             "lili_economy_leaderboard": "/economy/leaderboard",
             "lili_focus_weekly_leaderboard": "/leaderboard/focus-week",
+            "lili_sync_focus_segments": "/rpc/lili_sync_focus_segments",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
@@ -2691,5 +2692,6 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
+
 
 
