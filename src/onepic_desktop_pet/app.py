@@ -32,11 +32,23 @@ from __future__ import annotations
 import os
 import logging
 import sys
+import threading
 from functools import wraps
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QEvent, QLockFile, QProcess, QPoint, QRect, Qt, QTimer, QObject
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QLockFile,
+    QProcess,
+    QPoint,
+    QRect,
+    Qt,
+    QTimer,
+    QObject,
+)
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -72,6 +84,90 @@ from .window import PetWindow
 
 
 LOGGER = logging.getLogger(__name__)
+
+_RUNTIME_HANDLER_MARKER = "_lili_runtime_handler"
+_EXCEPTION_HOOK_MARKER = "_lili_exception_hook"
+
+
+def _configure_runtime_diagnostics() -> None:
+    """Persist bounded lifecycle errors so a packaged exit is diagnosable.
+
+    The release build has no console window, so an exception raised by a
+    native Qt callback used to disappear with no evidence.  Keep a small
+    per-user log (never the repository and never a private asset directory)
+    and make this setup best-effort: a read-only home directory must not stop
+    the pet from starting.
+    """
+
+    try:
+        log_dir = platform_app_data_root() / "Lili"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "runtime.log"
+        package_logger = logging.getLogger("onepic_desktop_pet")
+        if not any(
+            getattr(handler, _RUNTIME_HANDLER_MARKER, False)
+            for handler in package_logger.handlers
+        ):
+            handler = RotatingFileHandler(
+                log_path,
+                maxBytes=512 * 1024,
+                backupCount=2,
+                encoding="utf-8",
+            )
+            setattr(handler, _RUNTIME_HANDLER_MARKER, True)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+                    "%Y-%m-%d %H:%M:%S",
+                )
+            )
+            package_logger.addHandler(handler)
+            package_logger.setLevel(logging.INFO)
+        _install_process_exception_hooks()
+    except Exception:
+        # Diagnostics are deliberately non-critical.  Import/startup must
+        # still succeed when an endpoint blocks file creation.
+        return
+
+
+def _install_process_exception_hooks() -> None:
+    """Record otherwise-unhandled main/thread exceptions before Qt exits."""
+
+    if getattr(sys.excepthook, _EXCEPTION_HOOK_MARKER, False):
+        return
+    previous_hook = sys.excepthook
+
+    def excepthook(exc_type, exc_value, traceback) -> None:
+        LOGGER.critical(
+            "[Crash] unhandled main-thread exception",
+            exc_info=(exc_type, exc_value, traceback),
+        )
+        # Preserve Python's normal error reporting when a console/debugger is
+        # attached, while keeping the packaged build's diagnostics in the
+        # bounded runtime log above.
+        try:
+            previous_hook(exc_type, exc_value, traceback)
+        except Exception:
+            pass
+
+    setattr(excepthook, _EXCEPTION_HOOK_MARKER, True)
+    sys.excepthook = excepthook
+    if hasattr(threading, "excepthook"):
+        previous_thread_hook = threading.excepthook
+
+        def thread_excepthook(args) -> None:
+            LOGGER.critical(
+                "[Crash] unhandled worker-thread exception thread=%s",
+                getattr(args.thread, "name", "unknown"),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+            try:
+                previous_thread_hook(args)
+            except Exception:
+                pass
+
+        setattr(thread_excepthook, _EXCEPTION_HOOK_MARKER, True)
+        threading.excepthook = thread_excepthook
 
 
 def _guard_qt_callback(method):
@@ -116,7 +212,12 @@ class ResilientApplication(QApplication):
                 type(receiver).__name__,
                 getattr(event, "type", lambda: "unknown")(),
             )
-            return False
+            # The event has already failed; report it as handled so Qt does
+            # not retry/propagate the same Python callback through a native
+            # event boundary.  Returning False here was harmless on most Qt
+            # builds but could make Windows abandon the event dispatcher when
+            # a debugger or a closing QObject raced a queued event.
+            return True
 
 
 # QProgressDialog is normally parented to the frameless translucent pet.  On
@@ -282,6 +383,24 @@ class DesktopPetApplication(QObject):
         if sys.platform != "darwin":
             self.window._ensure_on_top()
 
+    @_guard_qt_callback
+    def _show_startup_todos(self) -> None:
+        """Show the passive startup Todo projection without breaking startup."""
+
+        self.window.show_today_note(passive=True)
+
+    @_guard_qt_callback
+    def _start_content_update_check(self) -> None:
+        """Run the delayed content check behind the Qt callback guard."""
+
+        self.check_content_updates(False)
+
+    @_guard_qt_callback
+    def _start_program_update_check(self) -> None:
+        """Run the delayed program metadata check behind the Qt callback guard."""
+
+        self.check_program_updates(False)
+
     def start(self, smoke_test_ms: int | None = None) -> int:
         """显示应用并进入事件循环；可选定时退出用于自动验证。"""
 
@@ -301,22 +420,38 @@ class DesktopPetApplication(QObject):
             # focus.  The compact panel hides itself when the shared Todo
             # projection is empty; explicit user actions still open the
             # normal interactive note window.
-            QTimer.singleShot(300, lambda: self.window.show_today_note(passive=True))
+            QTimer.singleShot(300, self._show_startup_todos)
         if self.tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         if not self._content_updates_disabled():
             # The startup check is deliberately delayed and silent.  It only
             # fetches the manifest; changed files are downloaded in a worker.
-            QTimer.singleShot(2500, lambda: self.check_content_updates(False))
+            QTimer.singleShot(2500, self._start_content_update_check)
         # Startup only checks release metadata.  Downloading, installing, and
         # quitting remain behind the explicit tray/settings action, so a newly
         # published Release can never make a healthy pet disappear on launch.
         if self._program_updates_enabled():
-            QTimer.singleShot(5000, lambda: self.check_program_updates(False))
+            QTimer.singleShot(5000, self._start_program_update_check)
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
-        return self.qt_app.exec()
+        # ``QApplication.quit()`` is intentionally called only by
+        # ``quit()`` above.  A native tray/window integration can nevertheless
+        # request an event-loop exit while the pet is still healthy (this was
+        # reproducible on Windows when a debugger refreshed a Codex child
+        # process).  Re-enter the dispatcher once so that transient native
+        # shutdown signals do not make Lili disappear.  A deliberate quit or
+        # OS-level Qt shutdown still returns immediately.
+        exit_code = self.qt_app.exec()
+        if not self._quit_started and not QCoreApplication.closingDown():
+            LOGGER.error(
+                "[Lifecycle] Qt event loop returned unexpectedly; restoring the pet"
+            )
+            if not self.window.isVisible():
+                self.show_window()
+            exit_code = self.qt_app.exec()
+        return exit_code
 
+    @_guard_qt_callback
     def quit(self) -> None:
         """保存窗口位置、隐藏托盘并退出应用。"""
 
@@ -338,16 +473,30 @@ class DesktopPetApplication(QObject):
                     worker.wait(6000)
             self.window.shutdown_work_timer()
             save_settings(self.settings)
+        except Exception:
+            # A partially unavailable worker or settings path must not prevent
+            # the final Qt shutdown sequence from running.
+            LOGGER.exception("[Lifecycle] graceful shutdown preparation failed")
         finally:
             if type(self)._active_instance is self:
                 type(self)._active_instance = None
-            self._status_item_controller.close()
-            self._dock_controller.close()
-            if self.tray is not None:
-                self.tray.hide()
-            self.window.close()
+            for label, cleanup in (
+                ("status item", self._status_item_controller.close),
+                ("dock menu", self._dock_controller.close),
+                ("tray", self.tray.hide if self.tray is not None else None),
+                ("pet window", self.window.close),
+            ):
+                if cleanup is None:
+                    continue
+                try:
+                    cleanup()
+                except Exception:
+                    LOGGER.exception("[Lifecycle] failed to close %s", label)
             if self._instance_lock is not None and self._instance_lock.isLocked():
-                self._instance_lock.unlock()
+                try:
+                    self._instance_lock.unlock()
+                except Exception:
+                    LOGGER.exception("[Lifecycle] failed to release instance lock")
             self.qt_app.quit()
 
     def check_content_updates(self, manual: bool = True) -> None:
@@ -755,6 +904,7 @@ class DesktopPetApplication(QObject):
 def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
+    _configure_runtime_diagnostics()
     lock_path = _instance_lock_path()
     instance_lock = QLockFile(str(lock_path))
     instance_lock.setStaleLockTime(0)

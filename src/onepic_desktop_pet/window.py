@@ -1132,6 +1132,7 @@ class PetWindow(QWidget):
             pixmap = pixmap.transformed(QTransform().scale(-1, 1))
         return display_state, pixmap
 
+    @_guard_qt_callback
     def _refresh_pixmap(self) -> None:
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
 
@@ -1782,6 +1783,7 @@ class PetWindow(QWidget):
             self._media_player.stop()
         super().closeEvent(event)
 
+    @_guard_qt_callback
     def _on_screen_changed(self, screen: QScreen | None) -> None:
         """切换目标屏幕后重连 DPI 信号并延迟刷新素材。"""
 
@@ -1799,6 +1801,7 @@ class PetWindow(QWidget):
         QTimer.singleShot(0, self._refresh_pixmap)
         QTimer.singleShot(0, self._position_accessories)
 
+    @_guard_qt_callback
     def _on_dpi_changed(self, _dpi: float) -> None:
         """显示器缩放发生变化时刷新当前帧。"""
 
@@ -3449,6 +3452,7 @@ class PetWindow(QWidget):
             y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
         bubble.move(x, y)
 
+    @_guard_qt_callback
     def _position_accessories(self) -> None:
         """Reflow every pet accessory from the pet as its single anchor."""
 
@@ -3539,6 +3543,7 @@ class PetWindow(QWidget):
         if self._todo_center_window is not None:
             self._todo_center_window.refresh()
 
+    @_guard_qt_callback
     def _chat_action_executed(self, result: object) -> None:
         """Refresh every Todo surface after a real chat-side local write."""
 
@@ -4593,6 +4598,7 @@ class PetWindow(QWidget):
         if not self.chat_manager.submit(message, history_before):
             self._chat_submission_active = False
 
+    @_guard_qt_callback
     def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
         """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
 
@@ -4609,6 +4615,7 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3000)
         self.show_speech(reply.text, 6500)
 
+    @_guard_qt_callback
     def _chat_reply_started(self) -> None:
         """Open an assistant bubble before the first network token arrives."""
 
@@ -4616,6 +4623,7 @@ class PetWindow(QWidget):
             self._chat_dialog.begin_streaming_message(self._pet_name())
         self._chat_streaming_active = True
 
+    @_guard_qt_callback
     def _chat_reply_delta(self, delta: str) -> None:
         """Render App Server agentMessage/delta without waiting for turn completion."""
 
@@ -4625,6 +4633,7 @@ class PetWindow(QWidget):
             self._chat_reply_started()
         self._chat_dialog.append_streaming_delta(delta)
 
+    @_guard_qt_callback
     def _chat_busy_changed(self, busy: bool) -> None:
         """只禁用聊天输入，宠物动画、计时和音乐继续运行。"""
 
@@ -4641,6 +4650,7 @@ class PetWindow(QWidget):
             return
         self._chat_notice("这一句暂时还不能中断，我再等它一下。")
 
+    @_guard_qt_callback
     def _chat_notice(self, message: str) -> None:
         """显示非阻塞提示，不跳转设置页。"""
 
@@ -4760,6 +4770,7 @@ class PetWindow(QWidget):
                 "聊天记录已经清空，新的聊天会从零开始；待办和提醒没有改变。",
             )
 
+    @_guard_qt_callback
     def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
         """后台检测完成后刷新缓存状态文案，恢复后下一条自然走 AI。"""
 

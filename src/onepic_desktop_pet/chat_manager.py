@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from typing import Callable, Iterable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -52,6 +53,31 @@ from .todo_nlp import parse_explicit_todo_request
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _guard_qt_callback(method):
+    """Prevent a stale Codex signal from terminating the Qt process.
+
+    Chat threads can finish while a user closes the chat window or while the
+    Codex CLI is being upgraded.  PySide invokes those slots through a native
+    queued connection; an exception escaping that boundary is otherwise
+    reported as an unhandled exception and may terminate the packaged app.
+    """
+
+    @wraps(method)
+    def guarded(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception(
+                "[Qt] chat callback failed; continuing: %s",
+                method.__qualname__,
+            )
+            return None
+
+    return guarded
 
 
 class AgentConnectionState(str, Enum):
@@ -303,9 +329,11 @@ class AgentManager(QObject):
         self._statuses[provider] = status
         self.status_changed.emit(provider, state.value, detail)
 
+    @_guard_qt_callback
     def _detection_result(self, provider: str, state: str, detail: str) -> None:
         self._set_status(provider, AgentConnectionState(state), detail)
 
+    @_guard_qt_callback
     def _detection_thread_finished(self) -> None:
         thread = self._thread
         self._thread = None
@@ -355,6 +383,7 @@ class AgentManager(QObject):
         if not self._app_server_recovery_timer.isActive():
             self._app_server_recovery_timer.start(self.APP_SERVER_RECOVERY_DELAY_MS)
 
+    @_guard_qt_callback
     def _recover_codex_app_server(self) -> None:
         """Re-probe the persistent runtime without blocking the chat UI."""
 
@@ -365,6 +394,7 @@ class AgentManager(QObject):
             return
         self._start_codex_warmup()
 
+    @_guard_qt_callback
     def _warmup_finished(self, ok: bool = True, detail: str = "") -> None:
         if not ok and self.settings.ai_provider == "codex":
             # Detection only proved that the CLI/login command works.  Keep
@@ -788,6 +818,7 @@ class ChatManager(QObject):
                 self.notice.emit("AI 连接已保留，新的聊天会在下次连接时重新开始。")
         return True
 
+    @_guard_qt_callback
     def _ai_succeeded(self, answer: str) -> None:
         self.agents.mark_runtime_success(self._pending_provider)
         action = extract_action(answer)
@@ -847,6 +878,7 @@ class ChatManager(QObject):
         self.action_executed.emit(result)
         return result
 
+    @_guard_qt_callback
     def _ai_failed(self, error: str) -> None:
         if self._interrupt_requested:
             self._interrupt_requested = False
@@ -881,6 +913,7 @@ class ChatManager(QObject):
             )
         )
 
+    @_guard_qt_callback
     def _thread_finished(self) -> None:
         thread = self._thread
         self._thread = None
