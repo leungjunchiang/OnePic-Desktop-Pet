@@ -1652,7 +1652,12 @@ def test_work_duration_stays_below_pet_and_reserves_bottom_space() -> None:
     first_offset = bubble.pos() - window.pos()
     window.move(window.x() - 80, window.y() - 40)
     app.processEvents()
-    assert bubble.pos() - window.pos() == first_offset
+    # Native window placement can round one coordinate differently on the
+    # macOS Intel runner (fractional backing scale).  Preserve the anchor
+    # relationship while allowing that one-pixel platform rounding.
+    moved_offset = bubble.pos() - window.pos()
+    assert abs(moved_offset.x() - first_offset.x()) <= 1
+    assert abs(moved_offset.y() - first_offset.y()) <= 1
 
     window.focus_session.finish()
     window.close(); window.deleteLater(); app.processEvents()
