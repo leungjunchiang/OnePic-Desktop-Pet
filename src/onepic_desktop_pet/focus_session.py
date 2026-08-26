@@ -57,12 +57,14 @@ class FocusSessionSnapshot:
             else:
                 current = current.astimezone(BEIJING_TIMEZONE)
             # ``session_seconds`` includes earlier segments separated by a
-            # pause/checkpoint.  Presence and live charts need the start of
-            # the currently running segment, otherwise an old cumulative
-            # total is rendered as one continuous interval.
-            started_at = (
-                current - timedelta(seconds=timer.current_elapsed_seconds())
-            ).isoformat()
+            # pause/checkpoint.  The timer keeps the wall-clock start of the
+            # current uninterrupted segment separately, so a checkpoint does
+            # not collapse the live chart to ``now–now``.  The monotonic
+            # fallback is retained for old timer files without this field.
+            segment_started = timer.current_segment_started_at()
+            if segment_started is None:
+                segment_started = current - timedelta(seconds=timer.current_elapsed_seconds())
+            started_at = segment_started.astimezone(BEIJING_TIMEZONE).isoformat()
         status = "focus" if timer.is_running else (
             "rest" if timer.has_active_session or resting else "idle"
         )
@@ -212,3 +214,4 @@ class FocusSessionManager(QObject):
         self._resting = False
         self.refresh()
         return total
+
