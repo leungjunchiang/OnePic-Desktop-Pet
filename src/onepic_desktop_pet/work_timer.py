@@ -137,6 +137,11 @@ class WorkTimerModel:
         self._analytics_recorded_session_seconds = 0
         self._session_active = False
         self._running_since: float | None = None
+        # Wall-clock start of the current uninterrupted segment.  The
+        # monotonic timestamp above is intentionally reset at checkpoints for
+        # crash-safe persistence, but this value must remain stable so reports
+        # can draw the real interval instead of ``now–now``.
+        self._running_started_at: datetime | None = None
         self._state = WORK_STATE_IDLE
         self._pause_reason: str | None = None
         self._last_checkpoint = self._monotonic()
@@ -173,6 +178,7 @@ class WorkTimerModel:
         self._analytics_recorded_session_seconds = 0
         self._session_active = False
         self._running_since = None
+        self._running_started_at = None
         self._state = WORK_STATE_IDLE
         self._pause_reason = None
         self._last_checkpoint = self._monotonic()
@@ -296,7 +302,24 @@ class WorkTimerModel:
             now = self._monotonic()
             self._running_since = now
             self._last_checkpoint = now
+            # Time while the application was closed is not work.  Start a new
+            # observed segment at recovery rather than reviving stale wall
+            # time from the previous process.
+            recovered_at = self._now()
+            if recovered_at.tzinfo is None:
+                recovered_at = recovered_at.replace(tzinfo=BEIJING_TIMEZONE)
+            self._running_started_at = recovered_at.astimezone(BEIJING_TIMEZONE)
             self._recovered_active_session = True
+        elif saved_session_active and same_date:
+            raw_started = data.get("running_started_at")
+            try:
+                if raw_started:
+                    recovered_at = datetime.fromisoformat(str(raw_started).replace("Z", "+00:00"))
+                    if recovered_at.tzinfo is None:
+                        recovered_at = recovered_at.replace(tzinfo=BEIJING_TIMEZONE)
+                    self._running_started_at = recovered_at.astimezone(BEIJING_TIMEZONE)
+            except (TypeError, ValueError, OverflowError):
+                self._running_started_at = None
 
     def _rollover_if_needed(self) -> None:
         """日期变化时清空昨日累计，并保持运行状态从当前时刻重新计时。"""
@@ -312,6 +335,10 @@ class WorkTimerModel:
         self._session_id = ""
         self._analytics_recorded_session_seconds = 0
         self._running_since = self._monotonic() if was_running else None
+        current = self._now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=BEIJING_TIMEZONE)
+        self._running_started_at = current.astimezone(BEIJING_TIMEZONE) if was_running else None
         self._episode_accumulated_seconds = 0
         self._state = WORK_STATE_IDLE
         self._pause_reason = None
@@ -349,6 +376,14 @@ class WorkTimerModel:
 
         self._rollover_if_needed()
         return self._current_elapsed()
+
+    def current_segment_started_at(self) -> datetime | None:
+        """Return the wall-clock start of the currently running segment."""
+
+        self._rollover_if_needed()
+        if not self.is_running:
+            return None
+        return self._running_started_at
 
     @property
     def focus_session_id(self) -> str:
@@ -488,6 +523,10 @@ class WorkTimerModel:
         # intact because this method is not called during __init__.
         self._episode_accumulated_seconds = 0
         self._running_since = now
+        current = self._now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=BEIJING_TIMEZONE)
+        self._running_started_at = current.astimezone(BEIJING_TIMEZONE)
         self._last_checkpoint = now
         self._last_reminder_key = None
         self._recovered_active_session = False
@@ -507,6 +546,7 @@ class WorkTimerModel:
         self._episode_accumulated_seconds += elapsed
         self._session_active = True
         self._running_since = None
+        self._running_started_at = None
         clean_reason = str(reason or "manual").strip().casefold()
         self._pause_reason = clean_reason or "manual"
         self._state = _PAUSE_STATE_BY_REASON.get(
@@ -528,6 +568,7 @@ class WorkTimerModel:
         self._episode_accumulated_seconds = 0
         self._session_id = ""
         self._analytics_recorded_session_seconds = 0
+        self._running_started_at = None
         self._state = WORK_STATE_IDLE
         self._pause_reason = None
         self._last_reminder_key = None
@@ -601,6 +642,8 @@ class WorkTimerModel:
             "analytics_recorded_session_seconds": max(
                 0, int(self._analytics_recorded_session_seconds)
             ),
+            "running_started_at": self._running_started_at.isoformat()
+            if self._running_started_at is not None else None,
             "state": self._state,
             "pause_reason": self._pause_reason,
         }
@@ -609,3 +652,4 @@ class WorkTimerModel:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+
