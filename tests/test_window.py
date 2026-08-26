@@ -317,6 +317,26 @@ def test_owner_nickname_restores_account_value_before_local_sync(monkeypatch) ->
     window.close(); window.deleteLater(); app.processEvents()
 
 
+
+def test_remote_daily_snapshot_never_mutates_local_timer_bucket(monkeypatch) -> None:
+    """A stale cloud maximum stays a fallback, not local worked time."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window._merge_remote_personal_state(
+        {
+            "data_source": "server",
+            "_personal_state": {
+                "focus_today_date": datetime.now().date().isoformat(),
+                "focus_today_seconds": 5 * 3600,
+                "focus_lifetime_seconds": 5 * 3600,
+            },
+        }
+    )
+    assert window.work_timer.today_seconds() == 0
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
     app, window = _create_window()
     assert window.settings.allow_autonomous_walk is False
@@ -1941,6 +1961,30 @@ def test_shared_focus_totals_include_checkpointed_current_session(monkeypatch) -
     )
     assert window._work_report_snapshot() == {"ok": True}
     assert reconcile_calls == []
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+
+def test_shared_focus_totals_prefer_local_day_when_remote_max_is_stale(monkeypatch) -> None:
+    """A fresh local session must not inherit a corrupted server maximum."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    # No analytics row exists until the first pause/finish, while an older
+    # device may still have left a five-hour server snapshot for today/week.
+    window.work_timer._running_since -= 35 * 60
+
+    def period_summary(period, _moment=None):
+        return {
+            "total_seconds": 5 * 3600 if period == "day" else 8 * 3600,
+            "local_record_count": 0,
+        }
+
+    monkeypatch.setattr(window.focus_analytics, "period_summary", period_summary)
+    totals = window._shared_focus_period_seconds()
+
+    assert 34 * 60 <= totals["today_seconds"] <= 35 * 60 + 1
+    assert totals["week_seconds"] == totals["today_seconds"]
     window.close(); window.deleteLater(); app.processEvents()
 
 
