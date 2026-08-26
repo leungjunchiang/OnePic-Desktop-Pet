@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QLockFile, QProcess, Qt, QTimer, QObject
+from PySide6.QtCore import QLockFile, QProcess, QPoint, QRect, Qt, QTimer, QObject
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -490,15 +490,85 @@ class DesktopPetApplication(QObject):
         # stylesheet-backed surface so its body cannot become transparent.
         progress.setAutoFillBackground(True)
         progress.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # The updater is a passive reminder: it must stay visible above the
+        # pet without blocking Word, browsers, or the rest of the app.  Qt's
+        # default dialog placement is screen-centred, which is especially
+        # easy to miss on a large monitor, so we anchor it above Lili below.
+        progress.setWindowFlags(
+            progress.windowFlags()
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        progress.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         progress.setWindowTitle("下载程序更新")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.NonModal)
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
         progress.setCancelButton(None)
         progress.setValue(0)
-        progress.show()
         self._program_update_progress = progress
+        if sys.platform == "darwin":
+            # Reuse the same non-activating NSPanel configuration as the pet
+            # surfaces while giving this updater an explicit floating level.
+            self.window._apply_macos_window_behavior(progress, always_on_top=True)
+        progress.show()
+        self._position_program_download_progress(progress)
+        progress.raise_()
+        # A native dialog may receive its final size one event turn after
+        # show(); repeat the anchor once so a resized label never drifts back
+        # to the centre of the screen.
+        QTimer.singleShot(
+            0,
+            lambda: self._position_program_download_progress(progress),
+        )
+
+    def _position_program_download_progress(self, progress: QProgressDialog) -> None:
+        """Keep the updater just above the pet, inside its current monitor."""
+
+        if progress is None or not progress.isVisible():
+            return
+        pet = self.window
+        screen = (
+            QGuiApplication.screenAt(pet.frameGeometry().center())
+            or QGuiApplication.primaryScreen()
+        )
+        if screen is None:
+            return
+        progress.adjustSize()
+        area = screen.availableGeometry()
+        visible = pet.mask().boundingRect()
+        if visible.isEmpty():
+            left, right, top, bottom = (
+                pet.x(),
+                pet.x() + pet.width(),
+                pet.y(),
+                pet.y() + pet.height(),
+            )
+        else:
+            left = pet.x() + visible.left()
+            right = pet.x() + visible.right() + 1
+            top = pet.y() + visible.top()
+            bottom = pet.y() + visible.bottom() + 1
+        gap = 8
+        center_x = (left + right - progress.width()) // 2
+        candidates = [
+            QPoint(center_x, top - progress.height() - gap),
+            QPoint(center_x, bottom + gap),
+            QPoint(right + gap, top),
+            QPoint(left - progress.width() - gap, top),
+        ]
+        chosen = None
+        for point in candidates:
+            candidate = QRect(point, progress.size())
+            if area.contains(candidate):
+                chosen = point
+                break
+        if chosen is None:
+            x = min(max(center_x, area.left()), area.right() - progress.width() + 1)
+            y = min(max(top - progress.height() - gap, area.top()), area.bottom() - progress.height() + 1)
+            chosen = QPoint(x, y)
+        progress.move(chosen)
 
     def _program_download_progress_changed(self, downloaded: int, total: int) -> None:
         progress = self._program_update_progress
@@ -509,6 +579,7 @@ class DesktopPetApplication(QObject):
         if total <= 0:
             progress.setRange(0, 0)
             progress.setLabelText("正在下载程序更新…（大小获取中）")
+            self._position_program_download_progress(progress)
             return
         progress.setRange(0, 100)
         percent = min(100, max(0, int(downloaded * 100 / total)))
@@ -519,6 +590,7 @@ class DesktopPetApplication(QObject):
             f"正在下载程序更新… {percent}%\n"
             f"已下载 {downloaded_mb:.1f} / {total_mb:.1f} MB"
         )
+        self._position_program_download_progress(progress)
 
     def _close_program_download_progress(self) -> None:
         progress = self._program_update_progress

@@ -16,10 +16,12 @@ def system_session_state() -> dict[str, bool]:
     """Return coarse lock/sleep hints without reading user content.
 
     Windows exposes the currently interactive desktop through
-    ``OpenInputDesktop``.  A missing desktop or foreground window generally
-    means the secure lock screen is active.  Other platforms return an
-    intentionally conservative unknown state; the idle duration and
-    application evidence still provide the normal fallback classification.
+    ``OpenInputDesktop``.  A failed probe or a missing foreground window is
+    *not* enough evidence to call the machine locked: both can happen during
+    normal desktop transitions and when another process has restricted API
+    access.  We only report a lock when the desktop name is explicitly the
+    secure ``Winlogon``/screen-saver desktop.  Other platforms return an
+    intentionally conservative unknown state.
     """
 
     state = {"locked": False, "sleeping": False}
@@ -39,10 +41,9 @@ def system_session_state() -> dict[str, bool]:
                 if bool(session.get(key)):
                     state["locked"] = True
                     return state
-            for key in ("kCGSessionOnConsoleKey", "CGSSessionOnConsoleKey"):
-                if key in session and session.get(key) is False:
-                    state["locked"] = True
-                    return state
+            # ``OnConsole`` is false during fast-user switching and a few
+            # normal display/session transitions; it is not a lock signal.
+            # Do not infer a lock from that ambiguous value.
         except Exception:
             # If the optional native probe is unavailable, never guess.
             pass
@@ -52,12 +53,38 @@ def system_session_state() -> dict[str, bool]:
     try:
         import ctypes
 
+        from ctypes import wintypes
+
         user32 = ctypes.windll.user32
+        # ``OpenInputDesktop`` can fail transiently or under restricted
+        # permissions.  Treat that as unknown/false rather than a lock.
         desktop = user32.OpenInputDesktop(0, False, 0x0100)
-        foreground = user32.GetForegroundWindow()
-        if not desktop or not foreground:
-            state["locked"] = True
-        if desktop:
+        if not desktop:
+            return state
+        try:
+            # UOI_NAME = 2.  The secure desktop has a stable name on supported
+            # Windows versions; ordinary desktops (including a missing
+            # foreground window) are never classified as locked.
+            name = ctypes.create_unicode_buffer(128)
+            returned = wintypes.DWORD()
+            get_name = getattr(user32, "GetUserObjectInformationW", None)
+            if get_name is None:
+                return state
+            ok = get_name(
+                desktop,
+                2,
+                ctypes.byref(name),
+                ctypes.sizeof(name),
+                ctypes.byref(returned),
+            )
+            if ok:
+                desktop_name = name.value.casefold().replace(" ", "-")
+                state["locked"] = desktop_name in {
+                    "winlogon",
+                    "screen-saver",
+                    "screensaver",
+                }
+        finally:
             user32.CloseDesktop(desktop)
     except Exception:
         # A native probe failure must never turn into a false rest record.

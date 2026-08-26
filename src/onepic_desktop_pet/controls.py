@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap, QRectF
 from .work_timer import format_elapsed_clock
 
 from PySide6.QtWidgets import (
@@ -66,17 +66,71 @@ QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; b
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
 QLabel { border: none; background: transparent; }
-QLabel#workDurationHint { background: #f6fbfb; color: #24475b;
-border: 1px solid #287d9e; border-radius: 10px;
+QLabel#workDurationHint { background: transparent; color: #24475b;
+border: none; border-radius: 10px;
 padding: 3px 8px; font-size: 11px; }
-QLabel#workDurationHint[paused="true"] { background: #fff0ee; color: #b94b51;
-border: 1px solid #e74a4f; }
-QLabel#visitStatusHint { background: #f6fbfb; color: #24475b;
-border: 1px solid #287d9e; border-radius: 10px;
+QLabel#workDurationHint[paused="true"] { background: transparent; color: #b94b51;
+border: none; }
+QLabel#visitStatusHint { background: transparent; color: #24475b;
+border: none; border-radius: 10px;
 padding: 3px 8px; font-size: 11px; }
-QLabel#visitStatusHint[taunt="true"] { background: #fff0ee; color: #b94b51;
-border: 1px solid #e74a4f; }
+QLabel#visitStatusHint[taunt="true"] { background: transparent; color: #b94b51;
+border: none; }
 """
+
+
+class RoundedSurfaceLabel(QLabel):
+    """Translucent top-level label with an explicitly painted card surface.
+
+    Qt's stylesheet background painter is unreliable on a frameless,
+    translucent top-level window: on some Windows/macOS styles it paints only
+    the text and leaves the whole card transparent.  Drawing the rounded
+    surface ourselves keeps the outside corners transparent while making the
+    actual card fill and border deterministic on every platform.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        fill: str = "#f6fbfb",
+        border: str = "#287d9e",
+        radius: float = 10.0,
+    ) -> None:
+        super().__init__(parent)
+        self._surface_fill = QColor(fill)
+        self._surface_border = QColor(border)
+        self._surface_radius = float(radius)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        # The stylesheet remains responsible for font, colour and padding;
+        # painting the background here avoids native rectangular backfills.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+    def set_surface_colors(self, fill: str, border: str) -> None:
+        """Change the card colours and repaint immediately."""
+
+        self._surface_fill = QColor(fill)
+        self._surface_border = QColor(border)
+        self.update()
+
+    @property
+    def surface_fill(self) -> QColor:
+        """Return the current fill colour (useful for visual tests)."""
+
+        return QColor(self._surface_fill)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.setBrush(QBrush(self._surface_fill))
+        painter.setPen(QPen(self._surface_border, 1.0))
+        painter.drawRoundedRect(rect, self._surface_radius, self._surface_radius)
+        painter.end()
+        # QLabel draws the text/content only; all stylesheet backgrounds are
+        # transparent, so it cannot introduce a rectangular halo afterwards.
+        super().paintEvent(event)
 
 
 class WorkControlBubble(QWidget):
@@ -171,11 +225,16 @@ class WorkControlBubble(QWidget):
             self.pause_requested.emit()
 
 
-class WorkDurationBubble(QLabel):
+class WorkDurationBubble(RoundedSurfaceLabel):
     """跟随六毛脚边显示统一的本日工作时长的轻量状态标签。"""
 
     def __init__(self) -> None:
-        super().__init__(None)
+        super().__init__(
+            None,
+            fill="#f6fbfb",
+            border="#287d9e",
+            radius=10,
+        )
         self.setObjectName("workDurationHint")
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -185,15 +244,10 @@ class WorkDurationBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        # Keep the rounded card fill visible while letting the pixels outside
-        # its corners remain transparent (no rectangular halo on the desktop).
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumWidth(100)
         self.setStyleSheet(CONTROL_STYLE)
-        self.setAutoFillBackground(False)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setProperty("paused", False)
         self.hide()
 
@@ -205,6 +259,10 @@ class WorkDurationBubble(QLabel):
         if active:
             paused = normalized == "rest"
             self.setProperty("paused", paused)
+            self.set_surface_colors(
+                "#fff0ee" if paused else "#f6fbfb",
+                "#e74a4f" if paused else "#287d9e",
+            )
             text = f"今日已工作 {format_elapsed_clock(seconds)}"
             if paused:
                 text += " · 已暂停"
@@ -220,11 +278,16 @@ class WorkDurationBubble(QLabel):
             self.style().polish(self)
 
 
-class VisitStatusBubble(QLabel):
+class VisitStatusBubble(RoundedSurfaceLabel):
     """跟随六毛左下角显示轻量串门状态，不创建大窗口。"""
 
     def __init__(self) -> None:
-        super().__init__(None)
+        super().__init__(
+            None,
+            fill="#f6fbfb",
+            border="#287d9e",
+            radius=10,
+        )
         self.setObjectName("visitStatusHint")
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -234,14 +297,11 @@ class VisitStatusBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(False)
         self.setMaximumWidth(640)
         self.setStyleSheet(CONTROL_STYLE)
-        self.setAutoFillBackground(False)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.hide()
 
     def _set_content(self, text: str, *, allow_wrap: bool = False) -> None:
@@ -261,6 +321,10 @@ class VisitStatusBubble(QLabel):
 
     def _set_taunt_style(self, active: bool) -> None:
         self.setProperty("taunt", bool(active))
+        self.set_surface_colors(
+            "#fff0ee" if active else "#f6fbfb",
+            "#e74a4f" if active else "#287d9e",
+        )
         self.style().unpolish(self)
         self.style().polish(self)
 

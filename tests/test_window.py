@@ -36,6 +36,7 @@ from onepic_desktop_pet.time_memory import TimeMemory
 from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
 from onepic_desktop_pet.today_note import TimeMemoryWindow, TodayNoteWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
+from onepic_desktop_pet.controls import RoundedSurfaceLabel
 
 
 def _create_window() -> tuple[QApplication, PetWindow]:
@@ -59,20 +60,21 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     for accessory in (window.quick_panel, window.work_controls, window.work_duration_bubble):
         assert accessory.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
         assert accessory.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    # The photo and the rounded text/status cards are translucent windows;
-    # their stylesheet paints the card while leaving the outside corners
-    # transparent.
+    # The photo and the rounded text/status cards are translucent windows. The
+    # cards paint their own rounded surface so a platform stylesheet cannot
+    # turn the entire top-level window transparent.
     assert window.photo_bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     for bubble in (
         window.speech_bubble,
         window.work_duration_bubble,
         window.visit_status_bubble,
     ):
+        assert isinstance(bubble, RoundedSurfaceLabel)
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        assert bubble.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        assert not bubble.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         assert "background:" in bubble.styleSheet()
-    assert "#eff5f8" in window.speech_bubble.styleSheet()
+    assert window.speech_bubble.surface_fill.name() == "#eff5f8"
     window.close()
     window.deleteLater()
     app.processEvents()

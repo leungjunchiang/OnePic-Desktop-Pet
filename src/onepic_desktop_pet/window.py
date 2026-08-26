@@ -148,6 +148,7 @@ from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, 
 from .controls import (
     CoffeeScenePrompt,
     QuickControlPanel,
+    RoundedSurfaceLabel,
     SizeControlDialog,
     WorkControlBubble,
     WorkDurationBubble,
@@ -695,20 +696,17 @@ class PetWindow(QWidget):
         self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.photo_bubble.setStyleSheet("background: transparent;")
 
-        self.speech_bubble = QLabel()
+        self.speech_bubble = RoundedSurfaceLabel(
+            None,
+            fill="#eff5f8",
+            border="#4b6070",
+            radius=15,
+        )
         self.speech_bubble.setWindowFlags(self._ambient_window_flags())
         self.speech_bubble.setAttribute(
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
         )
-        # Speech/status cards are readable UI, not pet pixels.  A solid
-        # backing prevents dark wallpapers from bleeding through the card and
-        # making the text appear to vanish on Windows/macOS.
-        # The card fill remains opaque, while the pixels outside its rounded
-        # corners stay transparent. This avoids a rectangular halo over the
-        # desktop without sacrificing contrast for the text.
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()
         bubble_font.setFamilies(
@@ -722,14 +720,11 @@ class PetWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
         self.speech_bubble.setStyleSheet(
-            "QLabel { background: #eff5f8; "
-            "color: #27313d; border: 1px solid #4b6070; border-radius: 15px; "
+            "QLabel { background: transparent; "
+            "color: #27313d; border: none; border-radius: 15px; "
             "padding: 10px 13px; font-size: 14px; }"
         )
-        # Set this after the stylesheet; otherwise some native Qt styles
-        # clear autoFillBackground while installing the rule above.
-        self.speech_bubble.setAutoFillBackground(False)
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
         self.work_controls = WorkControlBubble()
         self.coffee_scene_prompt = CoffeeScenePrompt()
