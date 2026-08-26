@@ -5118,6 +5118,10 @@ class PetWindow(QWidget):
     def _social_dashboard_received(self, data: dict) -> None:
         """显示新串门提醒，并在双方本地打开双六毛画面。"""
 
+        if isinstance(data, dict) and data.get("_device_session_revoked"):
+            self._handle_device_session_revoked()
+            return
+
         self._muted_buddy_ids = {
             str(item).strip()
             for item in (data.get("muted_buddy_ids") or [])
@@ -5587,6 +5591,28 @@ class PetWindow(QWidget):
                 self._social_dialog._set_status(
                     "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
                 )
+
+    @_guard_qt_callback
+    def _handle_device_session_revoked(self) -> None:
+        """Sign out cleanly when another computer takes this account lease."""
+
+        # The database is authoritative: do not keep retrying presence or
+        # writing local account data after a newer computer has signed in.
+        try:
+            self.social_client.sign_out()
+        except Exception as exc:
+            LOGGER.info("device-session sign-out cleanup failed: %s", type(exc).__name__)
+        dialog = self._social_dialog
+        if dialog is not None:
+            dialog.data = {}
+            dialog._muted_buddy_ids.clear()
+            dialog._account_email = ""
+            dialog._update_account_state()
+            dialog._set_status("这个账号已在另一台电脑登录，当前设备已自动退出。")
+            dialog.account_state_changed.emit(False)
+        else:
+            self._social_account_state_changed(False)
+        self.show_speech("这个账号已在另一台电脑登录，六毛已自动退出当前设备。", 6000)
 
     def _social_account_state_changed(self, signed_in: bool) -> None:
         """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""

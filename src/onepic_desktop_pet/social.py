@@ -3,7 +3,8 @@
 只发送账号认证、昵称、六毛外观、实时工作状态、累计秒数、房间与串门事件。工作心跳
 包含会话/暂停状态并以短间隔刷新，避免正在工作时被误判为可嘲讽。密码从不保存；
 刷新令牌保存在系统凭据库。邮箱注册明确区分“已创建、等待确认”和“已登录”，并支持
-重新发送确认邮件；网络失败不会影响离线桌宠、计时、AI 或本地素材。
+重新发送确认邮件；每台电脑使用一个随机设备身份，服务器据此保证一个账号同一时间只
+保留一个桌面设备；网络失败不会影响离线桌宠、计时、AI 或本地素材。
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from typing import Any, Callable, Protocol
 import unicodedata
 
 from .local_data import app_data_dir
+from .device_identity import get_device_id
 from .resources import resource_path, resource_root
 from .tls_support import tls_diagnostics, verified_ssl_context
 
@@ -57,6 +59,7 @@ HEARTBEAT_FIELDS = frozenset(
         "room_id",
         "quick_status",
         "quick_status_expires_at",
+        "device_id",
     }
 )
 
@@ -65,6 +68,24 @@ def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
     """Select only fields supported by the social heartbeat API."""
 
     return {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
+
+
+def _is_device_session_revoked(error_code: object, message: object) -> bool:
+    """Recognize the stable server marker used when another device signs in."""
+
+    code = str(error_code or "").strip().casefold()
+    text = str(message or "").strip().casefold()
+    return code in {"device_session_revoked", "lili_device_session_revoked"} or "device_session_revoked" in text
+
+
+def _is_missing_device_column(error: BaseException) -> bool:
+    """Allow a staged rollout before the presence migration reaches a relay."""
+
+    text = str(error).casefold()
+    return (
+        "device_id" in text
+        and ("column" in text or "schema cache" in text or "could not find" in text)
+    )
 
 
 class ConnectionStateStore:
@@ -785,6 +806,14 @@ class HttpSocialBackend:
         self.email_redirect_url = email_redirect_url
         self.password_reset_redirect_url = password_reset_redirect_url or email_redirect_url
         self.transport = transport if transport in {"direct", "proxy"} else "proxy"
+        # One stable id is shared by Direct and proxy transports in the same
+        # process.  The route manager also shares the AuthSessionManager, so a
+        # fallback cannot accidentally look like a second machine.
+        self.device_id = get_device_id()
+        # A fresh process may claim the account once.  After that, a heartbeat
+        # from an older device (which cannot set this flag) is rejected by the
+        # database trigger instead of stealing the lease back.
+        self._device_claim_pending = True
         self.last_server_timestamp = ""
         self.session: SocialSession | None = None
         self.auth_manager = auth_manager or AuthSessionManager(
@@ -870,7 +899,11 @@ class HttpSocialBackend:
             status = int(exc.code)
             is_refresh_endpoint = "/auth/v1/token" in path or path.rstrip("/") == "/auth/refresh"
             kind = "auth_refresh" if is_refresh_endpoint else "auth" if status in (401, 403) else "server" if status >= 500 else "http"
-            if error_code in {"refresh_token_already_used", "invalid_refresh_token", "invalid_grant"} or (
+            if _is_device_session_revoked(error_code, message):
+                message = "这个账号已在另一台电脑登录，当前设备已自动退出。"
+                kind = "device_session_revoked"
+                error_code = "device_session_revoked"
+            elif error_code in {"refresh_token_already_used", "invalid_refresh_token", "invalid_grant"} or (
                 "invalid refresh token" in str(message).casefold()
                 or ("refresh token" in str(message).casefold() and "already used" in str(message).casefold())
             ):
@@ -1253,22 +1286,44 @@ class HttpSocialBackend:
         # send a client last_seen value: a user's incorrect Windows clock would
         # otherwise make an active buddy look offline for the whole room.
         now = datetime.now(BEIJING_TIMEZONE)
-        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
+        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": self.device_id, "device_claim": self._device_claim_pending}
         if self.transport == "direct":
             body["user_id"] = self.session.user_id
             # PostgREST only turns the on_conflict query into an upsert when
             # merge-duplicates is explicitly requested. Without this header,
             # every direct heartbeat after the first one fails with a primary
             # key violation and peers keep seeing this user as offline.
-            self._raw(
-                "POST",
-                "/rest/v1/lili_focus_presence?on_conflict=user_id",
-                body,
-                authenticated=True,
-                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-            )
+            try:
+                self._raw(
+                    "POST",
+                    "/rest/v1/lili_focus_presence?on_conflict=user_id",
+                    body,
+                    authenticated=True,
+                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                )
+                self._device_claim_pending = False
+            except SocialError as exc:
+                if not _is_missing_device_column(exc):
+                    raise
+                # The desktop can be upgraded before a self-hosted relay has
+                # reloaded its PostgREST schema cache.  Retry once without the
+                # new column so local/offline features remain available; the
+                # one-device guarantee becomes active as soon as the migration
+                # reaches that backend.
+                legacy_body = dict(body)
+                legacy_body.pop("device_id", None)
+                legacy_body.pop("device_claim", None)
+                LOGGER.warning("device lease column unavailable; using legacy heartbeat until migration is deployed")
+                self._raw(
+                    "POST",
+                    "/rest/v1/lili_focus_presence?on_conflict=user_id",
+                    legacy_body,
+                    authenticated=True,
+                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                )
         else:
             self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+            self._device_claim_pending = False
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self.transport == "direct":
@@ -1357,6 +1412,7 @@ class LegacyDirectSocialClient:
         self._last_error = ""
         self.connection = ConnectionStateStore()
         self.session: SocialSession | None = None
+        self._device_claim_pending = True
         self.auth_manager = AuthSessionManager(
             service_name=self.SERVICE_NAME,
             account_name=self.ACCOUNT_NAME,
@@ -1665,7 +1721,11 @@ class LegacyDirectSocialClient:
             status = int(exc.code)
             is_refresh_endpoint = "/auth/v1/token" in path or path.rstrip("/") == "/auth/refresh"
             kind = "auth_refresh" if is_refresh_endpoint else "auth" if status in (401, 403) else "server" if status >= 500 else "http"
-            if error_code in {"refresh_token_already_used", "invalid_refresh_token", "invalid_grant"} or (
+            if _is_device_session_revoked(error_code, message):
+                message = "这个账号已在另一台电脑登录，当前设备已自动退出。"
+                kind = "device_session_revoked"
+                error_code = "device_session_revoked"
+            elif error_code in {"refresh_token_already_used", "invalid_refresh_token", "invalid_grant"} or (
                 "invalid refresh token" in str(message).casefold()
                 or ("refresh token" in str(message).casefold() and "already used" in str(message).casefold())
             ):
@@ -1953,8 +2013,16 @@ class LegacyDirectSocialClient:
             return
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
-        self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": get_device_id(), "device_claim": self._device_claim_pending}
+        try:
+            self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+            self._device_claim_pending = False
+        except SocialError as exc:
+            if not _is_missing_device_column(exc):
+                raise
+            body.pop("device_id", None)
+            body.pop("device_claim", None)
+            self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
 
     def update_owner_nickname(self, nickname: str) -> None:
         if self._http_backend is not None:

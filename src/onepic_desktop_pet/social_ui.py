@@ -354,6 +354,7 @@ class SocialSyncThread(QThread):
     def run(self) -> None:
         try:
             heartbeat_error = ""
+            device_session_revoked = False
             focus_history_result = None
             focus_segments_result = None
             personal_state_result = None
@@ -370,7 +371,17 @@ class SocialSyncThread(QThread):
                     # disappear from the other simply because its heartbeat
                     # proxy is briefly unavailable.
                     heartbeat_error = str(exc)
+                    device_session_revoked = getattr(exc, "kind", "") == "device_session_revoked" or getattr(exc, "error_code", "") == "device_session_revoked"
                     LOGGER.warning("social presence heartbeat failed: %s", exc)
+            if device_session_revoked:
+                # Do not continue with dashboard/RPC writes using a lease that
+                # the server has already revoked.  The UI consumes this
+                # marker on the GUI thread and clears the local auth session.
+                self.completed.emit({
+                    "_device_session_revoked": True,
+                    "_presence_heartbeat_error": heartbeat_error,
+                })
+                return
             if isinstance(personal_state, dict):
                 sync_rpc = getattr(self.client, "rpc", None)
                 if callable(sync_rpc):
