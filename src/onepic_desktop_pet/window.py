@@ -3940,11 +3940,26 @@ class PetWindow(QWidget):
                 else recorded_day
             )
         else:
-            # On a new device there may be no local rows yet. The timer and
-            # server projection are then the only safe baselines.
-            today = max(recorded_day + unrecorded_session, timer_today)
+            # While today's session is still open, the analytics ledger has
+            # not received a row yet.  In that window the server's daily
+            # maximum is only a cross-device fallback and may be an old
+            # snapshot from a previous buggy client.  Let the account-local
+            # timer win as soon as it has any evidence for today; otherwise a
+            # stale 5-hour value can be rendered (and re-published) after a
+            # fresh 20-minute session starts.  Keep the remote projection for
+            # a genuinely untouched device so cross-device history still
+            # appears before the user works on it.
+            today = timer_today if (self.work_timer.has_active_session or timer_today > 0) else recorded_day
 
         week = max(0, int(week_projection.get("total_seconds", 0) or 0))
+        if (
+            not has_local_day_records
+            and (self.work_timer.has_active_session or timer_today > 0)
+        ):
+            # The same stale-aggregate guard applies to the weekly card.  A
+            # newly active local day must not inherit a corrupted weekly
+            # maximum before its first analytics row is committed.
+            week = today
         # Add the same unrecorded day delta to the weekly projection exactly
         # once. If no local records exist, the day value remains the stronger
         # signal than a missing/stale weekly aggregate.
@@ -5270,8 +5285,14 @@ class PetWindow(QWidget):
         if remote_lifetime is None:
             remote_lifetime = profile.get("focus_lifetime_seconds")
         if remote_date is not None or remote_today is not None or remote_lifetime is not None:
+            # Keep the timer's daily bucket strictly local.  The remote day
+            # value is retained in FocusAnalyticsStore as a cross-device
+            # fallback, but copying it into WorkTimer would make a stale
+            # server maximum indistinguishable from seconds actually worked
+            # on this computer.  Lifetime remains safe to merge because it is
+            # monotonic and is only used for account-wide outfit unlocks.
             self.work_timer.merge_remote_state(
-                today_seconds=int(remote_today or 0),
+                today_seconds=0,
                 lifetime_seconds=int(remote_lifetime or 0),
                 date_key=str(remote_date or datetime.now(BEIJING_TIMEZONE).date().isoformat()),
             )
