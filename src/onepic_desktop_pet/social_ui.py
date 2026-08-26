@@ -355,6 +355,7 @@ class SocialSyncThread(QThread):
         try:
             heartbeat_error = ""
             focus_history_result = None
+            focus_segments_result = None
             personal_state_result = None
             taunt_state_result = None
             encouragement_state_result = None
@@ -401,6 +402,16 @@ class SocialSyncThread(QThread):
                         # received this migration yet, the existing profile
                         # sync and local cache continue to work.
                         LOGGER.info("daily focus history sync deferred: %s", exc)
+                    try:
+                        focus_segments_result = sync_rpc(
+                            "lili_sync_focus_segments",
+                            {"p_segments": personal_state.get("focus_segments") or []},
+                        )
+                    except (SocialError, AttributeError, TypeError) as exc:
+                        # Older relays do not expose the raw-fact migration;
+                        # the legacy profile/daily compatibility path remains
+                        # usable until they are upgraded.
+                        LOGGER.info("focus segment sync deferred: %s", exc)
             # Taunts are separate from room events because the receiver must
             # keep the state across devices until the first work heartbeat
             # plus twenty minutes.  Older relays may not know this optional
@@ -458,6 +469,9 @@ class SocialSyncThread(QThread):
             if isinstance(focus_history_result, dict):
                 data = dict(data or {})
                 data["_focus_history"] = focus_history_result
+            if isinstance(focus_segments_result, dict):
+                data = dict(data or {})
+                data["_focus_segments"] = focus_segments_result
             if isinstance(personal_state_result, dict):
                 data = dict(data or {})
                 # The dashboard function on older deployments does not yet
@@ -4184,4 +4198,5 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+
 
