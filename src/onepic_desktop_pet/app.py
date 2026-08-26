@@ -11,6 +11,7 @@
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
 - 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
+- 下载更新进度使用独立的不透明工具对话框，不继承宠物透明窗口的绘制属性。
 - 启动时使用与桌面待办小窗相同的近期待办投影，只在有未读待办时自动展示；
 - 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
@@ -34,7 +35,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from PySide6.QtCore import QLockFile, QProcess, Qt, QTimer, QObject
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QMessageBox,
@@ -69,6 +70,38 @@ from .window import PetWindow
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+# QProgressDialog is normally parented to the frameless translucent pet.  On
+# Windows (and on a few macOS Qt styles) that relationship lets the dialog
+# inherit the pet's transparent backing store, leaving a black/desktop-colour
+# content area while the title bar remains visible.  Keep the updater a normal
+# opaque utility surface with its own palette and stylesheet instead.
+PROGRAM_PROGRESS_STYLE = """
+QProgressDialog#programUpdateProgress {
+    background-color: #eef5f8;
+    color: #24475b;
+    border: 1px solid #b9d1dc;
+    border-radius: 10px;
+}
+QProgressDialog#programUpdateProgress QLabel {
+    background-color: transparent;
+    color: #24475b;
+    padding: 4px;
+}
+QProgressDialog#programUpdateProgress QProgressBar {
+    min-height: 12px;
+    background-color: #e7eff1;
+    color: #24475b;
+    border: 1px solid #b4ccd5;
+    border-radius: 6px;
+    text-align: center;
+}
+QProgressDialog#programUpdateProgress QProgressBar::chunk {
+    background-color: #2f9fbe;
+    border-radius: 5px;
+}
+"""
 
 
 def _uses_qt_system_tray() -> bool:
@@ -431,13 +464,28 @@ class DesktopPetApplication(QObject):
         if self._program_update_progress is not None:
             self._program_update_progress.close()
             self._program_update_progress.deleteLater()
+        # Do not make this dialog a child of PetWindow: PetWindow deliberately
+        # uses a translucent/no-system-background backing store for the
+        # character silhouette, which can make ordinary child dialogs paint
+        # as a black or fully transparent rectangle on Windows/macOS.
         progress = QProgressDialog(
             f"正在下载 Lili {release.version}…",
             "",
             0,
             100,
-            self.window,
+            None,
         )
+        progress.setObjectName("programUpdateProgress")
+        progress.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        progress.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        progress.setAutoFillBackground(True)
+        palette = progress.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#eef5f8"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#e7eff1"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#24475b"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#24475b"))
+        progress.setPalette(palette)
+        progress.setStyleSheet(PROGRAM_PROGRESS_STYLE)
         progress.setWindowTitle("下载程序更新")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)

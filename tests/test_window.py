@@ -59,16 +59,19 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     for accessory in (window.quick_panel, window.work_controls, window.work_duration_bubble):
         assert accessory.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
         assert accessory.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    # The photo is an image-only transparent layer.  Readable text/status
+    # cards deliberately use an opaque backing so dark wallpapers cannot
+    # swallow their border and text.
+    assert window.photo_bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     for bubble in (
-        window.photo_bubble,
         window.speech_bubble,
         window.work_duration_bubble,
         window.visit_status_bubble,
     ):
-        assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # The rounded bubbles must keep their own stylesheet paint (the
-        # translucent flag already prevents an opaque native rectangle).
+        assert not bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert bubble.autoFillBackground()
         assert "background:" in bubble.styleSheet()
+    assert "#eff5f8" in window.speech_bubble.styleSheet()
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -406,6 +409,10 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
 
     assert panel.windowTitle() == ""
     assert panel.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert not panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert not panel.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+    assert panel.autoFillBackground()
+    assert "background: #f7fcfb" in panel.styleSheet()
     assert not panel.findChildren(QLabel, "todayNoteTitle")
     assert set(panel.rows) == {task.id}
     assert panel.rows[task.id].checkbox.isChecked() is False

@@ -3,7 +3,7 @@
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
-独立气泡使用透明窗口承载圆角样式，保留可见边框与底色并清理圆角外的系统阴影。
+独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ from PySide6.QtWidgets import (
 
 
 CONTROL_STYLE = """
-QWidget#floatingPanel, QDialog#floatingPanel { background: rgba(238, 244, 247, 218); color: #27313d;
-border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px;
+QWidget#floatingPanel, QDialog#floatingPanel { background: #eef4f7; color: #27313d;
+border: 1px solid #4b6070; border-radius: 15px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
 QWidget#quickActionDock { background: rgba(250, 248, 242, 238); color: #24475b;
 border: 1px solid rgba(75, 96, 112, 72); border-radius: 19px;
@@ -53,8 +53,8 @@ border: 1px solid rgba(40, 125, 158, 135); }
 QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;
 border: 1px solid rgba(75, 96, 112, 95); border-radius: 8px;
 padding: 4px 9px; font-size: 11px; }
-QWidget#workControlDock { background: rgba(248, 252, 253, 242); color: #24475b;
-border: 1px solid rgba(40, 125, 158, 118); border-radius: 13px;
+QWidget#workControlDock { background: #f8fcfd; color: #24475b;
+border: 1px solid #287d9e; border-radius: 13px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
 QWidget#workControlDock QPushButton { background: rgba(231, 243, 246, 235); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 75); border-radius: 9px; padding: 5px 10px; }
@@ -66,16 +66,16 @@ QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; b
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
 QLabel { border: none; background: transparent; }
-QLabel#workDurationHint { background: rgba(246, 251, 251, 235); color: #24475b;
-border: 1px solid rgba(40, 125, 158, 86); border-radius: 10px;
+QLabel#workDurationHint { background: #f6fbfb; color: #24475b;
+border: 1px solid #287d9e; border-radius: 10px;
 padding: 3px 8px; font-size: 11px; }
-QLabel#workDurationHint[paused="true"] { background: rgba(255, 240, 238, 242); color: #b94b51;
-border: 1px solid rgba(231, 74, 79, 155); }
-QLabel#visitStatusHint { background: rgba(246, 251, 251, 235); color: #24475b;
-border: 1px solid rgba(40, 125, 158, 86); border-radius: 10px;
+QLabel#workDurationHint[paused="true"] { background: #fff0ee; color: #b94b51;
+border: 1px solid #e74a4f; }
+QLabel#visitStatusHint { background: #f6fbfb; color: #24475b;
+border: 1px solid #287d9e; border-radius: 10px;
 padding: 3px 8px; font-size: 11px; }
-QLabel#visitStatusHint[taunt="true"] { background: rgba(255, 240, 238, 242); color: #b94b51;
-border: 1px solid rgba(231, 74, 79, 155); }
+QLabel#visitStatusHint[taunt="true"] { background: #fff0ee; color: #b94b51;
+border: 1px solid #e74a4f; }
 """
 
 
@@ -98,7 +98,9 @@ class WorkControlBubble(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setAutoFillBackground(True)
         self.setStyleSheet(CONTROL_STYLE)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -180,11 +182,13 @@ class WorkDurationBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        # These labels are detached translucent top-level windows.  Keep the
-        # Qt stylesheet background enabled: it draws the rounded border/fill;
-        # the translucent window flag removes only the pixels outside it.
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAutoFillBackground(False)
+        # These labels are readable utility surfaces rather than transparent
+        # pet pixels.  Use a solid backing store so the rounded fill and
+        # border remain visible on dark wallpapers and on non-composited
+        # Windows desktops.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setAutoFillBackground(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumWidth(100)
         self.setStyleSheet(CONTROL_STYLE)
@@ -228,8 +232,9 @@ class VisitStatusBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setAutoFillBackground(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(False)
         self.setMaximumWidth(640)
@@ -328,7 +333,9 @@ class CoffeeScenePrompt(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setAutoFillBackground(True)
         self.setStyleSheet(CONTROL_STYLE)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)

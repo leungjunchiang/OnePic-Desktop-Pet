@@ -25,7 +25,7 @@
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
 - 维护亲密度、精力、无聊度与饱食度的会话内状态；
 - 使用 QTimer 驱动状态切换及水平移动，并限制窗口不脱离当前屏幕。
-- 所有独立气泡显式使用透明顶层窗口属性，避免平台默认背景形成矩形底色。
+- 宠物图层使用透明顶层窗口；工作状态、串门和提示卡片使用可读的实色背景，避免平台默认背景造成黑色或透明内容区。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -267,6 +267,33 @@ SETTINGS_SOURCE_USER_ACTION = "user_action"
 DEFAULT_WALK_MOTION_FACTORS = (0.45, 0.7, 1.2, 1.65, 0.45, 0.7, 1.2, 1.65)
 
 
+# Keep menus readable when the pet is over a dark wallpaper.  This is scoped
+# to QMenu instances only; it does not alter the transparent pet silhouette or
+# the native AppKit menu used by macOS Dock/status-item rendering.
+UNIFIED_MENU_STYLE = """
+QMenu {
+    background: #f8fbfd;
+    color: #203847;
+    border: 1px solid #b9d1dc;
+    padding: 4px;
+}
+QMenu::item {
+    background: transparent;
+    padding: 6px 26px 6px 10px;
+}
+QMenu::item:selected {
+    background: #d9eeeb;
+    color: #203847;
+}
+QMenu::item:disabled { color: #8fa0a8; }
+QMenu::separator {
+    height: 1px;
+    background: #d6e1e6;
+    margin: 4px 8px;
+}
+"""
+
+
 class IdleRecoveryDialog(QWidget):
     """Show one non-modal correction hint for an automatically classified gap.
 
@@ -311,7 +338,7 @@ class IdleRecoveryDialog(QWidget):
         buttons.addWidget(self.focus_button)
         layout.addLayout(buttons)
         self.setStyleSheet(
-            "QWidget { background: rgba(255, 255, 255, 242); border: 1px solid #b9d1dc; "
+            "QWidget { background: #ffffff; border: 1px solid #b9d1dc; "
             "border-radius: 10px; } QPushButton { background: #d9eeeb; color: #245965; "
             "border: 0; border-radius: 8px; padding: 5px 12px; }"
         )
@@ -674,8 +701,12 @@ class PetWindow(QWidget):
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
         )
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.speech_bubble.setAutoFillBackground(False)
+        # Speech/status cards are readable UI, not pet pixels.  A solid
+        # backing prevents dark wallpapers from bleeding through the card and
+        # making the text appear to vanish on Windows/macOS.
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.speech_bubble.setAutoFillBackground(True)
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()
         bubble_font.setFamilies(
@@ -689,8 +720,8 @@ class PetWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
         self.speech_bubble.setStyleSheet(
-            "QLabel { background: rgba(239, 245, 248, 175); "
-            "color: #27313d; border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px; "
+            "QLabel { background: #eff5f8; "
+            "color: #27313d; border: 1px solid #4b6070; border-radius: 15px; "
             "padding: 10px 13px; font-size: 14px; }"
         )
 
@@ -6412,6 +6443,7 @@ class PetWindow(QWidget):
         # state. A standalone menu remains usable while another app has focus
         # or while the pet itself is hidden.
         menu = QMenu(parent) if parent is not None else QMenu()
+        menu.setStyleSheet(UNIFIED_MENU_STYLE)
         self.refresh_unified_menu(menu, context)
         return menu
 
@@ -6424,6 +6456,7 @@ class PetWindow(QWidget):
         work/visibility state is refreshed.
         """
 
+        menu.setStyleSheet(UNIFIED_MENU_STYLE)
         menu.clear()
         populate_qmenu(menu, self.unified_menu_model(), context)
 
@@ -6858,6 +6891,7 @@ class PetWindow(QWidget):
         """Build the same complete app menu used by the tray and status item."""
 
         menu = QMenu(self)
+        menu.setStyleSheet(UNIFIED_MENU_STYLE)
         populate_qmenu(menu, self.unified_menu_model(), "pet")
         return menu
 

@@ -5,6 +5,9 @@ It is a frameless tool window with no title, statistics, chat text, or
 dashboard chrome.  ``PetWindow`` owns its lifetime and repositions it below
 the pet whenever the pet moves.  The accessory hides itself when there are no
 unfinished/unread entries, and is restored when a new visible Todo is added.
+Unlike the pet silhouette and its speech bubbles, this is an ordinary
+readable utility panel with an opaque backing surface so it stays visible on
+dark wallpapers and when platform composition is unavailable.
 """
 
 from __future__ import annotations
@@ -60,13 +63,13 @@ def compact_todo_candidates(memory: TimeMemory) -> list[Any]:
 
 COMPACT_TODO_STYLE = """
 QWidget#compactTodoPanel {
-    background: rgba(247, 252, 251, 242);
-    border: 1px solid rgba(92, 157, 160, 150);
+    background: #f7fcfb;
+    border: 1px solid #5c9da0;
     border-radius: 12px;
 }
-QWidget#todoRows { background: transparent; border: 0; }
-QWidget#todoActionColumn { background: transparent; border: 0; }
-QScrollArea { background: transparent; border: 0; }
+QWidget#todoRows { background: #f7fcfb; border: 0; }
+QWidget#todoActionColumn { background: #f7fcfb; border: 0; }
+QScrollArea { background: #f7fcfb; border: 0; }
 QCheckBox { spacing: 6px; color: #183c4c; }
 QCheckBox::indicator { width: 16px; height: 16px; }
 QCheckBox::indicator:unchecked {
@@ -338,7 +341,12 @@ class CompactTodoPanel(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # This panel is readable UI, not part of the transparent pet
+        # silhouette.  A solid backing prevents text and controls from
+        # disappearing into dark wallpapers on Windows/macOS.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setAutoFillBackground(True)
         self.setStyleSheet(COMPACT_TODO_STYLE)
         self.setMinimumWidth(self.MIN_WIDTH)
         self.setMaximumWidth(self.MAX_WIDTH)

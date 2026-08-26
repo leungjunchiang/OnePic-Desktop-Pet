@@ -122,6 +122,12 @@ def test_program_download_exposes_progress_to_the_gui() -> None:
     )
 
     assert "QProgressDialog" in app_source
+    assert "PROGRAM_PROGRESS_STYLE" in app_source
+    assert 'progress.setObjectName("programUpdateProgress")' in app_source
+    assert "progress.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)" in app_source
+    assert "progress.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)" in app_source
+    assert "progress.setAutoFillBackground(True)" in app_source
+    assert "QProgressDialog#programUpdateProgress" in app_source
     assert "worker.progress.connect(self._program_download_progress_changed)" in app_source
     assert "progress = Signal(int, int)" in worker_source
     assert "progress=self.progress.emit" in worker_source
