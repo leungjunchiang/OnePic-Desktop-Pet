@@ -1986,6 +1986,30 @@ def test_shared_focus_totals_prefer_local_day_when_remote_max_is_stale(monkeypat
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_shared_focus_totals_ignore_legacy_remote_timer_bucket_during_session(monkeypatch) -> None:
+    """An old cloud merge in the timer file cannot inflate a live round."""
+
+    app, window = _create_window()
+    window.work_timer.merge_remote_state(
+        today_seconds=5 * 3600,
+        lifetime_seconds=5 * 3600,
+        date_key=datetime.now().date().isoformat(),
+    )
+    window.start_work_timer()
+    window.work_timer._running_since -= 35 * 60
+
+    monkeypatch.setattr(
+        window.focus_analytics,
+        "period_summary",
+        lambda _period, _moment=None: {"total_seconds": 5 * 3600, "local_record_count": 0},
+    )
+    totals = window._shared_focus_period_seconds()
+
+    assert 34 * 60 <= totals["today_seconds"] <= 35 * 60 + 1
+    assert totals["week_seconds"] == totals["today_seconds"]
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_browser_video_fullscreen_pauses_after_short_confirmation(monkeypatch) -> None:
     """Real video fullscreen hides the pet and pauses work after confirmation."""
 
