@@ -159,7 +159,9 @@ def build_work_report(
     # would reintroduce the very 5h/53h reports this window is meant to fix.
     day_preview = analytics.period_summary("day", moment)
     local_record_count = max(0, int(day_preview.get("local_record_count", 0) or 0))
-    if local_record_count > 0:
+    if local_record_count > 0 and not (
+        snapshot_has_reconciled_day and snapshot_status == "focus"
+    ):
         # A shared snapshot is only a compatibility fallback for a device that
         # has no interval facts yet.  Once local facts exist it must not
         # override the canonical union projection.
@@ -1214,4 +1216,3 @@ class WorkReportDialog(QDialog):
             line.addWidget(bar, 1)
             line.addWidget(value)
             layout.addLayout(line)
-
