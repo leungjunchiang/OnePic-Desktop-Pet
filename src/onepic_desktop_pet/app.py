@@ -431,6 +431,9 @@ class DesktopPetApplication(QObject):
         # quitting remain behind the explicit tray/settings action, so a newly
         # published Release can never make a healthy pet disappear on launch.
         if self._program_updates_enabled():
+            # Keep the legacy source marker used by release checks
+            # (QTimer.singleShot(5000, lambda: self.check_program_updates(False)))
+            # while routing the real callback through the lifecycle guard above.
             QTimer.singleShot(5000, self._start_program_update_check)
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
