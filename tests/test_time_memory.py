@@ -54,6 +54,20 @@ def test_upcoming_todo_view_shows_tomorrow_with_a_date_label(tmp_path) -> None:
     assert memory.get_todo_view_item(task.id).display_text == item.display_text
 
 
+def test_manual_todo_projection_can_restore_read_item(tmp_path) -> None:
+    """The explicit desktop “显示待办” command can reopen a read task."""
+
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("已读但仍未完成")
+    memory.todos.mark_read(task.id, True)
+
+    assert memory.get_todo_view_item(task.id) is None
+    restored = memory.get_todo_view_item(task.id, include_read=True)
+    assert restored is not None
+    assert restored.source_id == task.id
+    assert restored.read is True
+
+
 def test_sticky_todo_survives_midnight_and_untimed_notes_need_manual_read(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 18, 0, 5))
     memory = TimeMemory(tmp_path, now_provider=clock)

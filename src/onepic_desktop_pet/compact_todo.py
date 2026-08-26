@@ -45,7 +45,11 @@ from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
 LOGGER = logging.getLogger(__name__)
 
 
-def compact_todo_candidates(memory: TimeMemory) -> list[Any]:
+def compact_todo_candidates(
+    memory: TimeMemory,
+    *,
+    include_read: bool = False,
+) -> list[Any]:
     """Return unfinished, unread items eligible for the desktop strip.
 
     ``TimeMemory.todo_view_upcoming`` is the shared projection used by the
@@ -55,9 +59,9 @@ def compact_todo_candidates(memory: TimeMemory) -> list[Any]:
 
     return [
         item
-        for item in memory.todo_view_upcoming()
+        for item in memory.todo_view_upcoming(include_read=include_read)
         if not bool(getattr(item, "completed", False))
-        and not bool(getattr(item, "read", False))
+        and (include_read or not bool(getattr(item, "read", False)))
     ]
 
 
@@ -332,6 +336,11 @@ class CompactTodoPanel(QWidget):
         self.selected_task_id = str(memory.current_task_id or "")
         self._rows: dict[str, TodoRow] = {}
         self._visible_task_ids: frozenset[str] = frozenset()
+        # A manual “显示待办” action is allowed to reopen unfinished notes
+        # that were already marked read.  Keep that override until the user
+        # explicitly hides the strip; automatic refreshes continue using the
+        # unread-only projection by default.
+        self._include_read_override = False
         self._list_width = 100
         self.setObjectName("compactTodoPanel")
         self.setWindowTitle("")
@@ -448,10 +457,12 @@ class CompactTodoPanel(QWidget):
         del collapsed
         self.refresh()
 
-    def _visible_tasks(self) -> list[Any]:
+    def _visible_tasks(self, *, include_read: bool | None = None) -> list[Any]:
         # When the last unfinished unread item is consumed, the whole
         # accessory (including ⋯ and ＋) should disappear immediately.
-        tasks = compact_todo_candidates(self.memory)
+        if include_read is None:
+            include_read = self._include_read_override
+        tasks = compact_todo_candidates(self.memory, include_read=bool(include_read))
         return sorted(tasks, key=self._task_priority_key)
 
     def _task_priority_key(self, task: Any) -> tuple[object, ...]:
@@ -494,7 +505,9 @@ class CompactTodoPanel(QWidget):
             str(getattr(task, "created_at", "") or ""),
         )
 
-    def refresh(self) -> bool:
+    def refresh(self, *, include_read: bool | None = None) -> bool:
+        if include_read is not None:
+            self._include_read_override = bool(include_read)
         for row in tuple(self._rows.values()):
             row.deleteLater()
         self._rows.clear()
@@ -676,7 +689,10 @@ class CompactTodoPanel(QWidget):
         )
 
     def _select_task(self, task_id: str) -> None:
-        task = self.memory.get_todo_view_item(task_id)
+        task = self.memory.get_todo_view_item(
+            task_id,
+            include_read=self._include_read_override,
+        )
         if task is None:
             return
         if task.source_type == "todo":
@@ -687,10 +703,17 @@ class CompactTodoPanel(QWidget):
         self.task_selected.emit(task.id)
 
     def _check_task(self, task_id: str, completed: bool) -> None:
-        task = self.memory.get_todo_view_item(task_id)
+        task = self.memory.get_todo_view_item(
+            task_id,
+            include_read=self._include_read_override,
+        )
         if task is None or bool(task.completed) == bool(completed):
             return
-        if not self.memory.complete_todo_view_item(task_id, completed):
+        if not self.memory.complete_todo_view_item(
+            task_id,
+            completed,
+            include_read=self._include_read_override,
+        ):
             return
         self.task_checked.emit(task_id, completed)
         self.task_changed.emit()
@@ -715,7 +738,10 @@ class CompactTodoPanel(QWidget):
     def _show_management_menu(self) -> None:
         """Open the one panel-level menu for the selected Todo row."""
 
-        task = self.memory.get_todo_view_item(self.selected_task_id)
+        task = self.memory.get_todo_view_item(
+            self.selected_task_id,
+            include_read=self._include_read_override,
+        )
         menu = QMenu(self)
         edit = time_action = pin = read_action = None
         complete = delete = None
@@ -753,7 +779,11 @@ class CompactTodoPanel(QWidget):
         elif task is not None and chosen is complete:
             self._check_task(task.id, not task.completed)
         elif task is not None and chosen is not None and chosen.data() == "acknowledge":
-            self.memory.complete_todo_view_item(task.id, True)
+            self.memory.complete_todo_view_item(
+                task.id,
+                True,
+                include_read=self._include_read_override,
+            )
             self.refresh()
             self.task_changed.emit()
         elif task is not None and delete is not None and chosen is delete:
@@ -765,7 +795,10 @@ class CompactTodoPanel(QWidget):
                 QMessageBox.StandardButton.No,
             )
             if answer == QMessageBox.StandardButton.Yes:
-                self.memory.delete_todo_view_item(task.id)
+                self.memory.delete_todo_view_item(
+                    task.id,
+                    include_read=self._include_read_override,
+                )
                 self.selected_task_id = ""
                 self.refresh()
                 self.task_changed.emit()
@@ -773,7 +806,10 @@ class CompactTodoPanel(QWidget):
             self.add_task()
 
     def _edit_task(self, task_id: str, *, include_time: bool, time_only: bool = False) -> None:
-        task = self.memory.get_todo_view_item(task_id)
+        task = self.memory.get_todo_view_item(
+            task_id,
+            include_read=self._include_read_override,
+        )
         if task is None or task.source_type != "todo":
             return
         dialog = QDialog(self)

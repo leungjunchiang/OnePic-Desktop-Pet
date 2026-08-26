@@ -3256,7 +3256,11 @@ class PetWindow(QWidget):
             self._compact_todo_panel.set_companion_topmost(
                 bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
             )
-        has_visible_tasks = self._compact_todo_panel.refresh()
+        # A manual menu action must be able to reopen unfinished tasks even
+        # after they were marked read.  Automatic startup/refresh paths keep
+        # the unread-only projection so the strip still disappears once all
+        # tasks have been acknowledged.
+        has_visible_tasks = self._compact_todo_panel.refresh(include_read=manual)
         if not has_visible_tasks:
             # An empty compact strip is not a useful accessory.  Keep the
             # widget instance so a later Todo write can reuse it, but do not
@@ -3483,6 +3487,7 @@ class PetWindow(QWidget):
         self._restore_compact_todos_after_show = False
         self._compact_todos_manually_hidden = True
         if self._compact_todo_panel is not None:
+            self._compact_todo_panel.refresh(include_read=False)
             self._compact_todo_panel.hide()
 
     def add_compact_todo(self) -> None:

@@ -627,6 +627,32 @@ def test_show_todos_command_overrides_auto_hide_policy(tmp_path) -> None:
     app.processEvents()
 
 
+def test_show_todos_command_restores_read_task(tmp_path) -> None:
+    """Manual restore should not be a no-op when the unfinished task is read."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("已读仍待完成")
+    memory.todos.mark_read(task.id, True)
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show()
+    app.processEvents()
+
+    window._menu_callbacks()["show_todos"]()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+    assert set(panel.rows) == {task.id}
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)

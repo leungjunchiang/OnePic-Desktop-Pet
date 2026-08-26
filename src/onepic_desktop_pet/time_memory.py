@@ -162,12 +162,25 @@ class TimeMemory:
             anniversary_next_date=self.anniversaries.next_date,
         )
 
-    def todo_view_upcoming(self, days: int = 7) -> list[TodoViewItem]:
-        """Return the compact sticky-note window, including recent overdue work."""
+    def todo_view_upcoming(
+        self,
+        days: int = 7,
+        *,
+        include_read: bool = False,
+    ) -> list[TodoViewItem]:
+        """Return the compact sticky-note projection, including recent overdue work.
+
+        The normal desktop projection excludes read items so the accessory can
+        disappear after the user has acknowledged every note.  An explicit
+        ``显示待办`` command may request the same unfinished projection again,
+        including acknowledged items; keeping that override here avoids the
+        command appearing to do nothing when every remaining task is already
+        marked read.
+        """
 
         today = self.now().date()
         latest = today + timedelta(days=max(0, int(days)))
-        scheduled = self._visible_todos_until(latest)
+        scheduled = self._visible_todos_until(latest, include_read=include_read)
         return collect_todo_view(
             scheduled, self.countdowns.items, self.anniversaries.items,
             countdown_remaining=self.countdowns.remaining_days,
@@ -177,7 +190,12 @@ class TimeMemory:
             show_future_dates=True,
         )
 
-    def _visible_todos_until(self, latest: date) -> list[object]:
+    def _visible_todos_until(
+        self,
+        latest: date,
+        *,
+        include_read: bool = False,
+    ) -> list[object]:
         """Select durable Todo records for desktop/center time views.
 
         The old implementation filtered by ``item.date >= today``.  That
@@ -189,7 +207,9 @@ class TimeMemory:
         current = self.now()
         result: list[object] = []
         for item in self.todos.items:
-            if item.completed or item.read or self.todos.auto_hidden(item, now=current):
+            if item.completed or (
+                item.read and not include_read
+            ) or self.todos.auto_hidden(item, now=current):
                 continue
             try:
                 item_date = date.fromisoformat(str(item.date)[:10])
@@ -211,13 +231,31 @@ class TimeMemory:
                 result.append(item)
         return result
 
-    def get_todo_view_item(self, item_id: str) -> TodoViewItem | None:
-        return next((item for item in self.todo_view_upcoming() if item.id == str(item_id)), None)
+    def get_todo_view_item(
+        self,
+        item_id: str,
+        *,
+        include_read: bool = False,
+    ) -> TodoViewItem | None:
+        return next(
+            (
+                item
+                for item in self.todo_view_upcoming(include_read=include_read)
+                if item.id == str(item_id)
+            ),
+            None,
+        )
 
-    def complete_todo_view_item(self, item_id: str, completed: bool = True) -> bool:
+    def complete_todo_view_item(
+        self,
+        item_id: str,
+        completed: bool = True,
+        *,
+        include_read: bool = False,
+    ) -> bool:
         """Complete a projected event without duplicating it into todos.json."""
 
-        item = self.get_todo_view_item(item_id)
+        item = self.get_todo_view_item(item_id, include_read=include_read)
         if item is None:
             return False
         if item.source_type == "todo":
@@ -253,8 +291,8 @@ class TimeMemory:
         self.todos.mark_read(item.id, read)
         return True
 
-    def delete_todo_view_item(self, item_id: str) -> bool:
-        item = self.get_todo_view_item(item_id)
+    def delete_todo_view_item(self, item_id: str, *, include_read: bool = False) -> bool:
+        item = self.get_todo_view_item(item_id, include_read=include_read)
         if item is None:
             return False
         if item.source_type == "todo":
