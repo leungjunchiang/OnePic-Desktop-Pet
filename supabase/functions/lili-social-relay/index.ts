@@ -33,6 +33,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_set_buddy_private_note",
   "lili_sync_personal_state",
   "lili_sync_focus_history",
+  "lili_sync_focus_segments",
   "lili_focus_weekly_leaderboard",
 ]);
 
@@ -340,5 +341,6 @@ Deno.serve(async (request: Request) => {
     return json(request, Deno.env.toObject(), { error: message }, status);
   }
 });
+
 
 
