@@ -7,7 +7,7 @@
 - 只在本机应用数据目录保存日期与累计秒数，不保存任务名称或聊天内容；
 - 按单次连续工作时长产生 25 分钟鼓励、50 分钟休息和更长时段劝慰提醒。
 
-计时使用单调时钟避免系统时间微调造成跳变；开始和自动检查点都会保存“仍在工作”的标记。
+计时使用单调时钟避免系统时间微调造成跳变；提醒阈值按当前连续工作段计算，开始和自动检查点都会保存“仍在工作”的标记。
 异常退出后下次启动恢复到最近一次已保存的计时点，但不会把应用关闭期间的离线时间误算为工作时间。
 """
 
@@ -600,12 +600,21 @@ class WorkTimerModel:
         suffix = " · 正在计时" if self.is_running else " · 已暂停"
         return f"今日工作 {format_work_duration(self.today_seconds())}{suffix}"
 
-    def take_due_reminder(self) -> str | None:
-        """在连续工作达到提醒阈值时返回一次提醒类型。"""
+    def take_due_reminder(self, seconds: int | None = None) -> str | None:
+        """在连续工作达到提醒阈值时返回一次提醒类型。
+
+        Callers that already have the reconciled FocusSession snapshot may
+        provide its canonical continuous value.  This prevents a stale timer
+        checkpoint from firing a two-hour reminder after the shared day total
+        has been corrected to a smaller value.
+        """
 
         if not self.is_running:
             return None
-        minutes = self.session_seconds() // 60
+        # Reminder thresholds describe one uninterrupted stretch, not the
+        # cumulative value carried across pause/resume or checkpoint writes.
+        measured = self.episode_seconds() if seconds is None else max(0, int(seconds))
+        minutes = measured // 60
         if minutes >= 90:
             reminder_key = f"long-{(minutes - 90) // 45}"
             reminder_kind = "long_break"

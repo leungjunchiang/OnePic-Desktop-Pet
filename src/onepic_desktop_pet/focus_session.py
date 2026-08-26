@@ -6,6 +6,7 @@ same local :class:`WorkTimerModel` session.
 
 日度和周度展示使用窗口提供的同一份日历周期投影；计时器仍只负责本地
 工作状态，避免自习室、工作报告和桌面提示各自维护一套累计时间。
+快照同时提供当前连续工作段，提醒与显示均从同一份快照取值。
 """
 
 from __future__ import annotations
@@ -33,6 +34,10 @@ class FocusSessionSnapshot:
     # shared projection, preserving the lightweight timer-only API for tests
     # and integrations that do not own FocusAnalyticsStore.
     week_seconds: int | None = None
+    # Seconds worked in the current uninterrupted episode.  This is kept
+    # alongside the cumulative session value so reminders cannot mistake a
+    # checkpointed/resumed session for one continuous stretch of work.
+    current_continuous_seconds: int = 0
 
     @property
     def is_running(self) -> bool:
@@ -49,6 +54,7 @@ class FocusSessionSnapshot:
     ) -> "FocusSessionSnapshot":
         session_seconds = timer.session_seconds()
         today_seconds = timer.today_seconds()
+        current_continuous_seconds = timer.episode_seconds() if timer.is_running else 0
         started_at = None
         if timer.is_running:
             current = now or datetime.now(BEIJING_TIMEZONE)
@@ -76,6 +82,7 @@ class FocusSessionSnapshot:
             room_id,
             timer.state,
             timer.pause_reason,
+            current_continuous_seconds=current_continuous_seconds,
         )
 
 
@@ -175,11 +182,16 @@ class FocusSessionManager(QObject):
             # cap that one field while retaining the real session semantics
             # whenever it is smaller than today's total.
             session_seconds = min(snapshot.session_seconds, normalized_today)
+            current_continuous_seconds = min(
+                max(0, int(snapshot.current_continuous_seconds)),
+                normalized_today,
+            )
             snapshot = replace(
                 snapshot,
                 session_seconds=session_seconds,
                 today_seconds=normalized_today,
                 week_seconds=normalized_week,
+                current_continuous_seconds=current_continuous_seconds,
             )
         elif normalized_week is not None:
             snapshot = replace(snapshot, week_seconds=normalized_week)

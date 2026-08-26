@@ -50,3 +50,19 @@ def test_focus_session_snapshot_reconciles_day_week_and_stale_session(tmp_path) 
     assert snapshot.session_seconds == 8 * 3600 + 22 * 60
     assert snapshot.today_seconds == 8 * 3600 + 22 * 60
     assert snapshot.week_seconds == 21 * 3600 + 41 * 60
+
+
+def test_focus_snapshot_caps_current_continuous_time_to_shared_day_total(tmp_path) -> None:
+    """A stale live timer cannot make a reminder exceed today's canonical total."""
+
+    timer = WorkTimerModel(path=tmp_path / "timer.json")
+    manager = FocusSessionManager(timer)
+    assert manager.start() is True
+    timer._session_accumulated_seconds = 2 * 3600 + 5 * 60  # type: ignore[attr-defined]
+    manager.set_period_seconds_provider(
+        lambda: {"today_seconds": 1 * 3600 + 48 * 60, "week_seconds": 1 * 3600 + 48 * 60}
+    )
+
+    snapshot = manager.snapshot()
+    assert snapshot.session_seconds == snapshot.today_seconds == 1 * 3600 + 48 * 60
+    assert snapshot.current_continuous_seconds <= snapshot.today_seconds

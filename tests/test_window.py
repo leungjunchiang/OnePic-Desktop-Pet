@@ -59,6 +59,14 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     for accessory in (window.quick_panel, window.work_controls, window.work_duration_bubble):
         assert accessory.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
         assert accessory.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    for bubble in (
+        window.photo_bubble,
+        window.speech_bubble,
+        window.work_duration_bubble,
+        window.visit_status_bubble,
+    ):
+        assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
     window.close()
     window.deleteLater()
     app.processEvents()

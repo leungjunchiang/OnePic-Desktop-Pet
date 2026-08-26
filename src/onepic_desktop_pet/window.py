@@ -25,6 +25,7 @@
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
 - 维护亲密度、精力、无聊度与饱食度的会话内状态；
 - 使用 QTimer 驱动状态切换及水平移动，并限制窗口不脱离当前屏幕。
+- 所有独立气泡显式使用透明顶层窗口属性，避免平台默认背景形成矩形底色。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -638,6 +639,9 @@ class PetWindow(QWidget):
 
         self.setWindowFlags(self._pet_window_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setWindowTitle(f"{APP_DISPLAY_NAME} · {self._pet_name()}")
@@ -648,6 +652,9 @@ class PetWindow(QWidget):
         self.setFixedSize(width + 12, settings.display_height + 14)
         self.label = QLabel(self)
         self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.label.setAutoFillBackground(False)
+        self.label.setStyleSheet("background: transparent;")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setGeometry(6, 0, width, settings.display_height + 8)
 
@@ -657,6 +664,9 @@ class PetWindow(QWidget):
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
         )
+        self.photo_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.photo_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.photo_bubble.setAutoFillBackground(False)
         self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.photo_bubble.setStyleSheet("background: transparent;")
 
@@ -666,6 +676,9 @@ class PetWindow(QWidget):
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
         )
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.speech_bubble.setAutoFillBackground(False)
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()
         bubble_font.setFamilies(
@@ -3606,11 +3619,12 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
         self._show_emotion(state, 2600)
-        today_seconds = self._shared_today_focus_seconds()
+        snapshot = self.focus_session.snapshot()
+        today_seconds = int(snapshot.today_seconds)
         text = (
             f"{self._shared_work_status_text()}\n"
             f"{growth_progress_text(today_seconds)}\n"
-            f"六毛心情：{positive_mood(today_seconds, self.work_timer.session_seconds())}"
+            f"六毛心情：{positive_mood(today_seconds, snapshot.session_seconds)}"
         )
         self.show_speech(text, 6800)
 
@@ -3722,10 +3736,23 @@ class PetWindow(QWidget):
         elif wellness_kind == "stand":
             self._set_temporary_activity("football", 35_000)
             self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
-        reminder_kind = None if quiet.blocked or deep_food_scene else self.work_timer.take_due_reminder()
+        canonical_continuous = min(
+            max(0, int(getattr(snapshot, "current_continuous_seconds", 0) or 0)),
+            max(0, int(getattr(snapshot, "today_seconds", 0) or 0)),
+        )
+        reminder_kind = (
+            None
+            if quiet.blocked or deep_food_scene
+            else self.work_timer.take_due_reminder(canonical_continuous)
+        )
         if reminder_kind is None:
             return
-        duration = format_work_duration(self.work_timer.session_seconds())
+        duration = format_work_duration(
+            min(
+                max(0, int(getattr(snapshot, "current_continuous_seconds", 0) or 0)),
+                max(0, int(getattr(snapshot, "today_seconds", 0) or 0)),
+            )
+        )
         reply = self.companion.work_reminder(reminder_kind, duration)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 7200)
@@ -6460,18 +6487,33 @@ class PetWindow(QWidget):
                 # safety net. A user typing in another app must not look
                 # idle merely because the pet itself was not clicked.
                 idle_seconds = self._inactive_ms() / 1000.0
-                if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
+                # All duration-based ambient decisions use the same
+                # reconciled snapshot as the bottom work bubble.  Reading
+                # WorkTimer.session_seconds() directly here could resurrect a
+                # stale checkpoint and produce a reminder longer than today's
+                # actual total (for example, 2:05 above a 1:48 day total).
+                focus_snapshot = self.focus_session.snapshot()
+                today_seconds = max(0, int(focus_snapshot.today_seconds))
+                session_seconds = min(
+                    max(0, int(focus_snapshot.session_seconds)),
+                    today_seconds,
+                )
+                continuous_seconds = min(
+                    max(0, int(getattr(focus_snapshot, "current_continuous_seconds", 0) or 0)),
+                    today_seconds,
+                )
+                if self.work_timer.is_running and continuous_seconds >= 2 * 3600:
                     activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"
                 elif idle_seconds >= 30 * 60:
                     activity, text = "pointing", "你很久没动啦，六毛偷偷探头看看你还在不在。"
-                elif self._shared_today_focus_seconds() >= 3 * 3600 and random.random() < 0.06:
+                elif today_seconds >= 3 * 3600 and random.random() < 0.06:
                     activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
                 elif random.random() < 0.55:
                     decision = self.companion_behavior.decide(
                         now_hour=datetime.now().hour,
                         working=self.work_timer.is_running,
-                        session_seconds=self.work_timer.session_seconds(),
-                        today_seconds=self._shared_today_focus_seconds(),
+                        session_seconds=session_seconds,
+                        today_seconds=today_seconds,
                         idle_seconds=int(idle_seconds),
                         music_playing=self._manual_activity_until > time.monotonic(),
                     )

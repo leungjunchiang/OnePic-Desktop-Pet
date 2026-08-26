@@ -287,6 +287,16 @@ def test_reminders_fire_once_at_focus_break_and_long_work_thresholds(tmp_path) -
     assert timer.take_due_reminder() == "long_break"
 
 
+def test_reminder_can_use_reconciled_continuous_seconds(tmp_path) -> None:
+    """A corrected shared snapshot can suppress a stale timer threshold."""
+
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    timer.start()
+    timer._episode_accumulated_seconds = 2 * 3600  # type: ignore[attr-defined]
+    assert timer.take_due_reminder(30 * 60) == "focus"
+
+
 def test_duration_formatting_is_compact_and_readable() -> None:
     assert format_work_duration(0) == "0分钟"
     assert format_work_duration(30) == "不足1分钟"
