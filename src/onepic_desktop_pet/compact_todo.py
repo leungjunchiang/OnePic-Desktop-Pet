@@ -3,8 +3,10 @@
 The compact Todo surface is deliberately separate from ``TodayNoteWindow``.
 It is a frameless tool window with no title, statistics, chat text, or
 dashboard chrome.  ``PetWindow`` owns its lifetime and repositions it below
-the pet whenever the pet moves.  The accessory hides itself when there are no
-unfinished/unread entries, and is restored when a new visible Todo is added.
+the pet whenever the pet moves.  The accessory hides itself only when there
+are no unfinished entries, and is restored when a new visible Todo is added.
+Reading a note in the detailed Todo view does not remove unfinished work from
+the desktop strip.
 The container and row surfaces are transparent so the strip does not cover
 the desktop; only the task text, check indicators, and the ``…``/``+``
 controls paint visible surfaces.
@@ -48,13 +50,15 @@ LOGGER = logging.getLogger(__name__)
 def compact_todo_candidates(
     memory: TimeMemory,
     *,
-    include_read: bool = False,
+    include_read: bool = True,
 ) -> list[Any]:
-    """Return unfinished, unread items eligible for the desktop strip.
+    """Return unfinished items eligible for the desktop strip.
 
     ``TimeMemory.todo_view_upcoming`` is the shared projection used by the
-    detailed Todo view.  Keep the final guard here as well so the panel and
-    the owning window always agree about whether there is anything to show.
+    detailed Todo view.  The desktop strip deliberately includes read items:
+    ``read`` is an acknowledgement, not completion.  Only completing or
+    deleting a Todo removes it from the strip.  Keep the final guard here as
+    well so the panel and the owning window always agree about visibility.
     """
 
     return [
@@ -336,11 +340,11 @@ class CompactTodoPanel(QWidget):
         self.selected_task_id = str(memory.current_task_id or "")
         self._rows: dict[str, TodoRow] = {}
         self._visible_task_ids: frozenset[str] = frozenset()
-        # A manual “显示待办” action is allowed to reopen unfinished notes
-        # that were already marked read.  Keep that override until the user
-        # explicitly hides the strip; automatic refreshes continue using the
-        # unread-only projection by default.
-        self._include_read_override = False
+        # Reading a note is not completion.  Keep unfinished notes visible on
+        # the desktop strip across automatic refreshes and restarts.  The
+        # include_read argument remains as a compatibility escape hatch for
+        # callers that explicitly need the old projection.
+        self._include_read_override = True
         self._list_width = 100
         self.setObjectName("compactTodoPanel")
         self.setWindowTitle("")
@@ -750,7 +754,7 @@ class CompactTodoPanel(QWidget):
                 edit = menu.addAction("编辑选中待办")
                 time_action = menu.addAction("修改时间")
                 pin = menu.addAction("取消置顶" if task.important else "置顶")
-                read_action = menu.addAction("标为已读（从桌面贴纸收起）")
+                read_action = menu.addAction("标为已读（不隐藏桌面待办）")
             elif task.source_type == "anniversary":
                 menu.addAction("这个日子先不显示").setData("acknowledge")
             complete = menu.addAction("取消完成" if task.completed else "完成")

@@ -408,9 +408,9 @@ class DesktopPetApplication(QObject):
         self.show_window()
         paper_mode = getattr(self.settings, "today_note_display_mode", "always")
         note_style = getattr(self.settings, "today_note_mode", "compact")
-        # Use the same upcoming projection as the compact strip. The old
-        # ``todos.pending()`` check only looked at today's raw records and
-        # could disagree with the panel for near-term/read transitions.
+        # Use the same upcoming projection as the compact strip. Read is an
+        # acknowledgement, not completion, so unfinished notes remain
+        # eligible at startup until the user checks or deletes them.
         has_pending_todos = bool(compact_todo_candidates(self.window.time_memory))
         should_show_paper = paper_mode == "always" or (
             paper_mode == "pending" and has_pending_todos

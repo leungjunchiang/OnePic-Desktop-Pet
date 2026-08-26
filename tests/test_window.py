@@ -653,6 +653,38 @@ def test_show_todos_command_restores_read_task(tmp_path) -> None:
     app.processEvents()
 
 
+def test_compact_todo_keeps_read_task_until_completed(tmp_path) -> None:
+    """Reading a Todo must not hide it from the desktop strip."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    task = memory.todos.add("已读但仍需完成")
+    memory.todos.mark_read(task.id, True)
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show_compact_todos()
+    app.processEvents()
+
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+    assert task.id in panel.visible_task_ids
+
+    # The panel's checkbox is the completion action; after it is checked the
+    # shared projection removes the task and hides the empty accessory.
+    panel._check_task(task.id, True)
+    app.processEvents()
+    assert memory.todos.get(task.id).completed is True
+    assert task.id not in panel.visible_task_ids
+    assert not panel.isVisible()
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)

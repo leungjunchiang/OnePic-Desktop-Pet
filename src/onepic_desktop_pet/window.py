@@ -3256,11 +3256,11 @@ class PetWindow(QWidget):
             self._compact_todo_panel.set_companion_topmost(
                 bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
             )
-        # A manual menu action must be able to reopen unfinished tasks even
-        # after they were marked read.  Automatic startup/refresh paths keep
-        # the unread-only projection so the strip still disappears once all
-        # tasks have been acknowledged.
-        has_visible_tasks = self._compact_todo_panel.refresh(include_read=manual)
+        # ``read`` is only an acknowledgement in the detailed Todo view, not
+        # completion.  Keep every unfinished task on the desktop strip for
+        # both automatic startup/refresh and the manual “显示待办” command.
+        # Only the checkbox (complete) or explicit deletion removes it.
+        has_visible_tasks = self._compact_todo_panel.refresh(include_read=True)
         if not has_visible_tasks:
             # An empty compact strip is not a useful accessory.  Keep the
             # widget instance so a later Todo write can reuse it, but do not
@@ -3487,7 +3487,10 @@ class PetWindow(QWidget):
         self._restore_compact_todos_after_show = False
         self._compact_todos_manually_hidden = True
         if self._compact_todo_panel is not None:
-            self._compact_todo_panel.refresh(include_read=False)
+            # Hiding the accessory is a window-layer action.  Do not switch
+            # the panel back to an unread-only projection: an unfinished item
+            # must be available when the accessory is shown again.
+            self._compact_todo_panel.refresh(include_read=True)
             self._compact_todo_panel.hide()
 
     def add_compact_todo(self) -> None:
@@ -3583,9 +3586,11 @@ class PetWindow(QWidget):
             self.start_work_timer()
 
     def _complete_todo_from_note(self, task_id: str) -> None:
-        task = self.time_memory.get_todo_view_item(task_id)
+        task = self.time_memory.get_todo_view_item(task_id, include_read=True)
         was_open = task is not None and not bool(getattr(task, "completed", False))
-        if not self.time_memory.complete_todo_view_item(task_id, True):
+        if not self.time_memory.complete_todo_view_item(
+            task_id, True, include_read=True
+        ):
             return
         if was_open and task is not None:
             self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
@@ -3595,18 +3600,18 @@ class PetWindow(QWidget):
         self.show_speech("这项做完了，给你记上。", 4200)
 
     def _set_todo_completion_from_note(self, task_id: str, completed: bool) -> None:
-        task = self.time_memory.get_todo_view_item(task_id)
+        task = self.time_memory.get_todo_view_item(task_id, include_read=True)
         if task is None:
             return
         if completed:
             was_open = not bool(getattr(task, "completed", False))
-            self.time_memory.complete_todo_view_item(task_id, True)
+            self.time_memory.complete_todo_view_item(task_id, True, include_read=True)
             if was_open:
                 self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
             self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
             self.show_speech("这项做完了，给你记上。", 4200)
         else:
-            self.time_memory.complete_todo_view_item(task_id, False)
+            self.time_memory.complete_todo_view_item(task_id, False, include_read=True)
             self.time_memory.summary.refresh_tasks()
         if self._today_note_window is not None:
             self._today_note_window.refresh()
@@ -3614,18 +3619,18 @@ class PetWindow(QWidget):
     def _set_todo_completion_from_panel(self, task_id: str, completed: bool) -> None:
         """Reflect a compact checkbox in the real local Todo store."""
 
-        task = self.time_memory.get_todo_view_item(task_id)
+        task = self.time_memory.get_todo_view_item(task_id, include_read=True)
         if task is None:
             return
         if completed:
             was_open = not bool(getattr(task, "completed", False))
-            self.time_memory.complete_todo_view_item(task_id, True)
+            self.time_memory.complete_todo_view_item(task_id, True, include_read=True)
             if was_open:
                 self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
             self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
             self.show_speech("这项做完了，给你记上。", 4200)
         else:
-            self.time_memory.complete_todo_view_item(task_id, False)
+            self.time_memory.complete_todo_view_item(task_id, False, include_read=True)
             self.time_memory.summary.refresh_tasks()
         self._refresh_todo_surfaces()
 
