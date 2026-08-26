@@ -3,7 +3,7 @@
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
-独立气泡关闭系统背景填充，保证圆角样式外不出现矩形底色。
+独立气泡使用透明窗口承载圆角样式，保留可见边框与底色并清理圆角外的系统阴影。
 """
 
 from __future__ import annotations
@@ -180,11 +180,10 @@ class WorkDurationBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        # These labels are detached top-level windows.  Explicitly disable
-        # the platform's default backing store so rounded CSS backgrounds do
-        # not leave a rectangular matte around the bubble on Windows/macOS.
+        # These labels are detached translucent top-level windows.  Keep the
+        # Qt stylesheet background enabled: it draws the rounded border/fill;
+        # the translucent window flag removes only the pixels outside it.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumWidth(100)
@@ -230,7 +229,6 @@ class VisitStatusBubble(QLabel):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(False)

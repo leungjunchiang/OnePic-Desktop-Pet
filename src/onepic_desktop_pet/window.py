@@ -641,7 +641,6 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setWindowTitle(f"{APP_DISPLAY_NAME} · {self._pet_name()}")
@@ -665,7 +664,6 @@ class PetWindow(QWidget):
             True,
         )
         self.photo_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.photo_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.photo_bubble.setAutoFillBackground(False)
         self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.photo_bubble.setStyleSheet("background: transparent;")
@@ -677,7 +675,6 @@ class PetWindow(QWidget):
             True,
         )
         self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.speech_bubble.setAutoFillBackground(False)
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()

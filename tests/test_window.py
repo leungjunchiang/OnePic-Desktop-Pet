@@ -66,7 +66,7 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
         window.visit_status_bubble,
     ):
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        assert bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        assert not bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
     window.close()
     window.deleteLater()
     app.processEvents()
