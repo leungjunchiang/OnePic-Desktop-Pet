@@ -2385,7 +2385,8 @@ class PetWindow(QWidget):
             return
         # Include the messages returned for each active taunt when the
         # backend provides them, while retaining the local catalogue for
-        # mixed-version relays.
+        # mixed-version relays.  A single chatter timer keeps the cadence
+        # visible without creating one timer per sender.
         message_pool = list(dict.fromkeys((*self._taunt_messages, *_TAUNT_FOLLOWUP_MESSAGES)))
         candidates = [
             message
@@ -2945,6 +2946,7 @@ class PetWindow(QWidget):
             self._record_user_interaction()
             self._reset_idle_episode()
         session_seconds = self.work_timer.session_seconds()
+        segment_started_at = self.work_timer.current_segment_started_at()
         was_running = self.focus_session.pause(reason)
         if was_running and reason in {"idle_10m", "fullscreen_video"}:
             self._away_recovery_reason = reason
@@ -2953,7 +2955,11 @@ class PetWindow(QWidget):
             self._close_away_recovery_card()
         if was_running:
             self.focus_analytics.pause_focus_session()
-            self._record_focus_segment(session_seconds, completed=False)
+            self._record_focus_segment(
+                session_seconds,
+                completed=False,
+                started_at=segment_started_at,
+            )
             # FocusSession emits its pause snapshot before the analytics
             # segment is committed. Publish one more snapshot so the study
             # room and report immediately see the same reconciled day total.
@@ -3019,9 +3025,15 @@ class PetWindow(QWidget):
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         session_id = self.work_timer.focus_session_id
+        segment_started_at = self.work_timer.current_segment_started_at()
         # Commit the final analytics segment while the timer still owns its
         # stable session ID.  The timer is reset immediately afterwards.
-        self._record_focus_segment(session_seconds, completed=True, session_id=session_id)
+        self._record_focus_segment(
+            session_seconds,
+            completed=True,
+            session_id=session_id,
+            started_at=segment_started_at,
+        )
         self.focus_session.finish()
         self.focus_analytics.finish_focus_session(completed=True)
         # The timer is reset by ``finish``; read the just-committed analytics
@@ -3870,6 +3882,7 @@ class PetWindow(QWidget):
         *,
         completed: bool,
         session_id: str | None = None,
+        started_at: datetime | None = None,
     ) -> int:
         """Credit only newly completed WORKING seconds in this session.
 
@@ -3888,7 +3901,16 @@ class PetWindow(QWidget):
                 # to be represented once in the local daily card.
                 self.daily_stats.record_focus(0, completed=True)
             return 0
-        started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
+        # ``started_at`` is captured before pausing the timer.  It survives
+        # timer checkpoints and prevents a resumed/checkpointed segment from
+        # being reconstructed as ``now - now`` or from inheriting a stale
+        # cumulative session start.
+        if started_at is None:
+            started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
+        elif started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            started_at = started_at.astimezone(BEIJING_TIMEZONE)
         self.time_memory.record_focus(
             seconds,
             completed_session=completed,
@@ -4923,6 +4945,10 @@ class PetWindow(QWidget):
                 "today_interruptions": int(analytics.get("today_interruptions") or 0),
                 "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
                 "focus_history": focus_history,
+                # Raw closed intervals are the cross-device source of truth.
+                # Daily/profile totals remain in the payload only for older
+                # relays and are never used to overwrite local facts.
+                "focus_segments": self.focus_analytics.focus_segments_payload(),
                 "outfit_key": self.settings.equipped_outfit,
                 "outfit_set": self._personal_outfit_sync_pending,
             },
@@ -5066,6 +5092,8 @@ class PetWindow(QWidget):
         """Render the receiver's persistent taunt and return whether active."""
 
         if not isinstance(state, dict) or "active" not in state:
+            # Older relays may omit the optional RPC.  Never clear a valid
+            # punishment merely because a compatibility response was sparse.
             return self._taunt_active
         active = bool(state.get("active"))
         if active:
@@ -5087,10 +5115,7 @@ class PetWindow(QWidget):
             ).strip()[:40]
             if not sender_names and fallback_sender:
                 sender_names = [fallback_sender]
-            try:
-                support_count = int(state.get("support_count") or len(sender_names) or 1)
-            except (TypeError, ValueError):
-                support_count = len(sender_names) or 1
+            support_count = int(state.get("support_count") or len(sender_names) or 1)
             sender = self._format_taunt_senders(sender_names, support_count)
             raw_remaining = state.get("remaining_work_seconds")
             if raw_remaining is not None:
@@ -5109,27 +5134,26 @@ class PetWindow(QWidget):
             self._taunt_id = taunt_id
             self._taunt_sender_nickname = sender
             self._taunt_sender_names = sender_names
-            self._taunt_message = str(
-                state.get("message") or "怎么，今天准备靠意念完成？"
-            )[:120]
+            self._taunt_message = str(state.get("message") or "怎么，今天准备靠意念完成？")[:120]
             self._taunt_messages = taunt_messages
             self._change_ambient_activity("taunt")
             if sys.platform == "darwin":
                 self._apply_macos_window_behavior(self.visit_status_bubble)
+            # Keep this call compatible with older builds whose bubble only
+            # accepts the taunter nickname.  The server still carries the
+            # supporter count, while the compact bubble text remains stable.
             self.visit_status_bubble.set_taunter(
                 sender,
                 support_count=support_count,
                 remaining_seconds=self._taunt_remaining_work_seconds,
             )
-            # Re-run the non-activating setup after changing the text. This is
-            # important on macOS where a detached panel can otherwise stay
-            # behind a later-created duration bubble.
-            self._show_nonactivating(self.visit_status_bubble)
             if is_new_taunt:
                 self._taunt_chatter_last_message = self._taunt_message
                 self.show_speech(f"{sender}：{self._taunt_message}", 5200)
                 self._schedule_taunt_chatter()
             elif not self.taunt_chatter_timer.isActive():
+                # Recover the periodic chatter after a sleep/resume or a
+                # transient timer reset without repeating the current line.
                 self._schedule_taunt_chatter()
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
@@ -5338,6 +5362,7 @@ class PetWindow(QWidget):
             week_seconds=int(remote_week_seconds or 0),
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
         local_day = self.focus_analytics.period_summary("day")
         if (
             int(local_day.get("local_record_count", 0) or 0) > 0
@@ -5346,7 +5371,7 @@ class PetWindow(QWidget):
             self.work_timer.reconcile_today_seconds(
                 int(local_day.get("total_seconds", 0) or 0)
             )
-        if (analytics_changed or history_changed) and self._social_dialog is not None:
+        if (analytics_changed or history_changed or segment_changed) and self._social_dialog is not None:
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
 
         if "outfit_key" not in profile and "outfit_key" not in personal_state:
@@ -6970,3 +6995,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
