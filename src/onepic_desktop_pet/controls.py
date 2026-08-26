@@ -11,8 +11,8 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap, QRectF
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from .work_timer import format_elapsed_clock
 
 from PySide6.QtWidgets import (
