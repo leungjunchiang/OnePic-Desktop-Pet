@@ -478,7 +478,6 @@ class DesktopPetApplication(QObject):
         progress.setObjectName("programUpdateProgress")
         progress.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         progress.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        progress.setAutoFillBackground(True)
         palette = progress.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor("#eef5f8"))
         palette.setColor(QPalette.ColorRole.Base, QColor("#e7eff1"))
@@ -486,6 +485,11 @@ class DesktopPetApplication(QObject):
         palette.setColor(QPalette.ColorRole.WindowText, QColor("#24475b"))
         progress.setPalette(palette)
         progress.setStyleSheet(PROGRAM_PROGRESS_STYLE)
+        # Native Qt styles may clear autoFillBackground while applying the
+        # stylesheet. Re-apply it afterwards and mark the dialog as a
+        # stylesheet-backed surface so its body cannot become transparent.
+        progress.setAutoFillBackground(True)
+        progress.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         progress.setWindowTitle("下载程序更新")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
