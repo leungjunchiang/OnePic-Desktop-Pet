@@ -277,3 +277,14 @@ def test_three_day_login_outfit_is_complete_transparent_and_uncropped() -> None:
         assert bbox is not None
         assert bbox[0] >= 34 and bbox[1] >= 20
         assert bbox[2] <= 1220 and bbox[3] <= 1234
+
+
+def test_three_day_login_outfit_does_not_keep_faint_edge_noise() -> None:
+    """登录奖励轮廓不能带近乎透明的噪点，否则小尺寸缩放会断线。"""
+
+    path = PROJECT_ROOT / "assets" / "pet" / "login-rewards" / "3-day-login.png"
+    with Image.open(path) as image:
+        alpha = image.convert("RGBA").getchannel("A")
+        positive = [value for value in alpha.getdata() if value]
+        assert positive
+        assert min(positive) >= 8
