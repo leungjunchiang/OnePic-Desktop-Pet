@@ -18,6 +18,14 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .focus_segments import (
+    FocusAggregate,
+    FocusSegment,
+    aggregate_focus_time,
+    calendar_window,
+    segment_from_record,
+)
+
 
 # A day may legitimately contain a very long work period.  The only hard
 # upper bound is an impossible full 24-hour day; older releases incorrectly
@@ -309,6 +317,74 @@ class FocusAnalyticsStore:
             self._save()
         return changed
 
+    def focus_segments_payload(self, limit: int = 96) -> list[dict[str, Any]]:
+        """Serialize closed local facts for the server fact-sync RPC."""
+
+        rows: list[dict[str, Any]] = []
+        for segment in self.focus_segments()[-max(1, min(256, int(limit))):]:
+            if segment.end_at is None:
+                # Active intervals are projected locally and sealed on pause;
+                # never make a remote device guess an end timestamp.
+                continue
+            rows.append(segment.to_dict())
+        return rows
+
+    def merge_remote_segments(self, payload: Any) -> bool:
+        """Merge server-returned interval facts without importing aggregates."""
+
+        entries = payload.get("segments") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return False
+        today = _as_beijing(self._now()).date()
+        cutoff = today - timedelta(days=400)
+        records = self._state.setdefault("records", [])
+        by_id = {
+            str(raw.get("record_id") or raw.get("segment_id")): index
+            for index, raw in enumerate(records)
+            if isinstance(raw, dict) and (raw.get("record_id") or raw.get("segment_id"))
+        }
+        changed = False
+        for index, item in enumerate(entries):
+            if not isinstance(item, dict):
+                continue
+            segment = segment_from_record(item, index)
+            if segment is None or segment.end_at is None:
+                continue
+            if segment.start_at.date() < cutoff or segment.start_at.date() > today:
+                continue
+            duration = max(0, int((segment.end_at - segment.start_at).total_seconds()))
+            if duration <= 0:
+                continue
+            record_id = segment.segment_id or f"remote:{index}"
+            record = {
+                "date": segment.start_at.date().isoformat(),
+                "started_at": segment.start_at.isoformat(),
+                "seconds": duration,
+                "completed": segment.completed,
+                "quality": segment.quality,
+                "task": segment.task,
+                "interruptions": segment.interruptions,
+                "record_id": record_id[:160],
+                "session_id": segment.session_id,
+                "device_id": segment.device_id,
+            }
+            existing_index = by_id.get(record_id)
+            if existing_index is None:
+                records.append(record)
+                by_id[record_id] = len(records) - 1
+                changed = True
+            elif records[existing_index] != record:
+                records[existing_index] = record
+                changed = True
+        if len(records) > 500:
+            del records[:-500]
+            changed = True
+        if changed:
+            self._rebuild_days_from_records()
+            self._trim_days()
+            self._save()
+        return changed
+
     def record_session(
         self,
         seconds: int,
@@ -527,6 +603,15 @@ class FocusAnalyticsStore:
                 weekly_total,
                 max(0, int(account_state.get("focus_week_seconds", 0) or 0)),
             )
+        # Re-read the same interval projection used by work reports.  This
+        # prevents the compact timer, study room and report summary from
+        # disagreeing after a checkpoint or a cross-midnight segment.
+        day_projection = self.period_summary("day", moment)
+        week_projection = self.period_summary("week", moment)
+        if bool(day_projection.get("local_evidence")) or self.focus_segments():
+            today_seconds = max(0, int(day_projection.get("total_seconds", 0) or 0))
+        if bool(week_projection.get("local_evidence")) or self.focus_segments():
+            weekly_total = max(0, int(week_projection.get("total_seconds", 0) or 0))
         streak_reference = today if (today_seconds or 0) > 0 else today - timedelta(days=1)
         streak = 0
         while (day_seconds(streak_reference - timedelta(days=streak)) or 0) > 0:
@@ -563,9 +648,15 @@ class FocusAnalyticsStore:
             yesterday, (today_seconds - yesterday) if today_seconds is not None and yesterday is not None else None,
             average_quality,
             quality_label, window, late_average,
-            day_value(today, "interruptions"),
+            max(
+                day_value(today, "interruptions"),
+                int(day_projection.get("interruptions", 0) or 0),
+            ),
             max(0, int(self._live.get("current_interruptions", 0))),
-            day_value(today, "longest_continuous"),
+            max(
+                day_value(today, "longest_continuous"),
+                int(day_projection.get("longest_focus_seconds", 0) or 0),
+            ),
             max(0, int(self._live.get("current_continuous_seconds", 0))),
             today_seconds,
         )
@@ -608,6 +699,52 @@ class FocusAnalyticsStore:
             result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
         return result
 
+    def focus_segments(self) -> list[FocusSegment]:
+        """Return the durable interval facts represented by local records.
+
+        ``days`` and the scalar account snapshot are deliberately excluded:
+        they are caches/fallbacks from older releases, not work facts.
+        """
+
+        result: list[FocusSegment] = []
+        for index, raw in enumerate(self._state.get("records", [])):
+            segment = segment_from_record(raw, index)
+            if segment is not None:
+                result.append(segment)
+        return result
+
+    def focus_aggregate(
+        self,
+        period: str = "day",
+        at: datetime | None = None,
+        *,
+        extra_segments: list[FocusSegment] | None = None,
+    ) -> FocusAggregate:
+        """Aggregate raw facts with one interval implementation."""
+
+        moment = _as_beijing(at or self._now())
+        range_start, range_end, _ = calendar_window(period, moment)
+        segments = self.focus_segments()
+        if extra_segments:
+            segments.extend(extra_segments)
+        # Legacy cumulative checkpoint rows are retained for diagnostics but
+        # are marked untrusted by ``_rebuild_days_from_records``.  Exclude all
+        # records on those dates from user-visible aggregates.
+        untrusted_dates = {
+            str(key)
+            for key, value in (self._state.get("days", {}) or {}).items()
+            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
+        }
+        if untrusted_dates:
+            segments = [item for item in segments if item.start_at.date().isoformat() not in untrusted_dates]
+        return aggregate_focus_time(
+            segments,
+            range_start,
+            range_end,
+            now=moment,
+            interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+        )
+
     def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
         """Calculate a day/week/month report from the account's local history.
 
@@ -639,6 +776,13 @@ class FocusAnalyticsStore:
             period_end = next_month - timedelta(days=1)
         range_start = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
         range_end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=BEIJING_TIMEZONE)
+        aggregate = self.focus_aggregate(key, moment)
+        # ``source_segment_count`` also includes facts outside the requested
+        # window.  A positive projection (or an explicit invalid-interval
+        # error) is the precise signal that this period has interval evidence.
+        # This matters for a segment crossing midnight: its start date can be
+        # yesterday while its overlap belongs to today's report.
+        interval_evidence = bool(aggregate.total_seconds or aggregate.errors)
 
         stored = self._state.get("days", {})
         if not isinstance(stored, dict):
@@ -672,6 +816,12 @@ class FocusAnalyticsStore:
                     seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
                 except (TypeError, ValueError, OverflowError):
                     seconds = 0
+                # Once this account has raw interval facts, the derived day
+                # cache is only a compatibility display.  Use the exact
+                # overlap projection so a segment crossing midnight is split
+                # into the correct two calendar days.
+                if date_key in aggregate.daily and interval_evidence:
+                    seconds = max(0, int(aggregate.daily.get(date_key, 0) or 0))
             if not is_future and not untrusted:
                 try:
                     rounds = max(0, int(raw.get("rounds", 0) or 0))
@@ -706,7 +856,11 @@ class FocusAnalyticsStore:
         # stronger evidence than a server-side weekly ``greatest`` snapshot;
         # otherwise an old aggregate can make Monday show more time than the
         # seven daily rows that produced it.
-        local_period_evidence = self._has_local_evidence(start, today)
+        local_period_evidence = self._has_local_evidence(start, today) or interval_evidence
+        if local_period_evidence:
+            # All report totals now come from the same unioned interval set.
+            # ``days`` remains a migration cache only.
+            total_seconds = aggregate.total_seconds
         if (
             key == "day"
             and not local_period_evidence
@@ -880,8 +1034,16 @@ class FocusAnalyticsStore:
             "end": today.isoformat(),
             "total_seconds": total_seconds,
             "completed_rounds": completed_rounds,
-            "longest_focus_seconds": max(longest_focus_seconds, longest_session_seconds),
-            "interruptions": interruptions,
+            "longest_focus_seconds": (
+                max(aggregate.longest_seconds, longest_session_seconds)
+                if interval_evidence
+                else max(aggregate.longest_seconds, longest_focus_seconds, longest_session_seconds)
+            ),
+            "interruptions": (
+                aggregate.interruption_count
+                if interval_evidence
+                else max(interruptions, aggregate.interruption_count)
+            ),
             "average_quality": round(sum(quality_values) / len(quality_values)) if quality_values else 0,
             "active_days": sum(1 for item in daily if int(item.get("seconds") or 0) > 0),
             "started_rounds": started_rounds,
@@ -889,27 +1051,35 @@ class FocusAnalyticsStore:
             # Average and maximum now use the same session grain.  Previously
             # average used unioned segment time while maximum used continuous
             # session time, which could make the average larger than the max.
-            "average_session_seconds": round(sum(session_durations) / len(session_durations))
-            if session_durations
-            else 0,
+            "average_session_seconds": (
+                round(sum(session_durations) / len(session_durations))
+                if session_durations else aggregate.average_seconds
+            ),
             "high_quality_seconds": high_quality_seconds,
             "deep_focus_seconds": high_quality_seconds,
             "first_started_at": first_started_text,
             "last_ended_at": last_ended_text,
             "strongest_window": self._best_window(today, start=start),
-            "hourly": [
+            "hourly": [dict(item) for item in aggregate.hourly]
+            if local_period_evidence
+            else [
                 {"hour": hour, "label": f"{hour:02d}:00", "seconds": union_seconds(intervals)}
                 for hour, intervals in enumerate(hourly_intervals)
             ],
-            "focus_intervals": focus_intervals,
+            "focus_intervals": [dict(item) for item in aggregate.intervals]
+            if local_period_evidence else focus_intervals,
             "daily": daily,
             "untrusted_days": untrusted_days,
             "data_quality": {
-                "trusted": not bool(untrusted_days),
+                "trusted": not bool(untrusted_days or aggregate.errors),
                 "untrusted_days": list(untrusted_days),
+                "consistency_errors": list(aggregate.errors),
                 "message": (
                     "本周期包含旧版异常计时记录；异常日期已从报告指标中剔除，避免把重复检查点当成真实工作时间。"
-                    if untrusted_days else "本周期数据口径正常。"
+                    if untrusted_days
+                    else "本周期区间统计存在一致性异常，异常区间已剔除。"
+                    if aggregate.errors
+                    else "本周期数据口径正常。"
                 ),
             },
             "local_record_count": sum(
@@ -1081,3 +1251,4 @@ class FocusAnalyticsStore:
         temp = self.path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.path)
+
