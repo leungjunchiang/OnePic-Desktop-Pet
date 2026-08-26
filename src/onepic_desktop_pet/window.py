@@ -3969,7 +3969,12 @@ class PetWindow(QWidget):
             # fresh 20-minute session starts.  Keep the remote projection for
             # a genuinely untouched device so cross-device history still
             # appears before the user works on it.
-            today = timer_today if (self.work_timer.has_active_session or timer_today > 0) else recorded_day
+            if self.work_timer.has_active_session:
+                today = session_total
+            elif timer_today > 0:
+                today = timer_today
+            else:
+                today = recorded_day
 
         week = max(0, int(week_projection.get("total_seconds", 0) or 0))
         if (
