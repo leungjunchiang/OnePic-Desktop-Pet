@@ -3246,11 +3246,31 @@ class PetWindow(QWidget):
             x, y = candidate_x, candidate_y
             break
         if x is None or y is None:
-            # Extremely small work areas can make every ideal placement
-            # impossible.  Clamp to the monitor as a last resort, then raise
-            # the panel so its controls remain usable.
-            x = max(available.left(), min(left_x, available.right() - panel_width + 1))
-            y = max(available.top(), min(center_y, available.bottom() - panel_height + 1))
+            # Extremely small work areas can make both horizontal placements
+            # unavailable. Prefer a clamped below/above placement before the
+            # final monitor clamp; this keeps the panel out of the character
+            # even when the monitor starts at a non-zero virtual-screen x.
+            for fallback_x, fallback_y in (
+                ((left + right - panel_width) // 2, bottom + gap_y),
+                ((left + right - panel_width) // 2, top - panel_height - gap_y),
+            ):
+                candidate_x = max(
+                    available.left(),
+                    min(fallback_x, available.right() - panel_width + 1),
+                )
+                candidate_y = max(
+                    available.top(),
+                    min(fallback_y, available.bottom() - panel_height + 1),
+                )
+                candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+                if not candidate.intersects(pet_rect):
+                    x, y = candidate_x, candidate_y
+                    break
+            if x is None or y is None:
+                # No non-overlapping rectangle exists in an unusually small
+                # work area; clamp to the monitor as the final usable option.
+                x = max(available.left(), min(left_x, available.right() - panel_width + 1))
+                y = max(available.top(), min(center_y, available.bottom() - panel_height + 1))
         x = max(available.left(), min(x, available.right() - panel_width + 1))
         y = max(available.top(), min(y, available.bottom() - panel_height + 1))
         panel.move(x, y)
