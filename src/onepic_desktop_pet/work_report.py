@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from .diary import DailyCompanionStats
 from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
+from .focus_segments import FocusSegment
 from .work_timer import WorkTimerModel, format_work_duration
 
 
@@ -159,6 +160,12 @@ def build_work_report(
     day_preview = analytics.period_summary("day", moment)
     local_record_count = max(0, int(day_preview.get("local_record_count", 0) or 0))
     if local_record_count > 0:
+        # A shared snapshot is only a compatibility fallback for a device that
+        # has no interval facts yet.  Once local facts exist it must not
+        # override the canonical union projection.
+        snapshot_has_reconciled_day = False
+        snapshot_week = None
+    if local_record_count > 0:
         # Raw local FocusSession records are the authoritative day total.
         # Only add the segment that is actually running now.  The cumulative
         # session snapshot includes earlier paused/checkpointed segments and
@@ -200,12 +207,20 @@ def build_work_report(
             else getattr(focus_snapshot, "session_started_at", None)
         )
     live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
+    live_segment: FocusSegment | None = None
     if live_started_value and snapshot_status == "focus" and live_elapsed > 0:
         try:
             live_started = datetime.fromisoformat(str(live_started_value).replace("Z", "+00:00"))
             if live_started.tzinfo is None:
                 live_started = live_started.replace(tzinfo=BEIJING_TIMEZONE)
             live_started = live_started.astimezone(BEIJING_TIMEZONE)
+            live_segment = FocusSegment(
+                segment_id=f"live:{getattr(timer, 'focus_session_id', '')}",
+                session_id=getattr(timer, "focus_session_id", "") or "live",
+                start_at=live_started,
+                end_at=moment.astimezone(BEIJING_TIMEZONE),
+                task=str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
+            )
             live_interval = {
                 "date": live_started.date().isoformat(),
                 "started_at": live_started.isoformat(),
@@ -237,8 +252,38 @@ def build_work_report(
                         if isinstance(bucket, dict):
                             bucket["seconds"] = max(0, int(bucket.get("seconds", 0) or 0)) + part_seconds
                     cursor = part_end
+                # The open interval is a real segment for the live report,
+                # even though it is not persisted until pause/finish.  Keep
+                # all four cards coherent while it is running.
+                item = report[period]
+                item["started_rounds"] = max(1, int(item.get("started_rounds", 0) or 0))
+                item["longest_focus_seconds"] = max(
+                    int(item.get("longest_focus_seconds", 0) or 0), live_elapsed
+                )
+                current_average = max(0, int(item.get("average_session_seconds", 0) or 0))
+                item["average_session_seconds"] = live_elapsed if not current_average else min(current_average, int(item["longest_focus_seconds"]))
         except (TypeError, ValueError, OverflowError):
             pass
+    if live_segment is not None:
+        # Rebuild every live period from the same interval set.  This replaces
+        # the old path that appended one interval to a separately calculated
+        # hourly chart and could leave count/average/longest inconsistent.
+        # The closed list may be empty for a user's very first active segment;
+        # the open segment is still a complete fact for this read-only view.
+        for period in ("day", "week", "month"):
+            aggregate = analytics.focus_aggregate(
+                period,
+                moment,
+                extra_segments=[live_segment],
+            )
+            item = report[period]
+            item["total_seconds"] = aggregate.total_seconds
+            item["hourly"] = [dict(row) for row in aggregate.hourly]
+            item["focus_intervals"] = [dict(row) for row in aggregate.intervals]
+            item["started_rounds"] = max(item.get("started_rounds", 0), aggregate.segment_count)
+            item["longest_focus_seconds"] = aggregate.longest_seconds
+            item["average_session_seconds"] = aggregate.average_seconds
+            item["interruptions"] = max(item.get("interruptions", 0), aggregate.interruption_count)
     day = report["day"]
     day["total_seconds"] = live_today if snapshot_has_reconciled_day else max(int(day["total_seconds"]), live_today)
     day["completed_rounds"] = max(
@@ -1169,3 +1214,4 @@ class WorkReportDialog(QDialog):
             line.addWidget(bar, 1)
             line.addWidget(value)
             layout.addLayout(line)
+
