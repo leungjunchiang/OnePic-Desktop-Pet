@@ -72,8 +72,11 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
         assert isinstance(bubble, RoundedSurfaceLabel)
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        assert not bubble.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-        assert "background:" in bubble.styleSheet()
+        # Qt may report WA_StyledBackground after installing any stylesheet,
+        # even when the rule is transparent.  The explicit surface painter is
+        # the guarantee that matters; verify that the stylesheet cannot add a
+        # second opaque rectangle.
+        assert "background: transparent" in bubble.styleSheet()
     assert window.speech_bubble.surface_fill.name() == "#eff5f8"
     window.close()
     window.deleteLater()
