@@ -1,4 +1,7 @@
-PySide6>=6.8,<7
+# Qt 6.11.2 is the native module reported in the Windows crash dump
+# (0xc0000409 in Qt6Core.dll). Keep release builds on the tested Qt 6.8–6.10
+# line until the upstream Qt/PySide6 regression is resolved.
+PySide6>=6.8,<6.11
 Pillow>=10,<13
 certifi>=2024.8.30,<2026
 keyring>=25,<27
