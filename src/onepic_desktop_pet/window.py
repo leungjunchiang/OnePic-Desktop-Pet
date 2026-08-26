@@ -706,7 +706,6 @@ class PetWindow(QWidget):
         # making the text appear to vanish on Windows/macOS.
         self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        self.speech_bubble.setAutoFillBackground(True)
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()
         bubble_font.setFamilies(
@@ -724,6 +723,9 @@ class PetWindow(QWidget):
             "color: #27313d; border: 1px solid #4b6070; border-radius: 15px; "
             "padding: 10px 13px; font-size: 14px; }"
         )
+        # Set this after the stylesheet; otherwise some native Qt styles
+        # clear autoFillBackground while installing the rule above.
+        self.speech_bubble.setAutoFillBackground(True)
 
         self.work_controls = WorkControlBubble()
         self.coffee_scene_prompt = CoffeeScenePrompt()

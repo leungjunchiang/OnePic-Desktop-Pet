@@ -100,8 +100,10 @@ class WorkControlBubble(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        self.setAutoFillBackground(True)
         self.setStyleSheet(CONTROL_STYLE)
+        # Apply this after the stylesheet: Qt style engines may reset the
+        # property while installing a stylesheet, especially on Windows.
+        self.setAutoFillBackground(True)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(5)
@@ -188,10 +190,10 @@ class WorkDurationBubble(QLabel):
         # Windows desktops.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        self.setAutoFillBackground(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumWidth(100)
         self.setStyleSheet(CONTROL_STYLE)
+        self.setAutoFillBackground(True)
         self.setProperty("paused", False)
         self.hide()
 
@@ -234,11 +236,11 @@ class VisitStatusBubble(QLabel):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        self.setAutoFillBackground(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(False)
         self.setMaximumWidth(640)
         self.setStyleSheet(CONTROL_STYLE)
+        self.setAutoFillBackground(True)
         self.hide()
 
     def _set_content(self, text: str, *, allow_wrap: bool = False) -> None:
@@ -335,8 +337,8 @@ class CoffeeScenePrompt(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        self.setAutoFillBackground(True)
         self.setStyleSheet(CONTROL_STYLE)
+        self.setAutoFillBackground(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)

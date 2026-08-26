@@ -346,8 +346,10 @@ class CompactTodoPanel(QWidget):
         # disappearing into dark wallpapers on Windows/macOS.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        self.setAutoFillBackground(True)
         self.setStyleSheet(COMPACT_TODO_STYLE)
+        # Qt's stylesheet engine can clear this property on some platforms;
+        # set it after the sheet so the panel always paints its backing store.
+        self.setAutoFillBackground(True)
         self.setMinimumWidth(self.MIN_WIDTH)
         self.setMaximumWidth(self.MAX_WIDTH)
 
