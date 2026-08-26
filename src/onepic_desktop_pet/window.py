@@ -25,6 +25,7 @@
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
 - 维护亲密度、精力、无聊度与饱食度的会话内状态；
 - 使用 QTimer 驱动状态切换及水平移动，并限制窗口不脱离当前屏幕。
+- Qt 定时器、平台探测和异步同步回调均设置故障边界，单次失败只记录日志，不终止桌宠进程；
 - 宠物图层使用透明顶层窗口；工作状态、串门和提示卡片使用可读的实色背景，避免平台默认背景造成黑色或透明内容区。
 
 Agent 快速定位：
@@ -53,6 +54,7 @@ import time
 import uuid
 from collections import OrderedDict, deque
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from typing import Callable
 
@@ -262,6 +264,30 @@ def context_menu_position_for_pet(
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _guard_qt_callback(method):
+    """Keep a transient native/API failure from stopping Qt's event loop.
+
+    Timers and queued signal callbacks are invoked by C++ and an exception
+    escaping one of them can terminate a packaged Windows process without a
+    visible error.  The application-level ``QApplication.notify`` guard
+    covers widget events; this decorator covers the callbacks that are
+    invoked directly by ``QTimer.timeout``/worker signals, especially the
+    platform probes used while an external debugger or updater is active.
+    """
+
+    @wraps(method)
+    def guarded(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception("[Qt] callback failed; continuing: %s", method.__qualname__)
+            return None
+
+    return guarded
 SETTINGS_SOURCE_USER_ACTION = "user_action"
 
 
@@ -1207,6 +1233,7 @@ class PetWindow(QWidget):
         painter.end()
         return result
 
+    @_guard_qt_callback
     def _activity_transition_tick(self) -> None:
         """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
 
@@ -1264,6 +1291,7 @@ class PetWindow(QWidget):
             self._remember_cache_item(self._mask_cache, cache_key, region)
         self.setMask(region.translated(self.label.x(), self.label.y()))
 
+    @_guard_qt_callback
     def _effect_tick(self) -> None:
         """推进表情符号的轻微漂浮动画并刷新合成帧。"""
 
@@ -1273,6 +1301,7 @@ class PetWindow(QWidget):
         self._effect_phase = (self._effect_phase + 1) % 12
         self._refresh_pixmap()
 
+    @_guard_qt_callback
     def _animation_tick(self) -> None:
         """推进循环或单次连续帧，并在反向过渡结束后执行回调。"""
 
@@ -1341,6 +1370,7 @@ class PetWindow(QWidget):
         self._position_accessories()
         QTimer.singleShot(0, self._ensure_on_top)
 
+    @_guard_qt_callback
     def _ensure_on_top(self) -> None:
         """恢复原生窗口层级，但绝不激活窗口或夺走当前输入焦点。"""
 
@@ -1653,6 +1683,7 @@ class PetWindow(QWidget):
                 surfaces.append(optional)
         return list(dict.fromkeys(surfaces))
 
+    @_guard_qt_callback
     def _sync_fullscreen_visibility(self) -> None:
         """Temporarily yield only to fullscreen media or games.
 
@@ -1775,6 +1806,7 @@ class PetWindow(QWidget):
         if not self.dragging:
             self.state_timer.start(decision.duration_ms)
 
+    @_guard_qt_callback
     def _state_timeout(self) -> None:
         """处理自主状态到期，并按无互动时长逐级进入坐下与睡眠。"""
 
@@ -2029,6 +2061,7 @@ class PetWindow(QWidget):
         self._pending_idle_seconds = 0
         self._idle_pause_started_at = None
 
+    @_guard_qt_callback
     def _check_input_idle(self) -> None:
         """Apply the only automatic pause rules; never resume from input."""
 
@@ -2090,6 +2123,7 @@ class PetWindow(QWidget):
                     6200,
                 )
 
+    @_guard_qt_callback
     def _ask_idle_recovery(self) -> None:
         """Automatically classify once; show a single hint only if uncertain."""
 
@@ -2193,6 +2227,7 @@ class PetWindow(QWidget):
             and self.work_duration_bubble.isVisible()
         )
 
+    @_guard_qt_callback
     def _movement_tick(self) -> None:
         """按实际经过时间亚像素累计移动，并在屏幕边缘转向。"""
 
@@ -2237,6 +2272,7 @@ class PetWindow(QWidget):
             self.turn_timer.start(self.settings.turn_pause_ms)
         self.move(round(self._movement_x), self.y())
 
+    @_guard_qt_callback
     def _finish_turn(self) -> None:
         """结束屏幕边缘的短暂停顿，并从第一帧恢复行走。"""
 
@@ -2251,6 +2287,7 @@ class PetWindow(QWidget):
                 self._frame_interval(PetState.WALK, self._frame_index)
             )
 
+    @_guard_qt_callback
     def _bob_tick(self) -> None:
         """通过标签轻微上下移动营造呼吸和行走起伏。"""
 
@@ -2422,6 +2459,7 @@ class PetWindow(QWidget):
         )
         self._position_visit_status_bubble()
 
+    @_guard_qt_callback
     def _taunt_chatter_tick(self) -> None:
         """Show a follow-up taunt and schedule the next one if still active."""
 
@@ -2708,6 +2746,7 @@ class PetWindow(QWidget):
         self._refresh_pixmap()
         return True
 
+    @_guard_qt_callback
     def _food_scene_timeout(self) -> None:
         scene = self.economy.active_food_scene()
         if not scene:
@@ -3691,6 +3730,7 @@ class PetWindow(QWidget):
         if self.work_timer.is_running:
             self.work_activity_timer.start(delay_ms or random.randint(150_000, 300_000))
 
+    @_guard_qt_callback
     def _work_activity_tick(self) -> None:
         """在专注动作间轮换，让用户工作时六毛也持续工作。"""
 
@@ -3720,6 +3760,7 @@ class PetWindow(QWidget):
         self._manual_activity_until = time.monotonic() + duration_ms / 1000
         self.activity_timer.start(max(1500, duration_ms))
 
+    @_guard_qt_callback
     def _activity_timeout(self) -> None:
         """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
 
@@ -3731,6 +3772,7 @@ class PetWindow(QWidget):
             random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
         )
 
+    @_guard_qt_callback
     def _work_timer_tick(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
@@ -4848,6 +4890,7 @@ class PetWindow(QWidget):
             self._social_dialog.show()
         self._social_dialog.raise_(); self._social_dialog.activateWindow()
 
+    @_guard_qt_callback
     def _focus_snapshot_changed(self, snapshot: object) -> None:
         self._refresh_shortcut_state()
         self._update_work_duration_bubble(snapshot)
@@ -4939,6 +4982,7 @@ class PetWindow(QWidget):
         if self._social_dialog is not None:
             self._social_dialog.deleteLater(); self._social_dialog = None
 
+    @_guard_qt_callback
     def _social_tick(self) -> None:
         """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
 
@@ -5033,6 +5077,7 @@ class PetWindow(QWidget):
         thread.finished.connect(self._social_thread_finished)
         thread.start()
 
+    @_guard_qt_callback
     def _social_dashboard_received(self, data: dict) -> None:
         """显示新串门提醒，并在双方本地打开双六毛画面。"""
 
@@ -5464,6 +5509,7 @@ class PetWindow(QWidget):
         if self._social_dialog is not None:
             self._social_dialog.outfit_key = remote_outfit
 
+    @_guard_qt_callback
     def _social_sync_failed(self, message: str) -> None:
         """Keep the pet quiet while making an unavailable room understandable."""
 
@@ -5750,6 +5796,7 @@ class PetWindow(QWidget):
         thread.finished.connect(lambda current=thread: self._incoming_visit_response_finished(current))
         thread.start()
 
+    @_guard_qt_callback
     def _incoming_visit_response_completed(self, event: dict, accepted: bool) -> None:
         self._finish_incoming_visit_notice(event)
         nickname = str(event.get("owner_nickname") or event.get("nickname") or "搭子")
@@ -5764,6 +5811,7 @@ class PetWindow(QWidget):
             self.show_speech(f"已拒绝 {nickname} 的互动。", 3200)
         self._schedule_social_tick()
 
+    @_guard_qt_callback
     def _incoming_visit_response_failed(self, event: dict, message: str) -> None:
         notice = self._incoming_visit_notice
         expired_or_already_handled = any(
@@ -5778,11 +5826,13 @@ class PetWindow(QWidget):
             notice.set_busy(False)
         self.show_speech(f"处理互动失败：{message[:120]}", 5200)
 
+    @_guard_qt_callback
     def _incoming_visit_response_finished(self, thread: SocialVisitResponseThread) -> None:
         if thread in self._incoming_visit_response_threads:
             self._incoming_visit_response_threads.remove(thread)
         thread.deleteLater()
 
+    @_guard_qt_callback
     def _social_thread_finished(self) -> None:
         if self._social_thread is not None:
             self._social_thread.deleteLater(); self._social_thread = None
@@ -5815,6 +5865,7 @@ class PetWindow(QWidget):
         save_settings(self.settings)
         self.show_speech("整点报时已开启。" if enabled else "整点报时已关闭。", 3200)
 
+    @_guard_qt_callback
     def _app_awareness_tick(self) -> None:
         """只根据前台应用类别切换配饰动作，不读取标题或文档内容。"""
 
@@ -6470,6 +6521,7 @@ class PetWindow(QWidget):
         if self.settings.automatic_grumbling:
             self.ambient_timer.start(random.randint(8 * 60_000, 18 * 60_000))
 
+    @_guard_qt_callback
     def _night_limited_tick(self) -> None:
         """在本地 00:30–06:30 显示当天限定造型，06:30 到点恢复普通状态。"""
 
@@ -6502,6 +6554,7 @@ class PetWindow(QWidget):
         self.show_speech(reply.text, max(5200, option.duration_ms + 1800))
         return True
 
+    @_guard_qt_callback
     def _ambient_tick(self) -> None:
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
@@ -6597,6 +6650,7 @@ class PetWindow(QWidget):
             base = self.settings.lyric_interval_minutes * 60_000
             self.song_timer.start(max(60_000, round(base * random.uniform(0.85, 1.15))))
 
+    @_guard_qt_callback
     def _song_inspiration_tick(self) -> None:
         """显示本机歌词短行；未选择文件时显示原创歌名意象短句。"""
 
@@ -6614,6 +6668,7 @@ class PetWindow(QWidget):
         finally:
             self._schedule_song_inspiration()
 
+    @_guard_qt_callback
     def _hourly_tick(self) -> None:
         """周期检查整点报时，工作报告改为用户按需打开。"""
 
@@ -6761,6 +6816,7 @@ class PetWindow(QWidget):
         self._show_emotion(random.choice((PetState.HAPPY, PetState.SHY, PetState.SURPRISED)), 1500)
         self.show_speech(random.choice(("巴布达！", "巴——布达。", "巴布达？六毛在呢。")), 2800)
 
+    @_guard_qt_callback
     def _trigger_long_press(self) -> None:
         """长按六毛让他原地睡觉，释放鼠标时不再触发普通点击。"""
 
@@ -6804,6 +6860,7 @@ class PetWindow(QWidget):
             self._show_emotion(state, 1600)
             self.show_speech("摸摸收到。六毛的红毛都开心得翘起来啦。", 3400)
 
+    @_guard_qt_callback
     def _trigger_hover_curiosity(self) -> None:
         """鼠标在宠物附近稳定停留时显示好奇注视。"""
 
@@ -6872,6 +6929,7 @@ class PetWindow(QWidget):
         photo.setDevicePixelRatio(ratio)
         return photo
 
+    @_guard_qt_callback
     def _finish_interaction(self) -> None:
         """结束互动并恢复自主待机。"""
 
@@ -6912,6 +6970,7 @@ class PetWindow(QWidget):
         self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
         event.accept()
 
+    @_guard_qt_callback
     def _show_deferred_context_menu(self) -> None:
         """确认不是双击后，打开六毛本体菜单。"""
 

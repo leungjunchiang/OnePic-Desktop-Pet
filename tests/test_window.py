@@ -1451,6 +1451,37 @@ def test_quick_panel_hover_label_switches_without_click() -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_quick_panel_debounces_report_when_pointer_sweeps_across_work() -> None:
+    """快速扫过开始/暂停按钮时不会闪出整行再留下报告按钮。"""
+
+    app, window = _create_window()
+    panel = window.quick_panel
+    panel.show()
+    app.processEvents()
+
+    panel._button_at_global_pos = lambda _position: panel.work_button
+    panel._set_hover_button(panel.work_button, immediate=False)
+    assert panel._report_show_timer.isActive()
+    assert not panel.report_button.isVisible()
+
+    # Moving to another primary shortcut before the dwell threshold cancels
+    # the pending secondary row and leaves the dock in one stable layout.
+    panel._set_hover_button(panel.music_button, immediate=False)
+    assert not panel._report_show_timer.isActive()
+    assert not panel.report_button.isVisible()
+
+    # A real dwell still reveals exactly one report tile; it does not create a
+    # second row of transient secondary controls.
+    panel._button_at_global_pos = lambda _position: panel.work_button
+    panel._set_hover_button(panel.work_button, immediate=False)
+    panel._show_report_if_pointer_still_on_work()
+    assert panel.report_button.isVisible()
+    assert panel.layout().itemAtPosition(0, 1).widget() is panel.report_button
+    assert panel.layout().itemAtPosition(0, 0) is None
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_quick_panel_hides_report_with_work_shortcut() -> None:
     """工作报告按钮必须和开始/暂停快捷面板同步移动、收起。"""
 

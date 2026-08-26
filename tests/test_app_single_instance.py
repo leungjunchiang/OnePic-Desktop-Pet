@@ -28,6 +28,17 @@ def test_application_controller_has_one_process_local_owner(monkeypatch):
         DesktopPetApplication.__new__(DesktopPetApplication).__init__()
 
 
+def test_production_qapplication_is_resilient_to_event_callback_errors():
+    """Qt event failures are isolated instead of terminating the pet process."""
+
+    from PySide6.QtWidgets import QApplication
+
+    from onepic_desktop_pet.app import ResilientApplication
+
+    assert issubclass(ResilientApplication, QApplication)
+    assert ResilientApplication.notify is not QApplication.notify
+
+
 def test_instance_lock_path_creates_missing_user_directory(monkeypatch, tmp_path):
     """A first launch must not look like a duplicate when Application Support is new."""
 

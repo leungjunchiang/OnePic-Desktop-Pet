@@ -12,6 +12,7 @@
 - 为自动验证提供定时退出的 smoke-test 参数。
 - 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
 - 下载更新进度使用独立的不透明工具对话框，不继承宠物透明窗口的绘制属性。
+- Qt 事件边界捕获单个窗口/定时器回调异常，记录诊断但保持桌宠进程和托盘继续运行。
 - 启动时使用与桌面待办小窗相同的近期待办投影，只在有未读待办时自动展示；
 - 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
@@ -31,10 +32,11 @@ from __future__ import annotations
 import os
 import logging
 import sys
+from functools import wraps
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QLockFile, QProcess, QPoint, QRect, Qt, QTimer, QObject
+from PySide6.QtCore import QEvent, QLockFile, QProcess, QPoint, QRect, Qt, QTimer, QObject
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -70,6 +72,51 @@ from .window import PetWindow
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _guard_qt_callback(method):
+    """Keep worker/tray callbacks from taking down the packaged process."""
+
+    @wraps(method)
+    def guarded(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception(
+                "[Qt] application callback failed; continuing: %s",
+                method.__qualname__,
+            )
+            return None
+
+    return guarded
+
+
+class ResilientApplication(QApplication):
+    """Keep one faulty Qt callback from terminating the desktop pet.
+
+    PySide dispatches timer callbacks, native window notifications and many
+    signal handlers through Qt's event loop.  An exception escaping one of
+    those Python callbacks can otherwise make the Windows process disappear
+    with no user-facing explanation (notably while an external debugger or
+    updater is touching the running application).  Returning ``False`` after
+    logging the failure lets Qt discard only that event; the next timer tick
+    and the tray remain alive.
+    """
+
+    def notify(self, receiver: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
+        try:
+            return bool(super().notify(receiver, event))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception(
+                "[Qt] unhandled event callback; keeping Lili alive receiver=%s event=%s",
+                type(receiver).__name__,
+                getattr(event, "type", lambda: "unknown")(),
+            )
+            return False
 
 
 # QProgressDialog is normally parented to the frameless translucent pet.  On
@@ -135,7 +182,10 @@ class DesktopPetApplication(QObject):
             QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
-        self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        # Use the guarded application in production.  Tests or embedders may
+        # already own a QApplication; in that case we must reuse it rather
+        # than trying to replace Qt's singleton after construction.
+        self.qt_app = QApplication.instance() or ResilientApplication(sys.argv)
         # Keep this controller in the GUI thread. Worker callbacks are
         # connected to methods on this object; QObject affinity makes Qt queue
         # those callbacks back to the main thread before they touch windows,
@@ -189,6 +239,7 @@ class DesktopPetApplication(QObject):
         tray.activated.connect(self._tray_activated)
         return tray
 
+    @_guard_qt_callback
     def _refresh_tray_menu(self) -> None:
         """Re-render dynamic work, visibility, music, and topmost state."""
 
@@ -198,12 +249,14 @@ class DesktopPetApplication(QObject):
         # only its dynamic action tree needs refreshing.
         self.window.refresh_unified_menu(self.tray_menu, "tray")
 
+    @_guard_qt_callback
     def _owner_nickname_changed(self, _owner_nickname: str) -> None:
         """Keep the pet identity fixed while refreshing the rename entry."""
 
         if self.tray is not None:
             self.tray.setToolTip(f"Lili · {PET_NAME}")
 
+    @_guard_qt_callback
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
 
@@ -363,12 +416,14 @@ class DesktopPetApplication(QObject):
         worker.finished.connect(self._program_update_check_finished)
         worker.start()
 
+    @_guard_qt_callback
     def _program_update_check_finished(self) -> None:
         worker = self._program_update_check_worker
         self._program_update_check_worker = None
         if worker is not None:
             worker.deleteLater()
 
+    @_guard_qt_callback
     def _program_update_checked(self, result: object) -> None:
         LOGGER.info("[Update] check_app_update completed result=%r", result)
         if not isinstance(result, ProgramUpdateCheckResult):
@@ -432,6 +487,7 @@ class DesktopPetApplication(QObject):
         elif self._program_update_manual:
             self.window.show_speech("好，先不更新。需要时可以从托盘再次检查。", 3200)
 
+    @_guard_qt_callback
     def _program_update_check_failed(self, message: str) -> None:
         LOGGER.warning("[Update] check_app_update failed: %s", message)
         self.program_update_state = UpdateState.ERROR
@@ -570,6 +626,7 @@ class DesktopPetApplication(QObject):
             chosen = QPoint(x, y)
         progress.move(chosen)
 
+    @_guard_qt_callback
     def _program_download_progress_changed(self, downloaded: int, total: int) -> None:
         progress = self._program_update_progress
         if progress is None:
@@ -599,6 +656,7 @@ class DesktopPetApplication(QObject):
             progress.close()
             progress.deleteLater()
 
+    @_guard_qt_callback
     def _program_update_download_finished(self) -> None:
         worker = self._program_update_download_worker
         self._program_update_download_worker = None
@@ -609,6 +667,7 @@ class DesktopPetApplication(QObject):
         if worker is not None:
             worker.deleteLater()
 
+    @_guard_qt_callback
     def _program_update_download_failed(self, message: str) -> None:
         self._close_program_download_progress()
         self.program_update_state = UpdateState.ERROR
@@ -619,6 +678,7 @@ class DesktopPetApplication(QObject):
             f"原因：{message or '未知错误'}",
         )
 
+    @_guard_qt_callback
     def _program_update_downloaded(self, result: object) -> None:
         self._close_program_download_progress()
         if not isinstance(result, ProgramUpdateResult):
@@ -654,12 +714,14 @@ class DesktopPetApplication(QObject):
         self.window.show_speech("更新程序已启动，六毛先重启一下。", 3000)
         QTimer.singleShot(500, self.quit)
 
+    @_guard_qt_callback
     def _content_update_finished(self) -> None:
         worker = self._content_update_worker
         self._content_update_worker = None
         if worker is not None:
             worker.deleteLater()
 
+    @_guard_qt_callback
     def _content_update_completed(self, result: object) -> None:
         manual = self._content_update_manual
         if not isinstance(result, ContentUpdateResult):
@@ -681,6 +743,7 @@ class DesktopPetApplication(QObject):
                 f"补充了 {len(result.updated_files)} 个内容文件。", 3600
             )
 
+    @_guard_qt_callback
     def _content_update_failed(self, message: str) -> None:
         # Startup checks are intentionally quiet for offline users.  Manual
         # checks provide a useful, non-technical status bubble.

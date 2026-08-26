@@ -4,6 +4,7 @@
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
+工作报告二级按钮使用短暂悬停停留确认，快速扫过工作入口时不会闪出错误的整行按钮。
 """
 
 from __future__ import annotations
@@ -581,6 +582,15 @@ class QuickControlPanel(QWidget):
         self._hover_poll_timer = QTimer(self)
         self._hover_poll_timer.setInterval(60)
         self._hover_poll_timer.timeout.connect(self._poll_hover_button)
+        # Do not materialize the secondary report tile for a pointer that is
+        # merely sweeping across the work shortcut.  A short dwell debounce
+        # prevents the dock from growing/repositioning several times in one
+        # mouse pass, which otherwise leaves a transient row ghost on the
+        # Windows layered window while the pointer is already elsewhere.
+        self._report_show_timer = QTimer(self)
+        self._report_show_timer.setSingleShot(True)
+        self._report_show_timer.setInterval(120)
+        self._report_show_timer.timeout.connect(self._show_report_if_pointer_still_on_work)
         self._report_hide_timer = QTimer(self)
         self._report_hide_timer.setSingleShot(True)
         self._report_hide_timer.setInterval(160)
@@ -706,6 +716,7 @@ class QuickControlPanel(QWidget):
         """Hide the report action together with its parent shortcut dock."""
 
         self._hover_poll_timer.stop()
+        self._report_show_timer.stop()
         self._report_hide_timer.stop()
         self._hide_hint()
         self.report_button.hide()
@@ -721,6 +732,8 @@ class QuickControlPanel(QWidget):
         """Show the work-report secondary action only while work is hovered."""
 
         target = bool(visible)
+        if not target:
+            self._report_show_timer.stop()
         if self.report_button.isVisible() == target:
             return
         if target:
@@ -753,6 +766,12 @@ class QuickControlPanel(QWidget):
         if button in (self.work_button, self.report_button):
             return
         self._set_report_button_visible(False)
+
+    def _show_report_if_pointer_still_on_work(self) -> None:
+        """Materialize the report tile only after a stable work-button hover."""
+
+        if self._button_at_global_pos(QCursor.pos()) is self.work_button:
+            self._set_report_button_visible(True)
 
     def _position_report_button(self) -> None:
         """Keep the legacy positioning hook harmless after layout integration."""
@@ -840,21 +859,31 @@ class QuickControlPanel(QWidget):
             return global_pos()
         return QCursor.pos()
 
-    def _set_hover_button(self, button: QPushButton | None) -> None:
+    def _set_hover_button(
+        self,
+        button: QPushButton | None,
+        *,
+        immediate: bool = True,
+    ) -> None:
         """Keep exactly one hover label in sync with the pointer."""
 
         if button is None:
+            self._report_show_timer.stop()
             if self._hint_button is not None:
                 self._hide_hint()
             self._schedule_report_hide()
             return
         if button in (self.work_button, self.report_button):
             self._report_hide_timer.stop()
-            self._set_report_button_visible(True)
+            if immediate or button is self.report_button:
+                self._set_report_button_visible(True)
+            elif not self.report_button.isVisible() and not self._report_show_timer.isActive():
+                self._report_show_timer.start()
         else:
             # Moving to any other primary shortcut immediately removes the
             # secondary report action. The short timer is reserved for the
             # tiny pointer bridge between work and report themselves.
+            self._report_show_timer.stop()
             self._set_report_button_visible(False)
         if self._hint_button is not button or not self.hover_hint.isVisible():
             self._show_hint(button)
@@ -862,7 +891,10 @@ class QuickControlPanel(QWidget):
     def _poll_hover_button(self) -> None:
         """Repair missing native hover events without changing focus."""
 
-        self._set_hover_button(self._button_at_global_pos(QCursor.pos()))
+        self._set_hover_button(
+            self._button_at_global_pos(QCursor.pos()),
+            immediate=False,
+        )
 
     def eventFilter(self, watched, event) -> bool:
         if self.isVisible() and event.type() in {
@@ -872,7 +904,8 @@ class QuickControlPanel(QWidget):
             # This branch also handles events delivered to the application
             # filter, where watched is not one of our six buttons.
             self._set_hover_button(
-                self._button_at_global_pos(self._event_global_position(event))
+                self._button_at_global_pos(self._event_global_position(event)),
+                immediate=False,
             )
         if watched in getattr(self, "_hover_buttons", ()):
             if event.type() in {
@@ -880,7 +913,7 @@ class QuickControlPanel(QWidget):
                 QEvent.Type.HoverEnter,
                 QEvent.Type.MouseMove,
             }:
-                self._set_hover_button(watched)
+                self._set_hover_button(watched, immediate=False)
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
                 QTimer.singleShot(0, self._poll_hover_button)
         return super().eventFilter(watched, event)
