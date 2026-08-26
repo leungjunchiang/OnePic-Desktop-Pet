@@ -10,7 +10,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
   "lili_buddy_private_notes", "lili_set_buddy_private_note",
-  "lili_sync_personal_state", "lili_sync_focus_history", "lili_focus_weekly_leaderboard",
+  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_focus_weekly_leaderboard",
 ]);
 
 const ROUTE_TO_RPC = new Map([

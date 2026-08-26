@@ -68,6 +68,23 @@ def test_current_elapsed_excludes_previous_checkpoint_segments(tmp_path) -> None
     assert timer.session_seconds() == 3 * 60 * 60 + 90
 
 
+def test_checkpoint_keeps_the_real_current_segment_start_for_reports(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    started_at = timer.current_segment_started_at()
+    clock.advance(65)
+    assert timer.checkpoint()
+
+    # Checkpoints reset only the monotonic display slice.  The report must
+    # continue to draw the segment from its wall-clock start instead of
+    # producing ``now–now``.
+    assert timer.current_segment_started_at() == started_at
+    clock.advance(35)
+    assert timer.current_segment_started_at() == started_at
+
+
 def test_running_work_timer_recovers_last_checkpoint_after_restart(tmp_path) -> None:
     """A crash/restart keeps the saved running session without counting downtime."""
     clock = FakeClock()

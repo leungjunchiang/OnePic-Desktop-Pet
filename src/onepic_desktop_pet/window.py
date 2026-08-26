@@ -2946,6 +2946,7 @@ class PetWindow(QWidget):
             self._record_user_interaction()
             self._reset_idle_episode()
         session_seconds = self.work_timer.session_seconds()
+        segment_started_at = self.work_timer.current_segment_started_at()
         was_running = self.focus_session.pause(reason)
         if was_running and reason in {"idle_10m", "fullscreen_video"}:
             self._away_recovery_reason = reason
@@ -2954,7 +2955,11 @@ class PetWindow(QWidget):
             self._close_away_recovery_card()
         if was_running:
             self.focus_analytics.pause_focus_session()
-            self._record_focus_segment(session_seconds, completed=False)
+            self._record_focus_segment(
+                session_seconds,
+                completed=False,
+                started_at=segment_started_at,
+            )
             # FocusSession emits its pause snapshot before the analytics
             # segment is committed. Publish one more snapshot so the study
             # room and report immediately see the same reconciled day total.
@@ -3020,9 +3025,15 @@ class PetWindow(QWidget):
         room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
         session_id = self.work_timer.focus_session_id
+        segment_started_at = self.work_timer.current_segment_started_at()
         # Commit the final analytics segment while the timer still owns its
         # stable session ID.  The timer is reset immediately afterwards.
-        self._record_focus_segment(session_seconds, completed=True, session_id=session_id)
+        self._record_focus_segment(
+            session_seconds,
+            completed=True,
+            session_id=session_id,
+            started_at=segment_started_at,
+        )
         self.focus_session.finish()
         self.focus_analytics.finish_focus_session(completed=True)
         # The timer is reset by ``finish``; read the just-committed analytics
@@ -3871,6 +3882,7 @@ class PetWindow(QWidget):
         *,
         completed: bool,
         session_id: str | None = None,
+        started_at: datetime | None = None,
     ) -> int:
         """Credit only newly completed WORKING seconds in this session.
 
@@ -3889,7 +3901,16 @@ class PetWindow(QWidget):
                 # to be represented once in the local daily card.
                 self.daily_stats.record_focus(0, completed=True)
             return 0
-        started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
+        # ``started_at`` is captured before pausing the timer.  It survives
+        # timer checkpoints and prevents a resumed/checkpointed segment from
+        # being reconstructed as ``now - now`` or from inheriting a stale
+        # cumulative session start.
+        if started_at is None:
+            started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
+        elif started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            started_at = started_at.astimezone(BEIJING_TIMEZONE)
         self.time_memory.record_focus(
             seconds,
             completed_session=completed,
@@ -4924,6 +4945,10 @@ class PetWindow(QWidget):
                 "today_interruptions": int(analytics.get("today_interruptions") or 0),
                 "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
                 "focus_history": focus_history,
+                # Raw closed intervals are the cross-device source of truth.
+                # Daily/profile totals remain in the payload only for older
+                # relays and are never used to overwrite local facts.
+                "focus_segments": self.focus_analytics.focus_segments_payload(),
                 "outfit_key": self.settings.equipped_outfit,
                 "outfit_set": self._personal_outfit_sync_pending,
             },
@@ -5337,6 +5362,7 @@ class PetWindow(QWidget):
             week_seconds=int(remote_week_seconds or 0),
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
         local_day = self.focus_analytics.period_summary("day")
         if (
             int(local_day.get("local_record_count", 0) or 0) > 0
@@ -5345,7 +5371,7 @@ class PetWindow(QWidget):
             self.work_timer.reconcile_today_seconds(
                 int(local_day.get("total_seconds", 0) or 0)
             )
-        if (analytics_changed or history_changed) and self._social_dialog is not None:
+        if (analytics_changed or history_changed or segment_changed) and self._social_dialog is not None:
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
 
         if "outfit_key" not in profile and "outfit_key" not in personal_state:

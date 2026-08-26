@@ -259,6 +259,33 @@ def test_period_summary_caps_overlapping_quality_time_to_effective_total(tmp_pat
     assert week["high_quality_seconds"] == week["total_seconds"]
 
 
+def test_remote_focus_segments_are_facts_not_daily_maxima(tmp_path) -> None:
+    now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+    )
+    changed = store.merge_remote_segments(
+        {
+            "segments": [
+                {
+                    "segment_id": "remote-1",
+                    "session_id": "remote-session",
+                    "start_at": "2026-08-26T01:00:00Z",
+                    "end_at": "2026-08-26T02:30:00Z",
+                    "completed": True,
+                }
+            ]
+        }
+    )
+    assert changed is True
+    day = store.period_summary("day", now)
+    assert day["total_seconds"] == 90 * 60
+    assert sum(int(item["seconds"]) for item in day["hourly"]) == day["total_seconds"]
+    assert day["focus_intervals"][0]["started_at"].startswith("2026-08-26T09:00")
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
