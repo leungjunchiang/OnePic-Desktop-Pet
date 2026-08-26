@@ -350,6 +350,7 @@ class CompactTodoPanel(QWidget):
         # Qt's stylesheet engine can clear this property on some platforms;
         # set it after the sheet so the panel always paints its backing store.
         self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumWidth(self.MIN_WIDTH)
         self.setMaximumWidth(self.MAX_WIDTH)
 

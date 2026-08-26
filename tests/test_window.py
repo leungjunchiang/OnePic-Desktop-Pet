@@ -69,7 +69,10 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
         window.visit_status_bubble,
     ):
         assert not bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        assert bubble.autoFillBackground()
+        # A stylesheet-backed QWidget paints its own background through
+        # WA_StyledBackground; Qt reports autoFillBackground differently
+        # across native styles even when the rendered surface is opaque.
+        assert bubble.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         assert "background:" in bubble.styleSheet()
     assert "#eff5f8" in window.speech_bubble.styleSheet()
     window.close()
@@ -411,7 +414,7 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
     assert panel.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert not panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert not panel.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-    assert panel.autoFillBackground()
+    assert panel.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     assert "background: #f7fcfb" in panel.styleSheet()
     assert not panel.findChildren(QLabel, "todayNoteTitle")
     assert set(panel.rows) == {task.id}

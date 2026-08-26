@@ -726,6 +726,7 @@ class PetWindow(QWidget):
         # Set this after the stylesheet; otherwise some native Qt styles
         # clear autoFillBackground while installing the rule above.
         self.speech_bubble.setAutoFillBackground(True)
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self.work_controls = WorkControlBubble()
         self.coffee_scene_prompt = CoffeeScenePrompt()

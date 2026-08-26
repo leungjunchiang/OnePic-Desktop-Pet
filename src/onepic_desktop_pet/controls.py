@@ -104,6 +104,7 @@ class WorkControlBubble(QWidget):
         # Apply this after the stylesheet: Qt style engines may reset the
         # property while installing a stylesheet, especially on Windows.
         self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(5)
@@ -194,6 +195,7 @@ class WorkDurationBubble(QLabel):
         self.setMinimumWidth(100)
         self.setStyleSheet(CONTROL_STYLE)
         self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setProperty("paused", False)
         self.hide()
 
@@ -241,6 +243,7 @@ class VisitStatusBubble(QLabel):
         self.setMaximumWidth(640)
         self.setStyleSheet(CONTROL_STYLE)
         self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.hide()
 
     def _set_content(self, text: str, *, allow_wrap: bool = False) -> None:
@@ -339,6 +342,7 @@ class CoffeeScenePrompt(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
         self.setStyleSheet(CONTROL_STYLE)
         self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
