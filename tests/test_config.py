@@ -98,7 +98,8 @@ def test_autonomous_walk_is_off_by_default_and_persistable(tmp_path) -> None:
 def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
     settings = load_settings(override_path=tmp_path / "missing.json")
     assert settings.today_note_mode == "compact"
-    assert settings.today_note_display_mode == "pending"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
     settings.today_note_mode = "compact"
     path = save_settings(settings, tmp_path / "settings.json")
     assert load_settings(override_path=path).today_note_mode == "compact"
@@ -118,11 +119,11 @@ def test_legacy_default_todo_surface_migrates_to_compact(tmp_path) -> None:
     settings = load_settings(override_path=legacy)
 
     assert settings.today_note_mode == "compact"
-    assert settings.today_note_display_mode == "pending"
-    assert settings.today_note_defaults_version == 2
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
 
 
-def test_old_compact_todo_policy_migrates_to_pending(tmp_path) -> None:
+def test_old_compact_todo_policy_migrates_to_auto_show(tmp_path) -> None:
     legacy = tmp_path / "legacy-settings.json"
     legacy.write_text(
         json.dumps(
@@ -138,8 +139,52 @@ def test_old_compact_todo_policy_migrates_to_pending(tmp_path) -> None:
     settings = load_settings(override_path=legacy)
 
     assert settings.today_note_mode == "compact"
-    assert settings.today_note_display_mode == "pending"
-    assert settings.today_note_defaults_version == 2
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+
+
+def test_transitional_hidden_todo_policy_migrates_to_auto_show(tmp_path) -> None:
+    """A v2 compact strip must not remain hidden after an application restart."""
+
+    legacy = tmp_path / "legacy-hidden-settings.json"
+    legacy.write_text(
+        json.dumps(
+            {
+                "today_note_mode": "compact",
+                "today_note_display_mode": "hidden",
+                "today_note_defaults_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+
+
+def test_legacy_fully_hidden_todo_surface_migrates_to_compact(tmp_path) -> None:
+    """Older hidden-mode settings regain the new default compact surface."""
+
+    legacy = tmp_path / "legacy-hidden-surface.json"
+    legacy.write_text(
+        json.dumps(
+            {
+                "today_note_mode": "hidden",
+                "today_note_display_mode": "hidden",
+                "today_note_defaults_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
 
 
 def test_content_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:

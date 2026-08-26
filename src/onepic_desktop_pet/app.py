@@ -13,7 +13,7 @@
 - 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
 - 下载更新进度使用独立的不透明工具对话框，不继承宠物透明窗口的绘制属性。
 - Qt 事件边界捕获单个窗口/定时器回调异常，记录诊断但保持桌宠进程和托盘继续运行。
-- 启动时使用与桌面待办小窗相同的近期待办投影，只在有未读待办时自动展示；
+- 启动时触发与桌面待办小窗相同的近期待办投影；有未读待办就显示，空投影由面板自动隐藏；
 - 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
 Agent 快速定位：
@@ -287,7 +287,7 @@ class DesktopPetApplication(QObject):
 
         self.window.place_at_start()
         self.show_window()
-        paper_mode = getattr(self.settings, "today_note_display_mode", "pending")
+        paper_mode = getattr(self.settings, "today_note_display_mode", "always")
         note_style = getattr(self.settings, "today_note_mode", "compact")
         # Use the same upcoming projection as the compact strip. The old
         # ``todos.pending()`` check only looked at today's raw records and
@@ -297,9 +297,10 @@ class DesktopPetApplication(QObject):
             paper_mode == "pending" and has_pending_todos
         ) or bool(getattr(self.settings, "today_note_autoshow", False))
         if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
-            # A pending note may be shown at startup, but startup UI must
-            # never steal the user's current editor/browser focus.  Explicit
-            # user actions still open the normal interactive note window.
+            # Startup UI must never steal the user's current editor/browser
+            # focus.  The compact panel hides itself when the shared Todo
+            # projection is empty; explicit user actions still open the
+            # normal interactive note window.
             QTimer.singleShot(300, lambda: self.window.show_today_note(passive=True))
         if self.tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()

@@ -594,7 +594,14 @@ class PetWindow(QWidget):
         self._economy_sync_pending = False
         self._economy_sync_user_id = ""
         self._personal_outfit_sync_pending = False
-        self._login_reward_unlocked = False
+        self._personal_outfit_sync_user_id = ""
+        # Keep a previously confirmed account reward usable immediately after
+        # restart.  The server still remains authoritative for new accounts;
+        # this local hint only prevents a saved, already-equipped wardrobe
+        # from flashing back to the classic sprite while the login RPC loads.
+        self._login_reward_unlocked = (
+            self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        )
         self._buddy_visit_window = BuddyVisitWindow()
         self.visit_status_bubble = VisitStatusBubble()
         self._seen_visit_ids: set[str] = set()
@@ -3492,7 +3499,7 @@ class PetWindow(QWidget):
         if self._today_note_window is not None:
             self._today_note_window.refresh()
         compact_mode = str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
-        display_mode = str(getattr(self.settings, "today_note_display_mode", "pending"))
+        display_mode = str(getattr(self.settings, "today_note_display_mode", "always"))
         if self._compact_todo_panel is None:
             # A Todo can be created from the center window before the compact
             # accessory has ever been instantiated.  In compact mode, create
@@ -3549,7 +3556,7 @@ class PetWindow(QWidget):
             if (
                 self._compact_todo_panel is None
                 and str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
-                and str(getattr(self.settings, "today_note_display_mode", "pending")) != "hidden"
+                and str(getattr(self.settings, "today_note_display_mode", "always")) != "hidden"
             ):
                 self.show_compact_todos()
 
@@ -4997,8 +5004,17 @@ class PetWindow(QWidget):
             self._economy_sync_user_id = user_id
             # The server is authoritative when an account is opened on a new
             # computer.  An explicit local outfit change is the only action
-            # allowed to write the durable outfit key back.
-            self._personal_outfit_sync_pending = False
+            # allowed to write the durable outfit key back.  Keep a pending
+            # selection made before the first heartbeat (for example while a
+            # freshly signed-in user opens 百变六毛); discard it only when it
+            # is known to belong to a different account.
+            if (
+                self._personal_outfit_sync_pending
+                and self._personal_outfit_sync_user_id
+                and self._personal_outfit_sync_user_id != user_id
+            ):
+                self._personal_outfit_sync_pending = False
+                self._personal_outfit_sync_user_id = ""
             self._sync_economy_events(
                 [event.as_dict() for event in self.economy.events]
             )
@@ -5088,7 +5104,23 @@ class PetWindow(QWidget):
         }
         self._merge_remote_personal_state(data)
         if self._personal_outfit_sync_pending and not data.get("_sync_offline"):
-            self._personal_outfit_sync_pending = False
+            # A local wardrobe choice is a pending write.  Do not clear the
+            # fence merely because an online dashboard arrived: older
+            # deployments can echo the previous profile value for several
+            # cycles.  Release the fence only after the server returns the
+            # exact selected key, otherwise the next heartbeat would undo the
+            # user's choice.
+            personal_state = data.get("_personal_state")
+            personal_state = personal_state if isinstance(personal_state, dict) else {}
+            if "outfit_key" in personal_state:
+                remote_outfit = str(personal_state.get("outfit_key") or "")[:60]
+            else:
+                profile = data.get("me")
+                profile = profile if isinstance(profile, dict) else {}
+                remote_outfit = str(profile.get("outfit_key") or "")[:60]
+            if remote_outfit == self.settings.equipped_outfit:
+                self._personal_outfit_sync_pending = False
+                self._personal_outfit_sync_user_id = ""
 
         # The sync thread already fetched this dashboard.  Render that exact
         # payload instead of issuing a second blocking request from the UI
@@ -5490,6 +5522,13 @@ class PetWindow(QWidget):
             else profile.get("outfit_key")
         )
         remote_outfit = str(remote_outfit_value or "")[:60]
+        # Do not let a stale profile/dashboard response overwrite an explicit
+        # local selection while its durable sync is still in flight.  This is
+        # particularly important for the account-bound three-day login outfit
+        # on a second computer or an older relay that still returns the old
+        # profile value.
+        if self._personal_outfit_sync_pending:
+            return
         allowed_outfits = {
             item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
         }
@@ -5542,7 +5581,18 @@ class PetWindow(QWidget):
 
         if not signed_in:
             self._economy_sync_user_id = ""
+            self._personal_outfit_sync_pending = False
+            self._personal_outfit_sync_user_id = ""
             return
+        if (
+            self._personal_outfit_sync_pending
+            and self._personal_outfit_sync_user_id
+            and self._personal_outfit_sync_user_id != account_id
+        ):
+            # A pending selection belongs to the account that made it.  Do
+            # not carry it across an explicit account switch.
+            self._personal_outfit_sync_pending = False
+            self._personal_outfit_sync_user_id = ""
         self._economy_sync_user_id = ""
         self._schedule_social_tick()
 
@@ -5551,10 +5601,17 @@ class PetWindow(QWidget):
 
         if not isinstance(result, dict):
             return
-        unlocked = bool(result.get("reward_unlocked"))
+        selected_reward = self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        if "reward_unlocked" in result:
+            unlocked = bool(result.get("reward_unlocked"))
+        else:
+            # A successful login can arrive before the optional streak RPC
+            # has returned.  An empty payload is not evidence that a reward
+            # previously equipped by this account has become unavailable.
+            unlocked = self._login_reward_unlocked
         newly_unlocked = bool(result.get("newly_unlocked"))
         was_unlocked = self._login_reward_unlocked
-        self._login_reward_unlocked = unlocked
+        self._login_reward_unlocked = unlocked or selected_reward
         if newly_unlocked and not was_unlocked:
             self._set_temporary_activity("happy", 30_000)
             self.show_speech(
@@ -6005,6 +6062,12 @@ class PetWindow(QWidget):
         self.settings.equipped_outfit = outfit_key
         save_settings(self.settings)
         self._personal_outfit_sync_pending = True
+        self._personal_outfit_sync_user_id = self._current_social_user_id()
+        if self._social_dialog is not None:
+            # The social window keeps a local member projection.  Update it in
+            # the same UI turn so it cannot repaint the previous outfit before
+            # the next heartbeat confirms the durable profile write.
+            self._social_dialog.outfit_key = outfit_key
         # Cancel a half-finished action cross-fade so the newly selected outfit
         # is visible immediately, even while a transient work action is ending.
         self.activity_transition_timer.stop()

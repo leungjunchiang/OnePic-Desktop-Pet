@@ -490,7 +490,7 @@ class TodayNoteWindow(QDialog):
         policy.addItem("有待办时显示", "pending")
         policy.addItem("始终显示", "always")
         policy.addItem("不自动显示", "hidden")
-        current_policy = str(getattr(self.settings, "today_note_display_mode", "pending"))
+        current_policy = str(getattr(self.settings, "today_note_display_mode", "always"))
         policy.setCurrentIndex(max(0, policy.findData(current_policy)))
         form.addRow("自动显示", policy)
         topmost = QCheckBox("窗口置顶", dialog)

@@ -355,6 +355,46 @@ def test_remote_daily_snapshot_never_mutates_local_timer_bucket(monkeypatch) -> 
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_pending_outfit_selection_is_not_replaced_by_stale_dashboard(monkeypatch) -> None:
+    """A delayed profile response must not undo a newly selected login outfit."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window._login_reward_unlocked = True
+    window.settings.equipped_outfit = "login-3-day"
+    window._personal_outfit_sync_pending = True
+
+    window._merge_remote_personal_state(
+        {
+            "data_source": "server",
+            "me": {"outfit_key": "hour-01"},
+        }
+    )
+
+    assert window.settings.equipped_outfit == "login-3-day"
+    assert window._personal_outfit_sync_pending is True
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_confirmed_outfit_response_releases_pending_selection_fence(monkeypatch) -> None:
+    """The pending fence ends only after the server echoes the selected key."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.settings.equipped_outfit = "login-3-day"
+    window._personal_outfit_sync_pending = True
+    window._social_dashboard_received(
+        {
+            "data_source": "server",
+            "_personal_state": {"outfit_key": "login-3-day"},
+        }
+    )
+
+    assert window._personal_outfit_sync_pending is False
+    assert window.settings.equipped_outfit == "login-3-day"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
     app, window = _create_window()
     assert window.settings.allow_autonomous_walk is False

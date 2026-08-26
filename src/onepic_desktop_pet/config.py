@@ -7,7 +7,7 @@
 - 持久化“始终置顶/桌面模式”，默认采用不抢焦点的 QQ 宠物式置顶行为；
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
 - 持久化键鼠空闲/视频全屏自动暂停及返回后的“继续工作”提醒偏好；
-- 默认采用“有未读待办时显示”的紧凑待办策略，并兼容旧版显示策略；
+- 默认启动时显示紧凑待办；没有未读待办时由共享投影自动隐藏，并兼容旧版显示策略；
 - 仅在用户配置目录保存窗口、AI 提供方、陪伴开关和音乐 Provider 成败统计，不保存任何 API 令牌。
 
 Agent 快速定位：
@@ -132,11 +132,12 @@ class PetSettings:
     local_lyrics_path: str = ""
     lyric_interval_minutes: int = 8
     equipped_outfit: str = ""
-    # Show the lightweight Todo strip while unfinished unread work exists;
-    # hide it once all items are read or completed.
-    today_note_display_mode: str = "pending"
+    # Ask the compact Todo strip to show on startup.  The panel itself uses
+    # the shared unfinished/unread projection and hides when that projection
+    # is empty, so a restart cannot silently hide existing work.
+    today_note_display_mode: str = "always"
     today_note_mode: str = "compact"
-    today_note_defaults_version: int = 2
+    today_note_defaults_version: int = 3
     today_note_always_on_top: bool = False
     today_note_autoshow: bool = False
     today_note_folded: bool = False
@@ -306,10 +307,10 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.lyric_interval_minutes = min(120, max(2, int(settings.lyric_interval_minutes)))
     settings.equipped_outfit = str(settings.equipped_outfit)[:60]
     if settings.today_note_display_mode not in {"always", "pending", "hidden"}:
-        settings.today_note_display_mode = "pending"
+        settings.today_note_display_mode = "always"
     if settings.today_note_mode not in {"detailed", "compact", "hidden"}:
         settings.today_note_mode = "compact"
-    settings.today_note_defaults_version = max(2, int(settings.today_note_defaults_version))
+    settings.today_note_defaults_version = max(3, int(settings.today_note_defaults_version))
     settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
     settings.today_note_folded = bool(settings.today_note_folded)
@@ -413,12 +414,13 @@ def load_settings(
         base["auto_pause_on_fullscreen_video"] = True
         base["work_timer_policy_version"] = 1
     # v0.23.42 changed the product default from the old detailed/pending
-    # combination to the compact Todo strip shown on the desktop. Version 2
-    # makes the new default explicit: compact mode auto-shows while there is
-    # unfinished unread work. Upgrade old compact defaults once so a machine
-    # that inherited ``always``/``hidden`` does not remain stuck with a
-    # permanently hidden strip; users can still choose either policy again
-    # in 待办显示设置.
+    # combination to the compact Todo strip shown on the desktop. Version 3
+    # makes the startup behavior explicit: the compact strip is asked to show
+    # on launch, and its own shared projection hides the empty state. This
+    # preserves the requested "show while there is a Todo" behavior without
+    # leaving a blank frame on the desktop. Older installs may have persisted
+    # ``pending``/``hidden`` from the transitional policy; migrate those once
+    # so a restart cannot silently hide existing work.
     try:
         stored_note_version = int(override.get("today_note_defaults_version", 0) or 0)
     except (TypeError, ValueError):
@@ -435,6 +437,22 @@ def load_settings(
         ):
             base["today_note_display_mode"] = "pending"
         base["today_note_defaults_version"] = 2
+    if stored_note_version < 3:
+        raw_note_mode = str(base.get("today_note_mode") or "")
+        raw_display_mode = str(base.get("today_note_display_mode") or "")
+        if raw_note_mode == "hidden":
+            # ``完全隐藏`` was a transitional compact-surface state in older
+            # builds.  The new default is the compact strip, which still
+            # hides itself when the shared projection is empty.
+            base["today_note_mode"] = "compact"
+            raw_note_mode = "compact"
+        if raw_note_mode in {"", "compact"} and raw_display_mode in {
+            "",
+            "pending",
+            "hidden",
+        }:
+            base["today_note_display_mode"] = "always"
+        base["today_note_defaults_version"] = 3
     return _validated(base)
 
 

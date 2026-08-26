@@ -262,3 +262,18 @@ def test_hourly_outfit_library_is_transparent_consistent_and_uncropped() -> None
             assert bbox is not None, path.name
             assert bbox[0] >= 34 and bbox[1] >= 34, path.name
             assert bbox[2] <= 990 and bbox[3] <= 990, path.name
+
+
+def test_three_day_login_outfit_is_complete_transparent_and_uncropped() -> None:
+    """登录奖励素材必须是完整 PNG，不能被截断成半套娃衣。"""
+
+    path = PROJECT_ROOT / "assets" / "pet" / "login-rewards" / "3-day-login.png"
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        assert rgba.size == (1254, 1254)
+        assert alpha.getextrema()[0] == 0
+        bbox = alpha.getbbox()
+        assert bbox is not None
+        assert bbox[0] >= 34 and bbox[1] >= 20
+        assert bbox[2] <= 1220 and bbox[3] <= 1234
