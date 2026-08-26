@@ -6816,6 +6816,14 @@ class PetWindow(QWidget):
         y = self.y() + max(0, (self.height() - self.photo_bubble.height()) // 2)
         self.photo_bubble.move(x, y)
         self._show_nonactivating(self.photo_bubble)
+        # Some Qt/macOS backends apply a native frame offset when a detached
+        # translucent window is first shown.  Correct against the actual
+        # top-level coordinate so the visible photo edge remains exactly
+        # ``gap`` pixels from the character mask (and does not drift by the
+        # platform's invisible frame margin).
+        actual_x = self.photo_bubble.x()
+        if actual_x != x:
+            self.photo_bubble.move(x + (x - actual_x), y)
         self.photo_timer.start(3800)
 
     def _scaled_selfie_photo(self, ratio: float) -> QPixmap:
