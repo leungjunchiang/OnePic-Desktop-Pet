@@ -185,16 +185,14 @@ class WorkDurationBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        # These labels are readable utility surfaces rather than transparent
-        # pet pixels.  Use a solid backing store so the rounded fill and
-        # border remain visible on dark wallpapers and on non-composited
-        # Windows desktops.
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        # Keep the rounded card fill visible while letting the pixels outside
+        # its corners remain transparent (no rectangular halo on the desktop).
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumWidth(100)
         self.setStyleSheet(CONTROL_STYLE)
-        self.setAutoFillBackground(True)
+        self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setProperty("paused", False)
         self.hide()
@@ -236,13 +234,13 @@ class VisitStatusBubble(QLabel):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(False)
         self.setMaximumWidth(640)
         self.setStyleSheet(CONTROL_STYLE)
-        self.setAutoFillBackground(True)
+        self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.hide()
 

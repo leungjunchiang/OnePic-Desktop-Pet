@@ -59,19 +59,17 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     for accessory in (window.quick_panel, window.work_controls, window.work_duration_bubble):
         assert accessory.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
         assert accessory.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    # The photo is an image-only transparent layer.  Readable text/status
-    # cards deliberately use an opaque backing so dark wallpapers cannot
-    # swallow their border and text.
+    # The photo and the rounded text/status cards are translucent windows;
+    # their stylesheet paints the card while leaving the outside corners
+    # transparent.
     assert window.photo_bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     for bubble in (
         window.speech_bubble,
         window.work_duration_bubble,
         window.visit_status_bubble,
     ):
-        assert not bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # A stylesheet-backed QWidget paints its own background through
-        # WA_StyledBackground; Qt reports autoFillBackground differently
-        # across native styles even when the rendered surface is opaque.
+        assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         assert "background:" in bubble.styleSheet()
     assert "#eff5f8" in window.speech_bubble.styleSheet()
@@ -412,10 +410,9 @@ def test_compact_todo_panel_is_frameless_and_keeps_only_todos(tmp_path) -> None:
 
     assert panel.windowTitle() == ""
     assert panel.windowFlags() & Qt.WindowType.FramelessWindowHint
-    assert not panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-    assert not panel.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-    assert panel.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-    assert "background: #f7fcfb" in panel.styleSheet()
+    assert panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert panel.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+    assert "background: transparent" in panel.styleSheet()
     assert not panel.findChildren(QLabel, "todayNoteTitle")
     assert set(panel.rows) == {task.id}
     assert panel.rows[task.id].checkbox.isChecked() is False

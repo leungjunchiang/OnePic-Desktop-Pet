@@ -704,8 +704,11 @@ class PetWindow(QWidget):
         # Speech/status cards are readable UI, not pet pixels.  A solid
         # backing prevents dark wallpapers from bleeding through the card and
         # making the text appear to vanish on Windows/macOS.
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        # The card fill remains opaque, while the pixels outside its rounded
+        # corners stay transparent. This avoids a rectangular halo over the
+        # desktop without sacrificing contrast for the text.
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.speech_bubble.setWordWrap(True)
         bubble_font = QFont()
         bubble_font.setFamilies(
@@ -725,7 +728,7 @@ class PetWindow(QWidget):
         )
         # Set this after the stylesheet; otherwise some native Qt styles
         # clear autoFillBackground while installing the rule above.
-        self.speech_bubble.setAutoFillBackground(True)
+        self.speech_bubble.setAutoFillBackground(False)
         self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self.work_controls = WorkControlBubble()

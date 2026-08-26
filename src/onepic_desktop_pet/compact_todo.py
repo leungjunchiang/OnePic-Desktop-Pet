@@ -5,9 +5,9 @@ It is a frameless tool window with no title, statistics, chat text, or
 dashboard chrome.  ``PetWindow`` owns its lifetime and repositions it below
 the pet whenever the pet moves.  The accessory hides itself when there are no
 unfinished/unread entries, and is restored when a new visible Todo is added.
-Unlike the pet silhouette and its speech bubbles, this is an ordinary
-readable utility panel with an opaque backing surface so it stays visible on
-dark wallpapers and when platform composition is unavailable.
+The container and row surfaces are transparent so the strip does not cover
+the desktop; only the task text, check indicators, and the ``…``/``+``
+controls paint visible surfaces.
 """
 
 from __future__ import annotations
@@ -63,13 +63,13 @@ def compact_todo_candidates(memory: TimeMemory) -> list[Any]:
 
 COMPACT_TODO_STYLE = """
 QWidget#compactTodoPanel {
-    background: #f7fcfb;
-    border: 1px solid #5c9da0;
-    border-radius: 12px;
+    background: transparent;
+    border: 0;
 }
-QWidget#todoRows { background: #f7fcfb; border: 0; }
-QWidget#todoActionColumn { background: #f7fcfb; border: 0; }
-QScrollArea { background: #f7fcfb; border: 0; }
+QWidget#todoRows { background: transparent; border: 0; }
+QWidget#todoActionColumn { background: transparent; border: 0; }
+QScrollArea { background: transparent; border: 0; }
+QWidget#todoViewport { background: transparent; border: 0; }
 QCheckBox { spacing: 6px; color: #183c4c; }
 QCheckBox::indicator { width: 16px; height: 16px; }
 QCheckBox::indicator:unchecked {
@@ -88,22 +88,22 @@ QToolButton#addButton {
     min-width: 32px; max-width: 32px;
     min-height: 32px; max-height: 32px;
     color: #557681;
-    background: rgba(230, 244, 240, 180);
-    border: 1px solid rgba(112, 173, 170, 95);
+    background: #e6f4f0;
+    border: 1px solid #70adaA;
     border-radius: 8px;
     padding: 0;
 }
 QToolButton#addButton:hover {
     color: #0b625f;
-    background: rgba(190, 231, 224, 220);
-    border-color: rgba(36, 128, 128, 150);
+    background: #bee7e0;
+    border-color: #248080;
 }
 QToolButton#moreButton {
     min-width: 32px; max-width: 32px;
     min-height: 32px; max-height: 32px;
     color: #315765;
-    background: rgba(214, 238, 233, 210);
-    border: 1px solid rgba(73, 137, 141, 125);
+    background: #d6eee9;
+    border: 1px solid #49898d;
     border-radius: 8px;
     padding: 0;
     font-size: 17px;
@@ -111,8 +111,8 @@ QToolButton#moreButton {
 }
 QToolButton#moreButton:hover {
     color: #0b625f;
-    background: rgba(182, 227, 217, 235);
-    border-color: rgba(36, 128, 128, 180);
+    background: #b6e3d9;
+    border-color: #248080;
 }
 QToolButton#moreButton:pressed {
     color: #ffffff;
@@ -341,16 +341,12 @@ class CompactTodoPanel(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        # This panel is readable UI, not part of the transparent pet
-        # silhouette.  A solid backing prevents text and controls from
-        # disappearing into dark wallpapers on Windows/macOS.
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        # The container is intentionally transparent so it does not cover
+        # the desktop. Individual controls keep their own solid surfaces.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setStyleSheet(COMPACT_TODO_STYLE)
-        # Qt's stylesheet engine can clear this property on some platforms;
-        # set it after the sheet so the panel always paints its backing store.
-        self.setAutoFillBackground(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAutoFillBackground(False)
         self.setMinimumWidth(self.MIN_WIDTH)
         self.setMaximumWidth(self.MAX_WIDTH)
 
@@ -359,12 +355,16 @@ class CompactTodoPanel(QWidget):
         root.setSpacing(self.PANEL_GAP)
 
         self.rows_scroll = QScrollArea(self)
+        self.rows_scroll.setObjectName("todoScroll")
         self.rows_scroll.setWidgetResizable(False)
         self.rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.rows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.rows_scroll.setContentsMargins(0, 0, 0, 0)
         self.rows_scroll.viewport().setContentsMargins(0, 0, 0, 0)
+        self.rows_scroll.viewport().setObjectName("todoViewport")
+        self.rows_scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.rows_scroll.viewport().setStyleSheet("background: transparent; border: 0;")
         self.rows_container = QWidget(self.rows_scroll)
         self.rows_container.setObjectName("todoRows")
         self.rows_layout = QVBoxLayout(self.rows_container)
