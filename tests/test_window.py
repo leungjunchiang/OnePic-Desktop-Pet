@@ -66,7 +66,9 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
         window.visit_status_bubble,
     ):
         assert bubble.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        assert not bubble.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        # The rounded bubbles must keep their own stylesheet paint (the
+        # translucent flag already prevents an opaque native rectangle).
+        assert "background:" in bubble.styleSheet()
     window.close()
     window.deleteLater()
     app.processEvents()
