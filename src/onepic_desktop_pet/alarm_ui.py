@@ -615,8 +615,14 @@ class AlarmCard(QDialog):
         lifecycle_log("alarm.popup.show.request", self, alarm_id=str(self.alarm.id))
         self._state = AlarmPopupState.UNSEEN
         self.show()
-        self.raise_()
-        self.activateWindow()
+        # Headless Qt platforms do not have a native foreground window.  In
+        # particular, macOS's offscreen backend can block in raise_/activate
+        # while handling a top-level show.  The real desktop path still uses
+        # both calls; the headless path only needs the widget to be shown so
+        # that lifecycle and audio scheduling can be tested deterministically.
+        if QApplication.platformName().casefold() not in {"offscreen", "minimal"}:
+            self.raise_()
+            self.activateWindow()
         self._queue_temporary_topmost(True)
         # Let the native window manager commit the show/activation before the
         # first sound. This is important for both AppKit and Windows.
