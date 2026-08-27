@@ -577,6 +577,39 @@ def test_compact_todo_panel_shows_important_date_without_ordinary_todos(tmp_path
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_work_report_keeps_visible_compact_todos_open(tmp_path) -> None:
+    """Opening and closing the report must not change the Todo accessory."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("报告关闭后仍要显示")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show()
+    app.processEvents()
+
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+
+    window.show_work_report()
+    app.processEvents()
+    assert window._work_report_dialog is not None
+    assert panel.isVisible()
+    assert panel.visible_task_ids
+
+    window._work_report_dialog.close()
+    app.processEvents()
+    assert panel.isVisible()
+    assert panel.visible_task_ids
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
     app, window = _create_window()
     assert window.settings.allow_autonomous_walk is False

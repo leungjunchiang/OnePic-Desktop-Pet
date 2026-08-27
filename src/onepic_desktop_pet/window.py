@@ -27,6 +27,7 @@
 - 使用 QTimer 驱动状态切换及水平移动，并限制窗口不脱离当前屏幕。
 - Qt 定时器、平台探测和异步同步回调均设置故障边界，单次失败只记录日志，不终止桌宠进程；
 - 宠物图层使用透明顶层窗口；工作状态、串门和提示卡片使用可读的实色背景，避免平台默认背景造成黑色或透明内容区。
+- 桌面待办浮层独立于工作报告窗口，两个窗口可以同时显示且互不改变可见状态。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -494,7 +495,6 @@ class PetWindow(QWidget):
         self._compact_todo_panel: CompactTodoPanel | None = None
         self._restore_compact_todos_after_show = False
         self._compact_todos_manually_hidden = False
-        self._restore_compact_todos_after_report = False
         self._time_memory_window: TimeMemoryWindow | None = None
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
@@ -3351,10 +3351,6 @@ class PetWindow(QWidget):
                 self.settings.today_note_mode = "compact"
                 save_settings(self.settings)
         self._record_user_interaction()
-        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
-            # The report is a normal independent window; its content must not
-            # be covered by the desktop Todo accessory while it is open.
-            return
         if self._today_note_window is not None:
             self._today_note_window.hide()
         self._restore_compact_todos_after_show = True
@@ -3380,19 +3376,19 @@ class PetWindow(QWidget):
         # both automatic startup/refresh and the manual “显示待办” command.
         # Only the checkbox (complete) or explicit deletion removes it.
         has_visible_tasks = panel.refresh(include_read=True)
-        lifecycle_log(
-            "todo.show.result",
-            panel,
-            manual=manual,
-            display_item_count=len(panel.visible_task_ids),
-            visible=has_visible_tasks,
-        )
         if not has_visible_tasks:
             # An empty compact strip is not a useful accessory.  Keep the
             # widget instance so a later Todo write can reuse it, but do not
             # show it (or its ⋯/＋ action rail).
             self._restore_compact_todos_after_show = False
             panel.hide()
+            lifecycle_log(
+                "todo.show.result",
+                panel,
+                manual=manual,
+                display_item_count=len(panel.visible_task_ids),
+                visible=False,
+            )
             return
         self._show_nonactivating(
             panel,
@@ -3407,6 +3403,13 @@ class PetWindow(QWidget):
         # the label or the trailing menu button.  The panel itself never
         # accepts focus, so this does not steal keyboard input.
         self._raise_accessory(panel)
+        lifecycle_log(
+            "todo.show.result",
+            panel,
+            manual=manual,
+            display_item_count=len(panel.visible_task_ids),
+            visible=bool(panel.isVisible()),
+        )
 
     @staticmethod
     def _qt_object_is_alive(widget: object | None) -> bool:
@@ -4684,14 +4687,6 @@ class PetWindow(QWidget):
             now=moment,
         )
 
-    def _restore_compact_todos_after_report_close(self) -> None:
-        """Restore the Todo strip only if it was visible before the report."""
-
-        should_restore = bool(self._restore_compact_todos_after_report)
-        self._restore_compact_todos_after_report = False
-        if should_restore and not bool(getattr(self, "_manually_hidden", False)):
-            self.show_compact_todos()
-
     def show_work_report(self) -> None:
         """Open the live day/week/month report without creating a local image."""
 
@@ -4700,9 +4695,6 @@ class PetWindow(QWidget):
         # Close the floating shortcut first. Showing both top-level windows
         # in one mouse event can leave the report behind the dock on macOS.
         self.quick_panel.hide()
-        if self._compact_todo_panel is not None:
-            self._restore_compact_todos_after_report = self._compact_todo_panel.isVisible()
-            self._compact_todo_panel.hide()
         if self._work_report_dialog is None:
             self._work_report_dialog = WorkReportDialog(
                 self._work_report_snapshot,
@@ -4716,7 +4708,6 @@ class PetWindow(QWidget):
                 )
             )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
-            self._work_report_dialog.closed.connect(self._restore_compact_todos_after_report_close)
         self._work_report_dialog.refresh()
         self._work_report_dialog.showNormal()
         self._work_report_dialog.raise_()
