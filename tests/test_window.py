@@ -1157,7 +1157,12 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
 
     app, window = _create_window()
     window.quick_panel.show()
-    window.work_duration_bubble.show()
+    # The duration bubble is a projection of an active focus session.  Showing
+    # it by hand leaves the model idle, so the restore refresh can correctly
+    # hide it on some Qt/offscreen backends (notably macOS Intel).  Start the
+    # smallest real session state instead of testing an impossible surface.
+    window.focus_session.start()
+    window._update_work_duration_bubble()
     app.processEvents()
     assert window.isVisible()
     assert window.quick_panel.isVisible()
