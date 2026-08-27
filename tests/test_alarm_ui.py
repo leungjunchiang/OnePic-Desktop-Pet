@@ -10,6 +10,15 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+if (
+    sys.platform == "darwin"
+    and os.environ.get("QT_QPA_PLATFORM", "").casefold() in {"offscreen", "minimal"}
+):
+    pytest.skip(
+        "macOS headless Qt cannot exercise native alarm windows safely",
+        allow_module_level=True,
+    )
+
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
@@ -23,11 +32,6 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin"
-    and os.environ.get("QT_QPA_PLATFORM", "").casefold() in {"offscreen", "minimal"},
-    reason="macOS headless Qt cannot exercise native foreground z-order safely",
-)
 def test_alarm_card_changes_native_z_order_without_mutating_qt_flags() -> None:
     app = _app()
     card = AlarmCard(
