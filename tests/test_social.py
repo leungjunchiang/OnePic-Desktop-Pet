@@ -97,6 +97,23 @@ def test_auth_session_manager_single_flight_refreshes_once_for_concurrent_caller
     assert {result.refresh_token for result in results if result is not None} == {"new-refresh"}
 
 
+def test_ephemeral_auth_managers_do_not_reuse_another_clients_session():
+    first = AuthSessionManager(
+        service_name="LiliSocialTest",
+        account_name="ephemeral-isolation",
+        persist_tokens=False,
+    )
+    first.adopt(SocialSession("old-access", "old-refresh", "user-1", time.time() + 3600, 1))
+
+    second = AuthSessionManager(
+        service_name="LiliSocialTest",
+        account_name="ephemeral-isolation",
+        persist_tokens=False,
+    )
+
+    assert second.current() is None
+
+
 def test_refresh_token_reuse_error_has_user_safe_message():
     assert social_user_message(
         SocialError(
@@ -1092,4 +1109,3 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
-

@@ -410,12 +410,20 @@ class AuthSessionManager:
         self.service_name = service_name
         self.account_name = account_name
         self.persist_tokens = persist_tokens
-        key = (service_name, account_name) if persist_tokens else (service_name, f"{account_name}:{id(self)}")
-        with self._registry_lock:
-            self._state = self._registry.setdefault(
-                key,
-                _AuthState(condition=threading.Condition(threading.RLock())),
-            )
+        if persist_tokens:
+            # Persisted credentials intentionally share one in-process state
+            # so direct/proxy transports cannot rotate different refresh
+            # tokens.  Ephemeral managers must not use ``id(self)`` as a
+            # registry key: once an old manager is collected, Python may reuse
+            # that id and leak its session into an unrelated new client.
+            key = (service_name, account_name)
+            with self._registry_lock:
+                self._state = self._registry.setdefault(
+                    key,
+                    _AuthState(condition=threading.Condition(threading.RLock())),
+                )
+        else:
+            self._state = _AuthState(condition=threading.Condition(threading.RLock()))
         self._load_latest()
 
     @staticmethod
@@ -2692,5 +2700,4 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
-
 
