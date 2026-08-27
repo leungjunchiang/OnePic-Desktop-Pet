@@ -1,27 +1,12 @@
--- Account-bound consecutive-login reward. The desktop only sends the
--- authenticated RPC; the calendar date and streak transition are calculated
--- on the server in Asia/Shanghai so local clocks cannot reset or inflate it.
+-- Keep the real consecutive-login count after the three-day reward is
+-- unlocked.  Older deployments capped the stored value at 3, which made the
+-- server disagree with the login-day number shown by newer clients.
 
-create table if not exists public.lili_login_streaks (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  last_login_date date,
-  streak_days integer not null default 0,
-  reward_unlocked boolean not null default false,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  primary key (user_id),
-  constraint lili_login_streaks_days_check check (streak_days >= 0)
-);
+alter table public.lili_login_streaks
+  drop constraint if exists lili_login_streaks_days_check;
 
-alter table public.lili_login_streaks enable row level security;
-
-drop policy if exists "lili_login_streaks_owner_select" on public.lili_login_streaks;
-create policy "lili_login_streaks_owner_select"
-  on public.lili_login_streaks for select
-  to authenticated
-  using ((select auth.uid()) = user_id);
-
-revoke all on table public.lili_login_streaks from anon, authenticated;
+alter table public.lili_login_streaks
+  add constraint lili_login_streaks_days_check check (streak_days >= 0);
 
 create or replace function public.lili_record_login()
 returns jsonb
@@ -68,12 +53,14 @@ begin
       user_id, last_login_date, streak_days, reward_unlocked, updated_at
     )
     values (
-      current_user_id, today, current_days, current_reward or current_days >= 3, now()
+      current_user_id, today, current_days,
+      current_reward or current_days >= 3, now()
     )
     on conflict (user_id) do update
       set last_login_date = excluded.last_login_date,
           streak_days = excluded.streak_days,
-          reward_unlocked = public.lili_login_streaks.reward_unlocked or excluded.reward_unlocked,
+          reward_unlocked = public.lili_login_streaks.reward_unlocked
+            or excluded.reward_unlocked,
           updated_at = now();
   end if;
 
@@ -88,4 +75,3 @@ $$;
 
 revoke all on function public.lili_record_login() from public, anon, authenticated;
 grant execute on function public.lili_record_login() to authenticated;
-

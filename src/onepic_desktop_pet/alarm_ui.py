@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import threading
 from ctypes import wintypes
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from PySide6.QtCore import QDateTime, QEvent, QUrl, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
@@ -224,6 +226,137 @@ class AlarmSoundSelector(QWidget):
         super().closeEvent(event)
 
 
+class _WindowsAlarmAudio:
+    """Play one alarm file through Windows MCI, outside Qt Multimedia.
+
+    Qt 6.11.2's Windows multimedia backend can block inside
+    ``QMediaPlayer.stop()`` while the GUI thread is dispatching a button
+    click.  The alarm card therefore uses this small, process-local backend
+    for custom sounds on Windows.  MCI commands run on daemon threads and
+    the GUI never waits for either the command or the thread.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        volume: int,
+        on_finished,
+        on_error,
+    ) -> None:
+        self.path = str(path)
+        self.volume = max(0, min(100, int(volume or 0)))
+        self.alias = f"lili_alarm_{uuid4().hex[:12]}"
+        self._on_finished = on_finished
+        self._on_error = on_error
+        self._lock = threading.Lock()
+        self._opened = False
+        self._start_requested = False
+        self._stop_requested = False
+        self._mci = None
+        try:
+            mci = ctypes.windll.winmm.mciSendStringW
+            mci.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.LPWSTR,
+                wintypes.UINT,
+                wintypes.HWND,
+            ]
+            mci.restype = wintypes.DWORD
+            self._mci = mci
+        except (AttributeError, OSError):
+            self._mci = None
+
+    @property
+    def available(self) -> bool:
+        return self._mci is not None
+
+    def start(self) -> None:
+        if self._start_requested or not self.available:
+            if not self.available:
+                self._notify_error("winmm 不可用")
+            return
+        self._start_requested = True
+        threading.Thread(
+            target=self._start_worker,
+            name="LiliAlarmAudioStart",
+            daemon=True,
+        ).start()
+
+    def request_stop(self) -> None:
+        """Request stop without joining the worker or waiting in the GUI."""
+
+        if self._stop_requested:
+            return
+        self._stop_requested = True
+        threading.Thread(
+            target=self._stop_worker,
+            name="LiliAlarmAudioStop",
+            daemon=True,
+        ).start()
+
+    def _send(self, command: str) -> int:
+        mci = self._mci
+        if mci is None:
+            return 1
+        try:
+            return int(mci(command, None, 0, 0))
+        except (OSError, TypeError, ValueError):
+            return 1
+
+    def _start_worker(self) -> None:
+        error = ""
+        with self._lock:
+            if self._stop_requested:
+                self._notify_finished()
+                return
+            extension = str(self.path).lower().rsplit(".", 1)[-1]
+            device_type = "waveaudio" if extension == "wav" else "mpegvideo"
+            safe_path = self.path.replace('"', '""')
+            result = self._send(
+                f'open "{safe_path}" type {device_type} alias {self.alias}'
+            )
+            if result:
+                error = f"mci open failed: {result}"
+            else:
+                self._opened = True
+                volume = self.volume * 10
+                self._send(f"setaudio {self.alias} volume to {volume}")
+                result = self._send(f"play {self.alias} repeat")
+                if result:
+                    error = f"mci play failed: {result}"
+                    self._send(f"close {self.alias}")
+                    self._opened = False
+        if error:
+            lifecycle_log(
+                "media.alarm.mci.error",
+                class_name="WindowsAlarmAudio",
+                alarm_path_extension=str(self.path).lower().rsplit(".", 1)[-1],
+                error=error,
+            )
+            self._notify_error(error)
+
+    def _stop_worker(self) -> None:
+        with self._lock:
+            if self._opened:
+                self._send(f"stop {self.alias}")
+                self._send(f"close {self.alias}")
+                self._opened = False
+        self._notify_finished()
+
+    def _notify_finished(self) -> None:
+        try:
+            self._on_finished()
+        except Exception:
+            return
+
+    def _notify_error(self, error: str) -> None:
+        try:
+            self._on_error(str(error))
+        except Exception:
+            return
+
+
 class AlarmCard(QDialog):
     """A frameless, movable, non-modal top-level alarm card.
 
@@ -237,6 +370,8 @@ class AlarmCard(QDialog):
     start_requested = Signal(str)
     snooze_requested = Signal(str, int)
     dismiss_requested = Signal(str)
+    _windows_audio_finished = Signal()
+    _windows_audio_error = Signal(str)
     # Emitted only after a closing card's media backend has received its
     # stop request.  PetWindow uses this as the safe point for deleteLater().
     audio_cleanup_finished = Signal()
@@ -274,7 +409,9 @@ class AlarmCard(QDialog):
         self._close_requested = False
         self._media_stop_pending = False
         self._media_stop_completed = False
+        self._media_drained = False
         self._audio_cleanup_ready = False
+        self._windows_audio = None
         self._drag_offset = None
         self._pending_topmost = None
         self.setObjectName("alarmCard")
@@ -308,7 +445,7 @@ class AlarmCard(QDialog):
             custom_id
             and self.sound_library is not None
             and self.sound_library.resolve_path(alarm.sound_id) is not None
-            and QMediaPlayer is not None
+            and (QMediaPlayer is not None or sys.platform == "win32")
         )
         if not alarm.sound_enabled:
             sound_text = "静音闹钟 · 只显示六毛提醒"
@@ -341,8 +478,9 @@ class AlarmCard(QDialog):
         close.clicked.connect(self._request_dismiss)
         actions.addWidget(close, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addLayout(actions)
-        self._audio_output = QAudioOutput(self) if QAudioOutput is not None else None
-        self._media_player = QMediaPlayer(self) if QMediaPlayer is not None else None
+        use_qt_media = sys.platform != "win32"
+        self._audio_output = QAudioOutput(self) if use_qt_media and QAudioOutput is not None else None
+        self._media_player = QMediaPlayer(self) if use_qt_media and QMediaPlayer is not None else None
         self._using_system_sound = True
         if self._media_player is not None and self._audio_output is not None:
             self._media_player.setAudioOutput(self._audio_output)
@@ -372,6 +510,14 @@ class AlarmCard(QDialog):
         self._topmost_timer.setSingleShot(True)
         self._topmost_timer.timeout.connect(self._apply_pending_topmost)
         self._custom_audio = False
+        self._windows_audio_finished.connect(
+            self._on_windows_audio_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._windows_audio_error.connect(
+            self._on_windows_audio_error,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._configure_sound(alarm)
 
         # Frameless cards still support the two platform close shortcuts.
@@ -420,22 +566,38 @@ class AlarmCard(QDialog):
         return super().eventFilter(watched, event)
 
     def _request_start(self) -> None:
+        lifecycle_log("alarm.action_button.enter", self, action="start")
         self._acknowledge_alarm()
-        if not self._prepare_action():
+        if not self._prepare_action("start"):
             return
         self.start_requested.emit(self.alarm.id)
+        lifecycle_log("alarm.action_button.return", self, action="start")
 
     def _request_snooze(self, minutes: int) -> None:
+        lifecycle_log(
+            "alarm.action_button.enter",
+            self,
+            action="snooze",
+            minutes=int(minutes),
+        )
         self._acknowledge_alarm()
-        if not self._prepare_action():
+        if not self._prepare_action("snooze"):
             return
         self.snooze_requested.emit(self.alarm.id, int(minutes))
+        lifecycle_log(
+            "alarm.action_button.return",
+            self,
+            action="snooze",
+            minutes=int(minutes),
+        )
 
     def _request_dismiss(self) -> None:
+        lifecycle_log("alarm.action_button.enter", self, action="dismiss")
         self._acknowledge_alarm()
-        if not self._prepare_action():
+        if not self._prepare_action("dismiss"):
             return
         self.dismiss_requested.emit(self.alarm.id)
+        lifecycle_log("alarm.action_button.return", self, action="dismiss")
 
     @property
     def popup_state(self) -> AlarmPopupState:
@@ -540,10 +702,24 @@ class AlarmCard(QDialog):
             return
         path = self.sound_library.resolve_path(alarm.sound_id) if self.sound_library else None
         is_custom = str(alarm.sound_id or "") not in {"", "system", "default"}
-        if is_custom and path is not None and self._media_player is not None:
+        if is_custom and path is not None and (
+            self._media_player is not None or sys.platform == "win32"
+        ):
             self._custom_audio = True
             self._using_system_sound = False
-            self._media_player.setSource(QUrl.fromLocalFile(str(path)))
+            if self._media_player is not None:
+                self._media_player.setSource(QUrl.fromLocalFile(str(path)))
+            else:
+                self._windows_audio = _WindowsAlarmAudio(
+                    str(path),
+                    volume=int(alarm.volume or 0),
+                    on_finished=self._windows_audio_finished.emit,
+                    on_error=self._windows_audio_error.emit,
+                )
+                if not self._windows_audio.available:
+                    self._windows_audio = None
+                    self._custom_audio = False
+                    self._using_system_sound = True
             return
         # System/default sounds are short platform alerts.  Missing custom
         # files intentionally fall back to this same bounded behavior.
@@ -571,6 +747,15 @@ class AlarmCard(QDialog):
         )
         if not self.alarm.sound_enabled:
             return
+        if self._custom_audio and self._windows_audio is not None:
+            lifecycle_log(
+                "media.alarm.backend_start",
+                class_name="WindowsAlarmAudio",
+                alarm_id=str(self.alarm.id),
+                backend="winmm-mci",
+            )
+            self._windows_audio.start()
+            return
         if self._custom_audio and self._media_player is not None:
             self._media_player.play()
             return
@@ -592,6 +777,20 @@ class AlarmCard(QDialog):
             alarm_id=str(self.alarm.id),
             status=str(status),
         )
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and self._audio_closing:
+            # The close path mutes the output and disables looping.  Once the
+            # current item reaches its natural end, the player is stopped by
+            # the backend and it is safe for PetWindow to delete the card.
+            self._media_stop_completed = True
+            self._media_drained = True
+            lifecycle_log(
+                "media.alarm.drain_complete",
+                self._media_player,
+                owner="AlarmCard",
+                alarm_id=str(self.alarm.id),
+            )
+            self._emit_audio_cleanup_finished()
+            return
         if (
             not self._audio_closing
             and self._state != AlarmPopupState.DISMISSED
@@ -616,6 +815,36 @@ class AlarmCard(QDialog):
             alarm_id=str(self.alarm.id),
             error=" ".join(str(item) for item in args),
         )
+        if self._audio_closing:
+            self._media_stop_completed = True
+            self._media_drained = True
+            self._emit_audio_cleanup_finished()
+            return
+        self._fallback_to_system()
+
+    def _on_windows_audio_finished(self) -> None:
+        """Receive the daemon stop completion on Qt's GUI thread."""
+
+        self._media_stop_pending = False
+        self._media_stop_completed = True
+        self._media_drained = True
+        lifecycle_log(
+            "media.alarm.mci.stop_complete",
+            class_name="WindowsAlarmAudio",
+            alarm_id=str(self.alarm.id),
+        )
+        self._emit_audio_cleanup_finished()
+
+    def _on_windows_audio_error(self, error: str) -> None:
+        lifecycle_log(
+            "media.alarm.mci.error_received",
+            class_name="WindowsAlarmAudio",
+            alarm_id=str(self.alarm.id),
+            error=str(error),
+        )
+        if self._audio_closing:
+            self._on_windows_audio_finished()
+            return
         self._fallback_to_system()
 
     def _fallback_to_system(self) -> None:
@@ -699,37 +928,77 @@ class AlarmCard(QDialog):
         self.audio_cleanup_finished.emit()
 
     def _finish_media_stop(self) -> None:
-        """Stop QMediaPlayer from a queued timer event, never in a click."""
+        """Mute custom audio without synchronously stopping Qt Multimedia."""
 
         self._media_stop_pending = False
-        if self._media_player is not None and not self._media_stop_completed:
+        if self._windows_audio is not None:
             lifecycle_log(
-                "media.alarm.stop",
-                self._media_player,
-                owner="AlarmCard",
+                "media.alarm.stop.defer",
+                class_name="WindowsAlarmAudio",
                 alarm_id=str(self.alarm.id),
-                reason="queued_stop",
+                reason="async_winmm_stop",
             )
-            # Prevent status/error signals from re-entering alarm handling
-            # while the native backend is being stopped.
-            was_blocked = self._media_player.signalsBlocked()
-            self._media_player.blockSignals(True)
-            try:
-                self._media_player.stop()
-            finally:
-                self._media_player.blockSignals(was_blocked)
+            self._windows_audio.request_stop()
+            # ``_media_stop_completed`` means that the stop request has been
+            # dispatched, not that the daemon MCI call has returned.  The
+            # latter is represented by ``_media_drained`` and the queued
+            # cleanup signal below.
+            self._media_stop_completed = True
+            # The daemon worker will signal the final completion.  The
+            # native Windows audio API is no longer part of the Qt GUI call
+            # stack, and the button path never waits for it.
+            return
+        if self._media_player is None or self._media_stop_completed:
+            self._media_stop_completed = True
+            if self._media_player is None:
+                self._media_drained = True
+            if self._media_drained:
+                self._emit_audio_cleanup_finished()
+            return
+        lifecycle_log(
+            "media.alarm.stop.defer",
+            self._media_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            reason="mute_and_drain",
+        )
+        if self._audio_output is not None:
+            self._audio_output.setVolume(0)
         self._media_stop_completed = True
-        self._emit_audio_cleanup_finished()
+        try:
+            stopped = (
+                self._media_player.playbackState()
+                == QMediaPlayer.PlaybackState.StoppedState
+            )
+        except RuntimeError:
+            stopped = True
+        if stopped:
+            self._media_drained = True
+            self._emit_audio_cleanup_finished()
 
     def _queue_media_stop(self, reason: str) -> None:
         """Queue a single media stop and return to the caller immediately."""
 
+        if self._windows_audio is not None:
+            if self._media_stop_completed or self._media_stop_pending:
+                return
+            lifecycle_log(
+                "media.alarm.stop.request",
+                class_name="WindowsAlarmAudio",
+                alarm_id=str(self.alarm.id),
+                reason=reason,
+            )
+            self._media_stop_pending = True
+            self._media_stop_timer.start(0)
+            return
         if self._media_player is None:
             self._media_stop_completed = True
+            self._media_drained = True
             self._emit_audio_cleanup_finished()
             return
         if self._media_stop_completed:
-            self._emit_audio_cleanup_finished()
+            if self._media_drained:
+                self._emit_audio_cleanup_finished()
             return
         if self._media_stop_pending:
             return
@@ -752,20 +1021,51 @@ class AlarmCard(QDialog):
             self._sound_timer.stop()
         if self._sound_stop_timer is not None:
             self._sound_stop_timer.stop()
+        if self._audio_output is not None:
+            # Changing the output level is the only synchronous multimedia
+            # operation allowed during an alarm button path.  It returns
+            # immediately and prevents a draining song from being audible.
+            self._audio_output.setVolume(0)
         self._queue_media_stop("popup_close")
 
-    def _prepare_action(self) -> bool:
+    def _prepare_action(self, action: str = "unknown") -> bool:
         """Make a button action idempotent before its queued owner handles it."""
 
         if self._action_requested:
+            lifecycle_log(
+                "alarm.action_button.duplicate",
+                self,
+                action=action,
+            )
             return False
         self._action_requested = True
         self._suppress_close_action = True
         self._state = AlarmPopupState.DISMISSED
+        lifecycle_log(
+            "alarm.popup.hide.begin",
+            self,
+            action=action,
+        )
+        self.hide()
+        lifecycle_log(
+            "alarm.popup.hide.end",
+            self,
+            action=action,
+        )
         # The button handler must return before touching the native media
         # backend.  The queued timer also keeps the card alive until the
         # owner has safely closed it and the backend has stopped.
+        lifecycle_log(
+            "alarm.stop_audio.begin",
+            self,
+            action=action,
+        )
         self._stop_sound()
+        lifecycle_log(
+            "alarm.stop_audio.end",
+            self,
+            action=action,
+        )
         return True
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API

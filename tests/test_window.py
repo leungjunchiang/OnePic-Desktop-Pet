@@ -395,6 +395,130 @@ def test_confirmed_outfit_response_releases_pending_selection_fence(monkeypatch)
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_six_day_login_payload_unlocks_three_day_outfit(monkeypatch) -> None:
+    """A missed day-three callback must be repaired by a later streak payload."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window._login_reward_unlocked = False
+    window._login_streak_updated({"streak_days": 6, "reward_unlocked": False})
+
+    assert window._login_reward_unlocked is True
+    window.equip_outfit("login-3-day")
+    assert window.settings.equipped_outfit == "login-3-day"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_confirmed_outfit_cannot_be_replaced_by_late_old_dashboard(monkeypatch) -> None:
+    """An older in-flight dashboard must not undo a confirmed local choice."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window._login_reward_unlocked = True
+    window.settings.equipped_outfit = "login-3-day"
+    window._personal_outfit_sync_pending = True
+    window._social_dashboard_received(
+        {
+            "data_source": "server",
+            "_personal_state": {"outfit_key": "login-3-day"},
+        }
+    )
+    assert window._personal_outfit_sync_pending is False
+
+    window._merge_remote_personal_state(
+        {"data_source": "server", "me": {"outfit_key": "hour-01"}}
+    )
+    assert window.settings.equipped_outfit == "login-3-day"
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_outfit_change_preserves_existing_compact_todo_panel(monkeypatch, tmp_path) -> None:
+    """Changing appearance must not hide or recreate the Todo accessory."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("换装后仍要显示")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.show()
+    app.processEvents()
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+
+    window._login_reward_unlocked = True
+    window.equip_outfit("login-3-day")
+    app.processEvents()
+
+    assert window._compact_todo_panel is panel
+    assert panel.isVisible()
+    assert panel.visible_task_ids
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_hidden_compact_todos_remain_hidden_until_manual_show_after_outfit(monkeypatch, tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(tmp_path, persist=False)
+    memory.todos.add("手动恢复")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+    window.hide_compact_todos()
+
+    window._login_reward_unlocked = True
+    window.equip_outfit("login-3-day")
+    app.processEvents()
+    assert not panel.isVisible()
+
+    window._menu_callbacks()["show_todos"]()
+    app.processEvents()
+    assert window._compact_todo_panel is panel
+    assert panel.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_account_memory_switch_rebinds_existing_todo_panel(monkeypatch, tmp_path) -> None:
+    """A resident panel must not keep reading the previous account's memory."""
+
+    app = QApplication.instance() or QApplication([])
+    first_memory = TimeMemory(tmp_path / "first", persist=False)
+    first_task = first_memory.todos.add("旧账号待办")
+    second_memory = TimeMemory(tmp_path / "second", persist=False)
+    second_task = second_memory.todos.add("新账号待办")
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = first_memory
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.visible_task_ids == frozenset({first_task.id})
+
+    window.time_memory = second_memory
+    window._rebind_todo_surfaces_to_current_memory()
+    app.processEvents()
+
+    assert window._compact_todo_panel is panel
+    assert panel.memory is second_memory
+    assert panel.visible_task_ids == frozenset({second_task.id})
+    assert panel.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
     app, window = _create_window()
     assert window.settings.allow_autonomous_walk is False

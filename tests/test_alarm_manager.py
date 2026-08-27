@@ -88,6 +88,30 @@ def test_stale_one_off_alarm_is_requeued_for_thirty_minutes(tmp_path) -> None:
     assert [item.id for item in manager.claim_due()] == [alarm.id]
 
 
+def test_persisted_daily_alarm_does_not_catch_up_after_restart(tmp_path) -> None:
+    """Restarting in the afternoon must not replay a missed morning slot."""
+
+    path = tmp_path / "alarms.json"
+    before = Clock(datetime(2026, 8, 26, 9, 0))
+    first = AlarmManager(path, now_provider=before)
+    alarm = first.add(
+        "工作日开工",
+        "2026-08-26T10:00:00",
+        repeat_rule=REPEAT_DAILY,
+    )
+
+    after = Clock(datetime(2026, 8, 26, 17, 0))
+    restarted = AlarmManager(path, now_provider=after)
+    assert restarted.claim_due() == []
+    restored = restarted.get(alarm.id)
+    assert restored is not None
+    assert restored.snooze_until is None
+    assert restored.last_triggered_slot.startswith("2026-08-26T10:00:00")
+
+    after.value = datetime(2026, 8, 27, 10, 0)
+    assert [item.id for item in restarted.claim_due()] == [alarm.id]
+
+
 def test_fired_alarm_is_not_replayed_after_restart(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 19, 12, 0))
     path = tmp_path / "alarms.json"

@@ -147,7 +147,14 @@ def test_custom_audio_button_queues_player_stop_before_card_cleanup(tmp_path) ->
     assert card._audio_closing is True
     assert card._media_stop_completed is True
     card.close_from_app()
-    app.processEvents()
+    # The custom backend is intentionally drained instead of synchronously
+    # stopped.  The short fixture should finish and release the card without
+    # ever blocking the GUI thread.
+    for _ in range(20):
+        app.processEvents()
+        if card.audio_cleanup_ready:
+            break
+        QTest.qWait(50)
     assert card.audio_cleanup_ready is True
 
 

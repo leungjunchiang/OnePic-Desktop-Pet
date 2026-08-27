@@ -30,6 +30,7 @@ from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import SignupResult, SocialClient, SocialError, _heartbeat_payload, social_user_message
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
+from .login_rewards import login_reward_granted, login_streak_days
 from .work_timer import format_work_duration
 from .lifecycle_log import lifecycle_log
 
@@ -2126,9 +2127,9 @@ class SocialHubDialog(QDialog):
                 f"{format_work_duration(abs(difference))}"
             )
         self.focus_insights.setText(
-            f"今天第 {int(summary.get('today_rounds') or 0)} 轮 · 连续 {int(summary.get('current_streak_days') or 0)} 天 · "
+            f"今天第 {int(summary.get('today_rounds') or 0)} 轮 · 连续专注 {int(summary.get('current_streak_days') or 0)} 天 · "
             f"本周 {format_work_duration(int(summary.get('weekly_total_seconds') or 0))}\n"
-            f"最长连续 {int(summary.get('longest_streak_days') or 0)} 天 · "
+            f"最长连续专注 {int(summary.get('longest_streak_days') or 0)} 天 · "
             f"最长专注 {format_work_duration(int(summary.get('longest_continuous_seconds') or 0))} · "
             f"今日中断 {int(summary.get('today_interruptions') or 0)} 次 · "
             f"{comparison} · "
@@ -2274,7 +2275,7 @@ class SocialHubDialog(QDialog):
         self.focus_task.setObjectName("muted")
         self.focus_task.setWordWrap(True)
         focus_layout.addWidget(self.focus_task)
-        self.focus_insights = QLabel("今天第 0 轮 · 连续 0 天 · 本周 0分钟")
+        self.focus_insights = QLabel("今天第 0 轮 · 连续专注 0 天 · 本周 0分钟")
         self.focus_insights.setObjectName("muted")
         self.focus_insights.setWordWrap(True)
         focus_layout.addWidget(self.focus_insights)
@@ -3430,13 +3431,10 @@ class SocialHubDialog(QDialog):
     def _login_streak_completed(self, result: dict) -> None:
         payload = dict(result or {})
         self.login_streak_updated.emit(payload)
-        try:
-            days = max(0, int(payload.get("streak_days") or 0))
-        except (TypeError, ValueError):
-            days = 0
+        days = login_streak_days(payload)
         if payload.get("newly_unlocked"):
             self._set_status("连续登录 3 天，已解锁新娃衣「三日连登搭子」！")
-        elif payload.get("reward_unlocked"):
+        elif login_reward_granted(payload):
             self._set_status("连续登录奖励已解锁；当前连续登录 %d 天。" % days)
 
     def _login_streak_failed(self, error: object) -> None:
@@ -3476,6 +3474,11 @@ class SocialHubDialog(QDialog):
         self.login_streak_updated.emit(payload)
         if payload.get("newly_unlocked"):
             self._set_status("登录成功；连续登录 3 天，已解锁新娃衣「三日连登搭子」！")
+        elif login_reward_granted(payload):
+            self._set_status(
+                "登录成功；三日连登娃衣已解锁。当前连续登录 %d 天。"
+                % login_streak_days(payload)
+            )
         else:
             self._set_status("登录成功，邮箱确认已完成。")
         self.account_state_changed.emit(True)

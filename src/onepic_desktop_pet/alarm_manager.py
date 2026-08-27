@@ -123,6 +123,11 @@ class AlarmManager:
         self.path = path or local_data_path("alarms.json")
         self._now = now_provider or (lambda: datetime.now().astimezone())
         self.persist = bool(persist)
+        # A process must not manufacture a new afternoon retry for a daily
+        # alarm whose morning slot passed while the app was not running.  A
+        # retry is still allowed when this process was already alive before
+        # the slot and its one-second scheduler missed the delivery window.
+        self._started_at = now_local(self._now)
         raw = read_json(self.path, [])
         raw_items = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
         self._items = (
@@ -435,6 +440,10 @@ class AlarmManager:
                 continue
             if slot > current:
                 continue
+            if self._should_skip_startup_catchup(item, slot):
+                self._finish_missed_occurrence(item, slot)
+                changed = True
+                continue
             if self._is_late(slot, current, grace_minutes):
                 if self._skip_missed_non_delivery_day(item, current, slot):
                     self._finish_missed_occurrence(item, slot)
@@ -526,6 +535,27 @@ class AlarmManager:
         item.last_triggered_slot = slot.isoformat()
         item.snooze_until = None
         item.schedule_generation = self._next_generation(item)
+
+    def _should_skip_startup_catchup(self, item: Alarm, slot: datetime) -> bool:
+        """Return whether *slot* belongs to a period before this process.
+
+        Persisted alarms are allowed to retry only when the process was alive
+        before the configured slot.  This preserves the requested “10 minutes
+        late → 30-minute retry” behavior for a running app while preventing a
+        stale 10:00 alarm from appearing at 17:00 just because Lili was
+        restarted.  Newly created alarms are exempt so a user can intentionally
+        add an already-due reminder and receive the normal late retry.
+        """
+
+        if slot >= self._started_at:
+            return False
+        try:
+            created = parse_datetime(item.created_at, self._now)
+        except (TypeError, ValueError):
+            # Legacy rows without creation metadata are persisted alarms, not
+            # a newly entered reminder in this process.
+            return True
+        return created < self._started_at
 
     def _reschedule_after_missed(self, item: Alarm, current: datetime, slot: datetime) -> None:
         """Move a missed claim to one retry without creating another alarm row."""

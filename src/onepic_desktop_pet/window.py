@@ -192,6 +192,12 @@ from .growth import (
     time_of_day_activity,
 )
 from .local_content import find_audio_variants, load_local_lines
+from .login_rewards import (
+    LOGIN_REWARD_KEY,
+    LoginRewardStore,
+    login_reward_granted,
+    login_streak_days,
+)
 from .liumao_worldview import family_music_mode
 from .music import ARTIST_MUSIC_SERVICE_LABELS, open_chen_artist_page as launch_chen_artist_page
 from .resources import resource_path
@@ -619,12 +625,21 @@ class PetWindow(QWidget):
         self._economy_sync_user_id = ""
         self._personal_outfit_sync_pending = False
         self._personal_outfit_sync_user_id = ""
-        # Keep a previously confirmed account reward usable immediately after
-        # restart.  The server still remains authoritative for new accounts;
-        # this local hint only prevents a saved, already-equipped wardrobe
-        # from flashing back to the classic sprite while the login RPC loads.
-        self._login_reward_unlocked = (
-            self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        self._personal_outfit_fence_key = ""
+        self._personal_outfit_fence_until = 0.0
+        self._login_reward_account_id = self._current_social_user_id()
+        self._login_reward_store = LoginRewardStore(
+            self._login_reward_account_id,
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+        )
+        # The selected outfit remains a compatibility hint only while no
+        # account is known.  Once signed in, the account-scoped entitlement or
+        # the login RPC must prove ownership.
+        self._login_reward_unlocked = self._login_reward_store.is_unlocked(
+            LOGIN_REWARD_KEY
+        ) or (
+            not self._login_reward_account_id
+            and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
         )
         self._buddy_visit_window = BuddyVisitWindow()
         self.visit_status_bubble = VisitStatusBubble()
@@ -3343,32 +3358,21 @@ class PetWindow(QWidget):
         if self._today_note_window is not None:
             self._today_note_window.hide()
         self._restore_compact_todos_after_show = True
-        if self._compact_todo_panel is None:
-            self._compact_todo_panel = CompactTodoPanel(
-                self.time_memory,
-                settings=self.settings,
-                save_settings_callback=save_settings,
-            )
-            self._compact_todo_panel.task_selected.connect(self._select_todo_from_note)
-            self._compact_todo_panel.task_checked.connect(self._set_todo_completion_from_panel)
-            self._compact_todo_panel.task_changed.connect(self._refresh_todo_surfaces)
-            self._compact_todo_panel.set_companion_topmost(
-                bool(self.settings.always_on_top or getattr(self.settings, "today_note_always_on_top", False))
-            )
+        panel = self._ensure_compact_todo_panel()
         # ``read`` is only an acknowledgement in the detailed Todo view, not
         # completion.  Keep every unfinished task on the desktop strip for
         # both automatic startup/refresh and the manual “显示待办” command.
         # Only the checkbox (complete) or explicit deletion removes it.
-        has_visible_tasks = self._compact_todo_panel.refresh(include_read=True)
+        has_visible_tasks = panel.refresh(include_read=True)
         if not has_visible_tasks:
             # An empty compact strip is not a useful accessory.  Keep the
             # widget instance so a later Todo write can reuse it, but do not
             # show it (or its ⋯/＋ action rail).
             self._restore_compact_todos_after_show = False
-            self._compact_todo_panel.hide()
+            panel.hide()
             return
         self._show_nonactivating(
-            self._compact_todo_panel,
+            panel,
             always_on_top=bool(
                 self.settings.always_on_top
                 or getattr(self.settings, "today_note_always_on_top", False)
@@ -3379,7 +3383,92 @@ class PetWindow(QWidget):
         # the panel after positioning so a transient pet repaint cannot cover
         # the label or the trailing menu button.  The panel itself never
         # accepts focus, so this does not steal keyboard input.
-        self._raise_accessory(self._compact_todo_panel)
+        self._raise_accessory(panel)
+
+    @staticmethod
+    def _qt_object_is_alive(widget: object | None) -> bool:
+        """Check a PySide wrapper without re-entering or creating a native handle."""
+
+        if widget is None:
+            return False
+        try:
+            getattr(widget, "objectName")()
+        except (AttributeError, RuntimeError):
+            return False
+        return True
+
+    def _compact_todo_panel_destroyed(self, panel: CompactTodoPanel) -> None:
+        """Drop a wrapper after Qt destroys the detached Todo window."""
+
+        if self._compact_todo_panel is panel:
+            self._compact_todo_panel = None
+            self._restore_compact_todos_after_show = False
+            lifecycle_log("todo.panel.destroy", class_name="CompactTodoPanel")
+
+    def _ensure_compact_todo_panel(self) -> CompactTodoPanel:
+        """Reuse one live Todo companion, recreating it only after destruction."""
+
+        panel = self._compact_todo_panel
+        if not self._qt_object_is_alive(panel):
+            self._compact_todo_panel = None
+            panel = CompactTodoPanel(
+                self.time_memory,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            self._compact_todo_panel = panel
+            panel.destroyed.connect(
+                lambda _obj=None, expected=panel: self._compact_todo_panel_destroyed(expected)
+            )
+            panel.task_selected.connect(self._select_todo_from_note)
+            panel.task_checked.connect(self._set_todo_completion_from_panel)
+            panel.task_changed.connect(self._refresh_todo_surfaces)
+            panel.set_companion_topmost(
+                bool(
+                    self.settings.always_on_top
+                    or getattr(self.settings, "today_note_always_on_top", False)
+                )
+            )
+            lifecycle_log("todo.panel.create", panel, owner="PetWindow")
+        return panel
+
+    def _reflow_compact_todos_after_outfit(self, was_visible: bool) -> None:
+        """Re-anchor a visible Todo panel after the pet mask/sprite changes."""
+
+        if not was_visible:
+            return
+        try:
+            panel = self._ensure_compact_todo_panel()
+            if not panel.refresh(include_read=True):
+                return
+            self._show_nonactivating(
+                panel,
+                always_on_top=bool(
+                    self.settings.always_on_top
+                    or getattr(self.settings, "today_note_always_on_top", False)
+                ),
+            )
+            self._position_compact_todos()
+            self._raise_accessory(panel)
+            # setMask()/native z-order updates can be deferred on Windows;
+            # repeat only the cheap position/raise pass on the next turn.
+            QTimer.singleShot(0, lambda expected=panel: self._finish_todo_reflow(expected))
+        except RuntimeError:
+            # A detached Qt window may be destroyed between the validity
+            # check and the queued native operation.  The next manual show
+            # will create a fresh panel through _ensure_compact_todo_panel().
+            self._compact_todo_panel = None
+
+    def _finish_todo_reflow(self, panel: CompactTodoPanel) -> None:
+        if self._compact_todo_panel is not panel or not self._qt_object_is_alive(panel):
+            return
+        try:
+            if panel.isVisible():
+                self._position_compact_todos()
+                self._raise_accessory(panel)
+        except RuntimeError:
+            if self._compact_todo_panel is panel:
+                self._compact_todo_panel = None
 
     def _position_compact_todos(self) -> None:
         """Keep the Todo strip close to the pet, preferring its left side.
@@ -3611,7 +3700,14 @@ class PetWindow(QWidget):
             self._today_note_window.refresh()
         compact_mode = str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
         display_mode = str(getattr(self.settings, "today_note_display_mode", "always"))
-        if self._compact_todo_panel is None:
+        panel = self._compact_todo_panel
+        if panel is not None and not self._qt_object_is_alive(panel):
+            # ``destroyed`` is queued for detached native windows.  Clear a
+            # stale Python wrapper before an automatic Todo refresh tries to
+            # call isVisible()/refresh() on the deleted C++ object.
+            self._compact_todo_panel = None
+            panel = None
+        if panel is None:
             # A Todo can be created from the center window before the compact
             # accessory has ever been instantiated.  In compact mode, create
             # it lazily as soon as there is something eligible to display.
@@ -3622,9 +3718,15 @@ class PetWindow(QWidget):
             ):
                 self.show_compact_todos()
         else:
-            panel = self._compact_todo_panel
-            was_visible = panel.isVisible()
-            has_visible_tasks = panel.refresh()
+            try:
+                was_visible = panel.isVisible()
+                has_visible_tasks = panel.refresh()
+            except RuntimeError:
+                # Keep the refresh path recoverable.  The next manual show or
+                # Todo write will create one replacement panel via ensure().
+                if self._compact_todo_panel is panel:
+                    self._compact_todo_panel = None
+                return
             if has_visible_tasks:
                 # Pending Todos are authoritative: if any unfinished item
                 # remains, a hidden compact panel must recover automatically.
@@ -4115,38 +4217,63 @@ class PetWindow(QWidget):
         return True
 
     def _start_alarm_work(self, alarm_id: str) -> None:
-        lifecycle_log("alarm.action.start", self, alarm_id=alarm_id)
+        self._handle_alarm_action("start", alarm_id)
+
+    def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
+        self._handle_alarm_action("snooze", alarm_id, minutes=int(minutes))
+
+    def _dismiss_alarm(self, alarm_id: str) -> None:
+        self._handle_alarm_action("dismiss", alarm_id)
+
+    def _handle_alarm_action(
+        self,
+        action: str,
+        alarm_id: str,
+        *,
+        minutes: int = 0,
+    ) -> None:
+        """Handle every card button through one non-blocking action path."""
+
+        lifecycle_log(
+            "alarm.action.enter",
+            self,
+            action=action,
+            alarm_id=alarm_id,
+            minutes=int(minutes),
+        )
         if not self._alarm_action_is_current(alarm_id):
             return
         alarm = self.time_memory.alarms.get(alarm_id)
         if alarm is None:
             self._close_alarm_card()
+            lifecycle_log("alarm.action.return", self, action=action, alarm_id=alarm_id)
             return
-        self.time_memory.alarms.dismiss(alarm_id)
-        if alarm.linked_todo_id:
+
+        # The manager has no scheduler thread to join: this is the single
+        # in-memory state transition for the alarm.  Keep explicit phase
+        # markers around the tiny JSON persistence call so a future backend
+        # regression cannot again be mistaken for a multimedia deadlock.
+        lifecycle_log("alarm.cancel_timer.begin", self, action=action, alarm_id=alarm_id)
+        try:
+            if action == "snooze":
+                lifecycle_log("alarm.reschedule.begin", self, action=action, alarm_id=alarm_id, minutes=int(minutes))
+                self.time_memory.alarms.snooze(alarm_id, minutes)
+                lifecycle_log("alarm.reschedule.end", self, action=action, alarm_id=alarm_id)
+            else:
+                self.time_memory.alarms.dismiss(alarm_id)
+        except KeyError:
+            pass
+        lifecycle_log("alarm.cancel_timer.end", self, action=action, alarm_id=alarm_id)
+        lifecycle_log("alarm.save_state.begin", self, action=action, alarm_id=alarm_id)
+        # AlarmManager persists synchronously as one small atomic JSON write;
+        # this marker remains around the manager transition for diagnostics.
+        lifecycle_log("alarm.save_state.end", self, action=action, alarm_id=alarm_id)
+        self._close_alarm_card()
+        if action == "start" and alarm.linked_todo_id:
             self.time_memory.select_task(alarm.linked_todo_id)
-        self._close_alarm_card()
-        self.start_work_timer()
-
-    def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
-        lifecycle_log("alarm.action.snooze", self, alarm_id=alarm_id, minutes=minutes)
-        if not self._alarm_action_is_current(alarm_id):
-            return
-        try:
-            self.time_memory.alarms.snooze(alarm_id, minutes)
-        except KeyError:
-            pass
-        self._close_alarm_card()
-
-    def _dismiss_alarm(self, alarm_id: str) -> None:
-        lifecycle_log("alarm.action.dismiss", self, alarm_id=alarm_id)
-        if not self._alarm_action_is_current(alarm_id):
-            return
-        try:
-            self.time_memory.alarms.dismiss(alarm_id)
-        except KeyError:
-            pass
-        self._close_alarm_card()
+        if action == "start":
+            self.start_work_timer()
+        lifecycle_log("alarm.action.return", self, action=action, alarm_id=alarm_id)
 
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
@@ -5373,6 +5500,11 @@ class PetWindow(QWidget):
             if remote_outfit == self.settings.equipped_outfit:
                 self._personal_outfit_sync_pending = False
                 self._personal_outfit_sync_user_id = ""
+                self._personal_outfit_fence_key = remote_outfit
+                self._personal_outfit_fence_until = max(
+                    self._personal_outfit_fence_until,
+                    time.monotonic() + 60.0,
+                )
 
         # The sync thread already fetched this dashboard.  Render that exact
         # payload instead of issuing a second blocking request from the UI
@@ -5774,12 +5906,19 @@ class PetWindow(QWidget):
             else profile.get("outfit_key")
         )
         remote_outfit = str(remote_outfit_value or "")[:60]
+        # A server profile that already contains the account-bound outfit is
+        # itself a durable ownership proof.  This repairs users whose login
+        # RPC result was missed by an older client.
+        if remote_outfit == LOGIN_REWARD_OUTFIT.key:
+            self._remember_login_reward_entitlement()
         # Do not let a stale profile/dashboard response overwrite an explicit
         # local selection while its durable sync is still in flight.  This is
         # particularly important for the account-bound three-day login outfit
         # on a second computer or an older relay that still returns the old
         # profile value.
         if self._personal_outfit_sync_pending:
+            return
+        if self._outfit_response_is_stale(remote_outfit):
             return
         allowed_outfits = {
             item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
@@ -5790,6 +5929,9 @@ class PetWindow(QWidget):
             return
         if remote_outfit == self.settings.equipped_outfit:
             return
+        panel_was_visible = self._qt_object_is_alive(self._compact_todo_panel) and bool(
+            self._compact_todo_panel.isVisible()
+        )
         self.settings.equipped_outfit = remote_outfit
         save_settings(self.settings)
         self.activity_transition_timer.stop()
@@ -5797,6 +5939,7 @@ class PetWindow(QWidget):
         self._activity_transition_step = self._activity_transition_steps
         self._mask_cache.clear()
         self._refresh_pixmap()
+        self._reflow_compact_todos_after_outfit(panel_was_visible)
         if self._social_dialog is not None:
             self._social_dialog.outfit_key = remote_outfit
 
@@ -5824,6 +5967,7 @@ class PetWindow(QWidget):
 
         account_id = self._current_social_user_id() if signed_in else ""
         self._switch_focus_account(account_id)
+        self._set_login_reward_account(account_id)
         if self._social_dialog is not None:
             # A room selected under another account is not an invitation for
             # the new account to keep sending heartbeats into that room.
@@ -5835,6 +5979,8 @@ class PetWindow(QWidget):
             self._economy_sync_user_id = ""
             self._personal_outfit_sync_pending = False
             self._personal_outfit_sync_user_id = ""
+            self._personal_outfit_fence_key = ""
+            self._personal_outfit_fence_until = 0.0
             return
         if (
             self._personal_outfit_sync_pending
@@ -5848,22 +5994,62 @@ class PetWindow(QWidget):
         self._economy_sync_user_id = ""
         self._schedule_social_tick()
 
+    def _set_login_reward_account(self, account_id: str | None) -> None:
+        """Load the permanent login entitlement for the active account."""
+
+        clean = str(account_id or "").strip()
+        self._login_reward_account_id = clean
+        self._login_reward_store = LoginRewardStore(
+            clean,
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+        )
+        self._login_reward_unlocked = self._login_reward_store.is_unlocked(
+            LOGIN_REWARD_KEY
+        ) or (
+            not clean
+            and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        )
+
+    def _remember_login_reward_entitlement(self) -> None:
+        """Cache an ownership proof returned by the account backend."""
+
+        account_id = self._current_social_user_id()
+        if not account_id:
+            return
+        if account_id != self._login_reward_account_id:
+            self._set_login_reward_account(account_id)
+        self._login_reward_store.grant(LOGIN_REWARD_KEY)
+        self._login_reward_unlocked = True
+
+    def _outfit_response_is_stale(self, remote_outfit: str) -> bool:
+        """Reject an older dashboard response after a local wardrobe choice."""
+
+        if time.monotonic() >= self._personal_outfit_fence_until:
+            return False
+        expected = self._personal_outfit_fence_key or self.settings.equipped_outfit
+        return str(remote_outfit or "") != str(expected or "")
+
     def _login_streak_updated(self, result: dict) -> None:
-        """Apply the server-authoritative three-day login wardrobe unlock."""
+        """Reconcile a server login streak into a permanent wardrobe grant."""
 
         if not isinstance(result, dict):
             return
+        account_id = self._current_social_user_id()
+        if account_id != self._login_reward_account_id:
+            self._set_login_reward_account(account_id)
         selected_reward = self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
-        if "reward_unlocked" in result:
-            unlocked = bool(result.get("reward_unlocked"))
-        else:
-            # A successful login can arrive before the optional streak RPC
-            # has returned.  An empty payload is not evidence that a reward
-            # previously equipped by this account has become unavailable.
-            unlocked = self._login_reward_unlocked
-        newly_unlocked = bool(result.get("newly_unlocked"))
         was_unlocked = self._login_reward_unlocked
-        self._login_reward_unlocked = unlocked or selected_reward
+        days = login_streak_days(result)
+        payload_grants = login_reward_granted(result)
+        if payload_grants:
+            self._remember_login_reward_entitlement()
+        unlocked = self._login_reward_unlocked or payload_grants or (
+            not account_id and selected_reward
+        )
+        self._login_reward_unlocked = unlocked
+        newly_unlocked = bool(result.get("newly_unlocked")) or (
+            days >= 3 and not was_unlocked
+        )
         if newly_unlocked and not was_unlocked:
             self._set_temporary_activity("happy", 30_000)
             self.show_speech(
@@ -5896,6 +6082,7 @@ class PetWindow(QWidget):
         self.focus_analytics.switch_account(clean or None)
         self.daily_stats.switch_account(clean or None)
         self.time_memory.switch_account(clean or None)
+        self._rebind_todo_surfaces_to_current_memory()
         self.economy.switch_account(clean or None)
         if hasattr(self, "_chat_memory"):
             self._chat_memory.switch_account(clean or None)
@@ -5918,6 +6105,44 @@ class PetWindow(QWidget):
         self._seen_visit_ids.clear()
         self._handled_visit_ids.clear()
         self._muted_buddy_ids.clear()
+
+    def _rebind_todo_surfaces_to_current_memory(self) -> None:
+        """Keep resident Todo windows on the same account namespace as the pet."""
+
+        panel = self._compact_todo_panel
+        if self._qt_object_is_alive(panel):
+            was_visible = bool(panel.isVisible())
+            panel.memory = self.time_memory
+            panel.selected_task_id = str(self.time_memory.current_task_id or "")
+            try:
+                has_tasks = panel.refresh(include_read=True)
+            except RuntimeError:
+                self._compact_todo_panel = None
+            else:
+                if was_visible and has_tasks:
+                    self._show_nonactivating(
+                        panel,
+                        always_on_top=bool(
+                            self.settings.always_on_top
+                            or getattr(self.settings, "today_note_always_on_top", False)
+                        ),
+                    )
+                    self._position_compact_todos()
+                    self._raise_accessory(panel)
+        if self._today_note_window is not None:
+            self._today_note_window.memory = self.time_memory
+            self._today_note_window.refresh()
+        if self._todo_center_window is not None:
+            self._todo_center_window.memory = self.time_memory
+            alarm_center = getattr(self._todo_center_window, "_alarm_center", None)
+            if alarm_center is not None:
+                alarm_center.alarms = self.time_memory.alarms
+                alarm_center.todos = list(self.time_memory.todos.items)
+                alarm_center.sound_library = self.time_memory.alarm_sounds
+            self._todo_center_window.refresh()
+        if self._time_memory_window is not None:
+            self._time_memory_window.memory = self.time_memory
+            self._time_memory_window.refresh()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""
@@ -6313,10 +6538,18 @@ class PetWindow(QWidget):
             else:
                 self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
             return
+        panel_was_visible = self._qt_object_is_alive(self._compact_todo_panel) and bool(
+            self._compact_todo_panel.isVisible()
+        )
         self.settings.equipped_outfit = outfit_key
         save_settings(self.settings)
         self._personal_outfit_sync_pending = True
         self._personal_outfit_sync_user_id = self._current_social_user_id()
+        # Heartbeats can complete out of order. Keep a short fence even after
+        # the selected key is echoed once, so an older in-flight response
+        # cannot put the previous outfit back on the pet.
+        self._personal_outfit_fence_key = outfit_key
+        self._personal_outfit_fence_until = time.monotonic() + 60.0
         if self._social_dialog is not None:
             # The social window keeps a local member projection.  Update it in
             # the same UI turn so it cannot repaint the previous outfit before
@@ -6329,6 +6562,7 @@ class PetWindow(QWidget):
         self._activity_transition_step = self._activity_transition_steps
         self._mask_cache.clear()
         self._refresh_pixmap()
+        self._reflow_compact_todos_after_outfit(panel_was_visible)
         self.update()
         label = next((item.name for item in ALL_OUTFITS if item.key == outfit_key), "经典六毛")
         self.show_speech(f"已换上：{label}。", 3200)
