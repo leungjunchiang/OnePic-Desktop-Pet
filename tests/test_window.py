@@ -1635,8 +1635,6 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     app.processEvents()
     assert window.quick_panel.pos() - window.pos() == first_offset
     assert window.quick_panel.y() + window.quick_panel.height() + 12 <= window.y()
-    window.quick_panel._set_hover_button(window.quick_panel.work_button)
-    assert window.quick_panel.report_button.isVisible()
     primary_buttons = (
         window.quick_panel.chat_button,
         window.quick_panel.work_button,
@@ -1645,10 +1643,19 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
         window.quick_panel.music_button,
         window.quick_panel.food_button,
     )
-    primary_tops = [button.mapToGlobal(QPoint(0, 0)).y() for button in primary_buttons]
-    assert max(primary_tops) - min(primary_tops) <= 1
-    assert window.quick_panel.layout().horizontalSpacing() == 6
-    assert window.quick_panel.layout().verticalSpacing() == 6
+    primary_positions_before = [button.mapToGlobal(QPoint(0, 0)) for button in primary_buttons]
+    assert max(position.y() for position in primary_positions_before) - min(
+        position.y() for position in primary_positions_before
+    ) <= 1
+    window.quick_panel._set_hover_button(window.quick_panel.work_button)
+    assert window.quick_panel.report_button.isVisible()
+    assert window.quick_panel._secondary_mode == window.quick_panel.SECONDARY_WORK_REPORT
+    assert window.quick_panel._secondary_container.isVisible()
+    app.processEvents()
+    primary_positions_after = [button.mapToGlobal(QPoint(0, 0)) for button in primary_buttons]
+    assert primary_positions_after == primary_positions_before
+    assert window.quick_panel._primary_container.layout().spacing() == 6
+    assert window.quick_panel._secondary_container.layout().spacing() == 6
     work_global_top = window.quick_panel.work_button.mapToGlobal(QPoint(0, 0))
     report_global_bottom = window.quick_panel.report_button.mapToGlobal(
         QPoint(0, window.quick_panel.report_button.height())
@@ -1733,8 +1740,9 @@ def test_quick_panel_debounces_report_when_pointer_sweeps_across_work() -> None:
     panel._set_hover_button(panel.work_button, immediate=False)
     panel._show_report_if_pointer_still_on_work()
     assert panel.report_button.isVisible()
-    assert panel.layout().itemAtPosition(0, 1).widget() is panel.report_button
-    assert panel.layout().itemAtPosition(0, 0) is None
+    assert panel.report_button.parent() is panel._secondary_container
+    assert panel._primary_container.layout().itemAt(0).widget() is panel.chat_button
+    assert panel._secondary_container.layout().itemAt(1).widget() is panel.report_button
 
     window.close(); window.deleteLater(); app.processEvents()
 

@@ -19,7 +19,6 @@ from .work_timer import format_elapsed_clock
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -526,6 +525,9 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
 class QuickControlPanel(QWidget):
     """跟随六毛移动的图标快捷坞；选择后或闲置八秒会自动收起。"""
 
+    SECONDARY_NONE = "none"
+    SECONDARY_WORK_REPORT = "work_report"
+
     chat_requested = Signal()
     work_requested = Signal()
     work_report_requested = Signal()
@@ -575,6 +577,7 @@ class QuickControlPanel(QWidget):
         self._hint_button: QPushButton | None = None
         self._window_behavior_callback: Callable[..., object] | None = None
         self._artist_music_service = "auto"
+        self._secondary_mode = self.SECONDARY_NONE
         # Native macOS Qt windows can omit Enter/Leave delivery until the
         # first click when the panel is a non-activating Tool window. Polling
         # the pointer over our shortcuts keeps the label a true hover
@@ -600,18 +603,25 @@ class QuickControlPanel(QWidget):
         self.hide_timer.timeout.connect(self.hide)
         self.hide_timer.timeout.connect(self._hide_hint)
         self._ignore_initial_enter = False
-        # Row 1 is the complete primary shortcut row.  The report action is
-        # placed in row 0, directly above the work column, so showing it can
-        # never push the other primary buttons sideways or onto another level.
-        layout = QGridLayout(self)
+        # Primary and secondary controls deliberately have separate containers.
+        # The primary buttons never enter/leave a layout during hover; only the
+        # secondary container changes visibility.  This prevents Qt from
+        # painting a transient frame in which the primary row occupies the
+        # secondary row's geometry.
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 9, 10, 9)
-        # Keep the secondary report shortcut the same distance from the work
-        # shortcut as adjacent primary shortcuts (for example music/food).
-        # Using one shared gap also keeps the geometry stable when the report
-        # row appears or disappears on macOS.
         shortcut_gap = 6
-        layout.setHorizontalSpacing(shortcut_gap)
-        layout.setVerticalSpacing(shortcut_gap)
+        layout.setSpacing(shortcut_gap)
+        self._primary_container = QWidget(self)
+        self._primary_container.setObjectName("quickPrimaryContainer")
+        primary_layout = QHBoxLayout(self._primary_container)
+        primary_layout.setContentsMargins(0, 0, 0, 0)
+        primary_layout.setSpacing(shortcut_gap)
+        self._secondary_container = QWidget(self)
+        self._secondary_container.setObjectName("quickSecondaryContainer")
+        secondary_layout = QHBoxLayout(self._secondary_container)
+        secondary_layout.setContentsMargins(0, 0, 0, 0)
+        secondary_layout.setSpacing(shortcut_gap)
         self.title = QLabel(f"{pet_name}快捷口袋")
         self.title.setVisible(False)
         self.chat_button = self._button("chat", "聊聊", self.chat_requested)
@@ -621,7 +631,12 @@ class QuickControlPanel(QWidget):
         # macOS and drift away from the work shortcut after a move.
         self.report_button = self._button("report", "工作报告", None)
         self.report_button.clicked.connect(self._open_report_from_button)
-        self.report_button.hide()
+        # Leave one primary-column offset before the report tile so its center
+        # is aligned with the work button without ever sharing its layout.
+        secondary_layout.addSpacing(self.work_button_width_offset())
+        secondary_layout.addWidget(self.report_button)
+        secondary_layout.addStretch(1)
+        self._secondary_container.hide()
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
@@ -644,12 +659,13 @@ class QuickControlPanel(QWidget):
             self.music_button,
             self.food_button,
         )
-        for column, button in enumerate(primary_buttons):
-            layout.addWidget(button, 1, column, Qt.AlignmentFlag.AlignHCenter)
+        for button in primary_buttons:
+            primary_layout.addWidget(button)
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             button.installEventFilter(self)
-        layout.addWidget(self.report_button, 0, 1, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self._secondary_container)
+        layout.addWidget(self._primary_container)
         for button in (self.work_button, self.report_button):
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -681,6 +697,12 @@ class QuickControlPanel(QWidget):
         if signal is not None:
             button.clicked.connect(lambda: signal.emit())
         return button
+
+    @staticmethod
+    def work_button_width_offset() -> int:
+        """Return the fixed secondary offset before the work-column tile."""
+
+        return 42 + 6
 
     def set_window_behavior_callback(self, callback: Callable[..., object] | None) -> None:
         """Let the owning window apply the same non-activating native panel rules."""
@@ -719,8 +741,7 @@ class QuickControlPanel(QWidget):
         self._report_show_timer.stop()
         self._report_hide_timer.stop()
         self._hide_hint()
-        self.report_button.hide()
-        self.adjustSize()
+        self._set_secondary_mode(self.SECONDARY_NONE, notify_layout=False)
 
     def hide(self) -> None:
         """Hide the shortcut dock and its report action together."""
@@ -728,30 +749,55 @@ class QuickControlPanel(QWidget):
         self._collapse_report_surface()
         super().hide()
 
-    def _set_report_button_visible(self, visible: bool) -> None:
-        """Show the work-report secondary action only while work is hovered."""
+    def _set_secondary_mode(self, mode: str, *, notify_layout: bool = True) -> None:
+        """Commit one complete secondary state without exposing a layout frame."""
 
-        target = bool(visible)
-        if not target:
-            self._report_show_timer.stop()
-        if self.report_button.isVisible() == target:
+        normalized = (
+            self.SECONDARY_WORK_REPORT
+            if mode == self.SECONDARY_WORK_REPORT
+            else self.SECONDARY_NONE
+        )
+        target_visible = normalized == self.SECONDARY_WORK_REPORT
+        already_visible = self._secondary_mode == normalized and bool(
+            self._secondary_container.isVisible()
+        ) == target_visible
+        self._secondary_mode = normalized
+        if already_visible:
             return
-        if target:
-            self._report_hide_timer.stop()
-            self.report_button.show()
-            # Resize the dock immediately so its position and auto-hide
-            # geometry include the newly visible secondary row.
-            self.adjustSize()
-            self._hover_poll_timer.start()
-        else:
+        if not target_visible:
+            self._report_show_timer.stop()
             if self._hint_button is self.report_button:
                 self._hide_hint()
-            self.report_button.hide()
+        else:
+            self._report_hide_timer.stop()
+
+        # A top-level QWidget may repaint after each child visibility change.
+        # Freeze only this small panel while the final layout and its anchored
+        # position are committed; the GUI event loop itself remains running.
+        self.setUpdatesEnabled(False)
+        try:
+            self.report_button.setVisible(target_visible)
+            self._secondary_container.setVisible(target_visible)
+            self.layout().invalidate()
+            self.layout().activate()
             self.adjustSize()
-        if self.isVisible():
-            # The owning window keeps the whole dock centered over the pet
-            # after the secondary row changes the panel height.
-            self.layout_changed.emit()
+            if self.isVisible() and notify_layout:
+                # The owner re-anchors the complete panel synchronously before
+                # painting resumes, so the primary row never flashes at the
+                # secondary row's temporary position.
+                self.layout_changed.emit()
+        finally:
+            self.setUpdatesEnabled(True)
+        self.update()
+        if target_visible:
+            self._hover_poll_timer.start()
+
+    def _set_report_button_visible(self, visible: bool) -> None:
+        """Compatibility wrapper for the work-report-only secondary mode."""
+
+        self._set_secondary_mode(
+            self.SECONDARY_WORK_REPORT if visible else self.SECONDARY_NONE
+        )
 
     def _schedule_report_hide(self) -> None:
         """Give the pointer a short bridge from the main button to the report."""
@@ -774,11 +820,11 @@ class QuickControlPanel(QWidget):
             self._set_report_button_visible(True)
 
     def _position_report_button(self) -> None:
-        """Keep the legacy positioning hook harmless after layout integration."""
+        """Keep the legacy positioning hook harmless after container split."""
 
-        # ``report_button`` follows normal grid-layout geometry. Callers from
-        # older window-positioning code can still invoke this method safely.
-        self.adjustSize()
+        # The secondary tile is owned by ``_secondary_container`` and follows
+        # the normal layout. The owning window positions the whole dock.
+        return
 
     def position_report_button(self) -> None:
         """Compatibility hook for callers that reposition the shortcut dock."""
@@ -876,15 +922,15 @@ class QuickControlPanel(QWidget):
         if button in (self.work_button, self.report_button):
             self._report_hide_timer.stop()
             if immediate or button is self.report_button:
-                self._set_report_button_visible(True)
+                self._set_secondary_mode(self.SECONDARY_WORK_REPORT)
             elif not self.report_button.isVisible() and not self._report_show_timer.isActive():
                 self._report_show_timer.start()
         else:
-            # Moving to any other primary shortcut immediately removes the
-            # secondary report action. The short timer is reserved for the
-            # tiny pointer bridge between work and report themselves.
+            # Work report is the only secondary mode. Moving to another primary
+            # shortcut cancels it immediately; the short timer is reserved for
+            # the tiny pointer bridge between work and report themselves.
             self._report_show_timer.stop()
-            self._set_report_button_visible(False)
+            self._set_secondary_mode(self.SECONDARY_NONE)
         if self._hint_button is not button or not self.hover_hint.isVisible():
             self._show_hint(button)
 
