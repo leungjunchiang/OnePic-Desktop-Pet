@@ -71,13 +71,70 @@ def test_weekday_alarm_skips_weekends(tmp_path) -> None:
     assert manager.get(alarm.id).active is False
 
 
-def test_stale_one_off_alarm_is_not_replayed_after_restart(tmp_path) -> None:
-    clock = Clock(datetime(2026, 8, 19, 15, 0))
+def test_stale_one_off_alarm_is_requeued_for_thirty_minutes(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 12, 10, 1))
     manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
     alarm = manager.add("错过的闹钟", "2026-08-19T12:00:00")
 
     assert manager.claim_due() == []
-    assert manager.get(alarm.id).enabled is False
+    restored = manager.get(alarm.id)
+    assert restored is not None
+    assert restored.enabled is True
+    assert restored.active is False
+    assert restored.snooze_until.startswith("2026-08-19T12:40:01")
+
+    clock.value += timedelta(minutes=30)
+    assert [item.id for item in manager.claim_due()] == [alarm.id]
+
+
+def test_stale_active_alarm_is_requeued_after_restart_without_a_duplicate(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 12, 0))
+    path = tmp_path / "alarms.json"
+    manager = AlarmManager(path, now_provider=clock)
+    alarm = manager.add("未处理的闹钟", clock.value)
+    manager.claim_due()
+
+    clock.value += timedelta(minutes=10, seconds=1)
+    reloaded = AlarmManager(path, now_provider=clock)
+    assert reloaded.claim_due() == []
+    restored = reloaded.get(alarm.id)
+    assert restored is not None
+    assert restored.active is False
+    assert restored.snooze_until.startswith("2026-08-19T12:40:01")
+
+    clock.value += timedelta(minutes=30)
+    assert [item.id for item in reloaded.claim_due()] == [alarm.id]
+
+
+def test_daily_alarm_retry_does_not_fire_the_original_slot_again(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    alarm = manager.add("每日重试", clock.value, repeat_rule=REPEAT_DAILY)
+    manager.claim_due()
+
+    clock.value += timedelta(minutes=10, seconds=1)
+    assert manager.claim_due() == []
+    clock.value += timedelta(minutes=30)
+    assert [item.id for item in manager.claim_due()] == [alarm.id]
+    manager.dismiss(alarm.id)
+
+    # The retry is the same day's occurrence; it must not immediately replay
+    # the original 09:00 slot after the user closes the retry card.
+    assert manager.claim_due() == []
+
+    clock.value = datetime(2026, 8, 20, 9, 0)
+    assert [item.id for item in manager.claim_due()] == [alarm.id]
+
+
+def test_due_alarms_only_claim_one_foreground_alarm(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    first = manager.add("第一个", clock.value)
+    second = manager.add("第二个", clock.value)
+
+    assert [item.id for item in manager.claim_due()] == [first.id]
+    assert manager.get(first.id).active is True
+    assert manager.get(second.id).active is False
 
 
 def test_dnd_skips_regular_alarm_but_allows_explicit_breakthrough(tmp_path) -> None:

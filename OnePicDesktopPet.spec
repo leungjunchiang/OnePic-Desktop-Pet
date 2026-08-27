@@ -59,11 +59,21 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["tools\\pyinstaller_qt_runtime.py"],
     excludes=excludes,
     noarchive=False,
     optimize=0,
 )
+# The workspace's Poppler runtime can contribute ICU 78 DLLs through ctypes.
+# Qt 6.11.2 expects the Windows ICU ABI under the unversioned ``icuuc.dll``
+# name; shipping Poppler's renamed-symbol ICU beside Qt causes entry-point
+# failures before Python can start. Keep the Qt/PySide6 package independent by
+# leaving these optional Poppler DLLs out of the public desktop bundle.
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if Path(entry[0]).name.casefold() not in {"icuuc.dll", "icudt78.dll"}
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(

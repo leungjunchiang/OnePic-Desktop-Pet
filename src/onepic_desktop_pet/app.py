@@ -13,7 +13,7 @@
 - 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
 - 下载更新进度使用独立的不透明工具对话框，不继承宠物透明窗口的绘制属性。
 - Qt 事件边界捕获单个窗口/定时器回调异常，记录诊断但保持桌宠进程和托盘继续运行。
-- 启动时触发与桌面待办小窗相同的近期待办投影；有未读待办就显示，空投影由面板自动隐藏；
+- 启动时触发与桌面待办小窗相同的近期待办投影；有未完成待办就显示，空投影由面板自动隐藏；
 - 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
 Agent 快速定位：
@@ -72,6 +72,8 @@ from .program_updates import (
     ProgramUpdateResult,
     UpdateState,
 )
+from .qt_lifecycle import wait_for_thread
+from .lifecycle_log import configure_lifecycle_logging, lifecycle_log
 from .resources import resource_path
 from .update_worker import (
     ContentUpdateWorker,
@@ -123,6 +125,12 @@ def _configure_runtime_diagnostics() -> None:
             )
             package_logger.addHandler(handler)
             package_logger.setLevel(logging.INFO)
+        lifecycle_path = configure_lifecycle_logging()
+        lifecycle_log(
+            "runtime.diagnostics.configured",
+            log_path=lifecycle_path,
+            runtime_log=log_path,
+        )
         _install_process_exception_hooks()
     except Exception:
         # Diagnostics are deliberately non-critical.  Import/startup must
@@ -292,12 +300,15 @@ class DesktopPetApplication(QObject):
         # those callbacks back to the main thread before they touch windows,
         # message boxes, or speech bubbles.
         super().__init__()
+        self.qt_app.aboutToQuit.connect(self._on_about_to_quit)
+        lifecycle_log("application.controller.created", self.qt_app)
         self._instance_lock = instance_lock
         self.qt_app.setApplicationName(APP_DISPLAY_NAME)
         self.qt_app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
+        lifecycle_log("pet_window.created", self.window, owner="DesktopPetApplication")
         type(self)._active_instance = self
         self.window.quit_requested.connect(self.quit)
         self.update_manager = UpdateManager()
@@ -326,17 +337,39 @@ class DesktopPetApplication(QObject):
         self._status_item_controller = install_status_item(self.window.unified_menu_model)
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
+    def _on_about_to_quit(self) -> None:
+        """Record Qt's final shutdown signal before native teardown begins."""
+
+        lifecycle_log(
+            "qapplication.about_to_quit",
+            self.qt_app,
+            quit_started=self._quit_started,
+        )
+
     def _create_tray(self) -> QSystemTrayIcon:
         """创建系统托盘图标及其操作菜单。"""
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
+        lifecycle_log("tray.create", tray)
+        tray.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "tray.destroy", class_name="QSystemTrayIcon"
+            )
+        )
         pet_name = PET_NAME
         tray.setToolTip(f"Lili · {pet_name}")
         menu = self.window.build_unified_menu(None, "tray")
+        lifecycle_log("tray.menu.create", menu, context="tray")
         tray.setContextMenu(menu)
         self.tray_menu = menu
         menu.aboutToShow.connect(self._refresh_tray_menu)
+        menu.aboutToShow.connect(
+            lambda: lifecycle_log("tray.menu.show", menu, context="tray")
+        )
+        menu.aboutToHide.connect(
+            lambda: lifecycle_log("tray.menu.close", menu, context="tray")
+        )
         tray.activated.connect(self._tray_activated)
         return tray
 
@@ -361,6 +394,8 @@ class DesktopPetApplication(QObject):
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
 
+        lifecycle_log("tray.activated", self.tray, reason=str(reason))
+
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
@@ -369,6 +404,8 @@ class DesktopPetApplication(QObject):
 
     def show_window(self) -> None:
         """显示宠物但不夺走用户正在输入文字的窗口焦点。"""
+
+        lifecycle_log("pet_window.show.request", self.window, source="application")
 
         if sys.platform == "darwin":
             # Configure the NSPanel before its first show.  Showing first and
@@ -382,6 +419,7 @@ class DesktopPetApplication(QObject):
         # been observed to reactivate Lili on some macOS/Qt combinations.
         if sys.platform != "darwin":
             self.window._ensure_on_top()
+        lifecycle_log("pet_window.show.complete", self.window, source="application")
 
     @_guard_qt_callback
     def _show_startup_todos(self) -> None:
@@ -404,18 +442,25 @@ class DesktopPetApplication(QObject):
     def start(self, smoke_test_ms: int | None = None) -> int:
         """显示应用并进入事件循环；可选定时退出用于自动验证。"""
 
+        lifecycle_log("application.start", self.qt_app, smoke_test_ms=smoke_test_ms)
+
         self.window.place_at_start()
         self.show_window()
-        paper_mode = getattr(self.settings, "today_note_display_mode", "always")
         note_style = getattr(self.settings, "today_note_mode", "compact")
         # Use the same upcoming projection as the compact strip. Read is an
         # acknowledgement, not completion, so unfinished notes remain
         # eligible at startup until the user checks or deletes them.
         has_pending_todos = bool(compact_todo_candidates(self.window.time_memory))
-        should_show_paper = paper_mode == "always" or (
-            paper_mode == "pending" and has_pending_todos
-        ) or bool(getattr(self.settings, "today_note_autoshow", False))
-        if paper_mode != "hidden" and note_style != "hidden" and should_show_paper:
+        # A pending Todo is an explicit reason to show the list on startup.
+        # This also repairs older user settings that retained the transitional
+        # "hidden" display policy; the user can still choose the permanent
+        # "完全隐藏" surface style when they do not want any Todo window.
+        should_show_paper = (
+            has_pending_todos
+            or getattr(self.settings, "today_note_display_mode", "always") == "always"
+            or bool(getattr(self.settings, "today_note_autoshow", False))
+        )
+        if note_style != "hidden" and should_show_paper:
             # Startup UI must never steal the user's current editor/browser
             # focus.  The compact panel hides itself when the shared Todo
             # projection is empty; explicit user actions still open the
@@ -423,6 +468,7 @@ class DesktopPetApplication(QObject):
             QTimer.singleShot(300, self._show_startup_todos)
         if self.tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
+            lifecycle_log("tray.show", self.tray)
         if not self._content_updates_disabled():
             # The startup check is deliberately delayed and silent.  It only
             # fetches the manifest; changed files are downloaded in a worker.
@@ -445,6 +491,12 @@ class DesktopPetApplication(QObject):
         # shutdown signals do not make Lili disappear.  A deliberate quit or
         # OS-level Qt shutdown still returns immediately.
         exit_code = self.qt_app.exec()
+        lifecycle_log(
+            "qapplication.exec.returned",
+            self.qt_app,
+            exit_code=exit_code,
+            quit_started=self._quit_started,
+        )
         if not self._quit_started and not QCoreApplication.closingDown():
             LOGGER.error(
                 "[Lifecycle] Qt event loop returned unexpectedly; restoring the pet"
@@ -459,48 +511,79 @@ class DesktopPetApplication(QObject):
         """保存窗口位置、隐藏托盘并退出应用。"""
 
         if self._quit_started:
+            lifecycle_log("application.quit.ignored_already_started", self.qt_app)
             return
+        lifecycle_log("application.quit.request", self.qt_app)
         self._quit_started = True
         self.settings.start_x = self.window.x()
         self.settings.start_y = self.window.y()
+        shutdown_ready = True
         try:
-            if self._content_update_worker is not None and self._content_update_worker.isRunning():
-                self._content_update_worker.requestInterruption()
-                self._content_update_worker.wait(6000)
+            if not wait_for_thread(self._content_update_worker, 6000):
+                shutdown_ready = False
             for worker in (
                 self._program_update_check_worker,
                 self._program_update_download_worker,
             ):
-                if worker is not None and worker.isRunning():
-                    worker.requestInterruption()
-                    worker.wait(6000)
+                if not wait_for_thread(worker, 6000):
+                    shutdown_ready = False
             self.window.shutdown_work_timer()
             save_settings(self.settings)
         except Exception:
-            # A partially unavailable worker or settings path must not prevent
-            # the final Qt shutdown sequence from running.
+            # Keep the process alive long enough for the retry path to finish
+            # native thread teardown instead of letting Qt destroy a worker
+            # that is still running.
             LOGGER.exception("[Lifecycle] graceful shutdown preparation failed")
-        finally:
-            if type(self)._active_instance is self:
-                type(self)._active_instance = None
-            for label, cleanup in (
-                ("status item", self._status_item_controller.close),
-                ("dock menu", self._dock_controller.close),
-                ("tray", self.tray.hide if self.tray is not None else None),
-                ("pet window", self.window.close),
-            ):
-                if cleanup is None:
-                    continue
-                try:
-                    cleanup()
-                except Exception:
-                    LOGGER.exception("[Lifecycle] failed to close %s", label)
-            if self._instance_lock is not None and self._instance_lock.isLocked():
-                try:
-                    self._instance_lock.unlock()
-                except Exception:
-                    LOGGER.exception("[Lifecycle] failed to release instance lock")
-            self.qt_app.quit()
+            shutdown_ready = False
+
+        if not shutdown_ready:
+            lifecycle_log("application.quit.retry_workers", self.qt_app)
+            self._quit_started = False
+            QTimer.singleShot(250, self.quit)
+            return
+
+        window_closed = True
+        for label, cleanup in (
+            ("status item", self._status_item_controller.close),
+            ("dock menu", self._dock_controller.close),
+            ("tray", self.tray.hide if self.tray is not None else None),
+            ("pet window", self.window.close),
+        ):
+            if cleanup is None:
+                continue
+            try:
+                lifecycle_log(
+                    "application.close_entry",
+                    cleanup if isinstance(cleanup, QObject) else None,
+                    target=label,
+                )
+                result = cleanup()
+                if label == "pet window" and result is False:
+                    window_closed = False
+            except Exception:
+                LOGGER.exception("[Lifecycle] failed to close %s", label)
+                if label == "pet window":
+                    window_closed = False
+
+        if not window_closed:
+            # PetWindow keeps its child QThreads alive and rejects the close
+            # event until they have actually stopped. Retry from the Qt event
+            # loop; never call QApplication.quit() while one is still live.
+            LOGGER.info("[Lifecycle] waiting for Qt worker threads before exit")
+            lifecycle_log("application.quit.waiting_for_window_threads", self.window)
+            self._quit_started = False
+            QTimer.singleShot(250, self.quit)
+            return
+
+        if type(self)._active_instance is self:
+            type(self)._active_instance = None
+        if self._instance_lock is not None and self._instance_lock.isLocked():
+            try:
+                self._instance_lock.unlock()
+            except Exception:
+                LOGGER.exception("[Lifecycle] failed to release instance lock")
+        lifecycle_log("qapplication.quit.call", self.qt_app)
+        self.qt_app.quit()
 
     def check_content_updates(self, manual: bool = True) -> None:
         """Check only the signed-by-hash content manifest, never the EXE."""

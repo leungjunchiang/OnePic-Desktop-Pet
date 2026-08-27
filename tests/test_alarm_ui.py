@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import os
+import wave
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from onepic_desktop_pet.alarm_manager import Alarm
+from onepic_desktop_pet.alarm_sounds import AlarmSoundLibrary
 from onepic_desktop_pet.alarm_ui import AlarmCard, AlarmPopupState, AwayRecoveryCard
 
 
@@ -17,7 +20,7 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
-def test_alarm_card_is_foreground_once_then_releases_topmost() -> None:
+def test_alarm_card_changes_native_z_order_without_mutating_qt_flags() -> None:
     app = _app()
     card = AlarmCard(
         Alarm(
@@ -28,21 +31,118 @@ def test_alarm_card_is_foreground_once_then_releases_topmost() -> None:
         )
     )
     assert card.graphicsEffect() is None
+    initial_flags = card.windowFlags()
 
     card.show_alarm_foreground()
     app.processEvents()
     assert card.popup_state is AlarmPopupState.UNSEEN
-    assert card.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert card.windowFlags() == initial_flags
 
     # A click anywhere is represented by the same acknowledgement path used
     # by the event filter and by every action button.
     card._acknowledge_alarm()
     assert card.popup_state is AlarmPopupState.ACKNOWLEDGED
-    assert not card.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    # Acknowledgement changes the native z-order directly on Windows; it must
+    # not mutate Qt window flags on a visible top-level dialog.
+    assert card.windowFlags() == initial_flags
 
     card.close_from_app()
     app.processEvents()
     assert card.popup_state is AlarmPopupState.DISMISSED
+
+
+def test_alarm_card_action_is_idempotent_and_cancels_delayed_audio() -> None:
+    app = _app()
+    card = AlarmCard(
+        Alarm(
+            id="alarm-action-1",
+            title="点击测试",
+            trigger_at="2026-08-26T09:00:00",
+            sound_enabled=True,
+        )
+    )
+    card.show_alarm_foreground()
+    assert card._audio_start_timer.isActive()
+
+    emitted: list[str] = []
+    card.dismiss_requested.connect(emitted.append)
+    card._request_dismiss()
+    card._request_dismiss()
+    app.processEvents()
+
+    assert emitted == ["alarm-action-1"]
+    assert card.popup_state is AlarmPopupState.DISMISSED
+    assert not card._audio_start_timer.isActive()
+    card.close_from_app()
+    app.processEvents()
+
+
+def test_alarm_card_real_button_click_returns_before_action_signal() -> None:
+    app = _app()
+    card = AlarmCard(
+        Alarm(
+            id="alarm-click-1",
+            title="真实按钮点击测试",
+            trigger_at="2026-08-26T09:00:00",
+            sound_enabled=True,
+        )
+    )
+    started: list[str] = []
+    card.start_requested.connect(started.append)
+    card.show_alarm_foreground()
+    app.processEvents()
+
+    button = next(
+        item for item in card.findChildren(QPushButton)
+        if item.text() == "开始30分钟"
+    )
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+
+    assert started == ["alarm-click-1"]
+    assert card.popup_state is AlarmPopupState.DISMISSED
+    assert not card._audio_start_timer.isActive()
+    card.close_from_app()
+    app.processEvents()
+
+
+def test_custom_audio_button_click_stops_player_before_card_cleanup(tmp_path) -> None:
+    app = _app()
+    source = tmp_path / "test-tone.wav"
+    with wave.open(str(source), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8_000)
+        output.writeframes(b"\x00\x00" * 1_600)
+    library = AlarmSoundLibrary(tmp_path)
+    sound = library.import_file(source, display_name="测试音频")
+    card = AlarmCard(
+        Alarm(
+            id="alarm-custom-click-1",
+            title="自定义音频点击测试",
+            trigger_at="2026-08-26T09:00:00",
+            sound_enabled=True,
+            sound_id=sound.sound_id,
+            max_ring_seconds=2,
+        ),
+        sound_library=library,
+    )
+    card.show_alarm_foreground()
+    QTest.qWait(220)
+    app.processEvents()
+
+    button = next(
+        item for item in card.findChildren(QPushButton)
+        if item.text() == "关闭"
+    )
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+
+    assert card.popup_state is AlarmPopupState.DISMISSED
+    assert not card._audio_start_timer.isActive()
+    assert card._audio_closing is True
+    card.close_from_app()
+    app.processEvents()
 
 
 def test_away_recovery_card_has_no_drop_shadow() -> None:

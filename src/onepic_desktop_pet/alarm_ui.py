@@ -1,7 +1,14 @@
-"""Non-modal UI for managing alarms and showing alarm-style recovery cards."""
+"""Non-modal UI for managing alarms and showing alarm-style recovery cards.
+
+闹钟卡片在 Windows 上只通过原生窗口层级 API 调整临时置顶，不在显示后
+反复切换 Qt window flag，避免触发 Qt 原生窗口重建。
+"""
 
 from __future__ import annotations
 
+import ctypes
+import sys
+from ctypes import wintypes
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -30,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from .alarm_manager import Alarm, AlarmManager, REPEAT_DAILY, REPEAT_ONCE, REPEAT_WEEKDAYS
 from .alarm_sounds import AlarmSoundLibrary
+from .lifecycle_log import lifecycle_log
 
 try:
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -71,6 +79,12 @@ class AlarmSoundSelector(QWidget):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        lifecycle_log("alarm.sound_selector.create", self)
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "alarm.sound_selector.destroy", class_name="AlarmSoundSelector"
+            )
+        )
         self.library = library or AlarmSoundLibrary(persist=False)
         self.combo = QComboBox(self)
         self.import_button = QPushButton("导入自定义音频…", self)
@@ -94,8 +108,26 @@ class AlarmSoundSelector(QWidget):
         self._preview_player = QMediaPlayer(self) if QMediaPlayer is not None else None
         if self._preview_player is not None and self._preview_output is not None:
             self._preview_player.setAudioOutput(self._preview_output)
-            self._preview_player.errorOccurred.connect(lambda *_args: self.stop_preview())
+            self._preview_player.playbackStateChanged.connect(
+                lambda state: lifecycle_log(
+                    "media.preview.state_changed",
+                    self._preview_player,
+                    owner="AlarmSoundSelector",
+                    signal="playbackStateChanged",
+                    state=str(state),
+                )
+            )
+            self._preview_player.errorOccurred.connect(self._preview_error)
         self.refresh(selected_id)
+
+    def _preview_error(self, *args: object) -> None:
+        lifecycle_log(
+            "media.preview.error",
+            self._preview_player,
+            owner="AlarmSoundSelector",
+            error=" ".join(str(item) for item in args),
+        )
+        self.stop_preview()
 
     def refresh(self, selected_id: str | None = None) -> None:
         selected = str(selected_id or self.current_sound_id() or "system")
@@ -169,11 +201,22 @@ class AlarmSoundSelector(QWidget):
         if self._preview_output is not None:
             self._preview_output.setVolume(0.7)
         self._preview_player.setSource(QUrl.fromLocalFile(str(path)))
+        lifecycle_log(
+            "media.preview.play",
+            self._preview_player,
+            owner="AlarmSoundSelector",
+            sound_id=sound_id,
+        )
         self._preview_player.play()
         QTimer.singleShot(15_000, self.stop_preview)
 
     def stop_preview(self) -> None:
         if self._preview_player is not None:
+            lifecycle_log(
+                "media.preview.stop",
+                self._preview_player,
+                owner="AlarmSoundSelector",
+            )
             self._preview_player.stop()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -203,12 +246,29 @@ class AlarmCard(QDialog):
         sound_library: AlarmSoundLibrary | None = None,
     ) -> None:
         super().__init__(None)
+        lifecycle_log(
+            "alarm.popup.create",
+            self,
+            alarm_id=str(alarm.id),
+            title=str(alarm.title),
+        )
+        alarm_id_for_destroy = str(alarm.id)
+        self.destroyed.connect(
+            lambda _obj=None, value=alarm_id_for_destroy: lifecycle_log(
+                "alarm.popup.destroy",
+                class_name="AlarmCard",
+                alarm_id=value,
+            )
+        )
         self.alarm = alarm
         self.sound_library = sound_library
         self._state = AlarmPopupState.UNSEEN
         self._audio_started = False
+        self._audio_closing = False
+        self._action_requested = False
         self._suppress_close_action = False
         self._drag_offset = None
+        self._pending_topmost = None
         self.setObjectName("alarmCard")
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -225,7 +285,14 @@ class AlarmCard(QDialog):
         title.setWordWrap(True)
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
         layout.addWidget(title)
-        trigger = QLabel(self._display_trigger(alarm.trigger_at))
+        # ``snooze_until`` is the effective next occurrence.  Showing it is
+        # important for a recovered alarm: the card must not still display
+        # the old time after the scheduler has moved it 30 minutes forward.
+        trigger = QLabel(
+            self._display_trigger(
+                alarm.snooze_until or alarm.last_triggered_slot or alarm.trigger_at
+            )
+        )
         trigger.setStyleSheet("font-size: 32px; font-weight: 800; color:#24475b;")
         layout.insertWidget(0, trigger)
         custom_id = str(alarm.sound_id or "") not in {"", "system", "default"}
@@ -273,9 +340,26 @@ class AlarmCard(QDialog):
             self._media_player.setAudioOutput(self._audio_output)
             self._audio_output.setVolume(max(0, min(100, int(alarm.volume or 0))) / 100)
             self._media_player.mediaStatusChanged.connect(self._media_status_changed)
-            self._media_player.errorOccurred.connect(lambda *_args: self._fallback_to_system())
+            self._media_player.playbackStateChanged.connect(
+                lambda state: lifecycle_log(
+                    "media.alarm.state_changed",
+                    self._media_player,
+                    owner="AlarmCard",
+                    alarm_id=str(self.alarm.id),
+                    signal="playbackStateChanged",
+                    state=str(state),
+                )
+            )
+            self._media_player.errorOccurred.connect(self._media_error)
         self._sound_timer = None
         self._sound_stop_timer = None
+        self._audio_start_timer = QTimer(self)
+        self._audio_start_timer.setSingleShot(True)
+        self._audio_start_timer.setInterval(120)
+        self._audio_start_timer.timeout.connect(self._start_alarm_audio)
+        self._topmost_timer = QTimer(self)
+        self._topmost_timer.setSingleShot(True)
+        self._topmost_timer.timeout.connect(self._apply_pending_topmost)
         self._custom_audio = False
         self._configure_sound(alarm)
 
@@ -326,23 +410,20 @@ class AlarmCard(QDialog):
 
     def _request_start(self) -> None:
         self._acknowledge_alarm()
-        self._stop_sound()
-        self._suppress_close_action = True
-        self._state = AlarmPopupState.DISMISSED
+        if not self._prepare_action():
+            return
         self.start_requested.emit(self.alarm.id)
 
     def _request_snooze(self, minutes: int) -> None:
         self._acknowledge_alarm()
-        self._stop_sound()
-        self._suppress_close_action = True
-        self._state = AlarmPopupState.DISMISSED
+        if not self._prepare_action():
+            return
         self.snooze_requested.emit(self.alarm.id, int(minutes))
 
     def _request_dismiss(self) -> None:
         self._acknowledge_alarm()
-        self._stop_sound()
-        self._suppress_close_action = True
-        self._state = AlarmPopupState.DISMISSED
+        if not self._prepare_action():
+            return
         self.dismiss_requested.emit(self.alarm.id)
 
     @property
@@ -352,14 +433,16 @@ class AlarmCard(QDialog):
     def show_alarm_foreground(self) -> None:
         """Show once in front of the active app, then start the sound."""
 
+        lifecycle_log("alarm.popup.show.request", self, alarm_id=str(self.alarm.id))
         self._state = AlarmPopupState.UNSEEN
-        self._set_temporary_topmost(True)
         self.show()
         self.raise_()
         self.activateWindow()
+        self._queue_temporary_topmost(True)
         # Let the native window manager commit the show/activation before the
         # first sound. This is important for both AppKit and Windows.
-        QTimer.singleShot(120, self._start_alarm_audio)
+        self._audio_start_timer.start()
+        lifecycle_log("alarm.popup.show.complete", self, alarm_id=str(self.alarm.id))
 
     def _acknowledge_alarm(self) -> None:
         """Release temporary topmost as soon as the user touches the card."""
@@ -367,15 +450,64 @@ class AlarmCard(QDialog):
         if self._state != AlarmPopupState.UNSEEN:
             return
         self._state = AlarmPopupState.ACKNOWLEDGED
-        self._set_temporary_topmost(False)
+        # Do not call a native z-order API from inside a mouse event.  Queue it
+        # until Qt finishes dispatching the click, just like the action signal
+        # below, to avoid re-entering the window manager from QPushButton.
+        self._queue_temporary_topmost(False)
+
+    def _queue_temporary_topmost(self, enabled: bool) -> None:
+        self._pending_topmost = bool(enabled)
+        self._topmost_timer.start(0)
+
+    def _apply_pending_topmost(self) -> None:
+        enabled = self._pending_topmost
+        self._pending_topmost = None
+        if enabled is None or not self.isVisible():
+            return
+        self._set_temporary_topmost(enabled)
 
     def _set_temporary_topmost(self, enabled: bool) -> None:
-        was_visible = self.isVisible()
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(enabled))
-        # Changing a window flag can hide a visible Qt window. Re-show it, but
-        # never call activateWindow while removing topmost after a click.
-        if was_visible and not self.isVisible():
-            self.show()
+        """Adjust z-order without rebuilding a visible Qt native window.
+
+        ``QWidget.setWindowFlag`` on an already-visible top-level window can
+        destroy and recreate its native handle.  That is especially risky
+        while a mouse event is being delivered and was the most suspicious
+        path behind the Qt6Core native crash.  Windows' z-order API changes
+        only the existing HWND, preserving the Qt object and its handle.
+        """
+
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                user32.SetWindowPos.argtypes = [
+                    wintypes.HWND,
+                    wintypes.HWND,
+                    wintypes.INT,
+                    wintypes.INT,
+                    wintypes.INT,
+                    wintypes.INT,
+                    wintypes.UINT,
+                ]
+                user32.SetWindowPos.restype = wintypes.BOOL
+                user32.SetWindowPos(
+                    wintypes.HWND(int(self.winId())),
+                    wintypes.HWND(-1 if enabled else -2),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0x0001 | 0x0002 | 0x0010,  # NOMOVE | NOSIZE | NOACTIVATE
+                )
+            except (AttributeError, OSError, TypeError, ValueError):
+                # The regular raise/activate path above still presents the
+                # card if the platform API is unavailable or the handle is
+                # not ready yet.  Do not fall back to setWindowFlag here.
+                pass
+            return
+
+        # On other platforms, show()/raise_()/activateWindow() already give
+        # the card a foreground presentation.  Do not mutate Qt window flags
+        # after showing it; this keeps the lifecycle safe across backends.
 
     @staticmethod
     def _display_trigger(value: str) -> str:
@@ -410,9 +542,16 @@ class AlarmCard(QDialog):
     def _start_alarm_audio(self) -> None:
         """Start audio only after the first foreground presentation."""
 
-        if self._state == AlarmPopupState.DISMISSED or self._audio_started:
+        if self._audio_closing or self._state == AlarmPopupState.DISMISSED or self._audio_started:
             return
         self._audio_started = True
+        lifecycle_log(
+            "media.alarm.play.request",
+            self._media_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            custom_audio=self._custom_audio,
+        )
         if not self.alarm.sound_enabled:
             return
         if self._custom_audio and self._media_player is not None:
@@ -429,15 +568,53 @@ class AlarmCard(QDialog):
         self._start_alarm_audio()
 
     def _media_status_changed(self, status) -> None:
-        if self._custom_audio and not self._using_system_sound and self._media_player is not None:
+        lifecycle_log(
+            "media.alarm.status_changed",
+            self._media_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            status=str(status),
+        )
+        if (
+            not self._audio_closing
+            and self._state != AlarmPopupState.DISMISSED
+            and self._custom_audio
+            and not self._using_system_sound
+            and self._media_player is not None
+        ):
             if status == QMediaPlayer.MediaStatus.EndOfMedia:
+                lifecycle_log(
+                    "media.alarm.play.loop",
+                    self._media_player,
+                    owner="AlarmCard",
+                    alarm_id=str(self.alarm.id),
+                )
                 self._media_player.play()
 
+    def _media_error(self, *args: object) -> None:
+        lifecycle_log(
+            "media.alarm.error",
+            self._media_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            error=" ".join(str(item) for item in args),
+        )
+        self._fallback_to_system()
+
     def _fallback_to_system(self) -> None:
+        if self._audio_closing or self._state == AlarmPopupState.DISMISSED:
+            return
         if self._custom_audio:
             self._custom_audio = False
         self._using_system_sound = True
         if self._media_player is not None:
+            lifecycle_log(
+                "media.alarm.stop",
+                self._media_player,
+                owner="AlarmCard",
+                alarm_id=str(self.alarm.id),
+                reason="fallback_to_system",
+            )
             self._media_player.stop()
         if self._sound_timer is None:
             self._sound_timer = QTimer(self)
@@ -481,21 +658,50 @@ class AlarmCard(QDialog):
     def close_from_app(self) -> None:
         """Close without treating application cleanup as user dismissal."""
 
+        lifecycle_log("alarm.popup.close.request", self, alarm_id=str(self.alarm.id), source="application")
         self._suppress_close_action = True
         self._state = AlarmPopupState.DISMISSED
         self.close()
 
     def _stop_sound(self) -> None:
+        self._audio_closing = True
+        self._audio_start_timer.stop()
         if self._sound_timer is not None:
             self._sound_timer.stop()
         if self._sound_stop_timer is not None:
             self._sound_stop_timer.stop()
         if self._media_player is not None:
-            self._media_player.stop()
+            lifecycle_log(
+                "media.alarm.stop",
+                self._media_player,
+                owner="AlarmCard",
+                alarm_id=str(self.alarm.id),
+                reason="popup_close",
+            )
+            # Prevent a synchronous stop() status/error signal from restarting
+            # audio while the card is already being dismissed.
+            was_blocked = self._media_player.signalsBlocked()
+            self._media_player.blockSignals(True)
+            try:
+                self._media_player.stop()
+            finally:
+                self._media_player.blockSignals(was_blocked)
+
+    def _prepare_action(self) -> bool:
+        """Make a button action idempotent before its queued owner handles it."""
+
+        if self._action_requested:
+            return False
+        self._action_requested = True
+        self._suppress_close_action = True
+        self._state = AlarmPopupState.DISMISSED
+        self._stop_sound()
+        return True
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         # Closing by Alt+F4/Cmd+W or by the window manager must stop both
         # system beeps and custom looping audio immediately.
+        lifecycle_log("alarm.popup.close_event.begin", self, alarm_id=str(self.alarm.id))
         self._stop_sound()
         if not self._suppress_close_action:
             # Closing the frameless card means “dismiss this firing”, not
@@ -504,6 +710,7 @@ class AlarmCard(QDialog):
             self._state = AlarmPopupState.DISMISSED
             self.dismiss_requested.emit(self.alarm.id)
         super().closeEvent(event)
+        lifecycle_log("alarm.popup.close_event.end", self, alarm_id=str(self.alarm.id))
 
 
 class AwayRecoveryCard(QDialog):
@@ -516,6 +723,17 @@ class AwayRecoveryCard(QDialog):
         # Keep this as a top-level card, just like AlarmCard, so it remains
         # visible after the pet is temporarily hidden by a fullscreen app.
         super().__init__(None)
+        lifecycle_log(
+            "away_recovery.create",
+            self,
+            reason=str(reason),
+            away_seconds=int(away_seconds),
+        )
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "away_recovery.destroy", class_name="AwayRecoveryCard"
+            )
+        )
         self._suppress_close_action = False
         self.setObjectName("alarmCard")
         self.setWindowFlags(
@@ -590,6 +808,7 @@ class AwayRecoveryCard(QDialog):
         )
 
     def close_from_app(self) -> None:
+        lifecycle_log("away_recovery.close.request", self, source="application")
         self._suppress_close_action = True
         self.close()
 
@@ -602,6 +821,7 @@ class AwayRecoveryCard(QDialog):
         self.dismiss_requested.emit()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        lifecycle_log("away_recovery.close_event", self)
         if not self._suppress_close_action:
             self._suppress_close_action = True
             self.dismiss_requested.emit()

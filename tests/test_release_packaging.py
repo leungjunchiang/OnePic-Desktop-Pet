@@ -32,6 +32,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     )
     spec = (PROJECT_ROOT / "OnePicDesktopPet.spec").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
     installer = (PROJECT_ROOT / "packaging" / "windows" / "Lili.iss").read_text(
         encoding="utf-8"
     )
@@ -72,6 +73,8 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     version_match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
     assert version_match is not None
     assert version_match.group(1) != "0.22.0"
+    assert '"PySide6==6.11.2"' in pyproject
+    assert "PySide6==6.11.2" in requirements
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
     assert "certifi" in pyproject
@@ -80,6 +83,38 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "ChineseSimplified.isl" not in installer
     assert installer_script.isascii()
     assert 'ln -s /Applications "$dmg_root/Applications"' in macos_build
+
+
+def test_qt_6112_thread_lifecycle_guards_are_packaged() -> None:
+    """Qt 6.11.2 must not destroy live worker threads or run UI lambdas inline."""
+
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    window_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "window.py").read_text(
+        encoding="utf-8"
+    )
+    social_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "social_ui.py").read_text(
+        encoding="utf-8"
+    )
+    lifecycle_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "qt_lifecycle.py").read_text(
+        encoding="utf-8"
+    )
+    spec_source = (PROJECT_ROOT / "OnePicDesktopPet.spec").read_text(encoding="utf-8")
+    runtime_hook_source = (PROJECT_ROOT / "tools" / "pyinstaller_qt_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "wait_for_thread" in app_source
+    assert "window_closed = True" in app_source
+    assert "request_stop_all(*thread_roots)" in window_source
+    assert "running_threads(*thread_roots)" in window_source
+    assert "wait_for_thread" in lifecycle_source
+    assert "Qt.ConnectionType.QueuedConnection" in social_source
+    assert "pyinstaller_qt_runtime.py" in spec_source
+    assert "os.add_dll_directory" in runtime_hook_source
+    assert "icudt78.dll" in spec_source
+    assert "icuuc.dll" in spec_source
 
 
 def test_tray_update_actions_are_explicit_manual_checks() -> None:

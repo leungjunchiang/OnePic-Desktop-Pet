@@ -1,4 +1,6 @@
-PySide6>=6.8,<7
+# Keep the packaged runtime identical to the verified Qt 6.11.2 build. The
+# native-thread lifecycle guards in the app are required for this Qt line.
+PySide6==6.11.2
 Pillow>=10,<13
 certifi>=2024.8.30,<2026
 keyring>=25,<27

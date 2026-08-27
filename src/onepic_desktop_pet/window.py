@@ -58,7 +58,18 @@ from functools import wraps
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTime, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    QTime,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QCloseEvent,
     QContextMenuEvent,
@@ -185,6 +196,8 @@ from .liumao_worldview import family_music_mode
 from .music import ARTIST_MUSIC_SERVICE_LABELS, open_chen_artist_page as launch_chen_artist_page
 from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
+from .qt_lifecycle import request_stop_all, running_threads
+from .lifecycle_log import lifecycle_log
 from .social import SocialClient
 from .social_ui import (
     BuddyVisitWindow,
@@ -445,6 +458,12 @@ class PetWindow(QWidget):
         work_timer: WorkTimerModel | None = None,
     ) -> None:
         super().__init__()
+        lifecycle_log("pet_window.construct.begin", self)
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "pet_window.destroy", class_name="PetWindow"
+            )
+        )
         self.settings = settings
         self._menu_external_callbacks: dict[str, Callable[[bool], object]] = {}
         self.behavior = BehaviorModel(settings)
@@ -576,6 +595,7 @@ class PetWindow(QWidget):
             persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self._social_dialog: SocialHubDialog | None = None
+        self._close_retry_scheduled = False
         self._social_thread: SocialSyncThread | None = None
         self._social_event_threads: list[SocialEventThread] = []
         self._social_profile_threads: list[SocialProfileThread] = []
@@ -697,6 +717,23 @@ class PetWindow(QWidget):
         if self._audio_output is not None and self._media_player is not None:
             self._audio_output.setVolume(0.9)
             self._media_player.setAudioOutput(self._audio_output)
+            self._media_player.playbackStateChanged.connect(
+                lambda state: lifecycle_log(
+                    "media.player.state_changed",
+                    self._media_player,
+                    owner="PetWindow",
+                    signal="playbackStateChanged",
+                    state=str(state),
+                )
+            )
+            self._media_player.errorOccurred.connect(
+                lambda error: lifecycle_log(
+                    "media.player.error",
+                    self._media_player,
+                    owner="PetWindow",
+                    error=str(error),
+                )
+            )
 
         self.setWindowFlags(self._pet_window_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -947,6 +984,7 @@ class PetWindow(QWidget):
         self._schedule(self.behavior.initial_idle())
         if should_start_startup_detection():
             QTimer.singleShot(0, self.agent_manager.start_background_check)
+        lifecycle_log("pet_window.construct.complete", self)
 
     def _pet_window_flags(self) -> Qt.WindowType:
         """返回不占任务栏、不接收键盘焦点的宠物窗口标志。"""
@@ -1359,6 +1397,7 @@ class PetWindow(QWidget):
     def showEvent(self, event: QShowEvent) -> None:
         """窗口首次显示时连接跨屏信号并按当前 DPI 绘制。"""
 
+        lifecycle_log("pet_window.show_event.begin", self)
         super().showEvent(event)
         handle = self.windowHandle()
         if handle is not None and not self._screen_change_connected:
@@ -1377,6 +1416,7 @@ class PetWindow(QWidget):
                 )
         self._position_accessories()
         QTimer.singleShot(0, self._ensure_on_top)
+        lifecycle_log("pet_window.show_event.end", self)
 
     @_guard_qt_callback
     def _ensure_on_top(self) -> None:
@@ -1631,6 +1671,7 @@ class PetWindow(QWidget):
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
 
+        lifecycle_log("pet_window.hide_event.begin", self)
         self.photo_bubble.hide()
         self.speech_bubble.hide()
         self.work_controls.hide()
@@ -1642,10 +1683,12 @@ class PetWindow(QWidget):
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
             self._compact_todo_panel.hide()
         super().hideEvent(event)
+        lifecycle_log("pet_window.hide_event.end", self)
 
     def hide_pet(self) -> None:
         """Hide the pet and every detached accessory until explicitly shown."""
 
+        lifecycle_log("pet_window.hide.request", self, source="explicit")
         self._manually_hidden = True
         # These are top-level windows, not children of PetWindow. Hide them
         # explicitly so a later focus/session refresh cannot leave the live
@@ -1658,6 +1701,7 @@ class PetWindow(QWidget):
     def show_pet(self) -> None:
         """Explicitly show the pet again, respecting an active full-screen app."""
 
+        lifecycle_log("pet_window.show.request", self, source="explicit")
         self._manually_hidden = False
         # Use the same platform-aware policy as the polling timer.  On macOS
         # a normal maximised Word/browser window can be screen-sized without
@@ -1665,8 +1709,10 @@ class PetWindow(QWidget):
         # here and could leave the pet hidden after an explicit Show action.
         self._sync_fullscreen_visibility()
         if self._fullscreen_hidden:
+            lifecycle_log("pet_window.show.blocked_fullscreen", self)
             return
         self.show()
+        lifecycle_log("pet_window.show.call", self, source="explicit")
 
     def _fullscreen_surfaces(self) -> list[QWidget]:
         """Return the pet and every passive surface that can cover fullscreen."""
@@ -1742,11 +1788,33 @@ class PetWindow(QWidget):
         ):
             self._show_away_recovery_prompt("fullscreen_video")
 
+    def _thread_shutdown_roots(self) -> tuple[QObject | None, ...]:
+        """Return every top-level object that can own a Qt worker thread."""
+
+        return (
+            self,
+            self._social_dialog,
+            self._chat_dialog,
+            self._chat_history_dialog,
+        )
+
+    @_guard_qt_callback
+    def _retry_close_after_threads_stop(self) -> None:
+        self._close_retry_scheduled = False
+        lifecycle_log("pet_window.close.retry", self)
+        self.close()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
+        lifecycle_log("pet_window.close_event.begin", self)
         if self._qt_application is not None:
             self._qt_application.removeEventFilter(self)
+        # Ask every descendant/top-level utility window worker to stop before
+        # any parent widget can be closed.  The study-room and chat windows
+        # are intentionally top-level, so they are not children of ``self``.
+        thread_roots = self._thread_shutdown_roots()
+        request_stop_all(*thread_roots)
         self.fullscreen_poll_timer.stop()
         self.shutdown_work_timer()
         self.chat_manager.shutdown()
@@ -1777,11 +1845,36 @@ class PetWindow(QWidget):
             self._economy_dialog.close()
         if self._work_report_dialog is not None:
             self._work_report_dialog.close()
+        if self._social_dialog is not None:
+            self._social_dialog.close()
+        if self._chat_dialog is not None:
+            self._chat_dialog.close()
         if self._social_thread is not None and self._social_thread.isRunning():
             self._social_thread.wait(2500)
         if self._media_player is not None:
+            lifecycle_log(
+                "media.player.stop",
+                self._media_player,
+                owner="PetWindow",
+                reason="pet_window.close_event",
+            )
             self._media_player.stop()
+
+        running = running_threads(*thread_roots)
+        if running:
+            names = ", ".join(type(thread).__name__ for thread in running)
+            LOGGER.warning(
+                "[Lifecycle] delaying PetWindow close until QThreads stop: %s",
+                names,
+            )
+            event.ignore()
+            if not self._close_retry_scheduled:
+                self._close_retry_scheduled = True
+                QTimer.singleShot(250, self._retry_close_after_threads_stop)
+            lifecycle_log("pet_window.close_event.ignored_threads_running", self)
+            return
         super().closeEvent(event)
+        lifecycle_log("pet_window.close_event.end", self)
 
     @_guard_qt_callback
     def _on_screen_changed(self, screen: QScreen | None) -> None:
@@ -1922,6 +2015,7 @@ class PetWindow(QWidget):
         card = self._away_recovery_card
         self._away_recovery_card = None
         if card is not None:
+            lifecycle_log("away_recovery.close.entry", card, source="PetWindow")
             self._fullscreen_restore_visible.pop(card, None)
             card.close_from_app()
             card.deleteLater()
@@ -1949,6 +2043,7 @@ class PetWindow(QWidget):
         card.dismiss_requested.connect(self._dismiss_away_recovery)
         self._away_recovery_card = card
         card.center_on_current_screen()
+        lifecycle_log("away_recovery.show.request", card, reason=reason)
         self._show_nonactivating(card, always_on_top=True)
 
     def _continue_from_away_recovery(self) -> None:
@@ -3895,13 +3990,18 @@ class PetWindow(QWidget):
     def _check_local_alarms(self) -> None:
         """Present due alarms as a focused, one-time foreground card."""
 
+        # A card can be temporarily hidden/minimized while still waiting for
+        # the user's action.  Treat the object itself as the lock, otherwise
+        # the one-second timer can create a second card during that window.
+        if self._alarm_card is not None:
+            lifecycle_log("alarm.scheduler.card_already_owned", self._alarm_card)
+            return
+
         quiet = detect_quiet_mode()
         deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
         claimed = self.time_memory.alarms.claim_due(
             allow_during_dnd=not (quiet.blocked or deep_food_scene),
         )
-        if self._alarm_card is not None and self._alarm_card.isVisible():
-            return
         candidates = claimed or self.time_memory.alarms.active()
         if candidates:
             self._show_alarm_card(candidates[0])
@@ -3910,27 +4010,52 @@ class PetWindow(QWidget):
         """Show one alarm window; queued alarms remain persisted/local."""
 
         if self._alarm_card is not None:
-            self._close_alarm_card()
+            # There is exactly one owner for the foreground card.  Do not
+            # close and replace it from a timer callback; that race was able
+            # to leave two native QDialogs alive during a restart/retry.
+            lifecycle_log("alarm.popup.create_ignored_existing", self._alarm_card)
+            return
+        lifecycle_log(
+            "alarm.popup.owner_create",
+            self,
+            alarm_id=str(getattr(alarm, "id", "")),
+        )
         self._alarm_card = AlarmCard(
             alarm,
             sound_library=self.time_memory.alarm_sounds,
         )
-        self._alarm_card.start_requested.connect(self._start_alarm_work)
-        self._alarm_card.snooze_requested.connect(self._snooze_alarm)
-        self._alarm_card.dismiss_requested.connect(self._dismiss_alarm)
+        # Handle actions after the QPushButton mouse/click event returns.  A
+        # synchronous close/delete path can re-enter a native QDialog while
+        # Qt is still dispatching the button event, especially with a custom
+        # QMediaPlayer active in the alarm card.
+        self._alarm_card.start_requested.connect(
+            self._start_alarm_work,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._alarm_card.snooze_requested.connect(
+            self._snooze_alarm,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._alarm_card.dismiss_requested.connect(
+            self._dismiss_alarm,
+            Qt.ConnectionType.QueuedConnection,
+        )
         # Center only once.  After the user drags or minimizes the native
         # window, accessory reflows must never move it back to the pet.
         self._alarm_card.center_on_current_screen()
         self._alarm_card.show_alarm_foreground()
+        lifecycle_log("alarm.popup.owner_show", self._alarm_card)
 
     def _close_alarm_card(self) -> None:
         card = self._alarm_card
         self._alarm_card = None
         if card is not None:
+            lifecycle_log("alarm.popup.close.entry", card, source="PetWindow")
             card.close_from_app()
             card.deleteLater()
 
     def _start_alarm_work(self, alarm_id: str) -> None:
+        lifecycle_log("alarm.action.start", self, alarm_id=alarm_id)
         alarm = self.time_memory.alarms.get(alarm_id)
         if alarm is None:
             self._close_alarm_card()
@@ -3942,6 +4067,7 @@ class PetWindow(QWidget):
         self.start_work_timer()
 
     def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
+        lifecycle_log("alarm.action.snooze", self, alarm_id=alarm_id, minutes=minutes)
         try:
             self.time_memory.alarms.snooze(alarm_id, minutes)
         except KeyError:
@@ -3949,6 +4075,7 @@ class PetWindow(QWidget):
         self._close_alarm_card()
 
     def _dismiss_alarm(self, alarm_id: str) -> None:
+        lifecycle_log("alarm.action.dismiss", self, alarm_id=alarm_id)
         try:
             self.time_memory.alarms.dismiss(alarm_id)
         except KeyError:
@@ -4352,6 +4479,7 @@ class PetWindow(QWidget):
     def show_work_report(self) -> None:
         """Open the live day/week/month report without creating a local image."""
 
+        lifecycle_log("work_report.show.request", self)
         self._record_user_interaction()
         # Close the floating shortcut first. Showing both top-level windows
         # in one mouse event can leave the report behind the dock on macOS.
@@ -4365,12 +4493,19 @@ class PetWindow(QWidget):
                 pet_name=self._pet_name(),
                 parent=None,
             )
+            lifecycle_log("work_report.create", self._work_report_dialog)
+            self._work_report_dialog.destroyed.connect(
+                lambda _obj=None: lifecycle_log(
+                    "work_report.destroy", class_name="WorkReportDialog"
+                )
+            )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
             self._work_report_dialog.closed.connect(self._restore_compact_todos_after_report_close)
         self._work_report_dialog.refresh()
         self._work_report_dialog.showNormal()
         self._work_report_dialog.raise_()
         self._work_report_dialog.activateWindow()
+        lifecycle_log("work_report.show.complete", self._work_report_dialog)
 
     def configure_daily_report(self) -> None:
         """从“工作记录”直接设置日报开关和每天的生成时间。"""
@@ -4540,7 +4675,7 @@ class PetWindow(QWidget):
         self._owner_nickname_sync_inflight = True
         thread = SocialProfileThread(self.social_client, clean, self)
         self._social_profile_threads.append(thread)
-        thread.completed.connect(lambda sync_key=key: self._owner_nickname_sync_succeeded(sync_key))
+        thread.completed.connect(lambda sync_key=key: self._owner_nickname_sync_succeeded(sync_key), Qt.ConnectionType.QueuedConnection)
         thread.failed.connect(self._owner_nickname_sync_failed)
         thread.finished.connect(
             lambda: self._social_profile_thread_finished(thread)
@@ -4802,9 +4937,11 @@ class PetWindow(QWidget):
         """只允许明确用户动作打开设置；所有自动或未知来源均拒绝并记录。"""
 
         if source != SETTINGS_SOURCE_USER_ACTION:
+            lifecycle_log("settings.open.rejected", self, source=source)
             LOGGER.debug("拒绝非用户来源打开连接与陪伴设置：source=%r", source)
             return False
 
+        lifecycle_log("settings.open.request", self, source=source)
         dialog = AISettingsDialog(
             self.settings,
             self.credentials,
@@ -4812,12 +4949,23 @@ class PetWindow(QWidget):
             agent_manager=self.agent_manager,
             music_manager=self.music_provider_manager,
         )
+        lifecycle_log("settings.create", dialog)
+        destroyed_signal = getattr(dialog, "destroyed", None)
+        if destroyed_signal is not None:
+            destroyed_signal.connect(
+                lambda _obj=None: lifecycle_log(
+                    "settings.destroy", class_name="AISettingsDialog"
+                )
+            )
         update_signal = getattr(dialog, "program_update_requested", None)
         if update_signal is not None:
             update_signal.connect(
                 lambda: self._invoke_menu_external("program_update")
             )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        lifecycle_log("settings.exec.begin", dialog)
+        dialog_result = dialog.exec()
+        lifecycle_log("settings.exec.end", dialog, result=str(dialog_result))
+        if dialog_result != QDialog.DialogCode.Accepted:
             return True
         previous_always_on_top = self.settings.always_on_top
         previous_allow_autonomous_walk = bool(
@@ -4878,6 +5026,7 @@ class PetWindow(QWidget):
     def open_social_hub(self) -> None:
         """打开联网搭子与私人自习室；离线功能不依赖此窗口。"""
 
+        lifecycle_log("study_room.show.request", self)
         self._record_user_interaction()
         if self._social_dialog is None:
             # Keep the study room as an independent top-level application
@@ -4889,6 +5038,12 @@ class PetWindow(QWidget):
                 self.settings.equipped_outfit,
                 self._owner_nickname(),
                 None,
+            )
+            lifecycle_log("study_room.create", self._social_dialog)
+            self._social_dialog.destroyed.connect(
+                lambda _obj=None: lifecycle_log(
+                    "study_room.destroy", class_name="SocialHubDialog"
+                )
             )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
             self._social_dialog.account_state_changed.connect(self._social_account_state_changed)
@@ -4917,6 +5072,7 @@ class PetWindow(QWidget):
         else:
             self._social_dialog.show()
         self._social_dialog.raise_(); self._social_dialog.activateWindow()
+        lifecycle_log("study_room.show.complete", self._social_dialog)
 
     @_guard_qt_callback
     def _focus_snapshot_changed(self, snapshot: object) -> None:
@@ -5008,6 +5164,7 @@ class PetWindow(QWidget):
 
     def _social_dialog_finished(self) -> None:
         if self._social_dialog is not None:
+            lifecycle_log("study_room.delete_later", self._social_dialog)
             self._social_dialog.deleteLater(); self._social_dialog = None
 
     @_guard_qt_callback
@@ -5111,7 +5268,15 @@ class PetWindow(QWidget):
         self._social_thread = thread
         thread.completed.connect(self._social_dashboard_received)
         thread.failed.connect(self._social_sync_failed)
-        thread.finished.connect(self._social_thread_finished)
+        # ``finished`` is delivered through the GUI event loop.  A new
+        # heartbeat can therefore replace ``self._social_thread`` before an
+        # older thread's queued callback runs.  Keep the originating thread
+        # in the callback so a stale callback can never delete a newer,
+        # still-running QThread.
+        thread.finished.connect(
+            lambda current=thread: self._social_thread_finished(current),
+            Qt.ConnectionType.QueuedConnection,
+        )
         thread.start()
 
     @_guard_qt_callback
@@ -5699,7 +5864,7 @@ class PetWindow(QWidget):
             self,
         )
         self._social_event_threads.append(thread)
-        thread.finished.connect(lambda: self._social_event_finished(thread))
+        thread.finished.connect(lambda: self._social_event_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _social_event_finished(self, thread: SocialEventThread) -> None:
@@ -5871,7 +6036,7 @@ class PetWindow(QWidget):
         self._incoming_visit_response_threads.append(thread)
         thread.completed.connect(self._incoming_visit_response_completed)
         thread.failed.connect(self._incoming_visit_response_failed)
-        thread.finished.connect(lambda current=thread: self._incoming_visit_response_finished(current))
+        thread.finished.connect(lambda current=thread: self._incoming_visit_response_finished(current), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     @_guard_qt_callback
@@ -5911,9 +6076,11 @@ class PetWindow(QWidget):
         thread.deleteLater()
 
     @_guard_qt_callback
-    def _social_thread_finished(self) -> None:
-        if self._social_thread is not None:
-            self._social_thread.deleteLater(); self._social_thread = None
+    def _social_thread_finished(self, thread: SocialSyncThread) -> None:
+        lifecycle_log("social_sync_thread.finished", thread)
+        if self._social_thread is thread:
+            self._social_thread = None
+        thread.deleteLater()
 
     def set_automatic_grumbling(self, enabled: bool) -> None:
         """启用或停用只在本机生成的间歇牢骚。"""
@@ -6579,6 +6746,12 @@ class PetWindow(QWidget):
         # state. A standalone menu remains usable while another app has focus
         # or while the pet itself is hidden.
         menu = QMenu(parent) if parent is not None else QMenu()
+        lifecycle_log("menu.create", menu, context=context)
+        menu.destroyed.connect(
+            lambda _obj=None, value=context: lifecycle_log(
+                "menu.destroy", class_name="QMenu", context=value
+            )
+        )
         menu.setStyleSheet(UNIFIED_MENU_STYLE)
         self.refresh_unified_menu(menu, context)
         return menu
@@ -6889,9 +7062,21 @@ class PetWindow(QWidget):
         self._babuda_variant_index += 1
         if variants and self._media_player is not None:
             path = variants[index % len(variants)]
+            lifecycle_log(
+                "media.player.stop",
+                self._media_player,
+                owner="PetWindow",
+                reason="play_babuda_voice.replace_source",
+            )
             self._media_player.stop()
             self._media_player.setPlaybackRate((0.96, 1.0, 1.05)[index % 3])
             self._media_player.setSource(QUrl.fromLocalFile(str(path.resolve())))
+            lifecycle_log(
+                "media.player.play",
+                self._media_player,
+                owner="PetWindow",
+                source_kind="babuda_voice",
+            )
             self._media_player.play()
         elif self._speech_engine is not None:
             self._speech_engine.setRate((-0.08, 0.0, 0.08)[index % 3])
@@ -7034,6 +7219,12 @@ class PetWindow(QWidget):
         """Build the same complete app menu used by the tray and status item."""
 
         menu = QMenu(self)
+        lifecycle_log("menu.create", menu, context="context")
+        menu.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "menu.destroy", class_name="QMenu", context="context"
+            )
+        )
         menu.setStyleSheet(UNIFIED_MENU_STYLE)
         populate_qmenu(menu, self.unified_menu_model(), "pet")
         return menu
@@ -7061,6 +7252,7 @@ class PetWindow(QWidget):
         if time.monotonic() >= self._suppress_context_until:
             self.work_controls.hide()
             menu = self._build_context_menu()
+            lifecycle_log("menu.show.request", menu, context="context")
             if sys.platform != "darwin" and bool(getattr(self.settings, "always_on_top", False)):
                 # Keep the popup above the desktop-mode pet without changing
                 # the ownership or flags of the real pet window.
@@ -7091,6 +7283,7 @@ class PetWindow(QWidget):
                     screen.availableGeometry(),
                 )
             menu.exec(point)
+            lifecycle_log("menu.close.complete", menu, context="context")
 
     def eventFilter(self, watched, event) -> bool:
         """收起工作条并记录 Lili 窗口焦点变化，绝不主动重新激活。"""

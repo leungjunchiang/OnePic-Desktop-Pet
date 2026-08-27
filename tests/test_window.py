@@ -946,6 +946,36 @@ def test_study_room_menu_restores_minimized_window() -> None:
     app.processEvents()
 
 
+def test_stale_social_thread_finished_callback_cannot_delete_new_thread() -> None:
+    """A delayed finished signal must clean up only its originating thread."""
+
+    app, window = _create_window()
+
+    class StubThread:
+        def __init__(self) -> None:
+            self.deleted = False
+
+        def isRunning(self) -> bool:
+            return False
+
+        def deleteLater(self) -> None:
+            self.deleted = True
+
+    old_thread = StubThread()
+    replacement_thread = StubThread()
+    window._social_thread = replacement_thread  # type: ignore[assignment]
+
+    window._social_thread_finished(old_thread)  # type: ignore[arg-type]
+
+    assert old_thread.deleted is True
+    assert replacement_thread.deleted is False
+    assert window._social_thread is replacement_thread
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
     app, window = _create_window()
     peer = {"id": "visit-1", "nickname": "搭子", "today_seconds": 5}

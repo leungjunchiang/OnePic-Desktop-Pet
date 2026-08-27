@@ -33,6 +33,7 @@ from .diary import DailyCompanionStats
 from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
 from .focus_segments import FocusSegment
 from .work_timer import WorkTimerModel, format_work_duration
+from .lifecycle_log import lifecycle_log
 
 
 REPORT_STYLE = """
@@ -436,6 +437,12 @@ class ReportTimeIntervalChart(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        lifecycle_log("work_report.construct.begin", self)
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "work_report.destroy", class_name="WorkReportDialog"
+            )
+        )
         self._intervals = [item for item in intervals if isinstance(item, dict)]
         self._period = period
         self._start_date = start_date
@@ -916,18 +923,24 @@ class WorkReportDialog(QDialog):
         self._refresh_timer.timeout.connect(self.refresh)
 
     def showEvent(self, event) -> None:
+        lifecycle_log("work_report.show_event.begin", self)
         super().showEvent(event)
         self.refresh()
         self._refresh_timer.start()
+        lifecycle_log("work_report.show_event.end", self)
 
     def hideEvent(self, event) -> None:
+        lifecycle_log("work_report.hide_event.begin", self)
         self._refresh_timer.stop()
         super().hideEvent(event)
+        lifecycle_log("work_report.hide_event.end", self)
 
     def closeEvent(self, event) -> None:  # pragma: no cover - native window event
+        lifecycle_log("work_report.close_event.begin", self)
         self._refresh_timer.stop()
         self.closed.emit()
         super().closeEvent(event)
+        lifecycle_log("work_report.close_event.end", self)
 
     def refresh(self) -> None:
         try:

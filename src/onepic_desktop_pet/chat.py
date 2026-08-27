@@ -68,6 +68,7 @@ from .ai import (
 )
 from . import __version__
 from .config import PET_NAME
+from .lifecycle_log import lifecycle_log
 from .config import PetSettings
 from .chat_manager import AgentConnectionState, AgentManager
 
@@ -842,6 +843,7 @@ class AISettingsDialog(QDialog):
         music_manager: MusicProviderManager | None = None,
     ) -> None:
         super().__init__(parent)
+        lifecycle_log("settings.construct.begin", self)
         self.settings = settings
         self.credentials = credentials
         self.agent_manager = agent_manager
@@ -1104,6 +1106,16 @@ class AISettingsDialog(QDialog):
         outer_layout.addLayout(buttons)
         self._provider_changed()
         self._music_provider_changed()
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt API
+        lifecycle_log("settings.show_event.begin", self)
+        super().showEvent(event)
+        lifecycle_log("settings.show_event.end", self)
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
+        lifecycle_log("settings.close_event.begin", self)
+        super().closeEvent(event)
+        lifecycle_log("settings.close_event.end", self)
 
     def _music_provider_changed(self) -> None:
         """分别显示应用、Transport 与自动选歌能力，不把安装称为已连接。"""

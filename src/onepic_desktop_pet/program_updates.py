@@ -515,6 +515,40 @@ class ProgramUpdateManager:
             raise ProgramUpdateError(f"找不到安装包校验值：{asset_name}")
         return match.group(1).casefold()
 
+    def _cleanup_previous_installers(self, keep_path: Path, asset_name: str) -> None:
+        """Remove stale installer files left by earlier update downloads.
+
+        The updater owns only its application-specific temporary directory.
+        Restrict deletion to files ending in the exact platform installer name
+        (or its interrupted-download suffix), so unrelated user files in the
+        directory are never touched.  Cleanup is best effort: a locked old
+        installer must not turn an already verified update into a failure.
+        """
+
+        installer_suffixes = (
+            f"-{asset_name}",
+            f"-{asset_name}.part",
+        )
+        try:
+            candidates = tuple(self.download_root.iterdir())
+        except OSError as exc:
+            LOGGER.warning("[Update] old installer cleanup skipped: %s", exc)
+            return
+
+        for path in candidates:
+            if (
+                path == keep_path
+                or not path.is_file()
+                or not path.name.endswith(installer_suffixes)
+            ):
+                continue
+            try:
+                path.unlink()
+            except OSError as exc:
+                LOGGER.warning("[Update] could not delete old installer %s: %s", path, exc)
+            else:
+                LOGGER.info("[Update] removed old installer %s", path)
+
     def download_and_verify(
         self,
         release: ProgramRelease,
@@ -547,4 +581,5 @@ class ProgramUpdateManager:
             partial_path.unlink(missing_ok=True)
             raise ProgramUpdateError("安装包校验失败，已拒绝启动")
         partial_path.replace(final_path)
+        self._cleanup_previous_installers(final_path, release.asset_name)
         return ProgramUpdateResult(release=release, installer_path=final_path)

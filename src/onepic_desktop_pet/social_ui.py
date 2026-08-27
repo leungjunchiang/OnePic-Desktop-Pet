@@ -17,7 +17,7 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QLocale, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtCore import QCollator
-from PySide6.QtGui import QFont, QFontDatabase, QPixmap
+from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QHideEvent, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -31,6 +31,7 @@ from .social import SignupResult, SocialClient, SocialError, _heartbeat_payload,
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .work_timer import format_work_duration
+from .lifecycle_log import lifecycle_log
 
 LOGGER = logging.getLogger(__name__)
 
@@ -835,7 +836,7 @@ class PasswordResetDialog(QDialog):
         self._request_thread = thread
         thread.completed.connect(self._code_sent)
         thread.failed.connect(self._code_failed)
-        thread.finished.connect(lambda: self._request_finished(thread))
+        thread.finished.connect(lambda: self._request_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _code_sent(self) -> None:
@@ -879,7 +880,7 @@ class PasswordResetDialog(QDialog):
         self._verify_thread = thread
         thread.completed.connect(self._reset_succeeded)
         thread.failed.connect(self._reset_failed)
-        thread.finished.connect(lambda: self._verify_finished(thread))
+        thread.finished.connect(lambda: self._verify_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _reset_succeeded(self) -> None:
@@ -1610,7 +1611,7 @@ class AccountSecurityDialog(QDialog):
         self._change_thread = thread
         thread.completed.connect(self._password_changed)
         thread.failed.connect(self._password_change_failed)
-        thread.finished.connect(lambda: self._password_thread_finished(thread))
+        thread.finished.connect(lambda: self._password_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _password_changed(self) -> None:
@@ -1686,7 +1687,7 @@ class AccountSecurityDialog(QDialog):
         self._delete_thread = thread
         thread.completed.connect(self._account_deleted)
         thread.failed.connect(self._delete_failed)
-        thread.finished.connect(lambda: self._delete_thread_finished(thread))
+        thread.finished.connect(lambda: self._delete_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _account_deleted(self) -> None:
@@ -1775,6 +1776,12 @@ class SocialHubDialog(QDialog):
 
     def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
         super().__init__(parent)
+        lifecycle_log("study_room.construct.begin", self)
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "study_room.destroy", class_name="SocialHubDialog"
+            )
+        )
         self.client = client
         self.outfit_key = outfit_key
         self.owner_nickname = owner_nickname.strip()[:24]
@@ -1905,6 +1912,21 @@ class SocialHubDialog(QDialog):
                     self.apply_dashboard(cached)
             self._initial_refresh_timer.start(50)
             QTimer.singleShot(180, self._record_login_streak)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt API
+        lifecycle_log("study_room.show_event.begin", self)
+        super().showEvent(event)
+        lifecycle_log("study_room.show_event.end", self)
+
+    def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802 - Qt API
+        lifecycle_log("study_room.hide_event.begin", self)
+        super().hideEvent(event)
+        lifecycle_log("study_room.hide_event.end", self)
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
+        lifecycle_log("study_room.close_event.begin", self)
+        super().closeEvent(event)
+        lifecycle_log("study_room.close_event.end", self)
 
     def _apply_adaptive_tab_widths(self) -> None:
         """Make all four primary tabs equal and fill the available width."""
@@ -2432,7 +2454,7 @@ class SocialHubDialog(QDialog):
         self._health_thread = thread
         thread.completed.connect(self._network_check_succeeded)
         thread.failed.connect(self._network_check_failed)
-        thread.finished.connect(lambda: self._health_thread_finished(thread))
+        thread.finished.connect(lambda: self._health_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _network_check_succeeded(self, data: dict[str, Any]) -> None:
@@ -2518,7 +2540,7 @@ class SocialHubDialog(QDialog):
             lambda data, requested_room=room_id: self._dashboard_received(data, requested_room)
         )
         thread.failed.connect(self._dashboard_failed)
-        thread.finished.connect(lambda: self._dashboard_thread_finished(thread))
+        thread.finished.connect(lambda: self._dashboard_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _dashboard_received(self, data: dict[str, Any], requested_room: str | None) -> None:
@@ -2545,7 +2567,7 @@ class SocialHubDialog(QDialog):
         self._leaderboard_thread = thread
         thread.completed.connect(self._leaderboard_received)
         thread.failed.connect(self._leaderboard_failed)
-        thread.finished.connect(lambda: self._leaderboard_thread_finished(thread))
+        thread.finished.connect(lambda: self._leaderboard_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _leaderboard_received(self, rows: list) -> None:
@@ -2632,9 +2654,9 @@ class SocialHubDialog(QDialog):
         event = {"room_id": self.current_room_id, "kind": kind, "target_id": target, "message": ""}
         thread = SocialEventThread(self.client, event, self)
         self._event_threads.append(thread)
-        thread.completed.connect(lambda: self._interaction_sent(nickname, kind))
-        thread.failed.connect(lambda message: self._set_status(f"互动没有送出：{social_user_message(SocialError(str(message), kind='network'))}", error=True))
-        thread.finished.connect(lambda: self._event_thread_finished(thread))
+        thread.completed.connect(lambda: self._interaction_sent(nickname, kind), Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(lambda message: self._set_status(f"互动没有送出：{social_user_message(SocialError(str(message), kind='network'))}", error=True), Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(lambda: self._event_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         self._set_status(f"正在向 {nickname} {labels.get(kind, '送出互动')}…")
         thread.start()
 
@@ -2688,9 +2710,9 @@ class SocialHubDialog(QDialog):
         event = {"room_id": self.current_room_id, "kind": "phrase", "target_id": str(target.get("user_id") or ""), "message": phrase[:80]}
         thread = SocialEventThread(self.client, event, self)
         self._event_threads.append(thread)
-        thread.completed.connect(lambda: self._interaction_sent(nickname, "phrase"))
-        thread.failed.connect(lambda message: self._set_status(f"短语没有送出：{social_user_message(SocialError(str(message), kind='network'))}", error=True))
-        thread.finished.connect(lambda: self._event_thread_finished(thread))
+        thread.completed.connect(lambda: self._interaction_sent(nickname, "phrase"), Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(lambda message: self._set_status(f"短语没有送出：{social_user_message(SocialError(str(message), kind='network'))}", error=True), Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(lambda: self._event_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         self._set_status(f"正在向 {nickname} 发送“{phrase}”…")
         thread.start()
 
@@ -3284,7 +3306,7 @@ class SocialHubDialog(QDialog):
         self._signup_thread = thread
         thread.completed.connect(self._signup_completed)
         thread.failed.connect(self._signup_failed)
-        thread.finished.connect(lambda: self._signup_thread_finished(thread))
+        thread.finished.connect(lambda: self._signup_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _signup_completed(self, result: object) -> None:
@@ -3371,7 +3393,7 @@ class SocialHubDialog(QDialog):
         self._resend_thread = thread
         thread.completed.connect(self._resend_completed)
         thread.failed.connect(self._resend_failed)
-        thread.finished.connect(lambda: self._resend_thread_finished(thread))
+        thread.finished.connect(lambda: self._resend_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _resend_completed(self) -> None:
@@ -3402,7 +3424,7 @@ class SocialHubDialog(QDialog):
         self._login_streak_thread = thread
         thread.completed.connect(self._login_streak_completed)
         thread.failed.connect(self._login_streak_failed)
-        thread.finished.connect(lambda: self._login_streak_thread_finished(thread))
+        thread.finished.connect(lambda: self._login_streak_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _login_streak_completed(self, result: dict) -> None:
@@ -3441,7 +3463,7 @@ class SocialHubDialog(QDialog):
         self._login_thread = thread
         thread.completed.connect(self._login_completed)
         thread.failed.connect(self._login_failed)
-        thread.finished.connect(lambda: self._login_thread_finished(thread))
+        thread.finished.connect(lambda: self._login_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _login_completed(self, result: object = None) -> None:
@@ -4037,9 +4059,9 @@ class SocialHubDialog(QDialog):
         self._begin_action("正在查找搭子…")
         thread = SocialBuddyRpcThread(self.client, "lili_lookup_buddy_by_code", {"code": code}, self)
         self._buddy_rpc_threads.append(thread)
-        thread.completed.connect(lambda payload, value=code: self._buddy_lookup_completed(value, payload))
+        thread.completed.connect(lambda payload, value=code: self._buddy_lookup_completed(value, payload), Qt.ConnectionType.QueuedConnection)
         thread.failed.connect(self._buddy_rpc_failed)
-        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current))
+        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _buddy_lookup_completed(self, code: str, payload: object) -> None:
@@ -4084,7 +4106,7 @@ class SocialHubDialog(QDialog):
         self._buddy_rpc_threads.append(thread)
         thread.completed.connect(self._buddy_request_completed)
         thread.failed.connect(self._buddy_rpc_failed)
-        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current))
+        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
     def _buddy_request_completed(self, payload: object) -> None:

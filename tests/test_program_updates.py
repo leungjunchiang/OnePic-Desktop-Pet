@@ -160,11 +160,22 @@ def test_fetch_and_verify_platform_installer(tmp_path, monkeypatch) -> None:
         opener=opener,
         download_root=tmp_path / "updates",
     )
+    manager.download_root.mkdir()
+    old_installer = manager.download_root / "v0.22.45-Lili-Windows-x64-Setup.exe"
+    old_partial = manager.download_root / "v0.22.44-Lili-Windows-x64-Setup.exe.part"
+    unrelated_file = manager.download_root / "keep-me.txt"
+    old_installer.write_bytes(b"old installer")
+    old_partial.write_bytes(b"stale partial download")
+    unrelated_file.write_text("keep", encoding="utf-8")
+
     release = manager.fetch_latest()
     assert release is not None
     result = manager.download_and_verify(release)
     assert result.installer_path.read_bytes() == installer
     assert result.installer_path.name == "v0.22.46-Lili-Windows-x64-Setup.exe"
+    assert not old_installer.exists()
+    assert not old_partial.exists()
+    assert unrelated_file.exists()
 
 
 def test_download_reports_byte_progress(tmp_path, monkeypatch) -> None:

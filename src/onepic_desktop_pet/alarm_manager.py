@@ -21,6 +21,12 @@ REPEAT_ONCE = "once"
 REPEAT_DAILY = "daily"
 REPEAT_WEEKDAYS = "weekdays"
 
+# A firing card must not remain stuck forever when Lili is closed while the
+# user is away.  The next attempt is stored as a snooze on the same alarm so
+# recurring alarms keep their original daily/weekly schedule.
+MISSED_ALARM_GRACE_MINUTES = 10
+MISSED_ALARM_RETRY_MINUTES = 30
+
 
 @dataclass
 class Alarm:
@@ -309,20 +315,60 @@ class AlarmManager:
         self,
         *,
         now: datetime | None = None,
-        grace_minutes: int = 30,
+        grace_minutes: int = MISSED_ALARM_GRACE_MINUTES,
         allow_during_dnd: bool = True,
     ) -> list[Alarm]:
-        """Claim alarms due now, keeping them active until user action.
+        """Claim at most one due alarm and keep it active until user action.
 
-        A one-off alarm missed by more than ``grace_minutes`` is disabled
-        instead of suddenly shouting hours after the user restarts Lili.
-        Repeating alarms follow the same rule for the missed occurrence and
-        become eligible at the next scheduled slot.
+        The desktop app has one foreground alarm card, so the scheduler also
+        keeps one active claim globally.  This prevents two due rows from
+        being persisted as simultaneously ringing and then appearing one
+        after another after a restart.
+
+        A firing alarm that is at least ``grace_minutes`` late is not
+        disabled.  It is requeued on the same alarm for 30 minutes from the
+        current check.  The retry uses ``snooze_until`` so a daily/weekly
+        alarm still retains its original recurring time after the retry is
+        handled.
         """
 
         current = now_local(now or self._now)
-        claimed: list[Alarm] = []
         changed = False
+
+        # Repair state written by an older build (or by a process that was
+        # terminated while a card was open).  Keep the earliest active alarm
+        # and move any additional active rows to the same single retry lane.
+        active_items = sorted(
+            (item for item in self._items if item.enabled and item.active),
+            key=lambda item: (
+                self._active_slot(item, current) or current,
+                item.created_at or "",
+            ),
+        )
+        active_keeper: Alarm | None = None
+        for item in active_items:
+            slot = self._active_slot(item, current)
+            if slot is not None and self._is_late(slot, current, grace_minutes):
+                if self._skip_missed_non_delivery_day(item, current, slot):
+                    self._finish_missed_occurrence(item, slot)
+                else:
+                    self._reschedule_after_missed(item, current, slot)
+                changed = True
+                continue
+            if active_keeper is None:
+                active_keeper = item
+                continue
+            self._reschedule_after_missed(item, current, slot or current)
+            changed = True
+
+        # There is already one alarm card waiting for a user action.  Do not
+        # claim another alarm in the same timer tick or after a restart.
+        if active_keeper is not None:
+            if changed:
+                self._save()
+            return []
+
+        due: list[tuple[datetime, Alarm]] = []
         for item in self._items:
             if not item.enabled or item.active:
                 continue
@@ -331,27 +377,111 @@ class AlarmManager:
             slot = self._snooze_slot(item, current)
             if slot is None:
                 slot = self._scheduled_slot(item, current)
-            if slot is None or slot <= current and item.last_triggered_slot == slot.isoformat():
+            if slot is None or slot <= current and self._was_triggered(item, slot):
                 continue
             if slot > current:
                 continue
-            if (current - slot).total_seconds() > max(1, int(grace_minutes)) * 60:
-                if item.repeat_rule == REPEAT_ONCE:
-                    item.enabled = False
-                    item.disabled_at = now_local(self._now).isoformat()
-                    item.disabled_reason = "missed"
-                item.last_triggered_slot = slot.isoformat()
-                item.snooze_until = None
+            if self._is_late(slot, current, grace_minutes):
+                if self._skip_missed_non_delivery_day(item, current, slot):
+                    self._finish_missed_occurrence(item, slot)
+                else:
+                    self._reschedule_after_missed(item, current, slot)
                 changed = True
                 continue
+
+            due.append((slot, item))
+
+        # Stable ordering makes the single-card rule deterministic when old
+        # data contains several alarms with the same due time.
+        # Python's sort is stable, so equal timestamps retain the persisted
+        # insertion order.  This makes the first alarm win deterministically
+        # even when two rows were created in the same clock tick.
+        due.sort(key=lambda pair: (pair[0], pair[1].created_at or ""))
+        claimed: list[Alarm] = []
+        if due:
+            _slot, item = due[0]
             item.active = True
-            item.last_triggered_slot = slot.isoformat()
+            item.last_triggered_slot = _slot.isoformat()
             item.snooze_until = None
             claimed.append(item)
             changed = True
         if changed:
             self._save()
         return claimed
+
+    @staticmethod
+    def _is_late(slot: datetime, current: datetime, grace_minutes: int) -> bool:
+        return slot <= current and (current - slot).total_seconds() >= max(1, int(grace_minutes)) * 60
+
+    def _active_slot(self, item: Alarm, current: datetime) -> datetime | None:
+        """Return the timestamp represented by a persisted active claim."""
+
+        for value in (item.last_triggered_slot, item.snooze_until, item.trigger_at):
+            if not value:
+                continue
+            try:
+                return parse_datetime(value, self._now)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _was_triggered(self, item: Alarm, slot: datetime) -> bool:
+        """Avoid replaying the same recurring occurrence after a retry."""
+
+        if not item.last_triggered_slot:
+            return False
+        try:
+            last = parse_datetime(item.last_triggered_slot, self._now)
+        except (TypeError, ValueError):
+            return False
+        if item.repeat_rule == REPEAT_ONCE:
+            return last == slot
+        # A snoozed/recovered alarm records the actual retry time.  Once that
+        # retry is handled, the original scheduled time on the same calendar
+        # day must not fire a second card.
+        return last.date() == slot.date() and last >= slot
+
+    @staticmethod
+    def _skip_missed_non_delivery_day(
+        item: Alarm,
+        current: datetime,
+        slot: datetime,
+    ) -> bool:
+        """Do not make a weekday/weekly alarm ring on an excluded day."""
+
+        if item.repeat_rule in {REPEAT_ONCE, REPEAT_DAILY}:
+            return False
+        if item.repeat_rule == REPEAT_WEEKDAYS:
+            allowed = {0, 1, 2, 3, 4}
+        elif item.repeat_rule.startswith("weekly:"):
+            try:
+                allowed = {
+                    int(value)
+                    for value in item.repeat_rule.split(":", 1)[1].split(",")
+                }
+            except ValueError:
+                allowed = set()
+        else:
+            allowed = set(range(7))
+        return current.weekday() not in allowed and slot.date() != current.date()
+
+    @staticmethod
+    def _finish_missed_occurrence(item: Alarm, slot: datetime) -> None:
+        """Mark an excluded recurring occurrence as handled without a retry."""
+
+        item.active = False
+        item.last_triggered_slot = slot.isoformat()
+        item.snooze_until = None
+
+    @staticmethod
+    def _reschedule_after_missed(item: Alarm, current: datetime, slot: datetime) -> None:
+        """Move a missed claim to one retry without creating another alarm row."""
+
+        item.active = False
+        item.last_triggered_slot = slot.isoformat()
+        item.snooze_until = (
+            current + timedelta(minutes=MISSED_ALARM_RETRY_MINUTES)
+        ).isoformat()
 
     def snooze(self, alarm_id: str, minutes: int | None = None) -> Alarm:
         item = self.get(alarm_id)

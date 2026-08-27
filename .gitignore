@@ -26,6 +26,11 @@ user_assets/*
 # 本地日志和临时输出
 *.log
 *.tmp
+diagnostics/dumps/
+diagnostics/*.analysis.txt
+diagnostics/procdump/*.exe
+diagnostics/procdump/*.zip
+diagnostics/procdump/*.txt
 .tmp*/
 .pytest*/
 .local-*/
