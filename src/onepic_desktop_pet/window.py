@@ -3358,12 +3358,35 @@ class PetWindow(QWidget):
         if self._today_note_window is not None:
             self._today_note_window.hide()
         self._restore_compact_todos_after_show = True
+        candidates = compact_todo_candidates(self.time_memory, include_read=True)
+        lifecycle_log(
+            "todo.show.request",
+            self,
+            manual=manual,
+            account_id=getattr(self.time_memory, "_account_id", ""),
+            ordinary_count=sum(
+                1 for item in candidates if getattr(item, "source_type", "") == "todo"
+            ),
+            important_date_count=sum(
+                1
+                for item in candidates
+                if getattr(item, "source_type", "") in {"countdown", "anniversary"}
+            ),
+            display_item_count=len(candidates),
+        )
         panel = self._ensure_compact_todo_panel()
         # ``read`` is only an acknowledgement in the detailed Todo view, not
         # completion.  Keep every unfinished task on the desktop strip for
         # both automatic startup/refresh and the manual “显示待办” command.
         # Only the checkbox (complete) or explicit deletion removes it.
         has_visible_tasks = panel.refresh(include_read=True)
+        lifecycle_log(
+            "todo.show.result",
+            panel,
+            manual=manual,
+            display_item_count=len(panel.visible_task_ids),
+            visible=has_visible_tasks,
+        )
         if not has_visible_tasks:
             # An empty compact strip is not a useful accessory.  Keep the
             # widget instance so a later Todo write can reuse it, but do not
@@ -6111,24 +6134,13 @@ class PetWindow(QWidget):
 
         panel = self._compact_todo_panel
         if self._qt_object_is_alive(panel):
-            was_visible = bool(panel.isVisible())
             panel.memory = self.time_memory
             panel.selected_task_id = str(self.time_memory.current_task_id or "")
-            try:
-                has_tasks = panel.refresh(include_read=True)
-            except RuntimeError:
-                self._compact_todo_panel = None
-            else:
-                if was_visible and has_tasks:
-                    self._show_nonactivating(
-                        panel,
-                        always_on_top=bool(
-                            self.settings.always_on_top
-                            or getattr(self.settings, "today_note_always_on_top", False)
-                        ),
-                    )
-                    self._position_compact_todos()
-                    self._raise_accessory(panel)
+            lifecycle_log(
+                "todo.panel.rebind",
+                panel,
+                account_id=getattr(self.time_memory, "_account_id", ""),
+            )
         if self._today_note_window is not None:
             self._today_note_window.memory = self.time_memory
             self._today_note_window.refresh()
@@ -6143,6 +6155,12 @@ class PetWindow(QWidget):
         if self._time_memory_window is not None:
             self._time_memory_window.memory = self.time_memory
             self._time_memory_window.refresh()
+        # The application can create an empty hidden panel before a restored
+        # login session becomes available.  Rebinding the memory alone does
+        # not run the normal show/empty-state policy, so explicitly re-run the
+        # shared surface refresh after every account switch.  This also
+        # recreates the panel when no panel existed during anonymous startup.
+        self._refresh_todo_surfaces()
 
     def _record_social_room_event(self, room_id: str, kind: str) -> None:
         """Record a lifecycle event without blocking the desktop pet."""

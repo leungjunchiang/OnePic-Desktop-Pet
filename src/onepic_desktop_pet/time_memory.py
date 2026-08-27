@@ -190,6 +190,22 @@ class TimeMemory:
             show_future_dates=True,
         )
 
+    def todo_view_desktop(
+        self,
+        *,
+        include_read: bool = True,
+    ) -> list[TodoViewItem]:
+        """Return the canonical projection for the resident desktop strip.
+
+        Keep this named entry point separate from the detailed Todo Center's
+        tab partitioning.  The compact strip, startup restore, account
+        rebinding and manual ``显示待办`` command must all ask the same
+        projection for their content; otherwise a newly selected account can
+        show events in Todo Center while the resident panel stays empty.
+        """
+
+        return self.todo_view_upcoming(include_read=include_read)
+
     def _visible_todos_until(
         self,
         latest: date,
@@ -240,7 +256,7 @@ class TimeMemory:
         return next(
             (
                 item
-                for item in self.todo_view_upcoming(include_read=include_read)
+                for item in self.todo_view_desktop(include_read=include_read)
                 if item.id == str(item_id)
             ),
             None,

@@ -170,7 +170,11 @@ def collect_todo_view(
             continue
         remaining = int(countdown_remaining(item))
         threshold = max(0, min(365, int(getattr(item, "show_before_days", 7) or 0)))
-        if remaining > threshold:
+        # ``show_on_desktop`` is an explicit user override.  Older builds
+        # stored this flag but the shared Todo projection silently ignored
+        # it, so an important date could remain visible in Todo Center while
+        # never reaching the desktop strip.
+        if remaining > threshold and not bool(getattr(item, "show_on_desktop", False)):
             continue
         title = str(item.title)
         result.append(
@@ -190,7 +194,10 @@ def collect_todo_view(
         remaining = int(anniversary_remaining(item))
         threshold = max(0, min(365, int(getattr(item, "show_before_days", 7) or 0)))
         acknowledged = str(getattr(item, "acknowledged_date", "") or "")
-        if remaining > threshold or acknowledged == next_date.isoformat():
+        if (
+            remaining > threshold
+            and not bool(getattr(item, "show_on_desktop", False))
+        ) or acknowledged == next_date.isoformat():
             continue
         title = str(item.title)
         result.append(

@@ -519,6 +519,64 @@ def test_account_memory_switch_rebinds_existing_todo_panel(monkeypatch, tmp_path
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_account_memory_switch_restores_panel_created_empty_before_login(monkeypatch, tmp_path) -> None:
+    """A panel created before login must show the newly selected account's Todo."""
+
+    app = QApplication.instance() or QApplication([])
+    anonymous_memory = TimeMemory(tmp_path / "anonymous", persist=False)
+    account_memory = TimeMemory(tmp_path / "account", persist=False)
+    event = account_memory.countdowns.add(
+        "返校", "2026-08-29", show_before_days=7
+    )
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = anonymous_memory
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
+    window.show_compact_todos()
+    app.processEvents()
+    panel = window._compact_todo_panel
+    assert panel is not None and not panel.isVisible()
+
+    window.time_memory = account_memory
+    window._rebind_todo_surfaces_to_current_memory()
+    app.processEvents()
+
+    assert window._compact_todo_panel is panel
+    assert panel.memory is account_memory
+    assert panel.visible_task_ids == frozenset({f"countdown:{event.id}"})
+    assert panel.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_compact_todo_panel_shows_important_date_without_ordinary_todos(tmp_path) -> None:
+    """An upcoming important date is desktop Todo content by itself."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(
+        tmp_path,
+        now_provider=lambda: datetime(2026, 8, 27, 12, 0),
+        persist=False,
+    )
+    event = memory.countdowns.add(
+        "返校", "2026-08-29", show_before_days=7
+    )
+    window = PetWindow(
+        PetSettings(today_note_mode="compact"),
+        work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
+    )
+    window.time_memory = memory
+    window.show_compact_todos()
+    app.processEvents()
+
+    panel = window._compact_todo_panel
+    assert panel is not None and panel.isVisible()
+    assert panel.visible_task_ids == frozenset({f"countdown:{event.id}"})
+    assert panel.rows[f"countdown:{event.id}"].label.text().startswith("返校")
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_autonomous_walk_setting_is_applied_without_disabling_ambient_animation() -> None:
     app, window = _create_window()
     assert window.settings.allow_autonomous_walk is False

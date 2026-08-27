@@ -393,6 +393,22 @@ def test_countdown_remaining_days_edit_and_delete(tmp_path) -> None:
     assert manager.items == ()
 
 
+def test_desktop_todo_projection_keeps_explicitly_pinned_far_event(tmp_path) -> None:
+    """An event explicitly marked for the desktop bypasses its lead window."""
+
+    clock = Clock(datetime(2026, 8, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock, persist=False)
+    event = memory.countdowns.add(
+        "长期重要日期",
+        "2026-09-20",
+        show_before_days=0,
+        show_on_desktop=True,
+    )
+
+    items = memory.todo_view_desktop()
+    assert [item.id for item in items] == [f"countdown:{event.id}"]
+
+
 def test_countdown_completion_is_recorded_once_in_timeline(tmp_path) -> None:
     memory = TimeMemory(tmp_path, now_provider=Clock(datetime(2026, 8, 15, 12, 0)))
     item = memory.countdowns.add("答辩", "2026-08-16")

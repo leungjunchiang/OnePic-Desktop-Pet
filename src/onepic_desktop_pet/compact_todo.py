@@ -54,8 +54,8 @@ def compact_todo_candidates(
 ) -> list[Any]:
     """Return unfinished items eligible for the desktop strip.
 
-    ``TimeMemory.todo_view_upcoming`` is the shared projection used by the
-    detailed Todo view.  The desktop strip deliberately includes read items:
+    ``TimeMemory.todo_view_desktop`` is the canonical desktop projection.
+    The desktop strip deliberately includes read items:
     ``read`` is an acknowledgement, not completion.  Only completing or
     deleting a Todo removes it from the strip.  Keep the final guard here as
     well so the panel and the owning window always agree about visibility.
@@ -63,7 +63,7 @@ def compact_todo_candidates(
 
     return [
         item
-        for item in memory.todo_view_upcoming(include_read=include_read)
+        for item in memory.todo_view_desktop(include_read=include_read)
         if not bool(getattr(item, "completed", False))
         and (include_read or not bool(getattr(item, "read", False)))
     ]
