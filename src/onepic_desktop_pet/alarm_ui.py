@@ -237,6 +237,9 @@ class AlarmCard(QDialog):
     start_requested = Signal(str)
     snooze_requested = Signal(str, int)
     dismiss_requested = Signal(str)
+    # Emitted only after a closing card's media backend has received its
+    # stop request.  PetWindow uses this as the safe point for deleteLater().
+    audio_cleanup_finished = Signal()
 
     def __init__(
         self,
@@ -261,12 +264,17 @@ class AlarmCard(QDialog):
             )
         )
         self.alarm = alarm
+        self._schedule_generation = int(getattr(alarm, "schedule_generation", 1) or 1)
         self.sound_library = sound_library
         self._state = AlarmPopupState.UNSEEN
         self._audio_started = False
         self._audio_closing = False
         self._action_requested = False
         self._suppress_close_action = False
+        self._close_requested = False
+        self._media_stop_pending = False
+        self._media_stop_completed = False
+        self._audio_cleanup_ready = False
         self._drag_offset = None
         self._pending_topmost = None
         self.setObjectName("alarmCard")
@@ -357,6 +365,9 @@ class AlarmCard(QDialog):
         self._audio_start_timer.setSingleShot(True)
         self._audio_start_timer.setInterval(120)
         self._audio_start_timer.timeout.connect(self._start_alarm_audio)
+        self._media_stop_timer = QTimer(self)
+        self._media_stop_timer.setSingleShot(True)
+        self._media_stop_timer.timeout.connect(self._finish_media_stop)
         self._topmost_timer = QTimer(self)
         self._topmost_timer.setSingleShot(True)
         self._topmost_timer.timeout.connect(self._apply_pending_topmost)
@@ -429,6 +440,12 @@ class AlarmCard(QDialog):
     @property
     def popup_state(self) -> AlarmPopupState:
         return self._state
+
+    @property
+    def schedule_generation(self) -> int:
+        """Generation captured when this foreground card was created."""
+
+        return self._schedule_generation
 
     def show_alarm_foreground(self) -> None:
         """Show once in front of the active app, then start the sound."""
@@ -608,14 +625,10 @@ class AlarmCard(QDialog):
             self._custom_audio = False
         self._using_system_sound = True
         if self._media_player is not None:
-            lifecycle_log(
-                "media.alarm.stop",
-                self._media_player,
-                owner="AlarmCard",
-                alarm_id=str(self.alarm.id),
-                reason="fallback_to_system",
-            )
-            self._media_player.stop()
+            # Error handling runs from a QMediaPlayer callback.  Queue the
+            # stop as well so an error/status signal cannot re-enter native
+            # multimedia cleanup synchronously.
+            self._queue_media_stop("fallback_to_system")
         if self._sound_timer is None:
             self._sound_timer = QTimer(self)
             self._sound_timer.setInterval(3_000)
@@ -659,33 +672,87 @@ class AlarmCard(QDialog):
         """Close without treating application cleanup as user dismissal."""
 
         lifecycle_log("alarm.popup.close.request", self, alarm_id=str(self.alarm.id), source="application")
+        self._close_requested = True
         self._suppress_close_action = True
         self._state = AlarmPopupState.DISMISSED
+        # closeEvent is not guaranteed for every native shutdown path (for
+        # example a card that has already been hidden), so request cleanup
+        # explicitly before asking Qt to close the window.
+        self._stop_sound()
         self.close()
 
-    def _stop_sound(self) -> None:
-        self._audio_closing = True
-        self._audio_start_timer.stop()
-        if self._sound_timer is not None:
-            self._sound_timer.stop()
-        if self._sound_stop_timer is not None:
-            self._sound_stop_timer.stop()
-        if self._media_player is not None:
+    @property
+    def audio_cleanup_ready(self) -> bool:
+        """Whether it is safe for the owner to schedule this card's deletion."""
+
+        return self._audio_cleanup_ready
+
+    def _emit_audio_cleanup_finished(self) -> None:
+        if not self._close_requested or self._audio_cleanup_ready:
+            return
+        self._audio_cleanup_ready = True
+        lifecycle_log(
+            "alarm.popup.audio_cleanup_finished",
+            self,
+            alarm_id=str(self.alarm.id),
+        )
+        self.audio_cleanup_finished.emit()
+
+    def _finish_media_stop(self) -> None:
+        """Stop QMediaPlayer from a queued timer event, never in a click."""
+
+        self._media_stop_pending = False
+        if self._media_player is not None and not self._media_stop_completed:
             lifecycle_log(
                 "media.alarm.stop",
                 self._media_player,
                 owner="AlarmCard",
                 alarm_id=str(self.alarm.id),
-                reason="popup_close",
+                reason="queued_stop",
             )
-            # Prevent a synchronous stop() status/error signal from restarting
-            # audio while the card is already being dismissed.
+            # Prevent status/error signals from re-entering alarm handling
+            # while the native backend is being stopped.
             was_blocked = self._media_player.signalsBlocked()
             self._media_player.blockSignals(True)
             try:
                 self._media_player.stop()
             finally:
                 self._media_player.blockSignals(was_blocked)
+        self._media_stop_completed = True
+        self._emit_audio_cleanup_finished()
+
+    def _queue_media_stop(self, reason: str) -> None:
+        """Queue a single media stop and return to the caller immediately."""
+
+        if self._media_player is None:
+            self._media_stop_completed = True
+            self._emit_audio_cleanup_finished()
+            return
+        if self._media_stop_completed:
+            self._emit_audio_cleanup_finished()
+            return
+        if self._media_stop_pending:
+            return
+        lifecycle_log(
+            "media.alarm.stop.request",
+            self._media_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            reason=reason,
+        )
+        self._media_stop_pending = True
+        self._media_stop_timer.start(0)
+
+    def _stop_sound(self) -> None:
+        """Stop all alarm audio without synchronously blocking a UI action."""
+
+        self._audio_closing = True
+        self._audio_start_timer.stop()
+        if self._sound_timer is not None:
+            self._sound_timer.stop()
+        if self._sound_stop_timer is not None:
+            self._sound_stop_timer.stop()
+        self._queue_media_stop("popup_close")
 
     def _prepare_action(self) -> bool:
         """Make a button action idempotent before its queued owner handles it."""
@@ -695,6 +762,9 @@ class AlarmCard(QDialog):
         self._action_requested = True
         self._suppress_close_action = True
         self._state = AlarmPopupState.DISMISSED
+        # The button handler must return before touching the native media
+        # backend.  The queued timer also keeps the card alive until the
+        # owner has safely closed it and the backend has stopped.
         self._stop_sound()
         return True
 
@@ -702,6 +772,7 @@ class AlarmCard(QDialog):
         # Closing by Alt+F4/Cmd+W or by the window manager must stop both
         # system beeps and custom looping audio immediately.
         lifecycle_log("alarm.popup.close_event.begin", self, alarm_id=str(self.alarm.id))
+        self._close_requested = True
         self._stop_sound()
         if not self._suppress_close_action:
             # Closing the frameless card means “dismiss this firing”, not

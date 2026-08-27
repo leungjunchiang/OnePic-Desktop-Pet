@@ -106,7 +106,7 @@ def test_alarm_card_real_button_click_returns_before_action_signal() -> None:
     app.processEvents()
 
 
-def test_custom_audio_button_click_stops_player_before_card_cleanup(tmp_path) -> None:
+def test_custom_audio_button_queues_player_stop_before_card_cleanup(tmp_path) -> None:
     app = _app()
     source = tmp_path / "test-tone.wav"
     with wave.open(str(source), "wb") as output:
@@ -136,13 +136,19 @@ def test_custom_audio_button_click_stops_player_before_card_cleanup(tmp_path) ->
         if item.text() == "关闭"
     )
     QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+
+    # The click handler must return while native media cleanup is still
+    # queued.  Calling QMediaPlayer.stop() inline here was the freeze path.
+    assert card._media_stop_timer.isActive() or card._media_stop_completed
     app.processEvents()
 
     assert card.popup_state is AlarmPopupState.DISMISSED
     assert not card._audio_start_timer.isActive()
     assert card._audio_closing is True
+    assert card._media_stop_completed is True
     card.close_from_app()
     app.processEvents()
+    assert card.audio_cleanup_ready is True
 
 
 def test_away_recovery_card_has_no_drop_shadow() -> None:

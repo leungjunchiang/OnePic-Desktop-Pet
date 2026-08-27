@@ -496,6 +496,10 @@ class PetWindow(QWidget):
         self._work_report_dialog: WorkReportDialog | None = None
         self._alarm_center_dialog: AlarmCenterDialog | None = None
         self._alarm_card: AlarmCard | None = None
+        # Keep a closing card alive until its queued QMediaPlayer stop has
+        # completed.  Deleting it immediately can destroy the native media
+        # backend while it is still processing a button/close event.
+        self._retired_alarm_cards: list[AlarmCard] = []
         self._away_recovery_card: AwayRecoveryCard | None = None
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
@@ -3777,6 +3781,7 @@ class PetWindow(QWidget):
                 parent=None,
                 sound_library=self.time_memory.alarm_sounds,
             )
+            self._alarm_center_dialog.changed.connect(self._alarm_center_changed)
         else:
             self._alarm_center_dialog.todos = todos
             self._alarm_center_dialog.refresh()
@@ -4002,9 +4007,12 @@ class PetWindow(QWidget):
         claimed = self.time_memory.alarms.claim_due(
             allow_during_dnd=not (quiet.blocked or deep_food_scene),
         )
-        candidates = claimed or self.time_memory.alarms.active()
-        if candidates:
-            self._show_alarm_card(candidates[0])
+        # ``claim_due`` is the only entry point that may create a card.  Do
+        # not resurrect ``active`` rows as a fallback: old builds persisted
+        # that transient bit and could replay an already-fired 10:00 alarm
+        # after a 15:00 restart.
+        if claimed:
+            self._show_alarm_card(claimed[0])
 
     def _show_alarm_card(self, alarm) -> None:
         """Show one alarm window; queued alarms remain persisted/local."""
@@ -4023,6 +4031,11 @@ class PetWindow(QWidget):
         self._alarm_card = AlarmCard(
             alarm,
             sound_library=self.time_memory.alarm_sounds,
+        )
+        card = self._alarm_card
+        card.audio_cleanup_finished.connect(
+            lambda card=card: self._finish_retired_alarm_card(card),
+            Qt.ConnectionType.QueuedConnection,
         )
         # Handle actions after the QPushButton mouse/click event returns.  A
         # synchronous close/delete path can re-enter a native QDialog while
@@ -4051,11 +4064,60 @@ class PetWindow(QWidget):
         self._alarm_card = None
         if card is not None:
             lifecycle_log("alarm.popup.close.entry", card, source="PetWindow")
+            if card not in self._retired_alarm_cards:
+                self._retired_alarm_cards.append(card)
             card.close_from_app()
-            card.deleteLater()
+            if card.audio_cleanup_ready:
+                self._finish_retired_alarm_card(card)
+
+    def _finish_retired_alarm_card(self, card: AlarmCard) -> None:
+        """Delete a closed alarm card only after its media stop is queued."""
+
+        # A native close (Alt+F4/window manager) can finish the audio timer
+        # before its queued dismiss signal reaches this window.  In that
+        # short interval the card is still the active owner and must remain
+        # alive; _close_alarm_card will retire it when the signal is handled.
+        if card is self._alarm_card:
+            return
+        if card not in self._retired_alarm_cards:
+            return
+        self._retired_alarm_cards.remove(card)
+        lifecycle_log("alarm.popup.delete_later", card, source="PetWindow")
+        card.deleteLater()
+
+    def _alarm_center_changed(self) -> None:
+        """Close a visible card when its alarm is edited or disabled."""
+
+        card = self._alarm_card
+        if card is None:
+            return
+        alarm = self.time_memory.alarms.get(card.alarm.id)
+        if alarm is None or not alarm.enabled or not alarm.active:
+            self._close_alarm_card()
+
+    def _alarm_action_is_current(self, alarm_id: str) -> bool:
+        """Reject a queued card action after its schedule was replaced."""
+
+        card = self._alarm_card
+        alarm = self.time_memory.alarms.get(alarm_id)
+        if card is None or alarm is None or card.alarm.id != alarm.id:
+            return alarm is not None
+        if card.schedule_generation != alarm.schedule_generation:
+            lifecycle_log(
+                "alarm.action.stale_generation",
+                card,
+                alarm_id=alarm_id,
+                card_generation=card.schedule_generation,
+                current_generation=alarm.schedule_generation,
+            )
+            self._close_alarm_card()
+            return False
+        return True
 
     def _start_alarm_work(self, alarm_id: str) -> None:
         lifecycle_log("alarm.action.start", self, alarm_id=alarm_id)
+        if not self._alarm_action_is_current(alarm_id):
+            return
         alarm = self.time_memory.alarms.get(alarm_id)
         if alarm is None:
             self._close_alarm_card()
@@ -4068,6 +4130,8 @@ class PetWindow(QWidget):
 
     def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
         lifecycle_log("alarm.action.snooze", self, alarm_id=alarm_id, minutes=minutes)
+        if not self._alarm_action_is_current(alarm_id):
+            return
         try:
             self.time_memory.alarms.snooze(alarm_id, minutes)
         except KeyError:
@@ -4076,6 +4140,8 @@ class PetWindow(QWidget):
 
     def _dismiss_alarm(self, alarm_id: str) -> None:
         lifecycle_log("alarm.action.dismiss", self, alarm_id=alarm_id)
+        if not self._alarm_action_is_current(alarm_id):
+            return
         try:
             self.time_memory.alarms.dismiss(alarm_id)
         except KeyError:

@@ -59,7 +59,10 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=["tools\\pyinstaller_qt_runtime.py"],
+    # PyInstaller resolves this path on the runner's host OS.  Using Path
+    # keeps the same hook on Windows and macOS instead of passing a Windows
+    # backslash path to the macOS module graph.
+    runtime_hooks=[str(Path("tools") / "pyinstaller_qt_runtime.py")],
     excludes=excludes,
     noarchive=False,
     optimize=0,

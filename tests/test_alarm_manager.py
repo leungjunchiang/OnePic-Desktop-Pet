@@ -1,5 +1,6 @@
 """Alarm scheduling tests; deliberately independent of Qt and network."""
 
+import json
 from datetime import datetime, timedelta
 
 from onepic_desktop_pet.alarm_manager import (
@@ -87,23 +88,23 @@ def test_stale_one_off_alarm_is_requeued_for_thirty_minutes(tmp_path) -> None:
     assert [item.id for item in manager.claim_due()] == [alarm.id]
 
 
-def test_stale_active_alarm_is_requeued_after_restart_without_a_duplicate(tmp_path) -> None:
+def test_fired_alarm_is_not_replayed_after_restart(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 19, 12, 0))
     path = tmp_path / "alarms.json"
     manager = AlarmManager(path, now_provider=clock)
     alarm = manager.add("未处理的闹钟", clock.value)
     manager.claim_due()
 
-    clock.value += timedelta(minutes=10, seconds=1)
+    # The firing card may be left open when the process is killed.  Restart
+    # must not resurrect its popup/audio or turn the old slot into a retry.
+    clock.value += timedelta(hours=3)
     reloaded = AlarmManager(path, now_provider=clock)
     assert reloaded.claim_due() == []
     restored = reloaded.get(alarm.id)
     assert restored is not None
     assert restored.active is False
-    assert restored.snooze_until.startswith("2026-08-19T12:40:01")
-
-    clock.value += timedelta(minutes=30)
-    assert [item.id for item in reloaded.claim_due()] == [alarm.id]
+    assert restored.snooze_until is None
+    assert reloaded.active() == []
 
 
 def test_daily_alarm_retry_does_not_fire_the_original_slot_again(tmp_path) -> None:
@@ -148,7 +149,7 @@ def test_dnd_skips_regular_alarm_but_allows_explicit_breakthrough(tmp_path) -> N
     assert manager.get(quiet.id).active is False
 
 
-def test_alarm_state_survives_reload(tmp_path) -> None:
+def test_alarm_configuration_survives_reload_without_runtime_popup_state(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 19, 9, 0))
     path = tmp_path / "alarms.json"
     manager = AlarmManager(path, now_provider=clock)
@@ -158,8 +159,83 @@ def test_alarm_state_survives_reload(tmp_path) -> None:
     reloaded = AlarmManager(path, now_provider=clock)
     restored = reloaded.get(alarm.id)
     assert restored is not None
-    assert restored.active is True
+    assert restored.active is False
     assert restored.sound_enabled is True
+    assert restored.last_triggered_slot == alarm.last_triggered_slot
+    assert reloaded.active() == []
+
+
+def test_alarm_json_never_persists_active_runtime_state(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    path = tmp_path / "alarms.json"
+    manager = AlarmManager(path, now_provider=clock)
+    alarm = manager.add("不持久化响铃中", clock.value)
+    manager.claim_due()
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored[0]["active"] is False
+    assert stored[0]["last_triggered_slot"] == alarm.last_triggered_slot
+
+
+def test_legacy_active_row_is_normalized_without_replaying_old_slot(tmp_path) -> None:
+    path = tmp_path / "alarms.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "legacy-10am",
+                    "title": "旧闹钟",
+                    "trigger_at": "2026-08-19T10:00:00",
+                    "repeat_rule": REPEAT_DAILY,
+                    "enabled": True,
+                    "sound_enabled": True,
+                    "sound_id": "old-custom",
+                    "active": True,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manager = AlarmManager(
+        path,
+        now_provider=Clock(datetime(2026, 8, 19, 15, 0)),
+    )
+
+    alarm = manager.get("legacy-10am")
+    assert alarm is not None
+    assert alarm.active is False
+    assert alarm.snooze_until is None
+    assert alarm.last_triggered_slot.startswith("2026-08-19T10:00:00")
+    assert manager.claim_due() == []
+
+
+def test_reenabling_after_today_slot_has_passed_waits_for_the_next_occurrence(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    alarm = manager.add("重新开启", "2026-08-19T10:00:00", repeat_rule=REPEAT_DAILY)
+
+    clock.value = datetime(2026, 8, 19, 15, 0)
+    manager.set_enabled(alarm.id, False)
+    manager.set_enabled(alarm.id, True)
+    assert manager.claim_due() == []
+    assert manager.get(alarm.id).last_triggered_slot.startswith("2026-08-19T10:00:00")
+
+    clock.value = datetime(2026, 8, 20, 10, 0)
+    assert [item.id for item in manager.claim_due()] == [alarm.id]
+
+
+def test_schedule_generation_changes_when_schedule_is_replaced(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0))
+    manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    alarm = manager.add("代际令牌", clock.value)
+    initial = alarm.schedule_generation
+
+    manager.update(alarm.id, trigger_at="2026-08-19T10:00:00")
+    assert alarm.schedule_generation > initial
+    updated = alarm.schedule_generation
+    manager.set_enabled(alarm.id, False)
+    manager.set_enabled(alarm.id, True)
+    assert alarm.schedule_generation > updated
 
 
 def test_alarm_enable_toggle_persists_and_controls_dispatch(tmp_path) -> None:

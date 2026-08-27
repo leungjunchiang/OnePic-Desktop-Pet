@@ -44,6 +44,11 @@ class Alarm:
     pet_action: str = "alarm"
     allow_during_dnd: bool = False
     source_todo_id: str | None = None
+    # Monotonically increasing token for scheduler callbacks.  A callback
+    # captured before an edit/enable/snooze operation must never be allowed
+    # to claim the newly configured occurrence.
+    schedule_generation: int = 1
+    # Runtime-only state.  It is deliberately never restored from disk.
     active: bool = False
     last_triggered_slot: str | None = None
     snooze_until: str | None = None
@@ -72,6 +77,10 @@ class Alarm:
             max_ring_seconds = max(0, min(300, int(value.get("max_ring_seconds", 60) or 0)))
         except (TypeError, ValueError):
             max_ring_seconds = 60
+        try:
+            schedule_generation = max(1, int(value.get("schedule_generation", 1) or 1))
+        except (TypeError, ValueError):
+            schedule_generation = 1
         return cls(
             id=str(value.get("id") or uuid4().hex),
             title=str(value.get("title") or "六毛闹钟")[:240],
@@ -87,9 +96,13 @@ class Alarm:
             pet_action=str(value.get("pet_action") or "alarm")[:40],
             allow_during_dnd=bool(value.get("allow_during_dnd", False)),
             source_todo_id=str(value.get("source_todo_id") or "") or None,
-            active=bool(value.get("active", False)),
+            # ``active`` means that a foreground card is currently owned by
+            # this process.  Restoring it after a crash/restart resurrects a
+            # stale popup and can replay an old custom ringtone.
+            active=False,
             last_triggered_slot=str(value.get("last_triggered_slot") or "") or None,
             snooze_until=str(value.get("snooze_until") or "") or None,
+            schedule_generation=schedule_generation,
             origin=str(value.get("origin") or ("todo" if value.get("source_todo_id") else "standalone"))[:20],
             created_at=str(value.get("created_at") or ""),
             disabled_at=str(value.get("disabled_at") or "") or None,
@@ -111,11 +124,30 @@ class AlarmManager:
         self._now = now_provider or (lambda: datetime.now().astimezone())
         self.persist = bool(persist)
         raw = read_json(self.path, [])
+        raw_items = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
         self._items = (
-            [Alarm.from_dict(item) for item in raw if isinstance(item, dict)]
+            [Alarm.from_dict(item) for item in raw_items]
             if isinstance(raw, list)
             else []
         )
+        # Older builds persisted the transient foreground state.  Preserve
+        # the already claimed slot (written at claim time), but never restore
+        # the popup/audio ownership itself.  For malformed legacy rows that
+        # lack a claimed slot, the configured occurrence is the safest one to
+        # mark as consumed; this prevents an old 10:00 alarm reappearing at
+        # 15:00 after a restart.
+        legacy_active_repaired = False
+        for raw_item, item in zip(raw_items, self._items):
+            if bool(raw_item.get("active", False)):
+                legacy_active_repaired = True
+                # A legacy active row represents a firing card, not a
+                # snooze timer.  Keeping its old snooze value would turn the
+                # stale card into a new afternoon retry on restart.
+                item.snooze_until = None
+                if not item.last_triggered_slot:
+                    item.last_triggered_slot = item.trigger_at or None
+        if legacy_active_repaired:
+            self._save()
 
     @property
     def items(self) -> tuple[Alarm, ...]:
@@ -123,7 +155,15 @@ class AlarmManager:
 
     def _save(self) -> None:
         if self.persist:
-            write_json_atomic(self.path, [asdict(item) for item in self._items])
+            payload = []
+            for item in self._items:
+                value = asdict(item)
+                # The next process must start without an owned popup or a
+                # live player.  Scheduling history remains persisted through
+                # ``last_triggered_slot``/``snooze_until``.
+                value["active"] = False
+                payload.append(value)
+            write_json_atomic(self.path, payload)
 
     def add(
         self,
@@ -160,6 +200,7 @@ class AlarmManager:
             source_todo_id=str(source_todo_id or "") or None,
             origin="todo" if source_todo_id else "standalone",
             created_at=now_local(self._now).isoformat(),
+            schedule_generation=1,
         )
         self._items.append(item)
         self._save()
@@ -202,6 +243,7 @@ class AlarmManager:
         item.active = False
         item.snooze_until = None
         item.last_triggered_slot = None
+        item.schedule_generation = self._next_generation(item)
         self._save()
         return item
 
@@ -226,6 +268,7 @@ class AlarmManager:
                 item.enabled = False
                 item.active = False
                 item.snooze_until = None
+                item.schedule_generation = self._next_generation(item)
                 item.disabled_at = item.disabled_at or now_local(self._now).isoformat()
                 item.disabled_reason = (
                     "todo_completed" if bool(getattr(todo, "completed", False))
@@ -247,6 +290,7 @@ class AlarmManager:
                 source_todo_id=todo_id,
                 origin="todo",
                 created_at=now_local(self._now).isoformat(),
+                schedule_generation=1,
             )
             self._items.append(item)
             self._save()
@@ -279,6 +323,7 @@ class AlarmManager:
             item.active = False
             item.snooze_until = None
             item.last_triggered_slot = None
+            item.schedule_generation = self._next_generation(item)
             self._save()
 
     def get(self, alarm_id: str) -> Alarm | None:
@@ -306,8 +351,17 @@ class AlarmManager:
             item.disabled_at = now_local(self._now).isoformat()
             item.disabled_reason = "user"
         else:
+            # Re-enabling is a new schedule.  If today's occurrence already
+            # passed, mark only that old occurrence as handled so enabling a
+            # 10:00 alarm at 15:00 schedules tomorrow rather than a ghost
+            # retry this afternoon.
+            current = now_local(self._now)
+            item.active = False
+            item.snooze_until = None
+            item.last_triggered_slot = self._past_or_current_slot(item, current)
             item.disabled_at = None
             item.disabled_reason = None
+        item.schedule_generation = self._next_generation(item)
         self._save()
         return item
 
@@ -465,16 +519,15 @@ class AlarmManager:
             allowed = set(range(7))
         return current.weekday() not in allowed and slot.date() != current.date()
 
-    @staticmethod
-    def _finish_missed_occurrence(item: Alarm, slot: datetime) -> None:
+    def _finish_missed_occurrence(self, item: Alarm, slot: datetime) -> None:
         """Mark an excluded recurring occurrence as handled without a retry."""
 
         item.active = False
         item.last_triggered_slot = slot.isoformat()
         item.snooze_until = None
+        item.schedule_generation = self._next_generation(item)
 
-    @staticmethod
-    def _reschedule_after_missed(item: Alarm, current: datetime, slot: datetime) -> None:
+    def _reschedule_after_missed(self, item: Alarm, current: datetime, slot: datetime) -> None:
         """Move a missed claim to one retry without creating another alarm row."""
 
         item.active = False
@@ -482,6 +535,7 @@ class AlarmManager:
         item.snooze_until = (
             current + timedelta(minutes=MISSED_ALARM_RETRY_MINUTES)
         ).isoformat()
+        item.schedule_generation = self._next_generation(item)
 
     def snooze(self, alarm_id: str, minutes: int | None = None) -> Alarm:
         item = self.get(alarm_id)
@@ -490,6 +544,7 @@ class AlarmManager:
         delay = max(1, min(120, int(minutes or item.snooze_minutes)))
         item.active = False
         item.snooze_until = (now_local(self._now) + timedelta(minutes=delay)).isoformat()
+        item.schedule_generation = self._next_generation(item)
         self._save()
         return item
 
@@ -503,8 +558,29 @@ class AlarmManager:
             item.enabled = False
             item.disabled_at = now_local(self._now).isoformat()
             item.disabled_reason = "dismissed"
+        item.schedule_generation = self._next_generation(item)
         self._save()
         return item
+
+    @staticmethod
+    def _next_generation(item: Alarm) -> int:
+        """Advance the token used to invalidate stale scheduler callbacks."""
+
+        return max(1, int(item.schedule_generation or 0) + 1)
+
+    def _past_or_current_slot(self, item: Alarm, current: datetime) -> str | None:
+        """Return today's already-passed slot when re-enabling an alarm."""
+
+        try:
+            base = parse_datetime(item.trigger_at, self._now)
+        except (TypeError, ValueError):
+            return None
+        if item.repeat_rule == REPEAT_ONCE:
+            # At the exact configured second the occurrence is still due;
+            # only a genuinely past slot should be skipped on re-enable.
+            return base.isoformat() if base < current else None
+        slot = self._scheduled_slot(item, current)
+        return slot.isoformat() if slot is not None and slot < current else None
 
     def _snooze_slot(self, item: Alarm, current: datetime) -> datetime | None:
         if not item.snooze_until:
