@@ -109,8 +109,7 @@ jobs:
           # Run each Qt-heavy module in a fresh Python process. This avoids
           # native Qt/AppKit state leaking from one module into the next and
           # makes a single problematic macOS test immediately identifiable.
-          mapfile -t files < <(find tests -maxdepth 1 -type f -name 'test_*.py' -print | sort)
-          for file in "${files[@]}"; do
+          for file in tests/test_*.py; do
             name="$(basename "$file" .py)"
             echo "=== Running $file ==="
             python -m pytest --basetemp "$RUNNER_TEMP/pytest-$name" "$file"
