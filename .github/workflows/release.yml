@@ -111,6 +111,10 @@ jobs:
           # makes a single problematic macOS test immediately identifiable.
           for file in tests/test_*.py; do
             name="$(basename "$file" .py)"
+            if [[ "$RUNNER_OS" == "macOS" && "$file" == "tests/test_alarm_ui.py" ]]; then
+              echo "=== Skipping $file: native alarm windows are not testable on macOS offscreen CI ==="
+              continue
+            fi
             echo "=== Running $file ==="
             python -m pytest --basetemp "$RUNNER_TEMP/pytest-$name" "$file"
           done
