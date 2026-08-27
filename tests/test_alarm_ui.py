@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import sys
 import wave
+
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -20,6 +23,11 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin"
+    and os.environ.get("QT_QPA_PLATFORM", "").casefold() in {"offscreen", "minimal"},
+    reason="macOS headless Qt cannot exercise native foreground z-order safely",
+)
 def test_alarm_card_changes_native_z_order_without_mutating_qt_flags() -> None:
     app = _app()
     card = AlarmCard(
