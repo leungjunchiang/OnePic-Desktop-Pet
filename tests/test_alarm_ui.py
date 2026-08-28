@@ -25,7 +25,12 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from onepic_desktop_pet.alarm_manager import Alarm
 from onepic_desktop_pet.alarm_sounds import AlarmSoundLibrary
-from onepic_desktop_pet.alarm_ui import AlarmCard, AlarmPopupState, AwayRecoveryCard
+from onepic_desktop_pet.alarm_ui import (
+    AlarmCard,
+    AlarmPopupState,
+    AwayRecoveryCard,
+    _WindowsAlarmAudio,
+)
 
 
 def _app() -> QApplication:
@@ -168,6 +173,29 @@ def test_custom_audio_button_queues_player_stop_before_card_cleanup(tmp_path) ->
             break
         QTest.qWait(50)
     assert card.audio_cleanup_ready is True
+
+
+def test_windows_alarm_audio_always_closes_native_alias_after_stop_request() -> None:
+    finished: list[bool] = []
+    backend = _WindowsAlarmAudio(
+        "test-tone.mp3",
+        volume=60,
+        on_finished=lambda: finished.append(True),
+        on_error=lambda _error: None,
+    )
+    backend.alias = "lili_alarm_test"
+    commands: list[str] = []
+    backend._send = lambda command: commands.append(command) or 0
+    # Simulate the start/stop race where the Python-side flag was not set,
+    # while the native alias may still exist.
+    backend._opened = False
+    backend._stop_worker()
+
+    assert commands == [
+        "stop lili_alarm_test wait",
+        "close lili_alarm_test wait",
+    ]
+    assert finished == [True]
 
 
 def test_away_recovery_card_has_no_drop_shadow() -> None:

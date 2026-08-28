@@ -9,6 +9,7 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
+import weakref
 from ctypes import wintypes
 from datetime import datetime
 from enum import Enum
@@ -236,6 +237,9 @@ class _WindowsAlarmAudio:
     the GUI never waits for either the command or the thread.
     """
 
+    _instances: weakref.WeakSet["_WindowsAlarmAudio"] = weakref.WeakSet()
+    _instances_lock = threading.Lock()
+
     def __init__(
         self,
         path: str,
@@ -266,6 +270,8 @@ class _WindowsAlarmAudio:
             self._mci = mci
         except (AttributeError, OSError):
             self._mci = None
+        with self._instances_lock:
+            self._instances.add(self)
 
     @property
     def available(self) -> bool:
@@ -286,14 +292,24 @@ class _WindowsAlarmAudio:
     def request_stop(self) -> None:
         """Request stop without joining the worker or waiting in the GUI."""
 
-        if self._stop_requested:
-            return
-        self._stop_requested = True
+        with self._lock:
+            if self._stop_requested:
+                return
+            self._stop_requested = True
         threading.Thread(
             target=self._stop_worker,
             name="LiliAlarmAudioStop",
             daemon=True,
         ).start()
+
+    @classmethod
+    def request_stop_all(cls) -> None:
+        """Stop every alarm backend owned by this process asynchronously."""
+
+        with cls._instances_lock:
+            instances = tuple(cls._instances)
+        for instance in instances:
+            instance.request_stop()
 
     def _send(self, command: str) -> int:
         mci = self._mci
@@ -338,10 +354,29 @@ class _WindowsAlarmAudio:
 
     def _stop_worker(self) -> None:
         with self._lock:
-            if self._opened:
-                self._send(f"stop {self.alias}")
-                self._send(f"close {self.alias}")
-                self._opened = False
+            # ``_opened`` is only a Python-side hint and can be stale if the
+            # start/stop workers race. Always issue both native commands;
+            # ``wait`` is confined to this daemon thread, never the GUI.
+            stop_result = self._send(f"stop {self.alias} wait")
+            stop_retry_result = 0
+            if stop_result:
+                # Some MCI device drivers reject the optional wait flag for
+                # ``stop``. Retry the plain command before closing the alias.
+                stop_retry_result = self._send(f"stop {self.alias}")
+            close_result = self._send(f"close {self.alias} wait")
+            close_retry_result = 0
+            if close_result:
+                close_retry_result = self._send(f"close {self.alias}")
+            self._opened = False
+        lifecycle_log(
+            "media.alarm.mci.stop_commands",
+            class_name="WindowsAlarmAudio",
+            alarm_alias=self.alias,
+            stop_result=stop_result,
+            stop_retry_result=stop_retry_result,
+            close_result=close_result,
+            close_retry_result=close_retry_result,
+        )
         self._notify_finished()
 
     def _notify_finished(self) -> None:
@@ -945,6 +980,9 @@ class AlarmCard(QDialog):
                 reason="async_winmm_stop",
             )
             self._windows_audio.request_stop()
+            # Defensive process-wide cleanup also covers a card whose Qt
+            # wrapper was retired while its native MCI alias remained open.
+            _WindowsAlarmAudio.request_stop_all()
             # ``_media_stop_completed`` means that the stop request has been
             # dispatched, not that the daemon MCI call has returned.  The
             # latter is represented by ``_media_drained`` and the queued
@@ -977,6 +1015,15 @@ class AlarmCard(QDialog):
                 == QMediaPlayer.PlaybackState.StoppedState
             )
         except RuntimeError:
+            stopped = True
+        if not stopped and sys.platform != "win32":
+            # Windows custom audio uses MCI above. On other platforms the
+            # queued player can be stopped safely, so do not leave a looping
+            # QMediaPlayer running silently after the card is closed.
+            try:
+                self._media_player.stop()
+            except RuntimeError:
+                pass
             stopped = True
         if stopped:
             self._media_drained = True
