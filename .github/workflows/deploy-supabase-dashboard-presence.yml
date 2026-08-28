@@ -7,6 +7,7 @@ on:
       - "release/v*"
     paths:
       - "supabase/migrations/20260828000100_lili_dashboard_presence_consistency.sql"
+      - "supabase/migrations/20260828000200_lili_focus_presence_date_consistency.sql"
       - ".github/workflows/deploy-supabase-dashboard-presence.yml"
 
 permissions:
@@ -25,3 +26,8 @@ jobs:
         run: |
           ./scripts/apply_supabase_focus_history.ps1 `
             -MigrationPath "supabase/migrations/20260828000100_lili_dashboard_presence_consistency.sql"
+      - name: Apply focus-date consistency migration
+        shell: pwsh
+        run: |
+          ./scripts/apply_supabase_focus_history.ps1 `
+            -MigrationPath "supabase/migrations/20260828000200_lili_focus_presence_date_consistency.sql"

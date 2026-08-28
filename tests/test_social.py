@@ -525,6 +525,22 @@ def test_never_seen_peer_totals_are_zeroed_without_touching_seen_peers():
     assert data["buddies"][1]["week_seconds"] == 7200
 
 
+def test_focus_today_migration_ignores_stale_presence_days_and_repairs_room_projection():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260828000200_lili_focus_presence_date_consistency.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "lili_effective_focus_today_seconds" in migration
+    assert "f.focus_date = (now() at time zone 'Asia/Shanghai')::date" in migration
+    assert "f.last_seen > now() - interval '2 minutes'" in migration
+    assert "lili_normalize_focus_today_people" in migration
+    assert "lili_room_dashboard_presence_base_20260828" in migration
+
+
 def test_private_note_decoration_is_removed_when_note_rpc_returns_no_rows():
     data = {"buddies": [{"user_id": "buddy-1", "private_note_name": "旧备注", "nickname": "小梁"}]}
 
