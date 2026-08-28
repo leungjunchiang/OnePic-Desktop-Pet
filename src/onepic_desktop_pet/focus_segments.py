@@ -7,9 +7,11 @@ the requested Beijing-calendar window.
 
 Intervals are normalised to ``Asia/Shanghai`` for reporting.  A missing
 ``end_at`` means that the interval is still running and is evaluated against
-``now`` without mutating the fact.  Invalid/negative intervals are ignored and
-reported as data-quality errors; they are never interpreted as a cross-midnight
-interval (which was the source of the classic 23:59/24-hour jump).
+``now`` without mutating the fact.  Invalid/negative, future, or implausibly
+long intervals are ignored and reported as data-quality errors; they are never
+interpreted as a cross-midnight interval (which was the source of the classic
+23:59/24-hour jump).  Calendar-day totals are always produced by clipping the
+same valid intervals to each Beijing day; cached daily counters are not facts.
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from typing import Any, Iterable
 
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 INTERRUPTION_GRACE_SECONDS = 10 * 60
+MAX_FOCUS_SEGMENT_SECONDS = 24 * 60 * 60
+FUTURE_FOCUS_GRACE_SECONDS = 2 * 60
 
 
 def as_beijing(value: datetime) -> datetime:
@@ -72,6 +76,33 @@ class FocusSegment:
 
     def effective_end(self, now: datetime) -> datetime:
         return as_beijing(self.end_at or now)
+
+    def validation_error(
+        self,
+        now: datetime,
+        *,
+        max_seconds: int = MAX_FOCUS_SEGMENT_SECONDS,
+        future_grace_seconds: int = FUTURE_FOCUS_GRACE_SECONDS,
+    ) -> str | None:
+        """Return a stable data-quality reason, or ``None`` when usable.
+
+        A closed segment arriving a few seconds ahead of the local clock is
+        tolerated for normal clock skew.  Anything farther in the future or
+        longer than a full day is not silently counted as work.
+        """
+
+        moment = as_beijing(now)
+        future_limit = moment + timedelta(seconds=max(0, int(future_grace_seconds)))
+        if self.start_at > future_limit:
+            return "future_start"
+        end = self.effective_end(moment)
+        if end < self.start_at:
+            return "negative_interval"
+        if self.end_at is not None and self.end_at > future_limit:
+            return "future_end"
+        if (end - self.start_at).total_seconds() > max(0, int(max_seconds)):
+            return "overlong_interval"
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         value = self.normalized()
@@ -257,10 +288,11 @@ def aggregate_focus_time(
             errors.append(f"invalid_segment:{index}")
             continue
         raw_count += 1
-        effective_end = segment.effective_end(moment)
-        if effective_end < segment.start_at:
-            errors.append(f"negative_interval:{segment.segment_id or index}")
+        validation_error = segment.validation_error(moment)
+        if validation_error:
+            errors.append(f"{validation_error}:{segment.segment_id or index}")
             continue
+        effective_end = segment.effective_end(moment)
         clipped = _clip_interval(segment.start_at, effective_end, window_start, window_end)
         if clipped:
             valid.append((segment, clipped[0], clipped[1]))

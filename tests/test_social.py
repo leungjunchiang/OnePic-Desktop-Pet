@@ -889,6 +889,21 @@ def test_weekly_leaderboard_uses_canonical_daily_focus_totals() -> None:
     assert "least(604800" in migration
 
 
+def test_latest_focus_stats_migration_uses_raw_interval_union_and_reconciles_caches() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829000100_lili_focus_canonical_session_stats.sql").read_text(encoding="utf-8")
+
+    assert "lili_focus_segment_is_valid" in migration
+    assert "range_agg" in migration
+    assert "extract(epoch from upper(r) - lower(r))" in migration
+    assert "lili_effective_focus_stats" in migration
+    assert "lili_effective_focus_week_seconds" in migration
+    assert "lili_reconcile_focus_derived_totals" in migration
+    assert "perform public.lili_reconcile_focus_derived_totals(current_user_id)" in migration
+    assert "focus_week_seconds" in migration
+    assert "-- Repair the active Beijing week, including zero days." in migration
+
+
 def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000400_lili_focus_daily_visibility.sql").read_text(encoding="utf-8")
