@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 52826)
+Total output lines: 4247
+
 """搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
@@ -27,7 +30,14 @@ from PySide6.QtWidgets import (
 
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
-from .social import SignupResult, SocialClient, SocialError, _heartbeat_payload, social_user_message
+from .social import (
+    SignupResult,
+    SocialClient,
+    SocialError,
+    _heartbeat_payload,
+    _session_user_id,
+    social_user_message,
+)
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .login_rewards import login_reward_granted, login_streak_days
@@ -2142,207 +2152,7 @@ class SocialHubDialog(QDialog):
         card.setObjectName("card")
         card.setMinimumWidth(0)
         # Ignore child size hints here. A long label or form control must not
-        # make the page wider than the scroll viewport.
-        card.setMaximumWidth(16777215)
-        card.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-        heading = QLabel(title)
-        heading.setObjectName("sectionTitle")
-        layout.addWidget(heading)
-        if description:
-            detail = QLabel(description)
-            detail.setObjectName("muted")
-            detail.setWordWrap(True)
-            layout.addWidget(detail)
-        return card, layout
-
-    @staticmethod
-    def _scroll_page(page: QWidget) -> QScrollArea:
-        """Keep dense pages usable when the utility window is made smaller."""
-
-        page.setMinimumSize(0, 0)
-        page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        scroll = QScrollArea()
-        scroll.setObjectName("pageScroll")
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setMinimumSize(0, 0)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(page)
-        return scroll
-
-    @staticmethod
-    def _fit_list_height(widget: QListWidget, minimum: int, maximum: int) -> None:
-        """Size short lists to their contents while retaining scrolling for long lists."""
-
-        widget.setMinimumHeight(minimum)
-        widget.setMaximumHeight(maximum)
-        widget.ensurePolished()
-        total = max(0, widget.frameWidth() * 2)
-        for index in range(widget.count()):
-            row_height = widget.sizeHintForRow(index)
-            total += row_height if row_height > 0 else widget.fontMetrics().lineSpacing() + 14
-        desired = min(maximum, max(minimum, total + 8))
-        widget.setFixedHeight(desired)
-
-    @staticmethod
-    def _set_buddy_item_height(item: QListWidgetItem, widget: QWidget) -> None:
-        widget.ensurePolished()
-        # Keep a dense, repeatable row so a room with many buddies remains
-        # scannable. The widget still determines the font/DPI-aware height;
-        # only a small platform safety margin is added.
-        item.setSizeHint(QSize(0, max(96, widget.sizeHint().height() + 6)))
-
-    def _home_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        welcome, welcome_layout = self._card("今天也一起往前一点", "查看搭子动态、待处理邀请和当前专注状态。")
-        self.study_summary = QLabel("登录后可查看搭子今天和本周的专注时间；本地工作计时不受影响。")
-        self.study_summary.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
-        self.study_summary.setWordWrap(True)
-        welcome_layout.addWidget(self.study_summary)
-        refresh = QPushButton("刷新首页")
-        refresh.clicked.connect(self.refresh)
-        welcome_layout.addWidget(refresh)
-        network_row = QHBoxLayout()
-        self.network_hint = QLabel(self._backend_hint())
-        self.network_hint.setObjectName("muted")
-        self.network_hint.setWordWrap(True)
-        network_row.addWidget(self.network_hint, 1)
-        network_check = QPushButton("检测自习室网络")
-        network_check.clicked.connect(self._check_network)
-        network_row.addWidget(network_check)
-        welcome_layout.addLayout(network_row)
-        layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。右键搭子卡片可设置消息免打扰或删除搭子。")
-        buddy_tools = QHBoxLayout()
-        add_buddy = QPushButton("用搭子码添加")
-        add_buddy.clicked.connect(self._add_buddy)
-        buddy_tools.addWidget(add_buddy)
-        buddy_tools.addStretch()
-        buddies_layout.addLayout(buddy_tools)
-        self.buddies = QListWidget(); self.buddies.setSpacing(5)
-        self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
-        self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
-        self.buddies.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.buddies.customContextMenuRequested.connect(self._buddy_context_menu)
-        buddies_layout.addWidget(self.buddies)
-        layout.addWidget(buddies_card)
-        wealth_card, wealth_layout = self._card(
-            "本周专注排行榜",
-            "只展示已接受搭子且主动参与的好友；按本周专注时间排名。默认参与，可在“我的”中关闭。",
-        )
-        self.wealth_leaderboard = QListWidget()
-        self.wealth_leaderboard.setMinimumHeight(52)
-        self.wealth_leaderboard.setMaximumHeight(210)
-        wealth_layout.addWidget(self.wealth_leaderboard)
-        layout.addWidget(wealth_card)
-        layout.addStretch()
-        return self._scroll_page(page)
-
-    def _chat_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        inbox_card, inbox_layout = self._card("待处理", "搭子申请、成果见证和串门都会在这里等待你的明确决定。添加搭子请回到首页“我的搭子”。")
-        self.inbox = QListWidget(); self.inbox.setSpacing(6); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
-        self.inbox.currentItemChanged.connect(self._update_inbox_actions)
-        inbox_layout.addWidget(self.inbox)
-        layout.addWidget(inbox_card)
-        recent_card, recent_layout = self._card("最近互动", "已处理的事件会保留一条轻量记录。")
-        self.recent_interactions = QListWidget(); self.recent_interactions.setMaximumHeight(180)
-        recent_layout.addWidget(self.recent_interactions)
-        layout.addWidget(recent_card)
-        layout.addStretch()
-        return self._scroll_page(page)
-
-    def _focus_page(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        focus_card, focus_layout = self._card(
-            "我的专注",
-            "桌面六毛与自习室共用同一个 FocusSession；这里不会再启动第二套计时器。",
-        )
-        self.focus_status = QLabel("等待同步")
-        self.focus_status.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
-        self.focus_clock = QLabel("0分钟")
-        self.focus_clock.setStyleSheet("font-size:28px;font-weight:700;color:#203847;")
-        self.focus_today = QLabel("今日累计 0分钟")
-        self.focus_today.setObjectName("muted")
-        focus_layout.addWidget(self.focus_status)
-        focus_layout.addWidget(self.focus_clock)
-        focus_layout.addWidget(self.focus_today)
-        self.focus_task = QLabel("当前任务：未设置")
-        self.focus_task.setObjectName("muted")
-        self.focus_task.setWordWrap(True)
-        focus_layout.addWidget(self.focus_task)
-        self.focus_insights = QLabel("今天第 0 轮 · 连续专注 0 天 · 本周 0分钟")
-        self.focus_insights.setObjectName("muted")
-        self.focus_insights.setWordWrap(True)
-        focus_layout.addWidget(self.focus_insights)
-        controls = QGridLayout()
-        self.focus_start = QPushButton("开始专注")
-        self.focus_pause = QPushButton("暂停休息")
-        self.focus_finish = QPushButton("结束本轮")
-        self.focus_start.clicked.connect(self.focus_start_requested.emit)
-        self.focus_pause.clicked.connect(self.focus_pause_requested.emit)
-        self.focus_finish.clicked.connect(self.focus_finish_requested.emit)
-        for column, button in enumerate((self.focus_start, self.focus_pause, self.focus_finish)):
-            controls.addWidget(button, 0, column)
-            controls.setColumnStretch(column, 1)
-        focus_layout.addLayout(controls)
-        report_button = QPushButton("查看工作报告")
-        report_button.setObjectName("focusReportButton")
-        report_button.clicked.connect(self.work_report_requested.emit)
-        focus_layout.addWidget(report_button)
-        task_button = QPushButton("设置一次只盯一件事")
-        task_button.clicked.connect(self._set_focus_task)
-        review_button = QPushButton("写下明天第一件事")
-        review_button.clicked.connect(self._set_tomorrow_review)
-        task_row = QGridLayout(); task_row.addWidget(task_button, 0, 0); task_row.addWidget(review_button, 0, 1)
-        task_row.setColumnStretch(0, 1); task_row.setColumnStretch(1, 1)
-        focus_layout.addLayout(task_row)
-        layout.addWidget(focus_card)
-
-        room_card, room_layout = self._card(
-            "共同专注房间",
-            "只显示专注/休息和累计时长；不会上传正在使用的软件、窗口标题或任务内容。",
-        )
-        self.room_goal = QLabel("尚未选择房间目标")
-        self.room_goal.setObjectName("muted")
-        room_layout.addWidget(self.room_goal)
-        self.room_summary = QLabel("选择一个房间后，这里会显示共同专注人数和累计时长。")
-        self.room_summary.setObjectName("muted")
-        self.room_summary.setWordWrap(True)
-        room_layout.addWidget(self.room_summary)
-        room_exclusive_note = QLabel("同一时间一个账号只会出现在一个自习室；加入或创建新房间会自动离开旧房间。")
-        room_exclusive_note.setObjectName("muted")
-        room_exclusive_note.setWordWrap(True)
-        room_layout.addWidget(room_exclusive_note)
-        self.room_members = QListWidget(); self.room_members.setSpacing(6)
-        self.room_members.setObjectName("roomStage")
-        self.room_members.setStyleSheet(
-            "QListWidget#roomStage{background:#eaf4f5;border:1px solid #bfd6dc;border-radius:12px;padding:5px;}"
-            "QListWidget#roomStage::item{background:transparent;border:0;}"
-        )
-        self.room_members.setMinimumHeight(120); self.room_members.setMaximumHeight(360)
-        room_layout.addWidget(self.room_members)
-        self.room_activity_label = QLabel("房间动态（北京时间）")
-        self.room_activity_label.setObjectName("muted")
-        room_layout.addWidget(self.room_activity_label)
-        self.room_activity = QListWidget(); self.room_activity.setMinimumHeight(90); self.room_activity.setMaximumHeight(180)
-        room_layout.addWidget(self.room_activity)
-        self.room_ritual = QLabel("共同开工/收工：未设置")
-        self.room_ritual.setObjectName("muted")
-        self.room_ritual.setWordWrap(True)
-        room_layout.addWidget(self.room_ritual)
-        self.room_challenge = QLabel("共同挑战：未设置")
-        self.room_challenge.setObjectName("muted")
-        self.room_challenge.setWordWrap(True)
-        room_layout.addWidget(self.room_challenge)
-        self.rooms = QListWidget(); self.rooms.setMinimumHeight(52); self.rooms.setMaximumHeight(140)
-        self.rooms.currentItemChanged.connect(self._room_selected)
-        room_layout.addWidget(self.rooms)
-        row = QGridLayout(); create = QPushButton("创建自习室"); join = QPushButton("使用房间码加入")
+        # make t…2826 tokens truncated…
         create.clicked.connect(self._create_room); join.clicked.connect(self._join_room)
         row.addWidget(create, 0, 0); row.addWidget(join, 0, 1)
         row.setColumnStretch(0, 1); row.setColumnStretch(1, 1); room_layout.addLayout(row)
@@ -3509,13 +3319,27 @@ class SocialHubDialog(QDialog):
         on the previous (often resting) state until the user clicked refresh.
         """
 
+        payload = data if isinstance(data, dict) else {}
+        active_user_id = _session_user_id(self.client)
+        payload_me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
+        payload_user_id = str(payload_me.get("user_id") or "").strip()
+        if active_user_id and payload_user_id and active_user_id != payload_user_id:
+            # A late response from the previous account must never repaint the
+            # new account's room cards, presence, or private labels.
+            LOGGER.warning(
+                "ignored dashboard for another account active=%s payload=%s",
+                active_user_id,
+                payload_user_id,
+            )
+            return
+
         # A direct render can happen immediately after construction (for
         # example when the owner restores a cached snapshot). Do not let the
         # one-shot 50 ms bootstrap refresh arrive afterward and overwrite that
         # newer view with its older in-flight result.
         self._initial_refresh_timer.stop()
         previous_data = self.data
-        self.data = dict(data or {})
+        self.data = dict(payload)
         self._muted_buddy_ids = {
             str(item).strip()
             for item in (self.data.get("muted_buddy_ids") or [])
@@ -4223,3 +4047,4 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+

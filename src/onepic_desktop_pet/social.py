@@ -26,8 +26,9 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 import unicodedata
+import uuid
 
-from .local_data import app_data_dir
+from .local_data import account_local_data_path, app_data_dir, read_json, write_json_atomic
 from .resources import resource_path, resource_root
 from .tls_support import tls_diagnostics, verified_ssl_context
 
@@ -59,6 +60,160 @@ HEARTBEAT_FIELDS = frozenset(
         "quick_status_expires_at",
     }
 )
+
+_PRESENCE_TIMESTAMP_FIELDS = ("last_seen_at", "last_seen", "status_updated_at")
+_PRESENCE_DEVICE_STATE_FILENAME = "social-device.json"
+_PRESENCE_DEVICE_STATE_LOCK = threading.Lock()
+_PRESENCE_DEVICE_STATE_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _presence_device_credentials(user_id: str) -> tuple[str, bool]:
+    """Return a stable per-account device id and whether it must claim the lease.
+
+    The live database protects an account's presence row with a device lease.
+    Older desktop builds omitted these fields, which made every heartbeat after
+    the first claimed session fail with ``device_session_revoked``.  Keep the
+    identifier in the account-scoped local directory so updating the app does
+    not claim a new device on every launch, and only claim once per account.
+    """
+
+    account_id = str(user_id or "").strip()
+    if not account_id:
+        return uuid.uuid4().hex, True
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        cached = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+        if cached:
+            return str(cached["device_id"]), bool(cached.get("claim_pending", True))
+
+        path = account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id)
+        raw = read_json(path, {})
+        device_id = str(raw.get("device_id") or "").strip()[:64] if isinstance(raw, dict) else ""
+        if not device_id:
+            device_id = uuid.uuid4().hex
+        state = {
+            "version": 1,
+            "device_id": device_id,
+            "claim_pending": bool(raw.get("claim_pending", True)) if isinstance(raw, dict) else True,
+        }
+        _PRESENCE_DEVICE_STATE_CACHE[account_id] = state
+        try:
+            write_json_atomic(path, state)
+        except OSError:
+            # The in-memory state still keeps one running process stable when
+            # a locked-down portable install cannot write its app-data folder.
+            LOGGER.debug("social device state could not be persisted", exc_info=True)
+        return device_id, bool(state["claim_pending"])
+
+
+def _mark_presence_device_claimed(user_id: str, device_id: str) -> None:
+    """Mark a successful device lease so later heartbeats do not steal it."""
+
+    account_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if not account_id or not clean_device_id:
+        return
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        state = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+        if not state or str(state.get("device_id")) != clean_device_id:
+            return
+        state["claim_pending"] = False
+        try:
+            write_json_atomic(account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id), state)
+        except OSError:
+            LOGGER.debug("social device claim state could not be persisted", exc_info=True)
+
+
+def _mark_presence_device_claim_pending(user_id: str, device_id: str) -> None:
+    """Allow one later heartbeat to reclaim a lease moved to another device."""
+
+    account_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if not account_id or not clean_device_id:
+        return
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        state = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+        if not state or str(state.get("device_id")) != clean_device_id:
+            return
+        state["claim_pending"] = True
+        try:
+            write_json_atomic(account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id), state)
+        except OSError:
+            LOGGER.debug("social device reclaim state could not be persisted", exc_info=True)
+
+
+def _session_user_id(client: Any) -> str:
+    """Return the authenticated account id without ever guessing it.
+
+    The desktop has both a route manager and individual HTTP transports.  A
+    token refresh can update the shared auth manager before the currently
+    selected transport has copied its ``session`` attribute, so callers must
+    check both layers.  An empty string means that the client is not
+    authenticated and must not be allowed to read an account-scoped cache.
+    """
+
+    try:
+        session = getattr(client, "session", None)
+    except Exception:
+        session = None
+    user_id = str(getattr(session, "user_id", "") or "").strip()
+    if user_id:
+        return user_id
+
+    manager = getattr(client, "auth_manager", None)
+    if isinstance(manager, AuthSessionManager):
+        current = manager.current()
+        user_id = str(getattr(current, "user_id", "") or "").strip()
+        if user_id:
+            return user_id
+
+    backend = getattr(client, "_http_backend", None)
+    try:
+        session = getattr(backend, "session", None)
+    except Exception:
+        session = None
+    return str(getattr(session, "user_id", "") or "").strip()
+
+
+def _normalise_never_seen_presence(data: dict[str, Any]) -> dict[str, Any]:
+    """Zero durable-looking totals for peers with no presence record.
+
+    ``lili_dashboard`` returns a profile row even when a user has never sent
+    a heartbeat.  In that case the profile's old focus totals are not proof
+    that this account has ever logged in.  Current deployments include a
+    nullable ``last_seen_at`` field specifically for this distinction.  Keep
+    the rule at the client boundary as well so a desktop release remains safe
+    while the database migration is rolling out.
+    """
+
+    def normalise(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict) or item.get("is_self"):
+                continue
+            fields_present = any(field in item for field in _PRESENCE_TIMESTAMP_FIELDS)
+            never_seen = bool(item.get("presence_never_seen"))
+            if not never_seen and not fields_present:
+                continue
+            has_seen = any(str(item.get(field) or "").strip() for field in _PRESENCE_TIMESTAMP_FIELDS)
+            if never_seen or not has_seen:
+                item.update(
+                    {
+                        "today_seconds": 0,
+                        "week_seconds": 0,
+                        "session_seconds": 0,
+                        "presence_never_seen": True,
+                    }
+                )
+
+    normalise(data.get("buddies"))
+    normalise(data.get("room_people"))
+    normalise(data.get("active_visits"))
+    current_room = data.get("current_room")
+    if isinstance(current_room, dict):
+        normalise(current_room.get("room_people"))
+        normalise(current_room.get("active_visits"))
+    return data
 
 
 def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
@@ -226,15 +381,16 @@ def _private_notes_from_payload(payload: Any) -> dict[str, str]:
 def _apply_buddy_private_notes(data: dict[str, Any], notes: dict[str, str]) -> dict[str, Any]:
     """Decorate only the current user's dashboard snapshot with private labels."""
 
-    if not notes:
-        return data
-
     def decorate(items: Any) -> None:
         if not isinstance(items, list):
             return
         for item in items:
             if not isinstance(item, dict):
                 continue
+            # A cached snapshot can still contain a note that the user has
+            # since removed.  The RPC's absence of a row is authoritative;
+            # clear the local-only decoration before applying current notes.
+            item.pop("private_note_name", None)
             for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id"):
                 user_id = item.get(field)
                 if user_id is not None and str(user_id) in notes:
@@ -1255,28 +1411,52 @@ class HttpSocialBackend:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
     def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
+        # ``AuthSessionManager`` is the source of truth.  During login and
+        # token refresh it can already hold a valid session while this
+        # transport's compatibility attribute is still empty.  Returning at
+        # that point silently drops the heartbeat and makes every peer see the
+        # user as offline.
+        managed_session = self.auth_manager.current()
+        if managed_session is not None:
+            self.session = managed_session
         if not self.session:
+            LOGGER.info(
+                "social heartbeat skipped authenticated=%s reason=no_session",
+                self.signed_in,
+            )
             return
         # Presence freshness is assigned by the Supabase database clock.  Do not
         # send a client last_seen value: a user's incorrect Windows clock would
         # otherwise make an active buddy look offline for the whole room.
         now = datetime.now(BEIJING_TIMEZONE)
-        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
+        device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
         if self.transport == "direct":
             body["user_id"] = self.session.user_id
             # PostgREST only turns the on_conflict query into an upsert when
             # merge-duplicates is explicitly requested. Without this header,
             # every direct heartbeat after the first one fails with a primary
             # key violation and peers keep seeing this user as offline.
-            self._raw(
-                "POST",
-                "/rest/v1/lili_focus_presence?on_conflict=user_id",
-                body,
-                authenticated=True,
-                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-            )
+            try:
+                self._raw(
+                    "POST",
+                    "/rest/v1/lili_focus_presence?on_conflict=user_id",
+                    body,
+                    authenticated=True,
+                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                )
+            except SocialError as exc:
+                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                raise
         else:
-            self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+            try:
+                self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+            except SocialError as exc:
+                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                raise
+        _mark_presence_device_claimed(self.session.user_id, device_id)
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self.transport == "direct":
@@ -1506,11 +1686,24 @@ class LegacyDirectSocialClient:
         try:
             raw = json.loads(self._dashboard_cache_path().read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                self._dashboard_cache = {
-                    str(key): value
-                    for key, value in raw.items()
-                    if isinstance(value, dict) and isinstance(value.get("data"), dict)
-                }
+                migrated: dict[str, dict[str, Any]] = {}
+                for key, value in raw.items():
+                    if not isinstance(value, dict) or not isinstance(value.get("data"), dict):
+                        continue
+                    payload = value["data"]
+                    payload_me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
+                    account_id = str(value.get("account_id") or payload_me.get("user_id") or "").strip()
+                    if not account_id:
+                        # Old unscoped entries are deliberately discarded:
+                        # they cannot be proven to belong to the next account.
+                        continue
+                    scoped_key = str(key)
+                    if not scoped_key.startswith(f"{account_id}:"):
+                        scoped_key = f"{account_id}:{scoped_key}"
+                    entry = dict(value)
+                    entry["account_id"] = account_id
+                    migrated[scoped_key] = entry
+                self._dashboard_cache = migrated
         except (OSError, ValueError, TypeError):
             self._dashboard_cache = {}
 
@@ -1531,23 +1724,41 @@ class LegacyDirectSocialClient:
             return
 
     def _remember_dashboard(self, room_id: str | None, data: dict[str, Any]) -> None:
-        key = str(room_id or "")
+        account_id = _session_user_id(self)
+        if not account_id:
+            return
+        key = f"{account_id}:{str(room_id or '')}"
+        snapshot = json.loads(json.dumps(data, ensure_ascii=False))
+        _normalise_never_seen_presence(snapshot)
         self._dashboard_cache[key] = {
+            "account_id": account_id,
             "saved_at": time.time(),
-            "data": json.loads(json.dumps(data, ensure_ascii=False)),
+            "data": snapshot,
         }
         self._save_dashboard_cache()
 
     def cached_dashboard(self, room_id: str | None = None) -> dict[str, Any] | None:
         """Return the latest payload for offline rendering, if available."""
 
-        key = str(room_id or "")
+        account_id = _session_user_id(self)
+        if not account_id:
+            return None
+        key = f"{account_id}:{str(room_id or '')}"
         entry = self._dashboard_cache.get(key)
-        if entry is None and key:
-            entry = self._dashboard_cache.get("")
         if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict):
             return None
+        if str(entry.get("account_id") or account_id) != account_id:
+            return None
         data = json.loads(json.dumps(entry["data"], ensure_ascii=False))
+        payload_me = data.get("me") if isinstance(data.get("me"), dict) else {}
+        payload_account_id = str(payload_me.get("user_id") or "").strip()
+        if payload_account_id and payload_account_id != account_id:
+            return None
+        _normalise_never_seen_presence(data)
+        # Private labels are local decorations and cannot be trusted when a
+        # cached snapshot is restored.  The next live dashboard applies the
+        # current account's notes again.
+        _apply_buddy_private_notes(data, {})
         saved_at = float(entry.get("saved_at") or 0)
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         age_minutes = max(0, int(age_seconds / 60)) if saved_at else 0
@@ -1914,7 +2125,7 @@ class LegacyDirectSocialClient:
                             # Older deployed projects may not have the optional ritual
                             # migration yet; the core room dashboard remains usable.
                             pass
-            result = dict(data or {})
+            result = _normalise_never_seen_presence(dict(data or {}))
             self._last_error = ""
             result["_connection_state"] = "ONLINE"
             result["data_source"] = "server"
@@ -1961,8 +2172,15 @@ class LegacyDirectSocialClient:
             return
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
-        self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
+        try:
+            self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        except SocialError as exc:
+            if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                _mark_presence_device_claim_pending(self.session.user_id, device_id)
+            raise
+        _mark_presence_device_claimed(self.session.user_id, device_id)
 
     def update_owner_nickname(self, nickname: str) -> None:
         if self._http_backend is not None:
@@ -2070,7 +2288,25 @@ class DashboardCacheClientBase:
             return
         try:
             raw = json.loads(self._dashboard_cache_path().read_text(encoding="utf-8"))
-            if isinstance(raw, dict): self._dashboard_cache = {str(k): v for k, v in raw.items() if isinstance(v, dict) and isinstance(v.get("data"), dict)}
+            if isinstance(raw, dict):
+                migrated: dict[str, dict[str, Any]] = {}
+                for key, value in raw.items():
+                    if not isinstance(value, dict) or not isinstance(value.get("data"), dict):
+                        continue
+                    payload = value["data"]
+                    payload_me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
+                    account_id = str(value.get("account_id") or payload_me.get("user_id") or "").strip()
+                    if not account_id:
+                        # Legacy entries had no account identity and must not
+                        # be shown after another user signs in.
+                        continue
+                    scoped_key = str(key)
+                    if not scoped_key.startswith(f"{account_id}:"):
+                        scoped_key = f"{account_id}:{scoped_key}"
+                    entry = dict(value)
+                    entry["account_id"] = account_id
+                    migrated[scoped_key] = entry
+                self._dashboard_cache = migrated
         except (OSError, ValueError, TypeError):
             self._dashboard_cache = {}
 
@@ -2086,7 +2322,16 @@ class DashboardCacheClientBase:
             pass
 
     def _remember_dashboard(self, room_id: str | None, data: dict[str, Any]) -> None:
-        self._dashboard_cache[str(room_id or "")] = {"saved_at": time.time(), "data": json.loads(json.dumps(data, ensure_ascii=False))}
+        account_id = _session_user_id(self)
+        if not account_id:
+            return
+        snapshot = json.loads(json.dumps(data, ensure_ascii=False))
+        _normalise_never_seen_presence(snapshot)
+        self._dashboard_cache[f"{account_id}:{str(room_id or '')}"] = {
+            "account_id": account_id,
+            "saved_at": time.time(),
+            "data": snapshot,
+        }
         self._save_dashboard_cache()
 
     @staticmethod
@@ -2122,9 +2367,22 @@ class DashboardCacheClientBase:
         if isinstance(data.get("room_summary"), dict): data["room_summary"]["presence_uncertain"] = True
 
     def cached_dashboard(self, room_id: str | None = None) -> dict[str, Any] | None:
-        key = str(room_id or ""); entry = self._dashboard_cache.get(key) or (self._dashboard_cache.get("") if key else None)
+        account_id = _session_user_id(self)
+        if not account_id:
+            return None
+        key = f"{account_id}:{str(room_id or '')}"
+        entry = self._dashboard_cache.get(key)
         if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict): return None
-        data = json.loads(json.dumps(entry["data"], ensure_ascii=False)); saved_at = float(entry.get("saved_at") or 0)
+        if str(entry.get("account_id") or account_id) != account_id:
+            return None
+        data = json.loads(json.dumps(entry["data"], ensure_ascii=False))
+        payload_me = data.get("me") if isinstance(data.get("me"), dict) else {}
+        payload_account_id = str(payload_me.get("user_id") or "").strip()
+        if payload_account_id and payload_account_id != account_id:
+            return None
+        _normalise_never_seen_presence(data)
+        _apply_buddy_private_notes(data, {})
+        saved_at = float(entry.get("saved_at") or 0)
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
         if presence_grace: self._mark_remote_presence_uncertain(data, age_seconds)
@@ -2193,7 +2451,9 @@ class DashboardCacheClientBase:
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
         self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
         try:
-            result = dict(self._require_backend().dashboard(room_id=room_id, allow_cache=allow_cache) or {})
+            result = _normalise_never_seen_presence(
+                dict(self._require_backend().dashboard(room_id=room_id, allow_cache=allow_cache) or {})
+            )
             server_timestamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
             result.update({"_connection_state": "ONLINE", "data_source": "server", "_data_source": "server", "_server_timestamp": server_timestamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=server_timestamp)
@@ -2578,7 +2838,20 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         """
 
         active = getattr(self._manager, "active", None)
-        return getattr(active, "session", None)
+        session = getattr(active, "session", None)
+        if session is not None:
+            return session
+        # The route manager deliberately shares one AuthSessionManager between
+        # Direct and proxy transports.  If a route switch happened between
+        # two GUI ticks, the selected transport can lag behind that manager;
+        # expose the authoritative session so the next heartbeat is not
+        # skipped and account-scoped cache lookup remains correct.
+        direct = getattr(self._manager, "direct", None)
+        session = getattr(direct, "session", None)
+        if session is not None:
+            return session
+        auth_manager = getattr(direct, "auth_manager", None)
+        return auth_manager.current() if isinstance(auth_manager, AuthSessionManager) else None
 
     @property
     def connection_state(self) -> str:
@@ -2646,7 +2919,9 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
         self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
         try:
-            result = dict(self._manager.request("dashboard", room_id=room_id) or {})
+            result = _normalise_never_seen_presence(
+                dict(self._manager.request("dashboard", room_id=room_id) or {})
+            )
             try:
                 note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
                 _apply_buddy_private_notes(result, _private_notes_from_payload(note_payload))

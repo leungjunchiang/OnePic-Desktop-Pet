@@ -1,0 +1,34 @@
+name: deploy-supabase-dashboard-presence
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "release/v*"
+    paths:
+      - "supabase/migrations/20260828000100_lili_dashboard_presence_consistency.sql"
+      - "supabase/migrations/20260828000200_lili_focus_presence_date_consistency.sql"
+      - ".github/workflows/deploy-supabase-dashboard-presence.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply dashboard presence-consistency migration
+        shell: pwsh
+        run: |
+          ./scripts/apply_supabase_focus_history.ps1 `
+            -MigrationPath "supabase/migrations/20260828000100_lili_dashboard_presence_consistency.sql"
+      - name: Apply focus-date consistency migration
+        shell: pwsh
+        run: |
+          ./scripts/apply_supabase_focus_history.ps1 `
+            -MigrationPath "supabase/migrations/20260828000200_lili_focus_presence_date_consistency.sql"
+

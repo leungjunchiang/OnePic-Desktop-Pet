@@ -228,6 +228,8 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
     room_id: body.room_id ? String(body.room_id) : null,
     quick_status: String(body.quick_status || "").trim().slice(0, 40),
     quick_status_expires_at: body.quick_status_expires_at || null,
+    device_id: String(body.device_id || "").trim().slice(0, 64),
+    device_claim: Boolean(body.device_claim),
     // Presence freshness must use this server's clock, never the desktop's.
     last_seen: now,
     updated_at: now,
@@ -341,5 +343,6 @@ Deno.serve(async (request: Request) => {
     return json(request, Deno.env.toObject(), { error: message }, status);
   }
 });
+
 
 

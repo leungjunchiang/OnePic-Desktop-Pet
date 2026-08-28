@@ -358,6 +358,25 @@ def test_supply_actions_are_large_inline_buttons() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
+def test_buddy_card_uses_public_nickname_when_private_note_is_missing() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = BuddyCardWidget(
+        {
+            "user_id": "buddy-1",
+            "nickname": "小梁",
+            "owner_nickname": "小梁",
+            "online": False,
+            "status": "offline",
+        }
+    )
+
+    labels = [label.text() for label in widget.findChildren(QLabel)]
+
+    assert any("小梁家的六毛" in text for text in labels)
+    assert not any("搭子家的六毛" in text for text in labels)
+    widget.close(); widget.deleteLater(); app.processEvents()
+
+
 def test_incoming_visit_notice_has_direct_accept_reject_and_later_actions() -> None:
     app = QApplication.instance() or QApplication([])
     notice = IncomingVisitNotice(
@@ -678,3 +697,4 @@ def test_local_focus_wins_and_missing_leaderboard_does_not_clear_cache() -> None
     app.processEvents()
     assert "暂无可展示" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+

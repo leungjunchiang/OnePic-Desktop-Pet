@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
+import onepic_desktop_pet.social as social_module
 from onepic_desktop_pet.social import (
     BackendRouteManager,
     AuthSessionManager,
@@ -22,6 +23,7 @@ from onepic_desktop_pet.social import (
     SignupResult,
     _apply_buddy_private_notes,
     _heartbeat_payload,
+    _normalise_never_seen_presence,
     normalize_email,
     social_user_message,
 )
@@ -458,6 +460,97 @@ def test_http_backend_uses_direct_supabase_paths():
     assert heartbeat_call[4] == {"Prefer": "resolution=merge-duplicates,return=minimal"}
 
 
+def test_heartbeat_refreshes_transport_session_from_auth_manager():
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+            self.calls = []
+
+        def _raw(self, method, path, body=None, **kwargs):
+            self.calls.append((method, path, body, kwargs))
+            return {}
+
+    backend = Recording()
+    session = SocialSession("access", "refresh", "user-1", 9_999_999_999)
+    backend.auth_manager.adopt(session)
+    backend.session = None
+
+    backend.heartbeat(
+        working=False,
+        session_active=False,
+        today_seconds=0,
+        session_started_at=None,
+        outfit_key="",
+        room_id=None,
+    )
+
+    assert backend.session is session
+    assert backend.calls
+    assert backend.calls[0][1] == "/rest/v1/lili_focus_presence?on_conflict=user_id"
+
+
+def test_never_seen_peer_totals_are_zeroed_without_touching_seen_peers():
+    data = {
+        "buddies": [
+            {
+                "user_id": "new-user",
+                "last_seen_at": None,
+                "status_updated_at": None,
+                "today_seconds": 3600,
+                "week_seconds": 7200,
+                "session_seconds": 30,
+            },
+            {
+                "user_id": "seen-user",
+                "last_seen_at": "2026-08-28T10:00:00+00:00",
+                "status_updated_at": "2026-08-28T10:00:00+00:00",
+                "today_seconds": 3600,
+                "week_seconds": 7200,
+                "session_seconds": 30,
+            },
+        ]
+    }
+
+    _normalise_never_seen_presence(data)
+
+    assert data["buddies"][0]["today_seconds"] == 0
+    assert data["buddies"][0]["week_seconds"] == 0
+    assert data["buddies"][0]["session_seconds"] == 0
+    assert data["buddies"][0]["presence_never_seen"] is True
+    assert data["buddies"][1]["today_seconds"] == 3600
+    assert data["buddies"][1]["week_seconds"] == 7200
+
+
+def test_focus_today_migration_ignores_stale_presence_days_and_repairs_room_projection():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260828000200_lili_focus_presence_date_consistency.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "lili_effective_focus_today_seconds" in migration
+    assert "f.focus_date = (now() at time zone 'Asia/Shanghai')::date" in migration
+    assert "f.last_seen > now() - interval '2 minutes'" in migration
+    assert "lili_normalize_focus_today_people" in migration
+    assert "lili_zero_never_seen_presence" in migration
+    assert "lili_room_dashboard_presence_base_20260828" in migration
+
+
+def test_private_note_decoration_is_removed_when_note_rpc_returns_no_rows():
+    data = {"buddies": [{"user_id": "buddy-1", "private_note_name": "旧备注", "nickname": "小梁"}]}
+
+    _apply_buddy_private_notes(data, {})
+
+    assert "private_note_name" not in data["buddies"][0]
+
+
 def test_email_normalization_removes_copied_invisible_characters_and_normalizes_domain():
     assert normalize_email("  Alice@EXAMPLE.COM\u200b ") == "Alice@example.com"
 
@@ -681,6 +774,41 @@ def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
     assert backend.headers == {"Prefer": "resolution=merge-duplicates,return=minimal"}
 
 
+def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_path):
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+    monkeypatch.setattr(
+        social_module,
+        "account_local_data_path",
+        lambda filename, account_id: tmp_path / f"{account_id}-{filename}",
+    )
+
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+            self.session = SocialSession("a", "r", "lease-user", 9_999_999_999)
+            self.bodies = []
+
+        def _raw(self, method, path, body=None, **kwargs):
+            self.bodies.append(body)
+            return {}
+
+    backend = Recording()
+    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
+    backend.heartbeat(working=True, today_seconds=61, session_started_at=None, outfit_key="", room_id="room-1")
+
+    first, second = backend.bodies
+    assert len(first["device_id"]) == 32
+    assert first["device_id"] == second["device_id"]
+    assert first["device_claim"] is True
+    assert second["device_claim"] is False
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+
+
 def test_presence_freshness_is_server_authoritative_in_all_relays():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000100_lili_presence_server_timestamp.sql").read_text(encoding="utf-8")
@@ -693,6 +821,8 @@ def test_presence_freshness_is_server_authoritative_in_all_relays():
     assert "last_seen: now" in edge
     assert "last_seen: now" in worker
     assert "String(body.last_seen || now)" not in cloudbase + edge + worker
+    assert "device_id" in cloudbase + edge + worker
+    assert "device_claim" in cloudbase + edge + worker
 
 
 def test_cloudbase_presence_and_profile_proxy_preserve_upsert_contract() -> None:
@@ -943,7 +1073,8 @@ def test_recent_cached_dashboard_preserves_last_known_peer_presence():
     manager = BackendRouteManager(direct, proxy, persist_state=False)
     client = SocialClient(backend=manager, persist_tokens=False)
     client._dashboard_cache = {
-        "room-1": {
+        "user-1:room-1": {
+            "account_id": "user-1",
             "saved_at": time.time() - 90,
             "data": {
                 "buddies": [
@@ -982,7 +1113,8 @@ def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
     manager = BackendRouteManager(direct, proxy, persist_state=False)
     client = SocialClient(backend=manager, persist_tokens=False)
     client._dashboard_cache = {
-        "room-1": {
+        "user-1:room-1": {
+            "account_id": "user-1",
             "saved_at": time.time() - PRESENCE_GRACE_SECONDS - 1,
             "data": {
                 "buddies": [
@@ -1003,6 +1135,24 @@ def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
     assert peer["working"] is False
     assert peer["stale_presence"] is True
     assert peer["presence_uncertain"] is False
+
+
+def test_dashboard_cache_rejects_unscoped_or_other_account_snapshots():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+    client._dashboard_cache = {
+        "room-1": {"saved_at": time.time(), "data": {"buddies": []}},
+        "user-2:room-1": {
+            "account_id": "user-2",
+            "saved_at": time.time(),
+            "data": {"buddies": []},
+        },
+    }
+
+    assert client.cached_dashboard("room-1") is None
 
 
 def test_room_shared_state_migrations_are_retained_as_supabase_history():
@@ -1109,3 +1259,4 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
+
