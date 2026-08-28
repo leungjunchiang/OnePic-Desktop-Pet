@@ -27,7 +27,14 @@ from PySide6.QtWidgets import (
 
 from .resources import resource_path
 from .accessories import SPECIAL_OUTFIT_SPRITES
-from .social import SignupResult, SocialClient, SocialError, _heartbeat_payload, social_user_message
+from .social import (
+    SignupResult,
+    SocialClient,
+    SocialError,
+    _heartbeat_payload,
+    _session_user_id,
+    social_user_message,
+)
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .login_rewards import login_reward_granted, login_streak_days
@@ -3509,13 +3516,27 @@ class SocialHubDialog(QDialog):
         on the previous (often resting) state until the user clicked refresh.
         """
 
+        payload = data if isinstance(data, dict) else {}
+        active_user_id = _session_user_id(self.client)
+        payload_me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
+        payload_user_id = str(payload_me.get("user_id") or "").strip()
+        if active_user_id and payload_user_id and active_user_id != payload_user_id:
+            # A late response from the previous account must never repaint the
+            # new account's room cards, presence, or private labels.
+            LOGGER.warning(
+                "ignored dashboard for another account active=%s payload=%s",
+                active_user_id,
+                payload_user_id,
+            )
+            return
+
         # A direct render can happen immediately after construction (for
         # example when the owner restores a cached snapshot). Do not let the
         # one-shot 50 ms bootstrap refresh arrive afterward and overwrite that
         # newer view with its older in-flight result.
         self._initial_refresh_timer.stop()
         previous_data = self.data
-        self.data = dict(data or {})
+        self.data = dict(payload)
         self._muted_buddy_ids = {
             str(item).strip()
             for item in (self.data.get("muted_buddy_ids") or [])
