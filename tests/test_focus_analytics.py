@@ -78,13 +78,13 @@ def test_period_summary_derives_report_metrics_from_account_records(tmp_path) ->
     session_id = "session-with-pause"
     store.record_session(
         20 * 60,
-        started_at=now - timedelta(minutes=50),
+        started_at=now - timedelta(minutes=65),
         completed=False,
         record_id=f"{session_id}:1200",
     )
     store.record_session(
         40 * 60,
-        started_at=now - timedelta(minutes=25),
+        started_at=now - timedelta(minutes=40),
         completed=True,
         record_id=f"{session_id}:3600",
     )
@@ -164,7 +164,7 @@ def test_long_daily_focus_above_eight_hours_is_still_trusted(tmp_path) -> None:
 
 
 def test_beijing_raw_timestamp_and_stale_remote_snapshot_do_not_inflate_today(tmp_path) -> None:
-    now = datetime(2026, 8, 24, 9, 0, tzinfo=timezone(timedelta(hours=8)))
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
     # 00:30Z is 08:30 in Beijing.  A legacy parser that used the machine
     # timezone could put this interval on the wrong calendar day.
@@ -182,6 +182,53 @@ def test_beijing_raw_timestamp_and_stale_remote_snapshot_do_not_inflate_today(tm
     assert store.period_summary("day", now)["total_seconds"] == 60 * 60
     assert store.period_summary("week", now)["total_seconds"] == 60 * 60
     assert store.period_summary("day", now)["daily"][0]["display_label"] == "8/24 周一"
+
+
+def test_raw_focus_facts_force_a_new_day_to_zero_over_stale_remote_cache(tmp_path) -> None:
+    now = datetime(2026, 8, 29, 0, 13, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(
+        45 * 60,
+        started_at=datetime(2026, 8, 28, 20, 0, tzinfo=timezone(timedelta(hours=8))),
+        record_id="previous-day:1",
+    )
+    # This is the midnight corruption seen in the field: a derived daily row
+    # exists even though the current day has no interval fact.
+    store.merge_remote_history([{"focus_date": "2026-08-29", "seconds": 5 * 3600 + 11 * 60}])
+
+    assert store.period_summary("day", now)["total_seconds"] == 0
+    assert store.summary(now).today_seconds == 0
+    assert store._state["days"]["2026-08-29"]["seconds"] == 0
+
+
+def test_reconcile_derived_totals_splits_cross_midnight_fact(tmp_path) -> None:
+    tz = timezone(timedelta(hours=8))
+    now = datetime(2026, 8, 29, 0, 20, tzinfo=tz)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(
+        20 * 60,
+        started_at=datetime(2026, 8, 28, 23, 50, tzinfo=tz),
+        record_id="cross-day:1",
+    )
+    store.reconcile_derived_totals(now)
+
+    assert store.period_summary("day", now)["total_seconds"] == 10 * 60
+    assert store.period_summary("day", now - timedelta(days=1))["total_seconds"] == 10 * 60
+
+
+def test_overlong_raw_fact_is_excluded_and_reported(tmp_path) -> None:
+    now = datetime(2026, 8, 29, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store._state["records"] = [{
+        "date": "2026-08-27",
+        "started_at": "2026-08-27T11:00:00+08:00",
+        "seconds": 25 * 60 * 60,
+        "record_id": "overlong:1",
+    }]
+
+    report = store.period_summary("week", now)
+    assert report["total_seconds"] == 0
+    assert any("overlong_interval" in item for item in report["data_quality"]["consistency_errors"])
 
 
 def test_synced_daily_history_wins_over_stale_week_snapshot(tmp_path) -> None:
@@ -433,3 +480,4 @@ def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypa
 
     assert store.switch_account("account-a")
     assert store.summary().weekly_total_seconds == 90
+

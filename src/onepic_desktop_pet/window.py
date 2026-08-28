@@ -4423,7 +4423,13 @@ class PetWindow(QWidget):
         day_projection = self.focus_analytics.period_summary("day", moment)
         week_projection = self.focus_analytics.period_summary("week", moment)
         recorded_day = max(0, int(day_projection.get("total_seconds", 0) or 0))
-        has_local_day_records = int(day_projection.get("local_record_count", 0) or 0) > 0
+        # A segment may start before Beijing midnight and still contribute to
+        # today.  Use the projection's overlap evidence instead of counting
+        # records by their start date, while keeping daily-only compatibility
+        # caches usable on a brand-new device.
+        has_local_day_records = bool(day_projection.get("raw_period_evidence")) or (
+            int(day_projection.get("local_record_count", 0) or 0) > 0
+        )
         timer_today = max(0, int(self.work_timer.today_seconds()))
         session_total = (
             max(0, int(self.work_timer.session_seconds()))
@@ -5901,15 +5907,16 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
+        derived_changed = self.focus_analytics.reconcile_derived_totals()
         local_day = self.focus_analytics.period_summary("day")
         if (
-            int(local_day.get("local_record_count", 0) or 0) > 0
+            bool(local_day.get("raw_period_evidence"))
             and not self.work_timer.has_active_session
         ):
             self.work_timer.reconcile_today_seconds(
                 int(local_day.get("total_seconds", 0) or 0)
             )
-        if (analytics_changed or history_changed or segment_changed) and self._social_dialog is not None:
+        if (analytics_changed or history_changed or segment_changed or derived_changed) and self._social_dialog is not None:
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
 
         if "outfit_key" not in profile and "outfit_key" not in personal_state:
@@ -7729,3 +7736,4 @@ class PetWindow(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+

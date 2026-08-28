@@ -172,6 +172,7 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - 六毛补给站与生活场景" \
+            --title "Lili $release_tag - 专注统计与跨日数据修复" \
             --generate-notes \
-            --notes "六毛补给站：仓库、吉他拨片商店、免费补给规则与食物场景联动。保持现有皮肤成长系统不变，不新增皮肤素材。"
+            --notes "统一今日、本周、搭子卡片、排行榜和工作报告的专注统计口径；以有效专注片段为唯一事实来源，按北京时间切分跨日片段，过滤异常时长并回算历史兼容汇总。"
+
