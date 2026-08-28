@@ -26,8 +26,9 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 import unicodedata
+import uuid
 
-from .local_data import app_data_dir
+from .local_data import account_local_data_path, app_data_dir, read_json, write_json_atomic
 from .resources import resource_path, resource_root
 from .tls_support import tls_diagnostics, verified_ssl_context
 
@@ -61,6 +62,83 @@ HEARTBEAT_FIELDS = frozenset(
 )
 
 _PRESENCE_TIMESTAMP_FIELDS = ("last_seen_at", "last_seen", "status_updated_at")
+_PRESENCE_DEVICE_STATE_FILENAME = "social-device.json"
+_PRESENCE_DEVICE_STATE_LOCK = threading.Lock()
+_PRESENCE_DEVICE_STATE_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _presence_device_credentials(user_id: str) -> tuple[str, bool]:
+    """Return a stable per-account device id and whether it must claim the lease.
+
+    The live database protects an account's presence row with a device lease.
+    Older desktop builds omitted these fields, which made every heartbeat after
+    the first claimed session fail with ``device_session_revoked``.  Keep the
+    identifier in the account-scoped local directory so updating the app does
+    not claim a new device on every launch, and only claim once per account.
+    """
+
+    account_id = str(user_id or "").strip()
+    if not account_id:
+        return uuid.uuid4().hex, True
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        cached = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+        if cached:
+            return str(cached["device_id"]), bool(cached.get("claim_pending", True))
+
+        path = account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id)
+        raw = read_json(path, {})
+        device_id = str(raw.get("device_id") or "").strip()[:64] if isinstance(raw, dict) else ""
+        if not device_id:
+            device_id = uuid.uuid4().hex
+        state = {
+            "version": 1,
+            "device_id": device_id,
+            "claim_pending": bool(raw.get("claim_pending", True)) if isinstance(raw, dict) else True,
+        }
+        _PRESENCE_DEVICE_STATE_CACHE[account_id] = state
+        try:
+            write_json_atomic(path, state)
+        except OSError:
+            # The in-memory state still keeps one running process stable when
+            # a locked-down portable install cannot write its app-data folder.
+            LOGGER.debug("social device state could not be persisted", exc_info=True)
+        return device_id, bool(state["claim_pending"])
+
+
+def _mark_presence_device_claimed(user_id: str, device_id: str) -> None:
+    """Mark a successful device lease so later heartbeats do not steal it."""
+
+    account_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if not account_id or not clean_device_id:
+        return
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        state = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+        if not state or str(state.get("device_id")) != clean_device_id:
+            return
+        state["claim_pending"] = False
+        try:
+            write_json_atomic(account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id), state)
+        except OSError:
+            LOGGER.debug("social device claim state could not be persisted", exc_info=True)
+
+
+def _mark_presence_device_claim_pending(user_id: str, device_id: str) -> None:
+    """Allow one later heartbeat to reclaim a lease moved to another device."""
+
+    account_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if not account_id or not clean_device_id:
+        return
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        state = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+        if not state or str(state.get("device_id")) != clean_device_id:
+            return
+        state["claim_pending"] = True
+        try:
+            write_json_atomic(account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id), state)
+        except OSError:
+            LOGGER.debug("social device reclaim state could not be persisted", exc_info=True)
 
 
 def _session_user_id(client: Any) -> str:
@@ -1351,22 +1429,34 @@ class HttpSocialBackend:
         # send a client last_seen value: a user's incorrect Windows clock would
         # otherwise make an active buddy look offline for the whole room.
         now = datetime.now(BEIJING_TIMEZONE)
-        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
+        device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
         if self.transport == "direct":
             body["user_id"] = self.session.user_id
             # PostgREST only turns the on_conflict query into an upsert when
             # merge-duplicates is explicitly requested. Without this header,
             # every direct heartbeat after the first one fails with a primary
             # key violation and peers keep seeing this user as offline.
-            self._raw(
-                "POST",
-                "/rest/v1/lili_focus_presence?on_conflict=user_id",
-                body,
-                authenticated=True,
-                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-            )
+            try:
+                self._raw(
+                    "POST",
+                    "/rest/v1/lili_focus_presence?on_conflict=user_id",
+                    body,
+                    authenticated=True,
+                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                )
+            except SocialError as exc:
+                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                raise
         else:
-            self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+            try:
+                self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+            except SocialError as exc:
+                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                raise
+        _mark_presence_device_claimed(self.session.user_id, device_id)
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self.transport == "direct":
@@ -2082,8 +2172,15 @@ class LegacyDirectSocialClient:
             return
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at}
-        self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
+        try:
+            self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        except SocialError as exc:
+            if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                _mark_presence_device_claim_pending(self.session.user_id, device_id)
+            raise
+        _mark_presence_device_claimed(self.session.user_id, device_id)
 
     def update_owner_nickname(self, nickname: str) -> None:
         if self._http_backend is not None:

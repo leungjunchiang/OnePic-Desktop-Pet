@@ -105,6 +105,37 @@ begin
   end if;
 
   payload := public.lili_dashboard_presence_base_20260828();
+  -- Keep the never-seen protection from 20260828000100 before applying the
+  -- date/freshness correction.  A profile row alone is not proof that this
+  -- account has ever sent a presence heartbeat.
+  payload := jsonb_set(
+    payload,
+    '{buddies}',
+    public.lili_zero_never_seen_presence(coalesce(payload -> 'buddies', '[]'::jsonb)),
+    true
+  );
+  payload := jsonb_set(
+    payload,
+    '{room_people}',
+    public.lili_zero_never_seen_presence(coalesce(payload -> 'room_people', '[]'::jsonb)),
+    true
+  );
+  payload := jsonb_set(
+    payload,
+    '{active_visits}',
+    public.lili_zero_never_seen_presence(coalesce(payload -> 'active_visits', '[]'::jsonb)),
+    true
+  );
+  if jsonb_typeof(payload -> 'current_room') = 'object' then
+    payload := jsonb_set(
+      payload,
+      '{current_room,room_people}',
+      public.lili_zero_never_seen_presence(
+        coalesce(payload -> 'current_room' -> 'room_people', '[]'::jsonb)
+      ),
+      true
+    );
+  end if;
   payload := jsonb_set(
     payload,
     '{buddies}',

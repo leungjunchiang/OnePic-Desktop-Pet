@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
+import onepic_desktop_pet.social as social_module
 from onepic_desktop_pet.social import (
     BackendRouteManager,
     AuthSessionManager,
@@ -538,6 +539,7 @@ def test_focus_today_migration_ignores_stale_presence_days_and_repairs_room_proj
     assert "f.focus_date = (now() at time zone 'Asia/Shanghai')::date" in migration
     assert "f.last_seen > now() - interval '2 minutes'" in migration
     assert "lili_normalize_focus_today_people" in migration
+    assert "lili_zero_never_seen_presence" in migration
     assert "lili_room_dashboard_presence_base_20260828" in migration
 
 
@@ -772,6 +774,41 @@ def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
     assert backend.headers == {"Prefer": "resolution=merge-duplicates,return=minimal"}
 
 
+def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_path):
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+    monkeypatch.setattr(
+        social_module,
+        "account_local_data_path",
+        lambda filename, account_id: tmp_path / f"{account_id}-{filename}",
+    )
+
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+            self.session = SocialSession("a", "r", "lease-user", 9_999_999_999)
+            self.bodies = []
+
+        def _raw(self, method, path, body=None, **kwargs):
+            self.bodies.append(body)
+            return {}
+
+    backend = Recording()
+    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
+    backend.heartbeat(working=True, today_seconds=61, session_started_at=None, outfit_key="", room_id="room-1")
+
+    first, second = backend.bodies
+    assert len(first["device_id"]) == 32
+    assert first["device_id"] == second["device_id"]
+    assert first["device_claim"] is True
+    assert second["device_claim"] is False
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+
+
 def test_presence_freshness_is_server_authoritative_in_all_relays():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260815000100_lili_presence_server_timestamp.sql").read_text(encoding="utf-8")
@@ -784,6 +821,8 @@ def test_presence_freshness_is_server_authoritative_in_all_relays():
     assert "last_seen: now" in edge
     assert "last_seen: now" in worker
     assert "String(body.last_seen || now)" not in cloudbase + edge + worker
+    assert "device_id" in cloudbase + edge + worker
+    assert "device_claim" in cloudbase + edge + worker
 
 
 def test_cloudbase_presence_and_profile_proxy_preserve_upsert_contract() -> None:
