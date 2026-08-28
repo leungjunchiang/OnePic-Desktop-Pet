@@ -31,4 +31,3 @@ jobs:
         run: |
           ./scripts/apply_supabase_focus_history.ps1 `
             -MigrationPath "supabase/migrations/20260828000200_lili_focus_presence_date_consistency.sql"
-

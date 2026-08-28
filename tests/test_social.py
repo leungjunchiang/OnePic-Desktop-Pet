@@ -1259,4 +1259,3 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
-

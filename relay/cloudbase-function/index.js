@@ -174,4 +174,3 @@ async function main(event, context) {
 module.exports = { main, handleRequest, RelayError, pathOf, queryOf };
 
 
-

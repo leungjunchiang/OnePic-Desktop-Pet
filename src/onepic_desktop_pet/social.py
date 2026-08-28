@@ -2975,4 +2975,3 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
-
