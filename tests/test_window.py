@@ -2534,6 +2534,9 @@ def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     )
     app = QApplication.instance() or QApplication([])
     window = PetWindow(PetSettings(), work_timer=timer)
+    # Keep the analytics calendar clock aligned with the deterministic timer
+    # clock used by this test; production uses the same system clock for both.
+    window.focus_analytics._now = lambda: now[0]
     window.show()
     app.processEvents()
 
@@ -2910,3 +2913,4 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+

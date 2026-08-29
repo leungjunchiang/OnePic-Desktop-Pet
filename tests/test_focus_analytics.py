@@ -117,7 +117,7 @@ def test_period_summary_uses_one_session_grain_for_average_and_max(tmp_path) -> 
     assert report["deep_focus_seconds"] <= report["total_seconds"]
 
 
-def test_month_includes_current_week_account_snapshot(tmp_path) -> None:
+def test_derived_account_snapshot_is_not_focus_evidence(tmp_path) -> None:
     now = datetime(2026, 8, 23, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
     store.merge_remote_state(
@@ -130,8 +130,8 @@ def test_month_includes_current_week_account_snapshot(tmp_path) -> None:
     week = store.period_summary("week", now)
     month = store.period_summary("month", now)
 
-    assert week["total_seconds"] == 53 * 3600
-    assert month["total_seconds"] >= week["total_seconds"]
+    assert week["total_seconds"] == 0
+    assert month["total_seconds"] == 0
 
 
 def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) -> None:
@@ -198,7 +198,7 @@ def test_raw_focus_facts_force_a_new_day_to_zero_over_stale_remote_cache(tmp_pat
 
     assert store.period_summary("day", now)["total_seconds"] == 0
     assert store.summary(now).today_seconds == 0
-    assert store._state["days"]["2026-08-29"]["seconds"] == 0
+    assert "2026-08-29" not in store._state["days"]
 
 
 def test_reconcile_derived_totals_splits_cross_midnight_fact(tmp_path) -> None:
@@ -231,12 +231,11 @@ def test_overlong_raw_fact_is_excluded_and_reported(tmp_path) -> None:
     assert any("overlong_interval" in item for item in report["data_quality"]["consistency_errors"])
 
 
-def test_synced_daily_history_wins_over_stale_week_snapshot(tmp_path) -> None:
+def test_synced_daily_history_is_not_focus_evidence(tmp_path) -> None:
     now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
-    # This is the order used by the social refresh: the profile aggregate can
-    # arrive before the per-day history payload.  The aggregate belongs to an
-    # older/stale projection and must not survive once the daily row arrives.
+    # Daily history and profile aggregates are both derived caches.  Neither
+    # may create focus time when no raw interval was received.
     store.merge_remote_state(
         focus_date="2026-08-24",
         today_seconds=2 * 3600,
@@ -245,10 +244,10 @@ def test_synced_daily_history_wins_over_stale_week_snapshot(tmp_path) -> None:
     )
     store.merge_remote_history([{"focus_date": "2026-08-24", "seconds": 2 * 3600}])
 
-    assert store.period_summary("day", now)["total_seconds"] == 2 * 3600
-    assert store.period_summary("week", now)["total_seconds"] == 2 * 3600
-    assert store.period_summary("month", now)["total_seconds"] == 2 * 3600
-    assert store.period_summary("day", now)["local_evidence"] is True
+    assert store.period_summary("day", now)["total_seconds"] == 0
+    assert store.period_summary("week", now)["total_seconds"] == 0
+    assert store.period_summary("month", now)["total_seconds"] == 0
+    assert store.period_summary("day", now)["local_evidence"] is False
 
 
 def test_week_and_month_keep_future_dates_as_missing_values(tmp_path) -> None:
@@ -354,8 +353,8 @@ def test_legacy_impossible_day_does_not_report_false_38_hour_difference(tmp_path
     store = FocusAnalyticsStore(path=path, now_provider=lambda: datetime(2026, 8, 21, 12, 0), persist=True)
 
     summary = store.summary()
-    assert summary.yesterday_seconds is None
-    assert summary.difference_vs_yesterday_seconds is None
+    assert summary.yesterday_seconds == 0
+    assert summary.difference_vs_yesterday_seconds == 0
     assert summary.weekly_total_seconds == 0
 
 
@@ -416,7 +415,7 @@ def test_pause_longer_than_ten_minutes_is_the_only_interruption(tmp_path) -> Non
 
 
 
-def test_account_totals_are_rendered_on_a_new_computer(tmp_path) -> None:
+def test_account_totals_are_not_rendered_without_raw_sessions(tmp_path) -> None:
     now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(
         path=tmp_path / "focus.json",
@@ -434,15 +433,15 @@ def test_account_totals_are_rendered_on_a_new_computer(tmp_path) -> None:
 
     assert changed
     snapshot = store.snapshot()
-    assert snapshot["today_seconds"] == 42 * 60
-    assert snapshot["weekly_total_seconds"] == 3 * 3600
+    assert snapshot["today_seconds"] == 0
+    assert snapshot["weekly_total_seconds"] == 0
 
 
 def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
     now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
 
-    assert store.merge_remote_state(
+    store.merge_remote_state(
         focus_date="2026-08-22",
         today_seconds=60,
         week_start="2026-08-10",
@@ -451,7 +450,7 @@ def test_account_totals_do_not_accept_a_previous_week(tmp_path) -> None:
     assert store.snapshot()["weekly_total_seconds"] == 0
 
 
-def test_server_daily_history_makes_yesterday_comparison_available_on_new_computer(tmp_path) -> None:
+def test_server_daily_history_does_not_create_focus_time_on_new_computer(tmp_path) -> None:
     now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
     store.merge_remote_history({
@@ -462,8 +461,31 @@ def test_server_daily_history_makes_yesterday_comparison_available_on_new_comput
     })
 
     summary = store.summary()
-    assert summary.yesterday_seconds == 11 * 3600
-    assert summary.difference_vs_yesterday_seconds == -8 * 3600
+    assert summary.yesterday_seconds == 0
+    assert summary.difference_vs_yesterday_seconds == 0
+
+
+def test_full_week_derived_cache_is_ignored_without_raw_session(tmp_path) -> None:
+    path = tmp_path / "focus.json"
+    path.write_text(
+        json.dumps({
+            "days": {"2026-08-24": {"seconds": 604800}},
+            "records": [],
+            "account_state": {
+                "focus_date": "2026-08-29",
+                "focus_today_seconds": 604800,
+                "focus_week_start": "2026-08-24",
+                "focus_week_seconds": 604800,
+            },
+        }),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 8, 29, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=path, now_provider=lambda: now, persist=True)
+
+    assert store.period_summary("day", now)["total_seconds"] == 0
+    assert store.period_summary("week", now)["total_seconds"] == 0
+    assert store.summary(now).weekly_total_seconds == 0
 
 
 def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:

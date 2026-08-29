@@ -197,6 +197,11 @@ class FocusAnalyticsStore:
             self._save()
         return True
 
+    def current_time(self) -> datetime:
+        """Return the clock used by this store's calendar projections."""
+
+        return _as_beijing(self._now())
+
     def merge_remote_state(
         self,
         *,
@@ -208,53 +213,34 @@ class FocusAnalyticsStore:
     ) -> bool:
         """Merge account totals received from Supabase without double counting.
 
-        The detailed history remains local.  These totals are a compatibility
-        fallback for accounts without interval facts; once raw facts exist,
-        they are the canonical source and these values are not allowed to
+        The detailed history remains local.  The scalar day/week totals are
+        compatibility inputs only and are deliberately ignored for metrics:
+        a cached aggregate is not evidence of a FocusSession and must never
         revive a stale day or week.
         """
 
-        now = _as_beijing(self._now()).date()
-        today_key = now.isoformat()
-        current_week_key = (now - timedelta(days=now.weekday())).isoformat()
         state = self._state.setdefault("account_state", {})
         if not isinstance(state, dict):
             state = {}
             self._state["account_state"] = state
         changed = False
 
-        remote_date = str(focus_date or "")[:10]
-        # A local raw record is more precise than the profile aggregate.  In
-        # particular, never let an old server-side ``greatest`` snapshot
-        # overwrite a corrected local day and then feed that value back to the
-        # server on the next heartbeat.
-        has_raw_facts = bool(self.focus_segments())
-        has_local_today = self._has_local_evidence(now, now)
-        if remote_date == today_key and not has_local_today and not has_raw_facts:
-            value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(today_seconds or 0)))
-            if value > max(0, int(state.get("focus_today_seconds", 0) or 0)):
-                state["focus_today_seconds"] = value
-                changed = True
-            if state.get("focus_date") != today_key:
-                state["focus_date"] = today_key
-                changed = True
-
         lifetime = max(0, int(lifetime_seconds or 0))
         if lifetime > max(0, int(state.get("focus_lifetime_seconds", 0) or 0)):
             state["focus_lifetime_seconds"] = lifetime
             changed = True
 
-        remote_week = str(week_start or "")[:10]
-        has_local_week = self._has_local_evidence(
-            now - timedelta(days=now.weekday()), now
-        )
-        if remote_week == current_week_key and not has_local_week and not has_raw_facts:
-            value = max(0, min(7 * MAX_ANALYTICS_DAY_SECONDS, int(week_seconds or 0)))
-            if value > max(0, int(state.get("focus_week_seconds", 0) or 0)):
-                state["focus_week_seconds"] = value
-                changed = True
-            if state.get("focus_week_start") != current_week_key:
-                state["focus_week_start"] = current_week_key
+        # Remove counters written by older releases.  Keeping them in the
+        # file is harmless, but leaving them available makes a future caller
+        # accidentally reintroduce the stale-cache bug this store prevents.
+        for key in (
+            "focus_date",
+            "focus_today_seconds",
+            "focus_week_start",
+            "focus_week_seconds",
+        ):
+            if key in state:
+                state.pop(key, None)
                 changed = True
 
         if changed:
@@ -262,66 +248,12 @@ class FocusAnalyticsStore:
         return changed
 
     def merge_remote_history(self, payload: Any) -> bool:
-        """Merge compatibility daily totals into this account's local cache.
+        """Ignore derived daily totals; raw intervals are the only facts."""
 
-        Daily rows remain useful for accounts that have not yet synced
-        interval facts.  Once raw facts exist, stale rows are not imported;
-        the later segment merge reconciles them from the interval ledger.
-        """
-
-        if isinstance(payload, dict):
-            entries = payload.get("days")
-        else:
-            entries = payload
-        if not isinstance(entries, list):
-            return False
-
-        today = _as_beijing(self._now()).date()
-        cutoff = today - timedelta(days=400)
-        days = self._state.setdefault("days", {})
-        changed = False
-        has_raw_facts = bool(self.focus_segments())
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            try:
-                focus_date = date.fromisoformat(str(item.get("focus_date") or "")[:10])
-                value = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(item.get("seconds") or 0)))
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if focus_date < cutoff or focus_date > today:
-                continue
-            key = focus_date.isoformat()
-            day = days.setdefault(key, self._empty_day())
-            try:
-                local_value = max(0, int(day.get("seconds", 0) or 0))
-            except (AttributeError, TypeError, ValueError):
-                local_value = 0
-            local_untrusted = bool(day.get("seconds_untrusted"))
-            has_local_record = self._has_local_records(focus_date, focus_date)
-            # Once this account has any interval facts, daily rows are only a
-            # compatibility cache.  Do not import a synthetic current-day
-            # maximum before the matching remote segments arrive; the segment
-            # merge below will reconcile the cache from the facts.
-            merged = (
-                0
-                if has_raw_facts and not has_local_record
-                else local_value
-                if has_local_record and not local_untrusted
-                else value
-            )
-            if local_value != merged:
-                day["seconds"] = merged
-                changed = True
-            if local_untrusted and day.get("seconds_untrusted"):
-                day["seconds_untrusted"] = False
-                changed = True
-
-        if self._trim_days():
-            changed = True
-        if changed:
-            self._save()
-        return changed
+        # A daily row is a cache, not a FocusSession.  Importing it here would
+        # allow a stale full-week value to reappear on a device that has no
+        # corresponding work interval.
+        return False
 
     def focus_segments_payload(self, limit: int = 96) -> list[dict[str, Any]]:
         """Serialize closed local facts for the server fact-sync RPC."""
@@ -398,14 +330,30 @@ class FocusAnalyticsStore:
     def reconcile_derived_totals(self, at: datetime | None = None) -> bool:
         """Rebuild local day/week caches from interval facts.
 
-        ``days`` and ``account_state`` are compatibility projections.  Once
-        an account has interval facts, they must never be allowed to revive a
-        value for a day with no valid session, especially after midnight.
+        ``days`` and ``account_state`` are compatibility projections.  They
+        are rebuilt only when raw interval facts exist and are never used as
+        a source of focus time.
         """
 
         segments = self.focus_segments()
         if not segments:
-            return False
+            state = self._state.setdefault("account_state", {})
+            if not isinstance(state, dict):
+                state = {}
+                self._state["account_state"] = state
+            changed = False
+            for key in (
+                "focus_date",
+                "focus_today_seconds",
+                "focus_week_start",
+                "focus_week_seconds",
+            ):
+                if key in state:
+                    state.pop(key, None)
+                    changed = True
+            if changed:
+                self._save()
+            return changed
         moment = _as_beijing(at or self._now())
         days = self._state.setdefault("days", {})
         changed = False
@@ -638,11 +586,10 @@ class FocusAnalyticsStore:
                 return None
             if has_raw_facts:
                 return self._raw_day_seconds(day, moment)
-            try:
-                value = max(0, int(raw.get("seconds", 0)))
-            except (AttributeError, TypeError, ValueError):
-                return None
-            return value if value <= MAX_ANALYTICS_DAY_SECONDS else None
+            # No raw FocusSession means no focus time.  Legacy daily rows are
+            # intentionally not evidence and therefore cannot resurrect old
+            # values after a fresh day/week starts.
+            return 0
 
         weekly_total = sum(
             seconds or 0
@@ -651,28 +598,6 @@ class FocusAnalyticsStore:
         )
         yesterday = day_seconds(today - timedelta(days=1))
         today_seconds = day_seconds(today)
-        account_state = self._state.get("account_state", {})
-        if not isinstance(account_state, dict):
-            account_state = {}
-        if (
-            str(account_state.get("focus_date") or "")[:10] == today.isoformat()
-            and not self._has_local_evidence(today, today)
-            and not has_raw_facts
-        ):
-            account_today = max(0, int(account_state.get("focus_today_seconds", 0) or 0))
-            today_seconds = max(today_seconds or 0, account_today)
-        current_week_key = (today - timedelta(days=today.weekday())).isoformat()
-        if (
-            str(account_state.get("focus_week_start") or "")[:10] == current_week_key
-            and not self._has_local_evidence(
-                today - timedelta(days=today.weekday()), today
-            )
-            and not has_raw_facts
-        ):
-            weekly_total = max(
-                weekly_total,
-                max(0, int(account_state.get("focus_week_seconds", 0) or 0)),
-            )
         # Re-read the same interval projection used by work reports.  This
         # prevents the compact timer, study room and report summary from
         # disagreeing after a checkpoint or a cross-midnight segment.
@@ -750,6 +675,10 @@ class FocusAnalyticsStore:
         result: list[dict[str, Any]] = []
         stored = self._state.get("days", {})
         has_raw_facts = bool(self.focus_segments())
+        if not has_raw_facts:
+            # Derived daily rows are not FocusSession facts and must not be
+            # uploaded back to the server as if they were real work.
+            return result
         for offset in range(count - 1, -1, -1):
             focus_date = today - timedelta(days=offset)
             key = focus_date.isoformat()
@@ -858,9 +787,9 @@ class FocusAnalyticsStore:
 
         This is deliberately a read-only, on-demand projection.  The current
         live timer is supplied by the caller because it is not yet a closed
-        analytics record.  Server daily/profile values are only a migration
-        fallback for accounts without raw interval facts; otherwise all totals
-        are recomputed from the same clipped interval union.
+        analytics record.  Every closed total is recomputed from the same
+        clipped raw interval union; daily/profile counters are never a
+        fallback.
         """
 
         moment = _as_beijing(at or self._now())
@@ -916,6 +845,9 @@ class FocusAnalyticsStore:
             raw = raw if isinstance(raw, dict) else {}
             is_future = cursor > today
             untrusted = bool(raw.get("seconds_untrusted"))
+            rounds = 0
+            longest = 0
+            day_interruptions = 0
             if is_future:
                 seconds = None
                 rounds = None
@@ -928,18 +860,16 @@ class FocusAnalyticsStore:
                 day_interruptions = 0
                 untrusted_days.append(date_key)
             else:
-                try:
-                    seconds = max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
-                except (TypeError, ValueError, OverflowError):
-                    seconds = 0
-                # Once this account has raw interval facts, the derived day
-                # cache is only a compatibility display.  Use the exact
-                # overlap projection so a segment crossing midnight is split
-                # into the correct two calendar days.  A day with no fact is
-                # explicitly zero; it must not inherit a previous aggregate.
-                if has_raw_facts:
-                    seconds = max(0, int(aggregate.daily.get(date_key, 0) or 0))
-            if not is_future and not untrusted:
+                # Once raw facts exist, use the exact overlap projection so a
+                # segment crossing midnight is split correctly.  Without raw
+                # facts, the authoritative answer is zero regardless of an
+                # old derived day row.
+                seconds = (
+                    max(0, int(aggregate.daily.get(date_key, 0) or 0))
+                    if has_raw_facts
+                    else 0
+                )
+            if not is_future and not untrusted and has_raw_facts:
                 try:
                     rounds = max(0, int(raw.get("rounds", 0) or 0))
                     longest = max(0, int(raw.get("longest", 0) or 0))
@@ -958,61 +888,18 @@ class FocusAnalyticsStore:
                 "display_label": f"{cursor.month}/{cursor.day} {weekday}",
                 "seconds": seconds,
                 "rounds": rounds,
-                "trusted": not untrusted and not is_future,
+                "trusted": has_raw_facts and not untrusted and not is_future,
                 "is_today": cursor == today,
                 "is_future": is_future,
                 "status": "future" if is_future else "untrusted" if untrusted else "observed",
             })
             cursor += timedelta(days=1)
 
-        account_state = self._state.get("account_state", {})
-        if not isinstance(account_state, dict):
-            account_state = {}
-        # A day row can come from a trusted cross-device history sync without
-        # having a raw FocusSession record on this computer.  It is still
-        # stronger evidence than a server-side weekly ``greatest`` snapshot;
-        # otherwise an old aggregate can make Monday show more time than the
-        # seven daily rows that produced it.
-        local_period_evidence = (
-            raw_period_evidence
-            or (not has_raw_facts and self._has_local_evidence(start, today))
-        )
-        if has_raw_facts:
-            # All report totals now come from the same unioned interval set.
-            # ``days`` remains a migration cache only.
-            total_seconds = aggregate.total_seconds
-        if (
-            key == "day"
-            and not has_raw_facts
-            and not local_period_evidence
-            and str(account_state.get("focus_date") or "")[:10] == today.isoformat()
-        ):
-            total_seconds = max(total_seconds, max(0, int(account_state.get("focus_today_seconds", 0) or 0)))
-        if (
-            key == "week"
-            and not has_raw_facts
-            and not local_period_evidence
-            and str(account_state.get("focus_week_start") or "")[:10] == start.isoformat()
-        ):
-            total_seconds = max(total_seconds, max(0, int(account_state.get("focus_week_seconds", 0) or 0)))
-        # A weekly server snapshot can arrive before all of its daily rows are
-        # present on a newly opened device.  When the current week is wholly
-        # inside the current month, include that same authoritative weekly
-        # total in the month projection as well.  This prevents impossible
-        # displays such as “本周 53 小时 / 本月 25 小时”.
-        current_week_start = today - timedelta(days=today.weekday())
-        if (
-            key == "month"
-            and not has_raw_facts
-            and not local_period_evidence
-            and current_week_start >= start
-            and str(account_state.get("focus_week_start") or "")[:10]
-            == current_week_start.isoformat()
-        ):
-            total_seconds = max(
-                total_seconds,
-                max(0, int(account_state.get("focus_week_seconds", 0) or 0)),
-            )
+        # All report totals now come from the same unioned interval set.
+        # ``days`` and ``account_state`` are compatibility caches only; with
+        # no raw FocusSession, the authoritative answer is zero.
+        local_period_evidence = raw_period_evidence
+        total_seconds = aggregate.total_seconds if has_raw_facts else 0
 
         trusted_days = {
             str(item.get("date") or "")
