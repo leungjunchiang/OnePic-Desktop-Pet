@@ -3344,7 +3344,7 @@ class PetWindow(QWidget):
             self.economy.finish_food_scene("work_finished")
             self.food_scene_timer.stop()
         if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
-            self._work_report_dialog.refresh()
+            self._work_report_dialog.refresh(force=True)
         return reply
 
     # Public state-machine commands.  The older *_work_timer names remain as
@@ -4862,7 +4862,9 @@ class PetWindow(QWidget):
                 )
             )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
-        self._work_report_dialog.refresh()
+        # An explicit open is a user request for current numbers; the dialog's
+        # 30-second timer throttles passive refreshes, not this action.
+        self._work_report_dialog.refresh(force=True)
         self._work_report_dialog.showNormal()
         self._work_report_dialog.raise_()
         self._work_report_dialog.activateWindow()
@@ -5438,8 +5440,18 @@ class PetWindow(QWidget):
             self._social_dialog.showNormal()
         else:
             self._social_dialog.show()
-        self._social_dialog.raise_(); self._social_dialog.activateWindow()
         lifecycle_log("study_room.show.complete", self._social_dialog)
+        # Native window activation can be comparatively slow on Windows.
+        # Queue it after the show turn so the shortcut click returns and the
+        # study room can paint before the OS foreground negotiation runs.
+        QTimer.singleShot(0, self._activate_social_hub_window)
+
+    def _activate_social_hub_window(self) -> None:
+        dialog = self._social_dialog
+        if dialog is None or not dialog.isVisible():
+            return
+        dialog.raise_()
+        dialog.activateWindow()
 
     @_guard_qt_callback
     def _focus_snapshot_changed(self, snapshot: object) -> None:

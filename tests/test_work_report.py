@@ -9,6 +9,7 @@ from onepic_desktop_pet.diary import DailyCompanionStats
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
 from onepic_desktop_pet.work_report import (
     ReportBarChart,
+    ReportCalendarHeatmap,
     WorkReportDialog,
     _nice_duration_ticks,
     build_work_report,
@@ -230,6 +231,36 @@ def test_report_bar_chart_keeps_axis_labels_inside_widget() -> None:
 
     chart.close()
     chart.deleteLater()
+    app.processEvents()
+
+
+def test_report_calendar_keeps_last_weekday_column_inside_widget() -> None:
+    """A six-row month must not clip its Sunday column or final row."""
+
+    app = QApplication.instance() or QApplication([])
+    calendar = ReportCalendarHeatmap(
+        [
+            {
+                "date": f"2026-08-{day:02d}",
+                "weekday": "",
+                "seconds": day * 60,
+                "rounds": 1,
+            }
+            for day in range(1, 32)
+        ]
+    )
+    calendar.resize(560, 202)
+    calendar.show()
+    app.processEvents()
+
+    assert calendar.minimumHeight() >= 202
+    assert calendar._cells
+    assert all(cell.left() >= 0 for cell, _row in calendar._cells)
+    assert all(cell.right() < calendar.width() for cell, _row in calendar._cells)
+    assert all(cell.bottom() < calendar.height() for cell, _row in calendar._cells)
+
+    calendar.close()
+    calendar.deleteLater()
     app.processEvents()
 
 

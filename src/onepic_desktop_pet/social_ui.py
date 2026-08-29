@@ -337,6 +337,7 @@ def _owner_nickname(record: dict[str, Any] | None) -> str:
         record.get("private_note_name")
         or record.get("owner_nickname")
         or record.get("nickname")
+        or record.get("display_name")
         or "搭子"
     ).strip() or "搭子"
 
@@ -2244,7 +2245,14 @@ class SocialHubDialog(QDialog):
                 except Exception:
                     cached = None
                 if isinstance(cached, dict):
-                    self.apply_dashboard(cached)
+                    # Let the top-level window paint first.  Applying a large
+                    # cached dashboard synchronously in the constructor made
+                    # the first study-room click wait for card/layout work.
+                    cached_payload = dict(cached)
+                    QTimer.singleShot(
+                        0,
+                        lambda payload=cached_payload: self.apply_dashboard(payload),
+                    )
             self._initial_refresh_timer.start(50)
             QTimer.singleShot(180, self._record_login_streak)
 
@@ -3301,7 +3309,9 @@ class SocialHubDialog(QDialog):
             if copy["is_self"]:
                 me = self.data.get("me") if isinstance(self.data.get("me"), dict) else {}
                 public_name = self.owner_nickname or clean_owner_nickname(
-                    me.get("owner_nickname") or me.get("nickname")
+                    me.get("owner_nickname")
+                    or me.get("nickname")
+                    or me.get("display_name")
                 )
                 if public_name:
                     copy["owner_nickname"] = public_name
@@ -4024,7 +4034,6 @@ class SocialHubDialog(QDialog):
             self._buddy_card_widgets.clear()
             self._buddy_card_structure.clear()
         working_count = 0
-        visible_total = 0
         for buddy in unique_people:
             buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
             if buddy.get("subscribed") and not buddy.get("notifications_muted"):
@@ -4037,13 +4046,10 @@ class SocialHubDialog(QDialog):
                 if previous is not None and _presence_status(previous) != _presence_status(buddy):
                     state_text = "开始专注" if _presence_status(buddy) == "focus" else "结束专注"
                     self.buddy_subscription_notice.emit(f"{_owner_label(buddy)} {state_text}了。")
-            is_stale = bool(buddy.get("stale_presence"))
-            is_uncertain = bool(buddy.get("presence_uncertain"))
-            # A transport outage must not turn the last peer state into an
-            # offline event, but it also must not inflate current room totals.
+            # A transport outage must not turn the last peer state into a
+            # misleading active count; the card itself still shows the
+            # preserved/stale status details.
             working_count += int(_presence_status(buddy) == "focus")
-            duration = None if is_stale or is_uncertain else buddy.get("today_seconds")
-            if duration is not None: visible_total += max(0, int(duration))
             if reuse_buddy_cards:
                 item, buddy_widget = self._buddy_card_widgets[buddy_id]
                 item.setData(Qt.ItemDataRole.UserRole, buddy)
@@ -4067,8 +4073,7 @@ class SocialHubDialog(QDialog):
         )
         self.study_summary.setText(
             f"现在 {working_count} 位搭子正在专注　·　"
-            f"我的今日专注 {format_work_duration(me_seconds)}　·　"
-            f"可见搭子合计 {format_work_duration(visible_total)}"
+            f"我的今日专注 {format_work_duration(me_seconds)}"
         )
         self._refresh_own_focus_labels()
         if not seen:
@@ -4217,8 +4222,12 @@ class SocialHubDialog(QDialog):
             })
         local_presence.update({
             "user_id": str(me.get("user_id") or me.get("id") or "me"),
-            "owner_nickname": self.owner_nickname or clean_owner_nickname(me.get("owner_nickname") or me.get("nickname")),
-            "nickname": self.owner_nickname or str(me.get("nickname") or "搭子"),
+            "owner_nickname": self.owner_nickname or clean_owner_nickname(
+                me.get("owner_nickname") or me.get("nickname") or me.get("display_name")
+            ),
+            "nickname": self.owner_nickname or str(
+                me.get("nickname") or me.get("display_name") or "搭子"
+            ),
             # The profile is the durable same-account outfit.  Presence is a
             # per-device heartbeat and can briefly belong to an older client.
             "outfit_key": str(me.get("outfit_key") or me_presence.get("outfit_key") or self.outfit_key or ""),
@@ -4233,26 +4242,9 @@ class SocialHubDialog(QDialog):
         goal = room_detail.get("room_goal") or self.data.get("room_goal") or {}
         summary = room_detail.get("room_summary") or self.data.get("room_summary") or {}
 
-        # The homepage summary is room-scoped only after the user explicitly
-        # selected a room and the room endpoint returned its canonical total.
-        # Do not label the all-buddy fallback as a room total: it excludes the
-        # local member and can contain buddies from other rooms.
-        room_today_total: int | None = None
-        if self.current_room_id and isinstance(summary, dict) and "today_shared_focus_seconds" in summary:
-            try:
-                room_today_total = max(0, int(summary.get("today_shared_focus_seconds") or 0))
-            except (TypeError, ValueError):
-                room_today_total = 0
-        if room_today_total is not None:
-            study_total_label = "房间可见合计"
-            study_total_seconds = room_today_total
-        else:
-            study_total_label = "可见搭子合计"
-            study_total_seconds = visible_total
         self.study_summary.setText(
             f"现在 {working_count} 位搭子正在专注　·　"
-            f"我的今日专注 {format_work_duration(me_seconds)}　·　"
-            f"{study_total_label} {format_work_duration(study_total_seconds)}"
+            f"我的今日专注 {format_work_duration(me_seconds)}"
         )
         if isinstance(summary, dict) and summary:
             self.room_summary.setText(_room_focus_summary_text(summary, len(room_people)))

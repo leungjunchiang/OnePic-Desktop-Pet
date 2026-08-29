@@ -447,6 +447,21 @@ def test_buddy_card_uses_public_nickname_when_private_note_is_missing() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
+def test_buddy_card_uses_display_name_when_public_nickname_alias_is_missing() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = BuddyCardWidget(
+        {
+            "user_id": "buddy-display-name",
+            "display_name": "小梁",
+            "online": False,
+            "status": "offline",
+        }
+    )
+    headline = widget.findChildren(QLabel)[0].text()
+    assert "小梁家的六毛已离线" in headline
+    widget.close(); widget.deleteLater(); app.processEvents()
+
+
 def test_incoming_visit_notice_has_direct_accept_reject_and_later_actions() -> None:
     app = QApplication.instance() or QApplication([])
     notice = IncomingVisitNotice(
@@ -645,8 +660,8 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
-def test_home_summary_uses_current_room_total_including_local_member() -> None:
-    """The room total must not be replaced by the visible buddy subtotal."""
+def test_home_summary_omits_ambiguous_visible_aggregate() -> None:
+    """The homepage must not present an unclear aggregate as a room total."""
 
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(RoomAggregateClient())
@@ -657,7 +672,7 @@ def test_home_summary_uses_current_room_total_including_local_member() -> None:
     app.processEvents()
 
     assert "我的今日专注 1小时13分钟" in dialog.study_summary.text()
-    assert "房间可见合计 1小时52分钟" in dialog.study_summary.text()
+    assert "房间可见合计" not in dialog.study_summary.text()
     assert "可见搭子合计 39分钟" not in dialog.study_summary.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 

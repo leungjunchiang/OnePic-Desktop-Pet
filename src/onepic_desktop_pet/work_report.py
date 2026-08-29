@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from time import monotonic
 from typing import Any, Callable
 
-from PySide6.QtCore import QRect, QTimer, Qt, Signal
+from PySide6.QtCore import QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -755,20 +756,32 @@ class ReportCalendarHeatmap(QWidget):
         super().__init__(parent)
         self._rows = [row for row in rows if isinstance(row, dict)]
         self._cells: list[tuple[QRect, dict[str, Any]]] = []
-        self.setMinimumHeight(178)
+        # A six-row month needs room for the weekday header and every
+        # calendar row.  The previous height let the final column/row run
+        # into the parent clip area on narrow report windows.
+        self.setMinimumHeight(202)
         self.setMinimumWidth(0)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMouseTracking(True)
+
+    def sizeHint(self) -> QSize:  # pragma: no cover - queried by Qt layout
+        return QSize(560, 202)
 
     def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        bounds = self.rect().adjusted(8, 4, 8, 8)
+        # ``QRect.adjusted`` takes signed deltas; positive right/bottom
+        # values expand the rectangle.  Use negative insets so the grid is
+        # actually kept inside the widget.
+        bounds = self.rect().adjusted(8, 4, -8, -8)
         header_height = 22
-        left = bounds.left() + 28
-        top = bounds.top() + header_height
         columns = 7
+        grid_left = bounds.left() + 28
+        grid_right = bounds.right() - 4
+        grid_width = max(columns * 16, grid_right - grid_left + 1)
+        cell_width = max(16, grid_width // columns)
+        top = bounds.top() + header_height
         slots: list[tuple[date, int]] = []
         for row in self._rows:
             try:
@@ -778,13 +791,14 @@ class ReportCalendarHeatmap(QWidget):
             first = date(focus_date.year, focus_date.month, 1)
             slots.append((focus_date, focus_date.day - 1 + first.weekday()))
         weeks = max(1, ((max((slot for _day, slot in slots), default=0) // 7) + 1))
-        cell_width = max(22, (bounds.width() - 28) // columns)
-        cell_height = max(22, (bounds.height() - header_height) // weeks)
+        grid_bottom = bounds.bottom()
+        grid_height = max(weeks * 18, grid_bottom - top + 1)
+        cell_height = max(18, grid_height // weeks)
         self._cells = []
         painter.setPen(QColor("#6c7f89"))
         for column, label in enumerate(self._WEEKDAYS):
             painter.drawText(
-                left + column * cell_width,
+                grid_left + column * cell_width,
                 bounds.top(),
                 cell_width,
                 header_height,
@@ -802,11 +816,15 @@ class ReportCalendarHeatmap(QWidget):
                 focus_date = date.fromisoformat(str(row.get("date") or ""))
             except ValueError:
                 continue
-            slot = focus_date.day + date(focus_date.year, focus_date.month, 1).weekday()
+            # ``weekday()`` is zero-based; day 1 belongs at that offset, so
+            # every later date advances by ``day - 1``.  Adding ``day`` here
+            # shifted the entire month one cell and pushed the final row out
+            # of the widget.
+            slot = focus_date.day - 1 + date(focus_date.year, focus_date.month, 1).weekday()
             column = slot % 7
             week = slot // 7
             cell = QRect(
-                left + column * cell_width + 2,
+                grid_left + column * cell_width + 2,
                 top + week * cell_height + 2,
                 max(16, cell_width - 4),
                 max(16, cell_height - 4),
@@ -928,9 +946,14 @@ class WorkReportDialog(QDialog):
         root.addLayout(footer)
 
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(5000)
+        # The report is a heavier derived view.  Rebuilding all three scroll
+        # pages every five seconds was enough to create visible event-loop
+        # stalls while the pet itself was otherwise ticking cheaply.
+        self._refresh_timer.setInterval(30_000)
         self._refresh_timer.timeout.connect(self.refresh)
         self._last_render_fingerprint: str | None = None
+        self._cached_report: dict[str, Any] | None = None
+        self._last_provider_refresh_at = 0.0
 
     def showEvent(self, event) -> None:
         lifecycle_log("work_report.show_event.begin", self)
@@ -952,11 +975,25 @@ class WorkReportDialog(QDialog):
         super().closeEvent(event)
         lifecycle_log("work_report.close_event.end", self)
 
-    def refresh(self) -> None:
+    def refresh(self, *, force: bool = False) -> None:
+        now = monotonic()
+        if (
+            not force
+            and self._cached_report is not None
+            and now - self._last_provider_refresh_at < 30.0
+        ):
+            return
         try:
             report = self._snapshot_provider()
         except Exception as exc:  # pragma: no cover - defensive UI boundary
             report = {"error": f"报告暂时无法读取：{exc}"}
+        self._cached_report = (
+            dict(report)
+            if isinstance(report, dict)
+            else {"error": "报告数据格式无效。"}
+        )
+        self._last_provider_refresh_at = now
+        report = self._cached_report
         # ``generated_at`` changes on every refresh, but rebuilding all three
         # scroll pages for that cosmetic field needlessly creates/deletes a
         # large widget tree.  Skip identical snapshots; a real session/data
