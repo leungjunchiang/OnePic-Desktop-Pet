@@ -201,6 +201,29 @@ def _session_user_id(client: Any) -> str:
     return str(getattr(session, "user_id", "") or "").strip()
 
 
+def _dashboard_payload_has_core_shape(data: Any) -> bool:
+    """Return whether a dashboard can safely replace the account snapshot.
+
+    A liveness/context response may be a valid JSON object while omitting the
+    identity and relationship collections owned by ``lili_dashboard``. Such a
+    response is useful as metadata, but is not a dashboard snapshot and must
+    never be persisted as one or erase the last good view. Empty lists are
+    valid: they represent a real account with no accepted buddies/room peers.
+    ``me`` must be non-empty so an accidental ``{}`` response cannot turn the
+    invite code into the placeholder.
+    """
+
+    if not isinstance(data, dict):
+        return False
+    me = data.get("me")
+    return (
+        isinstance(me, dict)
+        and bool(me)
+        and isinstance(data.get("buddies"), list)
+        and isinstance(data.get("room_people"), list)
+    )
+
+
 def _normalise_never_seen_presence(data: dict[str, Any]) -> dict[str, Any]:
     """Zero durable-looking totals for peers with no presence record.
 
@@ -1456,7 +1479,15 @@ class HttpSocialBackend:
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
-        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24], "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
+        clean = nickname.strip()[:24]
+        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
+        # An empty local nickname means “keep the durable server identity” on
+        # a new machine. Sending nickname="搭子" plus owner_nickname=""
+        # would silently erase an existing social name.
+        if clean:
+            body.update({"nickname": clean, "owner_nickname": clean})
+        else:
+            LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             path = f"/rest/v1/lili_profiles?user_id=eq.{user_id}"
@@ -1465,7 +1496,11 @@ class HttpSocialBackend:
         self._raw("PATCH", path, body, authenticated=True)
 
     def update_owner_nickname(self, nickname: str) -> None:
-        body = {"nickname": nickname.strip()[:24] or "搭子", "owner_nickname": nickname.strip()[:24]}
+        clean = nickname.strip()[:24]
+        if not clean:
+            LOGGER.info("social owner nickname write skipped reason=empty_nickname")
+            return
+        body = {"nickname": clean, "owner_nickname": clean}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
@@ -1794,6 +1829,12 @@ class LegacyDirectSocialClient:
     def _remember_dashboard(self, room_id: str | None, data: dict[str, Any]) -> None:
         account_id = _session_user_id(self)
         if not account_id:
+            return
+        if not _dashboard_payload_has_core_shape(data):
+            LOGGER.warning(
+                "social dashboard cache skipped incomplete payload keys=%s",
+                sorted(str(key) for key in data.keys()) if isinstance(data, dict) else [],
+            )
             return
         key = f"{account_id}:{str(room_id or '')}"
         snapshot = json.loads(json.dumps(data, ensure_ascii=False))
@@ -2235,7 +2276,11 @@ class LegacyDirectSocialClient:
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
         path = f"/rest/v1/lili_profiles?{query}"
-        body = {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
+        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
+        if clean:
+            body.update({"nickname": clean, "owner_nickname": clean})
+        else:
+            LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
@@ -2274,7 +2319,10 @@ class LegacyDirectSocialClient:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean or "搭子", "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        if not clean:
+            LOGGER.info("social owner nickname write skipped reason=empty_nickname")
+            return
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean, "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self._http_backend is not None:
@@ -2409,6 +2457,12 @@ class DashboardCacheClientBase:
     def _remember_dashboard(self, room_id: str | None, data: dict[str, Any]) -> None:
         account_id = _session_user_id(self)
         if not account_id:
+            return
+        if not _dashboard_payload_has_core_shape(data):
+            LOGGER.warning(
+                "social dashboard cache skipped incomplete payload keys=%s",
+                sorted(str(key) for key in data.keys()) if isinstance(data, dict) else [],
+            )
             return
         snapshot = json.loads(json.dumps(data, ensure_ascii=False))
         _normalise_never_seen_presence(snapshot)

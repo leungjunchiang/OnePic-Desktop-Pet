@@ -220,6 +220,46 @@ def test_account_page_can_copy_buddy_code() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_partial_dashboard_keeps_last_complete_buddies_and_identity() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard(
+        {
+            "me": {
+                "nickname": "小梁",
+                "invite_code": "AB12CD34",
+                "visibility": "friends",
+                "show_exact_time": True,
+            },
+            "buddies": [
+                {
+                    "user_id": "buddy-1",
+                    "nickname": "李晓彤",
+                    "online": False,
+                    "status": "offline",
+                    "today_seconds": 2340,
+                }
+            ],
+            "room_people": [],
+            "leaderboard": [],
+        }
+    )
+    dialog.apply_dashboard({"_connection_state": "ONLINE"})
+    app.processEvents()
+
+    assert dialog.data.get("_dashboard_partial") is True
+    assert dialog.data.get("is_stale") is True
+    assert "AB12CD34" in dialog.identity.text()
+    assert dialog.buddies.count() == 1
+    assert "李晓彤家的六毛" in " ".join(
+        label.text()
+        for label in dialog.buddies.itemWidget(dialog.buddies.item(0)).findChildren(QLabel)
+    )
+    assert "还没有搭子" not in dialog.buddies.item(0).text()
+
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_pending_request_is_rendered_as_an_action_card() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())

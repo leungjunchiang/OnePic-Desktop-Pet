@@ -158,8 +158,15 @@ async function handleRequest(event, env) {
   if (path === "/profile" && method === "PATCH") {
     const userId = userIdFromBearer(bearer(event)); const body = bodyOf(event); const clean = {};
     for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) if (Object.prototype.hasOwnProperty.call(body, key)) clean[key] = body[key];
-    if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";
-    if (clean.owner_nickname !== undefined) clean.owner_nickname = String(clean.owner_nickname).trim().slice(0, 24);
+    for (const key of ["nickname", "owner_nickname"]) {
+      if (clean[key] === undefined) continue;
+      const value = String(clean[key]).trim().slice(0, 24);
+      // An omitted/empty identity field means “leave the durable profile
+      // untouched”. Never turn a compatibility request into a destructive
+      // write of the generic fallback name.
+      if (value) clean[key] = value;
+      else delete clean[key];
+    }
     return response(event, env, await supabaseFetch(env, event, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(userId)}`, { method: "PATCH", body: clean }));
   }
   if (path === "/presence/heartbeat" && method === "POST") return response(event, env, await handlePresence(env, event, bodyOf(event)));

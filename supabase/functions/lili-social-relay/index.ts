@@ -310,8 +310,14 @@ async function handle(request: Request, env: Env): Promise<Response> {
     for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
       if (key in body) clean[key] = body[key];
     }
-    if (clean.nickname !== undefined) clean.nickname = String(clean.nickname).trim().slice(0, 24) || "搭子";
-    if (clean.owner_nickname !== undefined) clean.owner_nickname = String(clean.owner_nickname).trim().slice(0, 24);
+    for (const key of ["nickname", "owner_nickname"] as const) {
+      if (clean[key] === undefined) continue;
+      const value = String(clean[key]).trim().slice(0, 24);
+      // Empty identity fields mean “keep the durable profile”. Do not let an
+      // old client erase a social name while saving unrelated settings.
+      if (value) clean[key] = value;
+      else delete clean[key];
+    }
     if (clean.outfit_key !== undefined) clean.outfit_key = String(clean.outfit_key).slice(0, 60);
     return json(request, env, await supabaseFetch(request, env, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(String(user.id || ""))}`, {
       method: "PATCH", body: clean, auth: true,

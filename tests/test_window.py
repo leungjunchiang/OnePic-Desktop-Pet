@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QContextMenuEvent, QFontMetrics
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
 
@@ -1214,6 +1214,41 @@ def test_shortcut_refresh_uses_supplied_lightweight_snapshot(monkeypatch) -> Non
     # closeEvent also refreshes the focus state while shutting down; restore
     # the real method before exercising teardown.
     monkeypatch.undo()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_context_menu_state_uses_lightweight_snapshot_and_no_extra_delay(monkeypatch) -> None:
+    """Right-click state construction must not run the expensive projection."""
+
+    app, window = _create_window()
+    calls: list[dict] = []
+
+    class LightweightSnapshot:
+        status = "idle"
+        today_seconds = 0
+        session_seconds = 0
+
+    def snapshot(*_args, **kwargs):
+        calls.append(dict(kwargs))
+        return LightweightSnapshot()
+
+    monkeypatch.setattr(window.focus_session, "snapshot", snapshot)
+    state = window._menu_state()
+
+    assert state["work_action_label"] == "开始工作"
+    assert calls == [{"include_projection": False}]
+    window.contextMenuEvent(
+        QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            QPoint(1, 1),
+            QPoint(1, 1),
+        )
+    )
+    assert window.context_menu_timer.interval() == QApplication.doubleClickInterval()
+    window.context_menu_timer.stop()
+
     window.close()
     window.deleteLater()
     app.processEvents()

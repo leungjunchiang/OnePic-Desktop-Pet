@@ -5022,6 +5022,12 @@ class PetWindow(QWidget):
         if not user_id or self._owner_nickname_sync_inflight:
             return
         clean = clean_owner_nickname(nickname)
+        if not clean:
+            # An empty local setting means that this machine has not loaded a
+            # social identity yet. Never send it as a remote rename: doing so
+            # would overwrite an existing nickname with the default label.
+            LOGGER.info("owner nickname sync skipped reason=empty_local_nickname")
+            return
         key = (user_id, clean)
         if self._owner_nickname_sync_key == key:
             return
@@ -7121,7 +7127,7 @@ class PetWindow(QWidget):
         # mutually exclusive.  In particular, hide the detached report
         # button owned by the shortcut dock before placing this control bar.
         self.quick_panel.hide()
-        snapshot = self.focus_session.snapshot()
+        snapshot = self.focus_session.snapshot(include_projection=False)
         self._update_work_duration_bubble(snapshot)
         self.work_controls.set_session_status(snapshot.status)
         self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
@@ -7153,7 +7159,7 @@ class PetWindow(QWidget):
         # state so macOS cannot leave that secondary button behind while the
         # primary start/pause shortcut disappears.
         self.quick_panel.hide()
-        if self.focus_session.snapshot().status == "focus":
+        if self.focus_session.snapshot(include_projection=False).status == "focus":
             self.pause_work_timer()
         else:
             self.start_work_timer()
@@ -7208,7 +7214,7 @@ class PetWindow(QWidget):
         self.show_speech("这个设置要等应用服务准备好后再执行。", 2600)
 
     def _menu_state(self) -> dict[str, object]:
-        snapshot = self.focus_session.snapshot()
+        snapshot = self.focus_session.snapshot(include_projection=False)
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
         work_status_text = ""
         if snapshot.status in {"focus", "rest"}:
@@ -7819,7 +7825,7 @@ class PetWindow(QWidget):
             if callable(global_position)
             else event.globalPos()
         )
-        self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
+        self.context_menu_timer.start(QApplication.doubleClickInterval())
         event.accept()
 
     @_guard_qt_callback

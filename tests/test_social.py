@@ -15,6 +15,7 @@ import onepic_desktop_pet.social as social_module
 from onepic_desktop_pet.social import (
     BackendRouteManager,
     AuthSessionManager,
+    DashboardCacheClientBase,
     HttpSocialBackend,
     PRESENCE_GRACE_SECONDS,
     SocialClient,
@@ -22,6 +23,7 @@ from onepic_desktop_pet.social import (
     SocialSession,
     SignupResult,
     _apply_buddy_private_notes,
+    _dashboard_payload_has_core_shape,
     _heartbeat_payload,
     _normalise_never_seen_presence,
     normalize_email,
@@ -54,6 +56,56 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
         "session_id": "session-1",
         "session_started_at": "2026-08-21T08:00:00+08:00",
     }
+
+
+def test_dashboard_core_shape_requires_identity_and_relationship_lists() -> None:
+    assert _dashboard_payload_has_core_shape(
+        {"me": {"user_id": "user-1"}, "buddies": [], "room_people": []}
+    )
+    assert not _dashboard_payload_has_core_shape({"_connection_state": "ONLINE"})
+    assert not _dashboard_payload_has_core_shape(
+        {"me": {}, "buddies": [], "room_people": []}
+    )
+    assert not _dashboard_payload_has_core_shape(
+        {"me": {"user_id": "user-1"}, "buddies": []}
+    )
+
+
+def test_profile_updates_never_overwrite_identity_with_empty_local_nickname(monkeypatch) -> None:
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+    requests: list[dict] = []
+
+    def fake_raw(method, path, body=None, **_kwargs):
+        requests.append({"method": method, "path": path, "body": body or {}})
+        return None
+
+    monkeypatch.setattr(backend, "_raw", fake_raw)
+    backend.update_profile(
+        nickname=" ",
+        visibility="friends",
+        show_exact_time=True,
+        allow_visits=True,
+    )
+    backend.update_owner_nickname(" ")
+
+    assert len(requests) == 1
+    assert "nickname" not in requests[0]["body"]
+    assert "owner_nickname" not in requests[0]["body"]
+
+
+def test_incomplete_dashboard_is_not_persisted_as_cache(monkeypatch) -> None:
+    transport = FakeTransport("direct")
+    client = DashboardCacheClientBase(persist_tokens=False, backend=transport)
+
+    client._remember_dashboard("", {"_connection_state": "ONLINE"})
+
+    assert client._dashboard_cache == {}
 
 
 def test_auth_session_manager_single_flight_refreshes_once_for_concurrent_callers():
@@ -912,6 +964,18 @@ def test_cloudbase_presence_and_profile_proxy_use_atomic_presence_contract() -> 
     assert "p_working" in cloudbase
     assert "wealth_leaderboard_enabled" in cloudbase
     assert "wealth_leaderboard_preference_set" in cloudbase
+
+
+def test_all_profile_relays_drop_empty_identity_fields() -> None:
+    root = Path(__file__).resolve().parents[1]
+    sources = [
+        (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8"),
+        (root / "relay" / "cloudflare-worker" / "src" / "index.js").read_text(encoding="utf-8"),
+        (root / "supabase" / "functions" / "lili-social-relay" / "index.ts").read_text(encoding="utf-8"),
+    ]
+    for source in sources:
+        assert "delete clean[key]" in source or "delete profile[key]" in source
+        assert 'slice(0, 24) || "搭子"' not in source
 
 
 def test_personal_focus_and_outfit_state_is_server_merged_and_proxy_allowlisted() -> None:

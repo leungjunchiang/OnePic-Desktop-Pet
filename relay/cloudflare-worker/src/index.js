@@ -271,8 +271,15 @@ async function handleRequest(request, env) {
     const userId = userIdFromBearer(auth);
     const body = await parseJsonBody(request);
     const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]);
-    if (profile.owner_nickname !== undefined) profile.owner_nickname = String(profile.owner_nickname).trim().slice(0, 24);
-    if (profile.nickname !== undefined) profile.nickname = String(profile.nickname).trim().slice(0, 24) || "搭子";
+    for (const key of ["nickname", "owner_nickname"]) {
+      if (profile[key] === undefined) continue;
+      const value = String(profile[key]).trim().slice(0, 24);
+      // Empty identity fields are not a rename. Dropping them prevents an
+      // older client from erasing the durable social name while saving only
+      // visibility or presence-related settings.
+      if (value) profile[key] = value;
+      else delete profile[key];
+    }
     if (profile.outfit_key !== undefined) profile.outfit_key = String(profile.outfit_key).slice(0, 60);
     return jsonResponse(await callSupabase(env, request, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(userId)}`, {
       method: "PATCH", body: profile, headers: { Prefer: "return=minimal" },

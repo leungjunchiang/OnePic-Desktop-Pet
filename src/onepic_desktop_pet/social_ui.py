@@ -11,6 +11,7 @@ import time
 import logging
 import json
 import threading
+from copy import deepcopy
 from functools import cmp_to_key
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +36,7 @@ from .social import (
     _heartbeat_payload,
     _next_presence_sequence,
     _session_user_id,
+    _dashboard_payload_has_core_shape,
     social_user_message,
 )
 from .config import PET_NAME, clean_owner_nickname, social_pet_label
@@ -44,6 +46,85 @@ from .work_timer import format_work_duration
 from .lifecycle_log import lifecycle_log
 
 LOGGER = logging.getLogger(__name__)
+
+
+_DASHBOARD_IDENTITY_FIELDS = (
+    "user_id",
+    "id",
+    "invite_code",
+    "owner_nickname",
+    "nickname",
+)
+
+
+def _merge_dashboard_snapshot(
+    previous: dict[str, Any], incoming: dict[str, Any]
+) -> tuple[dict[str, Any], bool]:
+    """Keep a partial response from erasing identity or relationships.
+
+    ``lili_dashboard`` owns the account identity and accepted-buddy lists.
+    Heartbeat/context responses and mixed-version relays can still return a
+    JSON object without all three fields.  The UI must not interpret that as a
+    legitimate empty account.  A complete response remains authoritative,
+    including explicit empty buddy/room lists.
+    """
+
+    previous = previous if isinstance(previous, dict) else {}
+    incoming = incoming if isinstance(incoming, dict) else {}
+    complete = _dashboard_payload_has_core_shape(incoming)
+    merged = deepcopy(incoming) if complete else deepcopy(previous)
+
+    if not complete:
+        # Preserve the last known core snapshot when it exists.  On the first
+        # run, retain any valid core fields from a cache/older relay so a
+        # missing optional field does not discard useful peer cards.
+        for field in ("me", "buddies", "room_people"):
+            old_value = previous.get(field)
+            if field in previous and (
+                (field == "me" and isinstance(old_value, dict) and bool(old_value))
+                or (field != "me" and isinstance(old_value, list))
+            ):
+                merged[field] = deepcopy(old_value)
+            elif field not in merged and field in incoming:
+                value = incoming.get(field)
+                if (field == "me" and isinstance(value, dict)) or (
+                    field != "me" and isinstance(value, list)
+                ):
+                    merged[field] = deepcopy(value)
+        # Do not let an incomplete response replace the cached optional
+        # collections either, but accept new optional fields such as a
+        # connection diagnostic or server timestamp.
+        merged.update(deepcopy(incoming))
+        for field in ("me", "buddies", "room_people"):
+            old_value = previous.get(field)
+            if field in previous and (
+                (field == "me" and isinstance(old_value, dict) and bool(old_value))
+                or (field != "me" and isinstance(old_value, list))
+            ):
+                merged[field] = deepcopy(old_value)
+    else:
+        merged.update(deepcopy(incoming))
+
+    # A response with a sparse ``me`` mapping must not blank a durable invite
+    # code or nickname.  Empty fields are treated as “not supplied” here; an
+    # explicit rename is sent through the profile update path instead.
+    old_me = previous.get("me") if isinstance(previous.get("me"), dict) else {}
+    new_me = merged.get("me") if isinstance(merged.get("me"), dict) else {}
+    if old_me and new_me:
+        for field in _DASHBOARD_IDENTITY_FIELDS:
+            if not str(new_me.get(field) or "").strip() and str(old_me.get(field) or "").strip():
+                new_me[field] = old_me[field]
+        merged["me"] = new_me
+
+    if not complete:
+        merged["_dashboard_partial"] = True
+        merged["is_stale"] = True
+        merged["data_source"] = "server_partial"
+        merged["_data_source"] = "server_partial"
+        merged["_sync_error"] = "服务器返回了不完整的社交快照，已保留上次正常数据。"
+    else:
+        merged.pop("_dashboard_partial", None)
+    return merged, not complete
 
 
 def _unwrap_reaction_payload(payload: object) -> dict[str, Any] | None:
@@ -3828,6 +3909,7 @@ class SocialHubDialog(QDialog):
         """
 
         payload = dict(data) if isinstance(data, dict) else {}
+        previous_data = self.data if isinstance(self.data, dict) else {}
         active_user_id = _session_user_id(self.client)
         payload_me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
         payload_user_id = str(payload_me.get("user_id") or "").strip()
@@ -3841,6 +3923,12 @@ class SocialHubDialog(QDialog):
             )
             return
 
+        payload, partial = _merge_dashboard_snapshot(previous_data, payload)
+        if partial:
+            LOGGER.warning(
+                "partial social dashboard preserved last core snapshot keys=%s",
+                sorted(str(key) for key in payload.keys()),
+            )
         payload = self._apply_presence_sequence_fence(payload)
 
         # A direct render can happen immediately after construction (for
@@ -3848,7 +3936,6 @@ class SocialHubDialog(QDialog):
         # one-shot 50 ms bootstrap refresh arrive afterward and overwrite that
         # newer view with its older in-flight result.
         self._initial_refresh_timer.stop()
-        previous_data = self.data
         self.data = dict(payload)
         self._muted_buddy_ids = {
             str(item).strip()
@@ -4250,7 +4337,16 @@ class SocialHubDialog(QDialog):
         self._begin_action("正在保存隐私设置…")
         try:
             me=self.data.get("me") or {}
-            self.client.update_profile(nickname=str(self.owner_nickname or me.get("nickname") or "搭子"),visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
+            # Privacy changes must not use the display fallback (“搭子”) as a
+            # nickname write. On a fresh machine that fallback is only a
+            # renderer default; sending it would replace an existing durable
+            # social identity while the user is merely changing visibility.
+            nickname = str(
+                self.owner_nickname
+                or me.get("owner_nickname")
+                or ""
+            ).strip()
+            self.client.update_profile(nickname=nickname,visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
             self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": str(self.interaction_mode.currentData() or "focus_priority")})
             self.refresh()
         except SocialError as exc: self._error(exc)
