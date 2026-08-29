@@ -110,6 +110,19 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert room_report["day"]["focus_session_seconds"] == 12 * 60
     assert room_report["day"]["focus_room_id"] == "room-1"
 
+    projected_report = build_work_report(
+        analytics,
+        timer,
+        daily,
+        focus_snapshot={"status": "idle", "session_seconds": 0},
+        focus_projection={"today_seconds": 2 * 60 * 60, "week_seconds": 3 * 60 * 60},
+        now=now,
+    )
+    assert projected_report["day"]["total_seconds"] == 2 * 60 * 60
+    assert projected_report["week"]["total_seconds"] == 3 * 60 * 60
+    assert projected_report["day"]["week_total_seconds"] == 3 * 60 * 60
+    assert next(row for row in projected_report["week"]["daily"] if row["is_today"])["seconds"] == 2 * 60 * 60
+
 
 def test_report_does_not_render_cumulative_checkpoint_as_live_today(tmp_path) -> None:
     """A stale cumulative session must not inflate today's raw ledger."""

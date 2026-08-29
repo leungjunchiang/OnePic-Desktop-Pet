@@ -4827,7 +4827,12 @@ class PetWindow(QWidget):
             self.work_timer,
             self.daily_stats,
             best_buddy=self._best_buddy_for_report(),
-            focus_snapshot=self.focus_session.snapshot(),
+            # Keep the report headline/chart on the exact projection already
+            # used by the pet duration bubble and the study-room focus page.
+            # The snapshot still carries only live UI state; the calendar
+            # totals come from this one shared provider call.
+            focus_snapshot=self.focus_session.snapshot(include_projection=False),
+            focus_projection=self._shared_focus_period_seconds(moment),
             task_stats={
                 "day": self.time_memory.records.stats(start=current_date, end=current_date),
                 "week": self.time_memory.records.week_stats(current_date.isoformat()),

@@ -114,6 +114,7 @@ def build_work_report(
     *,
     best_buddy: str = "暂无自习室排行榜数据",
     focus_snapshot: Any | None = None,
+    focus_projection: dict[str, Any] | None = None,
     task_stats: dict[str, dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -124,6 +125,24 @@ def build_work_report(
         moment = moment.replace(tzinfo=BEIJING_TIMEZONE)
     summary = analytics.summary(moment)
     daily_stats_snapshot = daily_stats.snapshot()
+    canonical_today: int | None = None
+    canonical_week: int | None = None
+    if isinstance(focus_projection, dict):
+        for field, target in (
+            ("today_seconds", "today"),
+            ("week_seconds", "week"),
+        ):
+            try:
+                value = focus_projection.get(field)
+                if value is None:
+                    continue
+                normalized = max(0, int(value))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if target == "today":
+                canonical_today = normalized
+            else:
+                canonical_week = normalized
     snapshot_status = ""
     snapshot_session = 0
     snapshot_room = ""
@@ -304,6 +323,19 @@ def build_work_report(
             item["total_seconds"] = int(item.get("total_seconds", 0) or 0) + visible_today - stored_day
             today_row["seconds"] = visible_today
 
+    # The window supplies the same cached FocusSession calendar projection used
+    # by the pet bubble and the study-room focus page.  Update today's row in
+    # every chart first, then use the exact day/week totals for the headlines.
+    # Standalone callers that do not own that projection retain the raw local
+    # analytics behavior above.
+    if canonical_today is not None:
+        for key in ("day", "week", "month"):
+            rows = report[key].get("daily") or []
+            today_row = next((row for row in rows if row.get("is_today")), None)
+            if isinstance(today_row, dict):
+                today_row["seconds"] = canonical_today
+                today_row["status"] = "observed" if canonical_today else today_row.get("status", "observed")
+
     for key in ("day", "week", "month"):
         item = report[key]
         if isinstance(task_stats, dict) and isinstance(task_stats.get(key), dict):
@@ -320,7 +352,12 @@ def build_work_report(
         )
         # Daily projections are the canonical projection of the same clipped
         # interval union.  Never resurrect a stale snapshot with max().
-        item["total_seconds"] = rows_total
+        if key == "day" and canonical_today is not None:
+            item["total_seconds"] = canonical_today
+        elif key == "week" and canonical_week is not None:
+            item["total_seconds"] = canonical_week
+        else:
+            item["total_seconds"] = rows_total
         longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
         item["average_session_seconds"] = min(
             max(0, int(item.get("average_session_seconds", 0) or 0)),

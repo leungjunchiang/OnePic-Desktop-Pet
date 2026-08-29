@@ -323,7 +323,13 @@ def _wealth_leaderboard_enabled(profile: dict[str, Any] | None) -> bool:
 
 
 def _owner_nickname(record: dict[str, Any] | None) -> str:
-    """Prefer the explicit social owner field while keeping old payloads usable."""
+    """Return the viewer label, with a private remark taking precedence.
+
+    A private remark is intentionally scoped to this viewer, so it may be used
+    in that viewer's buddy card. When it is absent, fall back to the buddy's
+    public self-chosen nickname. It must never be replaced by the neutral
+    default merely because another identity field is missing.
+    """
 
     if not isinstance(record, dict):
         return "搭子"
@@ -336,6 +342,12 @@ def _owner_nickname(record: dict[str, Any] | None) -> str:
 
 
 def _owner_label(record: dict[str, Any] | None) -> str:
+    if isinstance(record, dict) and bool(record.get("is_self")):
+        public_name = clean_owner_nickname(
+            record.get("owner_nickname") or record.get("nickname") or record.get("display_name")
+        )
+        if not public_name or public_name == "搭子":
+            return f"我的{PET_NAME}"
     return social_pet_label(_owner_nickname(record))
 
 
@@ -1398,7 +1410,7 @@ class BuddyCardWidget(QWidget):
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         headline = QLabel(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
         self._headline_label = headline
@@ -1502,7 +1514,7 @@ class BuddyCardWidget(QWidget):
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         self._headline_label.setText(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
         duration = buddy.get("today_seconds")
@@ -1603,7 +1615,7 @@ class RoomPetCardWidget(QWidget):
         # Create the headline before the image so existing accessibility/tests
         # and screen readers encounter identity/state first.
         headline = QLabel(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
         )
         headline.setStyleSheet("font-size:14px;font-weight:700;color:#203847;")
@@ -3221,9 +3233,9 @@ class SocialHubDialog(QDialog):
         for index, row in enumerate(rows[:20], 1):
             if not isinstance(row, dict):
                 continue
-            nickname = social_pet_label(
-                row.get("private_note_name") or row.get("nickname") or row.get("owner_nickname") or "搭子"
-            )
+            nickname = _owner_label(row)
+            if bool(row.get("is_self")) and not nickname.endswith("（我）"):
+                nickname += "（我）"
             try:
                 week_seconds = max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0))
             except (TypeError, ValueError):
@@ -3272,6 +3284,10 @@ class SocialHubDialog(QDialog):
             for key in ("room_people", "active_visits", "visits"):
                 collect(current_room.get(key))
 
+        own_id = _session_user_id(self.client)
+        if not own_id:
+            me = self.data.get("me") if isinstance(self.data.get("me"), dict) else {}
+            own_id = str(me.get("user_id") or me.get("id") or "").strip()
         decorated: list[dict[str, Any]] = []
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, dict):
@@ -3281,6 +3297,15 @@ class SocialHubDialog(QDialog):
                 (str(copy.get(field)).strip() for field in ("user_id", "buddy_id", "peer_id") if copy.get(field) is not None),
                 "",
             )
+            copy["is_self"] = bool(copy.get("is_self")) or bool(own_id and user_id == own_id)
+            if copy["is_self"]:
+                me = self.data.get("me") if isinstance(self.data.get("me"), dict) else {}
+                public_name = self.owner_nickname or clean_owner_nickname(
+                    me.get("owner_nickname") or me.get("nickname")
+                )
+                if public_name:
+                    copy["owner_nickname"] = public_name
+                    copy["nickname"] = public_name
             private_note = note_by_user.get(user_id)
             if private_note:
                 copy["private_note_name"] = private_note

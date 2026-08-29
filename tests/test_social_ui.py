@@ -208,6 +208,22 @@ def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> N
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_leaderboard_marks_self_and_uses_self_public_name() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard({
+        "me": {"nickname": "小梁", "invite_code": "AB12CD34"},
+        "buddies": [], "room_people": [], "requests": [], "visits": [],
+        "leaderboard": [{"user_id": "self", "is_self": True, "nickname": "搭子", "week_seconds": 3600}],
+    })
+    app.processEvents()
+
+    text = dialog.wealth_leaderboard.item(0).text()
+    assert "小梁家的六毛（我）" in text
+    assert "搭子家的六毛" not in text
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_account_page_can_copy_buddy_code() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())
