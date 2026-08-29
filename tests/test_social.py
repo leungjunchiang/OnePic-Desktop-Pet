@@ -904,6 +904,18 @@ def test_latest_focus_stats_migration_uses_raw_interval_union_and_reconciles_cac
     assert "-- Repair the active Beijing week, including zero days." in migration
 
 
+def test_raw_only_focus_stats_migration_disables_legacy_cache_fallback() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829000200_lili_focus_raw_only_stats.sql").read_text(encoding="utf-8")
+
+    assert "No raw FocusSession facts means zero focus time." in migration
+    assert "raw_today := public.lili_focus_union_seconds" in migration
+    assert "raw_week := public.lili_focus_union_seconds" in migration
+    assert "lili_focus_daily" in migration
+    assert "focus_week_seconds = 0" in migration
+    assert "perform public.lili_reconcile_focus_derived_totals(account_id)" in migration
+
+
 def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000400_lili_focus_daily_visibility.sql").read_text(encoding="utf-8")

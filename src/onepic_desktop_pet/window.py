@@ -4419,18 +4419,14 @@ class PetWindow(QWidget):
         current monotonic slice made the live bubble repeat an old value.
         """
 
-        moment = moment or datetime.now(BEIJING_TIMEZONE)
+        moment = moment or self.focus_analytics.current_time()
         day_projection = self.focus_analytics.period_summary("day", moment)
         week_projection = self.focus_analytics.period_summary("week", moment)
         recorded_day = max(0, int(day_projection.get("total_seconds", 0) or 0))
         # A segment may start before Beijing midnight and still contribute to
-        # today.  Use the projection's overlap evidence instead of counting
-        # records by their start date, while keeping daily-only compatibility
-        # caches usable on a brand-new device.
-        has_local_day_records = bool(day_projection.get("raw_period_evidence")) or (
-            int(day_projection.get("local_record_count", 0) or 0) > 0
-        )
-        timer_today = max(0, int(self.work_timer.today_seconds()))
+        # today.  Use only raw interval evidence; cached timer/profile totals
+        # are not valid work facts and must not be rendered as today's time.
+        has_local_day_records = bool(day_projection.get("raw_period_evidence"))
         session_total = (
             max(0, int(self.work_timer.session_seconds()))
             if self.work_timer.has_active_session
@@ -4462,25 +4458,14 @@ class PetWindow(QWidget):
             )
         else:
             # While today's session is still open, the analytics ledger has
-            # not received a row yet.  In that window the server's daily
-            # maximum is only a cross-device fallback and may be an old
-            # snapshot from a previous buggy client.  Let the account-local
-            # timer win as soon as it has any evidence for today; otherwise a
-            # stale 5-hour value can be rendered (and re-published) after a
-            # fresh 20-minute session starts.  Keep the remote projection for
-            # a genuinely untouched device so cross-device history still
-            # appears before the user works on it.
-            if self.work_timer.has_active_session:
-                today = session_total
-            elif timer_today > 0:
-                today = timer_today
-            else:
-                today = recorded_day
+            # not received a row yet.  The live session is the only trusted
+            # supplement; an inactive persisted timer bucket is just a cache.
+            today = session_total if self.work_timer.has_active_session else recorded_day
 
         week = max(0, int(week_projection.get("total_seconds", 0) or 0))
         if (
             not has_local_day_records
-            and (self.work_timer.has_active_session or timer_today > 0)
+            and self.work_timer.has_active_session
         ):
             # The same stale-aggregate guard applies to the weekly card.  A
             # newly active local day must not inherit a corrupted weekly
