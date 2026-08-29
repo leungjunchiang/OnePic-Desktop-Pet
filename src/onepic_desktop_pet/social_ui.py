@@ -33,6 +33,7 @@ from .social import (
     SocialClient,
     SocialError,
     _heartbeat_payload,
+    _next_presence_sequence,
     _session_user_id,
     social_user_message,
 )
@@ -370,6 +371,7 @@ class SocialHeartbeatWorker:
         self._condition = threading.Condition()
         self._stopped = False
         self._pending: dict[str, Any] | None = None
+        self._shutdown_payload: dict[str, Any] | None = None
         self._send_now = False
         self._thread: threading.Thread | None = None
 
@@ -403,8 +405,15 @@ class SocialHeartbeatWorker:
             self._send_now = self._send_now or bool(immediate)
             self._condition.notify()
 
-    def stop(self) -> None:
+    def stop(self, final_presence: dict[str, Any] | None = None) -> None:
         with self._condition:
+            if isinstance(final_presence, dict):
+                # Queue one best-effort inactive state before the daemon
+                # worker exits.  This is intentionally asynchronous: closing
+                # the desktop must never wait on a network socket, while an
+                # explicit finalize helps peers stop showing a ghost session
+                # before the normal server freshness timeout.
+                self._shutdown_payload = _heartbeat_payload(dict(final_presence))
             self._stopped = True
             self._condition.notify_all()
 
@@ -414,20 +423,41 @@ class SocialHeartbeatWorker:
             with self._condition:
                 while not self._stopped and self._pending is None:
                     self._condition.wait()
-                if self._stopped:
+                if self._shutdown_payload is not None:
+                    payload = self._shutdown_payload
+                    self._shutdown_payload = None
+                    shutdown_send = True
+                elif self._stopped:
                     return
-                now = time.monotonic()
-                wait_for = 0.0 if self._send_now or now >= next_due else next_due - now
-                if wait_for > 0:
-                    self._condition.wait(timeout=wait_for)
-                    if self._stopped:
-                        return
-                    if self._send_now or time.monotonic() >= next_due:
-                        pass
-                    else:
-                        continue
-                payload = dict(self._pending or {})
-                self._send_now = False
+                else:
+                    shutdown_send = False
+                    now = time.monotonic()
+                    wait_for = 0.0 if self._send_now or now >= next_due else next_due - now
+                    if wait_for > 0:
+                        self._condition.wait(timeout=wait_for)
+                        if self._stopped and self._shutdown_payload is None:
+                            return
+                        if self._shutdown_payload is not None:
+                            payload = self._shutdown_payload
+                            self._shutdown_payload = None
+                            shutdown_send = True
+                        elif self._send_now or time.monotonic() >= next_due:
+                            pass
+                        else:
+                            continue
+                    if not shutdown_send:
+                        # Consume both values under the same lock. Otherwise a
+                        # concurrent immediate final-state update can be
+                        # overwritten by this worker clearing the flag after
+                        # it has been set.
+                        payload = dict(self._pending or {})
+                        self._send_now = False
+            user_id = str(payload.get("user_id") or "").strip()
+            if user_id:
+                # Sequence assignment happens on this independent transport
+                # thread, immediately before send.  A slow dashboard queue
+                # can therefore never reuse or reorder a presence version.
+                payload["sequence"] = _next_presence_sequence(user_id)
             try:
                 self.client.heartbeat(**payload)
                 LOGGER.debug("social heartbeat sent independently")
@@ -436,6 +466,13 @@ class SocialHeartbeatWorker:
                 # next payload retries naturally, while dashboard polling can
                 # continue to use its own fallback route.
                 LOGGER.warning("independent social heartbeat failed: %s", exc)
+            except Exception:
+                # A transport adapter must not be able to kill the dedicated
+                # liveness loop. Keep the next latest payload eligible for a
+                # retry and leave the diagnostic traceback in the log.
+                LOGGER.exception("independent social heartbeat crashed")
+            if shutdown_send:
+                return
             next_due = time.monotonic() + self.interval_seconds
 
 
@@ -443,8 +480,12 @@ class SocialSyncThread(QThread):
     completed = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, client: SocialClient, presence: dict[str, Any], parent=None, *, send_heartbeat: bool = False) -> None:
-        super().__init__(parent); self.client = client; self.presence = presence; self.send_heartbeat = send_heartbeat
+    def __init__(self, client: SocialClient, presence: dict[str, Any], parent=None, *, send_heartbeat: bool = False, request_generation: int = 0) -> None:
+        super().__init__(parent)
+        self.client = client
+        self.presence = presence
+        self.send_heartbeat = send_heartbeat
+        self.request_generation = max(0, int(request_generation or 0))
 
     def run(self) -> None:
         try:
@@ -452,6 +493,7 @@ class SocialSyncThread(QThread):
             focus_history_result = None
             focus_segments_result = None
             personal_state_result = None
+            presence_context_updated: bool | None = None
             taunt_state_result = None
             encouragement_state_result = None
             personal_state = self.presence.get("personal_state")
@@ -473,6 +515,36 @@ class SocialSyncThread(QThread):
                     # proxy is briefly unavailable.
                     heartbeat_error = str(exc)
                     LOGGER.warning("social presence heartbeat failed: %s", exc)
+            # Room/outfit/quick-status are presentation context, not liveness
+            # and not duration.  Send them through a separate, background RPC
+            # so the heartbeat payload remains deliberately liveness-only.
+            presence_context = self.presence.get("_presence_context")
+            context_rpc = getattr(self.client, "rpc", None)
+            if isinstance(presence_context, dict) and callable(context_rpc):
+                try:
+                    context_result = context_rpc(
+                        "lili_update_presence_context",
+                        {
+                            "p_room_id": presence_context.get("room_id"),
+                            "p_outfit_key": str(presence_context.get("outfit_key") or "")[:60],
+                            "p_quick_status": str(presence_context.get("quick_status") or "")[:40],
+                            "p_quick_status_expires_at": presence_context.get("quick_status_expires_at"),
+                        },
+                    )
+                    # The context RPC intentionally does not create a row.
+                    # If it races the first heartbeat, retry on the next
+                    # background cycle instead of losing the room association.
+                    presence_context_updated = bool(
+                        context_result.get("updated", False)
+                        if isinstance(context_result, dict)
+                        else False
+                    )
+                except (SocialError, AttributeError, TypeError) as exc:
+                    LOGGER.info("presence context sync deferred: %s", exc)
+                    presence_context_updated = False
+                except Exception:
+                    LOGGER.exception("presence context sync crashed")
+                    presence_context_updated = False
             if isinstance(personal_state, dict):
                 sync_rpc = getattr(self.client, "rpc", None)
                 if callable(sync_rpc):
@@ -568,6 +640,9 @@ class SocialSyncThread(QThread):
             if heartbeat_error:
                 data = dict(data or {})
                 data["_presence_heartbeat_error"] = heartbeat_error
+            if presence_context_updated is not None:
+                data = dict(data or {})
+                data["_presence_context_updated"] = presence_context_updated
             if isinstance(focus_history_result, dict):
                 data = dict(data or {})
                 data["_focus_history"] = focus_history_result
@@ -587,11 +662,20 @@ class SocialSyncThread(QThread):
             if isinstance(encouragement_state_result, dict):
                 data = dict(data or {})
                 data["_encouragement_state"] = encouragement_state_result
+            if isinstance(data, dict) and self.request_generation:
+                data = dict(data)
+                data["_request_generation"] = self.request_generation
             self.completed.emit(data)
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
             cached = cached_loader(self.presence.get("room_id")) if callable(cached_loader) else None
             if cached is not None:
+                if presence_context_updated is not None:
+                    cached = dict(cached)
+                    cached["_presence_context_updated"] = presence_context_updated
+                if self.request_generation:
+                    cached = dict(cached)
+                    cached["_request_generation"] = self.request_generation
                 self.completed.emit(cached)
             else:
                 self.failed.emit(str(exc))
@@ -1943,6 +2027,7 @@ class SocialHubDialog(QDialog):
         # large layout/repaint burst in the GUI thread.
         self._buddy_card_widgets: dict[str, tuple[QListWidgetItem, BuddyCardWidget]] = {}
         self._buddy_card_structure: dict[str, tuple[Any, ...]] = {}
+        self._buddy_presence_versions: dict[str, tuple[int, dict[str, Any]]] = {}
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
         self._focus_snapshot: Any = None
@@ -3683,11 +3768,56 @@ class SocialHubDialog(QDialog):
         thread.deleteLater()
 
     def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
+        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
         if not self._require_login(): return
         self._start_dashboard_refresh(self.current_room_id, "正在刷新搭子与专注状态…")
+
+    def _apply_presence_sequence_fence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Prevent an older per-buddy snapshot from moving live fields back."""
+
+        volatile_fields = (
+            "working", "session_active", "status", "online", "session_id",
+            "session_started_at", "session_seconds", "today_seconds", "week_seconds",
+            "last_seen_at", "status_updated_at", "server_updated_at", "sequence",
+        )
+        lists: list[Any] = [
+            payload.get("buddies"),
+            payload.get("room_people"),
+            payload.get("active_visits"),
+        ]
+        current_room = payload.get("current_room")
+        if isinstance(current_room, dict):
+            lists.extend((current_room.get("room_people"), current_room.get("active_visits")))
+
+        for items in lists:
+            if not isinstance(items, list):
+                continue
+            for index, raw_item in enumerate(items):
+                if not isinstance(raw_item, dict):
+                    continue
+                buddy_id = str(raw_item.get("user_id") or raw_item.get("peer_id") or "").strip()
+                if not buddy_id:
+                    continue
+                try:
+                    sequence = max(0, int(raw_item.get("sequence") or 0))
+                except (TypeError, ValueError, OverflowError):
+                    sequence = 0
+                previous = self._buddy_presence_versions.get(buddy_id)
+                if previous is not None and previous[0] > sequence:
+                    preserved = dict(raw_item)
+                    for field in volatile_fields:
+                        if field in previous[1]:
+                            preserved[field] = previous[1][field]
+                    items[index] = preserved
+                    # A mixed-version response may omit sequence entirely.
+                    # It is still older than a previously fenced response and
+                    # must not regress live fields.
+                    continue
+                if sequence:
+                    self._buddy_presence_versions[buddy_id] = (sequence, dict(raw_item))
+        return payload
 
     def apply_dashboard(self, data: dict[str, Any] | None) -> None:
         """Render a dashboard already fetched by the background sync thread.
@@ -3697,7 +3827,7 @@ class SocialHubDialog(QDialog):
         on the previous (often resting) state until the user clicked refresh.
         """
 
-        payload = data if isinstance(data, dict) else {}
+        payload = dict(data) if isinstance(data, dict) else {}
         active_user_id = _session_user_id(self.client)
         payload_me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
         payload_user_id = str(payload_me.get("user_id") or "").strip()
@@ -3710,6 +3840,8 @@ class SocialHubDialog(QDialog):
                 payload_user_id,
             )
             return
+
+        payload = self._apply_presence_sequence_fence(payload)
 
         # A direct render can happen immediately after construction (for
         # example when the owner restores a cached snapshot). Do not let the

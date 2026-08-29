@@ -616,12 +616,15 @@ class PetWindow(QWidget):
         self._social_dialog: SocialHubDialog | None = None
         self._close_retry_scheduled = False
         self._social_thread: SocialSyncThread | None = None
+        self._social_request_generation = 0
+        self._last_applied_social_generation = 0
         # Presence must not wait behind the dashboard/statistics request chain.
         # Keep the worker parented for Qt ownership, while closeEvent also
         # explicitly stops and waits for its cooperative condition loop.
         self._social_heartbeat_thread = SocialHeartbeatWorker(self.social_client)
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
+        self._social_presence_context_signature: tuple[str, str, str, str] | None = None
         self._social_event_threads: list[SocialEventThread] = []
         self._social_profile_threads: list[SocialProfileThread] = []
         self._owner_nickname_sync_key: tuple[str, str] | None = None
@@ -916,6 +919,21 @@ class PetWindow(QWidget):
         self.work_clock_timer.setInterval(1000)
         self.work_clock_timer.timeout.connect(self._work_timer_tick)
         self.work_clock_timer.start()
+
+        # Keep the one-second clock strictly presentation-only.  Persistence,
+        # reminders and reward bookkeeping are maintenance work and must not
+        # be able to stretch the clock callback or make the whole GUI appear
+        # sticky.  Alarm polling has its own small timer so a due alarm does
+        # not wait for the slower maintenance cadence.
+        self.alarm_poll_timer = QTimer(self)
+        self.alarm_poll_timer.setInterval(1000)
+        self.alarm_poll_timer.timeout.connect(self._alarm_poll_tick)
+        self.alarm_poll_timer.start()
+
+        self.work_maintenance_timer = QTimer(self)
+        self.work_maintenance_timer.setInterval(5000)
+        self.work_maintenance_timer.timeout.connect(self._work_maintenance_tick)
+        self.work_maintenance_timer.start()
 
         self.ambient_timer = QTimer(self)
         self.ambient_timer.setSingleShot(True)
@@ -1892,8 +1910,9 @@ class PetWindow(QWidget):
             self._social_dialog.close()
         if self._chat_dialog is not None:
             self._chat_dialog.close()
-        if self._social_thread is not None and self._social_thread.isRunning():
-            self._social_thread.wait(2500)
+        # ``request_stop_all`` above already requested this worker to stop.
+        # Never synchronously wait on a network QThread from closeEvent: a
+        # slow socket must not turn closing the pet into another GUI freeze.
         if self._media_player is not None:
             lifecycle_log(
                 "media.player.stop",
@@ -1909,9 +1928,21 @@ class PetWindow(QWidget):
         # parent widget from being destroyed while the native thread waits.
         heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
         if heartbeat_thread is not None and heartbeat_thread.isRunning():
-            heartbeat_thread.stop()
-            if not heartbeat_thread.wait(2000):
-                LOGGER.warning("[Lifecycle] independent social heartbeat did not stop cleanly")
+            final_user_id = self._current_social_user_id()
+            heartbeat_thread.stop(
+                {
+                    "user_id": final_user_id,
+                    "working": False,
+                    "session_active": False,
+                    "session_id": None,
+                    "session_started_at": None,
+                }
+                if final_user_id
+                else None
+            )
+            # It is a daemon Python worker and may be inside a bounded network
+            # request.  Stopping the condition loop is enough; waiting here
+            # would block the GUI during a network outage.
 
         running = running_threads(*thread_roots)
         if running:
@@ -4103,19 +4134,13 @@ class PetWindow(QWidget):
             self._work_timer_tick_impl()
 
     def _work_timer_tick_impl(self) -> None:
-        """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
+        """只刷新当前专注的轻量显示，不做持久化、统计或网络工作。"""
 
-        quiet = self._quiet_mode_for_work_tick()
-        self._check_local_alarms(quiet)
-        self._check_local_reminders(quiet)
-        self.work_timer.checkpoint()
-        # The one-second tick is deliberately timer-only.  Calendar
-        # projections and raw-history aggregation belong to the background
-        # social/report paths, never to the GUI clock refresh.
-        # A live clock tick is not a state-transition event. Emitting the
-        # full FocusSession signal here made every second traverse the whole
-        # shortcut/control/study-room rendering chain. Update only the small
-        # live labels; start/pause/finish still emit the normal signal.
+        # Calendar projections and raw-history aggregation belong to the
+        # background social/report paths, never to the GUI clock refresh.  A
+        # live clock tick is not a state-transition event: start/pause/finish
+        # still emit the normal FocusSession signal, while this callback only
+        # updates the small live labels.
         snapshot = self.focus_session.snapshot(include_projection=False)
         self._refresh_shortcut_state(snapshot)
         if self._social_dialog is not None and self._social_dialog.isVisible():
@@ -4128,6 +4153,28 @@ class PetWindow(QWidget):
                 "本轮 " + format_work_duration(snapshot.session_seconds)
                 if snapshot.status in {"focus", "rest"} else "本轮未开始"
             )
+
+    @_guard_qt_callback
+    def _alarm_poll_tick(self) -> None:
+        """Poll the local alarm queue without entering the work clock tick."""
+
+        with self._performance.measure("alarm.poll"):
+            quiet = self._quiet_mode_for_work_tick()
+            self._check_local_alarms(quiet)
+
+    @_guard_qt_callback
+    def _work_maintenance_tick(self) -> None:
+        """Run low-frequency local maintenance outside the display tick."""
+
+        with self._performance.measure("focus.maintenance"):
+            self._work_maintenance_tick_impl()
+
+    def _work_maintenance_tick_impl(self) -> None:
+        """Persist progress and process non-visual focus side effects."""
+
+        quiet = self._quiet_mode_for_work_tick()
+        self._check_local_reminders(quiet)
+        self.work_timer.checkpoint()
         self._award_focus_rewards()
         self._check_expensive_coffee_reward()
         self._sync_hourly_outfit(announce=True)
@@ -4146,23 +4193,17 @@ class PetWindow(QWidget):
         elif wellness_kind == "stand":
             self._set_temporary_activity("football", 35_000)
             self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
+        if quiet.blocked or deep_food_scene:
+            return
+        snapshot = self.focus_session.snapshot(include_projection=False)
         canonical_continuous = min(
             max(0, int(getattr(snapshot, "current_continuous_seconds", 0) or 0)),
             max(0, int(getattr(snapshot, "today_seconds", 0) or 0)),
         )
-        reminder_kind = (
-            None
-            if quiet.blocked or deep_food_scene
-            else self.work_timer.take_due_reminder(canonical_continuous)
-        )
+        reminder_kind = self.work_timer.take_due_reminder(canonical_continuous)
         if reminder_kind is None:
             return
-        duration = format_work_duration(
-            min(
-                max(0, int(getattr(snapshot, "current_continuous_seconds", 0) or 0)),
-                max(0, int(getattr(snapshot, "today_seconds", 0) or 0)),
-            )
-        )
+        duration = format_work_duration(canonical_continuous)
         reply = self.companion.work_reminder(reminder_kind, duration)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 7200)
@@ -5587,23 +5628,41 @@ class PetWindow(QWidget):
         # Keep this GUI callback cheap.  Calendar aggregation, raw segment
         # serialization and personal-state sync are performed by the worker.
         snapshot = self.focus_session.snapshot(include_projection=False)
-        today = datetime.now(BEIJING_TIMEZONE).date()
-        today_seconds = max(0, int(self.work_timer.today_seconds()))
+        active_session = bool(snapshot.is_running and self.work_timer.has_active_session)
         presence = {
+            "user_id": user_id,
             "working": bool(snapshot.is_running),
             # Paused/resting sessions are durable history, not live presence.
             # This invariant prevents the server from projecting paused time.
-            "session_active": bool(snapshot.is_running and self.work_timer.has_active_session),
-            "work_state": str(getattr(snapshot, "state", "idle") or "idle"),
-            "pause_reason": getattr(snapshot, "pause_reason", None),
-            "today_seconds": today_seconds,
-            "session_started_at": snapshot.session_started_at if snapshot.is_running else None,
+            "session_active": active_session,
+            "session_id": self.work_timer.focus_session_id if active_session else None,
+            "session_started_at": snapshot.session_started_at if active_session else None,
+            # The following are dashboard/personal-sync context only.  The
+            # heartbeat worker applies _heartbeat_payload before transport,
+            # so they can never become presence duration fields.
             "outfit_key": self.settings.equipped_outfit,
             "room_id": room_id,
             "quick_status": self._active_room_quick_status(),
             "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
             if self._room_quick_status_expires_at is not None else None,
         }
+        presence_context_signature = (
+            str(room_id or ""),
+            str(self.settings.equipped_outfit or "")[:60],
+            str(presence.get("quick_status") or "")[:40],
+            str(presence.get("quick_status_expires_at") or ""),
+        )
+        if presence_context_signature != self._social_presence_context_signature:
+            # Context is deliberately sent via a separate background RPC.
+            # It updates room association and presentation metadata without
+            # touching heartbeat liveness or any focus-duration field.
+            presence["_presence_context"] = {
+                "room_id": room_id,
+                "outfit_key": presence_context_signature[1],
+                "quick_status": presence_context_signature[2],
+                "quick_status_expires_at": presence.get("quick_status_expires_at"),
+            }
+            self._social_presence_context_signature = presence_context_signature
         now_monotonic = time.monotonic()
         if (
             not dashboard_busy
@@ -5632,7 +5691,15 @@ class PetWindow(QWidget):
         if dashboard_busy:
             return
 
-        thread = SocialSyncThread(self.social_client, presence, self, send_heartbeat=False)
+        self._social_request_generation += 1
+        request_generation = self._social_request_generation
+        thread = SocialSyncThread(
+            self.social_client,
+            presence,
+            self,
+            send_heartbeat=False,
+            request_generation=request_generation,
+        )
         self._social_thread = thread
         thread.completed.connect(self._social_dashboard_received)
         thread.failed.connect(self._social_sync_failed)
@@ -5650,6 +5717,25 @@ class PetWindow(QWidget):
     @_guard_qt_callback
     def _social_dashboard_received(self, data: dict) -> None:
         """显示新串门提醒，并在双方本地打开双六毛画面。"""
+
+        if not isinstance(data, dict):
+            return
+        generation = max(0, int(data.get("_request_generation") or 0))
+        if generation and generation < self._last_applied_social_generation:
+            lifecycle_log(
+                "social.dashboard.stale_response_ignored",
+                self,
+                request_generation=generation,
+                last_applied_generation=self._last_applied_social_generation,
+            )
+            return
+        if generation:
+            self._last_applied_social_generation = generation
+        if data.get("_presence_context_updated") is False:
+            # The first context RPC can race the heartbeat row creation. Keep
+            # the signature dirty so the next independent background cycle
+            # retries room/outfit metadata without changing liveness data.
+            self._social_presence_context_signature = None
 
         self._muted_buddy_ids = {
             str(item).strip()
@@ -6146,6 +6232,10 @@ class PetWindow(QWidget):
         account_id = self._current_social_user_id() if signed_in else ""
         self._switch_focus_account(account_id)
         self._set_login_reward_account(account_id)
+        # A new account has its own presence metadata row.  Force one
+        # background context sync even when its room/outfit happens to match
+        # the account that was previously open in this process.
+        self._social_presence_context_signature = None
         if self._social_dialog is not None:
             # A room selected under another account is not an invitation for
             # the new account to keep sending heartbeats into that room.
@@ -6155,6 +6245,7 @@ class PetWindow(QWidget):
 
         if not signed_in:
             self._economy_sync_user_id = ""
+            self._social_presence_context_signature = None
             self._personal_outfit_sync_pending = False
             self._personal_outfit_sync_user_id = ""
             self._personal_outfit_fence_key = ""

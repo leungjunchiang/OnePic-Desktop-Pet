@@ -17,5 +17,9 @@ def test_social_edge_relay_has_stable_routes_and_no_server_secret() -> None:
     assert "SUPABASE_SECRET_KEY" not in source
     assert "/rest/v1/rpc/lili_upsert_focus_presence" in source
     assert "p_session_started_at" in source
-    assert "p_device_claim" in source
+    assert "p_session_id" in source
+    assert "p_sequence" in source
+    assert "p_today_seconds" not in source
+    assert "p_week_seconds" not in source
+    assert "p_device_claim" not in source
     assert "String(body.last_seen || now)" not in source
