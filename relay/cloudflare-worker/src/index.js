@@ -27,7 +27,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_room_room_rituals",
   "lili_buddy_private_notes",
   "lili_set_buddy_private_note",
-  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_focus_weekly_leaderboard",
+  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_focus_weekly_leaderboard", "lili_upsert_focus_presence",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -207,32 +207,22 @@ async function handleDashboard(env, request, roomId = "") {
 
 async function handlePresence(env, request, body) {
   const auth = bearer(request);
-  const userId = userIdFromBearer(auth);
-  const now = new Date().toISOString();
-  const payload = {
-    ...safeBody(body, [
-      "working", "session_active", "work_state", "pause_reason", "session_started_at", "focus_date", "today_seconds", "outfit_key", "room_id", "quick_status", "quick_status_expires_at", "device_id", "device_claim",
-    ]),
-    user_id: userId,
-    focus_date: String(body.focus_date || now.slice(0, 10)),
-    // Presence freshness must use this server's clock, never the desktop's.
-    last_seen: now,
-    updated_at: now,
-  };
-  payload.working = Boolean(payload.working);
-  payload.today_seconds = Math.min(86400, Math.max(0, Number(payload.today_seconds) || 0));
-  payload.room_id = payload.room_id ? String(payload.room_id) : null;
-  payload.outfit_key = String(payload.outfit_key || "").slice(0, 60);
-  payload.quick_status = String(payload.quick_status || "").trim().slice(0, 40);
-  payload.quick_status_expires_at = payload.quick_status_expires_at ? String(payload.quick_status_expires_at) : null;
-  payload.session_active = Boolean(payload.session_active);
-  payload.work_state = String(payload.work_state || "idle").slice(0, 32);
-  payload.pause_reason = payload.pause_reason ? String(payload.pause_reason).slice(0, 32) : null;
-  payload.device_id = String(payload.device_id || "").trim().slice(0, 64);
-  payload.device_claim = Boolean(payload.device_claim);
-  return callSupabase(env, request, "/rest/v1/lili_focus_presence?on_conflict=user_id", {
-    body: payload,
-    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+  return callSupabase(env, request, "/rest/v1/rpc/lili_upsert_focus_presence", {
+    body: {
+      p_working: Boolean(body.working),
+      p_session_active: Boolean(body.session_active),
+      p_work_state: String(body.work_state || "idle").slice(0, 32),
+      p_pause_reason: body.pause_reason ? String(body.pause_reason).slice(0, 32) : null,
+      p_session_started_at: body.session_started_at || null,
+      p_focus_date: body.focus_date || null,
+      p_today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)),
+      p_room_id: body.room_id ? String(body.room_id) : null,
+      p_outfit_key: String(body.outfit_key || "").slice(0, 60),
+      p_quick_status: String(body.quick_status || "").trim().slice(0, 40),
+      p_quick_status_expires_at: body.quick_status_expires_at ? String(body.quick_status_expires_at) : null,
+      p_device_id: String(body.device_id || "").trim().slice(0, 120),
+      p_device_claim: Boolean(body.device_claim),
+    },
   });
 }
 

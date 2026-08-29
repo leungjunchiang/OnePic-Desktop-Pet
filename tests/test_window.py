@@ -1191,6 +1191,34 @@ def test_stale_social_thread_finished_callback_cannot_delete_new_thread() -> Non
     app.processEvents()
 
 
+def test_shortcut_refresh_uses_supplied_lightweight_snapshot(monkeypatch) -> None:
+    """The one-second clock tick must not request a projected focus snapshot."""
+
+    app, window = _create_window()
+
+    def fail_if_projected_snapshot_is_requested(*_args, **_kwargs):
+        raise AssertionError("shortcut refresh requested an expensive projection")
+
+    monkeypatch.setattr(
+        window.focus_session,
+        "snapshot",
+        fail_if_projected_snapshot_is_requested,
+    )
+
+    class LightweightSnapshot:
+        status = "focus"
+
+    window._refresh_shortcut_state(LightweightSnapshot())
+    assert window.quick_panel.work_button.toolTip() == "暂停工作"
+
+    # closeEvent also refreshes the focus state while shutting down; restore
+    # the real method before exercising teardown.
+    monkeypatch.undo()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
     app, window = _create_window()
     peer = {"id": "visit-1", "nickname": "搭子", "today_seconds": 5}

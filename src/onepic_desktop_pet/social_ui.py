@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 import json
+import threading
 from functools import cmp_to_key
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -353,11 +354,96 @@ class EqualWidthTabBar(QTabBar):
         return size
 
 
+class SocialHeartbeatWorker:
+    """Send only the lightweight presence heartbeat on an independent loop.
+
+    The dashboard poll deliberately remains a short-lived worker, but a
+    heartbeat must not wait behind dashboard/statistics/reaction requests.
+    This is a plain Python worker instead of a custom ``QThread`` because it
+    does not need Qt signals or an event loop; avoiding a Qt-owned condition
+    thread also makes native window teardown deterministic on Windows.
+    """
+
+    def __init__(self, client: SocialClient, parent=None, *, interval_seconds: float = 15.0) -> None:
+        self.client = client
+        self.interval_seconds = max(5.0, float(interval_seconds))
+        self._condition = threading.Condition()
+        self._stopped = False
+        self._pending: dict[str, Any] | None = None
+        self._send_now = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        with self._condition:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stopped = False
+            self._thread = threading.Thread(
+                target=self.run,
+                name="lili-social-heartbeat",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def isRunning(self) -> bool:
+        thread = self._thread
+        return bool(thread is not None and thread.is_alive())
+
+    def wait(self, timeout_ms: int = 0) -> bool:
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(max(0.0, float(timeout_ms)) / 1000.0)
+        return not thread.is_alive()
+
+    def update_presence(self, presence: dict[str, Any], *, immediate: bool = False) -> None:
+        payload = _heartbeat_payload(dict(presence))
+        with self._condition:
+            self._pending = dict(payload)
+            self._send_now = self._send_now or bool(immediate)
+            self._condition.notify()
+
+    def stop(self) -> None:
+        with self._condition:
+            self._stopped = True
+            self._condition.notify_all()
+
+    def run(self) -> None:
+        next_due = 0.0
+        while True:
+            with self._condition:
+                while not self._stopped and self._pending is None:
+                    self._condition.wait()
+                if self._stopped:
+                    return
+                now = time.monotonic()
+                wait_for = 0.0 if self._send_now or now >= next_due else next_due - now
+                if wait_for > 0:
+                    self._condition.wait(timeout=wait_for)
+                    if self._stopped:
+                        return
+                    if self._send_now or time.monotonic() >= next_due:
+                        pass
+                    else:
+                        continue
+                payload = dict(self._pending or {})
+                self._send_now = False
+            try:
+                self.client.heartbeat(**payload)
+                LOGGER.debug("social heartbeat sent independently")
+            except (SocialError, TypeError) as exc:
+                # Do not terminate the worker for a transient outage.  The
+                # next payload retries naturally, while dashboard polling can
+                # continue to use its own fallback route.
+                LOGGER.warning("independent social heartbeat failed: %s", exc)
+            next_due = time.monotonic() + self.interval_seconds
+
+
 class SocialSyncThread(QThread):
     completed = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, client: SocialClient, presence: dict[str, Any], parent=None, *, send_heartbeat: bool = True) -> None:
+    def __init__(self, client: SocialClient, presence: dict[str, Any], parent=None, *, send_heartbeat: bool = False) -> None:
         super().__init__(parent); self.client = client; self.presence = presence; self.send_heartbeat = send_heartbeat
 
     def run(self) -> None:
@@ -369,6 +455,13 @@ class SocialSyncThread(QThread):
             taunt_state_result = None
             encouragement_state_result = None
             personal_state = self.presence.get("personal_state")
+            personal_state_factory = self.presence.get("_personal_state_factory")
+            if personal_state is None and callable(personal_state_factory):
+                try:
+                    personal_state = personal_state_factory()
+                except Exception:
+                    LOGGER.exception("background personal-state preparation failed")
+                    personal_state = None
             heartbeat_presence = _heartbeat_payload(self.presence)
             if self.send_heartbeat:
                 try:
@@ -1143,6 +1236,7 @@ class BuddyCardWidget(QWidget):
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
+        self._headline_label = headline
         headline.setWordWrap(False)
         headline.setStyleSheet("font-size:14px;font-weight:600;color:#203847;")
         root.addWidget(headline)
@@ -1159,6 +1253,7 @@ class BuddyCardWidget(QWidget):
             week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
             time_text = f"{today_text}　·　{week_text}"
         focus = QLabel(time_text)
+        self._focus_label = focus
         focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
         quick_status = str(buddy.get("quick_status") or "").strip()
@@ -1169,6 +1264,7 @@ class BuddyCardWidget(QWidget):
             root.addWidget(quick)
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         footer = QLabel(f"娃衣：{outfit}")
+        self._footer_label = footer
         footer.setStyleSheet("color:#61727d;font-size:11px;")
         footer.setWordWrap(False)
         footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
@@ -1215,6 +1311,54 @@ class BuddyCardWidget(QWidget):
             subscribe.setChecked(bool(buddy.get("subscribed")))
             subscribe.stateChanged.connect(lambda state: self.subscription_requested.emit(self.buddy, bool(state)))
             root.addWidget(subscribe)
+
+    def update_buddy(self, buddy: dict[str, Any]) -> None:
+        """Update live status/time labels without rebuilding the card tree."""
+
+        self.buddy = dict(buddy)
+        uncertain = bool(buddy.get("presence_uncertain"))
+        status = _presence_status(buddy)
+        online_flag = buddy.get("online")
+        online = (
+            status != "offline"
+            and (online_flag is None or bool(online_flag))
+            and not bool(buddy.get("stale_presence"))
+            and not uncertain
+        )
+        if status == "unknown":
+            if bool(buddy.get("online")) and bool(buddy.get("working")):
+                status_text = "正在工作（同步恢复中）"
+            elif bool(buddy.get("online")):
+                status_text = "在线待确认"
+            else:
+                status_text = "状态待确认"
+        else:
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+        nickname = _owner_nickname(buddy)
+        is_self = bool(buddy.get("is_self"))
+        self._headline_label.setText(
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {social_pet_label(nickname)}"
+            f"{status_text}{'（我）' if is_self else ''}"
+        )
+        duration = buddy.get("today_seconds")
+        week_duration = buddy.get("week_seconds")
+        if uncertain:
+            age = int(buddy.get("presence_age_seconds") or 0)
+            age_text = f"约 {max(1, age // 60)} 分钟前" if age else "刚才"
+            time_text = f"实时状态暂无法确认（最后确认{age_text}），正在自动恢复"
+        elif buddy.get("stale_presence"):
+            time_text = "离线缓存；上次状态不计入当前专注"
+        else:
+            today_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
+            week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
+            time_text = f"{today_text}　·　{week_text}"
+        self._focus_label.setText(time_text)
+        outfit = str(buddy.get("outfit_key") or "经典六毛")
+        self._footer_label.setText(f"娃衣：{outfit}")
+        self._footer_label.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
+        cheer = self._buttons.get("cheer")
+        if cheer is not None and cheer.isEnabled():
+            cheer.setText(_reaction_label(buddy))
 
     def _request_food(self, kind: str) -> None:
         now = time.monotonic()
@@ -1794,6 +1938,11 @@ class SocialHubDialog(QDialog):
         self.outfit_key = outfit_key
         self.owner_nickname = owner_nickname.strip()[:24]
         self.data: dict[str, Any] = {}
+        # Reuse buddy card widgets while only live duration/status values
+        # change.  Rebuilding every card on each dashboard poll caused a
+        # large layout/repaint burst in the GUI thread.
+        self._buddy_card_widgets: dict[str, tuple[QListWidgetItem, BuddyCardWidget]] = {}
+        self._buddy_card_structure: dict[str, tuple[Any, ...]] = {}
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
         self._focus_snapshot: Any = None
@@ -1980,12 +2129,24 @@ class SocialHubDialog(QDialog):
             session_seconds = getattr(snapshot, "session_seconds", 0)
             today_seconds = getattr(snapshot, "today_seconds", 0)
         labels = {"focus": "专注中", "rest": "休息中", "idle": "尚未开始"}
-        self.focus_status.setText(labels.get(str(status), "等待同步"))
-        self.focus_clock.setText(format_work_duration(int(session_seconds)))
-        self.focus_today.setText(f"今日累计 {format_work_duration(int(today_seconds))}")
-        self.focus_start.setEnabled(str(status) != "focus")
-        self.focus_pause.setEnabled(str(status) == "focus")
-        self.focus_finish.setEnabled(int(session_seconds) > 0 or int(today_seconds) > 0)
+        status_text = labels.get(str(status), "等待同步")
+        clock_text = format_work_duration(int(session_seconds))
+        today_text = f"今日累计 {format_work_duration(int(today_seconds))}"
+        if self.focus_status.text() != status_text:
+            self.focus_status.setText(status_text)
+        if self.focus_clock.text() != clock_text:
+            self.focus_clock.setText(clock_text)
+        if self.focus_today.text() != today_text:
+            self.focus_today.setText(today_text)
+        start_enabled = str(status) != "focus"
+        pause_enabled = str(status) == "focus"
+        finish_enabled = int(session_seconds) > 0 or int(today_seconds) > 0
+        if self.focus_start.isEnabled() != start_enabled:
+            self.focus_start.setEnabled(start_enabled)
+        if self.focus_pause.isEnabled() != pause_enabled:
+            self.focus_pause.setEnabled(pause_enabled)
+        if self.focus_finish.isEnabled() != finish_enabled:
+            self.focus_finish.setEnabled(finish_enabled)
         self._refresh_own_focus_labels()
 
     def _local_today_seconds(self) -> int | None:
@@ -2025,16 +2186,18 @@ class SocialHubDialog(QDialog):
         if seconds is None:
             return
         if hasattr(self, "focus_today"):
-            self.focus_today.setText(f"今日累计 {format_work_duration(seconds)}")
+            text = f"今日累计 {format_work_duration(seconds)}"
+            if self.focus_today.text() != text:
+                self.focus_today.setText(text)
         if hasattr(self, "study_summary"):
             current = self.study_summary.text()
             marker = "我的今日专注 "
             start = current.find(marker)
             end = current.find("　·　", start + len(marker)) if start >= 0 else -1
             if start >= 0 and end >= 0:
-                self.study_summary.setText(
-                    current[:start] + marker + format_work_duration(seconds) + current[end:]
-                )
+                text = current[:start] + marker + format_work_duration(seconds) + current[end:]
+                if text != current:
+                    self.study_summary.setText(text)
 
     def _effective_focus_analytics(self) -> dict[str, Any]:
         """Include today's local seconds that have not reached analytics yet.
@@ -2202,6 +2365,24 @@ class SocialHubDialog(QDialog):
         # scannable. The widget still determines the font/DPI-aware height;
         # only a small platform safety margin is added.
         item.setSizeHint(QSize(0, max(96, widget.sizeHint().height() + 6)))
+
+    @staticmethod
+    def _buddy_structure_key(buddy: dict[str, Any]) -> tuple[Any, ...]:
+        """Fields that require a card rebuild instead of a label update."""
+
+        return (
+            _owner_nickname(buddy),
+            _presence_status(buddy),
+            bool(buddy.get("online")),
+            bool(buddy.get("presence_uncertain")),
+            bool(buddy.get("stale_presence")),
+            str(buddy.get("outfit_key") or ""),
+            str(buddy.get("quick_status") or ""),
+            str(buddy.get("quick_status_expires_at") or ""),
+            bool(buddy.get("subscribed")),
+            bool(buddy.get("is_self")),
+            _reaction_label(buddy),
+        )
 
     def _home_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
@@ -3570,7 +3751,6 @@ class SocialHubDialog(QDialog):
         mode = str(me.get("buddy_interaction_mode") or "focus_priority")
         mode_index = self.interaction_mode.findData(mode)
         self.interaction_mode.setCurrentIndex(mode_index if mode_index >= 0 else 1)
-        self.buddies.clear()
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
         seen=set()
         unique_people = []
@@ -3587,9 +3767,22 @@ class SocialHubDialog(QDialog):
             seen.add(buddy_id)
             unique_people.append(buddy)
         unique_people.sort(key=cmp_to_key(_compare_buddies))
+        ordered_ids = [str(item.get("user_id") or item.get("id") or "") for item in unique_people]
+        reuse_buddy_cards = bool(unique_people) and (
+            ordered_ids == list(self._buddy_card_widgets)
+            and all(
+                self._buddy_card_structure.get(buddy_id) == self._buddy_structure_key(buddy)
+                for buddy_id, buddy in zip(ordered_ids, unique_people)
+            )
+        )
+        if not reuse_buddy_cards:
+            self.buddies.clear()
+            self._buddy_card_widgets.clear()
+            self._buddy_card_structure.clear()
         working_count = 0
         visible_total = 0
         for buddy in unique_people:
+            buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
             if buddy.get("subscribed") and not buddy.get("notifications_muted"):
                 previous_buddies = {
                     str(item.get("user_id")): item
@@ -3607,14 +3800,21 @@ class SocialHubDialog(QDialog):
             working_count += int(_presence_status(buddy) == "focus")
             duration = None if is_stale or is_uncertain else buddy.get("today_seconds")
             if duration is not None: visible_total += max(0, int(duration))
-            item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
-            buddy_widget = BuddyCardWidget(buddy, self.buddies)
-            buddy_widget.interaction_requested.connect(self._send_interaction)
-            buddy_widget.food_interaction_requested.connect(self._send_food_interaction)
-            buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
-            buddy_widget.subscription_requested.connect(self._set_subscription)
-            self.buddies.setItemWidget(item, buddy_widget)
-            self._set_buddy_item_height(item, buddy_widget)
+            if reuse_buddy_cards:
+                item, buddy_widget = self._buddy_card_widgets[buddy_id]
+                item.setData(Qt.ItemDataRole.UserRole, buddy)
+                buddy_widget.update_buddy(buddy)
+            else:
+                item=QListWidgetItem(); item.setData(Qt.ItemDataRole.UserRole,buddy); self.buddies.addItem(item)
+                buddy_widget = BuddyCardWidget(buddy, self.buddies)
+                buddy_widget.interaction_requested.connect(self._send_interaction)
+                buddy_widget.food_interaction_requested.connect(self._send_food_interaction)
+                buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
+                buddy_widget.subscription_requested.connect(self._set_subscription)
+                self.buddies.setItemWidget(item, buddy_widget)
+                self._set_buddy_item_height(item, buddy_widget)
+            self._buddy_card_widgets[buddy_id] = (item, buddy_widget)
+            self._buddy_card_structure[buddy_id] = self._buddy_structure_key(buddy)
         local_today = self._local_today_seconds()
         me_seconds = (
             local_today

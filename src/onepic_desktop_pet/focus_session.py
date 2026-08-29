@@ -137,12 +137,21 @@ class FocusSessionManager(QObject):
         self.refresh()
         return changed
 
-    def snapshot(self) -> FocusSessionSnapshot:
+    def snapshot(self, *, include_projection: bool = True) -> FocusSessionSnapshot:
+        """Return the current timer snapshot.
+
+        The optional calendar projection is deliberately skipped by the
+        one-second GUI tick.  Projection providers may aggregate local
+        history and perform file I/O; they are for reports/sync boundaries,
+        not for keeping a clock label up to date.
+        """
         snapshot = FocusSessionSnapshot.from_timer(
             self.timer,
             room_id=self._room_id,
             resting=self._resting,
         )
+        if not include_projection:
+            return snapshot
         provider = self._today_seconds_provider
         period_provider = self._period_seconds_provider
         projected_today = None
@@ -197,8 +206,8 @@ class FocusSessionManager(QObject):
             snapshot = replace(snapshot, week_seconds=normalized_week)
         return snapshot
 
-    def refresh(self) -> FocusSessionSnapshot:
-        snapshot = self.snapshot()
+    def refresh(self, *, include_projection: bool = True) -> FocusSessionSnapshot:
+        snapshot = self.snapshot(include_projection=include_projection)
         self.changed.emit(snapshot)
         return snapshot
 
