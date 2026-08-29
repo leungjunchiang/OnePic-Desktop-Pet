@@ -79,6 +79,20 @@ class RoomClient(SignedInClient):
         return data
 
 
+class RoomAggregateClient(RoomClient):
+    def dashboard(self, room_id=None):
+        data = super().dashboard()
+        if room_id:
+            data["current_room"] = {
+                "room_people": list(data.get("room_people") or []),
+                "room_summary": {
+                    "member_count": 2,
+                    "today_shared_focus_seconds": 112 * 60,
+                },
+            }
+        return data
+
+
 class PrivateNoteRoomClient(RoomClient):
     def dashboard(self):
         data = super().dashboard()
@@ -572,6 +586,23 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     report_signal = QSignalSpy(dialog.work_report_requested)
     report_buttons[0].click()
     assert report_signal.count() == 1
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_home_summary_uses_current_room_total_including_local_member() -> None:
+    """The room total must not be replaced by the visible buddy subtotal."""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(RoomAggregateClient())
+    dialog.set_focus_snapshot({"status": "rest", "session_seconds": 0, "today_seconds": 73 * 60})
+    dialog.refresh()
+    app.processEvents()
+    dialog.rooms.setCurrentRow(0)
+    app.processEvents()
+
+    assert "我的今日专注 1小时13分钟" in dialog.study_summary.text()
+    assert "房间可见合计 1小时52分钟" in dialog.study_summary.text()
+    assert "可见搭子合计 39分钟" not in dialog.study_summary.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

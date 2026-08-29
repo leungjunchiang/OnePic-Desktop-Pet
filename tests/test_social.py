@@ -1093,6 +1093,17 @@ def test_room_dashboard_exposes_today_and_cumulative_focus_metrics():
     assert "Asia/Shanghai" in migration
 
 
+def test_room_today_total_uses_canonical_focus_sessions_and_active_presence():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829000400_lili_room_focus_canonical_total.sql").read_text(encoding="utf-8")
+    assert "public.lili_effective_focus_today_seconds(m.user_id)" in migration
+    assert "from public.lili_room_focus_sessions" not in migration
+    assert "f.session_active" in migration
+    assert "f.last_seen > now() - interval '2 minutes'" in migration
+    assert "range_agg" in migration
+    assert "m.user_id = (select auth.uid())" in migration
+
+
 def test_new_cloudbase_function_is_proxy_not_a_database_client():
     root = Path(__file__).resolve().parents[1]
     source = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8").lower()
