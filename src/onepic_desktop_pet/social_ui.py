@@ -3624,7 +3624,7 @@ class SocialHubDialog(QDialog):
         self.study_summary.setText(
             f"现在 {working_count} 位搭子正在专注　·　"
             f"我的今日专注 {format_work_duration(me_seconds)}　·　"
-            f"房间可见合计 {format_work_duration(visible_total)}"
+            f"可见搭子合计 {format_work_duration(visible_total)}"
         )
         self._refresh_own_focus_labels()
         if not seen:
@@ -3788,6 +3788,28 @@ class SocialHubDialog(QDialog):
         self._render_room_people(room_people)
         goal = room_detail.get("room_goal") or self.data.get("room_goal") or {}
         summary = room_detail.get("room_summary") or self.data.get("room_summary") or {}
+
+        # The homepage summary is room-scoped only after the user explicitly
+        # selected a room and the room endpoint returned its canonical total.
+        # Do not label the all-buddy fallback as a room total: it excludes the
+        # local member and can contain buddies from other rooms.
+        room_today_total: int | None = None
+        if self.current_room_id and isinstance(summary, dict) and "today_shared_focus_seconds" in summary:
+            try:
+                room_today_total = max(0, int(summary.get("today_shared_focus_seconds") or 0))
+            except (TypeError, ValueError):
+                room_today_total = 0
+        if room_today_total is not None:
+            study_total_label = "房间可见合计"
+            study_total_seconds = room_today_total
+        else:
+            study_total_label = "可见搭子合计"
+            study_total_seconds = visible_total
+        self.study_summary.setText(
+            f"现在 {working_count} 位搭子正在专注　·　"
+            f"我的今日专注 {format_work_duration(me_seconds)}　·　"
+            f"{study_total_label} {format_work_duration(study_total_seconds)}"
+        )
         if isinstance(summary, dict) and summary:
             self.room_summary.setText(_room_focus_summary_text(summary, len(room_people)))
         elif hasattr(self, "room_summary"):
@@ -4244,3 +4266,4 @@ class SocialHubDialog(QDialog):
             self._begin_action("正在加入自习室…")
             try: self.client.rpc("lili_join_room",{"code":code}); self.refresh(); self._set_status("已加入自习室。")
             except SocialError as exc: self._error(exc)
+
