@@ -452,12 +452,18 @@ def test_http_backend_uses_direct_supabase_paths():
     backend.dashboard("room-1")
     backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
     paths = [call[1] for call in backend.calls]
-    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/rpc/lili_buddy_requests", "/rest/v1/lili_focus_presence?on_conflict=user_id"]
+    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/rpc/lili_buddy_requests", "/rest/v1/rpc/lili_upsert_focus_presence"]
     heartbeat_call = backend.calls[-1]
     heartbeat_body = heartbeat_call[2]
-    assert "last_seen" not in heartbeat_body
-    assert "updated_at" not in heartbeat_body
-    assert heartbeat_call[4] == {"Prefer": "resolution=merge-duplicates,return=minimal"}
+    assert set(heartbeat_body) == {
+        "p_working", "p_session_active", "p_work_state", "p_pause_reason",
+        "p_session_started_at", "p_focus_date", "p_today_seconds", "p_outfit_key",
+        "p_room_id", "p_quick_status", "p_quick_status_expires_at", "p_device_id",
+        "p_device_claim",
+    }
+    assert "p_last_seen" not in heartbeat_body
+    assert "p_updated_at" not in heartbeat_body
+    assert heartbeat_call[4] is None
 
 
 def test_heartbeat_refreshes_transport_session_from_auth_manager():
@@ -491,7 +497,7 @@ def test_heartbeat_refreshes_transport_session_from_auth_manager():
 
     assert backend.session is session
     assert backend.calls
-    assert backend.calls[0][1] == "/rest/v1/lili_focus_presence?on_conflict=user_id"
+    assert backend.calls[0][1] == "/rest/v1/rpc/lili_upsert_focus_presence"
 
 
 def test_never_seen_peer_totals_are_zeroed_without_touching_seen_peers():
@@ -758,7 +764,7 @@ def test_security_actions_are_not_replayed_to_proxy_after_direct_failure():
     assert not any(call == "change_password" for call in proxy.calls)
 
 
-def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
+def test_direct_presence_heartbeat_uses_atomic_presence_rpc():
     class Recording(HttpSocialBackend):
         def __init__(self):
             super().__init__("https://supabase.example.test", client_key="sb_publishable_test", persist_tokens=False, transport="direct")
@@ -771,7 +777,7 @@ def test_direct_presence_heartbeat_uses_postgrest_upsert_header():
 
     backend = Recording()
     backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
-    assert backend.headers == {"Prefer": "resolution=merge-duplicates,return=minimal"}
+    assert backend.headers is None
 
 
 def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_path):
@@ -802,10 +808,10 @@ def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_p
     backend.heartbeat(working=True, today_seconds=61, session_started_at=None, outfit_key="", room_id="room-1")
 
     first, second = backend.bodies
-    assert len(first["device_id"]) == 32
-    assert first["device_id"] == second["device_id"]
-    assert first["device_claim"] is True
-    assert second["device_claim"] is False
+    assert len(first["p_device_id"]) == 32
+    assert first["p_device_id"] == second["p_device_id"]
+    assert first["p_device_claim"] is True
+    assert second["p_device_claim"] is False
     social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
 
 
@@ -817,18 +823,19 @@ def test_presence_freshness_is_server_authoritative_in_all_relays():
     worker = (root / "relay" / "cloudflare-worker" / "src" / "index.js").read_text(encoding="utf-8")
     assert "new.last_seen := now()" in migration
     assert "create trigger lili_presence_server_timestamp" in migration
-    assert "last_seen: now" in cloudbase
-    assert "last_seen: now" in edge
-    assert "last_seen: now" in worker
+    for source in (cloudbase, edge, worker):
+        assert "/rest/v1/rpc/lili_upsert_focus_presence" in source
+        assert "p_session_started_at" in source
+        assert "p_device_claim" in source
     assert "String(body.last_seen || now)" not in cloudbase + edge + worker
-    assert "device_id" in cloudbase + edge + worker
-    assert "device_claim" in cloudbase + edge + worker
+    assert "String(body.last_seen || now())" not in cloudbase + edge + worker
 
 
-def test_cloudbase_presence_and_profile_proxy_preserve_upsert_contract() -> None:
+def test_cloudbase_presence_and_profile_proxy_use_atomic_presence_contract() -> None:
     root = Path(__file__).resolve().parents[1]
     cloudbase = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8")
-    assert 'Prefer: "resolution=merge-duplicates,return=minimal"' in cloudbase
+    assert "/rest/v1/rpc/lili_upsert_focus_presence" in cloudbase
+    assert "p_working" in cloudbase
     assert "wealth_leaderboard_enabled" in cloudbase
     assert "wealth_leaderboard_preference_set" in cloudbase
 
@@ -914,6 +921,16 @@ def test_raw_only_focus_stats_migration_disables_legacy_cache_fallback() -> None
     assert "lili_focus_daily" in migration
     assert "focus_week_seconds = 0" in migration
     assert "perform public.lili_reconcile_focus_derived_totals(account_id)" in migration
+
+
+def test_focus_stats_timezone_migration_anchors_beijing_midnight() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829000300_lili_focus_stats_timezone_fix.sql").read_text(encoding="utf-8")
+
+    assert "today::timestamp at time zone 'Asia/Shanghai'" in migration
+    assert "week_start::timestamp at time zone 'Asia/Shanghai'" in migration
+    assert "days.focus_date::timestamp at time zone 'Asia/Shanghai'" in migration
+    assert "with rows as materialized" in migration
 
 
 def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
@@ -1081,6 +1098,17 @@ def test_room_dashboard_exposes_today_and_cumulative_focus_metrics():
     assert "today_shared_focus_seconds" in migration
     assert "cumulative_shared_focus_seconds" in migration
     assert "Asia/Shanghai" in migration
+
+
+def test_room_today_total_uses_canonical_focus_sessions_and_active_presence():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829000400_lili_room_focus_canonical_total.sql").read_text(encoding="utf-8")
+    assert "public.lili_effective_focus_today_seconds(m.user_id)" in migration
+    assert "from public.lili_room_focus_sessions" not in migration
+    assert "f.session_active" in migration
+    assert "f.last_seen > now() - interval '2 minutes'" in migration
+    assert "range_agg" in migration
+    assert "m.user_id = (select auth.uid())" in migration
 
 
 def test_new_cloudbase_function_is_proxy_not_a_database_client():

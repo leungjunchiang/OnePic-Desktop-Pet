@@ -173,6 +173,10 @@ class WorkControlBubble(QWidget):
         self.finish_button = QPushButton("结束工作")
         self.finish_button.setObjectName("finishWorkButton")
         self.finish_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # A child widget can report itself hidden while its top-level parent
+        # is still hidden.  Set the idle-state visibility explicitly here so
+        # it cannot become visible when the control bubble is shown later.
+        self.finish_button.setVisible(False)
         self._session_status = "idle"
         self.pause_button.clicked.connect(self._toggle_session)
         self.finish_button.clicked.connect(self.finish_requested.emit)
@@ -184,37 +188,56 @@ class WorkControlBubble(QWidget):
     def set_session_status(self, status: str) -> None:
         """Render only the action(s) valid for IDLE, FOCUSING or PAUSED."""
 
-        self._session_status = status if status in {"idle", "focus", "rest"} else "idle"
-        self.pause_button.setText(
-            {
-                "idle": "开始工作",
-                "focus": "暂停工作",
-                "rest": "继续工作",
-            }[self._session_status]
-        )
-        self.finish_button.setVisible(self._session_status != "idle")
-        self.duration_label.setVisible(self._duration_visible)
-        if self._session_status == "idle":
+        normalized = status if status in {"idle", "focus", "rest"} else "idle"
+        label = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}[normalized]
+        changed = normalized != self._session_status
+        self._session_status = normalized
+        if self.pause_button.text() != label:
+            self.pause_button.setText(label)
+            changed = True
+        target_finish_visible = normalized != "idle"
+        if self.finish_button.isVisible() != target_finish_visible:
+            self.finish_button.setVisible(target_finish_visible)
+            changed = True
+        if self.duration_label.isVisible() != self._duration_visible:
+            self.duration_label.setVisible(self._duration_visible)
+            changed = True
+        if normalized == "idle" and self.duration_label.text() != "本轮未开始":
             self.duration_label.setText("本轮未开始")
-        self.adjustSize()
+            changed = True
+        if changed:
+            self.adjustSize()
 
     def set_session_duration(self, text: str) -> None:
         """Show the live duration so the current work session is never opaque."""
 
         clean = str(text or "").strip() or "本轮未开始"
-        self.duration_label.setText(clean)
-        self.duration_label.setToolTip(clean)
-        self.duration_label.setVisible(self._duration_visible)
-        self.adjustSize()
+        changed = False
+        if self.duration_label.text() != clean:
+            old_length = len(self.duration_label.text())
+            self.duration_label.setText(clean)
+            changed = old_length != len(clean)
+        if self.duration_label.toolTip() != clean:
+            self.duration_label.setToolTip(clean)
+        if self.duration_label.isVisible() != self._duration_visible:
+            self.duration_label.setVisible(self._duration_visible)
+            changed = True
+        if changed:
+            self.adjustSize()
 
     def set_duration_visible(self, visible: bool) -> None:
         """Show or hide the optional live duration without changing timer state."""
 
-        self._duration_visible = bool(visible)
-        self.duration_label.setVisible(self._duration_visible)
-        if not self._duration_visible:
+        normalized = bool(visible)
+        changed = normalized != self._duration_visible
+        self._duration_visible = normalized
+        if self.duration_label.isVisible() != self._duration_visible:
+            self.duration_label.setVisible(self._duration_visible)
+            changed = True
+        if not self._duration_visible and self.duration_label.toolTip():
             self.duration_label.setToolTip("")
-        self.adjustSize()
+        if changed:
+            self.adjustSize()
 
     def _toggle_session(self) -> None:
         if self._session_status == "idle":
@@ -249,33 +272,58 @@ class WorkDurationBubble(RoundedSurfaceLabel):
         self.setStyleSheet(CONTROL_STYLE)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setProperty("paused", False)
+        self._last_status = "idle"
+        self._last_text = ""
         self.hide()
 
-    def set_session(self, status: str, seconds: int, visible: bool) -> None:
+    def set_session(self, status: str, seconds: int, visible: bool) -> bool:
         """Project the shared calendar-day snapshot; never owns a timer."""
 
         normalized = status if status in {"focus", "rest"} else "idle"
         active = bool(visible) and normalized in {"focus", "rest"}
+        old_visible = self.isVisible()
+        old_text = self._last_text
+        geometry_changed = False
         if active:
             paused = normalized == "rest"
-            self.setProperty("paused", paused)
-            self.set_surface_colors(
-                "#fff0ee" if paused else "#f6fbfb",
-                "#e74a4f" if paused else "#287d9e",
-            )
+            if self._last_status != normalized:
+                self.setProperty("paused", paused)
+                self.set_surface_colors(
+                    "#fff0ee" if paused else "#f6fbfb",
+                    "#e74a4f" if paused else "#287d9e",
+                )
             text = f"今日已工作 {format_elapsed_clock(seconds)}"
             if paused:
                 text += " · 已暂停"
-            self.setText(text)
-            self.setToolTip("当前工作计时" + ("已暂停" if paused else "正在计时"))
+            if self._last_text != text:
+                self.setText(text)
+                self._last_text = text
+            tooltip = "当前工作计时" + ("已暂停" if paused else "正在计时")
+            if self.toolTip() != tooltip:
+                self.setToolTip(tooltip)
+            # The live value changes every second, but its rendered width is
+            # stable until the clock changes from mm:ss to h:mm:ss. Avoid an
+            # adjustSize/style polish/layout cascade on every tick.
+            geometry_changed = (
+                not old_visible
+                or len(old_text) != len(text)
+                or self._last_status != normalized
+            )
+            self._last_status = normalized
         else:
-            self.setText("")
-            self.setToolTip("")
-        self.setVisible(active)
-        self.adjustSize()
-        if active:
+            if self._last_text:
+                self.setText("")
+                self._last_text = ""
+            if self.toolTip():
+                self.setToolTip("")
+            self._last_status = "idle"
+        if old_visible != active:
+            self.setVisible(active)
+        if active and geometry_changed:
+            self.adjustSize()
             self.style().unpolish(self)
             self.style().polish(self)
+        return geometry_changed
 
 
 class VisitStatusBubble(RoundedSurfaceLabel):
@@ -577,6 +625,7 @@ class QuickControlPanel(QWidget):
         self._hint_button: QPushButton | None = None
         self._window_behavior_callback: Callable[..., object] | None = None
         self._artist_music_service = "auto"
+        self._work_action_label = "开始工作"
         self._secondary_mode = self.SECONDARY_NONE
         # Native macOS Qt windows can omit Enter/Leave delivery until the
         # first click when the panel is a non-activating Tool window. Polling
@@ -721,6 +770,9 @@ class QuickControlPanel(QWidget):
         """Refresh the dynamic work action shown in the shortcut panel."""
 
         label = label.strip() or "开始工作"
+        if label == self._work_action_label:
+            return
+        self._work_action_label = label
         self.work_button.setToolTip(label)
         self.work_button.setAccessibleName(label)
         self.work_button.setIcon(_quick_icon("work", active=label == "暂停工作"))
@@ -1137,3 +1189,4 @@ class SizeControlDialog(QDialog):
     def _changed(self, value: int) -> None:
         self.label.setText(f"当前高度：{value} 像素")
         self.value_changed.emit(value)
+

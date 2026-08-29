@@ -35,6 +35,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_sync_focus_history",
   "lili_sync_focus_segments",
   "lili_focus_weekly_leaderboard",
+  "lili_upsert_focus_presence",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -214,29 +215,25 @@ async function dashboard(request: Request, env: Env, roomId = ""): Promise<Recor
 }
 
 async function presence(request: Request, env: Env, body: Record<string, unknown>): Promise<unknown> {
-  const user = await requireUser(request, env);
-  const now = new Date().toISOString();
-  const payload: Record<string, unknown> = {
-    working: Boolean(body.working),
-    session_active: Boolean(body.session_active),
-    work_state: String(body.work_state || "idle").slice(0, 32),
-    pause_reason: body.pause_reason ? String(body.pause_reason).slice(0, 32) : null,
-    session_started_at: body.session_started_at || null,
-    focus_date: String(body.focus_date || now.slice(0, 10)),
-    today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)),
-    outfit_key: String(body.outfit_key || "").slice(0, 60),
-    room_id: body.room_id ? String(body.room_id) : null,
-    quick_status: String(body.quick_status || "").trim().slice(0, 40),
-    quick_status_expires_at: body.quick_status_expires_at || null,
-    device_id: String(body.device_id || "").trim().slice(0, 64),
-    device_claim: Boolean(body.device_claim),
-    // Presence freshness must use this server's clock, never the desktop's.
-    last_seen: now,
-    updated_at: now,
-    user_id: String(user.id || ""),
-  };
-  return await supabaseFetch(request, env, "/rest/v1/lili_focus_presence?on_conflict=user_id", {
-    body: payload,
+  // One authenticated RPC updates the complete live-state tuple.  This keeps
+  // heartbeat independent from dashboard/statistics requests and prevents a
+  // partially written presence row.
+  return await supabaseFetch(request, env, "/rest/v1/rpc/lili_upsert_focus_presence", {
+    body: {
+      p_working: Boolean(body.working),
+      p_session_active: Boolean(body.session_active),
+      p_work_state: String(body.work_state || "idle").slice(0, 32),
+      p_pause_reason: body.pause_reason ? String(body.pause_reason).slice(0, 32) : null,
+      p_session_started_at: body.session_started_at || null,
+      p_focus_date: body.focus_date || null,
+      p_today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)),
+      p_outfit_key: String(body.outfit_key || "").slice(0, 60),
+      p_room_id: body.room_id ? String(body.room_id) : null,
+      p_quick_status: String(body.quick_status || "").trim().slice(0, 40),
+      p_quick_status_expires_at: body.quick_status_expires_at || null,
+      p_device_id: String(body.device_id || "").trim().slice(0, 120),
+      p_device_claim: Boolean(body.device_claim),
+    },
     auth: true,
     method: "POST",
   });
@@ -343,5 +340,6 @@ Deno.serve(async (request: Request) => {
     return json(request, Deno.env.toObject(), { error: message }, status);
   }
 });
+
 
 

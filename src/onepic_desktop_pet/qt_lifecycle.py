@@ -59,6 +59,13 @@ def request_thread_stop(thread: QThread | None) -> bool:
             owner="request_thread_stop",
             thread_class=type(thread).__name__,
         )
+        # Custom QThreads may override ``run`` with a blocking condition loop
+        # and therefore never enter QThread's event loop. Give such workers a
+        # cooperative stop hook before calling quit(); ordinary QThreads do
+        # not expose one and keep the existing interruption/quit behavior.
+        stopper = getattr(thread, "stop", None)
+        if callable(stopper):
+            stopper()
         thread.requestInterruption()
         # This stops a worker using QThread.exec().  Custom run() methods still
         # need to return naturally; requestInterruption remains harmless there.
@@ -121,3 +128,4 @@ def wait_for_thread(thread: QThread | None, timeout_ms: int) -> bool:
         return stopped
     except RuntimeError:
         return True
+

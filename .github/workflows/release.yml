@@ -172,7 +172,7 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - 专注统计与跨日数据修复" \
+            --title "Lili $release_tag - 专注统计与实时同步优化" \
             --generate-notes \
-            --notes "统一今日、本周、搭子卡片、排行榜和工作报告的专注统计口径；以有效专注片段为唯一事实来源，按北京时间切分跨日片段，过滤异常时长并回算历史兼容汇总。"
+            --notes "统一今日、本周、搭子卡片、排行榜和工作报告的专注统计口径；以有效专注片段为唯一事实来源，按北京时间切分跨日片段，过滤异常时长并回算历史兼容汇总。将实时心跳从统计刷新中独立出来，使用原子 FocusSession presence 更新，减少 GUI 主线程长任务和刷新卡顿。"
 

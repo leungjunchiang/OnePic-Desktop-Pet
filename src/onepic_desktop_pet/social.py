@@ -222,6 +222,26 @@ def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
     return {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
 
 
+def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Map the transport-neutral heartbeat to the atomic RPC parameters."""
+
+    return {
+        "p_working": bool(body.get("working")),
+        "p_session_active": bool(body.get("session_active")),
+        "p_work_state": str(body.get("work_state") or "idle")[:32],
+        "p_pause_reason": body.get("pause_reason"),
+        "p_session_started_at": body.get("session_started_at"),
+        "p_focus_date": body.get("focus_date"),
+        "p_today_seconds": int(body.get("today_seconds") or 0),
+        "p_outfit_key": str(body.get("outfit_key") or "")[:60],
+        "p_room_id": body.get("room_id"),
+        "p_quick_status": str(body.get("quick_status") or "")[:40],
+        "p_quick_status_expires_at": body.get("quick_status_expires_at"),
+        "p_device_id": str(body.get("device_id") or "")[:120],
+        "p_device_claim": bool(body.get("device_claim")),
+    }
+
+
 class ConnectionStateStore:
     """Single source of truth for the study-room transport state.
 
@@ -1432,23 +1452,31 @@ class HttpSocialBackend:
         device_id, device_claim = _presence_device_credentials(self.session.user_id)
         body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
         if self.transport == "direct":
-            body["user_id"] = self.session.user_id
-            # PostgREST only turns the on_conflict query into an upsert when
-            # merge-duplicates is explicitly requested. Without this header,
-            # every direct heartbeat after the first one fails with a primary
-            # key violation and peers keep seeing this user as offline.
             try:
                 self._raw(
                     "POST",
-                    "/rest/v1/lili_focus_presence?on_conflict=user_id",
-                    body,
+                    "/rest/v1/rpc/lili_upsert_focus_presence",
+                    _atomic_presence_body(body),
                     authenticated=True,
-                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
                 )
             except SocialError as exc:
-                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
-                raise
+                # Keep old deployed projects usable during the migration
+                # rollout.  New projects take the atomic RPC path; only a
+                # missing endpoint may use the legacy upsert fallback.
+                if exc.status == 404 or "lili_upsert_focus_presence" in str(exc):
+                    legacy_body = dict(body)
+                    legacy_body["user_id"] = self.session.user_id
+                    self._raw(
+                        "POST",
+                        "/rest/v1/lili_focus_presence?on_conflict=user_id",
+                        legacy_body,
+                        authenticated=True,
+                        extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                    )
+                else:
+                    if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                        _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                    raise
         else:
             try:
                 self._raw("POST", "/presence/heartbeat", body, authenticated=True)
@@ -2173,13 +2201,18 @@ class LegacyDirectSocialClient:
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
         device_id, device_claim = _presence_device_credentials(self.session.user_id)
-        body = {"user_id": self.session.user_id, "working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
+        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
         try:
-            self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+            self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
         except SocialError as exc:
-            if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                _mark_presence_device_claim_pending(self.session.user_id, device_id)
-            raise
+            if exc.status == 404 or "lili_upsert_focus_presence" in str(exc):
+                legacy_body = dict(body)
+                legacy_body["user_id"] = self.session.user_id
+                self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", legacy_body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+            else:
+                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                raise
         _mark_presence_device_claimed(self.session.user_id, device_id)
 
     def update_owner_nickname(self, nickname: str) -> None:
@@ -2497,6 +2530,11 @@ class BackendRouteManager:
         self.direct = direct
         self.proxy = proxy
         self.persist_state = persist_state
+        # The dashboard worker and the independent heartbeat worker may call
+        # this manager concurrently. Protect route telemetry/session choice
+        # without locking around network I/O, so a slow dashboard can never
+        # hold the heartbeat behind it.
+        self._state_lock = threading.RLock()
         self.current_route = self.DIRECT_SUPABASE
         self.last_route_hint = self.DIRECT_SUPABASE
         self.last_latency_ms: float | None = None
@@ -2542,15 +2580,17 @@ class BackendRouteManager:
         if not self.persist_state:
             return
         target = self._state_path()
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps({
+        with self._state_lock:
+            payload = {
                 "route": self.current_route,
                 "last_latency_ms": self.last_latency_ms,
                 "last_switch_at": self.last_switch_at,
                 "failure_count": self.failure_count,
                 "success_count": self.success_count,
-            }, ensure_ascii=False), encoding="utf-8")
+            }
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except OSError:
             return
 
@@ -2562,11 +2602,15 @@ class BackendRouteManager:
 
     @property
     def active(self) -> HttpSocialBackend:
-        return self.direct if self.current_route == self.DIRECT_SUPABASE or self.proxy is None else self.proxy
+        with self._state_lock:
+            route = self.current_route
+        return self.direct if route == self.DIRECT_SUPABASE or self.proxy is None else self.proxy
 
     @property
     def backend_name(self) -> str:
-        return "Supabase Direct" if self.current_route == self.DIRECT_SUPABASE or self.proxy is None else "CloudBase Proxy"
+        with self._state_lock:
+            route = self.current_route
+        return "Supabase Direct" if route == self.DIRECT_SUPABASE or self.proxy is None else "CloudBase Proxy"
 
     @property
     def backend_endpoint(self) -> str:
@@ -2588,33 +2632,47 @@ class BackendRouteManager:
         target.session = source.session
 
     def _switch(self, route: str) -> None:
-        if self.current_route != route:
-            self.current_route = route
-            self.last_switch_at = datetime.now().astimezone().isoformat()
+        changed = False
+        with self._state_lock:
+            if self.current_route != route:
+                self.current_route = route
+                self.last_switch_at = datetime.now().astimezone().isoformat()
+                changed = True
+        if changed:
             self._save_state()
 
     def _mark_success(self, started: float) -> None:
-        self.last_latency_ms = round((time.monotonic() - started) * 1000, 1)
-        self.success_count += 1
-        self.failure_count = 0
+        with self._state_lock:
+            self.last_latency_ms = round((time.monotonic() - started) * 1000, 1)
+            self.success_count += 1
+            self.failure_count = 0
         self._save_state()
 
     def _mark_failure(self) -> None:
-        self.failure_count += 1
+        with self._state_lock:
+            self.failure_count += 1
         self._save_state()
 
     def _probe_direct_recovery(self) -> None:
-        if self.proxy is None or self.current_route != self.CLOUDBASE_PROXY or time.monotonic() - self._last_direct_probe < self.DIRECT_RECOVERY_INTERVAL_SECONDS:
-            return
-        self._last_direct_probe = time.monotonic()
+        with self._state_lock:
+            if (
+                self.proxy is None
+                or self.current_route != self.CLOUDBASE_PROXY
+                or time.monotonic() - self._last_direct_probe < self.DIRECT_RECOVERY_INTERVAL_SECONDS
+            ):
+                return
+            self._last_direct_probe = time.monotonic()
         try:
             self.direct.health()
-            self._direct_recovery_successes += 1
-            if self._direct_recovery_successes >= 2:
+            with self._state_lock:
+                self._direct_recovery_successes += 1
+                recovered = self._direct_recovery_successes >= 2
+            if recovered:
                 self._switch(self.DIRECT_SUPABASE)
         except SocialError as exc:
             if self._is_network_failure(exc):
-                self._direct_recovery_successes = 0
+                with self._state_lock:
+                    self._direct_recovery_successes = 0
 
     def health(self) -> dict[str, Any]:
         """Select the current route with a lightweight Supabase-first probe.
@@ -2975,3 +3033,4 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
+
