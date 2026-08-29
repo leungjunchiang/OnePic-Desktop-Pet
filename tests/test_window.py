@@ -2576,6 +2576,9 @@ def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     now[0] += timedelta(minutes=50)
     monotonic[0] += 50 * 60
     window._work_timer_tick()
+    # The one-second callback is display-only; reminders and persistence run
+    # on the separate maintenance path.
+    window._work_maintenance_tick()
     app.processEvents()
     assert window.state is PetState.SLEEPY
     assert "活动" in window.speech_bubble.text()
@@ -2941,4 +2944,3 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
-

@@ -10,7 +10,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
   "lili_buddy_private_notes", "lili_set_buddy_private_note",
-  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_focus_weekly_leaderboard", "lili_upsert_focus_presence",
+  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_focus_weekly_leaderboard", "lili_update_presence_context", "lili_upsert_focus_presence",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -133,17 +133,10 @@ async function handlePresence(env, event, body) {
     body: {
       p_working: Boolean(body.working),
       p_session_active: Boolean(body.session_active),
-      p_work_state: String(body.work_state || "idle").slice(0, 32),
-      p_pause_reason: body.pause_reason ? String(body.pause_reason).slice(0, 32) : null,
+      p_session_id: body.session_id ? String(body.session_id).slice(0, 160) : null,
       p_session_started_at: body.session_started_at || null,
-      p_focus_date: body.focus_date || null,
-      p_today_seconds: Math.min(86400, Math.max(0, Number(body.today_seconds) || 0)),
-      p_room_id: body.room_id ? String(body.room_id) : null,
-      p_outfit_key: String(body.outfit_key || "").slice(0, 60),
-      p_quick_status: String(body.quick_status || "").trim().slice(0, 40),
-      p_quick_status_expires_at: body.quick_status_expires_at ? String(body.quick_status_expires_at) : null,
       p_device_id: String(body.device_id || "").trim().slice(0, 120),
-      p_device_claim: Boolean(body.device_claim),
+      p_sequence: Math.max(0, Number(body.sequence) || 0),
     },
   });
 }
@@ -181,6 +174,5 @@ async function main(event, context) {
 }
 
 module.exports = { main, handleRequest, RelayError, pathOf, queryOf };
-
 
 

@@ -1,7 +1,8 @@
 """Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
-只发送账号认证、昵称、六毛外观、实时工作状态、累计秒数、房间与串门事件。工作心跳
-包含会话/暂停状态并以短间隔刷新，避免正在工作时被误判为可嘲讽。密码从不保存；
+只发送账号认证、昵称、六毛外观、实时工作状态、FocusSession 区间事实、房间与串门事件。
+工作心跳只描述当前活动会话的存活状态，不携带任何累计时长；最终时长始终从有效
+FocusSession 区间派生。密码从不保存；
 刷新令牌保存在系统凭据库。邮箱注册明确区分“已创建、等待确认”和“已登录”，并支持
 重新发送确认邮件；网络失败不会影响离线桌宠、计时、AI 或本地素材。
 """
@@ -43,21 +44,19 @@ CONNECTION_STATES = {"CONNECTING", "ONLINE", "DEGRADED", "OFFLINE", "RECONNECTIN
 PRESENCE_GRACE_SECONDS = 180
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
-# Fields accepted by the durable focus-presence heartbeat endpoint. The
-# desktop UI keeps additional local-only state in the same snapshot, so the
-# transport must filter it before calling the backend.
+# The heartbeat is a liveness transport, not a time ledger.  Keep this allow
+# list deliberately small: final focus duration is derived from immutable
+# FocusSession segments, never from presence counters or profile summaries.
 HEARTBEAT_FIELDS = frozenset(
     {
+        "user_id",
+        "session_id",
         "working",
         "session_active",
-        "work_state",
-        "pause_reason",
-        "today_seconds",
         "session_started_at",
-        "outfit_key",
-        "room_id",
-        "quick_status",
-        "quick_status_expires_at",
+        "last_seen_at",
+        "device_id",
+        "sequence",
     }
 )
 
@@ -65,6 +64,34 @@ _PRESENCE_TIMESTAMP_FIELDS = ("last_seen_at", "last_seen", "status_updated_at")
 _PRESENCE_DEVICE_STATE_FILENAME = "social-device.json"
 _PRESENCE_DEVICE_STATE_LOCK = threading.Lock()
 _PRESENCE_DEVICE_STATE_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _next_presence_sequence(user_id: str) -> int:
+    """Allocate a durable, monotonic presence version for one account.
+
+    The sequence is assigned on the independent heartbeat thread immediately
+    before a request is sent.  Persisting it protects a newly launched
+    process from a delayed packet belonging to an older process.
+    """
+
+    account_id = str(user_id or "").strip()
+    if not account_id:
+        return 1
+    device_id, _claim = _presence_device_credentials(account_id)
+    del device_id
+    with _PRESENCE_DEVICE_STATE_LOCK:
+        state = _PRESENCE_DEVICE_STATE_CACHE.setdefault(account_id, {})
+        try:
+            current = max(0, int(state.get("presence_sequence", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            current = 0
+        sequence = current + 1
+        state["presence_sequence"] = sequence
+        try:
+            write_json_atomic(account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id), state)
+        except OSError:
+            LOGGER.debug("social presence sequence could not be persisted", exc_info=True)
+        return sequence
 
 
 def _presence_device_credentials(user_id: str) -> tuple[str, bool]:
@@ -217,9 +244,31 @@ def _normalise_never_seen_presence(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
-    """Select only fields supported by the social heartbeat API."""
+    """Select and normalize liveness-only fields for the heartbeat API."""
 
-    return {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
+    payload = {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
+    active = bool(payload.get("working")) and bool(payload.get("session_active"))
+    session_id = str(payload.get("session_id") or "").strip()
+    started_at = payload.get("session_started_at")
+    if not active or not session_id or not started_at:
+        payload.update(
+            {
+                "working": False,
+                "session_active": False,
+                "session_id": None,
+                "session_started_at": None,
+            }
+        )
+    else:
+        payload["working"] = True
+        payload["session_active"] = True
+        payload["session_id"] = session_id[:160]
+    if "sequence" in payload:
+        try:
+            payload["sequence"] = max(0, int(payload["sequence"] or 0))
+        except (TypeError, ValueError, OverflowError):
+            payload["sequence"] = 0
+    return payload
 
 
 def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -228,17 +277,10 @@ def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
     return {
         "p_working": bool(body.get("working")),
         "p_session_active": bool(body.get("session_active")),
-        "p_work_state": str(body.get("work_state") or "idle")[:32],
-        "p_pause_reason": body.get("pause_reason"),
+        "p_session_id": str(body.get("session_id") or "")[:160] or None,
         "p_session_started_at": body.get("session_started_at"),
-        "p_focus_date": body.get("focus_date"),
-        "p_today_seconds": int(body.get("today_seconds") or 0),
-        "p_outfit_key": str(body.get("outfit_key") or "")[:60],
-        "p_room_id": body.get("room_id"),
-        "p_quick_status": str(body.get("quick_status") or "")[:40],
-        "p_quick_status_expires_at": body.get("quick_status_expires_at"),
         "p_device_id": str(body.get("device_id") or "")[:120],
-        "p_device_claim": bool(body.get("device_claim")),
+        "p_sequence": max(0, int(body.get("sequence") or 0)),
     }
 
 
@@ -943,7 +985,7 @@ class SocialBackend(Protocol):
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
-    def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None: ...
+    def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
@@ -1430,7 +1472,7 @@ class HttpSocialBackend:
         else:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
-    def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
+    def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
         # ``AuthSessionManager`` is the source of truth.  During login and
         # token refresh it can already hold a valid session while this
         # transport's compatibility attribute is still empty.  Returning at
@@ -1448,9 +1490,21 @@ class HttpSocialBackend:
         # Presence freshness is assigned by the Supabase database clock.  Do not
         # send a client last_seen value: a user's incorrect Windows clock would
         # otherwise make an active buddy look offline for the whole room.
-        now = datetime.now(BEIJING_TIMEZONE)
-        device_id, device_claim = _presence_device_credentials(self.session.user_id)
-        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "today_seconds": min(86400, max(0, int(today_seconds))), "session_started_at": session_started_at, "focus_date": now.date().isoformat(), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
+        stable_device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        body = _heartbeat_payload(
+            {
+                "user_id": self.session.user_id,
+                "working": bool(working),
+                "session_active": bool(session_active),
+                "session_id": session_id,
+                "session_started_at": session_started_at,
+                "device_id": str(device_id or stable_device_id),
+                "sequence": max(0, int(sequence or 0)),
+            }
+        )
+        body["device_id"] = stable_device_id
+        if not body.get("sequence"):
+            body["sequence"] = _next_presence_sequence(self.session.user_id)
         if self.transport == "direct":
             try:
                 self._raw(
@@ -1460,23 +1514,9 @@ class HttpSocialBackend:
                     authenticated=True,
                 )
             except SocialError as exc:
-                # Keep old deployed projects usable during the migration
-                # rollout.  New projects take the atomic RPC path; only a
-                # missing endpoint may use the legacy upsert fallback.
-                if exc.status == 404 or "lili_upsert_focus_presence" in str(exc):
-                    legacy_body = dict(body)
-                    legacy_body["user_id"] = self.session.user_id
-                    self._raw(
-                        "POST",
-                        "/rest/v1/lili_focus_presence?on_conflict=user_id",
-                        legacy_body,
-                        authenticated=True,
-                        extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-                    )
-                else:
-                    if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                        _mark_presence_device_claim_pending(self.session.user_id, device_id)
-                    raise
+                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                    _mark_presence_device_claim_pending(self.session.user_id, stable_device_id)
+                raise
         else:
             try:
                 self._raw("POST", "/presence/heartbeat", body, authenticated=True)
@@ -1484,7 +1524,7 @@ class HttpSocialBackend:
                 if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
                     _mark_presence_device_claim_pending(self.session.user_id, device_id)
                 raise
-        _mark_presence_device_claimed(self.session.user_id, device_id)
+        _mark_presence_device_claimed(self.session.user_id, stable_device_id)
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self.transport == "direct":
@@ -1799,6 +1839,10 @@ class LegacyDirectSocialClient:
         data["_connection_state"] = "DEGRADED" if presence_grace else "OFFLINE"
         data["_presence_grace_active"] = presence_grace
         data["_presence_uncertainty_seconds"] = age_seconds if presence_grace else 0
+        # Keep the freshness contract explicit at the payload boundary.  A
+        # cached number may be rendered for continuity, but it must never be
+        # mistaken for a current server statistic.
+        data["is_stale"] = True
         data["data_source"] = "local_cache"
         data["_data_source"] = "local_cache"
         data["_sync_age_minutes"] = age_minutes
@@ -2156,6 +2200,7 @@ class LegacyDirectSocialClient:
             result = _normalise_never_seen_presence(dict(data or {}))
             self._last_error = ""
             result["_connection_state"] = "ONLINE"
+            result["is_stale"] = False
             result["data_source"] = "server"
             result["_data_source"] = "server"
             result["_server_timestamp"] = datetime.now().astimezone().isoformat()
@@ -2193,27 +2238,34 @@ class LegacyDirectSocialClient:
         body = {"nickname": clean or "搭子", "owner_nickname": clean, "visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
-    def heartbeat(self, *, working: bool, session_active: bool = False, work_state: str = "idle", pause_reason: str | None = None, today_seconds: int, session_started_at: str | None, outfit_key: str, room_id: str | None = None, quick_status: str = "", quick_status_expires_at: str | None = None) -> None:
+    def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
         if self._http_backend is not None:
-            return self._http_backend.heartbeat(working=working, session_active=session_active, work_state=work_state, pause_reason=pause_reason, today_seconds=today_seconds, session_started_at=session_started_at, outfit_key=outfit_key, room_id=room_id, quick_status=quick_status, quick_status_expires_at=quick_status_expires_at)
+            return self._http_backend.heartbeat(working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence)
         if not self.session:
             return
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
-        device_id, device_claim = _presence_device_credentials(self.session.user_id)
-        body = {"working": bool(working), "session_active": bool(session_active), "work_state": str(work_state or "idle")[:32], "pause_reason": str(pause_reason or "")[:32] or None, "session_started_at": session_started_at, "focus_date": datetime.now(BEIJING_TIMEZONE).date().isoformat(), "today_seconds": min(86400, max(0, int(today_seconds))), "outfit_key": outfit_key[:60], "room_id": room_id, "quick_status": quick_status[:40], "quick_status_expires_at": quick_status_expires_at, "device_id": device_id, "device_claim": device_claim}
+        stable_device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        body = _heartbeat_payload(
+            {
+                "user_id": self.session.user_id,
+                "working": bool(working),
+                "session_active": bool(session_active),
+                "session_id": session_id,
+                "session_started_at": session_started_at,
+                "device_id": stable_device_id,
+                "sequence": max(0, int(sequence or 0)),
+            }
+        )
+        if not body.get("sequence"):
+            body["sequence"] = _next_presence_sequence(self.session.user_id)
         try:
             self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
         except SocialError as exc:
-            if exc.status == 404 or "lili_upsert_focus_presence" in str(exc):
-                legacy_body = dict(body)
-                legacy_body["user_id"] = self.session.user_id
-                self._raw("POST", "/rest/v1/lili_focus_presence?on_conflict=user_id", legacy_body, authenticated=True, extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
-            else:
-                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
-                raise
-        _mark_presence_device_claimed(self.session.user_id, device_id)
+            if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                _mark_presence_device_claim_pending(self.session.user_id, stable_device_id)
+            raise
+        _mark_presence_device_claimed(self.session.user_id, stable_device_id)
 
     def update_owner_nickname(self, nickname: str) -> None:
         if self._http_backend is not None:
@@ -2420,7 +2472,7 @@ class DashboardCacheClientBase:
         presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
         if presence_grace: self._mark_remote_presence_uncertain(data, age_seconds)
         else: self._mark_remote_presence_stale(data)
-        data.update({"_sync_offline": True, "_connection_state": "DEGRADED" if presence_grace else "OFFLINE", "_presence_grace_active": presence_grace, "_presence_uncertainty_seconds": age_seconds if presence_grace else 0, "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int(age_seconds / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
+        data.update({"_sync_offline": True, "_connection_state": "DEGRADED" if presence_grace else "OFFLINE", "_presence_grace_active": presence_grace, "_presence_uncertainty_seconds": age_seconds if presence_grace else 0, "is_stale": True, "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int(age_seconds / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
         self.connection.set(
             "DEGRADED" if presence_grace else "OFFLINE",
             data_source="local_cache",
@@ -2488,7 +2540,7 @@ class DashboardCacheClientBase:
                 dict(self._require_backend().dashboard(room_id=room_id, allow_cache=allow_cache) or {})
             )
             server_timestamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
-            result.update({"_connection_state": "ONLINE", "data_source": "server", "_data_source": "server", "_server_timestamp": server_timestamp})
+            result.update({"_connection_state": "ONLINE", "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": server_timestamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=server_timestamp)
             self._last_error = ""; self._remember_dashboard(room_id, result); return result
         except SocialError as exc:
@@ -2805,7 +2857,11 @@ class BackendRouteManager:
             result = getattr(self.direct, method)(*args, **kwargs)
             self._mark_success(started)
             return result
-        self._probe_direct_recovery()
+        # Heartbeat has its own transport loop.  A route-recovery health probe
+        # is allowed to be slow, so never put it in front of a liveness write;
+        # dashboard/statistics traffic may probe independently on its worker.
+        if method != "heartbeat":
+            self._probe_direct_recovery()
         backend = self.active
         self._sync_sessions(self.direct if backend is self.direct else self.proxy, backend)
         started = time.monotonic()
@@ -3003,7 +3059,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
                 # inbox is safer than breaking the whole social dashboard.
                 LOGGER.info("achievement witness inbox unavailable kind=%s status=%s", exc.kind, exc.status)
             stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
-            result.update({"_connection_state": "ONLINE", "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
+            result.update({"_connection_state": "ONLINE", "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
             self._last_error = ""
             self._remember_dashboard(room_id, result)
@@ -3033,4 +3089,3 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
 
 SocialClient = SupabaseFirstSocialClient
-

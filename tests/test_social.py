@@ -35,6 +35,7 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
         {
             "working": True,
             "today_seconds": 120,
+            "session_id": "session-1",
             "session_started_at": "2026-08-21T08:00:00+08:00",
             "outfit_key": "hour-01",
             "room_id": "room-1",
@@ -50,14 +51,8 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
     assert payload == {
         "working": True,
         "session_active": True,
-        "work_state": "working",
-        "pause_reason": None,
-        "today_seconds": 120,
+        "session_id": "session-1",
         "session_started_at": "2026-08-21T08:00:00+08:00",
-        "outfit_key": "hour-01",
-        "room_id": "room-1",
-        "quick_status": "再卷30分钟",
-        "quick_status_expires_at": None,
     }
 
 
@@ -336,6 +331,27 @@ def test_route_manager_retries_direct_once_then_switches_only_network_failures()
     assert manager.current_route == BackendRouteManager.CLOUDBASE_PROXY
 
 
+def test_heartbeat_does_not_wait_for_route_recovery_probe():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    manager.current_route = BackendRouteManager.CLOUDBASE_PROXY
+
+    manager.request(
+        "heartbeat",
+        working=True,
+        session_active=True,
+        session_id="session-1",
+        session_started_at="2026-08-29T10:00:00+08:00",
+        device_id="device-1",
+        sequence=12,
+    )
+
+    assert direct.calls == []
+    assert proxy.calls[0][0] == "heartbeat"
+
+
 def test_route_manager_never_switches_for_business_auth_errors():
     direct = FakeTransport("direct")
     proxy = FakeTransport("proxy")
@@ -450,19 +466,24 @@ def test_http_backend_uses_direct_supabase_paths():
     backend.sign_in("a@example.com", "secret123")
     backend.health()
     backend.dashboard("room-1")
-    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
+    backend.heartbeat(
+        working=True,
+        session_active=True,
+        session_id="session-1",
+        session_started_at="2026-08-29T10:00:00+08:00",
+        sequence=7,
+    )
     paths = [call[1] for call in backend.calls]
     assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/rpc/lili_buddy_requests", "/rest/v1/rpc/lili_upsert_focus_presence"]
     heartbeat_call = backend.calls[-1]
     heartbeat_body = heartbeat_call[2]
     assert set(heartbeat_body) == {
-        "p_working", "p_session_active", "p_work_state", "p_pause_reason",
-        "p_session_started_at", "p_focus_date", "p_today_seconds", "p_outfit_key",
-        "p_room_id", "p_quick_status", "p_quick_status_expires_at", "p_device_id",
-        "p_device_claim",
+        "p_working", "p_session_active", "p_session_id",
+        "p_session_started_at", "p_device_id", "p_sequence",
     }
-    assert "p_last_seen" not in heartbeat_body
-    assert "p_updated_at" not in heartbeat_body
+    assert "p_today_seconds" not in heartbeat_body
+    assert "p_week_seconds" not in heartbeat_body
+    assert "p_duration" not in heartbeat_body
     assert heartbeat_call[4] is None
 
 
@@ -489,10 +510,7 @@ def test_heartbeat_refreshes_transport_session_from_auth_manager():
     backend.heartbeat(
         working=False,
         session_active=False,
-        today_seconds=0,
         session_started_at=None,
-        outfit_key="",
-        room_id=None,
     )
 
     assert backend.session is session
@@ -776,7 +794,12 @@ def test_direct_presence_heartbeat_uses_atomic_presence_rpc():
             return {}
 
     backend = Recording()
-    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
+    backend.heartbeat(
+        working=True,
+        session_active=True,
+        session_id="session-1",
+        session_started_at="2026-08-29T10:00:00+08:00",
+    )
     assert backend.headers is None
 
 
@@ -804,20 +827,31 @@ def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_p
             return {}
 
     backend = Recording()
-    backend.heartbeat(working=True, today_seconds=60, session_started_at=None, outfit_key="", room_id="room-1")
-    backend.heartbeat(working=True, today_seconds=61, session_started_at=None, outfit_key="", room_id="room-1")
+    backend.heartbeat(
+        working=True,
+        session_active=True,
+        session_id="session-1",
+        session_started_at="2026-08-29T10:00:00+08:00",
+    )
+    backend.heartbeat(
+        working=True,
+        session_active=True,
+        session_id="session-1",
+        session_started_at="2026-08-29T10:00:00+08:00",
+    )
 
     first, second = backend.bodies
     assert len(first["p_device_id"]) == 32
     assert first["p_device_id"] == second["p_device_id"]
-    assert first["p_device_claim"] is True
-    assert second["p_device_claim"] is False
+    assert first["p_sequence"] < second["p_sequence"]
+    assert "p_device_claim" not in first
+    assert "p_today_seconds" not in first
     social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
 
 
 def test_presence_freshness_is_server_authoritative_in_all_relays():
     root = Path(__file__).resolve().parents[1]
-    migration = (root / "supabase" / "migrations" / "20260815000100_lili_presence_server_timestamp.sql").read_text(encoding="utf-8")
+    migration = (root / "supabase" / "migrations" / "20260829100000_lili_presence_sequence_guard.sql").read_text(encoding="utf-8")
     cloudbase = (root / "relay" / "cloudbase-function" / "index.js").read_text(encoding="utf-8")
     edge = (root / "supabase" / "functions" / "lili-social-relay" / "index.ts").read_text(encoding="utf-8")
     worker = (root / "relay" / "cloudflare-worker" / "src" / "index.js").read_text(encoding="utf-8")
@@ -826,9 +860,49 @@ def test_presence_freshness_is_server_authoritative_in_all_relays():
     for source in (cloudbase, edge, worker):
         assert "/rest/v1/rpc/lili_upsert_focus_presence" in source
         assert "p_session_started_at" in source
-        assert "p_device_claim" in source
+        assert "p_session_id" in source
+        assert "p_sequence" in source
+        assert "p_today_seconds" not in source
+        assert "p_week_seconds" not in source
+        assert "p_device_claim" not in source
     assert "String(body.last_seen || now)" not in cloudbase + edge + worker
     assert "String(body.last_seen || now())" not in cloudbase + edge + worker
+
+
+def test_presence_context_is_separate_from_liveness_contract():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829100200_lili_presence_context_sync.sql").read_text(encoding="utf-8")
+    timestamp_migration = (root / "supabase" / "migrations" / "20260829100400_lili_presence_context_no_liveness_touch.sql").read_text(encoding="utf-8")
+    for path in (
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_update_presence_context" in source
+        assert "p_today_seconds" not in source
+        assert "p_week_seconds" not in source
+    assert "lili_update_presence_context" in migration
+    assert "Do not create a row here" in migration
+    assert "liveness_changed" in timestamp_migration
+    assert "new.last_seen := old.last_seen" in timestamp_migration
+    assert "new.presence_sequence is distinct from old.presence_sequence" in timestamp_migration
+
+
+def test_presence_ordering_cannot_be_bypassed_by_direct_table_writes():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829100500_lili_presence_rpc_only.sql").read_text(encoding="utf-8")
+    assert "revoke insert, update, delete on table public.lili_focus_presence" in migration
+
+
+def test_focus_stats_do_not_count_orphaned_open_segments():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829100300_lili_focus_live_projection_guard.sql").read_text(encoding="utf-8")
+    assert "s.end_at is not null" in migration
+    assert "f.last_seen > now() - interval '2 minutes'" in migration
+    assert "f.session_id is not null" in migration
+    assert "p_today_seconds" not in migration
+    assert "p_week_seconds" not in migration
 
 
 def test_cloudbase_presence_and_profile_proxy_use_atomic_presence_contract() -> None:
@@ -853,6 +927,21 @@ def test_personal_focus_and_outfit_state_is_server_merged_and_proxy_allowlisted(
         root / "relay" / "cloudflare-worker" / "src" / "index.js",
     ):
         assert "lili_sync_personal_state" in path.read_text(encoding="utf-8")
+
+
+def test_latest_personal_state_rpc_cannot_write_client_duration_projections() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations" /
+        "20260829100600_lili_personal_state_duration_write_barrier.sql"
+    ).read_text(encoding="utf-8")
+    assert migration.count("create or replace function public.lili_sync_personal_state") == 2
+    assert "p_focus_date and p_today_seconds are intentionally ignored" in migration
+    assert "p_focus_date/p_today_seconds/p_week_start/p_week_seconds are retained" in migration
+    assert "stats := public.lili_effective_focus_stats(current_user_id)" in migration
+    assert "focus_today_seconds = case" not in migration
+    assert "focus_week_seconds = case" not in migration
+    assert "insert into public.lili_focus_daily" not in migration
 
 
 def test_weekly_focus_sync_and_leaderboard_are_available_in_every_relay() -> None:
@@ -1152,6 +1241,7 @@ def test_recent_cached_dashboard_preserves_last_known_peer_presence():
     assert cached is not None
     assert cached["_connection_state"] == "DEGRADED"
     assert cached["_presence_grace_active"] is True
+    assert cached["is_stale"] is True
     assert client.connection_state == "DEGRADED"
     peer = cached["buddies"][0]
     assert peer["online"] is True
@@ -1184,6 +1274,7 @@ def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
     assert cached is not None
     assert cached["_connection_state"] == "OFFLINE"
     assert cached["_presence_grace_active"] is False
+    assert cached["is_stale"] is True
     assert client.connection_state == "OFFLINE"
     peer = cached["buddies"][0]
     assert peer["online"] is False
@@ -1314,4 +1405,3 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
-

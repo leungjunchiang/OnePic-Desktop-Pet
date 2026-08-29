@@ -42,10 +42,12 @@ class PerformanceMonitor:
                 continue
             ordered = sorted(values)
             p95_index = min(len(ordered) - 1, max(0, int(len(ordered) * 0.95) - 1))
+            p99_index = min(len(ordered) - 1, max(0, int(len(ordered) * 0.99) - 1))
             result[name] = {
                 "count": len(ordered),
                 "avg_ms": round(sum(ordered) / len(ordered), 3),
                 "p95_ms": round(ordered[p95_index], 3),
+                "p99_ms": round(ordered[p99_index], 3),
                 "max_ms": round(ordered[-1], 3),
             }
         return result
@@ -80,4 +82,3 @@ class EventLoopLagTracker:
                 active_page=active_page,
             )
         return lag_ms
-
