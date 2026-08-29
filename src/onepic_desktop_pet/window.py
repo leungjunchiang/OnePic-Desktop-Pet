@@ -205,6 +205,7 @@ from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .qt_lifecycle import request_stop_all, running_threads
 from .lifecycle_log import lifecycle_log
+from .performance import EventLoopLagTracker, PerformanceMonitor
 from .social import SocialClient
 from .social_ui import (
     BuddyVisitWindow,
@@ -481,6 +482,8 @@ class PetWindow(QWidget):
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self.focus_session = FocusSessionManager(self.work_timer, self)
+        self._focus_projection_revision = 0
+        self._focus_projection_cache: dict[str, object] | None = None
         self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
@@ -524,6 +527,11 @@ class PetWindow(QWidget):
         self.direction = -1
         self._movement_x = float(self.x())
         self._last_movement_at = time.monotonic()
+        self._performance = PerformanceMonitor()
+        self._event_loop_lag = EventLoopLagTracker(self._performance)
+        self._last_perf_summary_at = time.monotonic()
+        self._last_focus_analytics_ui_refresh = 0.0
+        self._last_focus_snapshot_status = ""
         self.paused = False
         self.dragging = False
         self._press_pending = False
@@ -997,12 +1005,21 @@ class PetWindow(QWidget):
         self.idle_recovery_timer.setSingleShot(True)
         self.idle_recovery_timer.timeout.connect(self._ask_idle_recovery)
 
+        # This probe does no network or database work.  It only measures how
+        # late the GUI event loop receives a lightweight timer callback and
+        # records unusually large stalls for later diagnosis.
+        self.event_loop_lag_timer = QTimer(self)
+        self.event_loop_lag_timer.setInterval(250)
+        self.event_loop_lag_timer.timeout.connect(self._event_loop_lag_tick)
+        self.event_loop_lag_timer.start()
+
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
         self._night_limited_tick()
         self._schedule(self.behavior.initial_idle())
         if should_start_startup_detection():
             QTimer.singleShot(0, self.agent_manager.start_background_check)
+        self._log_timer_inventory()
         lifecycle_log("pet_window.construct.complete", self)
 
     def _pet_window_flags(self) -> Qt.WindowType:
@@ -2181,6 +2198,7 @@ class PetWindow(QWidget):
                 away_count=1,
                 task=str((self.focus_analytics.current_task() or {}).get("title", "")),
             )
+            self._invalidate_focus_projection("idle_episode_recovered")
         self._idle_recovery_resolved = True
         self._pending_idle_seconds = 0
         self._idle_pause_started_at = None
@@ -2280,6 +2298,7 @@ class PetWindow(QWidget):
             away_count=1,
             task=str((self.focus_analytics.current_task() or {}).get("title", "")),
         )
+        self._invalidate_focus_projection("idle_episode_reclassified")
         classification = self._idle_hint_classification
         if classification is not None:
             self._save_idle_app_rule(classification.app_key, "focus")
@@ -3113,6 +3132,7 @@ class PetWindow(QWidget):
             self.work_timer.analytics_recorded_session_seconds()
         )
         self.focus_analytics.begin_focus_session()
+        self._invalidate_focus_projection("focus_started")
         if started:
             self.set_paused(True)
         self._change_ambient_activity("computer")
@@ -3168,6 +3188,7 @@ class PetWindow(QWidget):
                 completed=False,
                 started_at=segment_started_at,
             )
+            self._invalidate_focus_projection("focus_paused")
             # FocusSession emits its pause snapshot before the analytics
             # segment is committed. Publish one more snapshot so the study
             # room and report immediately see the same reconciled day total.
@@ -3244,6 +3265,7 @@ class PetWindow(QWidget):
         )
         self.focus_session.finish()
         self.focus_analytics.finish_focus_session(completed=True)
+        self._invalidate_focus_projection("focus_finished")
         # The timer is reset by ``finish``; read the just-committed analytics
         # projection so the completion message uses the same day total as the
         # study room and work report.
@@ -4023,7 +4045,47 @@ class PetWindow(QWidget):
         )
 
     @_guard_qt_callback
+    def _event_loop_lag_tick(self) -> None:
+        """Record GUI event-loop stalls without triggering a refresh."""
+
+        self._event_loop_lag.tick(
+            active_window=type(self).__name__,
+            active_page=(
+                type(self._social_dialog).__name__
+                if self._social_dialog is not None and self._social_dialog.isVisible()
+                else "pet"
+            ),
+        )
+        now = time.monotonic()
+        if now - self._last_perf_summary_at >= 60.0:
+            self._performance.log_summary(source="pet_window")
+            self._last_perf_summary_at = now
+
+    def _log_timer_inventory(self) -> None:
+        """Write one cheap inventory of the timers owned by the pet window."""
+
+        timers = []
+        for name, value in vars(self).items():
+            if not isinstance(value, QTimer):
+                continue
+            try:
+                timers.append({
+                    "name": name,
+                    "interval_ms": int(value.interval()),
+                    "single_shot": bool(value.isSingleShot()),
+                    "active": bool(value.isActive()),
+                })
+            except RuntimeError:
+                continue
+        lifecycle_log("perf.timer_inventory", self, count=len(timers), timers=timers)
+
     def _work_timer_tick(self) -> None:
+        """Measure the one-second UI tick, keeping the actual work isolated."""
+
+        with self._performance.measure("focus.tick"):
+            self._work_timer_tick_impl()
+
+    def _work_timer_tick_impl(self) -> None:
         """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
 
         self._check_local_alarms()
@@ -4407,31 +4469,69 @@ class PetWindow(QWidget):
         self.daily_stats.record_focus(seconds, completed=completed)
         self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
+        self._invalidate_focus_projection("focus_segment_recorded")
         return seconds
 
-    def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
-        """Return one reconciled day/week total for every focus surface.
+    def _invalidate_focus_projection(self, reason: str = "") -> None:
+        """Invalidate the closed-session projection after a lifecycle event."""
 
-        FocusAnalytics contains the durable account-scoped segments while
-        WorkTimer contributes the not-yet-recorded part of the current
-        session. A checkpoint can already have moved seconds into the timer's
-        persisted aggregate without creating an analytics row; using only the
-        current monotonic slice made the live bubble repeat an old value.
+        self._focus_projection_revision = int(getattr(self, "_focus_projection_revision", 0)) + 1
+        self._focus_projection_cache = None
+        if reason:
+            lifecycle_log("focus.projection.invalidate", self, reason=reason)
+
+    def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
+        """Return one reconciled day/week total without aggregating every tick.
+
+        Closed FocusSession facts are projected only after a session/account
+        lifecycle event.  While a session is running, the one-second timer
+        contributes only its monotonic delta to the cached closed projection.
+        This keeps the display current without rescanning the full ledger on
+        every GUI timer tick.
         """
 
         moment = moment or self.focus_analytics.current_time()
-        day_projection = self.focus_analytics.period_summary("day", moment)
-        week_projection = self.focus_analytics.period_summary("week", moment)
-        recorded_day = max(0, int(day_projection.get("total_seconds", 0) or 0))
-        # A segment may start before Beijing midnight and still contribute to
-        # today.  Use only raw interval evidence; cached timer/profile totals
-        # are not valid work facts and must not be rendered as today's time.
-        has_local_day_records = bool(day_projection.get("raw_period_evidence"))
-        session_total = (
-            max(0, int(self.work_timer.session_seconds()))
-            if self.work_timer.has_active_session
-            else 0
+        cache_key = (
+            str(getattr(self, "_active_focus_account_id", "")),
+            moment.date().isoformat(),
+            bool(self.work_timer.has_active_session),
+            str(self.work_timer.focus_session_id if self.work_timer.has_active_session else ""),
+            max(0, int(getattr(self, "_recorded_focus_session_seconds", 0) or 0)),
+            int(getattr(self, "_focus_projection_revision", 0)),
         )
+        cached = self._focus_projection_cache
+        if not isinstance(cached, dict) or cached.get("key") != cache_key:
+            day_projection = self.focus_analytics.period_summary("day", moment)
+            week_projection = self.focus_analytics.period_summary("week", moment)
+            cached = {
+                "key": cache_key,
+                "recorded_day": max(0, int(day_projection.get("total_seconds", 0) or 0)),
+                "recorded_week": max(0, int(week_projection.get("total_seconds", 0) or 0)),
+                # ``raw_period_evidence`` is the canonical marker returned by
+                # FocusAnalyticsStore.  Keep ``local_record_count`` as a
+                # compatibility signal for older callers/mocks so a
+                # checkpointed local segment is not counted twice in the
+                # weekly projection.
+                "has_day_evidence": bool(
+                    day_projection.get("raw_period_evidence")
+                    or day_projection.get("local_record_count")
+                ),
+                "has_week_evidence": bool(
+                    week_projection.get("raw_period_evidence")
+                    or week_projection.get("local_record_count")
+                ),
+            }
+            self._focus_projection_cache = cached
+
+        recorded_day = max(0, int(cached.get("recorded_day", 0) or 0))
+        recorded_week = max(0, int(cached.get("recorded_week", 0) or 0))
+        if not self.work_timer.has_active_session:
+            return {
+                "today_seconds": min(24 * 60 * 60, recorded_day),
+                "week_seconds": min(7 * 24 * 60 * 60, recorded_week),
+            }
+
+        session_total = max(0, int(self.work_timer.session_seconds()))
         recorded_session = max(
             0,
             int(
@@ -4443,43 +4543,20 @@ class PetWindow(QWidget):
                 or 0
             ),
         )
-        # ``session_seconds`` includes checkpointed segments and the current
-        # monotonic slice. Only the portion beyond the analytics cursor is
-        # still missing from ``recorded_day``.
         unrecorded_session = max(0, session_total - recorded_session)
-        if has_local_day_records:
-            # Local records are authoritative for completed sessions. While a
-            # session is active, retain its uncommitted delta instead of
-            # falling back to a stale remote timer maximum.
-            today = (
-                recorded_day + unrecorded_session
-                if self.work_timer.has_active_session
-                else recorded_day
-            )
-        else:
-            # While today's session is still open, the analytics ledger has
-            # not received a row yet.  The live session is the only trusted
-            # supplement; an inactive persisted timer bucket is just a cache.
-            today = session_total if self.work_timer.has_active_session else recorded_day
-
-        week = max(0, int(week_projection.get("total_seconds", 0) or 0))
-        if (
-            not has_local_day_records
-            and self.work_timer.has_active_session
-        ):
-            # The same stale-aggregate guard applies to the weekly card.  A
-            # newly active local day must not inherit a corrupted weekly
-            # maximum before its first analytics row is committed.
-            week = today
-        # Add the same unrecorded day delta to the weekly projection exactly
-        # once. If no local records exist, the day value remains the stronger
-        # signal than a missing/stale weekly aggregate.
-        if has_local_day_records and today > recorded_day:
-            week += today - recorded_day
-        week = max(week, today)
+        today = recorded_day + unrecorded_session if cached.get("has_day_evidence") else session_total
+        # A zero-evidence weekly projection is commonly a stale remote/cache
+        # value.  Do not resurrect it when a new live session starts.  When
+        # the week has genuine raw evidence (including prior days), append
+        # only the current session's unrecorded portion.
+        week = (
+            recorded_week + (today - recorded_day if cached.get("has_day_evidence") else today)
+            if cached.get("has_week_evidence")
+            else today
+        )
         return {
-            "today_seconds": min(24 * 60 * 60, today),
-            "week_seconds": min(7 * 24 * 60 * 60, week),
+            "today_seconds": min(24 * 60 * 60, max(0, today)),
+            "week_seconds": min(7 * 24 * 60 * 60, max(0, week)),
         }
 
     def _shared_today_focus_seconds(self) -> int:
@@ -5276,8 +5353,9 @@ class PetWindow(QWidget):
     def _focus_snapshot_changed(self, snapshot: object) -> None:
         self._refresh_shortcut_state()
         self._update_work_duration_bubble(snapshot)
+        snapshot_status = str(getattr(snapshot, "status", "idle") or "idle")
         if self.work_controls.isVisible():
-            status = str(getattr(snapshot, "status", "idle"))
+            status = snapshot_status
             seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
             self.work_controls.set_session_status(status)
             self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
@@ -5287,7 +5365,12 @@ class PetWindow(QWidget):
             )
         if self._social_dialog is not None:
             self._social_dialog.set_focus_snapshot(snapshot)
-            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+            now = time.monotonic()
+            status_changed = snapshot_status != self._last_focus_snapshot_status
+            if status_changed or now - self._last_focus_analytics_ui_refresh >= 5.0:
+                self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+                self._last_focus_analytics_ui_refresh = now
+                self._last_focus_snapshot_status = snapshot_status
 
     def _room_event_received(self, event: dict) -> None:
         """Play a received room interaction on this desktop pet."""
@@ -5367,6 +5450,12 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _social_tick(self) -> None:
+        """Measure dashboard preparation without affecting its async work."""
+
+        with self._performance.measure("social.tick_prepare"):
+            self._social_tick_impl()
+
+    def _social_tick_impl(self) -> None:
         """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
 
         if not self.social_client.signed_in:
@@ -5893,6 +5982,8 @@ class PetWindow(QWidget):
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
         derived_changed = self.focus_analytics.reconcile_derived_totals()
+        if analytics_changed or history_changed or segment_changed or derived_changed:
+            self._invalidate_focus_projection("remote_focus_reconciled")
         local_day = self.focus_analytics.period_summary("day")
         if (
             bool(local_day.get("raw_period_evidence"))
@@ -6101,6 +6192,7 @@ class PetWindow(QWidget):
             # account; keep the chat fast-action path on the new namespace.
             self.chat_manager.action_executor = self.time_memory.actions
         self._active_focus_account_id = clean
+        self._invalidate_focus_projection("account_switched")
         self._recorded_focus_session_seconds = (
             self.work_timer.analytics_recorded_session_seconds()
         )

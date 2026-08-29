@@ -125,63 +125,26 @@ def build_work_report(
     summary = analytics.summary(moment)
     daily_stats_snapshot = daily_stats.snapshot()
     snapshot_status = ""
-    snapshot_today = 0
     snapshot_session = 0
-    snapshot_week: int | None = None
-    snapshot_has_reconciled_day = False
     snapshot_room = ""
     if focus_snapshot is not None:
         if isinstance(focus_snapshot, dict):
             snapshot_status = str(focus_snapshot.get("status") or "")
-            snapshot_today = max(0, int(focus_snapshot.get("today_seconds") or 0))
             snapshot_session = max(0, int(focus_snapshot.get("session_seconds") or 0))
-            if "week_seconds" in focus_snapshot:
-                try:
-                    snapshot_week = max(0, int(focus_snapshot.get("week_seconds") or 0))
-                    snapshot_has_reconciled_day = True
-                except (TypeError, ValueError, OverflowError):
-                    snapshot_week = None
             snapshot_room = str(focus_snapshot.get("room_id") or "")
         else:
             snapshot_status = str(getattr(focus_snapshot, "status", "") or "")
-            snapshot_today = max(0, int(getattr(focus_snapshot, "today_seconds", 0) or 0))
             snapshot_session = max(0, int(getattr(focus_snapshot, "session_seconds", 0) or 0))
-            raw_week = getattr(focus_snapshot, "week_seconds", None)
-            if raw_week is not None:
-                try:
-                    snapshot_week = max(0, int(raw_week))
-                    snapshot_has_reconciled_day = True
-                except (TypeError, ValueError, OverflowError):
-                    snapshot_week = None
             snapshot_room = str(getattr(focus_snapshot, "room_id", "") or "")
-    # When detailed local records exist, they are the authoritative source
-    # for the calendar day.  A timer can still contain a stale server
-    # aggregate from an older release, so using ``max(timer, records)`` here
-    # would reintroduce the very 5h/53h reports this window is meant to fix.
+    # FocusSession snapshots carry UI state (status/session start), not a
+    # second statistics source.  All displayed calendar totals below come
+    # from FocusAnalyticsStore's clipped raw interval union.
     day_preview = analytics.period_summary("day", moment)
-    local_record_count = max(0, int(day_preview.get("local_record_count", 0) or 0))
-    if local_record_count > 0 and not (
-        snapshot_has_reconciled_day and snapshot_status == "focus"
-    ):
-        # A shared snapshot is only a compatibility fallback for a device that
-        # has no interval facts yet.  Once local facts exist it must not
-        # override the canonical union projection.
-        snapshot_has_reconciled_day = False
-        snapshot_week = None
-    if local_record_count > 0:
-        # Raw local FocusSession records are the authoritative day total.
-        # Only add the segment that is actually running now.  The cumulative
-        # session snapshot includes earlier paused/checkpointed segments and
-        # must never be rendered as a new three-hour live interval.
-        live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
-        live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + live_elapsed
-    else:
-        live_today = max(0, int(timer.today_seconds()), snapshot_today)
-    if snapshot_has_reconciled_day:
-        # A live FocusSession supplied by PetWindow already contains the
-        # canonical day projection. Reusing it here keeps the report card and
-        # study-room card byte-for-byte consistent during an open session.
-        live_today = snapshot_today
+    # An open segment is added once below as a FocusSegment.  Until then this
+    # is only a fallback for the headline while the live segment is prepared.
+    live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + (
+        timer.current_elapsed_seconds() if timer.is_running else 0
+    )
     current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
         "focus" if bool(timer.is_running)
         else "rest" if bool(timer.has_active_session)
@@ -287,8 +250,12 @@ def build_work_report(
             item["longest_focus_seconds"] = aggregate.longest_seconds
             item["average_session_seconds"] = aggregate.average_seconds
             item["interruptions"] = max(item.get("interruptions", 0), aggregate.interruption_count)
+    # The live aggregate above is the same interval union used by the daily
+    # rows.  Reuse its day projection instead of applying a second max/cache
+    # fallback to the report headline.
+    live_today = int(report["day"].get("total_seconds", 0) or 0)
     day = report["day"]
-    day["total_seconds"] = live_today if snapshot_has_reconciled_day else max(int(day["total_seconds"]), live_today)
+    day["total_seconds"] = live_today
     day["completed_rounds"] = max(
         int(day["completed_rounds"]),
         int(daily_stats_snapshot.get("completed_tasks", 0) or 0),
@@ -321,12 +288,18 @@ def build_work_report(
     def overlay_live_today(item: dict[str, Any]) -> None:
         """Overlay the open timer once, without double-counting a period."""
 
+        if live_segment is not None:
+            # The period was already rebuilt from the closed facts plus the
+            # open interval.  Overlaying it again would count the live segment
+            # twice and make report/rhythm totals diverge.
+            return
+
         rows = item.get("daily") or []
         today_row = next((row for row in rows if row.get("is_today")), None)
         if not isinstance(today_row, dict):
             return
         stored_day = max(0, int(today_row.get("seconds", 0) or 0))
-        visible_today = max(stored_day, live_today)
+        visible_today = live_today
         if visible_today > stored_day:
             item["total_seconds"] = int(item.get("total_seconds", 0) or 0) + visible_today - stored_day
             today_row["seconds"] = visible_today
@@ -345,10 +318,9 @@ def build_work_report(
             for row in item.get("daily") or []
             if row.get("seconds") is not None
         )
-        if key == "week" and snapshot_week is not None:
-            item["total_seconds"] = snapshot_week
-        else:
-            item["total_seconds"] = max(int(item.get("total_seconds", 0) or 0), rows_total)
+        # Daily projections are the canonical projection of the same clipped
+        # interval union.  Never resurrect a stale snapshot with max().
+        item["total_seconds"] = rows_total
         longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
         item["average_session_seconds"] = min(
             max(0, int(item.get("average_session_seconds", 0) or 0)),
@@ -921,6 +893,7 @@ class WorkReportDialog(QDialog):
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(5000)
         self._refresh_timer.timeout.connect(self.refresh)
+        self._last_render_fingerprint: str | None = None
 
     def showEvent(self, event) -> None:
         lifecycle_log("work_report.show_event.begin", self)
@@ -947,6 +920,18 @@ class WorkReportDialog(QDialog):
             report = self._snapshot_provider()
         except Exception as exc:  # pragma: no cover - defensive UI boundary
             report = {"error": f"报告暂时无法读取：{exc}"}
+        # ``generated_at`` changes on every refresh, but rebuilding all three
+        # scroll pages for that cosmetic field needlessly creates/deletes a
+        # large widget tree.  Skip identical snapshots; a real session/data
+        # change still produces a new fingerprint and is rendered normally.
+        fingerprint = repr({
+            key: report.get(key)
+            for key in ("error", "current_status", "day", "week", "month")
+            if key in report
+        })
+        if fingerprint == self._last_render_fingerprint:
+            return
+        self._last_render_fingerprint = fingerprint
         self.finish_button.setEnabled(
             report.get("current_status") in {"focus", "rest"}
             if not report.get("error")

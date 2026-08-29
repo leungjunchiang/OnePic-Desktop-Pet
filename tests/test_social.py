@@ -916,6 +916,16 @@ def test_raw_only_focus_stats_migration_disables_legacy_cache_fallback() -> None
     assert "perform public.lili_reconcile_focus_derived_totals(account_id)" in migration
 
 
+def test_focus_stats_timezone_migration_anchors_beijing_midnight() -> None:
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260829000300_lili_focus_stats_timezone_fix.sql").read_text(encoding="utf-8")
+
+    assert "today::timestamp at time zone 'Asia/Shanghai'" in migration
+    assert "week_start::timestamp at time zone 'Asia/Shanghai'" in migration
+    assert "days.focus_date::timestamp at time zone 'Asia/Shanghai'" in migration
+    assert "with rows as materialized" in migration
+
+
 def test_daily_focus_summary_is_permanent_but_sync_view_is_two_days() -> None:
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000400_lili_focus_daily_visibility.sql").read_text(encoding="utf-8")
@@ -1286,4 +1296,3 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
-
