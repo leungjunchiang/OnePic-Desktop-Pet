@@ -51,6 +51,10 @@ CONNECTION_STATES = {
 # freshness window; allowing one extra minute here covers a missed poll and
 # the time needed for the next retry without claiming that the peer is live.
 PRESENCE_GRACE_SECONDS = 180
+# These collections are read-only social overlays.  They do not carry
+# liveness or focus facts, so a five-minute account-scoped cache is safe for
+# passive dashboard polling while explicit UI actions can force a refresh.
+SOCIAL_AUXILIARY_TTL_SECONDS = 300.0
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 # The heartbeat is a liveness transport, not a time ledger.  Keep this allow
@@ -1332,7 +1336,7 @@ class SocialBackend(Protocol):
     def set_password_after_reset(self, new_password: str) -> None: ...
     def delete_account(self) -> None: ...
     def health(self) -> dict[str, Any]: ...
-    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
+    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True, force_auxiliary_refresh: bool = False) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
@@ -1369,6 +1373,10 @@ class HttpSocialBackend:
             account_name=self.ACCOUNT_NAME,
             persist_tokens=persist_tokens,
         )
+        # The dashboard contains the core presence snapshot.  Keep the
+        # request/notes overlays separately cached so their RPCs do not ride
+        # along with every passive dashboard poll.
+        self._buddy_requests_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._load_session()
 
     @property
@@ -1710,7 +1718,13 @@ class HttpSocialBackend:
         path = "/auth/v1/health" if self.transport == "direct" else "/health"
         return dict(self._raw("GET", path) or {})
 
-    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
+    def dashboard(
+        self,
+        room_id: str | None = None,
+        *,
+        allow_cache: bool = True,
+        force_auxiliary_refresh: bool = False,
+    ) -> dict[str, Any]:
         if self.transport == "direct":
             data = self._raw("POST", "/rest/v1/rpc/lili_dashboard", {}, authenticated=True) or {}
             if room_id:
@@ -1732,7 +1746,7 @@ class HttpSocialBackend:
                             data = _merge_dashboard_overlay(data, rituals)
                     except SocialError as exc:
                         if exc.status >= 500 or exc.kind in {"dns", "timeout", "refused", "tls", "network", "server"}: raise
-            self._merge_buddy_requests(data)
+            self._merge_buddy_requests(data, force=force_auxiliary_refresh)
             result = dict(data)
             if self.last_server_timestamp:
                 result.setdefault("server_timestamp", self.last_server_timestamp)
@@ -1749,13 +1763,20 @@ class HttpSocialBackend:
             # optional room detail as unavailable.
             result = dict(self._raw("GET", "/dashboard", authenticated=True) or {})
             result["_room_endpoint_unavailable"] = True
-        self._merge_buddy_requests(result)
+        self._merge_buddy_requests(result, force=force_auxiliary_refresh)
         if self.last_server_timestamp:
             result.setdefault("server_timestamp", self.last_server_timestamp)
         return result
 
-    def _merge_buddy_requests(self, data: dict[str, Any]) -> None:
+    def _merge_buddy_requests(self, data: dict[str, Any], *, force: bool = False) -> None:
         """Add incoming/outgoing buddy requests without breaking old relays."""
+
+        account_id = _session_user_id(self)
+        cached = self._buddy_requests_cache.get(account_id) if account_id else None
+        now = time.monotonic()
+        if cached is not None and not force and now - cached[0] < SOCIAL_AUXILIARY_TTL_SECONDS:
+            self._apply_buddy_requests_cache(data, cached[1])
+            return
 
         try:
             payload = self.rpc("lili_buddy_requests", {})
@@ -1763,10 +1784,32 @@ class HttpSocialBackend:
             # The request-state migration can roll out after the desktop
             # binary. Existing incoming requests from lili_dashboard remain
             # usable while the optional outgoing list catches up.
+            if account_id:
+                # Negative-cache an unavailable optional RPC as well.  A
+                # broken/old endpoint must not be retried on every 30-second
+                # dashboard cycle.
+                cached_payload = cached[1] if cached is not None else {}
+                self._buddy_requests_cache[account_id] = (now, cached_payload)
+                if cached is not None:
+                    self._apply_buddy_requests_cache(data, cached_payload)
             LOGGER.info("buddy request inbox unavailable kind=%s status=%s", exc.kind, exc.status)
             return
         if not isinstance(payload, dict):
+            if account_id:
+                self._buddy_requests_cache[account_id] = (now, {})
             return
+        incoming = payload.get("incoming")
+        outgoing = payload.get("outgoing")
+        cached_payload = {
+            "incoming": list(incoming) if isinstance(incoming, list) else None,
+            "outgoing": list(outgoing) if isinstance(outgoing, list) else None,
+        }
+        if account_id:
+            self._buddy_requests_cache[account_id] = (now, cached_payload)
+        self._apply_buddy_requests_cache(data, cached_payload)
+
+    @staticmethod
+    def _apply_buddy_requests_cache(data: dict[str, Any], payload: dict[str, Any]) -> None:
         incoming = payload.get("incoming")
         outgoing = payload.get("outgoing")
         if isinstance(incoming, list):
@@ -3392,6 +3435,8 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self._dashboard_cache = {}
         self._private_note_by_user: dict[str, str] = {}
         self._private_notes_loaded = False
+        self._private_notes_cache: dict[str, tuple[float, dict[str, str]]] = {}
+        self._auxiliary_cache_account_id = ""
         self.persist_tokens = persist_tokens
         if backend is not None:
             self._manager = backend
@@ -3523,37 +3568,85 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         if backend is not None: backend._clear_session()
         if self._manager.proxy is not None:
             self._manager.proxy.session = None
+        self._private_note_by_user = {}
+        self._private_notes_loaded = False
+        self._private_notes_cache.clear()
+        self._auxiliary_cache_account_id = ""
 
-    def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
+    def dashboard(
+        self,
+        room_id: str | None = None,
+        *,
+        allow_cache: bool = True,
+        force_auxiliary_refresh: bool = False,
+    ) -> dict[str, Any]:
         self.connection.set("SYNCING", data_source=self.connection.data_source, realtime_state="polling")
         try:
-            result = _normalise_never_seen_presence(
-                dict(self._manager.request("dashboard", room_id=room_id) or {})
-            )
+            account_id = _session_user_id(self)
+            if account_id != self._auxiliary_cache_account_id:
+                self._private_note_by_user = {}
+                self._private_notes_loaded = False
+                self._auxiliary_cache_account_id = account_id
             try:
-                note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
-                notes = _private_notes_from_payload(note_payload)
-                self._private_note_by_user = dict(notes)
+                dashboard_payload = self._manager.request(
+                    "dashboard",
+                    room_id=room_id,
+                    force_auxiliary_refresh=force_auxiliary_refresh,
+                )
+            except TypeError:
+                # Keep older in-memory/test route managers compatible with the
+                # new optional cache-control flag.  The production manager
+                # accepts it, so this fallback never duplicates a real read.
+                dashboard_payload = self._manager.request("dashboard", room_id=room_id)
+            result = _normalise_never_seen_presence(dict(dashboard_payload or {}))
+            now = time.monotonic()
+            cached_notes = self._private_notes_cache.get(account_id) if account_id else None
+            if (
+                cached_notes is not None
+                and not force_auxiliary_refresh
+                and now - cached_notes[0] < SOCIAL_AUXILIARY_TTL_SECONDS
+            ):
+                notes = dict(cached_notes[1])
+                self._private_note_by_user = notes
                 self._private_notes_loaded = True
                 _apply_buddy_private_notes(result, notes)
                 result["_private_notes_loaded"] = True
-            except SocialError as exc:
-                # The migration can be applied after the desktop release, and
-                # an older relay may omit the viewer-only field. Preserve the
-                # last authorized labels (or labels embedded in this payload)
-                # instead of silently replacing them with a default name.
-                embedded_notes = _private_notes_from_dashboard(result)
-                if embedded_notes:
-                    self._private_note_by_user.update(embedded_notes)
-                _apply_buddy_private_notes(result, self._private_note_by_user)
-                LOGGER.info(
-                    "buddy private notes unavailable; preserved local labels kind=%s status=%s",
-                    exc.kind,
-                    exc.status,
-                )
+            else:
+                try:
+                    note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
+                    notes = _private_notes_from_payload(note_payload)
+                    self._private_note_by_user = dict(notes)
+                    self._private_notes_loaded = True
+                    if account_id:
+                        self._private_notes_cache[account_id] = (now, dict(notes))
+                    _apply_buddy_private_notes(result, notes)
+                    result["_private_notes_loaded"] = True
+                except SocialError as exc:
+                    # The migration can be applied after the desktop release,
+                    # and an older relay may omit the viewer-only field.
+                    # Preserve the last authorized labels (or labels embedded
+                    # in this payload), then negative-cache the optional RPC
+                    # so a failed endpoint is not retried every poll.
+                    embedded_notes = _private_notes_from_dashboard(result)
+                    if embedded_notes and cached_notes is None:
+                        self._private_note_by_user.update(embedded_notes)
+                    if cached_notes is not None:
+                        self._private_note_by_user = dict(cached_notes[1])
+                        self._private_notes_loaded = True
+                    if account_id:
+                        self._private_notes_cache[account_id] = (
+                            now,
+                            dict(self._private_note_by_user),
+                        )
+                    _apply_buddy_private_notes(result, self._private_note_by_user)
+                    LOGGER.info(
+                        "buddy private notes unavailable; preserved local labels kind=%s status=%s",
+                        exc.kind,
+                        exc.status,
+                    )
             # The manual achievement-witness migration is not present in every
             # production project. Do not probe a missing optional RPC on every
-            # five-second dashboard refresh: a 404 adds noise to Supabase
+            # passive dashboard refresh: a 404 adds noise to Supabase
             # telemetry and is unrelated to the core buddy/presence snapshot.
             # If a future dashboard embeds this collection, the UI continues
             # to render it; this client simply does not invent a failing probe.

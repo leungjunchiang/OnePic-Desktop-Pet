@@ -30,13 +30,24 @@ from onepic_desktop_pet.behavior import PetState, StateDecision
 from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
-from onepic_desktop_pet.window import PetWindow
+from onepic_desktop_pet.window import (
+    PetWindow,
+    SOCIAL_DASHBOARD_INTERVAL_MS,
+    SOCIAL_LEADERBOARD_REFRESH_SECONDS,
+    SOCIAL_REACTION_REFRESH_SECONDS,
+)
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
 from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
 from onepic_desktop_pet.today_note import TimeMemoryWindow, TodayNoteWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
 from onepic_desktop_pet.controls import RoundedSurfaceLabel
+
+
+def test_phase1_social_read_gates_keep_heartbeat_separate() -> None:
+    assert SOCIAL_DASHBOARD_INTERVAL_MS == 30_000
+    assert SOCIAL_LEADERBOARD_REFRESH_SECONDS == 600.0
+    assert SOCIAL_REACTION_REFRESH_SECONDS == 60.0
 
 
 def _create_window() -> tuple[QApplication, PetWindow]:

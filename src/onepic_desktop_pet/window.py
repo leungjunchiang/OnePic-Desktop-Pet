@@ -287,6 +287,13 @@ def context_menu_position_for_pet(
 
 LOGGER = logging.getLogger(__name__)
 
+# Passive social reads are deliberately slower than the liveness heartbeat.
+# Keep these gates local to the desktop client: FocusSession writes, sync
+# cadence, and all time/statistics calculations remain unchanged.
+SOCIAL_DASHBOARD_INTERVAL_MS = 30_000
+SOCIAL_REACTION_REFRESH_SECONDS = 60.0
+SOCIAL_LEADERBOARD_REFRESH_SECONDS = 600.0
+
 
 def _guard_qt_callback(method):
     """Keep a transient native/API failure from stopping Qt's event loop.
@@ -1001,8 +1008,8 @@ class PetWindow(QWidget):
         # Keep incoming visits and food interactions responsive without
         # requiring the study-room window to be opened or manually refreshed.
         # Heartbeats are still throttled independently below, so this is a
-        # lightweight dashboard poll rather than a heartbeat every 5 seconds.
-        self.social_timer.setInterval(5_000)
+        # lightweight dashboard poll rather than a heartbeat on this timer.
+        self.social_timer.setInterval(SOCIAL_DASHBOARD_INTERVAL_MS)
         self.social_timer.timeout.connect(self._social_tick)
         self.social_timer.start()
         self.social_sync_timer = QTimer(self)
@@ -5694,9 +5701,9 @@ class PetWindow(QWidget):
         now_monotonic = time.monotonic()
         # Taunt/encouragement state is not liveness.  It only needs a modest
         # polling cadence, while the independent heartbeat keeps presence
-        # fresh.  Avoid making every five-second dashboard request perform a
+        # fresh.  Avoid making every dashboard request perform a
         # second reaction-state RPC and rebuild the pet bubble.
-        if now_monotonic - self._last_social_reaction_state_at >= 30.0:
+        if now_monotonic - self._last_social_reaction_state_at >= SOCIAL_REACTION_REFRESH_SECONDS:
             presence["_include_reaction_state"] = True
             self._last_social_reaction_state_at = now_monotonic
         if (
@@ -5727,9 +5734,9 @@ class PetWindow(QWidget):
             return
 
         # Rankings are useful but not liveness-critical.  Include them in at
-        # most one background dashboard cycle every two minutes; the normal
-        # five-second cycle remains focused on presence and buddy cards.
-        if now_monotonic - self._last_social_leaderboard_at >= 120.0:
+        # most one background dashboard cycle every ten minutes; the normal
+        # cycle remains focused on presence and buddy cards.
+        if now_monotonic - self._last_social_leaderboard_at >= SOCIAL_LEADERBOARD_REFRESH_SECONDS:
             presence["_include_leaderboard"] = True
             self._last_social_leaderboard_at = now_monotonic
 
@@ -6376,7 +6383,7 @@ class PetWindow(QWidget):
             )
         # A server profile may already contain the reward outfit when this
         # result arrives. Re-render immediately so the account-bound outfit
-        # does not wait for the next five-second social heartbeat.
+        # does not wait for the next passive social poll.
         if unlocked and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key:
             self._refresh_pixmap()
 

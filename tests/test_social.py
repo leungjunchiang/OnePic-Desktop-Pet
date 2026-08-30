@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
 
 import onepic_desktop_pet.social as social_module
 from onepic_desktop_pet.social import (
@@ -19,6 +20,7 @@ from onepic_desktop_pet.social import (
     DashboardCacheClientBase,
     HttpSocialBackend,
     PRESENCE_GRACE_SECONDS,
+    SOCIAL_AUXILIARY_TTL_SECONDS,
     SocialClient,
     SocialError,
     SocialSession,
@@ -658,6 +660,88 @@ def test_http_backend_uses_direct_supabase_paths():
     assert "p_week_seconds" not in heartbeat_body
     assert "p_duration" not in heartbeat_body
     assert heartbeat_call[4] is None
+
+
+def test_buddy_request_overlay_uses_five_minute_ttl_and_force_refresh(monkeypatch):
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+    request_calls = 0
+
+    def fake_raw(_method, path, _body=None, **_kwargs):
+        if path == "/rest/v1/rpc/lili_dashboard":
+            return {"me": {"user_id": "user-1"}, "buddies": [], "room_people": []}
+        raise AssertionError(path)
+
+    def fake_rpc(name, _body):
+        nonlocal request_calls
+        assert name == "lili_buddy_requests"
+        request_calls += 1
+        return {"incoming": [{"id": f"request-{request_calls}"}], "outgoing": []}
+
+    clock = [100.0]
+    monkeypatch.setattr(social_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend, "_raw", fake_raw)
+    monkeypatch.setattr(backend, "rpc", fake_rpc)
+
+    first = backend.dashboard()
+    second = backend.dashboard()
+    clock[0] += SOCIAL_AUXILIARY_TTL_SECONDS + 0.1
+    expired = backend.dashboard()
+    forced = backend.dashboard(force_auxiliary_refresh=True)
+
+    assert SOCIAL_AUXILIARY_TTL_SECONDS == 300.0
+    assert request_calls == 3
+    assert first["requests"] == [{"id": "request-1"}]
+    assert second["requests"] == [{"id": "request-1"}]
+    assert expired["requests"] == [{"id": "request-2"}]
+    assert forced["requests"] == [{"id": "request-3"}]
+
+
+def test_private_note_overlay_uses_ttl_and_force_refresh(monkeypatch):
+    direct_transport = SimpleNamespace(
+        session=SocialSession("token", "refresh", "user-1", 9_999_999_999),
+        auth_manager=None,
+    )
+
+    class FakeManager:
+        active = direct_transport
+        direct = direct_transport
+        proxy = None
+        backend_name = "Supabase Direct"
+        backend_endpoint = "https://supabase.example.test"
+        signed_in = True
+
+        def __init__(self):
+            self.dashboard_calls = []
+            self.note_calls = 0
+
+        def request(self, method, *args, **kwargs):
+            if method == "dashboard":
+                self.dashboard_calls.append(dict(kwargs))
+                return {"me": {"user_id": "user-1"}, "buddies": [], "room_people": []}
+            if method == "rpc" and args[0] == "lili_buddy_private_notes":
+                self.note_calls += 1
+                return {"notes": [{"buddy_user_id": "buddy-1", "note": f"备注{self.note_calls}"}]}
+            raise AssertionError((method, args, kwargs))
+
+    manager = FakeManager()
+    client = SocialClient(backend=manager, persist_tokens=False)
+
+    client.dashboard()
+    client.dashboard()
+    client.dashboard(force_auxiliary_refresh=True)
+
+    assert manager.note_calls == 2
+    assert manager.dashboard_calls == [
+        {"room_id": None, "force_auxiliary_refresh": False},
+        {"room_id": None, "force_auxiliary_refresh": False},
+        {"room_id": None, "force_auxiliary_refresh": True},
+    ]
 
 
 def test_heartbeat_rejects_payload_for_a_different_authenticated_account():

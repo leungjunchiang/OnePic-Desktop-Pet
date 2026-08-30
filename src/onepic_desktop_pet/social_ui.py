@@ -822,7 +822,7 @@ class SocialSyncThread(QThread):
                 # the room-scoped dashboard argument.
                 data = self.client.dashboard()
             # The leaderboard is a low-frequency view, not presence data.
-            # Fetching it on every five-second dashboard cycle caused a slow
+            # Fetching it on every passive dashboard cycle caused a slow
             # ranking RPC to hold up the completed signal and repaint path.
             leaderboard = getattr(self.client, "focus_leaderboard", None)
             if (
@@ -887,19 +887,33 @@ class SocialDashboardThread(QThread):
     completed = Signal(dict)
     failed = Signal(object)
 
-    def __init__(self, client: SocialClient, room_id: str | None, parent=None) -> None:
+    def __init__(
+        self,
+        client: SocialClient,
+        room_id: str | None,
+        parent=None,
+        *,
+        force_auxiliary_refresh: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.client = client
         self.room_id = room_id
+        self.force_auxiliary_refresh = bool(force_auxiliary_refresh)
 
     def run(self) -> None:
         try:
             try:
-                data = self.client.dashboard(room_id=self.room_id)
+                data = self.client.dashboard(
+                    room_id=self.room_id,
+                    force_auxiliary_refresh=self.force_auxiliary_refresh,
+                )
             except TypeError:
                 # Keep small offline/test backends compatible with the room
                 # scoped dashboard while the real request stays off the GUI.
-                data = self.client.dashboard()
+                try:
+                    data = self.client.dashboard(room_id=self.room_id)
+                except TypeError:
+                    data = self.client.dashboard()
             self.completed.emit(dict(data or {}))
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -2400,6 +2414,7 @@ class SocialHubDialog(QDialog):
         self.tabs.addTab(self._chat_page(), "互动")
         self.tabs.addTab(self._focus_page(), "专注")
         self.tabs.addTab(self._mine_page(), "我的")
+        self.tabs.currentChanged.connect(self._tab_changed)
         root.addWidget(self.tabs, 1)
         QTimer.singleShot(0, self._apply_adaptive_tab_widths)
         self._update_account_state()
@@ -2962,6 +2977,13 @@ class SocialHubDialog(QDialog):
             if not self._applying_dashboard:
                 self._room_refresh_timer.start(0)
 
+    def _tab_changed(self, index: int) -> None:
+        """Refresh viewer-scoped request/note overlays when their pages open."""
+
+        if index not in {1, 3} or self._applying_dashboard or not self.client.signed_in:
+            return
+        self.refresh()
+
     def _show_room_invite(self) -> None:
         """Reveal the invite code only when the user explicitly asks for it."""
 
@@ -3054,7 +3076,13 @@ class SocialHubDialog(QDialog):
             self._health_thread = None
         thread.deleteLater()
 
-    def _start_dashboard_refresh(self, room_id: str | None, message: str) -> None:
+    def _start_dashboard_refresh(
+        self,
+        room_id: str | None,
+        message: str,
+        *,
+        force_auxiliary_refresh: bool = False,
+    ) -> None:
         """Start one coalesced dashboard request away from the GUI thread."""
 
         if not self.client.signed_in:
@@ -3073,9 +3101,15 @@ class SocialHubDialog(QDialog):
             self._begin_action(message)
             try:
                 try:
-                    data = self.client.dashboard(room_id=room_id)
+                    data = self.client.dashboard(
+                        room_id=room_id,
+                        force_auxiliary_refresh=force_auxiliary_refresh,
+                    )
                 except TypeError:
-                    data = self.client.dashboard()
+                    try:
+                        data = self.client.dashboard(room_id=room_id)
+                    except TypeError:
+                        data = self.client.dashboard()
             except SocialError as exc:
                 self._dashboard_failed(str(exc))
                 return
@@ -3085,7 +3119,12 @@ class SocialHubDialog(QDialog):
             return
 
         self._begin_action(message)
-        thread = SocialDashboardThread(self.client, room_id, self)
+        thread = SocialDashboardThread(
+            self.client,
+            room_id,
+            self,
+            force_auxiliary_refresh=force_auxiliary_refresh,
+        )
         self._dashboard_thread = thread
         thread.completed.connect(
             lambda data, requested_room=room_id: self._dashboard_received(data, requested_room)
@@ -3159,7 +3198,11 @@ class SocialHubDialog(QDialog):
     def _refresh_selected_room(self) -> None:
         if not self.current_room_id or not self.client.signed_in:
             return
-        self._start_dashboard_refresh(self.current_room_id, "正在同步当前自习室…")
+        self._start_dashboard_refresh(
+            self.current_room_id,
+            "正在同步当前自习室…",
+            force_auxiliary_refresh=True,
+        )
 
     def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
@@ -4138,7 +4181,11 @@ class SocialHubDialog(QDialog):
 
     def refresh(self) -> None:
         if not self._require_login(): return
-        self._start_dashboard_refresh(self.current_room_id, "正在刷新搭子与专注状态…")
+        self._start_dashboard_refresh(
+            self.current_room_id,
+            "正在刷新搭子与专注状态…",
+            force_auxiliary_refresh=True,
+        )
 
     def _apply_presence_sequence_fence(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Prevent an older per-buddy snapshot from moving live fields back."""
