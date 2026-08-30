@@ -1039,6 +1039,57 @@ def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_p
     social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
 
 
+def test_presence_sequence_survives_process_restart(monkeypatch, tmp_path):
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+    monkeypatch.setattr(
+        social_module,
+        "account_local_data_path",
+        lambda filename, account_id: tmp_path / f"{account_id}-{filename}",
+    )
+
+    assert social_module._next_presence_sequence("restart-user") == 1
+    assert social_module._next_presence_sequence("restart-user") == 2
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+
+    assert social_module._next_presence_sequence("restart-user") == 3
+    saved = json.loads((tmp_path / "restart-user-social-device.json").read_text(encoding="utf-8"))
+    assert saved["presence_sequence"] == 3
+
+
+def test_rejected_presence_response_adopts_server_sequence_and_retries(monkeypatch, tmp_path):
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+    monkeypatch.setattr(
+        social_module,
+        "account_local_data_path",
+        lambda filename, account_id: tmp_path / f"{account_id}-{filename}",
+    )
+
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+            self.session = SocialSession("a", "r", "retry-user", 9_999_999_999)
+            self.bodies = []
+
+        def _raw(self, method, path, body=None, **kwargs):
+            self.bodies.append(body)
+            if len(self.bodies) == 1:
+                return {"accepted": False, "sequence": 202}
+            return {"accepted": True, "sequence": body["p_sequence"]}
+
+    backend = Recording()
+    backend.heartbeat(working=False, session_active=False)
+
+    assert [body["p_sequence"] for body in backend.bodies] == [1, 203]
+    saved = json.loads((tmp_path / "retry-user-social-device.json").read_text(encoding="utf-8"))
+    assert saved["presence_sequence"] == 203
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+
+
 def test_presence_freshness_is_server_authoritative_in_all_relays():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260829100000_lili_presence_sequence_guard.sql").read_text(encoding="utf-8")
@@ -1370,6 +1421,53 @@ def test_social_pet_name_migration_covers_dashboard_room_and_profile_relays():
     assert "lili_attach_social_pet_names" in migration
     assert "lili_dashboard_social_pet_names_base" in migration
     assert "lili_room_dashboard_social_pet_names_base" in migration
+
+
+def test_presence_dashboard_and_beijing_repair_is_durable_and_rpc_scoped():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations"
+        / "20260830143000_lili_presence_dashboard_beijing_repair.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "clean_device_id = coalesce(current_row.device_id, '')" in migration
+    assert "current_row.presence_sequence + 1" in migration
+    assert "coalesce(to_jsonb(me_presence.session_id), 'null'::jsonb)" in migration
+    assert "lili_parse_client_focus_timestamp" in migration
+    assert "at time zone 'Asia/Shanghai'" in migration
+    assert "time_corrected_at is not null" in migration
+    assert "leungjunchiang@qq.com" in migration
+    assert "grant execute on function public.lili_upsert_focus_presence" in migration
+    assert "revoke execute on function public.lili_dashboard_social_pet_names_base" in migration
+
+
+def test_owner_nickname_projection_treats_empty_string_as_missing():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations"
+        / "20260830143500_lili_owner_nickname_empty_guard.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "nullif(left(trim(p.owner_nickname), 24), '')" in migration
+    assert "nullif(left(trim(p.nickname), 24), '')" in migration
+    assert "'搭子'" in migration
+
+
+def test_legacy_direct_presence_compatibility_stays_owner_scoped_and_server_ordered():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations"
+        / "20260830170000_lili_legacy_presence_write_compat.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "request_path ~ '(^|/)lili_focus_presence$'" in migration
+    assert "new.user_id is distinct from me" in migration
+    assert "old.presence_sequence, 0) + 1" in migration
+    assert "m.user_id = me" in migration
+    assert "grant insert, update on table public.lili_focus_presence to authenticated" in migration
+    assert "revoke insert, update, delete on table public.lili_focus_presence from anon" in migration
+    assert "grant insert, update on table public.lili_focus_presence to anon" not in migration
+    assert "revoke execute on function public.lili_guard_legacy_direct_presence_write" in migration
     for path in (
         root / "src" / "onepic_desktop_pet" / "social.py",
         root / "relay" / "cloudbase-function" / "index.js",

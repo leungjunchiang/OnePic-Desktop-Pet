@@ -410,12 +410,10 @@ def _owner_label(record: dict[str, Any] | None) -> str:
     if isinstance(record, dict):
         private_note = clean_social_pet_name(record.get("private_note_name"))
         if private_note:
-            # A viewer-assigned nickname is already the complete card label;
-            # do not append the generic "家的六毛" suffix to it.
-            return private_note
+            return social_pet_label(private_note)
         pet_name = _social_pet_name(record)
         if pet_name:
-            return pet_name
+            return social_pet_label(pet_name)
     return social_pet_label(_public_owner_nickname(record))
 
 

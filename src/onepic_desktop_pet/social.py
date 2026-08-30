@@ -126,10 +126,18 @@ def _presence_device_credentials(user_id: str) -> tuple[str, bool]:
         device_id = str(raw.get("device_id") or "").strip()[:64] if isinstance(raw, dict) else ""
         if not device_id:
             device_id = uuid.uuid4().hex
+        try:
+            saved_sequence = max(0, int(raw.get("presence_sequence", 0) or 0)) if isinstance(raw, dict) else 0
+        except (TypeError, ValueError, OverflowError):
+            saved_sequence = 0
         state = {
             "version": 1,
             "device_id": device_id,
             "claim_pending": bool(raw.get("claim_pending", True)) if isinstance(raw, dict) else True,
+            # Keep the durable ordering fence across process restarts. Dropping
+            # this field makes a restarted client count from one while the
+            # database still remembers the previous, larger sequence.
+            "presence_sequence": saved_sequence,
         }
         _PRESENCE_DEVICE_STATE_CACHE[account_id] = state
         try:
@@ -139,6 +147,54 @@ def _presence_device_credentials(user_id: str) -> tuple[str, bool]:
             # a locked-down portable install cannot write its app-data folder.
             LOGGER.debug("social device state could not be persisted", exc_info=True)
         return device_id, bool(state["claim_pending"])
+
+
+def _presence_rpc_payload(response: Any) -> dict[str, Any]:
+    """Unwrap a presence RPC result from direct and relay transports."""
+
+    candidate = response
+    if isinstance(candidate, list):
+        candidate = candidate[0] if candidate else None
+    if isinstance(candidate, dict) and not ({"accepted", "sequence"} & candidate.keys()):
+        for key in ("data", "result"):
+            nested = candidate.get(key)
+            if isinstance(nested, list):
+                nested = nested[0] if nested else None
+            if isinstance(nested, dict):
+                candidate = nested
+                break
+    return candidate if isinstance(candidate, dict) else {}
+
+
+def _reconcile_presence_rpc_response(user_id: str, device_id: str, response: Any) -> bool:
+    """Persist the server sequence and report whether one retry is needed."""
+
+    payload = _presence_rpc_payload(response)
+    account_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if account_id and clean_device_id and payload:
+        try:
+            server_sequence = max(0, int(payload.get("sequence", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            server_sequence = 0
+        if server_sequence:
+            with _PRESENCE_DEVICE_STATE_LOCK:
+                state = _PRESENCE_DEVICE_STATE_CACHE.get(account_id)
+                if state and str(state.get("device_id")) == clean_device_id:
+                    try:
+                        local_sequence = max(0, int(state.get("presence_sequence", 0) or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        local_sequence = 0
+                    if server_sequence > local_sequence:
+                        state["presence_sequence"] = server_sequence
+                        try:
+                            write_json_atomic(
+                                account_local_data_path(_PRESENCE_DEVICE_STATE_FILENAME, account_id),
+                                state,
+                            )
+                        except OSError:
+                            LOGGER.debug("social server presence sequence could not be persisted", exc_info=True)
+    return payload.get("accepted") is False
 
 
 def _mark_presence_device_claimed(user_id: str, device_id: str) -> None:
@@ -1825,19 +1881,32 @@ class HttpSocialBackend:
             body["sequence"] = _next_presence_sequence(requested_user_id)
         if self.transport == "direct":
             try:
-                self._raw(
+                result = self._raw(
                     "POST",
                     "/rest/v1/rpc/lili_upsert_focus_presence",
                     _atomic_presence_body(body),
                     authenticated=True,
                 )
+                if _reconcile_presence_rpc_response(requested_user_id, stable_device_id, result):
+                    body["sequence"] = _next_presence_sequence(requested_user_id)
+                    result = self._raw(
+                        "POST",
+                        "/rest/v1/rpc/lili_upsert_focus_presence",
+                        _atomic_presence_body(body),
+                        authenticated=True,
+                    )
+                    _reconcile_presence_rpc_response(requested_user_id, stable_device_id, result)
             except SocialError as exc:
                 if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
                     _mark_presence_device_claim_pending(requested_user_id, stable_device_id)
                 raise
         else:
             try:
-                self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+                result = self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+                if _reconcile_presence_rpc_response(requested_user_id, stable_device_id, result):
+                    body["sequence"] = _next_presence_sequence(requested_user_id)
+                    result = self._raw("POST", "/presence/heartbeat", body, authenticated=True)
+                    _reconcile_presence_rpc_response(requested_user_id, stable_device_id, result)
             except SocialError as exc:
                 if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
                     _mark_presence_device_claim_pending(requested_user_id, device_id)
@@ -2619,7 +2688,11 @@ class LegacyDirectSocialClient:
         if not body.get("sequence"):
             body["sequence"] = _next_presence_sequence(self.session.user_id)
         try:
-            self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
+            result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
+            if _reconcile_presence_rpc_response(self.session.user_id, stable_device_id, result):
+                body["sequence"] = _next_presence_sequence(self.session.user_id)
+                result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
+                _reconcile_presence_rpc_response(self.session.user_id, stable_device_id, result)
         except SocialError as exc:
             if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
                 _mark_presence_device_claim_pending(self.session.user_id, stable_device_id)

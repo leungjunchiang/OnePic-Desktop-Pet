@@ -193,8 +193,7 @@ def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu
     item = dialog.buddies.item(0)
     widget = dialog.buddies.itemWidget(item)
     assert widget is not None
-    assert any("论文搭子" in label.text() for label in widget.findChildren(QLabel))
-    assert not any("论文搭子家的六毛" in label.text() for label in widget.findChildren(QLabel))
+    assert any("论文搭子家的六毛" in label.text() for label in widget.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -206,8 +205,7 @@ def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> N
     dialog.apply_dashboard(data)
     app.processEvents()
 
-    assert "论文搭子" in dialog.wealth_leaderboard.item(0).text()
-    assert "论文搭子家的六毛" not in dialog.wealth_leaderboard.item(0).text()
+    assert "论文搭子家的六毛" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -455,7 +453,7 @@ def test_buddy_name_priority_is_private_note_then_own_pet_name_then_fallback() -
     private = BuddyCardWidget(
         {
             "user_id": "buddy-private",
-            "private_note_name": "我给的昵称",
+            "private_note_name": "lxt",
             "pet_name": "对方六毛名",
             "owner_nickname": "对方公开昵称",
             "online": True,
@@ -479,14 +477,20 @@ def test_buddy_name_priority_is_private_note_then_own_pet_name_then_fallback() -
             "status": "rest",
         }
     )
+    default = BuddyCardWidget(
+        {
+            "user_id": "buddy-default",
+            "online": True,
+            "status": "rest",
+        }
+    )
 
-    assert "我给的昵称" in private.findChildren(QLabel)[0].text()
-    assert "家的六毛" not in private.findChildren(QLabel)[0].text()
-    assert "对方六毛名" in own_name.findChildren(QLabel)[0].text()
-    assert "对方六毛名家的六毛" not in own_name.findChildren(QLabel)[0].text()
+    assert "lxt家的六毛" in private.findChildren(QLabel)[0].text()
+    assert "对方六毛名家的六毛" in own_name.findChildren(QLabel)[0].text()
     assert "对方公开昵称家的六毛" in fallback.findChildren(QLabel)[0].text()
+    assert "搭子家的六毛" in default.findChildren(QLabel)[0].text()
 
-    for widget in (private, own_name, fallback):
+    for widget in (private, own_name, fallback, default):
         widget.close(); widget.deleteLater()
     app.processEvents()
 
