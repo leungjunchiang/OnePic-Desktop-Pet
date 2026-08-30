@@ -162,6 +162,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           release_tag="${GITHUB_REF_NAME#release/}"
+          notes_file="$(mktemp)"
+          trap 'rm -f "$notes_file"' EXIT
+          awk -v heading="## ${release_tag} " '
+            index($0, heading) == 1 { in_section = 1; next }
+            in_section && /^## / { exit }
+            in_section { print }
+          ' release-notes.md > "$notes_file"
+          if [ ! -s "$notes_file" ]; then
+            echo "No release notes section found for ${release_tag}." >&2
+            exit 1
+          fi
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Removing stale release $release_tag before publishing the verified artifacts."
             gh release delete "$release_tag" \
@@ -172,6 +183,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - 搭子在线与北京时间修复" \
+            --title "Lili $release_tag" \
             --generate-notes \
-            --notes "修复搭子双向在线、专注状态与私人备注刷新；名称统一为‘私人备注/对方自定义名/公开名/搭子 + 家的六毛’。修复客户端重启后的心跳序号回退、空闲账号 dashboard 变成 NULL、旧版 Presence 直写 403，以及凌晨专注记录被按 UTC 多显示 8 小时的问题。"
+            --notes-file "$notes_file"
