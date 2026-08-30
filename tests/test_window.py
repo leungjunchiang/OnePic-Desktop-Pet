@@ -955,10 +955,15 @@ def test_compact_todo_panel_supports_three_rows_and_follows_pet(tmp_path) -> Non
     pet_left = window.x() + visible_bounds.left()
     pet_right = window.x() + visible_bounds.right() + 1
     available = (QApplication.screenAt(window.geometry().center()) or QApplication.primaryScreen()).availableGeometry()
-    if pet_left - panel.width() - 8 >= available.left():
-        assert panel.x() + panel.width() + 8 <= pet_left
-    elif pet_right + 8 + panel.width() <= available.right() + 1:
-        assert panel.x() >= pet_right + 8
+    # _position_compact_todos reserves a 6px anti-aliased mask safety margin
+    # before applying the 8px placement gap.  Include the same margin here so
+    # the assertion remains stable on macOS Intel's fractional offscreen
+    # geometry, where the unexpanded rectangle can appear to fit by one pixel.
+    pet_safety = 6
+    if pet_left - pet_safety - panel.width() - 8 >= available.left():
+        assert panel.x() + panel.width() + 8 <= pet_left - pet_safety
+    elif pet_right + pet_safety + 8 + panel.width() <= available.right() + 1:
+        assert panel.x() >= pet_right + pet_safety + 8
     else:
         assert panel.y() >= window.y() + visible_bounds.bottom() + 1 + 6 or panel.y() <= window.y() + visible_bounds.top() - panel.height() - 6
     window.close()
