@@ -54,6 +54,29 @@ class SignedInClient:
         }
 
 
+class ProfileClient(SignedInClient):
+    def __init__(self) -> None:
+        self.owner_nickname = ""
+        self.profile_updates: list[dict] = []
+
+    def dashboard(self):
+        data = super().dashboard()
+        data["me"].update(
+            {
+                "nickname": "mianmian",
+                "owner_nickname": self.owner_nickname or None,
+            }
+        )
+        return data
+
+    def update_profile(self, **kwargs) -> None:
+        self.profile_updates.append(dict(kwargs))
+        self.owner_nickname = str(kwargs.get("owner_nickname") or "")
+
+    def rpc(self, *_args, **_kwargs):
+        return None
+
+
 class OfflineCachedClient(SignedInClient):
     def dashboard(self):
         data = super().dashboard()
@@ -449,7 +472,7 @@ def test_buddy_card_uses_public_nickname_when_private_note_is_missing() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
-def test_buddy_name_priority_is_private_note_then_own_pet_name_then_fallback() -> None:
+def test_buddy_name_priority_is_private_note_then_owner_name_then_account_name() -> None:
     app = QApplication.instance() or QApplication([])
     private = BuddyCardWidget(
         {
@@ -487,13 +510,53 @@ def test_buddy_name_priority_is_private_note_then_own_pet_name_then_fallback() -
     )
 
     assert "lxt家的六毛" in private.findChildren(QLabel)[0].text()
-    assert "对方六毛名家的六毛" in own_name.findChildren(QLabel)[0].text()
+    assert "对方公开昵称家的六毛" in own_name.findChildren(QLabel)[0].text()
+    assert "对方六毛名家的六毛" not in own_name.findChildren(QLabel)[0].text()
     assert "对方公开昵称家的六毛" in fallback.findChildren(QLabel)[0].text()
     assert "搭子家的六毛" in default.findChildren(QLabel)[0].text()
 
     for widget in (private, own_name, fallback, default):
         widget.close(); widget.deleteLater()
     app.processEvents()
+
+
+def test_owner_name_controls_fixed_liumao_label_and_persists_without_pet_name() -> None:
+    app = QApplication.instance() or QApplication([])
+    client = ProfileClient()
+    dialog = SocialHubDialog(client)
+    dialog.apply_dashboard(client.dashboard())
+    app.processEvents()
+
+    assert dialog.identity.text().startswith("mianmian家的六毛")
+    assert dialog.owner_name_edit.text() == ""
+    assert any(label.text() == "六毛主人名" for label in dialog.findChildren(QLabel))
+    assert not any("我的六毛昵称" in label.text() for label in dialog.findChildren(QLabel))
+    assert not any("搭子家的六毛" in label.text() for label in dialog.findChildren(QLabel))
+
+    dialog.owner_name_edit.setText("小梁")
+    app.processEvents()
+    assert dialog.identity.text().startswith("小梁家的六毛")
+    dialog._save_profile()
+    app.processEvents()
+    assert client.profile_updates[-1]["owner_nickname"] == "小梁"
+    assert "pet_name" not in client.profile_updates[-1]
+
+    # A fresh dialog receives the persisted owner_nickname from the same
+    # profile payload, while the fixed suffix remains exactly 六毛.
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+    restored = SocialHubDialog(client)
+    restored.apply_dashboard(client.dashboard())
+    app.processEvents()
+    assert restored.identity.text().startswith("小梁家的六毛")
+
+    restored.owner_name_edit.clear()
+    app.processEvents()
+    assert restored.identity.text().startswith("mianmian家的六毛")
+    restored._save_profile()
+    app.processEvents()
+    assert client.profile_updates[-1]["owner_nickname"] == ""
+    assert "六毛" in restored.identity.text()
+    restored.close(); restored.deleteLater(); app.processEvents()
 
 
 def test_dashboard_merge_preserves_private_remark_when_response_omits_field() -> None:

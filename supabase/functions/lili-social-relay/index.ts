@@ -402,6 +402,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
     }
     for (const key of ["nickname", "owner_nickname"] as const) {
       if (clean[key] === undefined) continue;
+      // Phase 3 uses an explicit NULL to clear only the optional owner name.
+      // Keep the legacy protection for empty strings from older clients.
+      if (key === "owner_nickname" && clean[key] === null) continue;
       const value = String(clean[key]).trim().slice(0, 24);
       // Empty identity fields mean “keep the durable profile”. Do not let an
       // old client erase a social name while saving unrelated settings.

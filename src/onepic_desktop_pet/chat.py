@@ -894,8 +894,9 @@ class AISettingsDialog(QDialog):
         form.addRow("API 令牌", self.token)
         self.owner_nickname = QLineEdit(getattr(settings, "owner_nickname", ""))
         self.owner_nickname.setMaxLength(24)
-        self.owner_nickname.setPlaceholderText("例如：小梁、mianmian；留空则显示搭子家的六毛")
-        form.addRow("主人称呼", self.owner_nickname)
+        self.owner_nickname.setPlaceholderText("例如：小梁、mianmian")
+        self.owner_nickname.setToolTip("这里只填写“谁家的”主人名；“家的六毛”是固定名称。")
+        form.addRow("六毛主人名", self.owner_nickname)
         layout.addLayout(form)
 
         self.token_status = QLabel()

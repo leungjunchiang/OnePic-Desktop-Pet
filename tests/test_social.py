@@ -156,7 +156,7 @@ def test_connection_state_store_keeps_auth_and_no_room_out_of_offline_bucket() -
     assert store.last_failure_at
 
 
-def test_profile_updates_never_overwrite_identity_with_empty_local_nickname(monkeypatch) -> None:
+def test_profile_updates_keep_identity_separate_and_allow_explicit_owner_clear(monkeypatch) -> None:
     backend = HttpSocialBackend(
         "https://supabase.example.test",
         client_key="sb_publishable_test",
@@ -179,9 +179,59 @@ def test_profile_updates_never_overwrite_identity_with_empty_local_nickname(monk
     )
     backend.update_owner_nickname(" ")
 
-    assert len(requests) == 1
+    assert len(requests) == 2
     assert "nickname" not in requests[0]["body"]
     assert "owner_nickname" not in requests[0]["body"]
+    assert requests[1]["body"]["owner_nickname"] is None
+
+
+def test_owner_nickname_update_does_not_overwrite_account_nickname(monkeypatch) -> None:
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+    requests: list[dict] = []
+
+    def fake_raw(method, path, body=None, **_kwargs):
+        requests.append({"method": method, "path": path, "body": body or {}})
+        return None
+
+    monkeypatch.setattr(backend, "_raw", fake_raw)
+    backend.update_owner_nickname("小梁")
+
+    assert requests[0]["body"]["owner_nickname"] == "小梁"
+    assert "nickname" not in requests[0]["body"]
+
+
+def test_profile_update_can_write_account_and_owner_names_as_separate_fields(monkeypatch) -> None:
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+    requests: list[dict] = []
+
+    def fake_raw(method, path, body=None, **_kwargs):
+        requests.append({"method": method, "path": path, "body": body or {}})
+        return None
+
+    monkeypatch.setattr(backend, "_raw", fake_raw)
+    backend.update_profile(
+        nickname="mianmian",
+        owner_nickname="小梁",
+        visibility="friends",
+        show_exact_time=True,
+        allow_visits=True,
+    )
+
+    assert requests[0]["body"]["nickname"] == "mianmian"
+    assert requests[0]["body"]["owner_nickname"] == "小梁"
+    assert "pet_name" not in requests[0]["body"]
 
 
 def test_profile_update_round_trips_optional_social_pet_name(monkeypatch) -> None:

@@ -32,6 +32,7 @@ import uuid
 from .local_data import account_local_data_path, app_data_dir, read_json, write_json_atomic
 from .resources import resource_path, resource_root
 from .tls_support import tls_diagnostics, verified_ssl_context
+from .config import clean_owner_nickname
 
 
 LOGGER = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ _PRESENCE_TIMESTAMP_FIELDS = ("last_seen_at", "last_seen", "status_updated_at")
 _PRESENCE_DEVICE_STATE_FILENAME = "social-device.json"
 _PRESENCE_DEVICE_STATE_LOCK = threading.Lock()
 _PRESENCE_DEVICE_STATE_CACHE: dict[str, dict[str, Any]] = {}
+_PROFILE_FIELD_UNSET = object()
 
 
 def _next_presence_sequence(user_id: str) -> int:
@@ -1348,7 +1350,7 @@ class SocialBackend(Protocol):
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True, force_auxiliary_refresh: bool = False) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None: ...
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
@@ -1861,18 +1863,24 @@ class HttpSocialBackend:
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
         clean = nickname.strip()[:24]
         body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
         if pet_name is not None:
             body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
-        # An empty local nickname means “keep the durable server identity” on
-        # a new machine. Sending nickname="搭子" plus owner_nickname=""
-        # would silently erase an existing social name.
-        if clean:
-            body.update({"nickname": clean, "owner_nickname": clean})
+        # Omitting owner_nickname preserves the legacy coupling for old
+        # callers.  The Phase 3 profile editor passes it explicitly so the
+        # account nickname and the optional owner display name remain two
+        # separate fields, including an intentional clear (NULL).
+        if owner_nickname is _PROFILE_FIELD_UNSET:
+            if clean:
+                body.update({"nickname": clean, "owner_nickname": clean})
+            else:
+                LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
         else:
-            LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
+            if clean:
+                body["nickname"] = clean
+            body["owner_nickname"] = clean_owner_nickname(owner_nickname) or None
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             path = f"/rest/v1/lili_profiles?user_id=eq.{user_id}"
@@ -1881,11 +1889,8 @@ class HttpSocialBackend:
         self._raw("PATCH", path, body, authenticated=True)
 
     def update_owner_nickname(self, nickname: str) -> None:
-        clean = nickname.strip()[:24]
-        if not clean:
-            LOGGER.info("social owner nickname write skipped reason=empty_nickname")
-            return
-        body = {"nickname": clean, "owner_nickname": clean}
+        clean = clean_owner_nickname(nickname)
+        body = {"owner_nickname": clean or None}
         if self.transport == "direct":
             user_id = urllib.parse.quote(str(self.session.user_id if self.session else ""), safe="")
             self._raw("PATCH", f"/rest/v1/lili_profiles?user_id=eq.{user_id}", body, authenticated=True)
@@ -2706,9 +2711,9 @@ class LegacyDirectSocialClient:
             return self._http_backend.rpc(name, body)
         return self._raw("POST", f"/rest/v1/rpc/{name}", body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
         if self._http_backend is not None:
-            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name)
+            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name, owner_nickname=owner_nickname)
         if not self.session:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
@@ -2717,10 +2722,15 @@ class LegacyDirectSocialClient:
         body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
         if pet_name is not None:
             body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
-        if clean:
-            body.update({"nickname": clean, "owner_nickname": clean})
+        if owner_nickname is _PROFILE_FIELD_UNSET:
+            if clean:
+                body.update({"nickname": clean, "owner_nickname": clean})
+            else:
+                LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
         else:
-            LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
+            if clean:
+                body["nickname"] = clean
+            body["owner_nickname"] = clean_owner_nickname(owner_nickname) or None
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
@@ -2765,11 +2775,8 @@ class LegacyDirectSocialClient:
         if not self.session:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
-        clean = nickname.strip()[:24]
-        if not clean:
-            LOGGER.info("social owner nickname write skipped reason=empty_nickname")
-            return
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"nickname": clean, "owner_nickname": clean, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        clean = clean_owner_nickname(nickname)
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"owner_nickname": clean or None, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self._http_backend is not None:
@@ -3084,7 +3091,7 @@ class DashboardCacheClientBase:
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._require_backend().rpc(name, body)
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name)
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name, owner_nickname=owner_nickname)
     def update_owner_nickname(self, nickname: str) -> None: self._require_backend().update_owner_nickname(nickname)
     def heartbeat(self, **kwargs: Any) -> None: self._require_backend().heartbeat(**kwargs)
     def send_interaction(self, **kwargs: Any) -> None: self._require_backend().send_interaction(**kwargs)

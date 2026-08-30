@@ -4805,7 +4805,7 @@ class PetWindow(QWidget):
             except (TypeError, ValueError, OverflowError):
                 seconds = 0
             name = social_pet_label(
-                row.get("owner_nickname") or row.get("nickname") or row.get("pet_name") or "搭子"
+                row.get("owner_nickname") or row.get("nickname") or "搭子"
             )
             if seconds > 0:
                 candidates.append((seconds, name))
@@ -5037,12 +5037,6 @@ class PetWindow(QWidget):
         if not user_id or self._owner_nickname_sync_inflight:
             return
         clean = clean_owner_nickname(nickname)
-        if not clean:
-            # An empty local setting means that this machine has not loaded a
-            # social identity yet. Never send it as a remote rename: doing so
-            # would overwrite an existing nickname with the default label.
-            LOGGER.info("owner nickname sync skipped reason=empty_local_nickname")
-            return
         key = (user_id, clean)
         if self._owner_nickname_sync_key == key:
             return
@@ -6132,9 +6126,14 @@ class PetWindow(QWidget):
         profile = profile if isinstance(profile, dict) else {}
         user_id = self._current_social_user_id()
         if user_id:
-            remote_raw_nickname = profile.get("owner_nickname")
-            if remote_raw_nickname is None:
-                remote_raw_nickname = profile.get("nickname")
+            # NULL/empty owner_nickname is an intentional clear and must fall
+            # back to the account nickname only at render time.  Fall back to
+            # profile.nickname only for legacy payloads that omit the field.
+            remote_raw_nickname = (
+                profile.get("owner_nickname")
+                if "owner_nickname" in profile
+                else profile.get("nickname")
+            )
             remote_nickname = clean_owner_nickname(remote_raw_nickname)
             # An explicit rename is already being uploaded; do not let a
             # stale in-flight dashboard response undo that local action.

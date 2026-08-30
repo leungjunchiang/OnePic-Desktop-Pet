@@ -288,6 +288,8 @@ def test_owner_nickname_changes_social_identity_without_changing_pet_name() -> N
     settings_dialog = AISettingsDialog(settings, CredentialStore())
 
     assert settings_dialog.owner_nickname.text() == ""
+    assert "六毛主人名" in " ".join(label.text() for label in settings_dialog.findChildren(QLabel))
+    assert "留空则显示搭子家的六毛" not in " ".join(label.text() for label in settings_dialog.findChildren(QLabel))
     settings_dialog.owner_nickname.setText("团团")
     settings_dialog.apply()
 
