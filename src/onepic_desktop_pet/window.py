@@ -206,7 +206,7 @@ from .quiet_mode import detect_quiet_mode
 from .qt_lifecycle import request_stop_all, running_threads
 from .lifecycle_log import lifecycle_log
 from .performance import EventLoopLagTracker, PerformanceMonitor
-from .social import SocialClient
+from .social import SocialClient, _session_user_id
 from .social_ui import (
     BuddyVisitWindow,
     IncomingVisitNotice,
@@ -624,6 +624,8 @@ class PetWindow(QWidget):
         self._social_heartbeat_thread = SocialHeartbeatWorker(self.social_client)
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
+        self._last_social_leaderboard_at = 0.0
+        self._last_social_reaction_state_at = 0.0
         self._social_presence_context_signature: tuple[str, str, str, str] | None = None
         self._social_event_threads: list[SocialEventThread] = []
         self._social_profile_threads: list[SocialProfileThread] = []
@@ -5024,8 +5026,7 @@ class PetWindow(QWidget):
 
         if not self.social_client.signed_in:
             return
-        session = getattr(self.social_client, "session", None)
-        user_id = str(getattr(session, "user_id", "") or "")
+        user_id = _session_user_id(self.social_client)
         if not user_id or self._owner_nickname_sync_inflight:
             return
         clean = clean_owner_nickname(nickname)
@@ -5620,8 +5621,12 @@ class PetWindow(QWidget):
             self._social_thread is not None
             and self._social_thread.isRunning()
         )
-        session = getattr(self.social_client, "session", None)
-        user_id = str(getattr(session, "user_id", "") or "")
+        # The authenticated account may live in the shared auth manager or in
+        # the active HTTP backend while a token refresh is copying it to the
+        # route client's ``session``.  Use the same resolver as the heartbeat
+        # and dashboard paths so an otherwise valid account never sends an
+        # anonymous/empty presence update.
+        user_id = _session_user_id(self.social_client)
         if user_id and user_id != self._economy_sync_user_id:
             self._economy_sync_user_id = user_id
             self._social_personal_sync_due = True
@@ -5687,6 +5692,13 @@ class PetWindow(QWidget):
             }
             self._social_presence_context_signature = presence_context_signature
         now_monotonic = time.monotonic()
+        # Taunt/encouragement state is not liveness.  It only needs a modest
+        # polling cadence, while the independent heartbeat keeps presence
+        # fresh.  Avoid making every five-second dashboard request perform a
+        # second reaction-state RPC and rebuild the pet bubble.
+        if now_monotonic - self._last_social_reaction_state_at >= 30.0:
+            presence["_include_reaction_state"] = True
+            self._last_social_reaction_state_at = now_monotonic
         if (
             not dashboard_busy
             and (
@@ -5713,6 +5725,13 @@ class PetWindow(QWidget):
         # working/paused state from reaching the independent heartbeat loop.
         if dashboard_busy:
             return
+
+        # Rankings are useful but not liveness-critical.  Include them in at
+        # most one background dashboard cycle every two minutes; the normal
+        # five-second cycle remains focused on presence and buddy cards.
+        if now_monotonic - self._last_social_leaderboard_at >= 120.0:
+            presence["_include_leaderboard"] = True
+            self._last_social_leaderboard_at = now_monotonic
 
         self._social_request_generation += 1
         request_generation = self._social_request_generation
@@ -5795,7 +5814,8 @@ class PetWindow(QWidget):
         # thread; this is what makes a peer's fresh focus state visible within
         # the same heartbeat.
         if self._social_dialog is not None:
-            self._social_dialog.apply_dashboard(data)
+            with self._performance.measure("social.dashboard_apply"):
+                self._social_dialog.apply_dashboard(data)
 
         taunt_active = self._apply_taunt_state(data.get("_taunt_state"))
         encouragement_active = self._apply_encouragement_state(data.get("_encouragement_state"))
@@ -6172,7 +6192,12 @@ class PetWindow(QWidget):
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
         derived_changed = self.focus_analytics.reconcile_derived_totals()
-        if analytics_changed or history_changed or segment_changed or derived_changed:
+        # Remote summary fields are compatibility/cache values and can change
+        # on every dashboard poll while an active session is ticking.  They
+        # must not invalidate the local raw-session projection every five
+        # seconds; raw history/segments or a derived reconciliation are the
+        # events that actually change the canonical projection.
+        if history_changed or segment_changed or derived_changed:
             self._invalidate_focus_projection("remote_focus_reconciled")
         local_day = self.focus_analytics.period_summary("day")
         if (
@@ -6359,8 +6384,7 @@ class PetWindow(QWidget):
         client = getattr(self, "social_client", None)
         if client is None or not getattr(client, "signed_in", False):
             return ""
-        session = getattr(client, "session", None)
-        return str(getattr(session, "user_id", "") or "").strip()
+        return _session_user_id(client)
 
     def _switch_focus_account(self, account_id: str | None) -> None:
         """在本地加载目标账号的计时与分析命名空间。"""

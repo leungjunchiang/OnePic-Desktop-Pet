@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from .diary import DailyCompanionStats
 from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
-from .focus_segments import FocusSegment
+from .focus_segments import FocusSegment, parse_focus_timestamp
 from .work_timer import WorkTimerModel, format_work_duration
 from .lifecycle_log import lifecycle_log
 
@@ -195,11 +195,8 @@ def build_work_report(
     live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
     live_segment: FocusSegment | None = None
     if live_started_value and snapshot_status == "focus" and live_elapsed > 0:
-        try:
-            live_started = datetime.fromisoformat(str(live_started_value).replace("Z", "+00:00"))
-            if live_started.tzinfo is None:
-                live_started = live_started.replace(tzinfo=BEIJING_TIMEZONE)
-            live_started = live_started.astimezone(BEIJING_TIMEZONE)
+        live_started = parse_focus_timestamp(live_started_value)
+        if live_started is not None:
             live_segment = FocusSegment(
                 segment_id=f"live:{getattr(timer, 'focus_session_id', '')}",
                 session_id=getattr(timer, "focus_session_id", "") or "live",
@@ -248,8 +245,7 @@ def build_work_report(
                 )
                 current_average = max(0, int(item.get("average_session_seconds", 0) or 0))
                 item["average_session_seconds"] = live_elapsed if not current_average else min(current_average, int(item["longest_focus_seconds"]))
-        except (TypeError, ValueError, OverflowError):
-            pass
+        # Invalid live timestamps are ignored; persisted facts remain intact.
     if live_segment is not None:
         # Rebuild every live period from the same interval set.  This replaces
         # the old path that appended one interval to a separately calculated
@@ -426,13 +422,7 @@ def _nice_duration_ticks(maximum: int, count: int = 4) -> list[int]:
 
 
 def _parse_interval(value: Any) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=BEIJING_TIMEZONE)
-    return parsed.astimezone(BEIJING_TIMEZONE)
+    return parse_focus_timestamp(value)
 
 
 class ReportTimeIntervalChart(QWidget):

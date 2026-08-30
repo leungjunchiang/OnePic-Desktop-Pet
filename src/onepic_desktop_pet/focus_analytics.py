@@ -16,15 +16,18 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 from .focus_segments import (
+    BEIJING_TIMEZONE as FOCUS_BEIJING_TIMEZONE,
     FocusAggregate,
     FocusSegment,
     aggregate_focus_time,
+    as_beijing,
     calendar_window,
+    parse_focus_timestamp,
     segment_from_record,
 )
 
@@ -34,18 +37,13 @@ from .focus_segments import (
 # treated anything above eight hours as anomalous.
 MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60 - 1
 INTERRUPTION_GRACE_SECONDS = 10 * 60
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+BEIJING_TIMEZONE = FOCUS_BEIJING_TIMEZONE
 
 
 def _as_beijing(value: datetime) -> datetime:
-    """Normalize an event without making machine timezone part of the metric."""
+    """Compatibility wrapper around the shared focus timestamp normalizer."""
 
-    if value.tzinfo is None:
-        # Naive values are legacy/test values.  They already represent the
-        # caller's stated clock time, so attach Beijing rather than silently
-        # shifting them by the developer machine's timezone.
-        value = value.replace(tzinfo=BEIJING_TIMEZONE)
-    return value.astimezone(BEIJING_TIMEZONE)
+    return as_beijing(value)
 
 
 def focus_analytics_path(account_id: str | None = None) -> Path:
@@ -475,7 +473,9 @@ class FocusAnalyticsStore:
         paused_at = live.get("paused_at")
         if paused_at:
             try:
-                paused = _as_beijing(datetime.fromisoformat(str(paused_at)))
+                paused = parse_focus_timestamp(paused_at)
+                if paused is None:
+                    raise ValueError("invalid paused_at")
                 if (now - paused).total_seconds() > INTERRUPTION_GRACE_SECONDS:
                     live["current_interruptions"] = max(0, int(live.get("current_interruptions", 0))) + 1
                     day = self._state.setdefault("days", {}).setdefault(now.date().isoformat(), self._empty_day())
@@ -518,7 +518,10 @@ class FocusAnalyticsStore:
         if not started:
             return
         try:
-            value = max(0, int((now - _as_beijing(datetime.fromisoformat(str(started)))).total_seconds()))
+            started_at = parse_focus_timestamp(started)
+            if started_at is None:
+                raise ValueError("invalid continuous_started_at")
+            value = max(0, int((now - started_at).total_seconds()))
         except (TypeError, ValueError, OverflowError):
             return
         self._live["current_continuous_seconds"] = max(
@@ -632,7 +635,9 @@ class FocusAnalyticsStore:
         late_records = []
         for raw in self._state.get("records", []):
             try:
-                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                started = parse_focus_timestamp(raw.get("started_at"))
+                if started is None:
+                    raise ValueError("invalid started_at")
             except ValueError:
                 continue
             if today - timedelta(days=6) <= started.date() <= today and started.hour >= 23:
@@ -915,7 +920,9 @@ class FocusAnalyticsStore:
             if not isinstance(raw, dict):
                 continue
             try:
-                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                started = parse_focus_timestamp(raw.get("started_at"))
+                if started is None:
+                    raise ValueError("invalid started_at")
                 value = int(raw.get("quality", 0) or 0)
             except (TypeError, ValueError, OverflowError):
                 continue
@@ -933,7 +940,9 @@ class FocusAnalyticsStore:
             if not isinstance(raw, dict):
                 continue
             try:
-                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                started = parse_focus_timestamp(raw.get("started_at"))
+                if started is None:
+                    raise ValueError("invalid started_at")
                 seconds = max(0, int(raw.get("seconds", 0) or 0))
             except (TypeError, ValueError, OverflowError):
                 continue
@@ -1109,7 +1118,9 @@ class FocusAnalyticsStore:
         buckets: dict[int, list[int]] = {}
         for raw in self._state.get("records", []):
             try:
-                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                started = parse_focus_timestamp(raw.get("started_at"))
+                if started is None:
+                    raise ValueError("invalid started_at")
                 seconds = max(0, int(raw.get("seconds", 0)))
             except (ValueError, TypeError):
                 continue
@@ -1138,7 +1149,9 @@ class FocusAnalyticsStore:
             if not isinstance(raw, dict):
                 continue
             try:
-                started = _as_beijing(datetime.fromisoformat(str(raw.get("started_at", ""))))
+                started = parse_focus_timestamp(raw.get("started_at"))
+                if started is None:
+                    raise ValueError("invalid started_at")
                 duration = max(0, min(int(raw.get("seconds", 0)), MAX_ANALYTICS_DAY_SECONDS))
             except (TypeError, ValueError, OverflowError):
                 continue
@@ -1201,7 +1214,8 @@ class FocusAnalyticsStore:
         try:
             value = raw.get("started_at") or raw.get("date") or ""
             if "T" in str(value):
-                return _as_beijing(datetime.fromisoformat(str(value).replace("Z", "+00:00"))).date()
+                parsed = parse_focus_timestamp(value)
+                return parsed.date() if parsed is not None else None
             return date.fromisoformat(str(value)[:10])
         except (TypeError, ValueError, OverflowError):
             return None

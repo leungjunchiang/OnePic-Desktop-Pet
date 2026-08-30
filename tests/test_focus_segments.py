@@ -6,7 +6,40 @@ from onepic_desktop_pet.focus_segments import (
     BEIJING_TIMEZONE,
     FocusSegment,
     aggregate_focus_time,
+    parse_focus_timestamp,
+    segment_from_record,
 )
+
+
+def test_focus_timestamp_parser_preserves_absolute_and_beijing_wall_times() -> None:
+    # A UTC value for 16:14 is midnight Beijing time on the following day.
+    assert parse_focus_timestamp("2026-08-29T16:14:40Z").hour == 0
+    # An explicit +08:00 value at midnight must remain in the midnight bucket.
+    assert parse_focus_timestamp("2026-08-30T00:14:40+08:00").hour == 0
+    # A Z suffix is not a local-time marker: 00:14 UTC is 08:14 Beijing.
+    assert parse_focus_timestamp("2026-08-30T00:14:40Z").hour == 8
+    # Legacy naive values retain their stated Beijing wall-clock time.
+    assert parse_focus_timestamp("2026-08-30T00:14:40").hour == 0
+
+
+def test_focus_timestamp_parser_places_midnight_fact_in_midnight_rhythm_bucket() -> None:
+    segment = {
+        "segment_id": "midnight",
+        "session_id": "session",
+        "start_at": "2026-08-29T16:14:40Z",
+        "end_at": "2026-08-29T17:30:40Z",
+    }
+    parsed = segment_from_record(segment)
+    assert parsed is not None
+    result = aggregate_focus_time(
+        [parsed],
+        datetime(2026, 8, 30, tzinfo=BEIJING_TIMEZONE),
+        datetime(2026, 8, 31, tzinfo=BEIJING_TIMEZONE),
+    )
+    assert result.total_seconds == 76 * 60
+    assert result.hourly[0]["seconds"] == 45 * 60 + 20
+    assert result.hourly[1]["seconds"] == 30 * 60 + 40
+    assert result.hourly[8]["seconds"] == 0
 
 
 def test_cross_midnight_uses_real_overlap_not_24_hour_wrap() -> None:

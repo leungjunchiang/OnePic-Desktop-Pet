@@ -39,6 +39,28 @@ def as_beijing(value: datetime) -> datetime:
     return value.astimezone(BEIJING_TIMEZONE)
 
 
+def parse_focus_timestamp(value: Any) -> datetime | None:
+    """Parse a persisted focus timestamp using one explicit timezone contract.
+
+    ISO timestamps with an offset (including ``Z``) are absolute instants and
+    are converted to Asia/Shanghai.  A legacy timestamp without an offset is
+    interpreted as a Beijing wall-clock value.  Keeping this distinction in
+    one helper prevents the report, analytics store, and interval chart from
+    applying subtly different timezone rules.
+    """
+
+    if isinstance(value, datetime):
+        return as_beijing(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return as_beijing(parsed)
+
+
 @dataclass(frozen=True)
 class FocusSegment:
     """One immutable piece of observed work.
@@ -172,13 +194,14 @@ def segment_from_record(raw: dict[str, Any], index: int = 0) -> FocusSegment | N
         return None
     try:
         raw_start = raw.get("start_at", raw.get("started_at"))
-        if isinstance(raw_start, datetime):
-            start = raw_start
-        else:
-            start = datetime.fromisoformat(str(raw_start or "").replace("Z", "+00:00"))
+        start = parse_focus_timestamp(raw_start)
+        if start is None:
+            return None
         raw_end = raw.get("end_at", raw.get("ended_at"))
         if raw_end:
-            end = raw_end if isinstance(raw_end, datetime) else datetime.fromisoformat(str(raw_end).replace("Z", "+00:00"))
+            end = parse_focus_timestamp(raw_end)
+            if end is None:
+                return None
         else:
             raw_seconds = raw.get("seconds", raw.get("duration_seconds"))
             if raw_seconds is None:

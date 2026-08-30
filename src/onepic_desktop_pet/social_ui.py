@@ -36,6 +36,9 @@ from .social import (
     _heartbeat_payload,
     _next_presence_sequence,
     _session_user_id,
+    _apply_buddy_private_notes,
+    _private_note_deletions_from_dashboard,
+    _private_notes_from_dashboard,
     _dashboard_payload_has_core_shape,
     social_user_message,
 )
@@ -124,6 +127,25 @@ def _merge_dashboard_snapshot(
         merged["_sync_error"] = "服务器返回了不完整的社交快照，已保留上次正常数据。"
     else:
         merged.pop("_dashboard_partial", None)
+
+    # Viewer-only labels have a different merge contract from public profile
+    # fields. Missing labels are expected from older relays and must not erase
+    # a known private remark. A successful notes RPC is authoritative; an
+    # explicit null/deletion marker is authoritative for one peer.
+    previous_notes = _private_notes_from_dashboard(previous)
+    incoming_notes = _private_notes_from_dashboard(incoming)
+    if incoming.get("_private_notes_loaded"):
+        note_by_user = dict(incoming_notes)
+    else:
+        note_by_user = dict(previous_notes)
+        note_by_user.update(incoming_notes)
+        for user_id in _private_note_deletions_from_dashboard(incoming):
+            note_by_user.pop(user_id, None)
+    _apply_buddy_private_notes(merged, note_by_user)
+    if not incoming.get("_private_notes_loaded"):
+        deleted = sorted(_private_note_deletions_from_dashboard(incoming))
+        if deleted:
+            merged["_private_notes_deleted"] = deleted
     return merged, not complete
 
 
@@ -302,9 +324,15 @@ def _taunt_window_open(now: datetime | None = None) -> bool:
 
 
 def _reaction_label(presence: dict[str, Any], now: datetime | None = None) -> str:
-    """Show the action that the server will accept at this time of day."""
+    """Show the action that matches the buddy's confirmed presence state.
 
-    return "嘲讽" if _taunt_available(presence) and _taunt_window_open(now) else "加油"
+    The button stays labelled ``嘲讽`` while a buddy is resting/offline so the
+    user can understand what the action normally does.  The click handler
+    performs the Beijing-time check and explains after-hours privacy time
+    without sending an RPC or consuming a quota.
+    """
+
+    return "嘲讽" if _taunt_available(presence) else "加油"
 
 
 def _wealth_leaderboard_enabled(profile: dict[str, Any] | None) -> bool:
@@ -547,24 +575,58 @@ class SocialHeartbeatWorker:
                         payload = dict(self._pending or {})
                         self._send_now = False
             user_id = str(payload.get("user_id") or "").strip()
+            if not user_id:
+                # Some compatibility clients expose the authenticated session
+                # through an auth manager or their active HTTP backend instead
+                # of ``client.session``.  Do not send an anonymous heartbeat:
+                # that would make every peer see this account as offline.
+                user_id = _session_user_id(self.client)
+                if user_id:
+                    payload["user_id"] = user_id
             if user_id:
                 # Sequence assignment happens on this independent transport
                 # thread, immediately before send.  A slow dashboard queue
                 # can therefore never reuse or reorder a presence version.
                 payload["sequence"] = _next_presence_sequence(user_id)
+            heartbeat_started = time.monotonic()
             try:
                 self.client.heartbeat(**payload)
                 LOGGER.debug("social heartbeat sent independently")
+                lifecycle_log(
+                    "social.heartbeat.sent",
+                    user_id=user_id,
+                    working=bool(payload.get("working")),
+                    session_active=bool(payload.get("session_active")),
+                    sequence=int(payload.get("sequence") or 0),
+                    latency_ms=round((time.monotonic() - heartbeat_started) * 1000, 1),
+                )
             except (SocialError, TypeError) as exc:
                 # Do not terminate the worker for a transient outage.  The
                 # next payload retries naturally, while dashboard polling can
                 # continue to use its own fallback route.
                 LOGGER.warning("independent social heartbeat failed: %s", exc)
+                lifecycle_log(
+                    "social.heartbeat.failed",
+                    user_id=user_id,
+                    working=bool(payload.get("working")),
+                    session_active=bool(payload.get("session_active")),
+                    sequence=int(payload.get("sequence") or 0),
+                    latency_ms=round((time.monotonic() - heartbeat_started) * 1000, 1),
+                    error_kind=getattr(exc, "kind", "transport"),
+                )
             except Exception:
                 # A transport adapter must not be able to kill the dedicated
                 # liveness loop. Keep the next latest payload eligible for a
                 # retry and leave the diagnostic traceback in the log.
                 LOGGER.exception("independent social heartbeat crashed")
+                lifecycle_log(
+                    "social.heartbeat.crashed",
+                    user_id=user_id,
+                    working=bool(payload.get("working")),
+                    session_active=bool(payload.get("session_active")),
+                    sequence=int(payload.get("sequence") or 0),
+                    latency_ms=round((time.monotonic() - heartbeat_started) * 1000, 1),
+                )
             if shutdown_send:
                 return
             next_due = time.monotonic() + self.interval_seconds
@@ -685,7 +747,7 @@ class SocialSyncThread(QThread):
             # plus twenty minutes.  Older relays may not know this optional
             # RPC yet; in that case the rest of the dashboard remains usable.
             taunt_rpc = getattr(self.client, "rpc", None)
-            if callable(taunt_rpc):
+            if self.presence.get("_include_reaction_state") and callable(taunt_rpc):
                 try:
                     reaction_state = _unwrap_reaction_payload(
                         taunt_rpc("lili_reaction_state", {})
@@ -722,8 +784,15 @@ class SocialSyncThread(QThread):
                 # Keep third-party/test backends compatible while they adopt
                 # the room-scoped dashboard argument.
                 data = self.client.dashboard()
+            # The leaderboard is a low-frequency view, not presence data.
+            # Fetching it on every five-second dashboard cycle caused a slow
+            # ranking RPC to hold up the completed signal and repaint path.
             leaderboard = getattr(self.client, "focus_leaderboard", None)
-            if callable(leaderboard) and getattr(self.client, "signed_in", True):
+            if (
+                self.presence.get("_include_leaderboard")
+                and callable(leaderboard)
+                and getattr(self.client, "signed_in", True)
+            ):
                 try:
                     data = dict(data or {})
                     data["leaderboard"] = leaderboard(period="week")
@@ -1451,9 +1520,9 @@ class BuddyCardWidget(QWidget):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setHorizontalSpacing(4)
         actions.setVerticalSpacing(3)
-        # “加油” now doubles as a playful punishment when a buddy is not
-        # working.  The server still checks the state, while this label gives
-        # the user an immediate, honest affordance in the card.
+        # The action follows the buddy's confirmed state: focus -> cheer;
+        # rest/offline -> taunt.  The server repeats this check authoritatively
+        # when the interaction is sent.
         action_specs = (
             ("visit", "串门"),
             ("cheer", _reaction_label(buddy)),
@@ -1621,18 +1690,21 @@ class RoomPetCardWidget(QWidget):
         )
         headline.setStyleSheet("font-size:14px;font-weight:700;color:#203847;")
         headline.setWordWrap(False)
+        self._headline_label = headline
         details.addWidget(headline)
         session = format_work_duration(int(buddy.get("session_seconds") or 0))
         today = format_work_duration(int(buddy.get("today_seconds") or 0))
         week = format_work_duration(int(buddy.get("week_seconds") or 0))
         metrics = QLabel(f"本轮 {session}　·　今日 {today}　·　本周 {week}")
         metrics.setStyleSheet("font-size:11px;font-weight:600;color:#087f74;")
+        self._metrics_label = metrics
         details.addWidget(metrics)
         interruptions = int(buddy.get("today_interruptions") or 0)
         longest = format_work_duration(int(buddy.get("longest_continuous_seconds") or 0))
         continuity = f"今日中断 {interruptions} 次" if interruptions else "连续专注中"
         detail = QLabel(f"{continuity}　·　最长连续 {longest}")
         detail.setStyleSheet("font-size:11px;color:#61727d;")
+        self._detail_label = detail
         details.addWidget(detail)
 
         actions = QGridLayout()
@@ -1645,6 +1717,7 @@ class RoomPetCardWidget(QWidget):
             ("food_coffee", "咖啡"), ("food_milk_tea", "奶茶"),
             ("food_cake", "蛋糕"),
         )
+        self._buttons: dict[str, QPushButton] = {}
         for index, (kind, label) in enumerate(specs):
             button = QPushButton(label)
             button.setEnabled(not is_self)
@@ -1652,19 +1725,66 @@ class RoomPetCardWidget(QWidget):
                 button.clicked.connect(lambda _checked=False, value=kind: self.food_interaction_requested.emit(self.buddy, value))
             else:
                 button.clicked.connect(lambda _checked=False, value=kind: self.interaction_requested.emit(self.buddy, value))
+            self._buttons[kind] = button
             actions.addWidget(button, index // 2, index % 2)
         details.addLayout(actions)
         root.addLayout(details, 1)
 
         image = QLabel()
+        self._image_label = image
         image.setFixedSize(70, 82)
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         outfit = str(buddy.get("outfit_key") or "")
+        self._outfit_key = outfit
         relative = SPECIAL_OUTFIT_SPRITES.get(outfit, "assets/pet/daily-actions/39-work-study.png")
         pixmap = QPixmap(str(resource_path(relative)))
         if not pixmap.isNull():
             image.setPixmap(pixmap.scaled(70, 82, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         root.insertWidget(0, image)
+
+    def update_buddy(self, buddy: dict[str, Any]) -> None:
+        """Update a room member in place; do not recreate its widget tree."""
+
+        self.buddy = dict(buddy)
+        status = _presence_status(buddy)
+        uncertain = bool(buddy.get("presence_uncertain"))
+        online = status != "offline" and not bool(buddy.get("stale_presence")) and not uncertain
+        if status == "unknown":
+            status_text = "正在工作（同步恢复中）" if buddy.get("working") else "在线待确认"
+        else:
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+        self._headline_label.setText(
+            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
+        )
+        self._metrics_label.setText(
+            f"本轮 {format_work_duration(int(buddy.get('session_seconds') or 0))}　·　"
+            f"今日 {format_work_duration(int(buddy.get('today_seconds') or 0))}　·　"
+            f"本周 {format_work_duration(int(buddy.get('week_seconds') or 0))}"
+        )
+        interruptions = int(buddy.get("today_interruptions") or 0)
+        longest = format_work_duration(int(buddy.get("longest_continuous_seconds") or 0))
+        continuity = f"今日中断 {interruptions} 次" if interruptions else "连续专注中"
+        self._detail_label.setText(f"{continuity}　·　最长连续 {longest}")
+        cheer = self._buttons.get("cheer")
+        if cheer is not None:
+            cheer.setText(_reaction_label(buddy))
+            cheer.setEnabled(not bool(buddy.get("is_self")))
+        outfit = str(buddy.get("outfit_key") or "")
+        if outfit != self._outfit_key:
+            self._outfit_key = outfit
+            relative = SPECIAL_OUTFIT_SPRITES.get(
+                outfit, "assets/pet/daily-actions/39-work-study.png"
+            )
+            pixmap = QPixmap(str(resource_path(relative)))
+            self._image_label.setPixmap(
+                pixmap.scaled(
+                    70, 82,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                if not pixmap.isNull() else QPixmap()
+            )
 
 
 class IncomingVisitNotice(QDialog):
@@ -2116,11 +2236,17 @@ class SocialHubDialog(QDialog):
         self.outfit_key = outfit_key
         self.owner_nickname = owner_nickname.strip()[:24]
         self.data: dict[str, Any] = {}
+        # A private note belongs to this viewer, not to the shared profile.
+        # Keep it across partial/legacy snapshots so a missing optional field
+        # cannot turn a known label into the generic public fallback.
+        self._private_note_by_user: dict[str, str] = {}
+        self._private_notes_loaded = False
         # Reuse buddy card widgets while only live duration/status values
         # change.  Rebuilding every card on each dashboard poll caused a
         # large layout/repaint burst in the GUI thread.
         self._buddy_card_widgets: dict[str, tuple[QListWidgetItem, BuddyCardWidget]] = {}
         self._buddy_card_structure: dict[str, tuple[Any, ...]] = {}
+        self._room_pet_card_widgets: dict[str, tuple[QListWidgetItem, RoomPetCardWidget]] = {}
         self._buddy_presence_versions: dict[str, tuple[int, dict[str, Any]]] = {}
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
@@ -2135,6 +2261,12 @@ class SocialHubDialog(QDialog):
         self._seen_room_event_ids: set[str] = set()
         self._seen_buddy_request_ids: set[str] = set()
         self._muted_buddy_ids: set[str] = set()
+        # Presence is polled frequently, but these collections usually do not
+        # change.  Their signatures let a live status update avoid clearing
+        # and recreating the corresponding QListWidgets.
+        self._inbox_signature: str | None = None
+        self._room_list_signature: str | None = None
+        self._recent_interactions_signature: str | None = None
         self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
         self._last_ritual_notice = ""
@@ -2838,16 +2970,21 @@ class SocialHubDialog(QDialog):
         service = str(data.get("service") or getattr(self.client, "backend_endpoint", "服务可达"))
         self.network_hint.setText(f"当前自习室后端：{backend} · {service}")
         state = str(data.get("connection_state") or "")
+        room_state = str(data.get("room_state") or "")
         snapshot = data.get("dashboard")
         if isinstance(snapshot, dict):
             snapshot = dict(snapshot)
             snapshot["_connection_state"] = state or snapshot.get("_connection_state")
             snapshot["data_source"] = data.get("data_source") or snapshot.get("data_source")
             self.apply_dashboard(snapshot)
-            if state == "ONLINE":
+            if state == "ONLINE" and room_state == "NO_ROOM":
+                self._set_status("自习室网络正常；当前尚未加入共同自习室。")
+            elif state == "ONLINE":
                 self._set_status("自习室已连接，房间状态已完整同步。")
             elif state == "DEGRADED":
                 self._set_status("自习室已连接，但实时同步暂时不可用，继续重新连接。")
+            elif state == "AUTH_ERROR":
+                self._set_status("自习室登录状态失效，请重新登录。", error=True, relogin=True)
             else:
                 self._set_status("当前显示离线缓存，等网络恢复后再同步。")
             return
@@ -3000,16 +3137,21 @@ class SocialHubDialog(QDialog):
             return
         if kind == "cheer":
             # Outside a focus session this is a playful, persistent taunt.
-            # The RPC repeats the state check server-side so stale cards or a
-            # second device cannot punish somebody who has already started.
-            if _taunt_available(buddy) and _taunt_window_open():
+            # Keep the daytime rule local for immediate feedback; the RPC
+            # repeats it server-side so stale cards cannot bypass privacy time.
+            if _taunt_available(buddy):
+                if not _taunt_window_open():
+                    self._set_status(
+                        "现在是嘲讽时间之外，给对方留点私人休息时间。"
+                    )
+                    return
                 try:
                     self.client.rpc("lili_send_taunt", {"p_target": target})
                     self._interaction_sent(nickname, "taunt")
                 except SocialError as exc:
                     self._error(exc)
                 return
-            if _presence_working(buddy) or not _taunt_window_open():
+            if _presence_working(buddy):
                 try:
                     self.client.rpc("lili_send_encouragement", {"p_target": target})
                     self._interaction_sent(nickname, "encouragement")
@@ -3181,29 +3323,58 @@ class SocialHubDialog(QDialog):
         if not hasattr(self, "room_members"):
             return
         self._room_people = list(people)
-        self.room_members.clear()
-        for buddy in people:
-            item = QListWidgetItem()
-            widget = RoomPetCardWidget(buddy, self.room_members)
-            widget.interaction_requested.connect(self._send_interaction)
-            widget.food_interaction_requested.connect(self._send_food_interaction)
-            item.setData(Qt.ItemDataRole.UserRole, buddy)
-            self.room_members.addItem(item)
-            self.room_members.setItemWidget(item, widget)
-            self._set_buddy_item_height(item, widget)
-        if not people:
-            empty = QListWidgetItem("加入房间后，这里会显示一起专注的六毛和累计时长。")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.room_members.addItem(empty)
-        self._fit_list_height(self.room_members, 120, 360)
+        valid_people = [
+            dict(buddy) for buddy in people
+            if isinstance(buddy, dict)
+            and str(buddy.get("user_id") or buddy.get("id") or "").strip()
+        ]
+        ordered_ids = [
+            str(buddy.get("user_id") or buddy.get("id") or "").strip()
+            for buddy in valid_people
+        ]
+        existing_ids = list(self._room_pet_card_widgets)
+        if ordered_ids != existing_ids:
+            self.room_members.clear()
+            self._room_pet_card_widgets.clear()
+            for buddy_id, buddy in zip(ordered_ids, valid_people):
+                item = QListWidgetItem()
+                widget = RoomPetCardWidget(buddy, self.room_members)
+                widget.interaction_requested.connect(self._send_interaction)
+                widget.food_interaction_requested.connect(self._send_food_interaction)
+                item.setData(Qt.ItemDataRole.UserRole, buddy)
+                self.room_members.addItem(item)
+                self.room_members.setItemWidget(item, widget)
+                self._set_buddy_item_height(item, widget)
+                self._room_pet_card_widgets[buddy_id] = (item, widget)
+            if not valid_people:
+                empty = QListWidgetItem("加入房间后，这里会显示一起专注的六毛和累计时长。")
+                empty.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.room_members.addItem(empty)
+            self._fit_list_height(self.room_members, 120, 360)
+        else:
+            for buddy_id, buddy in zip(ordered_ids, valid_people):
+                item, widget = self._room_pet_card_widgets[buddy_id]
+                item.setData(Qt.ItemDataRole.UserRole, buddy)
+                widget.update_buddy(buddy)
 
     def _render_room_activity(self, entries: list[Any]) -> None:
         if not hasattr(self, "room_activity"):
             return
+        visible_entries = list(entries[:3])
+        activity_signature = json.dumps(
+            visible_entries,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        if activity_signature == getattr(self, "_room_activity_signature", None):
+            return
+        self._room_activity_signature = activity_signature
         self.room_activity.clear()
         # A room is a stage, not an audit log. Keep only the newest three
         # lightweight events; older history remains available from the server.
-        for entry in entries[:3]:
+        for entry in visible_entries:
             if isinstance(entry, dict):
                 stamp = _format_beijing_time(str(entry.get("created_at") or ""))
                 text = str(entry.get("text") or entry.get("message") or "")
@@ -3237,6 +3408,21 @@ class SocialHubDialog(QDialog):
     def _render_wealth_leaderboard(self, rows: list[Any]) -> None:
         if not hasattr(self, "wealth_leaderboard"):
             return
+        leaderboard_signature = json.dumps(
+            rows[:20],
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        render_signature = (
+            leaderboard_signature,
+            bool(self._leaderboard_error),
+            bool(self._leaderboard_loaded),
+        )
+        if render_signature == getattr(self, "_leaderboard_render_signature", None):
+            return
+        self._leaderboard_render_signature = render_signature
         self.wealth_leaderboard.clear()
         for index, row in enumerate(rows[:20], 1):
             if not isinstance(row, dict):
@@ -3268,7 +3454,7 @@ class SocialHubDialog(QDialog):
         account or be written to the shared leaderboard data.
         """
 
-        note_by_user: dict[str, str] = {}
+        note_by_user: dict[str, str] = dict(self._private_note_by_user)
 
         def collect(items: Any) -> None:
             if not isinstance(items, list):
@@ -3279,7 +3465,7 @@ class SocialHubDialog(QDialog):
                 note = str(item.get("private_note_name") or "").strip()
                 if not note:
                     continue
-                for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id"):
+                for field in ("user_id", "buddy_user_id", "buddy_id", "peer_id", "owner_id", "sender_id", "receiver_id"):
                     value = item.get(field)
                     if value is not None and str(value).strip():
                         note_by_user[str(value)] = note[:40]
@@ -3302,7 +3488,11 @@ class SocialHubDialog(QDialog):
                 continue
             copy = dict(row)
             user_id = next(
-                (str(copy.get(field)).strip() for field in ("user_id", "buddy_id", "peer_id") if copy.get(field) is not None),
+                (
+                    str(copy.get(field)).strip()
+                    for field in ("user_id", "buddy_user_id", "buddy_id", "peer_id", "owner_id", "id")
+                    if copy.get(field) is not None
+                ),
                 "",
             )
             copy["is_self"] = bool(copy.get("is_self")) or bool(own_id and user_id == own_id)
@@ -3600,6 +3790,10 @@ class SocialHubDialog(QDialog):
             self.login_email.setFocus()
 
     def _set_status(self, message: str, *, error: bool = False, relogin: bool = False) -> None:
+        signature = (str(message), bool(error), bool(relogin))
+        if signature == getattr(self, "_status_signature", None):
+            return
+        self._status_signature = signature
         self.status_label.setText(message)
         color = "#a33a3a" if error else "#087f74"
         background = "#f7e5e5" if error else "#e1efec"
@@ -3935,6 +4129,61 @@ class SocialHubDialog(QDialog):
                     self._buddy_presence_versions[buddy_id] = (sequence, dict(raw_item))
         return payload
 
+    def _render_inbox_items(self) -> None:
+        """Rebuild the inbox only when invitation data actually changed."""
+
+        self.inbox.clear()
+        for request in self.data.get("requests") or []:
+            if _notification_sender_id(request) in self._muted_buddy_ids:
+                continue
+            self._add_inbox_item(
+                "buddy", request, f"搭子申请 · {_owner_label(request)}",
+                "对方想和你成为搭子；接受后可以看到彼此的自习状态。",
+                ("接受", "拒绝"),
+            )
+        for request in self.data.get("outgoing_requests") or []:
+            if not isinstance(request, dict):
+                continue
+            self._add_inbox_item(
+                "buddy_outgoing", request,
+                f"已发出的搭子申请 · {_owner_label(request)}",
+                "等待对方回应；如果不想继续，可以撤回这条申请。",
+                ("撤回申请",),
+            )
+        labels = {
+            "food_coffee": "☕ 一起开工邀请",
+            "food_milk_tea": "🧋 一起休息邀请",
+            "food_tea": "🍵 敬茶",
+            "food_cake": "🍰 庆祝邀请",
+            "food_cake_share": "🍰 请你一起吃蛋糕",
+        }
+        for visit in self.data.get("visits") or []:
+            if _notification_sender_id(visit) in self._muted_buddy_ids:
+                continue
+            visit_kind = str(visit.get("kind") or "visit")
+            self._add_inbox_item(
+                "food" if visit_kind.startswith("food_") else "visit",
+                visit,
+                f"{labels.get(visit_kind, '串门邀请')} · {_owner_label(visit)}",
+                "对方正在等你的决定；接受后六毛会把这次互动标记为已处理。",
+                ("接受", "拒绝"),
+            )
+        for request in self.data.get("achievement_witness_requests") or []:
+            if not isinstance(request, dict):
+                continue
+            title = str(request.get("name") or "未命名成果")[:90]
+            self._add_inbox_item(
+                "achievement_witness",
+                request,
+                f"成果见证 · {_owner_label(request)}",
+                f"{title} · 接受后会记录这次成果见证，并发放固定奖励。",
+                ("接受", "拒绝"),
+            )
+        if self.inbox.count() == 0:
+            empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.inbox.addItem(empty)
+
     def apply_dashboard(self, data: dict[str, Any] | None) -> None:
         """Render a dashboard already fetched by the background sync thread.
 
@@ -3966,6 +4215,16 @@ class SocialHubDialog(QDialog):
             )
         payload = self._apply_presence_sequence_fence(payload)
 
+        snapshot_notes = _private_notes_from_dashboard(payload)
+        if payload.get("_private_notes_loaded"):
+            self._private_note_by_user = snapshot_notes
+            self._private_notes_loaded = True
+        elif snapshot_notes:
+            self._private_note_by_user.update(snapshot_notes)
+        for user_id in payload.get("_private_notes_deleted") or []:
+            self._private_note_by_user.pop(str(user_id), None)
+        _apply_buddy_private_notes(payload, self._private_note_by_user)
+
         # A direct render can happen immediately after construction (for
         # example when the owner restores a cached snapshot). Do not let the
         # one-shot 50 ms bootstrap refresh arrive afterward and overwrite that
@@ -3977,6 +4236,12 @@ class SocialHubDialog(QDialog):
             for item in (self.data.get("muted_buddy_ids") or [])
             if str(item).strip()
         }
+        # Resolve the current account identity before decorating the separate
+        # leaderboard response. Otherwise the first render can label the
+        # owner with the generic fallback until a second refresh arrives.
+        me=self.data.get("me") or {}
+        if not self.owner_nickname:
+            self.owner_nickname = clean_owner_nickname(me.get("owner_nickname") or me.get("nickname"))
         # Missing is not empty: heartbeat payloads may omit this optional RPC
         # while the room dashboard remains healthy.  Preserve the last known
         # board until an explicit ``leaderboard=[]`` arrives.
@@ -3985,9 +4250,6 @@ class SocialHubDialog(QDialog):
             self._leaderboard_loaded = True
             self._leaderboard_error = False
             self._render_wealth_leaderboard(self._leaderboard_rows)
-        me=self.data.get("me") or {}
-        if not self.owner_nickname:
-            self.owner_nickname = clean_owner_nickname(me.get("owner_nickname") or me.get("nickname"))
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname"))
         invite_code = str(me.get("invite_code") or "--------").strip().upper()
@@ -4080,111 +4342,97 @@ class SocialHubDialog(QDialog):
             empty = QListWidgetItem("还没有搭子。点击上面的“用搭子码添加”，一起工作时这里会显示今天和本周的专注时长。")
             empty.setFlags(Qt.ItemFlag.NoItemFlags); self.buddies.addItem(empty)
         self._fit_list_height(self.buddies, 46, 360)
-        self.inbox.clear()
-        for request in self.data.get("requests") or []:
-            if _notification_sender_id(request) in self._muted_buddy_ids:
-                continue
-            self._add_inbox_item(
-                "buddy",
-                request,
-                f"搭子申请 · {_owner_label(request)}",
-                "对方想和你成为搭子；接受后可以看到彼此的自习状态。",
-                ("接受", "拒绝"),
-            )
-        for request in self.data.get("outgoing_requests") or []:
-            if not isinstance(request, dict):
-                continue
-            self._add_inbox_item(
-                "buddy_outgoing",
-                request,
-                f"已发出的搭子申请 · {_owner_label(request)}",
-                "等待对方回应；如果不想继续，可以撤回这条申请。",
-                ("撤回申请",),
-            )
-        for visit in self.data.get("visits") or []:
-            if _notification_sender_id(visit) in self._muted_buddy_ids:
-                continue
-            visit_kind = str(visit.get("kind") or "visit")
-            labels = {
-                "food_coffee": "☕ 一起开工邀请",
-                "food_milk_tea": "🧋 一起休息邀请",
-                "food_tea": "🍵 敬茶",
-                "food_cake": "🍰 庆祝邀请",
-                "food_cake_share": "🍰 请你一起吃蛋糕",
-            }
-            label = labels.get(visit_kind, "串门邀请")
-            inbox_kind = "food" if visit_kind.startswith("food_") else "visit"
-            self._add_inbox_item(
-                inbox_kind,
-                visit,
-                f"{label} · {_owner_label(visit)}",
-                "对方正在等你的决定；接受后六毛会把这次互动标记为已处理。",
-                ("接受", "拒绝"),
-            )
+        inbox_source = {
+            "requests": self.data.get("requests") or [],
+            "outgoing_requests": self.data.get("outgoing_requests") or [],
+            "visits": self.data.get("visits") or [],
+            "achievement_witness_requests": self.data.get("achievement_witness_requests") or [],
+            "muted": sorted(self._muted_buddy_ids),
+        }
+        inbox_signature = json.dumps(
+            inbox_source,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        inbox_changed = inbox_signature != self._inbox_signature
+        if inbox_changed:
+            self._render_inbox_items()
+            self._inbox_signature = inbox_signature
+
         if hasattr(self, "recent_interactions"):
-            self.recent_interactions.clear()
-            for share in self.data.get("cake_shares") or []:
-                if not isinstance(share, dict):
-                    continue
-                members = [item for item in (share.get("members") or []) if isinstance(item, dict)]
-                accepted = sum(str(item.get("status") or "") == "accepted" for item in members)
-                total = len(members)
-                message = str(share.get("message") or "今天值得庆祝一下")[:80]
-                self.recent_interactions.addItem(
-                    f"🍰 今日蛋糕 · 已邀请 {total} 人 · 已接受 {accepted}/{total}\n{message}"
-                )
-        for request in self.data.get("achievement_witness_requests") or []:
-            title = str(request.get("name") or "未命名成果")[:90]
-            owner = _owner_label(request)
-            self._add_inbox_item(
-                "achievement_witness",
-                request,
-                f"成果见证 · {owner}",
-                f"{title} · 接受后会记录这次成果见证，并发放固定奖励。",
-                ("接受", "拒绝"),
+            shares = self.data.get("cake_shares") or []
+            recent_signature = json.dumps(
+                shares,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
             )
-        if self.inbox.count() == 0:
-            empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags); self.inbox.addItem(empty)
+            if recent_signature != self._recent_interactions_signature:
+                self.recent_interactions.clear()
+                for share in shares:
+                    if not isinstance(share, dict):
+                        continue
+                    members = [item for item in (share.get("members") or []) if isinstance(item, dict)]
+                    accepted = sum(str(item.get("status") or "") == "accepted" for item in members)
+                    total = len(members)
+                    message = str(share.get("message") or "今天值得庆祝一下")[:80]
+                    self.recent_interactions.addItem(
+                        f"🍰 今日蛋糕 · 已邀请 {total} 人 · 已接受 {accepted}/{total}\n{message}"
+                    )
+                self._recent_interactions_signature = recent_signature
         self._update_inbox_actions(self.inbox.currentItem(), None)
-        QTimer.singleShot(0, self._auto_accept_light_food_interactions)
+        if inbox_changed:
+            QTimer.singleShot(0, self._auto_accept_light_food_interactions)
         rooms = list(self.data.get("rooms") or [])
         previous_room_id = self.current_room_id
         room_was_selected = bool(previous_room_id)
         self._applying_dashboard = True
-        # Rebuilding the list is an internal render operation.  Suppress the
-        # transient "selection cleared" and "selection restored" signals;
-        # otherwise each dashboard response schedules another network sync.
-        self.rooms.blockSignals(True)
-        self.rooms.clear()
-        for room in rooms:
-            room_item = QListWidgetItem(
-                f"{room.get('name')} · {room.get('members')} 人"
-            )
-            room_item.setData(Qt.ItemDataRole.UserRole, room)
-            self.rooms.addItem(room_item)
-        if self.rooms.count() == 0:
-            empty_room = QListWidgetItem("还没有私人自习室；创建后可把房间码发给搭子。")
-            empty_room.setFlags(Qt.ItemFlag.NoItemFlags); self.rooms.addItem(empty_room)
-            self.current_room_id = None
-            self._room_selection_explicit = False
-        else:
-            # A server membership is not an active desktop selection.  The
-            # user must explicitly choose a room after opening the window.
-            selected = -1
-            if self._room_selection_explicit and previous_room_id:
-                for index, room in enumerate(rooms):
-                    if self._room_id_from_payload(room) == previous_room_id:
-                        selected = index
-                        break
-            if selected >= 0:
-                self.rooms.setCurrentRow(selected)
-                self.current_room_id = self._room_id_from_payload(rooms[selected])
-            else:
-                self.rooms.setCurrentRow(-1)
+        room_signature = json.dumps(
+            rooms,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        if room_signature != self._room_list_signature:
+            # Rebuilding the list is an internal render operation. Suppress
+            # the transient selection signals; otherwise every dashboard
+            # response can schedule another network sync.
+            self.rooms.blockSignals(True)
+            self.rooms.clear()
+            for room in rooms:
+                room_item = QListWidgetItem(
+                    f"{room.get('name')} · {room.get('members')} 人"
+                )
+                room_item.setData(Qt.ItemDataRole.UserRole, room)
+                self.rooms.addItem(room_item)
+            if self.rooms.count() == 0:
+                empty_room = QListWidgetItem("还没有私人自习室；创建后可把房间码发给搭子。")
+                empty_room.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.rooms.addItem(empty_room)
                 self.current_room_id = None
-        self.rooms.blockSignals(False)
-        self._fit_list_height(self.rooms, 52, 140)
+                self._room_selection_explicit = False
+            else:
+                # A server membership is not an active desktop selection. The
+                # user must explicitly choose a room after opening the window.
+                selected = -1
+                if self._room_selection_explicit and previous_room_id:
+                    for index, room in enumerate(rooms):
+                        if self._room_id_from_payload(room) == previous_room_id:
+                            selected = index
+                            break
+                if selected >= 0:
+                    self.rooms.setCurrentRow(selected)
+                    self.current_room_id = self._room_id_from_payload(rooms[selected])
+                else:
+                    self.rooms.setCurrentRow(-1)
+                    self.current_room_id = None
+            self.rooms.blockSignals(False)
+            self._room_list_signature = room_signature
+            self._fit_list_height(self.rooms, 52, 140)
         self._applying_dashboard = False
         if self.current_room_id != previous_room_id:
             self.room_changed.emit(self.current_room_id)
@@ -4317,6 +4565,8 @@ class SocialHubDialog(QDialog):
             self._set_status(
                 "自习室连接暂时不稳定，搭子最近状态仍保留显示；正在自动恢复实时同步。"
             )
+        elif state == "AUTH_ERROR":
+            self._set_status("自习室登录状态失效，请重新登录；本地专注与桌宠功能仍可继续使用。", error=True, relogin=True)
         elif self.data.get("_sync_offline") or state == "OFFLINE":
             age = int(self.data.get("_sync_age_minutes") or 0)
             age_text = f"约 {age} 分钟前" if age else "刚才"
@@ -4336,16 +4586,19 @@ class SocialHubDialog(QDialog):
                     local_focus_active = bool(getattr(local_status, "is_running", False))
                 if local_focus_active:
                     self._set_status(
-                        "本地专注已开始；你还没有加入自习室，搭子状态会在网络恢复后自动同步。"
+                        "本地专注已开始；自习室实时同步暂不可用，已保留搭子缓存，网络恢复后自动同步。"
                     )
                 else:
                     self._set_status(
-                        "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
+                        "自习室实时同步暂不可用；本地功能不受影响，已保留搭子缓存，网络恢复后自动同步。"
                     )
         elif state == "DEGRADED":
             self._set_status("自习室已连接，实时同步暂时不可用，继续重新连接。")
         elif state == "ONLINE":
-            self._set_status("自习室已连接，房间状态已同步。")
+            if not self.current_room_id and not self._room_selection_explicit:
+                self._set_status("自习室已连接；当前未加入共同自习室，本地搭子数据仍可用。")
+            else:
+                self._set_status("自习室已连接，房间状态已同步。")
         else:
             self._set_status("已刷新，页面内容是最新的。")
 
@@ -4493,6 +4746,12 @@ class SocialHubDialog(QDialog):
     def _update_private_note_snapshot(self, buddy_id: str, note: str) -> None:
         """Update every local projection so the label is immediately consistent."""
 
+        self._private_notes_loaded = True
+        if note:
+            self._private_note_by_user[buddy_id] = note[:40]
+        else:
+            self._private_note_by_user.pop(buddy_id, None)
+
         def update(items: Any) -> None:
             if not isinstance(items, list):
                 return
@@ -4501,7 +4760,7 @@ class SocialHubDialog(QDialog):
                     continue
                 ids = {
                     str(item.get(field))
-                    for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id")
+                    for field in ("user_id", "buddy_user_id", "buddy_id", "peer_id", "owner_id", "sender_id", "receiver_id")
                     if item.get(field) is not None
                 }
                 if buddy_id in ids:
@@ -4531,6 +4790,16 @@ class SocialHubDialog(QDialog):
                 {"p_buddy_id": buddy_id, "p_private_note_name": note},
             )
             self._update_private_note_snapshot(buddy_id, note)
+            # Keep an explicit rename/clear authoritative across an offline
+            # restart. This only updates the account-scoped display cache; it
+            # never writes a relationship, profile, or focus record.
+            client_notes = getattr(self.client, "_private_note_by_user", None)
+            if isinstance(client_notes, dict):
+                client_notes.clear()
+                client_notes.update(self._private_note_by_user)
+            remember = getattr(self.client, "_remember_dashboard", None)
+            if callable(remember) and isinstance(self.data, dict):
+                remember(self.current_room_id, self.data)
             self._end_action()
             self.apply_dashboard(self.data)
             self._set_status("私人备注已保存；只有你能看到。" if note else "私人备注已清空；对方昵称保持不变。")

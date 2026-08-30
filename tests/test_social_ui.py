@@ -21,6 +21,7 @@ from onepic_desktop_pet.social_ui import (
     SocialSignupThread,
     SocialVisitResponseThread,
     _reaction_label,
+    _merge_dashboard_snapshot,
     _taunt_window_open,
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
@@ -447,6 +448,64 @@ def test_buddy_card_uses_public_nickname_when_private_note_is_missing() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
+def test_dashboard_merge_preserves_private_remark_when_response_omits_field() -> None:
+    previous = {
+        "me": {"user_id": "user-1"},
+        "buddies": [{"user_id": "buddy-1", "private_note_name": "论文搭子", "nickname": "小梁"}],
+        "room_people": [],
+    }
+    incoming = {
+        "me": {"user_id": "user-1"},
+        "buddies": [{"user_id": "buddy-1", "nickname": "小梁"}],
+        "room_people": [],
+    }
+
+    merged, partial = _merge_dashboard_snapshot(previous, incoming)
+
+    assert partial is False
+    assert merged["buddies"][0]["private_note_name"] == "论文搭子"
+
+
+def test_dashboard_merge_clears_private_remark_only_on_explicit_delete() -> None:
+    previous = {
+        "me": {"user_id": "user-1"},
+        "buddies": [{"user_id": "buddy-1", "private_note_name": "论文搭子", "nickname": "小梁"}],
+        "room_people": [],
+    }
+    incoming = {
+        "me": {"user_id": "user-1"},
+        "buddies": [{"user_id": "buddy-1", "private_note_name": None, "nickname": "小梁"}],
+        "room_people": [],
+    }
+
+    merged, partial = _merge_dashboard_snapshot(previous, incoming)
+
+    assert partial is False
+    assert "private_note_name" not in merged["buddies"][0]
+    assert merged["_private_notes_deleted"] == ["buddy-1"]
+
+
+def test_json_protocol_distinguishes_missing_remark_from_explicit_null() -> None:
+    previous = {
+        "me": {"user_id": "user-1"},
+        "buddies": [{"user_id": "buddy-1", "private_note_name": "胡老师", "nickname": "小梁"}],
+        "room_people": [],
+    }
+    omitted = json.loads(
+        '{"me":{"user_id":"user-1"},"buddies":[{"user_id":"buddy-1","nickname":"小梁"}],"room_people":[]}'
+    )
+    explicit_null = json.loads(
+        '{"me":{"user_id":"user-1"},"buddies":[{"user_id":"buddy-1","private_note_name":null,"nickname":"小梁"}],"room_people":[]}'
+    )
+
+    merged_omitted, _ = _merge_dashboard_snapshot(previous, omitted)
+    merged_null, _ = _merge_dashboard_snapshot(previous, explicit_null)
+
+    assert merged_omitted["buddies"][0]["private_note_name"] == "胡老师"
+    assert "private_note_name" not in merged_null["buddies"][0]
+    assert merged_null["_private_notes_deleted"] == ["buddy-1"]
+
+
 def test_buddy_card_uses_display_name_when_public_nickname_alias_is_missing() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget(
@@ -556,15 +615,17 @@ def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
-def test_reaction_label_switches_to_encouragement_outside_beijing_taunt_window() -> None:
+def test_reaction_label_follows_presence_state_and_window_is_checked_separately() -> None:
     tz = timezone(timedelta(hours=8))
     rest = {"online": False, "status": "offline", "working": False}
+    focus = {"online": True, "status": "focus", "working": True}
     assert _taunt_window_open(datetime(2026, 8, 26, 8, 0, tzinfo=tz))
     assert _taunt_window_open(datetime(2026, 8, 26, 22, 30, tzinfo=tz))
     assert not _taunt_window_open(datetime(2026, 8, 26, 7, 59, tzinfo=tz))
     assert not _taunt_window_open(datetime(2026, 8, 26, 22, 31, tzinfo=tz))
     assert _reaction_label(rest, datetime(2026, 8, 26, 12, 0, tzinfo=tz)) == "嘲讽"
-    assert _reaction_label(rest, datetime(2026, 8, 26, 23, 0, tzinfo=tz)) == "加油"
+    assert _reaction_label(rest, datetime(2026, 8, 26, 23, 0, tzinfo=tz)) == "嘲讽"
+    assert _reaction_label(focus, datetime(2026, 8, 26, 3, 0, tzinfo=tz)) == "加油"
 
 
 def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch) -> None:
@@ -584,6 +645,33 @@ def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch)
         assert any(button.text() == "嘲讽" for button in card.findChildren(QPushButton))
         card.close(); card.deleteLater()
     app.processEvents()
+
+
+def test_taunt_outside_window_only_warns_and_sends_no_rpc(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+
+    class Client(SignedInClient):
+        def __init__(self) -> None:
+            self.calls = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, body))
+            return {"active": True}
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._beijing_now",
+        lambda: datetime(2026, 8, 26, 23, 0, tzinfo=timezone(timedelta(hours=8))),
+    )
+    client = Client()
+    dialog = SocialHubDialog(client)
+    dialog._send_interaction(
+        {"user_id": "buddy-1", "nickname": "休息搭子", "online": False, "status": "offline"},
+        "cheer",
+    )
+
+    assert client.calls == []
+    assert "嘲讽时间之外" in dialog.status_label.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
 def test_room_pet_taunt_action_is_visible_for_stale_rest_payload(monkeypatch) -> None:

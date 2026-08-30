@@ -36,7 +36,16 @@ from .tls_support import tls_diagnostics, verified_ssl_context
 
 LOGGER = logging.getLogger(__name__)
 
-CONNECTION_STATES = {"CONNECTING", "ONLINE", "DEGRADED", "OFFLINE", "RECONNECTING"}
+CONNECTION_STATES = {
+    "CONNECTING",
+    "SYNCING",
+    "ONLINE",
+    "DEGRADED",
+    "AUTH_ERROR",
+    "OFFLINE",
+    "RECONNECTING",
+    "NO_ROOM",
+}
 # A short dashboard outage must not turn the last confirmed remote presence
 # into a false offline result.  The server itself uses a two-minute heartbeat
 # freshness window; allowing one extra minute here covers a missed poll and
@@ -332,7 +341,7 @@ class ConnectionStateStore:
         now = datetime.now().astimezone().isoformat()
         if self.state == "ONLINE":
             self.last_success_at = now
-        elif self.state in {"OFFLINE", "RECONNECTING", "DEGRADED"}:
+        elif self.state in {"OFFLINE", "RECONNECTING", "DEGRADED", "AUTH_ERROR"}:
             self.last_failure_at = now
 
     def payload(self) -> dict[str, Any]:
@@ -365,6 +374,31 @@ class SocialError(RuntimeError):
         self.retryable = retryable
         self.status = status
         self.error_code = error_code
+
+
+def _is_auth_error(error: BaseException) -> bool:
+    """Classify authentication/authorization failures separately from I/O."""
+
+    kind = str(getattr(error, "kind", "") or "").casefold()
+    status = getattr(error, "status", None)
+    code = str(getattr(error, "error_code", "") or "").casefold()
+    return (
+        kind in {"auth", "authentication", "authorization"}
+        or kind.startswith("auth_")
+        or status in {401, 403}
+        or code in {"invalid_token", "jwt_expired", "not_authenticated", "permission_denied"}
+    )
+
+
+def _mark_cached_dashboard_error(data: dict[str, Any] | None, error: BaseException) -> dict[str, Any] | None:
+    """Keep cache continuity while exposing authentication failures accurately."""
+
+    if not isinstance(data, dict) or not _is_auth_error(error):
+        return data
+    data["_connection_state"] = "AUTH_ERROR"
+    data["_sync_error_kind"] = "auth"
+    data["_sync_error"] = str(error)
+    return data
 
 
 def social_user_message(error: BaseException) -> str:
@@ -455,12 +489,136 @@ def _private_notes_from_payload(payload: Any) -> dict[str, str]:
         for item in payload:
             if not isinstance(item, dict):
                 continue
-            user_id = item.get("buddy_user_id") or item.get("user_id")
-            note = item.get("private_note_name")
+            user_id = next(
+                (
+                    item.get(field)
+                    for field in (
+                        "buddy_user_id",
+                        "user_id",
+                        "buddy_id",
+                        "peer_id",
+                        "owner_id",
+                    )
+                    if item.get(field) is not None
+                ),
+                None,
+            )
+            note = item.get("private_note_name") or item.get("private_note")
             if user_id and note:
                 result[str(user_id)] = str(note).strip()[:40]
         return result
     return {}
+
+
+def _private_note_identity(item: dict[str, Any]) -> str:
+    """Return a peer id from a person-shaped dashboard record.
+
+    ``id`` is intentionally excluded: in visits, requests, and activity rows
+    it is usually the event id, not the user's id.  Treating it as a person id
+    can apply somebody else's private note to an unrelated event.
+    """
+
+    for field in (
+        "user_id",
+        "buddy_user_id",
+        "buddy_id",
+        "peer_id",
+        "owner_id",
+        "sender_id",
+        "receiver_id",
+    ):
+        value = item.get(field)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _private_notes_from_dashboard(data: dict[str, Any]) -> dict[str, str]:
+    """Extract viewer-only labels from an account-scoped cached snapshot."""
+
+    notes: dict[str, str] = {}
+
+    def collect(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            note = str(item.get("private_note_name") or "").strip()[:40]
+            identity = _private_note_identity(item)
+            if note and identity:
+                notes[identity] = note
+
+    for key in ("buddies", "room_people", "active_visits", "visits", "requests", "leaderboard"):
+        collect(data.get(key))
+    current_room = data.get("current_room")
+    if isinstance(current_room, dict):
+        for key in ("room_people", "active_visits", "visits"):
+            collect(current_room.get(key))
+    return notes
+
+
+def _private_note_deletions_from_dashboard(data: dict[str, Any]) -> set[str]:
+    """Return only explicit viewer-note deletions from a dashboard payload.
+
+    An omitted ``private_note_name`` is not a deletion: old relays and partial
+    snapshots legitimately omit viewer-only fields.  A JSON null, or the
+    explicit deletion marker used by newer clients, is authoritative.
+    """
+
+    deleted: set[str] = set()
+
+    def collect(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if "private_note_name" not in item and not item.get("private_note_deleted"):
+                continue
+            if item.get("private_note_name") is not None and not item.get("private_note_deleted"):
+                continue
+            identity = _private_note_identity(item)
+            if identity:
+                deleted.add(identity)
+
+    for key in ("buddies", "room_people", "active_visits", "visits", "requests", "leaderboard"):
+        collect(data.get(key))
+    current_room = data.get("current_room")
+    if isinstance(current_room, dict):
+        for key in ("room_people", "active_visits", "visits"):
+            collect(current_room.get(key))
+    return deleted
+
+
+def _dashboard_room_state(data: dict[str, Any], room_id: str | None = None) -> str:
+    """Classify room membership without confusing it with transport health."""
+
+    if not isinstance(data, dict):
+        return "UNKNOWN"
+    requested_id = str(room_id or "").strip()
+    current_room = data.get("current_room")
+    if isinstance(current_room, dict):
+        current_id = str(current_room.get("id") or current_room.get("room_id") or "").strip()
+        if current_id and (not requested_id or current_id == requested_id):
+            return "JOINED"
+        if any(key in current_room for key in ("room_people", "room_summary", "room_activity", "room_goal")):
+            return "JOINED"
+    if requested_id and str(data.get("room_id") or "").strip() == requested_id:
+        return "JOINED"
+    rooms = data.get("rooms")
+    if requested_id and isinstance(rooms, list):
+        for room in rooms:
+            if isinstance(room, dict) and str(room.get("id") or room.get("room_id") or "").strip() == requested_id:
+                return "JOINED"
+    explicit = str(data.get("room_membership_state") or data.get("room_state") or "").strip().upper()
+    if explicit in {"JOINED", "NO_ROOM", "UNKNOWN"}:
+        return explicit
+    # A missing optional room endpoint says nothing about membership. Keep
+    # that case distinguishable from a confirmed no-room response.
+    if data.get("_room_endpoint_unavailable"):
+        return "UNKNOWN"
+    return "NO_ROOM"
 
 
 def _apply_buddy_private_notes(data: dict[str, Any], notes: dict[str, str]) -> dict[str, Any]:
@@ -476,11 +634,9 @@ def _apply_buddy_private_notes(data: dict[str, Any], notes: dict[str, str]) -> d
             # since removed.  The RPC's absence of a row is authoritative;
             # clear the local-only decoration before applying current notes.
             item.pop("private_note_name", None)
-            for field in ("user_id", "buddy_id", "peer_id", "sender_id", "receiver_id"):
-                user_id = item.get(field)
-                if user_id is not None and str(user_id) in notes:
-                    item["private_note_name"] = notes[str(user_id)]
-                    break
+            user_id = _private_note_identity(item)
+            if user_id in notes:
+                item["private_note_name"] = notes[user_id]
 
     # ``focus_leaderboard`` is fetched by a separate RPC after the dashboard
     # snapshot.  Decorating it here keeps private labels available even when
@@ -1008,7 +1164,7 @@ class SocialBackend(Protocol):
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
-    def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None: ...
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
@@ -1507,7 +1663,7 @@ class HttpSocialBackend:
         else:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
-    def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
         # ``AuthSessionManager`` is the source of truth.  During login and
         # token refresh it can already hold a valid session while this
         # transport's compatibility attribute is still empty.  Returning at
@@ -1522,13 +1678,20 @@ class HttpSocialBackend:
                 self.signed_in,
             )
             return
+        # The independent heartbeat worker includes the account id in its
+        # transport-neutral liveness tuple.  Keep that field through the
+        # HTTP boundary and reject an accidental cross-account payload rather
+        # than silently sending presence for the wrong session.
+        requested_user_id = str(user_id or self.session.user_id).strip()
+        if requested_user_id and requested_user_id != str(self.session.user_id):
+            raise SocialError("登录账号已切换，请稍后重试。", kind="auth", error_code="account_mismatch")
         # Presence freshness is assigned by the Supabase database clock.  Do not
         # send a client last_seen value: a user's incorrect Windows clock would
         # otherwise make an active buddy look offline for the whole room.
-        stable_device_id, device_claim = _presence_device_credentials(self.session.user_id)
+        stable_device_id, device_claim = _presence_device_credentials(requested_user_id)
         body = _heartbeat_payload(
             {
-                "user_id": self.session.user_id,
+                "user_id": requested_user_id,
                 "working": bool(working),
                 "session_active": bool(session_active),
                 "session_id": session_id,
@@ -1539,7 +1702,7 @@ class HttpSocialBackend:
         )
         body["device_id"] = stable_device_id
         if not body.get("sequence"):
-            body["sequence"] = _next_presence_sequence(self.session.user_id)
+            body["sequence"] = _next_presence_sequence(requested_user_id)
         if self.transport == "direct":
             try:
                 self._raw(
@@ -1550,16 +1713,16 @@ class HttpSocialBackend:
                 )
             except SocialError as exc:
                 if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                    _mark_presence_device_claim_pending(self.session.user_id, stable_device_id)
+                    _mark_presence_device_claim_pending(requested_user_id, stable_device_id)
                 raise
         else:
             try:
                 self._raw("POST", "/presence/heartbeat", body, authenticated=True)
             except SocialError as exc:
                 if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                    _mark_presence_device_claim_pending(self.session.user_id, device_id)
+                    _mark_presence_device_claim_pending(requested_user_id, device_id)
                 raise
-        _mark_presence_device_claimed(self.session.user_id, stable_device_id)
+        _mark_presence_device_claimed(requested_user_id, stable_device_id)
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self.transport == "direct":
@@ -1645,6 +1808,8 @@ class LegacyDirectSocialClient:
         )
         self.persist_tokens = persist_tokens
         self._dashboard_cache: dict[str, dict[str, Any]] = {}
+        self._private_note_by_user: dict[str, str] = {}
+        self._private_notes_loaded = False
         self._last_error = ""
         self.connection = ConnectionStateStore()
         self.session: SocialSession | None = None
@@ -1842,6 +2007,7 @@ class LegacyDirectSocialClient:
         self._dashboard_cache[key] = {
             "account_id": account_id,
             "saved_at": time.time(),
+            "private_notes": dict(self._private_note_by_user),
             "data": snapshot,
         }
         self._save_dashboard_cache()
@@ -1864,10 +2030,25 @@ class LegacyDirectSocialClient:
         if payload_account_id and payload_account_id != account_id:
             return None
         _normalise_never_seen_presence(data)
-        # Private labels are local decorations and cannot be trusted when a
-        # cached snapshot is restored.  The next live dashboard applies the
-        # current account's notes again.
-        _apply_buddy_private_notes(data, {})
+        data["room_state"] = _dashboard_room_state(data, room_id)
+        # The cache is scoped to the authenticated account and the payload
+        # identity was checked above.  Preserve the last authorized viewer-only
+        # labels during an offline render instead of silently replacing them
+        # with a public/default nickname.  The snapshot remains explicitly
+        # stale below, and these labels are never uploaded.
+        saved_notes = entry.get("private_notes")
+        if isinstance(saved_notes, dict):
+            self._private_note_by_user.update(
+                {
+                    str(user_id): str(note).strip()[:40]
+                    for user_id, note in saved_notes.items()
+                    if str(user_id).strip() and str(note).strip()
+                }
+            )
+        if not self._private_notes_loaded:
+            self._private_note_by_user.update(_private_notes_from_dashboard(data))
+            self._private_notes_loaded = True
+        _apply_buddy_private_notes(data, self._private_note_by_user)
         saved_at = float(entry.get("saved_at") or 0)
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         age_minutes = max(0, int(age_seconds / 60)) if saved_at else 0
@@ -2204,7 +2385,7 @@ class LegacyDirectSocialClient:
         self._clear_session()
 
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
-        self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
+        self.connection.set("SYNCING", data_source=self.connection.data_source, realtime_state="polling")
         try:
             if self._http_backend is not None:
                 data = self._http_backend.dashboard(room_id=room_id)
@@ -2241,6 +2422,7 @@ class LegacyDirectSocialClient:
             result = _normalise_never_seen_presence(dict(data or {}))
             self._last_error = ""
             result["_connection_state"] = "ONLINE"
+            result["room_state"] = _dashboard_room_state(result, room_id)
             result["is_stale"] = False
             result["data_source"] = "server"
             result["_data_source"] = "server"
@@ -2255,11 +2437,18 @@ class LegacyDirectSocialClient:
             return result
         except SocialError as exc:
             self._last_error = str(exc)
-            self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
+            self.connection.set(
+                "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE",
+                data_source="local_cache",
+                realtime_state="unavailable",
+            )
             if not allow_cache:
                 raise
             cached = self.cached_dashboard(room_id)
             if cached is not None:
+                _mark_cached_dashboard_error(cached, exc)
+                if _is_auth_error(exc):
+                    self.connection.set("AUTH_ERROR", data_source="local_cache", realtime_state="unavailable")
                 return cached
             raise
 
@@ -2283,11 +2472,14 @@ class LegacyDirectSocialClient:
             LOGGER.info("social profile nickname write skipped reason=empty_local_nickname")
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
-    def heartbeat(self, *, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
         if self._http_backend is not None:
-            return self._http_backend.heartbeat(working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence)
+            return self._http_backend.heartbeat(user_id=user_id, working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence)
         if not self.session:
             return
+        session_user_id = str(self.session.user_id)
+        if user_id and str(user_id).strip() != session_user_id:
+            raise SocialError("登录账号已切换，请稍后重试。", kind="auth", error_code="account_mismatch")
         # Keep compatibility with the legacy direct client, but let the
         # server-side trigger own both freshness timestamps.
         stable_device_id, device_claim = _presence_device_credentials(self.session.user_id)
@@ -2368,6 +2560,11 @@ class DashboardCacheClientBase:
         self.password_reset_redirect_url = os.environ.get("LILI_PASSWORD_RESET_REDIRECT_URL", "").strip() or str(config.get("password_reset_redirect_to", "")).strip() or self.email_redirect_url
         self.persist_tokens = persist_tokens
         self._dashboard_cache: dict[str, dict[str, Any]] = {}
+        # Viewer-only labels remain available while an account-scoped
+        # dashboard cache is rendered.  This is display state, not presence or
+        # focus data, and it is never sent back in a heartbeat.
+        self._private_note_by_user: dict[str, str] = {}
+        self._private_notes_loaded = False
         self._last_error = ""
         self.connection = ConnectionStateStore()
         self._http_backend: SocialBackend | None = backend
@@ -2469,6 +2666,7 @@ class DashboardCacheClientBase:
         self._dashboard_cache[f"{account_id}:{str(room_id or '')}"] = {
             "account_id": account_id,
             "saved_at": time.time(),
+            "private_notes": dict(self._private_note_by_user),
             "data": snapshot,
         }
         self._save_dashboard_cache()
@@ -2520,7 +2718,25 @@ class DashboardCacheClientBase:
         if payload_account_id and payload_account_id != account_id:
             return None
         _normalise_never_seen_presence(data)
-        _apply_buddy_private_notes(data, {})
+        data["room_state"] = _dashboard_room_state(data, room_id)
+        # The cache is scoped to the authenticated account and the payload
+        # identity was checked above. Preserve the last authorized viewer-only
+        # labels during an offline render instead of silently replacing them
+        # with a public/default nickname. The snapshot remains explicitly
+        # stale below, and these labels are never uploaded.
+        saved_notes = entry.get("private_notes")
+        if isinstance(saved_notes, dict):
+            self._private_note_by_user.update(
+                {
+                    str(user_id): str(note).strip()[:40]
+                    for user_id, note in saved_notes.items()
+                    if str(user_id).strip() and str(note).strip()
+                }
+            )
+        if not self._private_notes_loaded:
+            self._private_note_by_user.update(_private_notes_from_dashboard(data))
+            self._private_notes_loaded = True
+        _apply_buddy_private_notes(data, self._private_note_by_user)
         saved_at = float(entry.get("saved_at") or 0)
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
@@ -2541,10 +2757,11 @@ class DashboardCacheClientBase:
             health = self.health(); checks["edge_function"] = {"ok": True, "backend": health.get("backend", "supabase"), "transport": "https-rest"}
         except SocialError as exc:
             cached = self.cached_dashboard(room_id)
-            state = str((cached or {}).get("_connection_state") or "OFFLINE")
+            _mark_cached_dashboard_error(cached, exc)
+            state = "AUTH_ERROR" if _is_auth_error(exc) else str((cached or {}).get("_connection_state") or "OFFLINE")
             realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
-            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
         if not self.signed_in:
             self.connection.set("DEGRADED", data_source="local_live", realtime_state="not_authenticated")
             return {"connection_state": "DEGRADED", "data_source": "local_live", "realtime_state": "not_authenticated", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
@@ -2553,10 +2770,11 @@ class DashboardCacheClientBase:
             return {"connection_state": "ONLINE", "data_source": "server", "realtime_state": "polling", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": snapshot}
         except SocialError as exc:
             cached = self.cached_dashboard(room_id)
-            state = str((cached or {}).get("_connection_state") or "OFFLINE")
+            _mark_cached_dashboard_error(cached, exc)
+            state = "AUTH_ERROR" if _is_auth_error(exc) else str((cached or {}).get("_connection_state") or "OFFLINE")
             realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
-            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
 
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
         return self._require_backend().sign_up(email, password, nickname)
@@ -2588,20 +2806,26 @@ class DashboardCacheClientBase:
         if backend is not None: backend.sign_out()
 
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
-        self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
+        self.connection.set("SYNCING", data_source=self.connection.data_source, realtime_state="polling")
         try:
             result = _normalise_never_seen_presence(
                 dict(self._require_backend().dashboard(room_id=room_id, allow_cache=allow_cache) or {})
             )
             server_timestamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
-            result.update({"_connection_state": "ONLINE", "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": server_timestamp})
+            result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": server_timestamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=server_timestamp)
             self._last_error = ""; self._remember_dashboard(room_id, result); return result
         except SocialError as exc:
-            self._last_error = str(exc); self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
+            self._last_error = str(exc)
+            state = "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE"
+            self.connection.set(state, data_source="local_cache", realtime_state="unavailable")
             if not allow_cache: raise
             cached = self.cached_dashboard(room_id)
-            if cached is not None: return cached
+            if cached is not None:
+                _mark_cached_dashboard_error(cached, exc)
+                if _is_auth_error(exc):
+                    self.connection.set("AUTH_ERROR", data_source="local_cache", realtime_state="unavailable")
+                return cached
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._require_backend().rpc(name, body)
@@ -2971,6 +3195,12 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self.connection = ConnectionStateStore()
         self._last_error = ""
         self._dashboard_cache = {}
+        self._private_note_by_user: dict[str, str] = {}
+        self._private_notes_loaded = False
+        # Optional feature RPCs may lag behind the desktop release.  Do not
+        # spend one authenticated round trip on the same known 404 on every
+        # dashboard refresh.
+        self._unavailable_optional_rpcs: set[str] = set()
         self.persist_tokens = persist_tokens
         if backend is not None:
             self._manager = backend
@@ -3029,19 +3259,38 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return self._manager.health()
 
     def diagnose_connection(self, room_id: str | None = None) -> dict[str, Any]:
-        del room_id
         checks = {"edge_function": {"ok": False}, "authentication": {"ok": self.signed_in}, "room_snapshot": {"ok": False}, "presence": {"ok": False}, "realtime": {"ok": False}}
         try:
             health = self.health()
             checks["edge_function"] = {"ok": True, "backend": health.get("backend", "supabase"), "transport": "https-rest"}
-            self.connection.set("ONLINE" if self.signed_in else "DEGRADED", data_source="local_live", realtime_state="not_started")
-            return {"connection_state": "ONLINE" if self.signed_in else "DEGRADED", "data_source": "local_live", "realtime_state": "not_started", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
+            if not self.signed_in:
+                self.connection.set("DEGRADED", data_source="local_live", realtime_state="not_authenticated")
+                return {"connection_state": "DEGRADED", "data_source": "local_live", "realtime_state": "not_authenticated", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
         except SocialError as exc:
-            cached = self.cached_dashboard(None)
-            state = str((cached or {}).get("_connection_state") or "OFFLINE")
+            cached = self.cached_dashboard(room_id)
+            _mark_cached_dashboard_error(cached, exc)
+            state = "AUTH_ERROR" if _is_auth_error(exc) else str((cached or {}).get("_connection_state") or "OFFLINE")
             realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
-            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "error": str(exc)}
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
+        try:
+            # A public health response only proves that Supabase is reachable;
+            # it does not prove that the authenticated dashboard, profile, and
+            # buddy relationship path works.  Validate that path here, in the
+            # background health thread, not on the GUI thread.
+            snapshot = self.dashboard(room_id, allow_cache=False)
+            checks["room_snapshot"] = {"ok": True}
+            checks["presence"] = {"ok": True}
+            checks["realtime"] = {"ok": True, "mode": "desktop low-frequency polling"}
+            return {"connection_state": "ONLINE", "data_source": "server", "realtime_state": "polling", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": snapshot, "room_state": snapshot.get("room_state") if isinstance(snapshot, dict) else None}
+        except SocialError as exc:
+            cached = self.cached_dashboard(room_id)
+            _mark_cached_dashboard_error(cached, exc)
+            state = "AUTH_ERROR" if _is_auth_error(exc) else ("DEGRADED" if cached is not None else "OFFLINE")
+            realtime_state = "polling_degraded" if cached is not None else "unavailable"
+            checks["room_snapshot"] = {"ok": False, "error": str(exc)}
+            self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
 
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
         return self._manager.request("sign_up", email, password, nickname)
@@ -3085,45 +3334,65 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             self._manager.proxy.session = None
 
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]:
-        self.connection.set("CONNECTING", data_source=self.connection.data_source, realtime_state="polling")
+        self.connection.set("SYNCING", data_source=self.connection.data_source, realtime_state="polling")
         try:
             result = _normalise_never_seen_presence(
                 dict(self._manager.request("dashboard", room_id=room_id) or {})
             )
             try:
                 note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
-                _apply_buddy_private_notes(result, _private_notes_from_payload(note_payload))
+                notes = _private_notes_from_payload(note_payload)
+                self._private_note_by_user = dict(notes)
+                self._private_notes_loaded = True
+                _apply_buddy_private_notes(result, notes)
+                result["_private_notes_loaded"] = True
             except SocialError as exc:
-                # The migration can be applied after the desktop release. The
-                # core dashboard must remain usable while that deployment is
-                # catching up, so private labels fail closed to public names.
+                # The migration can be applied after the desktop release, and
+                # an older relay may omit the viewer-only field. Preserve the
+                # last authorized labels (or labels embedded in this payload)
+                # instead of silently replacing them with a default name.
+                embedded_notes = _private_notes_from_dashboard(result)
+                if embedded_notes:
+                    self._private_note_by_user.update(embedded_notes)
+                _apply_buddy_private_notes(result, self._private_note_by_user)
                 LOGGER.info(
-                    "buddy private notes unavailable kind=%s status=%s",
+                    "buddy private notes unavailable; preserved local labels kind=%s status=%s",
                     exc.kind,
                     exc.status,
                 )
-            try:
-                witness_payload = self._manager.request("rpc", "lili_achievement_witness_inbox", {})
-                result["achievement_witness_requests"] = (
-                    witness_payload if isinstance(witness_payload, list) else []
-                )
-            except SocialError as exc:
-                # This RPC is introduced by the manual-witness migration. A
-                # client may meet an older backend during rollout; an empty
-                # inbox is safer than breaking the whole social dashboard.
-                LOGGER.info("achievement witness inbox unavailable kind=%s status=%s", exc.kind, exc.status)
+            witness_rpc = "lili_achievement_witness_inbox"
+            if witness_rpc not in self._unavailable_optional_rpcs:
+                try:
+                    witness_payload = self._manager.request("rpc", witness_rpc, {})
+                    result["achievement_witness_requests"] = (
+                        witness_payload if isinstance(witness_payload, list) else []
+                    )
+                except SocialError as exc:
+                    # This RPC is introduced by the manual-witness migration. A
+                    # client may meet an older backend during rollout; an empty
+                    # inbox is safer than breaking the whole social dashboard.
+                    # A stable 404 is remembered for this process so it does
+                    # not make every refresh look like a network problem.
+                    if exc.status == 404 or str(exc.error_code).casefold() in {"pgrst202", "42883"}:
+                        self._unavailable_optional_rpcs.add(witness_rpc)
+                    LOGGER.info("achievement witness inbox unavailable kind=%s status=%s", exc.kind, exc.status)
             stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
-            result.update({"_connection_state": "ONLINE", "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
+            result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
             self._last_error = ""
             self._remember_dashboard(room_id, result)
             return result
         except SocialError as exc:
             self._last_error = str(exc)
-            self.connection.set("OFFLINE", data_source="local_cache", realtime_state="unavailable")
+            state = "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE"
+            self.connection.set(state, data_source="local_cache", realtime_state="unavailable")
             if allow_cache:
                 cached = self.cached_dashboard(room_id)
-                if cached is not None: return cached
+                if cached is not None:
+                    _mark_cached_dashboard_error(cached, exc)
+                    if _is_auth_error(exc):
+                        self.connection.set("AUTH_ERROR", data_source="local_cache", realtime_state="unavailable")
+                    return cached
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._manager.request("rpc", name, body)

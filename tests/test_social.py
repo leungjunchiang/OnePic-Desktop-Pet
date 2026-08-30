@@ -15,6 +15,7 @@ import onepic_desktop_pet.social as social_module
 from onepic_desktop_pet.social import (
     BackendRouteManager,
     AuthSessionManager,
+    ConnectionStateStore,
     DashboardCacheClientBase,
     HttpSocialBackend,
     PRESENCE_GRACE_SECONDS,
@@ -23,6 +24,7 @@ from onepic_desktop_pet.social import (
     SocialSession,
     SignupResult,
     _apply_buddy_private_notes,
+    _dashboard_room_state,
     _dashboard_payload_has_core_shape,
     _heartbeat_payload,
     _normalise_never_seen_presence,
@@ -69,6 +71,27 @@ def test_dashboard_core_shape_requires_identity_and_relationship_lists() -> None
     assert not _dashboard_payload_has_core_shape(
         {"me": {"user_id": "user-1"}, "buddies": []}
     )
+
+
+def test_room_membership_is_not_inferred_from_requested_room_id() -> None:
+    assert _dashboard_room_state({"me": {"user_id": "user-1"}}, "room-1") == "NO_ROOM"
+    assert _dashboard_room_state(
+        {"current_room": {"room_people": []}}, "room-1"
+    ) == "JOINED"
+    assert _dashboard_room_state(
+        {"_room_endpoint_unavailable": True}, "room-1"
+    ) == "UNKNOWN"
+
+
+def test_connection_state_store_keeps_auth_and_no_room_out_of_offline_bucket() -> None:
+    store = ConnectionStateStore()
+    store.set("NO_ROOM", data_source="local_live")
+    assert store.state == "NO_ROOM"
+    assert store.last_failure_at == ""
+
+    store.set("AUTH_ERROR", data_source="local_cache")
+    assert store.state == "AUTH_ERROR"
+    assert store.last_failure_at
 
 
 def test_profile_updates_never_overwrite_identity_with_empty_local_nickname(monkeypatch) -> None:
@@ -423,14 +446,15 @@ def test_route_manager_never_switches_for_business_auth_errors():
     assert proxy.calls == []
 
 
-def test_health_check_is_one_lightweight_request_and_does_not_load_dashboard():
+def test_health_check_validates_authenticated_dashboard_after_public_probe():
     direct = FakeTransport("direct")
     proxy = FakeTransport("proxy")
     manager = BackendRouteManager(direct, proxy, persist_state=False)
     client = SocialClient(backend=manager, persist_tokens=False)
     result = client.diagnose_connection()
     assert result["connection_state"] == "ONLINE"
-    assert direct.calls == ["health"]
+    assert direct.calls[0] == "health"
+    assert direct.calls[1] == ("dashboard", None)
     assert proxy.calls == []
 
 
@@ -442,7 +466,8 @@ def test_health_rechecks_direct_when_previous_route_was_proxy():
     client = SocialClient(backend=manager, persist_tokens=False)
     result = client.diagnose_connection()
     assert result["connection_state"] == "ONLINE"
-    assert direct.calls == ["health"]
+    assert direct.calls[0] == "health"
+    assert direct.calls[1] == ("dashboard", None)
     assert proxy.calls == []
     assert manager.current_route == BackendRouteManager.DIRECT_SUPABASE
 
@@ -455,8 +480,9 @@ def test_health_uses_proxy_only_after_two_direct_network_failures():
     client = SocialClient(backend=manager, persist_tokens=False)
     result = client.diagnose_connection()
     assert result["connection_state"] == "ONLINE"
-    assert direct.calls == ["health", "health"]
-    assert proxy.calls == ["health"]
+    assert direct.calls == ["health", "health", "health"]
+    assert proxy.calls[0] == "health"
+    assert proxy.calls[1] == ("dashboard", None)
     assert manager.current_route == BackendRouteManager.CLOUDBASE_PROXY
 
 
@@ -519,6 +545,7 @@ def test_http_backend_uses_direct_supabase_paths():
     backend.health()
     backend.dashboard("room-1")
     backend.heartbeat(
+        user_id="u",
         working=True,
         session_active=True,
         session_id="session-1",
@@ -537,6 +564,23 @@ def test_http_backend_uses_direct_supabase_paths():
     assert "p_week_seconds" not in heartbeat_body
     assert "p_duration" not in heartbeat_body
     assert heartbeat_call[4] is None
+
+
+def test_heartbeat_rejects_payload_for_a_different_authenticated_account():
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+
+    with pytest.raises(SocialError, match="登录账号已切换"):
+        backend.heartbeat(
+            user_id="user-2",
+            working=False,
+            session_active=False,
+        )
 
 
 def test_heartbeat_refreshes_transport_session_from_auth_manager():
@@ -1196,6 +1240,35 @@ def test_taunt_time_window_migration_switches_to_after_hours_encouragement():
     assert "taunt_window and not exists" in migration
 
 
+def test_taunt_presence_state_migration_preserves_daytime_privacy_window():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260830110000_lili_taunt_by_presence_state.sql").read_text(encoding="utf-8")
+    assert "A buddy who is working receives encouragement" in migration
+    assert "local_minutes" in migration
+    assert "local_minutes not between 480 and 1350" in migration
+    assert "嘲讽时间之外" in migration
+    assert migration.index("local_minutes not between 480 and 1350") < migration.index("lili_buddy_taunts t")
+    assert "f.working" in migration
+    assert "f.last_seen > now() - interval '45 seconds'" in migration
+    assert "kind', 'taunt'" in migration
+    assert "kind', 'encouragement'" in migration
+
+
+def test_latest_dashboard_reasserts_canonical_focus_totals_and_never_seen_guard():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations"
+        / "20260830120000_lili_reassert_canonical_focus_dashboard.sql"
+    ).read_text(encoding="utf-8")
+    assert "lili_effective_focus_stats(p_user_id)->>'today_seconds'" in migration
+    assert "lili_effective_focus_stats(p_user_id)->>'week_seconds'" in migration
+    assert "presence_never_seen" in migration
+    assert "lili_normalize_focus_today_people" in migration
+    assert "lili_dashboard_presence_base_20260828" in migration
+    assert "p_today_seconds" not in migration
+    assert "greatest(coalesce(p.focus_today_seconds" not in migration
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
@@ -1313,6 +1386,62 @@ def test_recent_cached_dashboard_preserves_last_known_peer_presence():
     assert peer["presence_uncertain"] is True
     assert peer.get("stale_presence") is not True
     assert cached["room_summary"]["presence_uncertain"] is True
+
+
+def test_cached_dashboard_preserves_viewer_private_buddy_note():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+    client._dashboard_cache = {
+        "user-1:room-1": {
+            "account_id": "user-1",
+            "saved_at": time.time() - 30,
+            "data": {
+                "me": {"user_id": "user-1", "nickname": "小梁"},
+                "buddies": [
+                    {
+                        "user_id": "buddy-1",
+                        "nickname": "搭子",
+                        "private_note_name": "论文搭子",
+                    }
+                ],
+                "room_people": [],
+            },
+        }
+    }
+
+    cached = client.cached_dashboard("room-1")
+
+    assert cached is not None
+    assert cached["buddies"][0]["private_note_name"] == "论文搭子"
+    assert cached["is_stale"] is True
+
+
+def test_cached_dashboard_uses_saved_private_note_when_snapshot_omits_field():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+    client._dashboard_cache = {
+        "user-1:room-1": {
+            "account_id": "user-1",
+            "saved_at": time.time() - 30,
+            "private_notes": {"buddy-1": "论文搭子"},
+            "data": {
+                "me": {"user_id": "user-1", "nickname": "小梁"},
+                "buddies": [{"user_id": "buddy-1", "nickname": "小梁"}],
+                "room_people": [],
+            },
+        }
+    }
+
+    cached = client.cached_dashboard("room-1")
+
+    assert cached is not None
+    assert cached["buddies"][0]["private_note_name"] == "论文搭子"
 
 
 def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
