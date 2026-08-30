@@ -42,7 +42,7 @@ from .social import (
     _dashboard_payload_has_core_shape,
     social_user_message,
 )
-from .config import PET_NAME, clean_owner_nickname, social_pet_label
+from .config import PET_NAME, clean_owner_nickname, clean_social_pet_name, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
 from .login_rewards import login_reward_granted, login_streak_days
 from .work_timer import format_work_duration
@@ -117,6 +117,10 @@ def _merge_dashboard_snapshot(
         for field in _DASHBOARD_IDENTITY_FIELDS:
             if not str(new_me.get(field) or "").strip() and str(old_me.get(field) or "").strip():
                 new_me[field] = old_me[field]
+        # Unlike the durable identity fields above, null is a meaningful
+        # value for pet_name because it explicitly clears the optional name.
+        if "pet_name" not in new_me and "pet_name" in old_me:
+            new_me["pet_name"] = old_me["pet_name"]
         merged["me"] = new_me
 
     if not complete:
@@ -363,11 +367,31 @@ def _owner_nickname(record: dict[str, Any] | None) -> str:
         return "搭子"
     return str(
         record.get("private_note_name")
-        or record.get("owner_nickname")
+        or _public_owner_nickname(record)
+    ).strip() or "搭子"
+
+
+def _public_owner_nickname(record: dict[str, Any] | None) -> str:
+    if not isinstance(record, dict):
+        return "搭子"
+    return str(
+        record.get("owner_nickname")
         or record.get("nickname")
         or record.get("display_name")
         or "搭子"
     ).strip() or "搭子"
+
+
+def _social_pet_name(record: dict[str, Any] | None) -> str:
+    """Read the owner's own 六毛 name across current and legacy payloads."""
+
+    if not isinstance(record, dict):
+        return ""
+    for key in ("pet_name", "pet_nickname", "liumao_name", "companion_name"):
+        value = clean_social_pet_name(record.get(key))
+        if value:
+            return value
+    return ""
 
 
 def _owner_label(record: dict[str, Any] | None) -> str:
@@ -377,7 +401,16 @@ def _owner_label(record: dict[str, Any] | None) -> str:
         )
         if not public_name or public_name == "搭子":
             return f"我的{PET_NAME}"
-    return social_pet_label(_owner_nickname(record))
+    if isinstance(record, dict):
+        private_note = clean_social_pet_name(record.get("private_note_name"))
+        if private_note:
+            # A viewer-assigned nickname is already the complete card label;
+            # do not append the generic "家的六毛" suffix to it.
+            return private_note
+        pet_name = _social_pet_name(record)
+        if pet_name:
+            return pet_name
+    return social_pet_label(_public_owner_nickname(record))
 
 
 def _notification_sender_id(record: dict[str, Any] | None) -> str:
@@ -2235,6 +2268,7 @@ class SocialHubDialog(QDialog):
         self.client = client
         self.outfit_key = outfit_key
         self.owner_nickname = owner_nickname.strip()[:24]
+        self._social_pet_name_loaded = False
         self.data: dict[str, Any] = {}
         # A private note belongs to this viewer, not to the shared profile.
         # Keep it across partial/legacy snapshots so a missing optional field
@@ -2690,6 +2724,7 @@ class SocialHubDialog(QDialog):
 
         return (
             _owner_nickname(buddy),
+            _owner_label(buddy),
             _presence_status(buddy),
             bool(buddy.get("online")),
             bool(buddy.get("presence_uncertain")),
@@ -3379,14 +3414,20 @@ class SocialHubDialog(QDialog):
                 stamp = _format_beijing_time(str(entry.get("created_at") or ""))
                 text = str(entry.get("text") or entry.get("message") or "")
                 if not text:
-                    actor = social_pet_label(
-                        entry.get("actor_private_note_name")
-                        or entry.get("owner_nickname")
-                        or entry.get("nickname")
-                        or entry.get("actor_nickname")
-                    )
+                    actor = _owner_label({
+                        "private_note_name": entry.get("actor_private_note_name"),
+                        "pet_name": entry.get("actor_pet_name") or entry.get("pet_name"),
+                        "owner_nickname": entry.get("owner_nickname"),
+                        "nickname": entry.get("nickname") or entry.get("actor_nickname"),
+                    })
                     target = entry.get("target_private_note_name") or entry.get("target_owner_nickname") or entry.get("target_nickname")
-                    target_text = f" → {social_pet_label(target)}" if target else ""
+                    target_record = {
+                        "private_note_name": entry.get("target_private_note_name"),
+                        "pet_name": entry.get("target_pet_name"),
+                        "owner_nickname": entry.get("target_owner_nickname"),
+                        "nickname": entry.get("target_nickname"),
+                    }
+                    target_text = f" → {_owner_label(target_record)}" if target else ""
                     kind_text = {
                         "join": "进入房间", "leave": "离开房间", "focus_start": "开始专注",
                         "focus_pause": "暂停休息", "focus_finish": "完成一轮",
@@ -3698,6 +3739,14 @@ class SocialHubDialog(QDialog):
         self.copy_buddy_code_button.clicked.connect(self._copy_buddy_code)
         identity_row.addWidget(self.copy_buddy_code_button)
         layout.addLayout(identity_row)
+        self.social_pet_name = QLineEdit()
+        self.social_pet_name.setMaxLength(24)
+        self.social_pet_name.setPlaceholderText("留空则显示“搭子家的六毛”")
+        self.social_pet_name.setToolTip("这是搭子看到的你的六毛名字；搭子给你的私人备注优先级更高。")
+        pet_name_row = QHBoxLayout()
+        pet_name_row.addWidget(QLabel("我的六毛昵称"))
+        pet_name_row.addWidget(self.social_pet_name, 1)
+        layout.addLayout(pet_name_row)
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("允许搭子串门")
@@ -3829,6 +3878,9 @@ class SocialHubDialog(QDialog):
         if hasattr(self, "copy_buddy_code_button"):
             self.copy_buddy_code_button.setEnabled(False)
             self.copy_buddy_code_button.setText("复制搭子码")
+        if hasattr(self, "social_pet_name"):
+            self.social_pet_name.clear()
+            self._social_pet_name_loaded = False
         if hasattr(self, "inbox_accept_button"):
             self._update_inbox_actions(None, None)
         self.rooms.clear(); self.rooms.addItem("登录后可创建或加入私人自习室。")
@@ -4263,6 +4315,9 @@ class SocialHubDialog(QDialog):
             if request_id and request_id not in self._seen_buddy_request_ids:
                 self._seen_buddy_request_ids.add(request_id)
                 self.buddy_request_received.emit(dict(request))
+        if "pet_name" in me:
+            self.social_pet_name.setText(clean_social_pet_name(me.get("pet_name")))
+            self._social_pet_name_loaded = True
         self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
         mode = str(me.get("buddy_interaction_mode") or "focus_priority")
         mode_index = self.interaction_mode.findData(mode)
@@ -4476,6 +4531,7 @@ class SocialHubDialog(QDialog):
             "nickname": self.owner_nickname or str(
                 me.get("nickname") or me.get("display_name") or "搭子"
             ),
+            "pet_name": me.get("pet_name"),
             # The profile is the durable same-account outfit.  Presence is a
             # per-device heartbeat and can briefly belong to an older client.
             "outfit_key": str(me.get("outfit_key") or me_presence.get("outfit_key") or self.outfit_key or ""),
@@ -4616,7 +4672,8 @@ class SocialHubDialog(QDialog):
                 or me.get("owner_nickname")
                 or ""
             ).strip()
-            self.client.update_profile(nickname=nickname,visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True)
+            pet_name = self.social_pet_name.text() if self._social_pet_name_loaded else None
+            self.client.update_profile(nickname=nickname,visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True,pet_name=pet_name)
             self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": str(self.interaction_mode.currentData() or "focus_priority")})
             self.refresh()
         except SocialError as exc: self._error(exc)

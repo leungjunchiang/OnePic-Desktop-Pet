@@ -122,6 +122,40 @@ def test_profile_updates_never_overwrite_identity_with_empty_local_nickname(monk
     assert "owner_nickname" not in requests[0]["body"]
 
 
+def test_profile_update_round_trips_optional_social_pet_name(monkeypatch) -> None:
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+    requests: list[dict] = []
+
+    def fake_raw(method, path, body=None, **_kwargs):
+        requests.append({"method": method, "path": path, "body": body or {}})
+        return None
+
+    monkeypatch.setattr(backend, "_raw", fake_raw)
+    backend.update_profile(
+        nickname="我的主人昵称",
+        visibility="friends",
+        show_exact_time=True,
+        allow_visits=True,
+        pet_name="团团",
+    )
+    backend.update_profile(
+        nickname="我的主人昵称",
+        visibility="friends",
+        show_exact_time=True,
+        allow_visits=True,
+        pet_name="",
+    )
+
+    assert requests[0]["body"]["pet_name"] == "团团"
+    assert requests[1]["body"]["pet_name"] is None
+
+
 def test_incomplete_dashboard_is_not_persisted_as_cache(monkeypatch) -> None:
     transport = FakeTransport("direct")
     client = DashboardCacheClientBase(persist_tokens=False, backend=transport)
@@ -1267,6 +1301,23 @@ def test_latest_dashboard_reasserts_canonical_focus_totals_and_never_seen_guard(
     assert "lili_dashboard_presence_base_20260828" in migration
     assert "p_today_seconds" not in migration
     assert "greatest(coalesce(p.focus_today_seconds" not in migration
+
+
+def test_social_pet_name_migration_covers_dashboard_room_and_profile_relays():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260830042738_lili_social_pet_names.sql").read_text(encoding="utf-8")
+    assert "add column if not exists pet_name text" in migration
+    assert "lili_attach_social_pet_names" in migration
+    assert "lili_dashboard_social_pet_names_base" in migration
+    assert "lili_room_dashboard_social_pet_names_base" in migration
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "pet_name" in source
 
 
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():

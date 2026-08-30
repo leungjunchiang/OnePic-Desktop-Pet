@@ -193,7 +193,8 @@ def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu
     item = dialog.buddies.item(0)
     widget = dialog.buddies.itemWidget(item)
     assert widget is not None
-    assert any("论文搭子家的六毛" in label.text() for label in widget.findChildren(QLabel))
+    assert any("论文搭子" in label.text() for label in widget.findChildren(QLabel))
+    assert not any("论文搭子家的六毛" in label.text() for label in widget.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -205,7 +206,8 @@ def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> N
     dialog.apply_dashboard(data)
     app.processEvents()
 
-    assert "论文搭子家的六毛" in dialog.wealth_leaderboard.item(0).text()
+    assert "论文搭子" in dialog.wealth_leaderboard.item(0).text()
+    assert "论文搭子家的六毛" not in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -446,6 +448,47 @@ def test_buddy_card_uses_public_nickname_when_private_note_is_missing() -> None:
     assert any("小梁家的六毛" in text for text in labels)
     assert not any("搭子家的六毛" in text for text in labels)
     widget.close(); widget.deleteLater(); app.processEvents()
+
+
+def test_buddy_name_priority_is_private_note_then_own_pet_name_then_fallback() -> None:
+    app = QApplication.instance() or QApplication([])
+    private = BuddyCardWidget(
+        {
+            "user_id": "buddy-private",
+            "private_note_name": "我给的昵称",
+            "pet_name": "对方六毛名",
+            "owner_nickname": "对方公开昵称",
+            "online": True,
+            "status": "rest",
+        }
+    )
+    own_name = BuddyCardWidget(
+        {
+            "user_id": "buddy-own-name",
+            "pet_name": "对方六毛名",
+            "owner_nickname": "对方公开昵称",
+            "online": True,
+            "status": "rest",
+        }
+    )
+    fallback = BuddyCardWidget(
+        {
+            "user_id": "buddy-fallback",
+            "owner_nickname": "对方公开昵称",
+            "online": True,
+            "status": "rest",
+        }
+    )
+
+    assert "我给的昵称" in private.findChildren(QLabel)[0].text()
+    assert "家的六毛" not in private.findChildren(QLabel)[0].text()
+    assert "对方六毛名" in own_name.findChildren(QLabel)[0].text()
+    assert "对方六毛名家的六毛" not in own_name.findChildren(QLabel)[0].text()
+    assert "对方公开昵称家的六毛" in fallback.findChildren(QLabel)[0].text()
+
+    for widget in (private, own_name, fallback):
+        widget.close(); widget.deleteLater()
+    app.processEvents()
 
 
 def test_dashboard_merge_preserves_private_remark_when_response_omits_field() -> None:

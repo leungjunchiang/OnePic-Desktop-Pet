@@ -1162,7 +1162,7 @@ class SocialBackend(Protocol):
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: ...
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
@@ -1634,9 +1634,11 @@ class HttpSocialBackend:
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None:
         clean = nickname.strip()[:24]
         body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
+        if pet_name is not None:
+            body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
         # An empty local nickname means “keep the durable server identity” on
         # a new machine. Sending nickname="搭子" plus owner_nickname=""
         # would silently erase an existing social name.
@@ -2457,15 +2459,17 @@ class LegacyDirectSocialClient:
             return self._http_backend.rpc(name, body)
         return self._raw("POST", f"/rest/v1/rpc/{name}", body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None:
         if self._http_backend is not None:
-            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set)
+            return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name)
         if not self.session:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
         path = f"/rest/v1/lili_profiles?{query}"
         body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
+        if pet_name is not None:
+            body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
         if clean:
             body.update({"nickname": clean, "owner_nickname": clean})
         else:
@@ -2829,7 +2833,7 @@ class DashboardCacheClientBase:
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._require_backend().rpc(name, body)
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set)
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name)
     def update_owner_nickname(self, nickname: str) -> None: self._require_backend().update_owner_nickname(nickname)
     def heartbeat(self, **kwargs: Any) -> None: self._require_backend().heartbeat(**kwargs)
     def send_interaction(self, **kwargs: Any) -> None: self._require_backend().send_interaction(**kwargs)

@@ -307,7 +307,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const user = await requireUser(request, env);
     const body = await parseBody(request);
     const clean: Record<string, unknown> = {};
-    for (const key of ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
+    for (const key of ["nickname", "owner_nickname", "pet_name", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]) {
       if (key in body) clean[key] = body[key];
     }
     for (const key of ["nickname", "owner_nickname"] as const) {
@@ -317,6 +317,10 @@ async function handle(request: Request, env: Env): Promise<Response> {
       // old client erase a social name while saving unrelated settings.
       if (value) clean[key] = value;
       else delete clean[key];
+    }
+    if (clean.pet_name !== undefined) {
+      const value = String(clean.pet_name || "").trim().slice(0, 24);
+      clean.pet_name = value || null;
     }
     if (clean.outfit_key !== undefined) clean.outfit_key = String(clean.outfit_key).slice(0, 60);
     return json(request, env, await supabaseFetch(request, env, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(String(user.id || ""))}`, {

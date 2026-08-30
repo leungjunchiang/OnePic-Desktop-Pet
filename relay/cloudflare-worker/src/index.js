@@ -270,7 +270,7 @@ async function handleRequest(request, env) {
     const auth = bearer(request);
     const userId = userIdFromBearer(auth);
     const body = await parseJsonBody(request);
-    const profile = safeBody(body, ["nickname", "owner_nickname", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]);
+    const profile = safeBody(body, ["nickname", "owner_nickname", "pet_name", "visibility", "show_exact_time", "allow_visits", "outfit_key", "wealth_leaderboard_enabled", "wealth_leaderboard_preference_set"]);
     for (const key of ["nickname", "owner_nickname"]) {
       if (profile[key] === undefined) continue;
       const value = String(profile[key]).trim().slice(0, 24);
@@ -279,6 +279,10 @@ async function handleRequest(request, env) {
       // visibility or presence-related settings.
       if (value) profile[key] = value;
       else delete profile[key];
+    }
+    if (profile.pet_name !== undefined) {
+      const value = String(profile.pet_name || "").trim().slice(0, 24);
+      profile.pet_name = value || null;
     }
     if (profile.outfit_key !== undefined) profile.outfit_key = String(profile.outfit_key).slice(0, 60);
     return jsonResponse(await callSupabase(env, request, `/rest/v1/lili_profiles?user_id=eq.${encodeURIComponent(userId)}`, {

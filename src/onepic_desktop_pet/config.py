@@ -47,6 +47,12 @@ def clean_owner_nickname(value: Any) -> str:
     return "" if clean in {PET_NAME, "六毛搭子"} else clean
 
 
+def clean_social_pet_name(value: Any) -> str:
+    """Normalize the account owner's own social-facing 六毛 name."""
+
+    return str(value or "").replace("\x00", "").strip()[:24]
+
+
 def social_pet_label(owner_nickname: Any) -> str:
     """Build the only social-facing identity used for another user's pet."""
 
