@@ -556,15 +556,17 @@ def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
-def test_reaction_label_switches_to_encouragement_outside_beijing_taunt_window() -> None:
+def test_reaction_label_follows_presence_state_and_window_is_checked_separately() -> None:
     tz = timezone(timedelta(hours=8))
     rest = {"online": False, "status": "offline", "working": False}
+    focus = {"online": True, "status": "focus", "working": True}
     assert _taunt_window_open(datetime(2026, 8, 26, 8, 0, tzinfo=tz))
     assert _taunt_window_open(datetime(2026, 8, 26, 22, 30, tzinfo=tz))
     assert not _taunt_window_open(datetime(2026, 8, 26, 7, 59, tzinfo=tz))
     assert not _taunt_window_open(datetime(2026, 8, 26, 22, 31, tzinfo=tz))
     assert _reaction_label(rest, datetime(2026, 8, 26, 12, 0, tzinfo=tz)) == "嘲讽"
-    assert _reaction_label(rest, datetime(2026, 8, 26, 23, 0, tzinfo=tz)) == "加油"
+    assert _reaction_label(rest, datetime(2026, 8, 26, 23, 0, tzinfo=tz)) == "嘲讽"
+    assert _reaction_label(focus, datetime(2026, 8, 26, 3, 0, tzinfo=tz)) == "加油"
 
 
 def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch) -> None:
@@ -584,6 +586,33 @@ def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch)
         assert any(button.text() == "嘲讽" for button in card.findChildren(QPushButton))
         card.close(); card.deleteLater()
     app.processEvents()
+
+
+def test_taunt_outside_window_only_warns_and_sends_no_rpc(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+
+    class Client(SignedInClient):
+        def __init__(self) -> None:
+            self.calls = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, body))
+            return {"active": True}
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._beijing_now",
+        lambda: datetime(2026, 8, 26, 23, 0, tzinfo=timezone(timedelta(hours=8))),
+    )
+    client = Client()
+    dialog = SocialHubDialog(client)
+    dialog._send_interaction(
+        {"user_id": "buddy-1", "nickname": "休息搭子", "online": False, "status": "offline"},
+        "cheer",
+    )
+
+    assert client.calls == []
+    assert "嘲讽时间之外" in dialog.status_label.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
 def test_room_pet_taunt_action_is_visible_for_stale_rest_payload(monkeypatch) -> None:
@@ -799,3 +828,4 @@ def test_local_focus_wins_and_missing_leaderboard_does_not_clear_cache() -> None
     app.processEvents()
     assert "暂无可展示" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
