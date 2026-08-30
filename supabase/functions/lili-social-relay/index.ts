@@ -68,6 +68,96 @@ const ROUTE_TO_RPC = new Map([
   ["/leaderboard/focus-week", "lili_focus_weekly_leaderboard"],
 ]);
 
+const DASHBOARD_PERSON_LIST_FIELDS = new Set([
+  "buddies",
+  "room_people",
+  "active_visits",
+  "visits",
+  "requests",
+  "outgoing_requests",
+  "leaderboard",
+]);
+const DASHBOARD_PERSON_ID_FIELDS = [
+  "user_id",
+  "buddy_user_id",
+  "buddy_id",
+  "peer_id",
+  "owner_id",
+  "actor_id",
+  "sender_id",
+  "receiver_id",
+  "requester_id",
+  "target_id",
+];
+const DASHBOARD_OPTIONAL_PERSON_FIELDS = [
+  "pet_name",
+  "pet_nickname",
+  "liumao_name",
+  "companion_name",
+  "owner_nickname",
+  "nickname",
+  "display_name",
+];
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function personIdentity(value: unknown): string {
+  const item = record(value);
+  if (!item) return "";
+  for (const field of DASHBOARD_PERSON_ID_FIELDS) {
+    const candidate = String(item[field] ?? "").trim();
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+function mergeDashboardPeople(previous: unknown, incoming: unknown): unknown {
+  if (!Array.isArray(incoming)) return incoming;
+  const previousById = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(previous)) {
+    for (const item of previous) {
+      const identity = personIdentity(item);
+      const itemRecord = record(item);
+      if (identity && itemRecord) previousById.set(identity, itemRecord);
+    }
+  }
+  return incoming.map((item) => {
+    const itemRecord = record(item);
+    if (!itemRecord) return item;
+    const merged = { ...itemRecord };
+    const previousItem = previousById.get(personIdentity(item));
+    if (previousItem) {
+      for (const field of DASHBOARD_OPTIONAL_PERSON_FIELDS) {
+        if (!(field in itemRecord) && field in previousItem) merged[field] = previousItem[field];
+      }
+    }
+    return merged;
+  });
+}
+
+function mergeDashboardOverlay(
+  previous: Record<string, unknown>,
+  incoming: unknown,
+): Record<string, unknown> {
+  const incomingRecord = record(incoming);
+  if (!incomingRecord) return { ...previous };
+  const merged = { ...previous };
+  for (const [key, value] of Object.entries(incomingRecord)) {
+    if (DASHBOARD_PERSON_LIST_FIELDS.has(key) && Array.isArray(value)) {
+      merged[key] = mergeDashboardPeople(merged[key], value);
+    } else if (key === "current_room" && record(value)) {
+      merged[key] = mergeDashboardOverlay(record(merged[key]) || {}, value);
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
 class RelayError extends Error {
   status: number;
 
@@ -194,7 +284,7 @@ async function rpc(request: Request, env: Env, name: string, body: Record<string
 
 async function dashboard(request: Request, env: Env, roomId = ""): Promise<Record<string, unknown>> {
   const dashboardData = await rpc(request, env, "lili_dashboard", {}) as Record<string, unknown> | null;
-  const result: Record<string, unknown> = { ...(dashboardData || {}) };
+  let result: Record<string, unknown> = mergeDashboardOverlay({}, dashboardData || {});
   if (!roomId) return result;
   let room: unknown;
   try {
@@ -204,10 +294,10 @@ async function dashboard(request: Request, env: Env, roomId = ""): Promise<Recor
     result._room_endpoint_unavailable = true;
     return result;
   }
-  Object.assign(result, room || {});
+  result = mergeDashboardOverlay(result, room);
   try {
     const rituals = await rpc(request, env, "lili_room_room_rituals", { p_room_id: roomId });
-    Object.assign(result, rituals || {});
+    result = mergeDashboardOverlay(result, rituals);
   } catch (error) {
     if (error instanceof RelayError && error.status < 500) return result;
     throw error;

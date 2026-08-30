@@ -40,6 +40,7 @@ from .social import (
     _private_note_deletions_from_dashboard,
     _private_notes_from_dashboard,
     _dashboard_payload_has_core_shape,
+    _merge_dashboard_overlay,
     social_user_message,
 )
 from .config import PET_NAME, clean_owner_nickname, clean_social_pet_name, social_pet_label
@@ -107,6 +108,11 @@ def _merge_dashboard_snapshot(
                 merged[field] = deepcopy(old_value)
     else:
         merged.update(deepcopy(incoming))
+
+    # The room projection may be a newer complete snapshot while omitting
+    # optional profile labels that the account projection already supplied.
+    # Preserve those labels only for omission; explicit null remains a clear.
+    merged = _merge_dashboard_overlay(previous, merged)
 
     # A response with a sparse ``me`` mapping must not blank a durable invite
     # code or nickname.  Empty fields are treated as “not supplied” here; an

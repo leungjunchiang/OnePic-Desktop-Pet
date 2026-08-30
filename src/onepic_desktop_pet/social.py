@@ -233,6 +233,122 @@ def _dashboard_payload_has_core_shape(data: Any) -> bool:
     )
 
 
+_DASHBOARD_PERSON_LIST_FIELDS = frozenset(
+    {
+        "buddies",
+        "room_people",
+        "active_visits",
+        "visits",
+        "requests",
+        "outgoing_requests",
+        "leaderboard",
+    }
+)
+_DASHBOARD_PERSON_ID_FIELDS = (
+    "user_id",
+    "buddy_user_id",
+    "buddy_id",
+    "peer_id",
+    "owner_id",
+    "actor_id",
+    "sender_id",
+    "receiver_id",
+    "requester_id",
+    "target_id",
+)
+_DASHBOARD_OPTIONAL_PERSON_FIELDS = (
+    # These fields are optional in mixed-version dashboard/room responses.
+    # An omitted field means that the endpoint did not project it; an explicit
+    # null remains authoritative and must clear the old value.
+    "pet_name",
+    "pet_nickname",
+    "liumao_name",
+    "companion_name",
+    "owner_nickname",
+    "nickname",
+    "display_name",
+)
+
+
+def _dashboard_person_identity(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for field in _DASHBOARD_PERSON_ID_FIELDS:
+        value = item.get(field)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _merge_dashboard_people(
+    previous: Any,
+    incoming: Any,
+    fallback_by_id: dict[str, dict[str, Any]] | None = None,
+) -> Any:
+    """Merge optional person labels without weakening server authority.
+
+    The account dashboard and room dashboard are separate RPC projections. A
+    deployment can therefore return the same buddy twice, with the second
+    projection omitting optional profile fields such as ``pet_name``. Treating
+    that omission as a delete made a name appear on the first refresh and
+    disappear on the next one. Only omission is filled from the prior snapshot;
+    explicit null/value fields from the newest response always win.
+    """
+
+    if not isinstance(incoming, list):
+        return incoming
+    previous_by_id: dict[str, dict[str, Any]] = dict(fallback_by_id or {})
+    if isinstance(previous, list):
+        for item in previous:
+            identity = _dashboard_person_identity(item)
+            if identity and isinstance(item, dict):
+                previous_by_id[identity] = item
+
+    result: list[Any] = []
+    for item in incoming:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+        merged = dict(item)
+        old = previous_by_id.get(_dashboard_person_identity(item))
+        if old is not None:
+            for field in _DASHBOARD_OPTIONAL_PERSON_FIELDS:
+                if field not in item and field in old:
+                    merged[field] = old[field]
+        result.append(merged)
+    return result
+
+
+def _merge_dashboard_overlay(
+    previous: Any,
+    incoming: Any,
+    _fallback_by_id: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Overlay a room/relay snapshot while retaining omitted person labels."""
+
+    base = dict(previous) if isinstance(previous, dict) else {}
+    if not isinstance(incoming, dict):
+        return base
+    fallback_by_id: dict[str, dict[str, Any]] = dict(_fallback_by_id or {})
+    if isinstance(previous, dict):
+        for field in _DASHBOARD_PERSON_LIST_FIELDS:
+            items = previous.get(field)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                identity = _dashboard_person_identity(item)
+                if identity and isinstance(item, dict):
+                    fallback_by_id[identity] = item
+    for key, value in incoming.items():
+        if key in _DASHBOARD_PERSON_LIST_FIELDS and isinstance(value, list):
+            base[key] = _merge_dashboard_people(base.get(key), value, fallback_by_id)
+        elif key == "current_room" and isinstance(value, dict):
+            base[key] = _merge_dashboard_overlay(base.get(key), value, fallback_by_id)
+        else:
+            base[key] = value
+    return base
+
+
 def _normalise_never_seen_presence(data: dict[str, Any]) -> dict[str, Any]:
     """Zero durable-looking totals for peers with no presence record.
 
@@ -1544,7 +1660,8 @@ class HttpSocialBackend:
             if room_id:
                 try:
                     room = self._raw("POST", "/rest/v1/rpc/lili_room_dashboard", {"p_room_id": room_id}, authenticated=True) or {}
-                    if isinstance(room, dict): data.update(room)
+                    if isinstance(room, dict):
+                        data = _merge_dashboard_overlay(data, room)
                 except SocialError as exc:
                     if not _missing_room_endpoint(exc):
                         raise
@@ -1555,7 +1672,8 @@ class HttpSocialBackend:
                 if not data.get("_room_endpoint_unavailable"):
                     try:
                         rituals = self._raw("POST", "/rest/v1/rpc/lili_room_room_rituals", {"p_room_id": room_id}, authenticated=True) or {}
-                        if isinstance(rituals, dict): data.update(rituals)
+                        if isinstance(rituals, dict):
+                            data = _merge_dashboard_overlay(data, rituals)
                     except SocialError as exc:
                         if exc.status >= 500 or exc.kind in {"dns", "timeout", "refused", "tls", "network", "server"}: raise
             self._merge_buddy_requests(data)
@@ -2402,7 +2520,7 @@ class LegacyDirectSocialClient:
                             authenticated=True,
                         ) or {}
                         if isinstance(room, dict):
-                            data.update(room)
+                            data = _merge_dashboard_overlay(data, room)
                     except SocialError as exc:
                         if not _missing_room_endpoint(exc):
                             raise
@@ -2416,7 +2534,7 @@ class LegacyDirectSocialClient:
                                 authenticated=True,
                             ) or {}
                             if isinstance(rituals, dict):
-                                data.update(rituals)
+                                data = _merge_dashboard_overlay(data, rituals)
                         except SocialError:
                             # Older deployed projects may not have the optional ritual
                             # migration yet; the core room dashboard remains usable.
@@ -3201,10 +3319,6 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self._dashboard_cache = {}
         self._private_note_by_user: dict[str, str] = {}
         self._private_notes_loaded = False
-        # Optional feature RPCs may lag behind the desktop release.  Do not
-        # spend one authenticated round trip on the same known 404 on every
-        # dashboard refresh.
-        self._unavailable_optional_rpcs: set[str] = set()
         self.persist_tokens = persist_tokens
         if backend is not None:
             self._manager = backend
@@ -3364,22 +3478,12 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
                     exc.kind,
                     exc.status,
                 )
-            witness_rpc = "lili_achievement_witness_inbox"
-            if witness_rpc not in self._unavailable_optional_rpcs:
-                try:
-                    witness_payload = self._manager.request("rpc", witness_rpc, {})
-                    result["achievement_witness_requests"] = (
-                        witness_payload if isinstance(witness_payload, list) else []
-                    )
-                except SocialError as exc:
-                    # This RPC is introduced by the manual-witness migration. A
-                    # client may meet an older backend during rollout; an empty
-                    # inbox is safer than breaking the whole social dashboard.
-                    # A stable 404 is remembered for this process so it does
-                    # not make every refresh look like a network problem.
-                    if exc.status == 404 or str(exc.error_code).casefold() in {"pgrst202", "42883"}:
-                        self._unavailable_optional_rpcs.add(witness_rpc)
-                    LOGGER.info("achievement witness inbox unavailable kind=%s status=%s", exc.kind, exc.status)
+            # The manual achievement-witness migration is not present in every
+            # production project. Do not probe a missing optional RPC on every
+            # five-second dashboard refresh: a 404 adds noise to Supabase
+            # telemetry and is unrelated to the core buddy/presence snapshot.
+            # If a future dashboard embeds this collection, the UI continues
+            # to render it; this client simply does not invent a failing probe.
             stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
             result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)

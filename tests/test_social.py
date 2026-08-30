@@ -26,6 +26,7 @@ from onepic_desktop_pet.social import (
     _apply_buddy_private_notes,
     _dashboard_room_state,
     _dashboard_payload_has_core_shape,
+    _merge_dashboard_overlay,
     _heartbeat_payload,
     _normalise_never_seen_presence,
     normalize_email,
@@ -81,6 +82,65 @@ def test_room_membership_is_not_inferred_from_requested_room_id() -> None:
     assert _dashboard_room_state(
         {"_room_endpoint_unavailable": True}, "room-1"
     ) == "UNKNOWN"
+
+
+def test_dashboard_overlay_preserves_omitted_social_names_but_honors_explicit_null() -> None:
+    previous = {
+        "buddies": [{"user_id": "buddy-1", "pet_name": "小六毛", "nickname": "小梁"}],
+        "current_room": {
+            "room_people": [{"user_id": "buddy-1", "pet_name": "小六毛"}],
+        },
+    }
+    incoming = {
+        "buddies": [{"user_id": "buddy-1", "working": True}],
+        "current_room": {"room_people": [{"user_id": "buddy-1", "working": True}]},
+    }
+
+    merged = _merge_dashboard_overlay(previous, incoming)
+
+    assert merged["buddies"][0]["pet_name"] == "小六毛"
+    assert merged["buddies"][0]["nickname"] == "小梁"
+    assert merged["current_room"]["room_people"][0]["pet_name"] == "小六毛"
+
+    cleared = _merge_dashboard_overlay(
+        previous,
+        {"buddies": [{"user_id": "buddy-1", "pet_name": None}]},
+    )
+    assert cleared["buddies"][0]["pet_name"] is None
+
+
+def test_direct_dashboard_room_projection_does_not_erase_social_name(monkeypatch) -> None:
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    backend.session = SocialSession("token", "refresh", "user-1", 9_999_999_999)
+
+    def fake_raw(_method, path, _body=None, **_kwargs):
+        if path == "/rest/v1/rpc/lili_dashboard":
+            return {
+                "me": {"user_id": "user-1"},
+                "buddies": [{"user_id": "buddy-1", "pet_name": "小六毛"}],
+                "room_people": [],
+            }
+        if path == "/rest/v1/rpc/lili_room_dashboard":
+            return {
+                "buddies": [{"user_id": "buddy-1", "working": True}],
+                "room_people": [{"user_id": "buddy-1", "working": True}],
+            }
+        if path == "/rest/v1/rpc/lili_room_room_rituals":
+            return {}
+        if path == "/rest/v1/rpc/lili_buddy_requests":
+            return {"incoming": [], "outgoing": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(backend, "_raw", fake_raw)
+    result = backend.dashboard(room_id="room-1")
+
+    assert result["buddies"][0]["pet_name"] == "小六毛"
+    assert result["room_people"][0]["pet_name"] == "小六毛"
 
 
 def test_connection_state_store_keeps_auth_and_no_room_out_of_offline_bucket() -> None:
