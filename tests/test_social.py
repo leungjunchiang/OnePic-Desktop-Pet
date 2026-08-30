@@ -1196,6 +1196,35 @@ def test_taunt_time_window_migration_switches_to_after_hours_encouragement():
     assert "taunt_window and not exists" in migration
 
 
+def test_taunt_presence_state_migration_preserves_daytime_privacy_window():
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "supabase" / "migrations" / "20260830110000_lili_taunt_by_presence_state.sql").read_text(encoding="utf-8")
+    assert "A buddy who is working receives encouragement" in migration
+    assert "local_minutes" in migration
+    assert "local_minutes not between 480 and 1350" in migration
+    assert "嘲讽时间之外" in migration
+    assert migration.index("local_minutes not between 480 and 1350") < migration.index("lili_buddy_taunts t")
+    assert "f.working" in migration
+    assert "f.last_seen > now() - interval '45 seconds'" in migration
+    assert "kind', 'taunt'" in migration
+    assert "kind', 'encouragement'" in migration
+
+
+def test_latest_dashboard_reasserts_canonical_focus_totals_and_never_seen_guard():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations"
+        / "20260830120000_lili_reassert_canonical_focus_dashboard.sql"
+    ).read_text(encoding="utf-8")
+    assert "lili_effective_focus_stats(p_user_id)->>'today_seconds'" in migration
+    assert "lili_effective_focus_stats(p_user_id)->>'week_seconds'" in migration
+    assert "presence_never_seen" in migration
+    assert "lili_normalize_focus_today_people" in migration
+    assert "lili_dashboard_presence_base_20260828" in migration
+    assert "p_today_seconds" not in migration
+    assert "greatest(coalesce(p.focus_today_seconds" not in migration
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
@@ -1469,3 +1498,4 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
+
