@@ -206,7 +206,7 @@ from .quiet_mode import detect_quiet_mode
 from .qt_lifecycle import request_stop_all, running_threads
 from .lifecycle_log import lifecycle_log
 from .performance import EventLoopLagTracker, PerformanceMonitor
-from .social import SocialClient, _session_user_id
+from .social import SocialClient, _session_user_id, presence_device_id
 from .social_ui import (
     BuddyVisitWindow,
     IncomingVisitNotice,
@@ -6403,6 +6403,7 @@ class PetWindow(QWidget):
             self._owner_nickname_remote_loaded_for = ""
         self.focus_session.switch_account(clean or None)
         self.focus_analytics.switch_account(clean or None)
+        self.focus_analytics.set_device_id(presence_device_id(clean))
         self.daily_stats.switch_account(clean or None)
         self.time_memory.switch_account(clean or None)
         self._rebind_todo_surfaces_to_current_memory()

@@ -153,6 +153,16 @@ def _presence_device_credentials(user_id: str) -> tuple[str, bool]:
         return device_id, bool(state["claim_pending"])
 
 
+def presence_device_id(user_id: str | None) -> str:
+    """Return the durable installation ID used by presence and focus facts."""
+
+    account_id = str(user_id or "").strip()
+    if not account_id:
+        return ""
+    device_id, _claim_pending = _presence_device_credentials(account_id)
+    return device_id
+
+
 def _presence_rpc_payload(response: Any) -> dict[str, Any]:
     """Unwrap a presence RPC result from direct and relay transports."""
 
@@ -2669,6 +2679,13 @@ class LegacyDirectSocialClient:
             return result
         except SocialError as exc:
             self._last_error = str(exc)
+            LOGGER.warning(
+                "social dashboard failed kind=%s status=%s error_code=%s allow_cache=%s",
+                exc.kind,
+                exc.status,
+                exc.error_code,
+                allow_cache,
+            )
             self.connection.set(
                 "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE",
                 data_source="local_cache",

@@ -22,6 +22,7 @@ from onepic_desktop_pet.social_ui import (
     SocialVisitResponseThread,
     _reaction_label,
     _merge_dashboard_snapshot,
+    _study_focus_summary_text,
     _taunt_window_open,
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
@@ -795,6 +796,53 @@ def test_focus_page_shares_snapshot_and_renders_room_activity() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_other_device_working_never_starts_or_finishes_local_session() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    start_signal = QSignalSpy(dialog.focus_start_requested)
+    finish_signal = QSignalSpy(dialog.focus_finish_requested)
+    dialog.data = {
+        "me_presence": {
+            "account_online": True,
+            "account_working": True,
+            "active_device_count": 2,
+            "working_device_count": 1,
+        }
+    }
+
+    dialog.set_focus_snapshot({"status": "idle", "session_seconds": 0, "today_seconds": 0})
+    app.processEvents()
+
+    assert "其他设备工作" in dialog.focus_account_hint.text()
+    assert dialog.focus_start.isEnabled() is True
+    assert dialog.focus_pause.isEnabled() is False
+    assert start_signal.count() == 0
+    assert finish_signal.count() == 0
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_local_session_stays_local_when_account_has_two_working_devices() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.data = {
+        "me_presence": {
+            "account_online": True,
+            "account_working": True,
+            "active_device_count": 2,
+            "working_device_count": 2,
+        }
+    }
+
+    dialog.set_focus_snapshot({"status": "focus", "session_seconds": 90, "today_seconds": 90})
+    app.processEvents()
+
+    assert "多台设备正在工作" in dialog.focus_account_hint.text()
+    assert dialog.focus_start.isEnabled() is False
+    assert dialog.focus_pause.isEnabled() is True
+    assert dialog.focus_finish.isEnabled() is True
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_home_summary_omits_ambiguous_visible_aggregate() -> None:
     """The homepage must not present an unclear aggregate as a room total."""
 
@@ -880,7 +928,20 @@ def test_recent_cached_presence_is_not_rendered_as_peer_offline() -> None:
     assert any("正在工作（同步恢复中）" in text for text in peer_labels)
     assert all("已离线" not in text for text in peer_labels)
     assert "连接暂时不稳定" in dialog.status_label.text()
+    assert "最近确认 1 位搭子正在专注（实时状态待确认）" in dialog.study_summary.text()
+    assert "现在 0 位搭子正在专注" not in dialog.study_summary.text()
+
+    dialog.apply_dashboard(RoomClient().dashboard())
+    app.processEvents()
+    assert "连接暂时不稳定" not in dialog.status_label.text()
+    assert "现在 1 位搭子正在专注" in dialog.study_summary.text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_degraded_study_summary_never_converts_unknown_presence_to_zero() -> None:
+    assert _study_focus_summary_text(0, 12 * 60, presence_uncertain=True) == (
+        "搭子实时专注人数待确认　·　我的今日专注 12分钟"
+    )
 
 
 def test_offline_dashboard_does_not_mask_local_focus_when_no_room_is_selected() -> None:

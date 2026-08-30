@@ -141,11 +141,13 @@ class FocusAnalyticsStore:
         path: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
         persist: bool = True,
+        device_id: str = "",
     ) -> None:
         self._uses_explicit_path = path is not None
         self.path = path or focus_analytics_path()
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
+        self._device_id = str(device_id or "").strip()[:120]
         self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None, "account_state": {}}
         self._live: dict[str, Any] = {
             "session_active": False,
@@ -175,6 +177,9 @@ class FocusAnalyticsStore:
             return False
         self._save()
         self.path = target
+        # Device attribution is rebound by the account/session owner after the
+        # account switch. Never carry an installation ID across accounts.
+        self._device_id = ""
         self._state = {
             "days": {},
             "records": [],
@@ -194,6 +199,11 @@ class FocusAnalyticsStore:
         if self._rebuild_days_from_records() or self._trim_days():
             self._save()
         return True
+
+    def set_device_id(self, device_id: str | None) -> None:
+        """Attribute only newly observed facts to this installation."""
+
+        self._device_id = str(device_id or "").strip()[:120]
 
     def current_time(self) -> datetime:
         """Return the clock used by this store's calendar projections."""
@@ -407,11 +417,15 @@ class FocusAnalyticsStore:
         task: str = "",
         interruptions: int = 0,
         record_id: str | None = None,
+        device_id: str | None = None,
     ) -> FocusQuality:
         duration = max(0, int(seconds))
         started = _as_beijing(started_at or self._now())
         quality = score_focus_quality(duration, application_switches, away_count)
         clean_record_id = str(record_id or "").strip()[:160]
+        clean_device_id = str(
+            self._device_id if device_id is None else device_id
+        ).strip()[:120]
         if clean_record_id:
             for raw in self._state.get("records", []):
                 if isinstance(raw, dict) and str(raw.get("record_id") or "") == clean_record_id:
@@ -444,6 +458,7 @@ class FocusAnalyticsStore:
             "task": str(task)[:120],
             "interruptions": max(0, int(interruptions)),
             "record_id": clean_record_id,
+            "device_id": clean_device_id,
         })
         self._state["records"] = records[-500:]
         self._rebuild_days_from_records()
@@ -786,6 +801,64 @@ class FocusAnalyticsStore:
             now=validation_moment,
             interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
         )
+
+    def focus_device_diagnostics(
+        self,
+        period: str = "day",
+        at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Return raw-per-device versus account-union time for diagnostics.
+
+        This is deliberately not a statistics source. User-visible totals keep
+        using :meth:`focus_aggregate`; this view only explains how much overlap
+        that canonical union removed.
+        """
+
+        moment = _as_beijing(at or self._now())
+        validation_moment = _as_beijing(self._now())
+        range_start, range_end, _ = calendar_window(period, moment)
+        untrusted_dates = {
+            str(key)
+            for key, value in (self._state.get("days", {}) or {}).items()
+            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
+        }
+        segments = [
+            segment
+            for segment in self.focus_segments()
+            if segment.start_at.date().isoformat() not in untrusted_dates
+        ]
+        grouped: dict[str, list[FocusSegment]] = {}
+        for segment in segments:
+            key = str(segment.device_id or "").strip() or "unattributed"
+            grouped.setdefault(key, []).append(segment)
+
+        devices: list[dict[str, Any]] = []
+        raw_sum = 0
+        for device_id, device_segments in sorted(grouped.items()):
+            aggregate = aggregate_focus_time(
+                device_segments,
+                range_start,
+                range_end,
+                now=validation_moment,
+                interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+            )
+            seconds = max(0, int(aggregate.total_seconds))
+            raw_sum += seconds
+            devices.append({
+                "device_id": device_id,
+                "seconds": seconds,
+                "segment_count": aggregate.source_segment_count,
+            })
+
+        effective = self.focus_aggregate(period, moment)
+        effective_seconds = max(0, int(effective.total_seconds))
+        return {
+            "period": str(period or "day"),
+            "devices": devices,
+            "raw_sum_seconds": raw_sum,
+            "effective_union_seconds": effective_seconds,
+            "overlap_seconds": max(0, raw_sum - effective_seconds),
+        }
 
     def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
         """Calculate a day/week/month report from the account's local history.

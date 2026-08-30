@@ -137,6 +137,24 @@ def _merge_dashboard_snapshot(
         merged["_sync_error"] = "服务器返回了不完整的社交快照，已保留上次正常数据。"
     else:
         merged.pop("_dashboard_partial", None)
+        # ``_merge_dashboard_overlay`` deliberately starts from the prior
+        # snapshot to keep omitted profile labels. Transport flags are not
+        # durable labels, however: carrying a cached DEGRADED flag into a
+        # complete healthy dashboard makes a recovered connection look
+        # offline forever. Only clear them when the incoming payload itself
+        # is not an offline/cache response.
+        state = str(incoming.get("_connection_state") or "").upper()
+        incoming_is_stale = bool(incoming.get("_sync_offline")) or bool(incoming.get("is_stale"))
+        if not incoming_is_stale and state not in {"DEGRADED", "OFFLINE", "AUTH_ERROR"}:
+            for field in (
+                "_connection_state",
+                "_sync_offline",
+                "_presence_grace_active",
+                "_presence_uncertainty_seconds",
+                "_sync_age_minutes",
+                "_sync_error",
+            ):
+                merged.pop(field, None)
 
     # Viewer-only labels have a different merge contract from public profile
     # fields. Missing labels are expected from older relays and must not erase
@@ -221,6 +239,7 @@ def _unwrap_single_reaction_state(payload: object) -> dict[str, Any] | None:
 # machine's local timezone, so users in different regions see the same room
 # timeline.  A fixed UTC+8 offset is sufficient for Beijing (no DST).
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+PRESENCE_RECOVERY_STATUS = "自习室连接暂时不稳定，搭子最近状态仍保留显示；正在自动恢复实时同步。"
 
 def _beijing_now() -> datetime:
     return datetime.now(BEIJING_TIMEZONE)
@@ -266,6 +285,25 @@ def _room_focus_summary_text(summary: dict[str, Any], member_count: int = 0, foc
         f"今日共同专注 {format_work_duration(today_seconds)} · "
         f"累计共同专注 {format_work_duration(cumulative_seconds)}"
     )
+
+
+def _study_focus_summary_text(
+    working_count: int,
+    me_seconds: int,
+    *,
+    presence_uncertain: bool = False,
+) -> str:
+    """Render the homepage count without turning an unknown state into zero."""
+
+    if presence_uncertain:
+        focus_text = (
+            f"最近确认 {int(working_count)} 位搭子正在专注（实时状态待确认）"
+            if working_count > 0
+            else "搭子实时专注人数待确认"
+        )
+    else:
+        focus_text = f"现在 {int(working_count)} 位搭子正在专注"
+    return f"{focus_text}　·　我的今日专注 {format_work_duration(me_seconds)}"
 
 
 def _presence_working(presence: dict[str, Any]) -> bool:
@@ -1517,7 +1555,6 @@ class BuddyCardWidget(QWidget):
             status != "offline"
             and (online_flag is None or bool(online_flag))
             and not bool(buddy.get("stale_presence"))
-            and not uncertain
         )
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
@@ -1621,7 +1658,6 @@ class BuddyCardWidget(QWidget):
             status != "offline"
             and (online_flag is None or bool(online_flag))
             and not bool(buddy.get("stale_presence"))
-            and not uncertain
         )
         if status == "unknown":
             if bool(buddy.get("online")) and bool(buddy.get("working")):
@@ -1727,7 +1763,7 @@ class RoomPetCardWidget(QWidget):
 
         status = _presence_status(buddy)
         uncertain = bool(buddy.get("presence_uncertain"))
-        online = status != "offline" and not bool(buddy.get("stale_presence")) and not uncertain
+        online = status != "offline" and not bool(buddy.get("stale_presence"))
         if status == "unknown":
             status_text = "正在工作（同步恢复中）" if buddy.get("working") else "在线待确认"
         else:
@@ -1799,7 +1835,7 @@ class RoomPetCardWidget(QWidget):
         self.buddy = dict(buddy)
         status = _presence_status(buddy)
         uncertain = bool(buddy.get("presence_uncertain"))
-        online = status != "offline" and not bool(buddy.get("stale_presence")) and not uncertain
+        online = status != "offline" and not bool(buddy.get("stale_presence"))
         if status == "unknown":
             status_text = "正在工作（同步恢复中）" if buddy.get("working") else "在线待确认"
         else:
@@ -2518,7 +2554,40 @@ class SocialHubDialog(QDialog):
             self.focus_pause.setEnabled(pause_enabled)
         if self.focus_finish.isEnabled() != finish_enabled:
             self.focus_finish.setEnabled(finish_enabled)
+        self._refresh_multi_device_focus_hint()
         self._refresh_own_focus_labels()
+
+    def _refresh_multi_device_focus_hint(self) -> None:
+        """Describe account presence without changing local timer controls."""
+
+        if not hasattr(self, "focus_account_hint"):
+            return
+        if not isinstance(self.data, dict) or self.data.get("_sync_offline"):
+            self.focus_account_hint.hide()
+            return
+        me_presence = self.data.get("me_presence")
+        me_presence = me_presence if isinstance(me_presence, dict) else {}
+        account_working = bool(
+            me_presence.get("account_working", me_presence.get("working", False))
+        )
+        try:
+            working_devices = max(0, int(me_presence.get("working_device_count", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            working_devices = 0
+        snapshot = self._focus_snapshot
+        if isinstance(snapshot, dict):
+            local_working = str(snapshot.get("status") or "") == "focus"
+        else:
+            local_working = bool(getattr(snapshot, "is_running", False))
+
+        if local_working and working_devices > 1:
+            message = "当前账号有多台设备正在工作；本机计时与其他设备分别记录。"
+        elif not local_working and account_working:
+            message = "账号正在其他设备工作；本机尚未开始，仍可点击“开始专注”。"
+        else:
+            message = ""
+        self.focus_account_hint.setText(message)
+        self.focus_account_hint.setVisible(bool(message))
 
     def _local_today_seconds(self) -> int | None:
         snapshot = self._focus_snapshot
@@ -2831,6 +2900,11 @@ class SocialHubDialog(QDialog):
         focus_layout.addWidget(self.focus_status)
         focus_layout.addWidget(self.focus_clock)
         focus_layout.addWidget(self.focus_today)
+        self.focus_account_hint = QLabel("")
+        self.focus_account_hint.setObjectName("muted")
+        self.focus_account_hint.setWordWrap(True)
+        self.focus_account_hint.hide()
+        focus_layout.addWidget(self.focus_account_hint)
         self.focus_task = QLabel("当前任务：未设置")
         self.focus_task.setObjectName("muted")
         self.focus_task.setWordWrap(True)
@@ -4334,6 +4408,7 @@ class SocialHubDialog(QDialog):
         # newer view with its older in-flight result.
         self._initial_refresh_timer.stop()
         self.data = dict(payload)
+        self._refresh_multi_device_focus_hint()
         self._muted_buddy_ids = {
             str(item).strip()
             for item in (self.data.get("muted_buddy_ids") or [])
@@ -4402,6 +4477,8 @@ class SocialHubDialog(QDialog):
             self._buddy_card_widgets.clear()
             self._buddy_card_structure.clear()
         working_count = 0
+        last_confirmed_working_count = 0
+        presence_uncertain = bool(self.data.get("_presence_grace_active"))
         for buddy in unique_people:
             buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
             if buddy.get("subscribed") and not buddy.get("notifications_muted"):
@@ -4414,10 +4491,16 @@ class SocialHubDialog(QDialog):
                 if previous is not None and _presence_status(previous) != _presence_status(buddy):
                     state_text = "开始专注" if _presence_status(buddy) == "focus" else "结束专注"
                     self.buddy_subscription_notice.emit(f"{_owner_label(buddy)} {state_text}了。")
-            # A transport outage must not turn the last peer state into a
-            # misleading active count; the card itself still shows the
-            # preserved/stale status details.
-            working_count += int(_presence_status(buddy) == "focus")
+            status = _presence_status(buddy)
+            # A transport outage must not turn an unknown state into a false
+            # zero. During the short cache grace window, show the last
+            # confirmed working count with an explicit uncertainty label.
+            if bool(buddy.get("presence_uncertain")):
+                presence_uncertain = True
+            if status == "focus":
+                working_count += 1
+            if not bool(buddy.get("stale_presence")) and _presence_working(buddy):
+                last_confirmed_working_count += 1
             if reuse_buddy_cards:
                 item, buddy_widget = self._buddy_card_widgets[buddy_id]
                 item.setData(Qt.ItemDataRole.UserRole, buddy)
@@ -4440,8 +4523,11 @@ class SocialHubDialog(QDialog):
             else int(me_presence.get("today_seconds") or me.get("today_seconds") or 0)
         )
         self.study_summary.setText(
-            f"现在 {working_count} 位搭子正在专注　·　"
-            f"我的今日专注 {format_work_duration(me_seconds)}"
+            _study_focus_summary_text(
+                last_confirmed_working_count if presence_uncertain else working_count,
+                me_seconds,
+                presence_uncertain=presence_uncertain,
+            )
         )
         self._refresh_own_focus_labels()
         if not seen:
@@ -4598,8 +4684,11 @@ class SocialHubDialog(QDialog):
         summary = room_detail.get("room_summary") or self.data.get("room_summary") or {}
 
         self.study_summary.setText(
-            f"现在 {working_count} 位搭子正在专注　·　"
-            f"我的今日专注 {format_work_duration(me_seconds)}"
+            _study_focus_summary_text(
+                last_confirmed_working_count if presence_uncertain else working_count,
+                me_seconds,
+                presence_uncertain=presence_uncertain,
+            )
         )
         if isinstance(summary, dict) and summary:
             self.room_summary.setText(_room_focus_summary_text(summary, len(room_people)))
@@ -4669,9 +4758,7 @@ class SocialHubDialog(QDialog):
         if self.data.get("_room_endpoint_unavailable"):
             self._set_status("账号与搭子已同步，但当前部署缺少自习室详情接口；隐私设置仍已保存。", error=False)
         elif self.data.get("_presence_grace_active") or state == "DEGRADED":
-            self._set_status(
-                "自习室连接暂时不稳定，搭子最近状态仍保留显示；正在自动恢复实时同步。"
-            )
+            self._set_status(PRESENCE_RECOVERY_STATUS)
         elif state == "AUTH_ERROR":
             self._set_status("自习室登录状态失效，请重新登录；本地专注与桌宠功能仍可继续使用。", error=True, relogin=True)
         elif self.data.get("_sync_offline") or state == "OFFLINE":

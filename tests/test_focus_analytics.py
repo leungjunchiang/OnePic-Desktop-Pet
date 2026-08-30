@@ -344,6 +344,60 @@ def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     assert len(store._state["records"]) == 2
 
 
+def test_multi_device_facts_keep_attribution_and_report_account_union(tmp_path) -> None:
+    now = datetime(2026, 8, 21, 12, 0)
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(
+        60 * 60,
+        started_at=datetime(2026, 8, 21, 9, 0),
+        record_id="session-a:3600",
+    )
+    store.set_device_id("device-b")
+    store.record_session(
+        60 * 60,
+        started_at=datetime(2026, 8, 21, 9, 30),
+        record_id="session-b:3600",
+    )
+
+    diagnostics = store.focus_device_diagnostics("day", now)
+
+    assert [item["device_id"] for item in diagnostics["devices"]] == ["device-a", "device-b"]
+    assert [item["seconds"] for item in diagnostics["devices"]] == [3600, 3600]
+    assert diagnostics["raw_sum_seconds"] == 7200
+    assert diagnostics["effective_union_seconds"] == 90 * 60
+    assert diagnostics["overlap_seconds"] == 30 * 60
+    assert store.period_summary("day", now)["total_seconds"] == 90 * 60
+
+    persisted = json.loads((tmp_path / "focus.json").read_text(encoding="utf-8"))
+    assert [item["device_id"] for item in persisted["records"]] == ["device-a", "device-b"]
+
+
+def test_duplicate_remote_device_segment_remains_idempotent(tmp_path) -> None:
+    now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    payload = {
+        "segments": [{
+            "segment_id": "device-b-session:1800",
+            "session_id": "device-b-session",
+            "start_at": "2026-08-21T09:00:00+08:00",
+            "end_at": "2026-08-21T09:30:00+08:00",
+            "device_id": "device-b",
+            "completed": True,
+        }]
+    }
+
+    assert store.merge_remote_segments(payload) is True
+    assert store.merge_remote_segments(payload) is False
+    assert len(store.focus_segments()) == 1
+    assert store.focus_segments()[0].device_id == "device-b"
+    assert store.period_summary("day", now)["total_seconds"] == 30 * 60
+
+
 def test_legacy_impossible_day_does_not_report_false_38_hour_difference(tmp_path) -> None:
     path = tmp_path / "focus.json"
     path.write_text(

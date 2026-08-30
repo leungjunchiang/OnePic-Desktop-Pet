@@ -1562,6 +1562,84 @@ def test_legacy_direct_presence_compatibility_stays_owner_scoped_and_server_orde
         assert "pet_name" in source
 
 
+def test_multi_device_presence_migration_is_additive_rpc_scoped_and_union_compatible():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260830180000_lili_multi_device_focus_presence.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create table if not exists public.lili_focus_device_presence" in migration
+    assert "primary key (user_id, device_id)" in migration
+    assert "alter table public.lili_focus_device_presence enable row level security" in migration
+    assert "revoke all on table public.lili_focus_device_presence from public, anon, authenticated" in migration
+    assert "on conflict (user_id, device_id) do update" in migration
+    assert "excluded.presence_sequence > public.lili_focus_device_presence.presence_sequence" in migration
+    assert "count(*) filter (where d.working and d.session_active)" in migration
+    assert "working_device_count > 0" in migration
+    assert "account_before.working" in migration
+    assert "active_device_count" in migration
+    assert "account_working" in migration
+    assert "device_working" in migration
+    assert "request_path ~ '(^|/)lili_focus_presence$'" in migration
+    assert "grant execute on function public.lili_upsert_focus_presence" in migration
+    assert "grant insert, update on table public.lili_focus_device_presence" not in migration
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+
+
+def test_multi_device_dashboard_compat_reprojects_legacy_presence_fields():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260831100000_lili_multi_device_dashboard_compat.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "public.lili_dashboard_multidevice_base_20260830()" in migration
+    for field in (
+        "account_online",
+        "account_working",
+        "active_device_count",
+        "working_device_count",
+        "{me_presence,online}",
+        "{me_presence,working}",
+        "{me_presence,session_active}",
+        "{me_presence,status}",
+        "{me_presence,session_id}",
+        "{me_presence,session_started_at}",
+        "{me_presence,session_seconds}",
+    ):
+        assert field in migration
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+
+
+def test_multi_device_presence_policy_is_explicit_deny_only():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260831103000_lili_multi_device_presence_policy.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "lili_focus_device_presence_no_direct_access" in migration
+    assert "using (false)" in normalized
+    assert "with check (false)" in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
