@@ -828,4 +828,3 @@ def test_local_focus_wins_and_missing_leaderboard_does_not_clear_cache() -> None
     app.processEvents()
     assert "暂无可展示" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
-
