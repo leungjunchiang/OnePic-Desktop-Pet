@@ -1174,6 +1174,11 @@ def test_study_room_menu_restores_minimized_window() -> None:
     assert window._social_dialog is dialog
     assert not dialog.isMinimized()
     dialog.close()
+    app.processEvents()
+    # Closing the independent study-room window must hide/reuse it instead
+    # of deleting a dialog that may still own a network QThread.
+    assert window._social_dialog is dialog
+    assert dialog._closed is True
     window.close()
     window.deleteLater()
     app.processEvents()

@@ -2361,6 +2361,12 @@ class SocialHubDialog(QDialog):
         self._password_reset_thread: SocialPasswordResetThread | None = None
         self._event_threads: list[SocialEventThread] = []
         self._buddy_rpc_threads: list[SocialBuddyRpcThread] = []
+        # Closing the top-level study room must not destroy it while one of
+        # its network QThreads is still unwinding. Qt aborts the process when
+        # a live QThread is destroyed (Windows reports this as 0xc0000409 in
+        # Qt6Core.dll). Keep the dialog reusable and let the normal finished
+        # callbacks clean up each worker safely.
+        self._closed = False
         self.setFont(_social_font())
         # Make this a normal independent utility window.  QDialog's default
         # flags differ by platform and can omit the minimize button when a
@@ -2462,8 +2468,14 @@ class SocialHubDialog(QDialog):
             QTimer.singleShot(180, self._record_login_streak)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt API
+        was_closed = self._closed
+        self._closed = False
         lifecycle_log("study_room.show_event.begin", self)
         super().showEvent(event)
+        if was_closed and self.client.signed_in:
+            self._initial_refresh_timer.start(50)
+        if hasattr(self, "room_goal_timer"):
+            self.room_goal_timer.start()
         lifecycle_log("study_room.show_event.end", self)
 
     def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802 - Qt API
@@ -2472,6 +2484,12 @@ class SocialHubDialog(QDialog):
         lifecycle_log("study_room.hide_event.end", self)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
+        self._closed = True
+        self._initial_refresh_timer.stop()
+        self._room_refresh_timer.stop()
+        self._room_refresh_pending = False
+        if hasattr(self, "room_goal_timer"):
+            self.room_goal_timer.stop()
         lifecycle_log("study_room.close_event.begin", self)
         super().closeEvent(event)
         lifecycle_log("study_room.close_event.end", self)
@@ -3084,6 +3102,8 @@ class SocialHubDialog(QDialog):
         return f"当前自习室后端：{backend} · 未配置独立中转服务"
 
     def _check_network(self) -> None:
+        if self._closed:
+            return
         if self._health_thread is not None and self._health_thread.isRunning():
             return
         self._begin_action("正在检测自习室网络…")
@@ -3163,7 +3183,7 @@ class SocialHubDialog(QDialog):
     ) -> None:
         """Start one coalesced dashboard request away from the GUI thread."""
 
-        if not self.client.signed_in:
+        if self._closed or not self.client.signed_in:
             return
         if self._dashboard_thread is not None and self._dashboard_thread.isRunning():
             if room_id and room_id == self.current_room_id:
@@ -3224,7 +3244,7 @@ class SocialHubDialog(QDialog):
     def _start_leaderboard_refresh(self) -> None:
         """Fetch the optional leaderboard without delaying the room snapshot."""
 
-        if not self.client.signed_in:
+        if self._closed or not self.client.signed_in:
             return
         if "leaderboard" in self.data:
             return
@@ -3269,7 +3289,12 @@ class SocialHubDialog(QDialog):
         if self._dashboard_thread is thread:
             self._dashboard_thread = None
         thread.deleteLater()
-        if self._room_refresh_pending and self.current_room_id and self.client.signed_in:
+        if (
+            not self._closed
+            and self._room_refresh_pending
+            and self.current_room_id
+            and self.client.signed_in
+        ):
             self._room_refresh_pending = False
             QTimer.singleShot(0, self._refresh_selected_room)
 
@@ -4263,6 +4288,8 @@ class SocialHubDialog(QDialog):
         self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
+        if self._closed:
+            return
         if not self._require_login(): return
         self._start_dashboard_refresh(
             self.current_room_id,

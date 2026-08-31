@@ -5550,9 +5550,18 @@ class PetWindow(QWidget):
         self.show_speech(message, 4200)
 
     def _social_dialog_finished(self) -> None:
-        if self._social_dialog is not None:
-            lifecycle_log("study_room.delete_later", self._social_dialog)
-            self._social_dialog.deleteLater(); self._social_dialog = None
+        dialog = self._social_dialog
+        if dialog is None:
+            return
+        # SocialHubDialog owns short-lived network QThreads. A close event
+        # can arrive while dashboard/leaderboard/RPC work is still blocking in
+        # a bounded request; deleting the dialog here would make Qt destroy a
+        # live QThread and abort the whole process on Windows. Keep this
+        # top-level utility dialog alive (hidden and reusable) until the app
+        # itself shuts down, when PetWindow's normal thread-drain pass handles
+        # the workers in the correct order.
+        lifecycle_log("study_room.hide_after_close", dialog)
+        dialog.hide()
 
     @_guard_qt_callback
     def _social_tick(self) -> None:

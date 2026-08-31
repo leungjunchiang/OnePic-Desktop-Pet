@@ -172,6 +172,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - 年度工作报告" \
+            --title "Lili $release_tag - 自习室关闭闪退修复" \
             --generate-notes \
-            --notes "新增日度｜本周｜月度｜年度四级工作报告。年度页包含全年热力图、12 个月趋势、全年典型工作节律与年度里程碑；统计继续以当前账号的原始专注区间并集为唯一来源，工作均值统一标注为‘工作日日均’。"
+            --notes "修复 Windows 上关闭六毛搭子自习室时后台网络 QThread 尚未结束就销毁窗口导致的 Qt6Core.dll 0xc0000409 闪退；关闭后安全隐藏并复用窗口，线程完成后再清理。"
