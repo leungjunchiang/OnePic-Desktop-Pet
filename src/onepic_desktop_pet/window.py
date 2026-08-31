@@ -290,9 +290,13 @@ LOGGER = logging.getLogger(__name__)
 # Passive social reads are deliberately slower than the liveness heartbeat.
 # Keep these gates local to the desktop client: FocusSession writes, sync
 # cadence, and all time/statistics calculations remain unchanged.
-SOCIAL_DASHBOARD_INTERVAL_MS = 30_000
+SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
+# The existing worker still needs a lightweight cadence to preserve the
+# independent presence/personal-state paths. Dashboard reads inside it are
+# admitted by the 90-second client coordinator above, not by this timer.
+SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
-SOCIAL_LEADERBOARD_REFRESH_SECONDS = 600.0
+SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
 
 
 def _guard_qt_callback(method):
@@ -1009,7 +1013,7 @@ class PetWindow(QWidget):
         # requiring the study-room window to be opened or manually refreshed.
         # Heartbeats are still throttled independently below, so this is a
         # lightweight dashboard poll rather than a heartbeat on this timer.
-        self.social_timer.setInterval(SOCIAL_DASHBOARD_INTERVAL_MS)
+        self.social_timer.setInterval(SOCIAL_SYNC_TICK_INTERVAL_MS)
         self.social_timer.timeout.connect(self._social_tick)
         self.social_timer.start()
         self.social_sync_timer = QTimer(self)
@@ -5736,10 +5740,15 @@ class PetWindow(QWidget):
         if dashboard_busy:
             return
 
-        # Rankings are useful but not liveness-critical.  Include them in at
-        # most one background dashboard cycle every ten minutes; the normal
-        # cycle remains focused on presence and buddy cards.
-        if now_monotonic - self._last_social_leaderboard_at >= SOCIAL_LEADERBOARD_REFRESH_SECONDS:
+        # Rankings are useful but not liveness-critical. Only refresh while
+        # the study-room window is actually visible; entering its ranking
+        # view can still fetch immediately through the shared client cache.
+        # This does not touch the FocusSession sync or Presence heartbeat.
+        if (
+            self._social_dialog is not None
+            and self._social_dialog.isVisible()
+            and now_monotonic - self._last_social_leaderboard_at >= SOCIAL_LEADERBOARD_REFRESH_SECONDS
+        ):
             presence["_include_leaderboard"] = True
             self._last_social_leaderboard_at = now_monotonic
 

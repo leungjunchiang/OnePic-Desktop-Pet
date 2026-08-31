@@ -35,6 +35,7 @@ from onepic_desktop_pet.window import (
     SOCIAL_DASHBOARD_INTERVAL_MS,
     SOCIAL_LEADERBOARD_REFRESH_SECONDS,
     SOCIAL_REACTION_REFRESH_SECONDS,
+    SOCIAL_SYNC_TICK_INTERVAL_MS,
 )
 from onepic_desktop_pet.chat import AISettingsDialog, ChatDialog
 from onepic_desktop_pet.time_memory import TimeMemory
@@ -45,8 +46,9 @@ from onepic_desktop_pet.controls import RoundedSurfaceLabel
 
 
 def test_phase1_social_read_gates_keep_heartbeat_separate() -> None:
-    assert SOCIAL_DASHBOARD_INTERVAL_MS == 30_000
-    assert SOCIAL_LEADERBOARD_REFRESH_SECONDS == 600.0
+    assert SOCIAL_DASHBOARD_INTERVAL_MS == 90_000
+    assert SOCIAL_SYNC_TICK_INTERVAL_MS == 30_000
+    assert SOCIAL_LEADERBOARD_REFRESH_SECONDS == 300.0
     assert SOCIAL_REACTION_REFRESH_SECONDS == 60.0
 
 

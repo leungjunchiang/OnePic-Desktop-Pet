@@ -1,3 +1,10 @@
+## v0.23.187 — P0：Supabase 请求降频与去重
+
+- 停止客户端对不存在的 `lili_achievement_witness_inbox` 的任何轮询调用；当前生产代码不再探测该可选 RPC。
+- `lili_dashboard` 由账户隔离的全局 single-flight 协调器统一：后台成功快照 90 秒复用，交互触发 5 秒去抖，并始终保留 last-known-good 数据；自习室先展示本地缓存，再在后台刷新。
+- `lili_focus_weekly_leaderboard` 改为账户隔离的 300 秒缓存与 single-flight；自习室未打开时不再持续拉取排行榜，断网时保留已显示榜单。
+- 未修改 FocusSession、Presence 15 秒心跳、`sync_focus_history`、`sync_focus_segments`、`sync_personal_state`、Supabase SQL/表结构、统计口径、北京时间/周边界或任何生产数据。
+
 ## v0.23.186 — 修复自习室窗口关闭闪退
 
 - 修复 Windows 上关闭“六毛搭子自习室”时，后台网络 QThread 尚未结束就销毁窗口，导致 `Qt6Core.dll` 异常 `0xc0000409`、应用闪退的问题。

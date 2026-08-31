@@ -4438,11 +4438,12 @@ class SocialHubDialog(QDialog):
             self._private_note_by_user.pop(str(user_id), None)
         _apply_buddy_private_notes(payload, self._private_note_by_user)
 
-        # A direct render can happen immediately after construction (for
-        # example when the owner restores a cached snapshot). Do not let the
-        # one-shot 50 ms bootstrap refresh arrive afterward and overwrite that
-        # newer view with its older in-flight result.
-        self._initial_refresh_timer.stop()
+        # A server-confirmed direct render can supersede the bootstrap read.
+        # A last-known-good cache must not: it paints immediately, then the
+        # scheduled background read remains responsible for replacing it when
+        # the network is available again.
+        if payload.get("data_source") != "local_cache" and not payload.get("is_stale"):
+            self._initial_refresh_timer.stop()
         self.data = dict(payload)
         self._refresh_multi_device_focus_hint()
         self._muted_buddy_ids = {

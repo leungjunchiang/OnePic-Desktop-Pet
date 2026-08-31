@@ -56,6 +56,11 @@ PRESENCE_GRACE_SECONDS = 180
 # liveness or focus facts, so a five-minute account-scoped cache is safe for
 # passive dashboard polling while explicit UI actions can force a refresh.
 SOCIAL_AUXILIARY_TTL_SECONDS = 300.0
+# These are client-side read gates only.  They never alter the payload, its
+# statistics, or any FocusSession / presence write path.
+SOCIAL_DASHBOARD_BACKGROUND_TTL_SECONDS = 90.0
+SOCIAL_DASHBOARD_INTERACTION_TTL_SECONDS = 5.0
+SOCIAL_LEADERBOARD_TTL_SECONDS = 300.0
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 # The heartbeat is a liveness transport, not a time ledger.  Keep this allow
@@ -79,6 +84,116 @@ _PRESENCE_DEVICE_STATE_FILENAME = "social-device.json"
 _PRESENCE_DEVICE_STATE_LOCK = threading.Lock()
 _PRESENCE_DEVICE_STATE_CACHE: dict[str, dict[str, Any]] = {}
 _PROFILE_FIELD_UNSET = object()
+
+
+def _clone_read_cache_payload(value: Any) -> Any:
+    """Return an isolated JSON-compatible snapshot for a read cache."""
+
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _dashboard_read_payload_has_basic_shape(value: Any) -> bool:
+    """Reject empty/error JSON while allowing compatibility relay snapshots."""
+
+    if not isinstance(value, dict):
+        return False
+    return any(
+        key in value
+        for key in (
+            "me",
+            "buddies",
+            "room_people",
+            "rooms",
+            "current_room",
+        )
+    )
+
+
+class _LastKnownGoodReadManager:
+    """Account-scoped TTL cache with process-wide single-flight reads.
+
+    This manager is deliberately transport-agnostic: callers still own all
+    RPC payload shaping and error handling.  It only decides *whether* a
+    duplicate read can reuse a recent successful response.  A failed or
+    malformed request is never committed to the cache.
+    """
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self._condition = threading.Condition(threading.RLock())
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._in_flight: set[str] = set()
+
+    def clear(self) -> None:
+        with self._condition:
+            self._cache.clear()
+            self._in_flight.clear()
+            self._condition.notify_all()
+
+    def fetch(
+        self,
+        key: str,
+        *,
+        max_age_seconds: float,
+        loader: Callable[[], Any],
+        is_valid: Callable[[Any], bool],
+    ) -> Any:
+        """Get one read result, joining an identical in-flight request."""
+
+        with self._condition:
+            cached = self._cache.get(key)
+            now = time.monotonic()
+            if cached is not None and now - cached[0] < max(0.0, max_age_seconds):
+                LOGGER.debug("%s refresh reused fresh cache key=%s", self.label, key)
+                return _clone_read_cache_payload(cached[1])
+            if key in self._in_flight:
+                LOGGER.info("%s refresh joined in-flight request key=%s", self.label, key)
+                while key in self._in_flight:
+                    self._condition.wait()
+                cached = self._cache.get(key)
+                if cached is not None:
+                    # A caller that joined an in-flight request must never
+                    # issue a second HTTP read merely because it woke after
+                    # the short freshness window elapsed.
+                    return _clone_read_cache_payload(cached[1])
+                raise SocialError(
+                    f"{self.label} 刷新失败，未获取到新的有效数据。",
+                    kind="network",
+                    retryable=True,
+                )
+            self._in_flight.add(key)
+
+        try:
+            value = loader()
+            if not is_valid(value):
+                raise SocialError(
+                    f"{self.label} 返回数据格式无效。",
+                    kind="malformed",
+                    retryable=True,
+                )
+            snapshot = _clone_read_cache_payload(value)
+            with self._condition:
+                self._cache[key] = (time.monotonic(), snapshot)
+            LOGGER.info("%s refresh completed key=%s", self.label, key)
+            return _clone_read_cache_payload(snapshot)
+        finally:
+            with self._condition:
+                self._in_flight.discard(key)
+                self._condition.notify_all()
+
+
+class DashboardRefreshManager(_LastKnownGoodReadManager):
+    """The sole process-local coordinator for ``lili_dashboard`` reads."""
+
+    def __init__(self) -> None:
+        super().__init__("dashboard")
+
+
+class LeaderboardRefreshManager(_LastKnownGoodReadManager):
+    """The sole process-local coordinator for weekly leaderboard reads."""
+
+    def __init__(self) -> None:
+        super().__init__("weekly leaderboard")
 
 
 def _next_presence_sequence(user_id: str) -> int:
@@ -3461,6 +3576,12 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self._private_notes_loaded = False
         self._private_notes_cache: dict[str, tuple[float, dict[str, str]]] = {}
         self._auxiliary_cache_account_id = ""
+        # Both the main window and the study-room window use this one client
+        # instance.  Keep their reads behind shared coordinators so opening a
+        # tab, a startup refresh, and a passive timer cannot fan out into
+        # duplicate Supabase requests.
+        self._dashboard_refresh_manager = DashboardRefreshManager()
+        self._leaderboard_refresh_manager = LeaderboardRefreshManager()
         self.persist_tokens = persist_tokens
         if backend is not None:
             self._manager = backend
@@ -3596,6 +3717,11 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self._private_notes_loaded = False
         self._private_notes_cache.clear()
         self._auxiliary_cache_account_id = ""
+        # Do not retain any process-local response when a later login belongs
+        # to another account.  Persistent dashboard snapshots are separately
+        # identity-checked by ``cached_dashboard``.
+        self._dashboard_refresh_manager.clear()
+        self._leaderboard_refresh_manager.clear()
 
     def dashboard(
         self,
@@ -3604,82 +3730,43 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         allow_cache: bool = True,
         force_auxiliary_refresh: bool = False,
     ) -> dict[str, Any]:
-        self.connection.set("SYNCING", data_source=self.connection.data_source, realtime_state="polling")
+        """Return a dashboard through the shared, last-known-good reader.
+
+        Passive callers reuse a successful snapshot for 90 seconds.  An
+        explicit study-room refresh is allowed after a five-second debounce
+        window, but concurrent callers still join the same request.  This is
+        intentionally only request scheduling: the Supabase RPC, its payload
+        and all focus/presence/statistics meanings remain untouched.
+        """
+
+        account_id = _session_user_id(self)
+        cache_key = f"{account_id}:{str(room_id or '')}"
+        max_age_seconds = (
+            0.0
+            if not allow_cache
+            else (
+                SOCIAL_DASHBOARD_INTERACTION_TTL_SECONDS
+                if force_auxiliary_refresh
+                else SOCIAL_DASHBOARD_BACKGROUND_TTL_SECONDS
+            )
+        )
         try:
-            account_id = _session_user_id(self)
-            if account_id != self._auxiliary_cache_account_id:
-                self._private_note_by_user = {}
-                self._private_notes_loaded = False
-                self._auxiliary_cache_account_id = account_id
-            try:
-                dashboard_payload = self._manager.request(
-                    "dashboard",
-                    room_id=room_id,
-                    force_auxiliary_refresh=force_auxiliary_refresh,
+            return dict(
+                self._dashboard_refresh_manager.fetch(
+                    cache_key,
+                    max_age_seconds=max_age_seconds,
+                    loader=lambda: self._dashboard_from_server(
+                        room_id,
+                        force_auxiliary_refresh=force_auxiliary_refresh,
+                    ),
+                    # The persistent dashboard cache below remains stricter
+                    # and accepts complete account-scoped snapshots only;
+                    # this gate still rejects empty/error JSON while allowing
+                    # compatibility relays to omit newer lists.
+                    is_valid=_dashboard_read_payload_has_basic_shape,
                 )
-            except TypeError:
-                # Keep older in-memory/test route managers compatible with the
-                # new optional cache-control flag.  The production manager
-                # accepts it, so this fallback never duplicates a real read.
-                dashboard_payload = self._manager.request("dashboard", room_id=room_id)
-            result = _normalise_never_seen_presence(dict(dashboard_payload or {}))
-            now = time.monotonic()
-            cached_notes = self._private_notes_cache.get(account_id) if account_id else None
-            if (
-                cached_notes is not None
-                and not force_auxiliary_refresh
-                and now - cached_notes[0] < SOCIAL_AUXILIARY_TTL_SECONDS
-            ):
-                notes = dict(cached_notes[1])
-                self._private_note_by_user = notes
-                self._private_notes_loaded = True
-                _apply_buddy_private_notes(result, notes)
-                result["_private_notes_loaded"] = True
-            else:
-                try:
-                    note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
-                    notes = _private_notes_from_payload(note_payload)
-                    self._private_note_by_user = dict(notes)
-                    self._private_notes_loaded = True
-                    if account_id:
-                        self._private_notes_cache[account_id] = (now, dict(notes))
-                    _apply_buddy_private_notes(result, notes)
-                    result["_private_notes_loaded"] = True
-                except SocialError as exc:
-                    # The migration can be applied after the desktop release,
-                    # and an older relay may omit the viewer-only field.
-                    # Preserve the last authorized labels (or labels embedded
-                    # in this payload), then negative-cache the optional RPC
-                    # so a failed endpoint is not retried every poll.
-                    embedded_notes = _private_notes_from_dashboard(result)
-                    if embedded_notes and cached_notes is None:
-                        self._private_note_by_user.update(embedded_notes)
-                    if cached_notes is not None:
-                        self._private_note_by_user = dict(cached_notes[1])
-                        self._private_notes_loaded = True
-                    if account_id:
-                        self._private_notes_cache[account_id] = (
-                            now,
-                            dict(self._private_note_by_user),
-                        )
-                    _apply_buddy_private_notes(result, self._private_note_by_user)
-                    LOGGER.info(
-                        "buddy private notes unavailable; preserved local labels kind=%s status=%s",
-                        exc.kind,
-                        exc.status,
-                    )
-            # The manual achievement-witness migration is not present in every
-            # production project. Do not probe a missing optional RPC on every
-            # passive dashboard refresh: a 404 adds noise to Supabase
-            # telemetry and is unrelated to the core buddy/presence snapshot.
-            # If a future dashboard embeds this collection, the UI continues
-            # to render it; this client simply does not invent a failing probe.
-            stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
-            result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
-            self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
-            self._last_error = ""
-            self._remember_dashboard(room_id, result)
-            return result
+                or {}
+            )
         except SocialError as exc:
             self._last_error = str(exc)
             state = "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE"
@@ -3693,6 +3780,88 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
                     return cached
             raise
 
+    def _dashboard_from_server(
+        self,
+        room_id: str | None,
+        *,
+        force_auxiliary_refresh: bool,
+    ) -> dict[str, Any]:
+        """Execute one real dashboard read after the coordinator admits it."""
+
+        self.connection.set("SYNCING", data_source=self.connection.data_source, realtime_state="polling")
+        account_id = _session_user_id(self)
+        if account_id != self._auxiliary_cache_account_id:
+            self._private_note_by_user = {}
+            self._private_notes_loaded = False
+            self._auxiliary_cache_account_id = account_id
+        try:
+            dashboard_payload = self._manager.request(
+                "dashboard",
+                room_id=room_id,
+                force_auxiliary_refresh=force_auxiliary_refresh,
+            )
+        except TypeError:
+            # Keep older in-memory/test route managers compatible with the
+            # new optional cache-control flag. The production manager accepts
+            # it, so this fallback never duplicates a real read.
+            dashboard_payload = self._manager.request("dashboard", room_id=room_id)
+        result = _normalise_never_seen_presence(dict(dashboard_payload or {}))
+        now = time.monotonic()
+        cached_notes = self._private_notes_cache.get(account_id) if account_id else None
+        if (
+            cached_notes is not None
+            and not force_auxiliary_refresh
+            and now - cached_notes[0] < SOCIAL_AUXILIARY_TTL_SECONDS
+        ):
+            notes = dict(cached_notes[1])
+            self._private_note_by_user = notes
+            self._private_notes_loaded = True
+            _apply_buddy_private_notes(result, notes)
+            result["_private_notes_loaded"] = True
+        else:
+            try:
+                note_payload = self._manager.request("rpc", "lili_buddy_private_notes", {})
+                notes = _private_notes_from_payload(note_payload)
+                self._private_note_by_user = dict(notes)
+                self._private_notes_loaded = True
+                if account_id:
+                    self._private_notes_cache[account_id] = (now, dict(notes))
+                _apply_buddy_private_notes(result, notes)
+                result["_private_notes_loaded"] = True
+            except SocialError as exc:
+                # The migration can be applied after the desktop release,
+                # and an older relay may omit the viewer-only field.
+                # Preserve the last authorized labels (or labels embedded
+                # in this payload), then negative-cache the optional RPC
+                # so a failed endpoint is not retried on every poll.
+                embedded_notes = _private_notes_from_dashboard(result)
+                if embedded_notes and cached_notes is None:
+                    self._private_note_by_user.update(embedded_notes)
+                if cached_notes is not None:
+                    self._private_note_by_user = dict(cached_notes[1])
+                    self._private_notes_loaded = True
+                if account_id:
+                    self._private_notes_cache[account_id] = (
+                        now,
+                        dict(self._private_note_by_user),
+                    )
+                _apply_buddy_private_notes(result, self._private_note_by_user)
+                LOGGER.info(
+                    "buddy private notes unavailable; preserved local labels kind=%s status=%s",
+                    exc.kind,
+                    exc.status,
+                )
+        # The manual achievement-witness migration is not present in every
+        # production project. Do not probe a missing optional RPC on every
+        # passive dashboard refresh: a 404 adds noise to Supabase telemetry
+        # and is unrelated to the core buddy/presence snapshot.
+        stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
+        result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
+        self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
+        self._last_error = ""
+        self._remember_dashboard(room_id, result)
+        return result
+
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._manager.request("rpc", name, body)
     def update_profile(self, **kwargs: Any) -> None: self._manager.request("update_profile", **kwargs)
     def update_owner_nickname(self, nickname: str) -> None: self._manager.request("update_owner_nickname", nickname)
@@ -3701,7 +3870,28 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     def record_room_event(self, **kwargs: Any) -> None: self._manager.request("record_room_event", **kwargs)
     def record_economy_event(self, **kwargs: Any) -> None: self._manager.request("record_economy_event", **kwargs)
     def economy_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return list(self._manager.request("economy_leaderboard", **kwargs) or [])
-    def focus_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]: return list(self._manager.request("focus_leaderboard", **kwargs) or [])
+    def focus_leaderboard(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Read the weekly ranking at most once per account/period/5 minutes."""
+
+        period = str(kwargs.get("period") or "week")
+        account_id = _session_user_id(self)
+        cache_key = f"{account_id}:{period}"
+
+        def load() -> list[dict[str, Any]]:
+            payload = self._manager.request("focus_leaderboard", **kwargs)
+            if not isinstance(payload, list):
+                raise SocialError("排行榜返回数据格式无效。", kind="malformed", retryable=True)
+            return list(payload)
+
+        return list(
+            self._leaderboard_refresh_manager.fetch(
+                cache_key,
+                max_age_seconds=SOCIAL_LEADERBOARD_TTL_SECONDS,
+                loader=load,
+                is_valid=lambda value: isinstance(value, list),
+            )
+            or []
+        )
     def set_room_goal(self, **kwargs: Any) -> None: self._manager.request("set_room_goal", **kwargs)
     def set_room_schedule(self, **kwargs: Any) -> None: self._manager.request("set_room_schedule", **kwargs)
     def set_room_challenge(self, **kwargs: Any) -> None: self._manager.request("set_room_challenge", **kwargs)

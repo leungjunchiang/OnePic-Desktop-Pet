@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtTest import QSignalSpy
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget, QSizePolicy
 
 from onepic_desktop_pet.social import SignupResult, SocialError
@@ -89,6 +89,22 @@ class OfflineCachedClient(SignedInClient):
                 "_sync_age_minutes": 1,
             }
         )
+        return data
+
+
+class CachedBootstrapClient(SignedInClient):
+    def __init__(self) -> None:
+        self.dashboard_calls = 0
+
+    def cached_dashboard(self, _room_id=None):
+        data = super().dashboard()
+        data.update({"data_source": "local_cache", "is_stale": True})
+        return data
+
+    def dashboard(self, *args, **kwargs):
+        self.dashboard_calls += 1
+        data = super().dashboard()
+        data.update({"data_source": "server", "is_stale": False})
         return data
 
 
@@ -204,6 +220,21 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     app.processEvents()
     assert dialog.tabs.currentIndex() == 3
     assert "请先" in dialog.status_label.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_cached_bootstrap_keeps_its_background_dashboard_refresh() -> None:
+    app = QApplication.instance() or QApplication([])
+    client = CachedBootstrapClient()
+    dialog = SocialHubDialog(client)
+
+    # The initial cache paint happens at turn zero; it must not cancel the
+    # scheduled network refresh that follows at 50 ms.
+    QTest.qWait(100)
+    app.processEvents()
+
+    assert client.dashboard_calls == 1
+    assert dialog.data.get("data_source") == "server"
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

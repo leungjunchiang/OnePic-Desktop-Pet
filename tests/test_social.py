@@ -21,6 +21,9 @@ from onepic_desktop_pet.social import (
     HttpSocialBackend,
     PRESENCE_GRACE_SECONDS,
     SOCIAL_AUXILIARY_TTL_SECONDS,
+    SOCIAL_DASHBOARD_BACKGROUND_TTL_SECONDS,
+    SOCIAL_DASHBOARD_INTERACTION_TTL_SECONDS,
+    SOCIAL_LEADERBOARD_TTL_SECONDS,
     SocialClient,
     SocialError,
     SocialSession,
@@ -786,12 +789,238 @@ def test_private_note_overlay_uses_ttl_and_force_refresh(monkeypatch):
     client.dashboard()
     client.dashboard(force_auxiliary_refresh=True)
 
-    assert manager.note_calls == 2
+    # The second caller and a rapid explicit refresh reuse the sole
+    # process-wide successful dashboard result.  The content is unchanged;
+    # only duplicate request timing is suppressed.
+    assert manager.note_calls == 1
     assert manager.dashboard_calls == [
         {"room_id": None, "force_auxiliary_refresh": False},
-        {"room_id": None, "force_auxiliary_refresh": False},
-        {"room_id": None, "force_auxiliary_refresh": True},
     ]
+
+
+def test_dashboard_refresh_manager_single_flight_ttl_and_offline_cache(monkeypatch):
+    direct_transport = SimpleNamespace(
+        session=SocialSession("token", "refresh", "user-1", 9_999_999_999),
+        auth_manager=None,
+    )
+
+    class FakeManager:
+        active = direct_transport
+        direct = direct_transport
+        proxy = None
+        backend_name = "Supabase Direct"
+        backend_endpoint = "https://supabase.example.test"
+        signed_in = True
+
+        def __init__(self):
+            self.dashboard_calls = 0
+            self.block = threading.Event()
+            self.started = threading.Event()
+            self.fail = False
+
+        def request(self, method, *args, **kwargs):
+            if method == "dashboard":
+                self.dashboard_calls += 1
+                self.started.set()
+                self.block.wait(timeout=2)
+                if self.fail:
+                    raise SocialError("offline", kind="network", retryable=True)
+                return {
+                    "me": {"user_id": "user-1"},
+                    "buddies": [{"user_id": "buddy-1", "week_seconds": 321}],
+                    "room_people": [],
+                }
+            if method == "rpc" and args[0] == "lili_buddy_private_notes":
+                return {"notes": []}
+            raise AssertionError((method, args, kwargs))
+
+    manager = FakeManager()
+    client = SocialClient(backend=manager, persist_tokens=False)
+    results: list[dict] = []
+    errors: list[BaseException] = []
+
+    def read_dashboard() -> None:
+        try:
+            results.append(client.dashboard())
+        except BaseException as exc:  # pragma: no cover - assertion below
+            errors.append(exc)
+
+    first = threading.Thread(target=read_dashboard)
+    second = threading.Thread(target=read_dashboard)
+    first.start()
+    assert manager.started.wait(timeout=1)
+    second.start()
+    manager.block.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not errors
+    assert manager.dashboard_calls == 1
+    assert len(results) == 2
+    assert results[0]["buddies"][0]["week_seconds"] == 321
+    assert results[1]["buddies"][0]["week_seconds"] == 321
+
+    # Passive 90-second reads reuse the last server-confirmed payload.
+    client.dashboard()
+    assert manager.dashboard_calls == 1
+
+    # A later UI refresh may make one new request after the 5-second debounce.
+    clock = [100.0]
+    monkeypatch.setattr(social_module.time, "monotonic", lambda: clock[0])
+    client._dashboard_refresh_manager._cache.clear()
+    manager.block.set()
+    client.dashboard(force_auxiliary_refresh=True)
+    assert manager.dashboard_calls == 2
+    clock[0] += SOCIAL_DASHBOARD_INTERACTION_TTL_SECONDS + 0.1
+    manager.fail = True
+    cached = client.dashboard(force_auxiliary_refresh=True)
+    assert manager.dashboard_calls == 3
+    # A network failure must keep the last known successful values visible.
+    assert cached["buddies"][0]["week_seconds"] == 321
+    assert cached["data_source"] == "local_cache"
+    assert SOCIAL_DASHBOARD_BACKGROUND_TTL_SECONDS == 90.0
+
+
+def test_leaderboard_refresh_manager_reuses_last_known_good_rows(monkeypatch):
+    direct_transport = SimpleNamespace(
+        session=SocialSession("token", "refresh", "user-1", 9_999_999_999),
+        auth_manager=None,
+    )
+
+    class FakeManager:
+        active = direct_transport
+        direct = direct_transport
+        proxy = None
+        backend_name = "Supabase Direct"
+        backend_endpoint = "https://supabase.example.test"
+        signed_in = True
+
+        def __init__(self):
+            self.calls = 0
+            self.fail = False
+
+        def request(self, method, *args, **kwargs):
+            assert method == "focus_leaderboard"
+            self.calls += 1
+            if self.fail:
+                raise SocialError("offline", kind="network", retryable=True)
+            return [{"user_id": "user-1", "week_seconds": 654}]
+
+    manager = FakeManager()
+    client = SocialClient(backend=manager, persist_tokens=False)
+    first = client.focus_leaderboard(period="week")
+    second = client.focus_leaderboard(period="week")
+    assert manager.calls == 1
+    assert second == first
+
+    clock = [200.0]
+    monkeypatch.setattr(social_module.time, "monotonic", lambda: clock[0])
+    client._leaderboard_refresh_manager._cache.clear()
+    client.focus_leaderboard(period="week")
+    manager.fail = True
+    clock[0] += SOCIAL_LEADERBOARD_TTL_SECONDS + 0.1
+    with pytest.raises(SocialError):
+        client.focus_leaderboard(period="week")
+    assert manager.calls == 3
+    # The UI owns rendering on errors; its existing rows are never replaced
+    # by an empty list. The manager itself has not written a failed payload.
+    assert client._leaderboard_refresh_manager._cache
+
+
+def test_read_managers_are_isolated_when_authenticated_account_changes():
+    direct_transport = SimpleNamespace(
+        session=SocialSession("token-1", "refresh-1", "user-1", 9_999_999_999),
+        auth_manager=None,
+    )
+
+    class FakeManager:
+        active = direct_transport
+        direct = direct_transport
+        proxy = None
+        backend_name = "Supabase Direct"
+        backend_endpoint = "https://supabase.example.test"
+        signed_in = True
+
+        def __init__(self):
+            self.dashboard_calls = 0
+            self.leaderboard_calls = 0
+
+        def request(self, method, *args, **kwargs):
+            user_id = direct_transport.session.user_id
+            if method == "dashboard":
+                self.dashboard_calls += 1
+                return {"me": {"user_id": user_id}, "buddies": [], "room_people": []}
+            if method == "rpc" and args[0] == "lili_buddy_private_notes":
+                return {"notes": []}
+            if method == "focus_leaderboard":
+                self.leaderboard_calls += 1
+                return [{"user_id": user_id, "week_seconds": 777}]
+            raise AssertionError((method, args, kwargs))
+
+    manager = FakeManager()
+    client = SocialClient(backend=manager, persist_tokens=False)
+    assert client.dashboard()["me"]["user_id"] == "user-1"
+    assert client.focus_leaderboard(period="week")[0]["user_id"] == "user-1"
+
+    direct_transport.session = SocialSession("token-2", "refresh-2", "user-2", 9_999_999_999)
+    assert client.dashboard()["me"]["user_id"] == "user-2"
+    assert client.focus_leaderboard(period="week")[0]["user_id"] == "user-2"
+    assert manager.dashboard_calls == 2
+    assert manager.leaderboard_calls == 2
+
+
+def test_actual_client_read_frequency_is_limited_over_twenty_simulated_minutes(monkeypatch):
+    direct_transport = SimpleNamespace(
+        session=SocialSession("token", "refresh", "user-1", 9_999_999_999),
+        auth_manager=None,
+    )
+
+    class FakeManager:
+        active = direct_transport
+        direct = direct_transport
+        proxy = None
+        backend_name = "Supabase Direct"
+        backend_endpoint = "https://supabase.example.test"
+        signed_in = True
+
+        def __init__(self):
+            self.dashboard_calls = 0
+            self.leaderboard_calls = 0
+
+        def request(self, method, *args, **kwargs):
+            if method == "dashboard":
+                self.dashboard_calls += 1
+                return {"me": {"user_id": "user-1"}, "buddies": [], "room_people": []}
+            if method == "rpc" and args[0] == "lili_buddy_private_notes":
+                return {"notes": []}
+            if method == "focus_leaderboard":
+                self.leaderboard_calls += 1
+                return [{"user_id": "user-1", "week_seconds": 88}]
+            raise AssertionError((method, args, kwargs))
+
+    clock = [0.0]
+    monkeypatch.setattr(social_module.time, "monotonic", lambda: clock[0])
+    manager = FakeManager()
+    client = SocialClient(backend=manager, persist_tokens=False)
+    # These calls model real callers every 30 seconds; the assertions count
+    # actual fake transport invocations, not just configured timer values.
+    for seconds in range(0, 20 * 60, 30):
+        clock[0] = float(seconds)
+        client.dashboard()
+        client.focus_leaderboard(period="week")
+
+    assert manager.dashboard_calls == 14  # t=0, 90, ..., 1170
+    assert manager.leaderboard_calls == 4  # t=0, 300, 600, 900
+
+
+def test_production_client_never_calls_missing_achievement_witness_inbox_rpc():
+    root = Path(__file__).resolve().parents[1]
+    source_root = root / "src" / "onepic_desktop_pet"
+    matches = [
+        path for path in source_root.rglob("*.py")
+        if "lili_achievement_witness_inbox" in path.read_text(encoding="utf-8")
+    ]
+    assert matches == []
 
 
 def test_heartbeat_rejects_payload_for_a_different_authenticated_account():
