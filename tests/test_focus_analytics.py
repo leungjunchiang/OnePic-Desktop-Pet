@@ -72,6 +72,26 @@ def test_period_summary_projects_day_week_and_month_without_network(tmp_path) ->
     assert all(row["seconds"] is None for row in month["daily"] if row["date"] > "2026-08-13")
 
 
+def test_period_summary_projects_current_calendar_year_without_network(tmp_path) -> None:
+    now = datetime(2026, 8, 13, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(60 * 60, started_at=datetime(2026, 1, 2, 9, 0), completed=True)
+    store.record_session(2 * 60 * 60, started_at=datetime(2026, 4, 4, 10, 0), completed=True)
+    store.record_session(30 * 60, started_at=datetime(2026, 8, 12, 9, 0), completed=True)
+    store.record_session(60 * 60, started_at=now - timedelta(hours=2), completed=True)
+
+    year = store.period_summary("year", now)
+
+    assert year["period"] == "year"
+    assert year["start"] == "2026-01-01"
+    assert year["total_seconds"] == 4 * 60 * 60 + 30 * 60
+    assert year["active_days"] == 4
+    assert len(year["daily"]) == 365
+    assert len(year["hourly"]) == 24
+    assert next(row for row in year["daily"] if row["date"] == "2026-01-02")["seconds"] == 60 * 60
+    assert next(row for row in year["daily"] if row["date"] == "2026-12-01")["seconds"] is None
+
+
 def test_period_summary_derives_report_metrics_from_account_records(tmp_path) -> None:
     now = datetime(2026, 8, 13, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)

@@ -325,35 +325,33 @@ def aggregate_focus_time(
     longest = max((_seconds(item[0], item[1]) for item in merged), default=0)
     average = round(total / len(merged)) if merged else 0
 
-    hourly: list[dict[str, int | str]] = []
-    # Use the local calendar day containing the window start.  For a weekly or
-    # monthly window the buckets are still the familiar 00:00–24:00 rhythm.
-    cursor = window_start.replace(minute=0, second=0, microsecond=0)
-    while cursor < window_end:
-        bucket_end = min(cursor + timedelta(hours=1), window_end)
-        hourly.append({
-            "hour": cursor.hour,
-            "label": f"{cursor.hour:02d}:00",
-            "seconds": _bucket_overlap_seconds(merged, cursor, bucket_end),
-        })
-        cursor = bucket_end
-    # The report UI expects exactly 24 hour rows for a day; for week/month it
-    # also expects the hour-of-day chart, so collapse all calendar days.
+    # Distribute each non-overlapping interval directly into its hour and day
+    # buckets.  Scanning every bucket against every interval was acceptable
+    # for a month, but a 365-day annual report made refreshes visibly slow.
+    # This still uses the merged union above, so concurrent-device overlaps
+    # remain impossible to double count.
     by_hour = [0] * 24
-    for item in hourly:
-        by_hour[int(item["hour"])] += int(item["seconds"])
+    daily: dict[str, int] = {}
+    for interval_start, interval_end in merged:
+        cursor = interval_start
+        while cursor < interval_end:
+            next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            bucket_end = min(interval_end, next_hour)
+            seconds = _seconds(cursor, bucket_end)
+            if seconds:
+                by_hour[cursor.hour] += seconds
+                date_key = cursor.date().isoformat()
+                daily[date_key] = daily.get(date_key, 0) + seconds
+            cursor = bucket_end
+    # Keep zero-value days explicit for callers that render a full calendar.
+    day_cursor = window_start.date()
+    while day_cursor < window_end.date() or (day_cursor == window_end.date() and window_end.time() != time.min):
+        daily.setdefault(day_cursor.isoformat(), 0)
+        day_cursor += timedelta(days=1)
     hourly = [
         {"hour": hour, "label": f"{hour:02d}:00", "seconds": value}
         for hour, value in enumerate(by_hour)
     ]
-
-    daily: dict[str, int] = {}
-    day_cursor = window_start.date()
-    while day_cursor < window_end.date() or (day_cursor == window_end.date() and window_end.time() != time.min):
-        day_start = datetime.combine(day_cursor, time.min, tzinfo=BEIJING_TIMEZONE)
-        day_end = day_start + timedelta(days=1)
-        daily[day_cursor.isoformat()] = _bucket_overlap_seconds(merged, day_start, day_end)
-        day_cursor += timedelta(days=1)
 
     interval_dicts = tuple(
         {
@@ -410,7 +408,7 @@ def aggregate_focus_time(
 
 
 def calendar_window(period: str, moment: datetime) -> tuple[datetime, datetime, str]:
-    """Return a Beijing-local half-open window for day/week/month."""
+    """Return a Beijing-local half-open window for day/week/month/year."""
 
     current = as_beijing(moment)
     today = current.date()
@@ -421,10 +419,15 @@ def calendar_window(period: str, moment: datetime) -> tuple[datetime, datetime, 
     elif normalized in {"month", "monthly", "月度", "月"}:
         start_date = today.replace(day=1)
         key = "month"
+    elif normalized in {"year", "annual", "年度", "年"}:
+        start_date = today.replace(month=1, day=1)
+        key = "year"
     else:
         start_date = today
         key = "day"
-    if key == "month":
+    if key == "year":
+        end_date = start_date.replace(year=start_date.year + 1)
+    elif key == "month":
         next_month = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
         end_date = next_month
     elif key == "week":

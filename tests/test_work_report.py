@@ -10,6 +10,7 @@ from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
 from onepic_desktop_pet.work_report import (
     ReportBarChart,
     ReportCalendarHeatmap,
+    ReportYearHeatmap,
     WorkReportDialog,
     _nice_duration_ticks,
     build_work_report,
@@ -28,6 +29,12 @@ def test_work_report_is_a_normal_minimizable_window() -> None:
     assert flags & Qt.WindowType.WindowCloseButtonHint
     assert not flags & Qt.WindowType.WindowStaysOnTopHint
     assert dialog.parent() is None
+    assert [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())] == [
+        "日度",
+        "本周",
+        "月度",
+        "年度",
+    ]
 
     dialog.show()
     app.processEvents()
@@ -76,6 +83,8 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert report["day"]["completed_rounds"] == 1
     assert report["week"]["total_seconds"] == 45 * 60
     assert report["month"]["total_seconds"] == 45 * 60
+    assert report["year"]["total_seconds"] == 45 * 60
+    assert len(report["year"]["monthly"]) == 12
     assert report["current_streak_days"] == 1
     assert report["day"]["week_total_seconds"] == report["week"]["total_seconds"]
     assert report["day"]["rest_state"] == "清醒 / 暂未工作"
@@ -123,6 +132,32 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
     assert projected_report["week"]["total_seconds"] == 3 * 60 * 60
     assert projected_report["day"]["week_total_seconds"] == 3 * 60 * 60
     assert next(row for row in projected_report["week"]["daily"] if row["is_today"])["seconds"] == 2 * 60 * 60
+
+
+def test_annual_report_builds_monthly_trend_and_milestones(tmp_path) -> None:
+    now = datetime(2026, 8, 13, 12, 0)
+    analytics = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    analytics.record_session(60 * 60, started_at=datetime(2026, 1, 2, 9, 0), completed=True)
+    analytics.record_session(3 * 60 * 60, started_at=datetime(2026, 4, 4, 9, 0), completed=True)
+    analytics.record_session(60 * 60, started_at=datetime(2026, 8, 12, 9, 0), completed=True)
+    analytics.record_session(60 * 60, started_at=datetime(2026, 8, 13, 9, 0), completed=True)
+    report = build_work_report(
+        analytics,
+        WorkTimerModel(path=tmp_path / "timer.json", now_provider=lambda: now, persist=True),
+        DailyCompanionStats(path=tmp_path / "daily.json", now_provider=lambda: now, persist=True),
+        now=now,
+    )
+
+    year = report["year"]
+    assert year["total_seconds"] == 6 * 60 * 60
+    assert year["active_days"] == 4
+    assert year["workday_average_seconds"] == 90 * 60
+    assert year["longest_streak_days"] == 2
+    assert year["busiest_day"]["date"] == "2026-04-04"
+    assert year["busiest_month"]["label"] == "4月"
+    assert len(year["monthly"]) == 12
+    assert year["monthly"][3]["seconds"] == 3 * 60 * 60
+    assert year["monthly"][11]["seconds"] is None
 
 
 def test_report_does_not_render_cumulative_checkpoint_as_live_today(tmp_path) -> None:
@@ -254,6 +289,33 @@ def test_report_calendar_keeps_last_weekday_column_inside_widget() -> None:
     app.processEvents()
 
     assert calendar.minimumHeight() >= 202
+    assert calendar._cells
+    assert all(cell.left() >= 0 for cell, _row in calendar._cells)
+    assert all(cell.right() < calendar.width() for cell, _row in calendar._cells)
+    assert all(cell.bottom() < calendar.height() for cell, _row in calendar._cells)
+
+    calendar.close()
+    calendar.deleteLater()
+    app.processEvents()
+
+
+def test_report_year_calendar_keeps_all_cells_inside_widget() -> None:
+    app = QApplication.instance() or QApplication([])
+    calendar = ReportYearHeatmap(
+        [
+            {
+                "date": (datetime(2026, 1, 1) + timedelta(days=offset)).date().isoformat(),
+                "weekday": "",
+                "seconds": offset * 60 if offset <= 224 else None,
+                "is_future": offset > 224,
+            }
+            for offset in range(365)
+        ]
+    )
+    calendar.resize(680, 220)
+    calendar.show()
+    app.processEvents()
+
     assert calendar._cells
     assert all(cell.left() >= 0 for cell, _row in calendar._cells)
     assert all(cell.right() < calendar.width() for cell, _row in calendar._cells)

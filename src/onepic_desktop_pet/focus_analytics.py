@@ -861,7 +861,7 @@ class FocusAnalyticsStore:
         }
 
     def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
-        """Calculate a day/week/month report from the account's local history.
+        """Calculate a day/week/month/year report from account-local history.
 
         This is deliberately a read-only, on-demand projection.  The current
         live timer is supplied by the caller because it is not yet a closed
@@ -879,6 +879,9 @@ class FocusAnalyticsStore:
         elif normalized in {"month", "monthly", "月度", "月"}:
             key = "month"
             start = today.replace(day=1)
+        elif normalized in {"year", "annual", "年度", "年"}:
+            key = "year"
+            start = today.replace(month=1, day=1)
         else:
             key = "day"
             start = today
@@ -887,9 +890,11 @@ class FocusAnalyticsStore:
             period_end = today
         elif key == "week":
             period_end = start + timedelta(days=6)
-        else:
+        elif key == "month":
             next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
             period_end = next_month - timedelta(days=1)
+        else:
+            period_end = start.replace(year=start.year + 1) - timedelta(days=1)
         range_start = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
         range_end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=BEIJING_TIMEZONE)
         aggregate = self.focus_aggregate(key, moment)

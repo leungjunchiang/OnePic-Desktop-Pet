@@ -172,6 +172,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - 搭子在线与北京时间修复" \
+            --title "Lili $release_tag - 年度工作报告" \
             --generate-notes \
-            --notes "修复搭子双向在线、专注状态与私人备注刷新；名称统一为‘私人备注/对方自定义名/公开名/搭子 + 家的六毛’。修复客户端重启后的心跳序号回退、空闲账号 dashboard 变成 NULL、旧版 Presence 直写 403，以及凌晨专注记录被按 UTC 多显示 8 小时的问题。"
+            --notes "新增日度｜本周｜月度｜年度四级工作报告。年度页包含全年热力图、12 个月趋势、全年典型工作节律与年度里程碑；统计继续以当前账号的原始专注区间并集为唯一来源，工作均值统一标注为‘工作日日均’。"
