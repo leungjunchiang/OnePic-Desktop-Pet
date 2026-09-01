@@ -1782,6 +1782,12 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert all(not button.icon().isNull() for button in buttons)
     assert not window.quick_panel.title.isVisible()
     assert window.quick_panel.objectName() == "quickActionDock"
+    if window.quick_panel._stable_windows_dock:
+        # The fixed two-row native geometry remains in place, but the parent
+        # surface itself must stay transparent so it cannot flash as a large
+        # opaque card while the secondary shortcut is toggled.
+        assert window.quick_panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert "background: transparent" in window.quick_panel.styleSheet()
     assert all(button.size() == QSize(42, 42) for button in buttons)
     # The report action is a child of the same dock, never a detached
     # top-level window that can remain stuck on the desktop.

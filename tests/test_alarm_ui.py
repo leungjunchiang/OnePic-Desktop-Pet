@@ -201,7 +201,7 @@ def test_windows_alarm_audio_always_closes_native_alias_after_stop_request() -> 
 
 
 def test_windows_custom_audio_preview_uses_async_mci_not_qt_player(tmp_path, monkeypatch) -> None:
-    """The selector's automatic preview timeout must not call QMediaPlayer.stop on Windows."""
+    """The selector stops native MCI asynchronously on the Windows timeout."""
 
     _app()
     source = tmp_path / "preview-tone.wav"
@@ -238,6 +238,79 @@ def test_windows_custom_audio_preview_uses_async_mci_not_qt_player(tmp_path, mon
     selector._preview_stop_timer.timeout.emit()
     assert calls == ["start", "stop"]
     assert not selector._preview_stop_timer.isActive()
+    selector.close()
+
+
+def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
+    tmp_path, monkeypatch
+) -> None:
+    """MCI error 277 must still produce sound without a GUI-thread stop call."""
+
+    _app()
+    source = tmp_path / "preview-tone.mp3"
+    source.write_bytes(b"not a real mp3")
+    library = AlarmSoundLibrary(tmp_path)
+    sound = library.import_file(source, display_name="MP3试听音频")
+    backend_instances: list[object] = []
+
+    class FakeWindowsPreviewAudio:
+        def __init__(self, *_args, **kwargs) -> None:
+            self.available = True
+            self.on_error = kwargs["on_error"]
+            backend_instances.append(self)
+
+        def start(self) -> None:
+            return None
+
+        def request_stop(self) -> None:
+            return None
+
+    class _FakeSignal:
+        def connect(self, _slot, *_args, **_kwargs) -> None:
+            return None
+
+    class FakeAudioOutput:
+        def __init__(self, _parent=None) -> None:
+            self.volume = None
+
+        def setVolume(self, volume: float) -> None:  # noqa: N802 - Qt API
+            self.volume = volume
+
+    class FakeMediaPlayer:
+        def __init__(self, _parent=None) -> None:
+            self.playbackStateChanged = _FakeSignal()
+            self.errorOccurred = _FakeSignal()
+            self.sources: list[object] = []
+            self.play_count = 0
+
+        def setAudioOutput(self, _output) -> None:  # noqa: N802 - Qt API
+            return None
+
+        def setSource(self, source_url) -> None:  # noqa: N802 - Qt API
+            self.sources.append(source_url)
+
+        def play(self) -> None:
+            self.play_count += 1
+
+        def stop(self) -> None:
+            raise AssertionError("Windows preview fallback must never call stop() inline")
+
+    monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
+    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", FakeWindowsPreviewAudio)
+    monkeypatch.setattr(alarm_ui, "QAudioOutput", FakeAudioOutput)
+    monkeypatch.setattr(alarm_ui, "QMediaPlayer", FakeMediaPlayer)
+    selector = AlarmSoundSelector(library, sound.sound_id)
+
+    selector.preview()
+    assert len(backend_instances) == 1
+    backend_instances[0].on_error(277)
+    _app().processEvents()
+
+    assert selector._preview_fallback_active is True
+    assert selector._preview_fallback_player.play_count == 1
+    selector._preview_stop_timer.timeout.emit()
+    assert selector._preview_fallback_active is False
+    assert selector._preview_fallback_output.volume == 0.0
     selector.close()
 
 

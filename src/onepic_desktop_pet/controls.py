@@ -37,8 +37,8 @@ QWidget#quickActionDock { background: rgba(250, 248, 242, 238); color: #24475b;
 border: 1px solid rgba(75, 96, 112, 72); border-radius: 19px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
 /* On Windows the dock keeps its two-row native geometry even before the
-   secondary action is shown.  The surface is painted by QuickControlPanel so
-   an invisible reserved row cannot leave a blank card above the main row. */
+   secondary action is shown.  The top-level surface stays transparent so
+   the reserved row never becomes a large background card. */
 QWidget#quickActionDock[stableWindowsDock="true"] { background: transparent; border: none; }
 QWidget#quickActionDock QPushButton { background: rgba(239, 246, 247, 150); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
@@ -637,8 +637,8 @@ class QuickControlPanel(QWidget):
         # the new secondary-row geometry for one frame, making the two rows
         # look as if they briefly swapped.  Keep the native window at its
         # maximum two-row size on Windows and only change the secondary tile's
-        # visibility.  ``paintEvent`` draws a one-row surface while that tile
-        # is hidden, so there is no empty card space in the normal state.
+        # visibility.  The fixed area is transparent, so the reserved row
+        # does not become an empty card in the normal state.
         self._stable_windows_dock = sys.platform.startswith("win")
         self.setProperty("stableWindowsDock", self._stable_windows_dock)
         # Native macOS Qt windows can omit Enter/Leave delivery until the
@@ -670,7 +670,8 @@ class QuickControlPanel(QWidget):
         # The primary buttons never enter/leave a layout during hover; only the
         # secondary container changes visibility.  This prevents Qt from
         # painting a transient frame in which the primary row occupies the
-        # secondary row's geometry.
+        # secondary row's geometry.  Only the individual shortcut tiles paint
+        # visible backgrounds; the parent surface stays transparent.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 9, 10, 9)
         shortcut_gap = 6
@@ -892,30 +893,18 @@ class QuickControlPanel(QWidget):
         self.layout().activate()
         self.adjustSize()
 
-    def _stable_surface_rect(self) -> QRectF:
-        """Return the visible card area for the fixed Windows dock geometry."""
-
-        if self.report_button.isVisible():
-            return QRectF(self.rect())
-        primary = self._primary_container.geometry()
-        # Include the dock's normal top/bottom margin around the main row.
-        top = max(0, primary.top() - 9)
-        return QRectF(0, top, self.width(), max(0, self.height() - top))
-
     def paintEvent(self, event) -> None:
-        """Paint the stable Windows surface without a hidden secondary row."""
+        """Keep the fixed Windows dock's top-level surface transparent.
+
+        The native window must retain two-row geometry to prevent the old
+        hover jump, but that geometry is intentionally not visible.  Skip
+        parent painting entirely; child buttons paint their own tiles and
+        the transparent top-level window contributes no background frame.
+        """
 
         if not self._stable_windows_dock or not hasattr(self, "_primary_container"):
             return super().paintEvent(event)
-        surface = self._stable_surface_rect()
-        if surface.isEmpty():
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QBrush(QColor(250, 248, 242, 238)))
-        painter.setPen(QPen(QColor(75, 96, 112, 72), 1))
-        painter.drawRoundedRect(surface.adjusted(0.5, 0.5, -0.5, -0.5), 19, 19)
-        painter.end()
+        event.accept()
 
     def _set_report_button_visible(self, visible: bool) -> None:
         """Compatibility wrapper for the work-report-only secondary mode."""

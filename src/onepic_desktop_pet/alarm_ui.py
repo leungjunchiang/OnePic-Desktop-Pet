@@ -74,6 +74,10 @@ class AlarmSoundSelector(QWidget):
     """Shared sound picker used by standalone alarms and Todo alarms."""
 
     changed = Signal(str)
+    # ``_WindowsAlarmAudio`` invokes callbacks from daemon workers.  Forward
+    # the failure through a queued Qt signal before touching any multimedia
+    # object, otherwise a native worker callback could race the GUI thread.
+    _preview_mci_error = Signal(int, str, str, str)
 
     def __init__(
         self,
@@ -109,11 +113,24 @@ class AlarmSoundSelector(QWidget):
         row.addWidget(self.delete_button)
         # Qt 6.11's Windows multimedia backend can block the GUI thread in
         # QMediaPlayer.stop().  AlarmCard already uses the asynchronous MCI
-        # backend below; the selector must use the same safe route or its
-        # automatic 15-second stop can still freeze the whole application.
+        # backend below; the selector uses the same safe route first.  Some
+        # Windows installations cannot decode MP3 through MCI (error 277),
+        # so keep a Qt player as a *failure-only* fallback.  It is never
+        # stopped synchronously; the timeout merely mutes it.
         use_qt_preview = sys.platform != "win32"
         self._preview_output = QAudioOutput(self) if use_qt_preview and QAudioOutput is not None else None
         self._preview_player = QMediaPlayer(self) if use_qt_preview and QMediaPlayer is not None else None
+        use_windows_qt_fallback = (
+            sys.platform == "win32" and QAudioOutput is not None and QMediaPlayer is not None
+        )
+        self._preview_fallback_output = (
+            QAudioOutput(self) if use_windows_qt_fallback else None
+        )
+        self._preview_fallback_player = (
+            QMediaPlayer(self) if use_windows_qt_fallback else None
+        )
+        self._preview_fallback_active = False
+        self._preview_generation = 0
         self._windows_preview_audio: _WindowsAlarmAudio | None = None
         self._preview_stop_timer = QTimer(self)
         self._preview_stop_timer.setSingleShot(True)
@@ -129,17 +146,67 @@ class AlarmSoundSelector(QWidget):
                     state=str(state),
                 )
             )
-            self._preview_player.errorOccurred.connect(self._preview_error)
+            self._preview_player.errorOccurred.connect(
+                lambda *args: self._qt_preview_error(self._preview_player, *args)
+            )
+        if self._preview_fallback_player is not None and self._preview_fallback_output is not None:
+            self._preview_fallback_player.setAudioOutput(self._preview_fallback_output)
+            self._preview_fallback_player.playbackStateChanged.connect(
+                lambda state: lifecycle_log(
+                    "media.preview.qt_fallback.state_changed",
+                    self._preview_fallback_player,
+                    owner="AlarmSoundSelector",
+                    signal="playbackStateChanged",
+                    state=str(state),
+                )
+            )
+            self._preview_fallback_player.errorOccurred.connect(
+                lambda *args: self._qt_preview_error(self._preview_fallback_player, *args)
+            )
+        self._preview_mci_error.connect(
+            self._on_preview_mci_error,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self.refresh(selected_id)
 
-    def _preview_error(self, *args: object) -> None:
+    def _qt_preview_error(self, player, *args: object) -> None:
         lifecycle_log(
             "media.preview.error",
-            self._preview_player,
+            player,
             owner="AlarmSoundSelector",
             error=" ".join(str(item) for item in args),
         )
-        self.stop_preview()
+        if player is self._preview_fallback_player and sys.platform == "win32":
+            # Do not call QMediaPlayer.stop() on the GUI thread.  Muting is
+            # immediate and leaves native teardown to Qt's normal lifecycle.
+            self._mute_qt_fallback_preview()
+        else:
+            self.stop_preview()
+
+    def _mute_qt_fallback_preview(self) -> None:
+        self._preview_fallback_active = False
+        if self._preview_fallback_output is not None:
+            self._preview_fallback_output.setVolume(0.0)
+
+    def _play_qt_preview(self, path: str, sound_id: str, *, fallback: bool) -> bool:
+        player = self._preview_fallback_player if fallback else self._preview_player
+        output = self._preview_fallback_output if fallback else self._preview_output
+        if player is None:
+            return False
+        if output is not None:
+            output.setVolume(0.7)
+        player.setSource(QUrl.fromLocalFile(str(path)))
+        lifecycle_log(
+            "media.preview.qt_fallback.play" if fallback else "media.preview.play",
+            player,
+            owner="AlarmSoundSelector",
+            sound_id=sound_id,
+        )
+        player.play()
+        if fallback:
+            self._preview_fallback_active = True
+        self._preview_stop_timer.start(15_000)
+        return True
 
     def refresh(self, selected_id: str | None = None) -> None:
         selected = str(selected_id or self.current_sound_id() or "system")
@@ -208,6 +275,22 @@ class AlarmSoundSelector(QWidget):
             QApplication.beep()
             return
         if sys.platform == "win32":
+            generation = self._preview_generation
+
+            def _on_mci_error(error: object) -> None:
+                lifecycle_log(
+                    "media.preview.mci.error",
+                    class_name="WindowsAlarmAudio",
+                    sound_id=sound_id,
+                    error=str(error),
+                )
+                self._preview_mci_error.emit(
+                    generation,
+                    sound_id,
+                    str(path),
+                    str(error),
+                )
+
             backend = _WindowsAlarmAudio(
                 str(path),
                 volume=70,
@@ -216,15 +299,11 @@ class AlarmSoundSelector(QWidget):
                     class_name="WindowsAlarmAudio",
                     sound_id=sound_id,
                 ),
-                on_error=lambda error: lifecycle_log(
-                    "media.preview.mci.error",
-                    class_name="WindowsAlarmAudio",
-                    sound_id=sound_id,
-                    error=str(error),
-                ),
+                on_error=_on_mci_error,
             )
             if not backend.available:
-                QApplication.beep()
+                if not self._play_qt_preview(str(path), sound_id, fallback=True):
+                    QApplication.beep()
                 return
             self._windows_preview_audio = backend
             lifecycle_log(
@@ -235,22 +314,31 @@ class AlarmSoundSelector(QWidget):
             backend.start()
             self._preview_stop_timer.start(15_000)
             return
-        if self._preview_player is None:
+        if not self._play_qt_preview(str(path), sound_id, fallback=False):
             QApplication.beep()
+
+    def _on_preview_mci_error(
+        self,
+        generation: int,
+        sound_id: str,
+        path: str,
+        error: str,
+    ) -> None:
+        if generation != self._preview_generation:
             return
-        if self._preview_output is not None:
-            self._preview_output.setVolume(0.7)
-        self._preview_player.setSource(QUrl.fromLocalFile(str(path)))
+        self._windows_preview_audio = None
         lifecycle_log(
-            "media.preview.play",
-            self._preview_player,
+            "media.preview.mci.fallback",
+            self,
             owner="AlarmSoundSelector",
             sound_id=sound_id,
+            error=error,
         )
-        self._preview_player.play()
-        self._preview_stop_timer.start(15_000)
+        if not self._play_qt_preview(path, sound_id, fallback=True):
+            QApplication.beep()
 
     def stop_preview(self) -> None:
+        self._preview_generation += 1
         self._preview_stop_timer.stop()
         backend = self._windows_preview_audio
         self._windows_preview_audio = None
@@ -263,6 +351,9 @@ class AlarmSoundSelector(QWidget):
             # WinMM, so a button click, dialog close, or automatic timeout
             # cannot block the Qt event loop.
             backend.request_stop()
+        if self._preview_fallback_active:
+            self._mute_qt_fallback_preview()
+        if backend is not None:
             return
         if self._preview_player is not None:
             lifecycle_log(
