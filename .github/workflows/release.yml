@@ -169,9 +169,22 @@ jobs:
               --yes \
               --cleanup-tag
           fi
-          gh release create "$release_tag" release-assets/* \
+          assets=(
+            release-assets/content-manifest.json
+            release-assets/Lili-macOS-arm64-unsigned.dmg
+            release-assets/Lili-macOS-arm64-unsigned.dmg.sha256
+            release-assets/Lili-macOS-x64-unsigned.dmg
+            release-assets/Lili-macOS-x64-unsigned.dmg.sha256
+            release-assets/Lili-Windows-x64-Setup.exe
+            release-assets/Lili-Windows-x64-Setup.exe.sha256
+            release-assets/Lili-Windows-x64.zip
+            release-assets/Lili-Windows-x64.zip.sha256
+          )
+          for asset in "${assets[@]}"; do
+            test -f "$asset"
+          done
+          gh release create "$release_tag" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --verify-tag \
             --title "Lili $release_tag - 双设备今日专注显示修复" \
-            --generate-notes \
             --notes "六毛现在仅在两个实时显示位置使用账号级、只读的今日专注区间并集：自习室首页“我的今日专注”和主窗口“今日已工作”。同一账号多台设备的重叠时段只计算一次；网络/数据校验异常时回退原有本地显示。未修改数据库、表结构、RPC、FocusSession 写入/同步规则、工作报告、排行榜、Presence 或任何既有生产数据。"
