@@ -28,9 +28,11 @@ from onepic_desktop_pet.alarm_sounds import AlarmSoundLibrary
 from onepic_desktop_pet.alarm_ui import (
     AlarmCard,
     AlarmPopupState,
+    AlarmSoundSelector,
     AwayRecoveryCard,
     _WindowsAlarmAudio,
 )
+from onepic_desktop_pet import alarm_ui
 
 
 def _app() -> QApplication:
@@ -196,6 +198,47 @@ def test_windows_alarm_audio_always_closes_native_alias_after_stop_request() -> 
         "close lili_alarm_test wait",
     ]
     assert finished == [True]
+
+
+def test_windows_custom_audio_preview_uses_async_mci_not_qt_player(tmp_path, monkeypatch) -> None:
+    """The selector's automatic preview timeout must not call QMediaPlayer.stop on Windows."""
+
+    _app()
+    source = tmp_path / "preview-tone.wav"
+    with wave.open(str(source), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8_000)
+        output.writeframes(b"\x00\x00" * 800)
+    library = AlarmSoundLibrary(tmp_path)
+    sound = library.import_file(source, display_name="试听音频")
+    calls: list[str] = []
+
+    class FakeWindowsPreviewAudio:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.available = True
+
+        def start(self) -> None:
+            calls.append("start")
+
+        def request_stop(self) -> None:
+            calls.append("stop")
+
+    monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
+    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", FakeWindowsPreviewAudio)
+    selector = AlarmSoundSelector(library, sound.sound_id)
+
+    assert selector._preview_player is None
+    selector.preview()
+    assert calls == ["start"]
+    assert selector._preview_stop_timer.isActive()
+
+    # Exercise the same callback used by the 15-second automatic stop,
+    # without waiting for real time in the test.
+    selector._preview_stop_timer.timeout.emit()
+    assert calls == ["start", "stop"]
+    assert not selector._preview_stop_timer.isActive()
+    selector.close()
 
 
 def test_away_recovery_card_has_no_drop_shadow() -> None:
