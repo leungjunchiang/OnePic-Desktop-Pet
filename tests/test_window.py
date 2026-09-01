@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,6 +51,63 @@ def test_phase1_social_read_gates_keep_heartbeat_separate() -> None:
     assert SOCIAL_SYNC_TICK_INTERVAL_MS == 30_000
     assert SOCIAL_LEADERBOARD_REFRESH_SECONDS == 300.0
     assert SOCIAL_REACTION_REFRESH_SECONDS == 60.0
+
+
+def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
+    """A later local lifecycle refresh must not downgrade the account total."""
+
+    app, window = _create_window()
+    moment = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
+    local_rows = [
+        {
+            "user_id": "account-1",
+            "segment_id": "local-new",
+            "session_id": "local-session",
+            "start_at": "2026-08-31T13:00:00+08:00",
+            "end_at": "2026-08-31T14:00:00+08:00",
+            "device_id": "device-a",
+        }
+    ]
+    remote_rows = [
+        {
+            "user_id": "account-1",
+            "segment_id": "remote-a",
+            "session_id": "remote-session",
+            "start_at": "2026-08-31T09:00:00+08:00",
+            "end_at": "2026-08-31T12:00:00+08:00",
+            "device_id": "device-b",
+        }
+    ]
+    snapshot = SimpleNamespace(
+        status="idle",
+        session_started_at=None,
+        current_continuous_seconds=0,
+    )
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
+    monkeypatch.setattr(window, "_shared_today_focus_seconds", lambda: 2 * 60 * 60 + 30 * 60)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
+    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [
+        type("Segment", (), {"to_dict": lambda self: dict(local_rows[0])})()
+    ])
+
+    payload = {"_focus_segments": {"segments": remote_rows}}
+    assert window._refresh_cross_device_today_display(payload, snapshot=snapshot, source="test")
+    assert window._cross_device_today_display_seconds == 4 * 60 * 60
+
+    # This is the real failure mode: a status/dashboard callback without a
+    # fresh segment RPC used to replace the 4-hour union with local-only rows.
+    assert window._refresh_cross_device_today_display({}, snapshot=snapshot, source="test")
+    assert window._cross_device_today_display_seconds == 4 * 60 * 60
+
+    # A malformed later payload must not poison the last validated display.
+    assert not window._refresh_cross_device_today_display(
+        {"_focus_segments": {"unexpected": []}}, snapshot=snapshot, source="test"
+    )
+    assert window._cross_device_today_display_seconds == 4 * 60 * 60
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
 
 
 def _create_window() -> tuple[QApplication, PetWindow]:

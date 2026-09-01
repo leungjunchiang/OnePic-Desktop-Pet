@@ -542,6 +542,11 @@ class PetWindow(QWidget):
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
+        # Keep the last validated server interval payload in memory only.
+        # Lifecycle/status refreshes often carry no new segment response;
+        # re-projecting from local rows alone would otherwise downgrade a
+        # valid account-wide display back to this device's total.
+        self._cross_device_today_display_remote_rows: list[object] | None = None
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
         self._recorded_focus_session_seconds = (
@@ -4668,6 +4673,7 @@ class PetWindow(QWidget):
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
+        self._cross_device_today_display_remote_rows = None
         dialog = getattr(self, "_social_dialog", None)
         if dialog is not None:
             dialog.set_cross_device_today_display_seconds(None, account_id="")
@@ -4683,8 +4689,9 @@ class PetWindow(QWidget):
 
         The rows are already available through the normal focus-segment sync;
         this helper performs no network request and never writes the ledger.
-        A malformed/foreign payload invalidates this display projection and
-        leaves callers on the established local value.
+        A malformed/foreign payload never replaces the last validated display
+        projection and leaves first-time callers on the established local
+        value.  The cache is process-local and is never persisted.
         """
 
         account_id = self._current_social_user_id()
@@ -4698,16 +4705,16 @@ class PetWindow(QWidget):
         current = snapshot or self.focus_session.snapshot(include_projection=False)
         old_today = self._shared_today_focus_seconds()
         local_rows = [segment.to_dict() for segment in self.focus_analytics.focus_segments()]
-        rows: object = local_rows
-        if isinstance(data, dict) and "_focus_segments" in data:
+        has_remote_payload = isinstance(data, dict) and "_focus_segments" in data
+        remote_rows: list[object] | None = None
+        if has_remote_payload:
             # Validate the server response as a display input, then retain
             # local pending facts too.  Duplicate rows are harmless because
             # the projection is an interval union.
-            remote_rows = data.get("_focus_segments")
-            if isinstance(remote_rows, dict):
-                remote_rows = remote_rows.get("segments")
-            if not isinstance(remote_rows, list):
-                self._clear_cross_device_today_display()
+            candidate = data.get("_focus_segments")
+            if isinstance(candidate, dict):
+                candidate = candidate.get("segments")
+            if not isinstance(candidate, list):
                 lifecycle_log(
                     "focus.display.fallback",
                     self,
@@ -4715,9 +4722,17 @@ class PetWindow(QWidget):
                     source=source,
                     reason="malformed_focus_segments_payload",
                     old_today_seconds=old_today,
+                    preserved_cross_device_seconds=self._cross_device_today_display_seconds,
                 )
                 return False
-            rows = list(remote_rows) + local_rows
+            remote_rows = list(candidate)
+        elif self._cross_device_today_display_remote_rows is not None:
+            # A local lifecycle event or an ordinary dashboard response does
+            # not authorize replacing a valid account-wide snapshot with local
+            # rows.  Reuse the last validated remote facts and add any newly
+            # committed local facts; interval union keeps duplicates harmless.
+            remote_rows = list(self._cross_device_today_display_remote_rows)
+        rows: object = list(remote_rows or []) + local_rows
 
         active_row: dict[str, object] | None = None
         status = str(getattr(current, "status", "") or "")
@@ -4740,7 +4755,6 @@ class PetWindow(QWidget):
                 active_session=active_row,
             )
         except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
-            self._clear_cross_device_today_display()
             lifecycle_log(
                 "focus.display.fallback",
                 self,
@@ -4748,9 +4762,14 @@ class PetWindow(QWidget):
                 source=source,
                 reason=str(exc)[:180],
                 old_today_seconds=old_today,
+                preserved_cross_device_seconds=self._cross_device_today_display_seconds,
             )
             return False
 
+        if has_remote_payload:
+            # Commit only after the pure projection validated successfully;
+            # malformed or foreign rows can never poison the retained input.
+            self._cross_device_today_display_remote_rows = list(remote_rows or [])
         self._cross_device_today_display_seconds = max(0, min(24 * 60 * 60, int(union_seconds)))
         self._cross_device_today_display_account_id = account_id
         self._cross_device_today_display_session_id = (
