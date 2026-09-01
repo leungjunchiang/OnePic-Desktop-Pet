@@ -70,6 +70,20 @@ def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:
     assert native.becomes_key_only is True
 
 
+def test_macos_policy_skips_cocoa_bridge_for_headless_qt(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(native_window_policy, "_is_headless_qt_backend", lambda: True)
+
+    result = native_window_policy.apply_macos_window_policy(
+        SimpleNamespace(winId=lambda: (_ for _ in ()).throw(AssertionError())),
+        topmost=True,
+        qt_stays_on_top=True,
+    )
+
+    assert result["action"] == "headless_qt_backend"
+    assert result["available"] is True
+
+
 def test_windows_policy_restores_topmost_without_activation(monkeypatch) -> None:
     class FakeUser32:
         def __init__(self) -> None:

@@ -24,6 +24,24 @@ def _base_result(native_id: int, qt_stays_on_top: bool) -> dict[str, Any]:
     }
 
 
+def _is_headless_qt_backend() -> bool:
+    """识别没有 Cocoa NSWindow 的 Qt 离屏后端，避免误把句柄当作 NSView。"""
+
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        application = QGuiApplication.instance()
+        if application is None:
+            return False
+        return str(application.platformName()).lower() in {
+            "offscreen",
+            "minimal",
+            "minimalegl",
+        }
+    except Exception:
+        return False
+
+
 def apply_windows_window_policy(
     widget: object,
     *,
@@ -91,6 +109,18 @@ def apply_macos_window_policy(
     """用 PyObjC 设置浮动层级，并明确拒绝加入全屏 Space。"""
 
     try:
+        # macOS CI 使用 Qt offscreen/minimal 后端；此时 winId() 不是可供
+        # Cocoa 包装的 NSView 指针。真实桌面后端不经过此分支。
+        if _is_headless_qt_backend():
+            return {
+                "native_id": 0,
+                "qt_stays_on_top": bool(qt_stays_on_top),
+                "native_level": None,
+                "native_topmost": None,
+                "action": "headless_qt_backend",
+                "available": True,
+            }
+
         import ctypes
         import objc
         from AppKit import (
