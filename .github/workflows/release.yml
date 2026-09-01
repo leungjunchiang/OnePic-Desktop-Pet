@@ -172,6 +172,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - macOS 稳定性与跨午夜专注修复" \
+            --title "Lili $release_tag - Windows 快捷栏稳定性修复" \
             --generate-notes \
-            --notes "修复连续专注跨北京时间 00:00 时未封存旧日区间、可能导致排行榜和工作报告回落的问题；旧日真实时段现会先写入本地 FocusSession，再从 00:00 开始新日时段。macOS Dock 菜单改为优先使用 Qt 原生桥接，不再默认替换 Cocoa application delegate；高风险 ctypes 原生窗口调用默认关闭，仅保留诊断用显式开关。未修改数据库、RPC、FocusSession 统计口径、Presence 或任何既有生产数据。"
+            --notes "修复 Windows 快捷口袋在快速悬停“开始/暂停工作”时，一级六个快捷按钮与“工作报告”二级按钮短暂上下错位或跳动的问题。Windows 端现在在显示前固定两行原生窗口几何，悬停只切换二级按钮绘制，不再触发可见窗口的 resize、重定位或布局重建。未修改数据库、RPC、FocusSession、Presence 或任何既有生产数据。"

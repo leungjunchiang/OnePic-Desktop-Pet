@@ -36,6 +36,10 @@ font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
 QWidget#quickActionDock { background: rgba(250, 248, 242, 238); color: #24475b;
 border: 1px solid rgba(75, 96, 112, 72); border-radius: 19px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+/* On Windows the dock keeps its two-row native geometry even before the
+   secondary action is shown.  The surface is painted by QuickControlPanel so
+   an invisible reserved row cannot leave a blank card above the main row. */
+QWidget#quickActionDock[stableWindowsDock="true"] { background: transparent; border: none; }
 QWidget#quickActionDock QPushButton { background: rgba(239, 246, 247, 150); color: #24475b;
 border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
 QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228);
@@ -627,6 +631,16 @@ class QuickControlPanel(QWidget):
         self._artist_music_service = "auto"
         self._work_action_label = "开始工作"
         self._secondary_mode = self.SECONDARY_NONE
+        # Windows paints a frameless translucent top-level window between a
+        # child visibility change and its later resize/move.  With a vertical
+        # secondary row this exposed either the old primary-row geometry or
+        # the new secondary-row geometry for one frame, making the two rows
+        # look as if they briefly swapped.  Keep the native window at its
+        # maximum two-row size on Windows and only change the secondary tile's
+        # visibility.  ``paintEvent`` draws a one-row surface while that tile
+        # is hidden, so there is no empty card space in the normal state.
+        self._stable_windows_dock = sys.platform.startswith("win")
+        self.setProperty("stableWindowsDock", self._stable_windows_dock)
         # Native macOS Qt windows can omit Enter/Leave delivery until the
         # first click when the panel is a non-activating Tool window. Polling
         # the pointer over our shortcuts keeps the label a true hover
@@ -685,7 +699,15 @@ class QuickControlPanel(QWidget):
         secondary_layout.addSpacing(self.work_button_width_offset())
         secondary_layout.addWidget(self.report_button)
         secondary_layout.addStretch(1)
-        self._secondary_container.hide()
+        # A visible parent would otherwise make QPushButton's default-visible
+        # state leak the report tile into the initial Windows dock.
+        self.report_button.hide()
+        if self._stable_windows_dock:
+            # Reserve the exact button-row height from construction onward.
+            # The button is still hidden until the work shortcut is hovered.
+            self._secondary_container.setFixedHeight(self.report_button.height())
+        else:
+            self._secondary_container.hide()
         self.todo_button = self._button("todo", "待办", self.todo_requested)
         self.social_button = self._button("social", "搭子自习室", self.social_requested)
         self.music_button = self._button("music", "音乐", None)
@@ -810,9 +832,12 @@ class QuickControlPanel(QWidget):
             else self.SECONDARY_NONE
         )
         target_visible = normalized == self.SECONDARY_WORK_REPORT
-        already_visible = self._secondary_mode == normalized and bool(
-            self._secondary_container.isVisible()
-        ) == target_visible
+        current_visible = (
+            bool(self.report_button.isVisible())
+            if self._stable_windows_dock
+            else bool(self._secondary_container.isVisible())
+        )
+        already_visible = self._secondary_mode == normalized and current_visible == target_visible
         self._secondary_mode = normalized
         if already_visible:
             return
@@ -822,6 +847,21 @@ class QuickControlPanel(QWidget):
                 self._hide_hint()
         else:
             self._report_hide_timer.stop()
+
+        if self._stable_windows_dock:
+            # Do not invalidate, resize or re-anchor the native Tool window
+            # here.  Those are the three separate Windows compositor commits
+            # that caused the primary/secondary rows to flash in the wrong
+            # order during a fast pointer sweep.
+            self.setUpdatesEnabled(False)
+            try:
+                self.report_button.setVisible(target_visible)
+            finally:
+                self.setUpdatesEnabled(True)
+            self.update()
+            if target_visible:
+                self._hover_poll_timer.start()
+            return
 
         # A top-level QWidget may repaint after each child visibility change.
         # Freeze only this small panel while the final layout and its anchored
@@ -843,6 +883,39 @@ class QuickControlPanel(QWidget):
         self.update()
         if target_visible:
             self._hover_poll_timer.start()
+
+    def prepare_for_show(self) -> None:
+        """Materialize the final Windows dock geometry before it is shown."""
+
+        if not self._stable_windows_dock:
+            return
+        self.layout().activate()
+        self.adjustSize()
+
+    def _stable_surface_rect(self) -> QRectF:
+        """Return the visible card area for the fixed Windows dock geometry."""
+
+        if self.report_button.isVisible():
+            return QRectF(self.rect())
+        primary = self._primary_container.geometry()
+        # Include the dock's normal top/bottom margin around the main row.
+        top = max(0, primary.top() - 9)
+        return QRectF(0, top, self.width(), max(0, self.height() - top))
+
+    def paintEvent(self, event) -> None:
+        """Paint the stable Windows surface without a hidden secondary row."""
+
+        if not self._stable_windows_dock or not hasattr(self, "_primary_container"):
+            return super().paintEvent(event)
+        surface = self._stable_surface_rect()
+        if surface.isEmpty():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QBrush(QColor(250, 248, 242, 238)))
+        painter.setPen(QPen(QColor(75, 96, 112, 72), 1))
+        painter.drawRoundedRect(surface.adjusted(0.5, 0.5, -0.5, -0.5), 19, 19)
+        painter.end()
 
     def _set_report_button_visible(self, visible: bool) -> None:
         """Compatibility wrapper for the work-report-only secondary mode."""

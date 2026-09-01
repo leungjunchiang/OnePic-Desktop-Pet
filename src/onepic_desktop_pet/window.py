@@ -7209,6 +7209,11 @@ class PetWindow(QWidget):
             key: self.economy.inventory_count(key)
             for key in ("coffee", "expensive_coffee", "milk_tea", "cake", "tea")
         })
+        # Windows keeps the shortcut dock's full two-row native geometry
+        # before it becomes visible.  This avoids a compositor frame where a
+        # newly revealed secondary row and the old one-row window bounds are
+        # temporarily combined in the wrong order.
+        self.quick_panel.prepare_for_show()
         self._position_quick_panel()
         self._show_nonactivating(self.quick_panel)
         self._raise_accessory(self.quick_panel)

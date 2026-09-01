@@ -1805,7 +1805,12 @@ def test_quick_panel_has_six_high_frequency_entries_and_secondary_report() -> No
     assert "color: #111111" in window.quick_panel.hover_hint.styleSheet()
     window.quick_panel._hide_hint()
     assert not window.quick_panel.hover_hint.isVisible()
-    assert 50 <= window.quick_panel.sizeHint().height() <= 60
+    if window.quick_panel._stable_windows_dock:
+        # Windows reserves the secondary row from creation so revealing the
+        # report tile never resizes or re-anchors a visible native window.
+        assert window.quick_panel.sizeHint().height() > 90
+    else:
+        assert 50 <= window.quick_panel.sizeHint().height() <= 60
     window.move(300, 200)
     window.show_quick_panel()
     app.processEvents()
@@ -1923,6 +1928,61 @@ def test_quick_panel_debounces_report_when_pointer_sweeps_across_work() -> None:
     assert panel._primary_container.layout().itemAt(0).widget() is panel.chat_button
     assert panel._secondary_container.layout().itemAt(1).widget() is panel.report_button
 
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_windows_quick_panel_keeps_primary_row_geometry_when_report_changes(monkeypatch) -> None:
+    """Windows must not resize/re-anchor the dock while revealing the report tile."""
+
+    monkeypatch.setattr("onepic_desktop_pet.controls.sys.platform", "win32")
+    app, window = _create_window()
+    window.move(320, 220)
+    window.show_quick_panel()
+    app.processEvents()
+    panel = window.quick_panel
+    assert panel._stable_windows_dock
+    assert panel._secondary_container.isVisible()
+    assert panel.sizeHint().height() > 90
+    primary_before = [
+        button.mapToGlobal(QPoint(0, 0))
+        for button in (
+            panel.chat_button,
+            panel.work_button,
+            panel.todo_button,
+            panel.social_button,
+            panel.music_button,
+            panel.food_button,
+        )
+    ]
+    panel._set_hover_button(panel.work_button)
+    app.processEvents()
+    primary_after = [
+        button.mapToGlobal(QPoint(0, 0))
+        for button in (
+            panel.chat_button,
+            panel.work_button,
+            panel.todo_button,
+            panel.social_button,
+            panel.music_button,
+            panel.food_button,
+        )
+    ]
+    assert panel.report_button.isVisible()
+    assert primary_after == primary_before
+    panel._set_hover_button(panel.social_button)
+    app.processEvents()
+    assert not panel.report_button.isVisible()
+    assert primary_after == [
+        button.mapToGlobal(QPoint(0, 0))
+        for button in (
+            panel.chat_button,
+            panel.work_button,
+            panel.todo_button,
+            panel.social_button,
+            panel.music_button,
+            panel.food_button,
+        )
+    ]
     window.close(); window.deleteLater(); app.processEvents()
 
 
