@@ -63,13 +63,6 @@ def test_dock_menu_uses_qt_native_dock_bridge(monkeypatch) -> None:
     """The real macOS path must register QMenu with Qt's Dock bridge."""
 
     monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
-    # AppKit is authoritative in production. Force the compatibility path so
-    # this test remains focused on Qt's bridge behavior.
-    monkeypatch.setattr(
-        macos_dock.MacDockMenuController,
-        "_install_appkit_dock_menu",
-        lambda _self: False,
-    )
 
     class Signal:
         def __init__(self) -> None:
@@ -145,11 +138,6 @@ def test_dock_menu_reasserts_qt_bridge_after_startup(monkeypatch) -> None:
     """A late Qt delegate change must not discard the Dock menu."""
 
     monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
-    monkeypatch.setattr(
-        macos_dock.MacDockMenuController,
-        "_install_appkit_dock_menu",
-        lambda _self: False,
-    )
 
     class Signal:
         def connect(self, _callback) -> None:
@@ -212,10 +200,11 @@ def test_dock_menu_reasserts_qt_bridge_after_startup(monkeypatch) -> None:
     controller.close()
 
 
-def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) -> None:
-    """macOS must use the native Dock callback with the pet menu exactly."""
+def test_dock_menu_uses_appkit_only_when_explicitly_requested(monkeypatch) -> None:
+    """The legacy delegate replacement is an opt-in diagnostic fallback."""
 
     monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
+    monkeypatch.setenv("LILI_ENABLE_LEGACY_APPKIT_DOCK_DELEGATE", "1")
 
     class FakeQObject:
         @classmethod
@@ -292,6 +281,11 @@ def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) ->
     monkeypatch.setitem(sys.modules, "Foundation", foundation)
     monkeypatch.setattr(macos_dock, "_DOCK_TARGET_CLASS", None)
     monkeypatch.setattr(macos_dock, "_DOCK_DELEGATE_CLASS", None)
+    monkeypatch.setattr(
+        macos_dock.MacDockMenuController,
+        "_install_qt_dock_menu",
+        lambda _self: False,
+    )
 
     model = UnifiedMenuModel(
         pet_name="六毛",
@@ -319,8 +313,8 @@ def test_dock_menu_prefers_appkit_and_renders_the_pet_projection(monkeypatch) ->
     controller.close()
 
 
-def test_dock_menu_reasserts_appkit_delegate_when_qt_bridge_is_missing(monkeypatch) -> None:
-    """The packaged fallback keeps its delegate after Qt changes it."""
+def test_dock_menu_does_not_replace_qt_delegate_when_bridge_is_missing(monkeypatch) -> None:
+    """A missing Dock bridge must not endanger Qt's native lifecycle."""
 
     monkeypatch.setattr(macos_dock.sys, "platform", "darwin")
 
@@ -417,8 +411,8 @@ def test_dock_menu_reasserts_appkit_delegate_when_qt_bridge_is_missing(monkeypat
         callbacks={"chat": lambda _checked=False: None},
     )
     controller = macos_dock.install_dock_menu(model)
-    assert controller.installed is True
-    assert fake_application.set_calls == 2
+    assert controller.installed is False
+    assert fake_application.set_calls == 0
     controller.close()
 
 

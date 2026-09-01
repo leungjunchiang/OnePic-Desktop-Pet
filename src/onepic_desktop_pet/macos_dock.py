@@ -7,6 +7,7 @@ item, and pet context menu aligned while retaining native menu rendering.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable
 
@@ -102,20 +103,24 @@ class MacDockMenuController:
         if sys.platform != "darwin":
             return
 
-        # Install the AppKit delegate first.  QMenu.setAsDockMenu() is
-        # available only in some PySide/macOS combinations and can silently
-        # leave the Dock showing Qt's stale/default menu even though the call
-        # succeeds.  The AppKit applicationDockMenu: callback is the actual
-        # macOS Dock hook, so it is the authoritative path and always renders
-        # the current pet projection from UnifiedMenuModel.
-        if self._install_appkit_dock_menu():
+        # Keep Qt as the owner of NSApplication and its delegate. Replacing
+        # the delegate from PyObjC can bypass Qt's Cocoa lifecycle callbacks;
+        # an Objective-C exception at that boundary terminates a packaged app
+        # before Python's normal exception hooks can record it. Qt's own Dock
+        # bridge preserves the same unified menu without taking that risk.
+        if self._install_qt_dock_menu():
             self._schedule_dock_reassertion()
             return
 
-        # Keep Qt's native bridge as a compatibility fallback for unusual
-        # environments where PyObjC/AppKit is unavailable (for example, a
-        # test harness or a stripped-down Python runtime).
-        if self._install_qt_dock_menu():
+        # The direct AppKit delegate implementation remains available only
+        # for diagnosing a broken Qt Dock bridge in a controlled environment.
+        # It is deliberately opt-in: normal releases must never replace the
+        # delegate that Qt owns for native activation/termination handling.
+        legacy_delegate_enabled = (
+            os.environ.get("LILI_ENABLE_LEGACY_APPKIT_DOCK_DELEGATE", "").strip()
+            == "1"
+        )
+        if legacy_delegate_enabled and self._install_appkit_dock_menu():
             self._schedule_dock_reassertion()
             return
 

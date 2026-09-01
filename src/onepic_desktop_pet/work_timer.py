@@ -2,7 +2,7 @@
 本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
 
 职责范围：
-- 记录当天和终身累计工作秒数，并在日期变化时自动开始新一天；
+- 记录当天和终身累计工作秒数，并在北京时间跨日时封存旧日运行段后开始新一天；
 - 支持开始、暂停、完成、状态格式化和运行中定期落盘；
 - 只在本机应用数据目录保存日期与累计秒数，不保存任务名称或聊天内容；
 - 按单次连续工作时长产生 25 分钟鼓励、50 分钟休息和更长时段劝慰提醒。
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -49,6 +50,8 @@ _PAUSE_STATE_BY_REASON = {
     "video": WORK_STATE_PAUSED_VIDEO,
     "account_switch": WORK_STATE_PAUSED_MANUAL,
 }
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _local_data_root() -> Path:
@@ -147,7 +150,25 @@ class WorkTimerModel:
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key: str | None = None
         self._recovered_active_session = False
+        # The timer owns clock state but not the FocusSession ledger.  The
+        # window registers this small hook so an active interval can be
+        # sealed before a Beijing-midnight rollover replaces its session.
+        self._day_rollover_handler: Callable[[int, str, datetime | None], None] | None = None
         self._load()
+
+    def set_day_rollover_handler(
+        self,
+        handler: Callable[[int, str, datetime | None], None] | None,
+    ) -> None:
+        """Register the owner that persists an active interval at midnight.
+
+        ``WorkTimerModel`` deliberately has no dependency on analytics or
+        networking.  It therefore gives its owner the pre-rollover cumulative
+        session seconds and the continuous segment start, then starts a new
+        session for the new Beijing day.
+        """
+
+        self._day_rollover_handler = handler
 
     def switch_account(self, account_id: str | None) -> bool:
         """切换本地计时命名空间，绝不把一个账号的计时带给另一个账号。"""
@@ -322,25 +343,60 @@ class WorkTimerModel:
                 self._running_started_at = None
 
     def _rollover_if_needed(self) -> None:
-        """日期变化时清空昨日累计，并保持运行状态从当前时刻重新计时。"""
+        """跨日时封存旧日运行段，并从北京时间 00:00 开始新会话。"""
 
         today = self._today_key()
         if today == self._date_key:
             return
         was_running = self.is_running
-        self._date_key = today
-        self._accumulated_seconds = 0
-        self._session_accumulated_seconds = 0
-        self._session_active = False
-        self._session_id = ""
-        self._analytics_recorded_session_seconds = 0
-        self._running_since = self._monotonic() if was_running else None
         current = self._now()
         if current.tzinfo is None:
             current = current.replace(tzinfo=BEIJING_TIMEZONE)
-        self._running_started_at = current.astimezone(BEIJING_TIMEZONE) if was_running else None
-        self._episode_accumulated_seconds = 0
-        self._state = WORK_STATE_IDLE
+        else:
+            current = current.astimezone(BEIJING_TIMEZONE)
+        boundary = datetime.combine(current.date(), datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        elapsed = self._current_elapsed() if was_running else 0
+        # ``_running_since`` is reset at checkpoints, while the wall clock
+        # remembers the actual uninterrupted segment.  The monotonic delta is
+        # still the authoritative duration; use the wall clock only to split
+        # that delta at the calendar boundary.
+        post_midnight_seconds = (
+            min(elapsed, max(0, int((current - boundary).total_seconds())))
+            if was_running
+            else 0
+        )
+        pre_midnight_seconds = max(0, elapsed - post_midnight_seconds)
+        closing_session_seconds = self._session_accumulated_seconds + pre_midnight_seconds
+        if was_running and closing_session_seconds > self._analytics_recorded_session_seconds:
+            handler = self._day_rollover_handler
+            if handler is not None:
+                try:
+                    handler(
+                        closing_session_seconds,
+                        self._session_id,
+                        self._running_started_at,
+                    )
+                except Exception:
+                    # Do not clear the old day if its raw FocusSession could
+                    # not be persisted.  A later UI tick will retry instead
+                    # of silently losing the interval at midnight.
+                    LOGGER.exception("work timer midnight focus seal failed")
+                    return
+        self._date_key = today
+        # The previous implementation discarded ``elapsed`` here whenever a
+        # timer was still running at 00:00.  Preserve both its lifetime value
+        # and the seconds that have already elapsed in the new day.
+        if was_running:
+            self._lifetime_seconds += elapsed
+        self._accumulated_seconds = post_midnight_seconds
+        self._session_accumulated_seconds = post_midnight_seconds
+        self._session_active = was_running
+        self._session_id = uuid.uuid4().hex if was_running else ""
+        self._analytics_recorded_session_seconds = 0
+        self._running_since = self._monotonic() if was_running else None
+        self._running_started_at = boundary if was_running else None
+        self._episode_accumulated_seconds = post_midnight_seconds
+        self._state = WORK_STATE_WORKING if was_running else WORK_STATE_IDLE
         self._pause_reason = None
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key = None

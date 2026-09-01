@@ -172,6 +172,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - P0 Supabase 请求降频与去重" \
+            --title "Lili $release_tag - macOS 稳定性与跨午夜专注修复" \
             --generate-notes \
-            --notes "P0 客户端请求降频：停止不存在的 achievement witness inbox RPC 轮询；lili_dashboard 使用账户隔离的 90 秒 last-known-good single-flight 缓存与 5 秒交互去抖；lili_focus_weekly_leaderboard 使用 300 秒 single-flight 缓存且自习室未打开时不轮询。未修改 FocusSession、Presence、同步 RPC、统计口径、数据库或任何生产数据。"
+            --notes "修复连续专注跨北京时间 00:00 时未封存旧日区间、可能导致排行榜和工作报告回落的问题；旧日真实时段现会先写入本地 FocusSession，再从 00:00 开始新日时段。macOS Dock 菜单改为优先使用 Qt 原生桥接，不再默认替换 Cocoa application delegate；高风险 ctypes 原生窗口调用默认关闭，仅保留诊断用显式开关。未修改数据库、RPC、FocusSession 统计口径、Presence 或任何既有生产数据。"

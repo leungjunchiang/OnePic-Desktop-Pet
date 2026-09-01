@@ -7,6 +7,7 @@
 from datetime import datetime, timedelta
 
 from onepic_desktop_pet.work_timer import (
+    BEIJING_TIMEZONE,
     WorkTimerModel,
     format_elapsed_clock,
     format_work_duration,
@@ -201,6 +202,66 @@ def test_new_date_resets_today_total(tmp_path) -> None:
     clock.now += timedelta(days=1)
     assert timer.today_seconds() == 0
     assert "0分钟" in timer.status_text()
+
+
+def test_running_session_is_sealed_and_split_at_beijing_midnight(tmp_path) -> None:
+    clock = FakeClock()
+    clock.now = datetime(2026, 8, 10, 23, 50)
+    timer = _timer(tmp_path, clock)
+    sealed: list[tuple[int, str, datetime | None]] = []
+    timer.set_day_rollover_handler(
+        lambda seconds, session_id, started_at: sealed.append(
+            (seconds, session_id, started_at)
+        )
+    )
+
+    assert timer.start()
+    clock.advance(5 * 60)
+    assert timer.checkpoint()
+    clock.advance(15 * 60)
+
+    # Reading any timer projection after midnight must first persist the ten
+    # minutes belonging to the old Beijing day, then retain ten minutes in
+    # the new session instead of silently resetting it to zero.
+    assert timer.today_seconds() == 10 * 60
+    assert timer.lifetime_seconds() == 20 * 60
+    assert len(sealed) == 1
+    assert sealed[0][0] == 10 * 60
+    assert sealed[0][1]
+    assert sealed[0][2] == datetime(2026, 8, 10, 23, 50, tzinfo=BEIJING_TIMEZONE)
+
+
+def test_midnight_rollover_retries_when_the_focus_seal_fails(tmp_path) -> None:
+    """A failed raw-record write must not reset and lose the active session."""
+
+    clock = FakeClock()
+    clock.now = datetime(2026, 8, 10, 23, 50)
+    timer = _timer(tmp_path, clock)
+    attempts: list[int] = []
+
+    def fail_to_seal(seconds: int, _session_id: str, _started_at: datetime | None) -> None:
+        attempts.append(seconds)
+        raise RuntimeError("temporary local ledger error")
+
+    timer.set_day_rollover_handler(fail_to_seal)
+    assert timer.start()
+    clock.advance(5 * 60)
+    assert timer.checkpoint()
+    clock.advance(15 * 60)
+
+    # The first attempt is rejected, but the old-day timer state remains
+    # intact so the missing pre-midnight interval can be sealed on retry.
+    assert timer.today_seconds() == 20 * 60
+    assert timer._date_key == "2026-08-10"  # type: ignore[attr-defined]
+    assert attempts == [10 * 60]
+
+    sealed: list[int] = []
+    timer.set_day_rollover_handler(
+        lambda seconds, _session_id, _started_at: sealed.append(seconds)
+    )
+    assert timer.today_seconds() == 10 * 60
+    assert timer.lifetime_seconds() == 20 * 60
+    assert sealed == [10 * 60]
 
 
 def test_remote_focus_totals_merge_without_double_counting_live_seconds(tmp_path) -> None:

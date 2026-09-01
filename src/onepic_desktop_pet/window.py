@@ -525,6 +525,7 @@ class PetWindow(QWidget):
         self.focus_analytics = FocusAnalyticsStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.work_timer.set_day_rollover_handler(self._seal_focus_at_day_rollover)
         self.focus_session.set_period_seconds_provider(self._shared_focus_period_seconds)
         self._focus_quality_tracker = FocusQualityTracker()
         self._active_focus_account_id = ""
@@ -1602,6 +1603,13 @@ class PetWindow(QWidget):
         """
 
         if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
+            return
+        # Qt's Tool + WindowDoesNotAcceptFocus flags already express the
+        # required behavior.  Calling the Objective-C ABI via ctypes is not
+        # memory-safe: a changed Qt native handle or selector signature can
+        # abort the whole macOS process before Python gets an exception. Keep
+        # that legacy workaround opt-in for targeted diagnostics only.
+        if os.environ.get("LILI_ENABLE_LEGACY_MACOS_CTYPES_WINDOW_TWEAKS", "").strip() != "1":
             return
         target = widget or self
         topmost = (
@@ -4512,6 +4520,7 @@ class PetWindow(QWidget):
         completed: bool,
         session_id: str | None = None,
         started_at: datetime | None = None,
+        update_daily_stats: bool = True,
     ) -> int:
         """Credit only newly completed WORKING seconds in this session.
 
@@ -4560,11 +4569,39 @@ class PetWindow(QWidget):
             ),
         )
         self.focus_analytics.update_current_task_progress(seconds)
-        self.daily_stats.record_focus(seconds, completed=completed)
+        if update_daily_stats:
+            self.daily_stats.record_focus(seconds, completed=completed)
         self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
         self._invalidate_focus_projection("focus_segment_recorded")
         return seconds
+
+    def _seal_focus_at_day_rollover(
+        self,
+        session_seconds: int,
+        session_id: str,
+        started_at: datetime | None,
+    ) -> None:
+        """Persist the old-day part of a running interval before 00:00 reset.
+
+        The raw interval ends at Beijing midnight by construction in
+        ``WorkTimerModel``.  It is therefore safe for the canonical server
+        aggregation to include it in the previous day and current week.
+        Daily companion counters intentionally wait for the new day's normal
+        lifecycle so they cannot be credited to the wrong calendar date.
+        """
+
+        self._record_focus_segment(
+            session_seconds,
+            completed=False,
+            session_id=session_id,
+            started_at=started_at,
+            update_daily_stats=False,
+        )
+        # The timer creates a fresh session immediately after this callback;
+        # its analytics cursor starts at zero too.
+        self._recorded_focus_session_seconds = 0
+        self._invalidate_focus_projection("focus_day_rollover_sealed")
 
     def _invalidate_focus_projection(self, reason: str = "") -> None:
         """Invalidate the closed-session projection after a lifecycle event."""
