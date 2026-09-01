@@ -2323,6 +2323,11 @@ class SocialHubDialog(QDialog):
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
         self._focus_snapshot: Any = None
+        # Optional read-only account-wide projection used only by the home
+        # page's “我的今日专注” labels.  The local FocusSession snapshot still
+        # owns controls and all other statistics.
+        self._cross_device_today_display_seconds: int | None = None
+        self._cross_device_today_display_account_id = ""
         self._leaderboard_rows: list[Any] = []
         self._leaderboard_loaded = False
         self._leaderboard_error = False
@@ -2559,6 +2564,30 @@ class SocialHubDialog(QDialog):
         self._refresh_multi_device_focus_hint()
         self._refresh_own_focus_labels()
 
+    def set_cross_device_today_display_seconds(
+        self,
+        seconds: int | None,
+        *,
+        account_id: str = "",
+    ) -> None:
+        """Set the account-scoped read-only value used on the home page."""
+
+        active_account = _session_user_id(self.client)
+        requested_account = str(account_id or active_account or "").strip()
+        if active_account and requested_account and active_account != requested_account:
+            return
+        self._cross_device_today_display_account_id = requested_account
+        if seconds is None:
+            self._cross_device_today_display_seconds = None
+        else:
+            try:
+                self._cross_device_today_display_seconds = max(
+                    0, min(24 * 60 * 60, int(seconds))
+                )
+            except (TypeError, ValueError, OverflowError):
+                self._cross_device_today_display_seconds = None
+        self._refresh_own_focus_labels()
+
     def _refresh_multi_device_focus_hint(self) -> None:
         """Describe account presence without changing local timer controls."""
 
@@ -2624,11 +2653,24 @@ class SocialHubDialog(QDialog):
     def _refresh_own_focus_labels(self) -> None:
         """Refresh both focus surfaces from the shared local snapshot."""
 
-        seconds = self._local_today_seconds()
-        if seconds is None:
+        local_seconds = self._local_today_seconds()
+        if local_seconds is None:
             return
+        display_seconds = local_seconds
+        active_account = _session_user_id(self.client)
+        if (
+            self._cross_device_today_display_seconds is not None
+            and self._cross_device_today_display_account_id
+            and (
+                not active_account
+                or self._cross_device_today_display_account_id == active_account
+            )
+        ):
+            display_seconds = self._cross_device_today_display_seconds
         if hasattr(self, "focus_today"):
-            text = f"今日累计 {format_work_duration(seconds)}"
+            # The dedicated focus page remains on its existing local
+            # FocusSession projection in this first-stage rollout.
+            text = f"今日累计 {format_work_duration(local_seconds)}"
             if self.focus_today.text() != text:
                 self.focus_today.setText(text)
         if hasattr(self, "study_summary"):
@@ -2637,7 +2679,7 @@ class SocialHubDialog(QDialog):
             start = current.find(marker)
             end = current.find("　·　", start + len(marker)) if start >= 0 else -1
             if start >= 0 and end >= 0:
-                text = current[:start] + marker + format_work_duration(seconds) + current[end:]
+                text = current[:start] + marker + format_work_duration(display_seconds) + current[end:]
                 if text != current:
                     self.study_summary.setText(text)
 

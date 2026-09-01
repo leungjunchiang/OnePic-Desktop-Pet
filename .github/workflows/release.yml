@@ -172,6 +172,6 @@ jobs:
           gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - Windows 快捷栏稳定性修复" \
+            --title "Lili $release_tag - 双设备今日专注显示修复" \
             --generate-notes \
-            --notes "修复 Windows 快捷口袋在快速悬停“开始/暂停工作”时，一级六个快捷按钮与“工作报告”二级按钮短暂上下错位或跳动的问题。Windows 端现在在显示前固定两行原生窗口几何，悬停只切换二级按钮绘制，不再触发可见窗口的 resize、重定位或布局重建。未修改数据库、RPC、FocusSession、Presence 或任何既有生产数据。"
+            --notes "六毛现在仅在两个实时显示位置使用账号级、只读的今日专注区间并集：自习室首页“我的今日专注”和主窗口“今日已工作”。同一账号多台设备的重叠时段只计算一次；网络/数据校验异常时回退原有本地显示。未修改数据库、表结构、RPC、FocusSession 写入/同步规则、工作报告、排行榜、Presence 或任何既有生产数据。"
