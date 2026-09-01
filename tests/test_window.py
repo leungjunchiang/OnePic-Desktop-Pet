@@ -210,6 +210,14 @@ def test_macos_pet_does_not_poll_native_topmost_layer(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_pet_topmost_repair_is_lifecycle_driven_not_timer_driven() -> None:
+    app, window = _create_window()
+    assert not window.topmost_timer.isActive()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_macos_accessory_raise_is_suppressed(monkeypatch) -> None:
     """macOS accessory refreshes must not reorder the owning application."""
 

@@ -1,3 +1,9 @@
+## v0.23.194 — 六毛主窗口层级生命周期修复
+
+- 在现有 v0.23.193 的只读跨设备今日专注显示基础上，收口六毛主窗口的 Qt/native flags policy；只在 Show、WinIdChange、恢复显示、屏幕变化和应用重新激活等生命周期节点校验 topmost。
+- Windows 使用不激活的 HWND topmost 校验，macOS 使用安全 PyObjC Cocoa bridge；不抢键盘焦点，不加入会覆盖全屏视频或 PowerPoint/Keynote 放映的全屏 Space。
+- 普通最大化编辑窗口继续显示六毛；全屏视频、PowerPoint/Keynote 全屏放映仍由系统优先。未修改数据库、RPC、FocusSession、统计缓存或历史事实。
+
 ## v0.23.187 — P0：Supabase 请求降频与去重
 
 - 停止客户端对不存在的 `lili_achievement_witness_inbox` 的任何轮询调用；当前生产代码不再探测该可选 RPC。

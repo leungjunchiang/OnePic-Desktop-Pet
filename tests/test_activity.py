@@ -194,3 +194,14 @@ def test_macos_fullscreen_yield_is_limited_to_media_and_games(monkeypatch) -> No
 
     monkeypatch.setattr(activity, "active_application_name", lambda: "Minecraft")
     assert activity.active_fullscreen_game() is True
+
+
+def test_presentation_fullscreen_yields_only_for_known_slideshow(monkeypatch) -> None:
+    """Only a real PowerPoint/Keynote slideshow may hide the pet."""
+
+    monkeypatch.setattr(activity, "active_application_name", lambda: "Microsoft PowerPoint")
+    monkeypatch.setattr(activity, "active_window_is_fullscreen", lambda: True)
+    assert activity.active_fullscreen_presentation() is True
+
+    monkeypatch.setattr(activity, "active_application_name", lambda: "Microsoft Word")
+    assert activity.active_fullscreen_presentation() is False

@@ -129,6 +129,7 @@ from .activity import (
     active_application_category,
     active_application_name,
     active_fullscreen_game,
+    active_fullscreen_presentation,
     active_fullscreen_video,
     active_window_is_fullscreen,
 )
@@ -223,6 +224,7 @@ from .social_ui import (
 )
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .music_playback import SongPlaybackResult
+from .native_window_policy import apply_native_window_policy
 from .wellness import WellnessReminderModel
 from .work_timer import WorkTimerModel, format_elapsed_clock, format_work_duration
 from .workflow import WorkflowError, character_is_approved, load_workflow
@@ -618,6 +620,7 @@ class PetWindow(QWidget):
         self._room_quick_status_expires_at: datetime | None = None
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
+        self._applying_pet_window_policy = False
         # Native macOS panel configuration is cached per Qt widget/native
         # handle.  Speech bubbles and quick controls are separate top-level
         # windows, so they need the same non-activating guard as the pet, but
@@ -797,7 +800,7 @@ class PetWindow(QWidget):
                 )
             )
 
-        self.setWindowFlags(self._pet_window_flags())
+        self.ensure_pet_window_policy(event="Construct")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
@@ -864,6 +867,11 @@ class PetWindow(QWidget):
         self._qt_application = QApplication.instance()
         if self._qt_application is not None:
             self._qt_application.installEventFilter(self)
+            self._qt_application.applicationStateChanged.connect(
+                self._on_application_state_changed
+            )
+            self._qt_application.screenAdded.connect(self._on_screen_topology_changed)
+            self._qt_application.screenRemoved.connect(self._on_screen_topology_changed)
         self.work_controls.start_requested.connect(self._start_work_from_control)
         self.work_controls.pause_requested.connect(self.pause_work_timer)
         self.work_controls.resume_requested.connect(self._resume_work_from_control)
@@ -1008,15 +1016,9 @@ class PetWindow(QWidget):
         self.topmost_timer = QTimer(self)
         self.topmost_timer.setInterval(4000)
         self.topmost_timer.timeout.connect(self._ensure_on_top)
-        # On macOS, repeatedly touching an NSWindow's level/collection
-        # behavior can cause AppKit to reconsider the owning application as
-        # the active app.  That is especially disruptive for a desktop pet:
-        # the user can click Word or a browser, only for Lili to take the
-        # application focus back a few seconds later.  The native behavior is
-        # applied once after show (and again only when the window flags are
-        # deliberately changed); there is no reason to poll it on macOS.
-        if sys.platform != "darwin":
-            self.topmost_timer.start()
+        # Topmost is restored at lifecycle boundaries below. A timer would
+        # turn a window-layer repair into continuous z-order traffic and, on
+        # macOS, can make AppKit reconsider the active application.
 
         self._last_social_heartbeat_at = 0.0
         self._social_heartbeat_due = True
@@ -1083,6 +1085,54 @@ class PetWindow(QWidget):
         if self.settings.always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         return flags
+
+    def ensure_pet_window_policy(self, *, event: str = "PolicyCheck") -> bool:
+        """在生命周期节点恢复六毛唯一的 Qt 窗口 flags policy。
+
+        任何功能都不能自行重建六毛本体 flags。若 Qt/native 生命周期
+        意外丢失了 flags，这里只按当前设置恢复完整组合，并保留位置与
+        可见状态；native 层级的补强由随后同一生命周期节点的校验负责。
+        """
+
+        if getattr(self, "_applying_pet_window_policy", False):
+            return False
+        desired = self._pet_window_flags()
+        try:
+            current = self.windowFlags()
+            changed = int(current) != int(desired)
+            if changed:
+                position = QPoint(self.pos())
+                was_visible = bool(self.isVisible())
+                self._applying_pet_window_policy = True
+                try:
+                    self.setWindowFlags(desired)
+                    self.move(position)
+                    if was_visible:
+                        self.show()
+                finally:
+                    self._applying_pet_window_policy = False
+                lifecycle_log(
+                    "pet-window.qt-policy",
+                    self,
+                    section="pet-window",
+                    platform=(
+                        "macOS"
+                        if sys.platform == "darwin"
+                        else "Windows"
+                        if os.name == "nt"
+                        else sys.platform
+                    ),
+                    event=str(event),
+                    qt_stays_on_top=bool(
+                        desired & Qt.WindowType.WindowStaysOnTopHint
+                    ),
+                    action="restore_qt_flags",
+                )
+            if self.isVisible():
+                self._ensure_on_top(event=event)
+            return changed
+        except (RuntimeError, TypeError, ValueError):
+            return False
 
     def _ambient_window_flags(self) -> Qt.WindowType:
         """让自动气泡跟随宠物模式，并保证显示时不激活当前应用。"""
@@ -1480,10 +1530,30 @@ class PetWindow(QWidget):
             / self.settings.movement_interval_ms
         )
 
+    def event(self, event: QEvent) -> bool:
+        """在 Qt 可能重建 native handle 时立即重检唯一窗口 policy。"""
+
+        event_type = event.type()
+        if event_type == QEvent.Type.WinIdChange:
+            self.ensure_pet_window_policy(event="WinIdChange")
+            QTimer.singleShot(
+                0,
+                lambda: self._ensure_on_top(event="WinIdChange"),
+            )
+        elif event_type == QEvent.Type.WindowStateChange:
+            # Restore/show transitions can replace or reorder a native window
+            # without changing the Python QWidget instance.
+            QTimer.singleShot(
+                0,
+                lambda: self.ensure_pet_window_policy(event="WindowStateChange"),
+            )
+        return super().event(event)
+
     def showEvent(self, event: QShowEvent) -> None:
         """窗口首次显示时连接跨屏信号并按当前 DPI 绘制。"""
 
         lifecycle_log("pet_window.show_event.begin", self)
+        self.ensure_pet_window_policy(event="Show")
         super().showEvent(event)
         handle = self.windowHandle()
         if handle is not None and not self._screen_change_connected:
@@ -1501,66 +1571,62 @@ class PetWindow(QWidget):
                     ),
                 )
         self._position_accessories()
-        QTimer.singleShot(0, self._ensure_on_top)
+        QTimer.singleShot(0, lambda: self._ensure_on_top(event="Show"))
         lifecycle_log("pet_window.show_event.end", self)
 
     @_guard_qt_callback
-    def _ensure_on_top(self) -> None:
-        """恢复原生窗口层级，但绝不激活窗口或夺走当前输入焦点。"""
+    def _ensure_on_top(self, *, event: str = "PolicyCheck") -> None:
+        """在生命周期节点校验 native 层级，但绝不激活或抢输入焦点。"""
 
         if not self.isVisible():
             return
-        if os.name == "nt":
-            try:
-                import ctypes
+        self._apply_native_window_policy_for_widget(self, event=event)
+        # Detached passive surfaces are separate native windows. Recheck them
+        # in the same lifecycle pass, but never poll or call activateWindow().
+        for accessory in self._fullscreen_surfaces():
+            if accessory is self or not accessory.isVisible():
+                continue
+            self._apply_native_window_policy_for_widget(accessory, event=event)
 
-                user32 = ctypes.windll.user32
-                hwnd = int(self.winId())
-                get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-                set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-                extended = int(get_style(hwnd, -20))
-                extended |= 0x00000080 | 0x08000000  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-                set_style(hwnd, -20, extended)
-                insert_after = -1 if self.settings.always_on_top else -2
-                user32.SetWindowPos(
-                    hwnd,
-                    insert_after,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0x0001 | 0x0002 | 0x0010 | 0x0040,
-                )
-                # The pet owns several detached, non-activating top-level
-                # surfaces (status bubbles, controls and the quick panel).
-                # Qt's WindowStaysOnTopHint is not consistently retained for
-                # those windows after a hide/show cycle on Windows. Reapply
-                # the same native z-order to every visible surface so Word or
-                # a normal maximised browser cannot cover only part of Lili.
-                if self.settings.always_on_top:
-                    for accessory in self._fullscreen_surfaces():
-                        if accessory is self or not accessory.isVisible():
-                            continue
-                        try:
-                            accessory_hwnd = int(accessory.winId())
-                            user32.SetWindowPos(
-                                accessory_hwnd,
-                                -1,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0x0001 | 0x0002 | 0x0010 | 0x0040,
-                            )
-                        except (AttributeError, OSError, TypeError, ValueError):
-                            continue
-                return
-            except (AttributeError, OSError, ValueError):
-                pass
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior()
-        # 其他平台由 WindowStaysOnTopHint 负责。这里不能调用 raise_()，
-        # 否则 macOS/部分 Linux 桌面会在用户打字时切换当前应用。
+    def _apply_native_window_policy_for_widget(
+        self,
+        widget: QWidget,
+        *,
+        event: str,
+    ) -> None:
+        """应用 native policy 并写入一条本地 pet-window 诊断记录。"""
+
+        try:
+            qt_stays_on_top = bool(
+                widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+            )
+            result = apply_native_window_policy(
+                widget,
+                topmost=bool(self.settings.always_on_top),
+                qt_stays_on_top=qt_stays_on_top,
+            )
+            lifecycle_log(
+                "pet-window.native-policy",
+                widget,
+                section="pet-window",
+                platform=(
+                    "macOS"
+                    if sys.platform == "darwin"
+                    else "Windows"
+                    if os.name == "nt"
+                    else sys.platform
+                ),
+                event=str(event),
+                native_id=result.get("native_id"),
+                qt_stays_on_top=qt_stays_on_top,
+                native_level=result.get("native_level"),
+                hwnd_topmost=result.get("native_topmost"),
+                action=result.get("action"),
+                available=result.get("available"),
+                error=result.get("error", ""),
+            )
+        except (RuntimeError, TypeError, ValueError, OverflowError):
+            LOGGER.exception("native pet window policy check failed")
 
     @staticmethod
     def _raise_accessory(widget: QWidget) -> None:
@@ -1596,107 +1662,35 @@ class PetWindow(QWidget):
             return
 
         if sys.platform == "darwin":
-            self._apply_macos_window_behavior(widget, always_on_top=always_on_top)
+            # Configure the freshly created NSWindow before it is ordered;
+            # the bridge is non-activating and does not bring the app front.
+            self._apply_macos_window_behavior(
+                widget,
+                always_on_top=always_on_top,
+                event="Show",
+            )
         widget.show()
+        if sys.platform != "darwin":
+            # Windows creates/recreates the HWND during show; check it after
+            # the handle exists without activating the window.
+            self._apply_native_window_policy_for_widget(widget, event="Show")
 
     def _apply_macos_window_behavior(
         self,
         widget: QWidget | None = None,
         *,
         always_on_top: bool | None = None,
+        event: str = "PolicyCheck",
     ) -> None:
-        """以非激活的 NSPanel 浮动层级显示桌宠。
+        """用安全的 PyObjC bridge 设置非激活浮动层级。"""
 
-        ``WindowDoesNotAcceptFocus`` 是 Qt 层面的保证，但在 macOS 上
-        仍需要把 Qt 创建的原生 NSWindow/NSPanel 标记为
-        ``NSNonactivatingPanelMask``。否则窗口虽然没有键盘焦点，AppKit
-        仍可能在重新设置浮动层级时把 Lili 重新变成前台应用。
-        """
-
-        if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
-            return
-        # Qt's Tool + WindowDoesNotAcceptFocus flags already express the
-        # required behavior.  Calling the Objective-C ABI via ctypes is not
-        # memory-safe: a changed Qt native handle or selector signature can
-        # abort the whole macOS process before Python gets an exception. Keep
-        # that legacy workaround opt-in for targeted diagnostics only.
-        if os.environ.get("LILI_ENABLE_LEGACY_MACOS_CTYPES_WINDOW_TWEAKS", "").strip() != "1":
-            return
         target = widget or self
         topmost = (
             bool(self.settings.always_on_top)
             if always_on_top is None
             else bool(always_on_top)
         )
-        try:
-            import ctypes
-
-            objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.A.dylib")
-            objc.sel_registerName.restype = ctypes.c_void_p
-            objc.sel_registerName.argtypes = [ctypes.c_char_p]
-            objc.objc_msgSend.restype = ctypes.c_void_p
-            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            native_handle = int(target.winId())
-            cache_key = id(target)
-            cache_value = (native_handle, topmost)
-            if self._macos_native_window_configs.get(cache_key) == cache_value:
-                return
-            view = ctypes.c_void_p(native_handle)
-            window = objc.objc_msgSend(view, objc.sel_registerName(b"window"))
-            if not window:
-                return
-            send_integer = objc.objc_msgSend
-            send_integer.restype = None
-            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_longlong]
-            level = 3 if topmost else 0  # NSFloatingWindowLevel / normal
-            send_integer(window, objc.sel_registerName(b"setLevel:"), level)
-            behavior = (1 << 0) | (1 << 8) if topmost else 0
-            send_integer(
-                window,
-                objc.sel_registerName(b"setCollectionBehavior:"),
-                behavior,
-            )
-            # Qt::Tool normally creates an NSPanel on macOS.  Explicitly add
-            # the non-activating panel style so clicking another application
-            # cannot be undone by AppKit's panel activation rules.  This is a
-            # style-mask operation only; it never calls activate/raise/front.
-            send_integer.restype = ctypes.c_ulonglong
-            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            style_mask = int(
-                send_integer(window, objc.sel_registerName(b"styleMask"))
-                or 0
-            )
-            send_integer.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-                ctypes.c_ulonglong,
-            ]
-            send_integer(
-                window,
-                objc.sel_registerName(b"setStyleMask:"),
-                style_mask | (1 << 7),  # NSWindowStyleMaskNonactivatingPanel
-            )
-            send_bool = objc.objc_msgSend
-            send_bool.restype = None
-            send_bool.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
-            send_bool(window, objc.sel_registerName(b"setHidesOnDeactivate:"), False)
-            send_bool(window, objc.sel_registerName(b"setIgnoresMouseEvents:"), False)
-            # NSPanel exposes this selector.  Guard it so the fallback still
-            # works if a future Qt build gives us a plain NSWindow instead.
-            send_pointer = objc.objc_msgSend
-            send_pointer.restype = ctypes.c_void_p
-            send_pointer.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-            ]
-            selector = objc.sel_registerName(b"setBecomesKeyOnlyIfNeeded:")
-            responds = objc.sel_registerName(b"respondsToSelector:")
-            if send_pointer(window, responds, selector):
-                send_bool(window, selector, True)
-            self._macos_native_window_configs[cache_key] = cache_value
-        except (AttributeError, OSError, TypeError, ValueError):
-            return
+        self._apply_native_window_policy_for_widget(target, event=event)
 
     def set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
         """在 QQ 宠物式置顶与普通桌面模式间切换，显示时不抢焦点。"""
@@ -1709,10 +1703,14 @@ class PetWindow(QWidget):
             (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
         )
         self.settings.always_on_top = enabled
-        self.setWindowFlags(self._pet_window_flags())
+        self.ensure_pet_window_policy(event="SetAlwaysOnTop")
         self.move(position)
         if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self, always_on_top=enabled)
+            self._apply_macos_window_behavior(
+                self,
+                always_on_top=enabled,
+                event="SetAlwaysOnTop",
+            )
         for bubble, visible, bubble_position in bubble_states:
             bubble.setWindowFlags(self._ambient_window_flags())
             bubble.move(bubble_position)
@@ -1742,7 +1740,7 @@ class PetWindow(QWidget):
                 # macOS may round a frameless window by one pixel while recreating
                 # its native handle. Restore the user-visible position afterwards.
                 self.move(target_position)
-                self._ensure_on_top()
+                self._ensure_on_top(event="SetAlwaysOnTop")
 
             QTimer.singleShot(0, restore_position_after_show)
         if persist:
@@ -1846,7 +1844,11 @@ class PetWindow(QWidget):
         # desktop window. Use the same process-aware media/game policy on every
         # desktop platform; only a known video player/browser video fullscreen
         # or a known game fullscreen may temporarily cover the pet.
-        fullscreen = bool(active_fullscreen_video() or active_fullscreen_game())
+        fullscreen = bool(
+            active_fullscreen_video()
+            or active_fullscreen_game()
+            or active_fullscreen_presentation()
+        )
         if fullscreen:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
@@ -2009,6 +2011,35 @@ class PetWindow(QWidget):
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
         QTimer.singleShot(0, self._position_accessories)
+        self.ensure_pet_window_policy(event="ScreenChange")
+        QTimer.singleShot(
+            0,
+            lambda: self._ensure_on_top(event="ScreenChange"),
+        )
+
+    @_guard_qt_callback
+    def _on_screen_topology_changed(self, _screen: QScreen | None = None) -> None:
+        """外接屏增删后重新校验 native 层级，不主动移动或激活窗口。"""
+
+        if not self.isVisible():
+            return
+        self.ensure_pet_window_policy(event="ScreenTopologyChange")
+        QTimer.singleShot(
+            0,
+            lambda: self._ensure_on_top(event="ScreenTopologyChange"),
+        )
+
+    @_guard_qt_callback
+    def _on_application_state_changed(self, state: Qt.ApplicationState) -> None:
+        """应用重新激活时恢复层级，但不把六毛变成前台焦点窗口。"""
+
+        if state != Qt.ApplicationState.ApplicationActive or not self.isVisible():
+            return
+        self.ensure_pet_window_policy(event="ApplicationActivate")
+        QTimer.singleShot(
+            0,
+            lambda: self._ensure_on_top(event="ApplicationActivate"),
+        )
 
     @_guard_qt_callback
     def _on_dpi_changed(self, _dpi: float) -> None:

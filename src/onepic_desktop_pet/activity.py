@@ -72,6 +72,14 @@ KNOWN_GAME_PROCESS_TOKENS = (
     "terraria",
 )
 
+# A real PowerPoint/Keynote slideshow is a fullscreen surface, while their
+# ordinary editing windows must remain below the pet's floating level.
+KNOWN_PRESENTATION_PROCESS_TOKENS = (
+    "powerpnt",
+    "microsoft powerpoint",
+    "keynote",
+)
+
 # Finder's desktop is exposed by Quartz as a screen-sized window.  Treating
 # that window as fullscreen makes a click on an empty desktop area hide Lili;
 # opening a normal browser window then appears to "restore" it.  These are
@@ -187,6 +195,16 @@ def _is_known_game_process(name: str) -> bool:
 
     normalized = str(name or "").casefold().strip()
     return bool(normalized) and any(token in normalized for token in KNOWN_GAME_PROCESS_TOKENS)
+
+
+def _is_known_presentation_process(name: str) -> bool:
+    """Return whether a foreground process can own a slideshow fullscreen."""
+
+    normalized = str(name or "").casefold().strip()
+    return bool(normalized) and any(
+        token in normalized
+        for token in KNOWN_PRESENTATION_PROCESS_TOKENS
+    )
 
 
 def classify_application(name: str) -> str:
@@ -403,5 +421,14 @@ def active_fullscreen_game() -> bool:
 
     name = active_application_name().casefold().strip()
     if not _is_known_game_process(name):
+        return False
+    return active_window_is_fullscreen()
+
+
+def active_fullscreen_presentation() -> bool:
+    """Return true only for a known PowerPoint/Keynote fullscreen surface."""
+
+    name = active_application_name().casefold().strip()
+    if not _is_known_presentation_process(name):
         return False
     return active_window_is_fullscreen()
