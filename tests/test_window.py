@@ -94,8 +94,10 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     assert window._refresh_cross_device_today_display(payload, snapshot=snapshot, source="test")
     assert window._cross_device_today_display_seconds == 4 * 60 * 60
 
-    # This is the real failure mode: a status/dashboard callback without a
-    # fresh segment RPC used to replace the 4-hour union with local-only rows.
+    # This is the pause race: the status callback can run before the local
+    # segment is committed, so the temporary candidate is lower than the
+    # already validated account-wide value.
+    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [])
     assert window._refresh_cross_device_today_display({}, snapshot=snapshot, source="test")
     assert window._cross_device_today_display_seconds == 4 * 60 * 60
 

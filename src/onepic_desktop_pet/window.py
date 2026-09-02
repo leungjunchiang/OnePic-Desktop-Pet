@@ -540,6 +540,7 @@ class PetWindow(QWidget):
         # statistics, sync payloads and rewards retain their existing source.
         self._cross_device_today_display_seconds: int | None = None
         self._cross_device_today_display_account_id = ""
+        self._cross_device_today_display_date = ""
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
         # Keep the last validated server interval payload in memory only.
@@ -1622,7 +1623,7 @@ class PetWindow(QWidget):
                     if os.name == "nt"
                     else sys.platform
                 ),
-                event=str(event),
+                policy_event=str(event),
                 native_id=result.get("native_id"),
                 qt_stays_on_top=qt_stays_on_top,
                 native_level=result.get("native_level"),
@@ -4684,6 +4685,7 @@ class PetWindow(QWidget):
 
         self._cross_device_today_display_seconds = None
         self._cross_device_today_display_account_id = ""
+        self._cross_device_today_display_date = ""
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
         self._cross_device_today_display_remote_rows = None
@@ -4717,6 +4719,8 @@ class PetWindow(QWidget):
             return False
         current = snapshot or self.focus_session.snapshot(include_projection=False)
         old_today = self._shared_today_focus_seconds()
+        moment = self.focus_analytics.current_time()
+        display_date = moment.date().isoformat()
         local_rows = [segment.to_dict() for segment in self.focus_analytics.focus_segments()]
         has_remote_payload = isinstance(data, dict) and "_focus_segments" in data
         remote_rows: list[object] | None = None
@@ -4759,7 +4763,6 @@ class PetWindow(QWidget):
                 "end_at": None,
                 "device_id": str(getattr(self.focus_analytics, "_device_id", "") or ""),
             }
-        moment = self.focus_analytics.current_time()
         try:
             union_seconds = get_cross_device_today_display_seconds(
                 account_id,
@@ -4779,12 +4782,38 @@ class PetWindow(QWidget):
             )
             return False
 
+        candidate_seconds = max(0, min(24 * 60 * 60, int(union_seconds)))
+        previous_seconds = self._cross_device_today_display_seconds
+        preserve_lower_candidate = (
+            not has_remote_payload
+            and previous_seconds is not None
+            and account_id == self._cross_device_today_display_account_id
+            and display_date == self._cross_device_today_display_date
+            and candidate_seconds < previous_seconds
+        )
+        if preserve_lower_candidate:
+            # A pause/finish signal can arrive before the just-closed local
+            # segment is committed.  Keep the last validated account-wide
+            # value for this Beijing day until the normal post-write refresh.
+            lifecycle_log(
+                "focus.display.retain",
+                self,
+                user_id=account_id,
+                source=source,
+                candidate_seconds=candidate_seconds,
+                preserved_cross_device_seconds=previous_seconds,
+                display_date=display_date,
+                reason="local_transition_before_segment_commit",
+            )
+            candidate_seconds = previous_seconds
+
         if has_remote_payload:
             # Commit only after the pure projection validated successfully;
             # malformed or foreign rows can never poison the retained input.
             self._cross_device_today_display_remote_rows = list(remote_rows or [])
-        self._cross_device_today_display_seconds = max(0, min(24 * 60 * 60, int(union_seconds)))
+        self._cross_device_today_display_seconds = candidate_seconds
         self._cross_device_today_display_account_id = account_id
+        self._cross_device_today_display_date = display_date
         self._cross_device_today_display_session_id = (
             str(getattr(self.work_timer, "focus_session_id", "") or "")
             if status == "focus"
@@ -5733,10 +5762,11 @@ class PetWindow(QWidget):
         self._refresh_shortcut_state(snapshot)
         snapshot_status = str(getattr(snapshot, "status", "idle") or "idle")
         status_changed = snapshot_status != self._last_focus_snapshot_status
-        if status_changed and self._current_social_user_id():
+        if status_changed and snapshot_status == "focus" and self._current_social_user_id():
             # Establish a new local-live anchor only when the session state
-            # changes. Subsequent one-second ticks advance this cached value
-            # from the monotonic timer and never rescan the ledger.
+            # starts/resumes. Pause/finish emits before its local segment is
+            # persisted, so those transitions are refreshed by the explicit
+            # post-write path in pause_work_timer/finish_work_timer.
             self._refresh_cross_device_today_display(
                 snapshot=snapshot,
                 source="focus_state_changed",
@@ -6498,7 +6528,10 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
-        derived_changed = self.focus_analytics.reconcile_derived_totals()
+        # merge_remote_segments already reconciles derived caches and folds
+        # that result into its return value.  Avoid a second full-ledger scan
+        # on every dashboard response, which can starve the macOS event loop.
+        derived_changed = False
         # Remote summary fields are compatibility/cache values and can change
         # on every dashboard poll while an active session is ticking.  They
         # must not invalidate the local raw-session projection every five

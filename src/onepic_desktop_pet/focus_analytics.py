@@ -332,8 +332,10 @@ class FocusAnalyticsStore:
         # A server daily/profile snapshot can be written before the raw
         # segment RPC in the same heartbeat.  Rebuild every derived value
         # after facts arrive so a stale midnight cache cannot be republished.
-        self.reconcile_derived_totals()
-        return changed
+        # Return the reconciliation result as part of the merge result so
+        # callers do not need to scan the raw ledger a second time.
+        derived_changed = self.reconcile_derived_totals()
+        return changed or derived_changed
 
     def reconcile_derived_totals(self, at: datetime | None = None) -> bool:
         """Rebuild local day/week caches from interval facts.
