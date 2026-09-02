@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from PySide6.QtCore import QDateTime, QEvent, QUrl, Qt, QTimer, Signal
+from PySide6.QtCore import QDateTime, QEvent, QTime, QUrl, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -588,6 +588,10 @@ class AlarmCard(QDialog):
         self._media_drained = False
         self._audio_cleanup_ready = False
         self._windows_audio = None
+        self._qt_fallback_output = None
+        self._qt_fallback_player = None
+        self._qt_fallback_active = False
+        self._custom_audio_path = None
         self._drag_offset = None
         self._pending_topmost = None
         self.setObjectName("alarmCard")
@@ -677,7 +681,11 @@ class AlarmCard(QDialog):
         self._sound_stop_timer = None
         self._audio_start_timer = QTimer(self)
         self._audio_start_timer.setSingleShot(True)
-        self._audio_start_timer.setInterval(120)
+        # Kept as a cancellation fence for callers from older builds.  New
+        # cards start audio synchronously after ``show()``; a 120 ms delay
+        # makes a due-at-:00 alarm audibly late and is unnecessary because
+        # both native MCI and QMediaPlayer start asynchronously themselves.
+        self._audio_start_timer.setInterval(0)
         self._audio_start_timer.timeout.connect(self._start_alarm_audio)
         self._media_stop_timer = QTimer(self)
         self._media_stop_timer.setSingleShot(True)
@@ -800,9 +808,10 @@ class AlarmCard(QDialog):
             self.raise_()
             self.activateWindow()
         self._queue_temporary_topmost(True)
-        # Let the native window manager commit the show/activation before the
-        # first sound. This is important for both AppKit and Windows.
-        self._audio_start_timer.start()
+        # Start immediately after the first foreground presentation.  The
+        # media backends do their native work asynchronously, so this does
+        # not block the Qt event loop or require an artificial delay.
+        self._start_alarm_audio()
         lifecycle_log("alarm.popup.show.complete", self, alarm_id=str(self.alarm.id))
 
     def _acknowledge_alarm(self) -> None:
@@ -889,6 +898,7 @@ class AlarmCard(QDialog):
         ):
             self._custom_audio = True
             self._using_system_sound = False
+            self._custom_audio_path = str(path)
             if self._media_player is not None:
                 self._media_player.setSource(QUrl.fromLocalFile(str(path)))
             else:
@@ -900,8 +910,9 @@ class AlarmCard(QDialog):
                 )
                 if not self._windows_audio.available:
                     self._windows_audio = None
-                    self._custom_audio = False
-                    self._using_system_sound = True
+                    if not self._configure_qt_fallback(str(path)):
+                        self._custom_audio = False
+                        self._using_system_sound = True
             return
         # System/default sounds are short platform alerts.  Missing custom
         # files intentionally fall back to this same bounded behavior.
@@ -913,6 +924,110 @@ class AlarmCard(QDialog):
         self._sound_stop_timer.setSingleShot(True)
         self._sound_stop_timer.setInterval(max(1, int(alarm.max_ring_seconds or 60)) * 1_000)
         self._sound_stop_timer.timeout.connect(self._stop_sound)
+
+    def _ensure_qt_fallback(self) -> bool:
+        """Create the Windows Qt player used only after MCI cannot decode."""
+
+        if self._qt_fallback_player is not None and self._qt_fallback_output is not None:
+            return True
+        if QAudioOutput is None or QMediaPlayer is None:
+            return False
+        try:
+            output = QAudioOutput(self)
+            player = QMediaPlayer(self)
+            player.setAudioOutput(output)
+            player.mediaStatusChanged.connect(self._qt_fallback_status_changed)
+            player.errorOccurred.connect(self._qt_fallback_error)
+        except Exception as exc:  # pragma: no cover - depends on native Qt backend
+            lifecycle_log(
+                "media.alarm.qt_fallback.unavailable",
+                class_name="AlarmCard",
+                alarm_id=str(self.alarm.id),
+                error=str(exc),
+            )
+            return False
+        self._qt_fallback_output = output
+        self._qt_fallback_player = player
+        return True
+
+    def _configure_qt_fallback(self, path: str) -> bool:
+        if not self._ensure_qt_fallback():
+            return False
+        try:
+            self._qt_fallback_output.setVolume(
+                max(0, min(100, int(self.alarm.volume or 0))) / 100
+            )
+            self._qt_fallback_player.setSource(QUrl.fromLocalFile(str(path)))
+        except Exception as exc:  # pragma: no cover - depends on native Qt backend
+            lifecycle_log(
+                "media.alarm.qt_fallback.configure_error",
+                class_name="AlarmCard",
+                alarm_id=str(self.alarm.id),
+                error=str(exc),
+            )
+            return False
+        return True
+
+    def _play_qt_fallback(self, path: str | None = None) -> bool:
+        fallback_path = str(path or self._custom_audio_path or "")
+        if not fallback_path or not self._configure_qt_fallback(fallback_path):
+            return False
+        try:
+            self._qt_fallback_output.setVolume(
+                max(0, min(100, int(self.alarm.volume or 0))) / 100
+            )
+            self._qt_fallback_active = True
+            lifecycle_log(
+                "media.alarm.qt_fallback.play",
+                self._qt_fallback_player,
+                owner="AlarmCard",
+                alarm_id=str(self.alarm.id),
+                reason="mci_decode_failure",
+            )
+            self._qt_fallback_player.play()
+        except Exception as exc:  # pragma: no cover - depends on native Qt backend
+            self._qt_fallback_active = False
+            lifecycle_log(
+                "media.alarm.qt_fallback.play_error",
+                class_name="AlarmCard",
+                alarm_id=str(self.alarm.id),
+                error=str(exc),
+            )
+            return False
+        return True
+
+    def _qt_fallback_status_changed(self, status) -> None:
+        lifecycle_log(
+            "media.alarm.qt_fallback.status_changed",
+            self._qt_fallback_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            status=str(status),
+        )
+        if (
+            status == QMediaPlayer.MediaStatus.EndOfMedia
+            and self._qt_fallback_active
+            and not self._audio_closing
+            and self._state != AlarmPopupState.DISMISSED
+            and self._custom_audio
+        ):
+            self._qt_fallback_player.play()
+
+    def _qt_fallback_error(self, *args: object) -> None:
+        self._qt_fallback_active = False
+        lifecycle_log(
+            "media.alarm.qt_fallback.error",
+            self._qt_fallback_player,
+            owner="AlarmCard",
+            alarm_id=str(self.alarm.id),
+            error=" ".join(str(item) for item in args),
+        )
+        if self._audio_closing:
+            self._media_stop_completed = True
+            self._media_drained = True
+            self._emit_audio_cleanup_finished()
+            return
+        self._fallback_to_system()
 
     def _start_alarm_audio(self) -> None:
         """Start audio only after the first foreground presentation."""
@@ -940,6 +1055,11 @@ class AlarmCard(QDialog):
             return
         if self._custom_audio and self._media_player is not None:
             self._media_player.play()
+            return
+        if self._custom_audio and self._play_qt_fallback():
+            return
+        if self._custom_audio:
+            self._fallback_to_system()
             return
         if self._sound_stop_timer is not None:
             self._sound_stop_timer.start()
@@ -1024,8 +1144,14 @@ class AlarmCard(QDialog):
             alarm_id=str(self.alarm.id),
             error=str(error),
         )
+        backend = self._windows_audio
+        self._windows_audio = None
+        if backend is not None:
+            backend.request_stop()
         if self._audio_closing:
             self._on_windows_audio_finished()
+            return
+        if self._custom_audio and self._play_qt_fallback(self._custom_audio_path):
             return
         self._fallback_to_system()
 
@@ -1035,6 +1161,9 @@ class AlarmCard(QDialog):
         if self._custom_audio:
             self._custom_audio = False
         self._using_system_sound = True
+        self._qt_fallback_active = False
+        if self._qt_fallback_output is not None:
+            self._qt_fallback_output.setVolume(0)
         if self._media_player is not None:
             # Error handling runs from a QMediaPlayer callback.  Queue the
             # stop as well so an error/status signal cannot re-enter native
@@ -1173,6 +1302,14 @@ class AlarmCard(QDialog):
     def _queue_media_stop(self, reason: str) -> None:
         """Queue a single media stop and return to the caller immediately."""
 
+        if self._qt_fallback_player is not None:
+            # Qt 6.11's Windows backend can block in stop().  Muting and
+            # disabling the loop is sufficient for a closing card, and keeps
+            # cleanup out of the GUI thread's native multimedia call stack.
+            self._qt_fallback_active = False
+            if self._qt_fallback_output is not None:
+                self._qt_fallback_output.setVolume(0)
+
         if self._windows_audio is not None:
             if self._media_stop_completed or self._media_stop_pending:
                 return
@@ -1184,6 +1321,11 @@ class AlarmCard(QDialog):
             )
             self._media_stop_pending = True
             self._media_stop_timer.start(0)
+            return
+        if self._qt_fallback_player is not None:
+            self._media_stop_completed = True
+            self._media_drained = True
+            self._emit_audio_cleanup_finished()
             return
         if self._media_player is None:
             self._media_stop_completed = True
@@ -1220,6 +1362,8 @@ class AlarmCard(QDialog):
             # operation allowed during an alarm button path.  It returns
             # immediately and prevents a draining song from being audible.
             self._audio_output.setVolume(0)
+        if self._qt_fallback_output is not None:
+            self._qt_fallback_output.setVolume(0)
         self._queue_media_stop("popup_close")
 
     def _prepare_action(self, action: str = "unknown") -> bool:
@@ -1413,9 +1557,11 @@ class AlarmEditDialog(QDialog):
         self.trigger.setCalendarPopup(True)
         self.trigger.setDisplayFormat("yyyy-MM-dd HH:mm")
         if alarm:
-            self.trigger.setDateTime(QDateTime.fromString(alarm.trigger_at[:19], Qt.DateFormat.ISODate))
+            trigger = QDateTime.fromString(alarm.trigger_at[:19], Qt.DateFormat.ISODate)
+            self.trigger.setDateTime(self._minute_aligned(trigger))
         else:
-            self.trigger.setDateTime(QDateTime.currentDateTime().addSecs(60))
+            default = QDateTime.currentDateTime().addSecs(60)
+            self.trigger.setDateTime(self._minute_aligned(default))
         self.repeat = QComboBox(self)
         self.repeat.addItem("一次性", REPEAT_ONCE)
         self.repeat.addItem("每天", REPEAT_DAILY)
@@ -1498,6 +1644,12 @@ class AlarmEditDialog(QDialog):
     def _toggle_weekdays(self) -> None:
         self.weekdays.setEnabled(self.repeat.currentData() == "weekly")
 
+    @staticmethod
+    def _minute_aligned(value: QDateTime) -> QDateTime:
+        clock = value.time()
+        value.setTime(QTime(clock.hour(), clock.minute(), 0, 0))
+        return value
+
     def values(self) -> dict[str, Any]:
         repeat_rule = self.repeat.currentData()
         if repeat_rule == "weekly":
@@ -1507,9 +1659,10 @@ class AlarmEditDialog(QDialog):
                 if check.isChecked()
             ]
             repeat_rule = "weekly:" + ",".join(days) if days else REPEAT_ONCE
+        trigger = self._minute_aligned(self.trigger.dateTime())
         return {
             "title": self.title.text().strip() or "六毛闹钟",
-            "trigger_at": self.trigger.dateTime().toString("yyyy-MM-ddTHH:mm:ss"),
+            "trigger_at": trigger.toString("yyyy-MM-ddTHH:mm:ss"),
             "repeat_rule": repeat_rule,
             "enabled": self.enabled.isChecked(),
             "sound_enabled": self.sound.isChecked(),

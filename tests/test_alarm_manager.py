@@ -19,6 +19,17 @@ class Clock:
         return self.value
 
 
+def test_alarm_times_are_aligned_to_the_start_of_the_minute(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 9, 0, 12))
+    manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    alarm = manager.add("整秒闹钟", "2026-08-19T09:15:42")
+
+    assert alarm.trigger_at.startswith("2026-08-19T09:15:00")
+
+    manager.update(alarm.id, trigger_at="2026-08-19T09:20:59")
+    assert alarm.trigger_at.startswith("2026-08-19T09:20:00")
+
+
 def test_one_off_alarm_claims_once_and_dismisses(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 19, 9, 0))
     manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)

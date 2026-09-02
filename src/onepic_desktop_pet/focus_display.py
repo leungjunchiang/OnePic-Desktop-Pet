@@ -27,6 +27,19 @@ class CrossDeviceDisplayDataError(ValueError):
     """The read-only interval payload cannot be trusted for display."""
 
 
+def _is_bucket_rounding_mismatch(error: str) -> bool:
+    """Recognise aggregate-only bucket rounding diagnostics.
+
+    ``aggregate_focus_time`` calculates the union total from each merged
+    interval, then independently truncates every hour/day fragment to whole
+    seconds.  A fractional-second interval crossing a bucket boundary can
+    therefore produce e.g. ``13575!=13576`` even though the underlying union
+    is valid.  This is a projection diagnostic, not a bad interval fact.
+    """
+
+    return error.startswith(("hourly_mismatch:", "daily_mismatch:"))
+
+
 def _payload_rows(session_rows: Any) -> list[Any]:
     """Extract rows from the response shape used by ``lili_sync_focus_segments``."""
 
@@ -100,10 +113,20 @@ def get_cross_device_today_display_seconds(
         rows.extend(active_rows)
 
     aggregate = aggregate_focus_time(rows, day_start, moment, now=moment)
-    if aggregate.errors:
+    # Keep rejecting malformed, foreign, future, and otherwise invalid
+    # intervals.  Only the derived bucket sums are tolerated here: the
+    # display must use the union total, rather than falling back to a stale
+    # cached value when subsecond truncation makes a bucket sum differ by a
+    # second.  FocusSession and the shared aggregator remain untouched.
+    errors = tuple(
+        error
+        for error in aggregate.errors
+        if not _is_bucket_rounding_mismatch(error)
+    )
+    if errors:
         raise CrossDeviceDisplayDataError(
             "focus display interval validation failed: "
-            + ",".join(aggregate.errors[:4])
+            + ",".join(errors[:4])
         )
     return max(0, int(aggregate.total_seconds))
 

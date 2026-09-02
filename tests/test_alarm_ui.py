@@ -19,7 +19,7 @@ if (
         allow_module_level=True,
     )
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDateTime, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -27,6 +27,7 @@ from onepic_desktop_pet.alarm_manager import Alarm
 from onepic_desktop_pet.alarm_sounds import AlarmSoundLibrary
 from onepic_desktop_pet.alarm_ui import (
     AlarmCard,
+    AlarmEditDialog,
     AlarmPopupState,
     AlarmSoundSelector,
     AwayRecoveryCard,
@@ -70,7 +71,7 @@ def test_alarm_card_changes_native_z_order_without_mutating_qt_flags() -> None:
     assert card.popup_state is AlarmPopupState.DISMISSED
 
 
-def test_alarm_card_action_is_idempotent_and_cancels_delayed_audio() -> None:
+def test_alarm_card_action_is_idempotent_and_starts_audio_immediately() -> None:
     app = _app()
     card = AlarmCard(
         Alarm(
@@ -81,7 +82,7 @@ def test_alarm_card_action_is_idempotent_and_cancels_delayed_audio() -> None:
         )
     )
     card.show_alarm_foreground()
-    assert card._audio_start_timer.isActive()
+    assert not card._audio_start_timer.isActive()
 
     emitted: list[str] = []
     card.dismiss_requested.connect(emitted.append)
@@ -312,6 +313,104 @@ def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
     assert selector._preview_fallback_active is False
     assert selector._preview_fallback_output.volume == 0.0
     selector.close()
+
+
+def test_windows_alarm_audio_falls_back_to_qt_when_mci_cannot_decode(
+    tmp_path, monkeypatch
+) -> None:
+    """An MCI 277 failure must keep the selected custom track audible."""
+
+    _app()
+    source = tmp_path / "alarm-tone.mp3"
+    source.write_bytes(b"not a real mp3")
+    library = AlarmSoundLibrary(tmp_path)
+    sound = library.import_file(source, display_name="闹钟音乐")
+    backend_instances: list[object] = []
+    calls: list[str] = []
+
+    class FakeWindowsAlarmAudio:
+        def __init__(self, *_args, **kwargs) -> None:
+            self.available = True
+            self.on_error = kwargs["on_error"]
+            backend_instances.append(self)
+
+        def start(self) -> None:
+            calls.append("start")
+
+        def request_stop(self) -> None:
+            calls.append("stop")
+
+    class _FakeSignal:
+        def connect(self, _slot, *_args, **_kwargs) -> None:
+            return None
+
+    class FakeAudioOutput:
+        def __init__(self, _parent=None) -> None:
+            self.volume = None
+
+        def setVolume(self, volume: float) -> None:  # noqa: N802 - Qt API
+            self.volume = volume
+
+    class FakeMediaPlayer:
+        class MediaStatus:
+            EndOfMedia = object()
+
+        def __init__(self, _parent=None) -> None:
+            self.mediaStatusChanged = _FakeSignal()
+            self.errorOccurred = _FakeSignal()
+            self.sources: list[object] = []
+            self.play_count = 0
+
+        def setAudioOutput(self, _output) -> None:  # noqa: N802 - Qt API
+            return None
+
+        def setSource(self, source_url) -> None:  # noqa: N802 - Qt API
+            self.sources.append(source_url)
+
+        def play(self) -> None:
+            self.play_count += 1
+
+    monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
+    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", FakeWindowsAlarmAudio)
+    monkeypatch.setattr(alarm_ui, "QAudioOutput", FakeAudioOutput)
+    monkeypatch.setattr(alarm_ui, "QMediaPlayer", FakeMediaPlayer)
+    card = AlarmCard(
+        Alarm(
+            id="alarm-custom-mci-fallback",
+            title="MP3解码回退测试",
+            trigger_at="2026-08-26T09:00:00",
+            sound_enabled=True,
+            sound_id=sound.sound_id,
+        ),
+        sound_library=library,
+    )
+
+    card.show_alarm_foreground()
+    assert calls == ["start"]
+    assert len(backend_instances) == 1
+    backend_instances[0].on_error("mci open failed: 277")
+    _app().processEvents()
+
+    assert calls == ["start", "stop"]
+    assert card._custom_audio is True
+    assert card._using_system_sound is False
+    assert card._qt_fallback_active is True
+    assert card._qt_fallback_player.play_count == 1
+
+    card.close_from_app()
+    _app().processEvents()
+    assert card.audio_cleanup_ready is True
+
+
+def test_alarm_edit_dialog_always_saves_zero_seconds(tmp_path) -> None:
+    _app()
+    dialog = AlarmEditDialog([], sound_library=AlarmSoundLibrary(tmp_path))
+    dialog.trigger.setDateTime(
+        QDateTime.fromString("2026-08-26T09:15:42", Qt.DateFormat.ISODate)
+    )
+
+    assert dialog.values()["trigger_at"].endswith("T09:15:00")
+    dialog.close()
 
 
 def test_away_recovery_card_has_no_drop_shadow() -> None:

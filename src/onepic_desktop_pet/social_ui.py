@@ -2323,9 +2323,9 @@ class SocialHubDialog(QDialog):
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
         self._focus_snapshot: Any = None
-        # Optional read-only account-wide projection used only by the home
-        # page's “我的今日专注” labels.  The local FocusSession snapshot still
-        # owns controls and all other statistics.
+        # Optional read-only account-wide projection used by the visible
+        # personal-focus totals.  The local FocusSession snapshot still owns
+        # controls and all other statistics.
         self._cross_device_today_display_seconds: int | None = None
         self._cross_device_today_display_account_id = ""
         self._leaderboard_rows: list[Any] = []
@@ -2570,7 +2570,7 @@ class SocialHubDialog(QDialog):
         *,
         account_id: str = "",
     ) -> None:
-        """Set the account-scoped read-only value used on the home page."""
+        """Set the account-scoped read-only value used by visible totals."""
 
         active_account = _session_user_id(self.client)
         requested_account = str(account_id or active_account or "").strip()
@@ -2668,17 +2668,22 @@ class SocialHubDialog(QDialog):
         ):
             display_seconds = self._cross_device_today_display_seconds
         if hasattr(self, "focus_today"):
-            # The dedicated focus page remains on its existing local
-            # FocusSession projection in this first-stage rollout.
-            text = f"今日累计 {format_work_duration(local_seconds)}"
+            # The focus page and the home summary must show the same
+            # account-wide union when the read-only projection is available.
+            text = f"今日累计 {format_work_duration(display_seconds)}"
             if self.focus_today.text() != text:
                 self.focus_today.setText(text)
         if hasattr(self, "study_summary"):
             current = self.study_summary.text()
             marker = "我的今日专注 "
             start = current.find(marker)
-            end = current.find("　·　", start + len(marker)) if start >= 0 else -1
-            if start >= 0 and end >= 0:
+            if start >= 0:
+                # The current homepage summary ends after this value, while
+                # older layouts may have another ideographic-delimiter field
+                # after it. Replace only the value in either layout.
+                suffix_start = start + len(marker)
+                next_delimiter = current.find("　·　", suffix_start)
+                end = next_delimiter if next_delimiter >= 0 else len(current)
                 text = current[:start] + marker + format_work_duration(display_seconds) + current[end:]
                 if text != current:
                     self.study_summary.setText(text)

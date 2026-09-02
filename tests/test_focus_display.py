@@ -89,6 +89,25 @@ def test_cross_device_display_includes_an_open_local_session_without_mutating_ro
     assert rows == before
 
 
+def test_cross_device_display_uses_union_when_only_bucket_sums_round_down() -> None:
+    """Derived hourly/daily truncation must not trigger a stale-cache fallback."""
+
+    rows = [
+        {
+            "user_id": "account-1",
+            "segment_id": "fractional-boundary",
+            "session_id": "session",
+            "start_at": "2026-08-31T09:00:00.100000+08:00",
+            "end_at": "2026-08-31T12:00:00.300000+08:00",
+        }
+    ]
+
+    assert (
+        get_cross_device_today_display_seconds("account-1", NOW, rows)
+        == 3 * 60 * 60
+    )
+
+
 def test_cross_device_display_rejects_malformed_or_foreign_payload() -> None:
     with pytest.raises(CrossDeviceDisplayDataError):
         get_cross_device_today_display_seconds("account-1", NOW, [{"start_at": "bad"}])

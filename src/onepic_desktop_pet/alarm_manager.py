@@ -135,6 +135,26 @@ class AlarmManager:
             if isinstance(raw, list)
             else []
         )
+        # Alarm editor times are minute-based.  Normalize rows created by
+        # older builds as well, otherwise a hidden :31 (for example) would
+        # continue to fire away from the user's configured minute boundary.
+        precision_repaired = False
+        for item in self._items:
+            try:
+                normalized_trigger = self._normalize_trigger_at(item.trigger_at)
+            except (TypeError, ValueError):
+                normalized_trigger = None
+            if normalized_trigger is not None and normalized_trigger != item.trigger_at:
+                item.trigger_at = normalized_trigger
+                precision_repaired = True
+            if item.last_triggered_slot:
+                try:
+                    normalized_last = self._normalize_trigger_at(item.last_triggered_slot)
+                except (TypeError, ValueError):
+                    normalized_last = None
+                if normalized_last is not None and normalized_last != item.last_triggered_slot:
+                    item.last_triggered_slot = normalized_last
+                    precision_repaired = True
         # Older builds persisted the transient foreground state.  Preserve
         # the already claimed slot (written at claim time), but never restore
         # the popup/audio ownership itself.  For malformed legacy rows that
@@ -151,7 +171,7 @@ class AlarmManager:
                 item.snooze_until = None
                 if not item.last_triggered_slot:
                     item.last_triggered_slot = item.trigger_at or None
-        if legacy_active_repaired:
+        if precision_repaired or legacy_active_repaired:
             self._save()
 
     @property
@@ -170,6 +190,13 @@ class AlarmManager:
                 payload.append(value)
             write_json_atomic(self.path, payload)
 
+    def _normalize_trigger_at(self, value: str | datetime) -> str:
+        return (
+            parse_datetime(value, self._now)
+            .replace(second=0, microsecond=0)
+            .isoformat()
+        )
+
     def add(
         self,
         title: str,
@@ -187,7 +214,7 @@ class AlarmManager:
         allow_during_dnd: bool = False,
         source_todo_id: str | None = None,
     ) -> Alarm:
-        trigger = parse_datetime(trigger_at, self._now).isoformat()
+        trigger = self._normalize_trigger_at(trigger_at)
         item = Alarm(
             id=uuid4().hex,
             title=str(title).strip()[:240] or "六毛闹钟",
@@ -218,7 +245,7 @@ class AlarmManager:
         if "title" in changes:
             item.title = str(changes["title"] or "六毛闹钟").strip()[:240]
         if "trigger_at" in changes:
-            item.trigger_at = parse_datetime(changes["trigger_at"], self._now).isoformat()
+            item.trigger_at = self._normalize_trigger_at(changes["trigger_at"])
         if "repeat_rule" in changes:
             item.repeat_rule = self._normalize_repeat(changes["repeat_rule"])
         if "sound_enabled" in changes:
@@ -285,7 +312,7 @@ class AlarmManager:
             item = Alarm(
                 id=alarm_id,
                 title=str(getattr(todo, "title", "待办"))[:240] or "待办",
-                trigger_at=parse_datetime(due, self._now).isoformat(),
+                trigger_at=self._normalize_trigger_at(due),
                 sound_enabled=True,
                 sound_id=str(getattr(todo, "alarm_sound_id", "system") or "system")[:40],
                 volume=max(0, min(100, int(getattr(todo, "alarm_volume", 60) or 0))),
@@ -301,11 +328,12 @@ class AlarmManager:
             self._save()
             return
         was_user_disabled = (not item.enabled and item.disabled_reason == "user")
+        due_trigger = self._normalize_trigger_at(due)
         changed = (
             (not item.enabled and not was_user_disabled)
             or
             item.title != str(getattr(todo, "title", "待办"))[:240]
-            or item.trigger_at != parse_datetime(due, self._now).isoformat()
+            or item.trigger_at != due_trigger
             or item.sound_id != str(getattr(todo, "alarm_sound_id", "system") or "system")[:40]
             or item.volume != max(0, min(100, int(getattr(todo, "alarm_volume", 60) or 0)))
             or item.snooze_minutes != max(1, min(120, int(getattr(todo, "alarm_snooze_minutes", 10) or 10)))
@@ -315,7 +343,7 @@ class AlarmManager:
             item.enabled = True
             item.disabled_at = None
             item.disabled_reason = None
-        item.trigger_at = parse_datetime(due, self._now).isoformat()
+        item.trigger_at = due_trigger
         item.sound_enabled = True
         item.sound_id = str(getattr(todo, "alarm_sound_id", "system") or "system")[:40]
         item.volume = max(0, min(100, int(getattr(todo, "alarm_volume", 60) or 0)))

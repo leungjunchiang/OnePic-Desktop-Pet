@@ -964,9 +964,10 @@ class PetWindow(QWidget):
         # sticky.  Alarm polling has its own small timer so a due alarm does
         # not wait for the slower maintenance cadence.
         self.alarm_poll_timer = QTimer(self)
-        self.alarm_poll_timer.setInterval(1000)
+        self.alarm_poll_timer.setSingleShot(True)
+        self.alarm_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.alarm_poll_timer.timeout.connect(self._alarm_poll_tick)
-        self.alarm_poll_timer.start()
+        self._arm_alarm_poll_timer()
 
         self.work_maintenance_timer = QTimer(self)
         self.work_maintenance_timer.setInterval(5000)
@@ -4234,9 +4235,21 @@ class PetWindow(QWidget):
     def _alarm_poll_tick(self) -> None:
         """Poll the local alarm queue without entering the work clock tick."""
 
-        with self._performance.measure("alarm.poll"):
-            quiet = self._quiet_mode_for_work_tick()
-            self._check_local_alarms(quiet)
+        try:
+            with self._performance.measure("alarm.poll"):
+                quiet = self._quiet_mode_for_work_tick()
+                self._check_local_alarms(quiet)
+        finally:
+            # Re-arm against wall-clock boundaries instead of repeatedly
+            # adding 1000 ms to an arbitrary startup phase.  This lets a
+            # minute alarm be claimed at the beginning of its configured
+            # second, subject only to normal OS/Qt scheduling jitter.
+            self._arm_alarm_poll_timer()
+
+    def _arm_alarm_poll_timer(self) -> None:
+        now = datetime.now().astimezone()
+        delay_ms = max(1, 1000 - int(now.microsecond / 1000))
+        self.alarm_poll_timer.start(delay_ms)
 
     @_guard_qt_callback
     def _work_maintenance_tick(self) -> None:

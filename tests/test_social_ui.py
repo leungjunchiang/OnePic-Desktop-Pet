@@ -954,6 +954,21 @@ def test_home_summary_omits_ambiguous_visible_aggregate() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_cross_device_total_updates_focus_page_and_home_summary() -> None:
+    """Both personal focus surfaces must use the same account-wide display value."""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard(dialog.client.dashboard())
+    dialog.set_focus_snapshot({"status": "rest", "session_seconds": 0, "today_seconds": 60})
+    dialog.set_cross_device_today_display_seconds(2 * 3600 + 30 * 60, account_id="account-1")
+    app.processEvents()
+
+    assert "今日累计 2小时30分钟" in dialog.focus_today.text()
+    assert "我的今日专注 2小时30分钟" in dialog.study_summary.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_focus_weekly_total_does_not_become_yesterday_difference() -> None:
     """Live weekly reconciliation must not reuse the weekly value as a day delta."""
 
