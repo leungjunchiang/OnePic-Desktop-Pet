@@ -6,11 +6,16 @@ in the client, clips them to the current Beijing calendar day and returns the
 union length.  It never writes a fact, updates a cache, calls an RPC or
 changes a timer.  Callers can therefore use it for the two live display
 surfaces without changing reports, weekly statistics or leaderboard values.
+Closed intervals whose end accidentally runs ahead of the local clock are
+clipped to the current display moment in a new in-memory value only; the
+durable FocusSession fact remains unchanged and the strict shared aggregator
+continues to report the data-quality error.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from datetime import datetime, time
 from typing import Any
 
@@ -52,9 +57,27 @@ def _payload_rows(session_rows: Any) -> list[Any]:
     return list(session_rows)
 
 
+def _display_safe_segment(segment: FocusSegment, moment: datetime) -> FocusSegment:
+    """Return a display-only safe copy of one parsed interval.
+
+    A closed record can occasionally arrive with an end time ahead of the
+    local clock when a timer checkpoint and a pause/idle transition race.
+    The durable fact must remain untouched, but a display projection must not
+    discard the whole account-wide union because of that one boundary.  Treat
+    only this specific case as an open interval and cap it at ``moment``.
+    Other validation failures, especially a future start, remain fatal.
+    """
+
+    if segment.validation_error(moment) == "future_end":
+        return replace(segment, end_at=moment)
+    return segment
+
+
 def _normalise_rows(
     user_id: str,
     session_rows: Any,
+    *,
+    now: datetime,
 ) -> list[FocusSegment]:
     """Validate without mutating the supplied rows or FocusSegment objects."""
 
@@ -66,7 +89,7 @@ def _normalise_rows(
         if isinstance(raw, FocusSegment):
             # FocusSegment.normalized() returns a new immutable value.
             try:
-                rows.append(raw.normalized())
+                rows.append(_display_safe_segment(raw.normalized(), now))
             except (TypeError, ValueError, OverflowError) as exc:
                 raise CrossDeviceDisplayDataError(
                     f"invalid focus display interval:{index}"
@@ -80,7 +103,7 @@ def _normalise_rows(
         parsed = segment_from_record(dict(raw), index)
         if parsed is None:
             raise CrossDeviceDisplayDataError(f"invalid focus display interval:{index}")
-        rows.append(parsed)
+        rows.append(_display_safe_segment(parsed, now))
     return rows
 
 
@@ -107,17 +130,19 @@ def get_cross_device_today_display_seconds(
 
     moment = as_beijing(now)
     day_start = datetime.combine(moment.date(), time.min, tzinfo=BEIJING_TIMEZONE)
-    rows = _normalise_rows(user_id, session_rows)
+    rows = _normalise_rows(user_id, session_rows, now=moment)
     if active_session is not None:
-        active_rows = _normalise_rows(user_id, [active_session])
+        active_rows = _normalise_rows(user_id, [active_session], now=moment)
         rows.extend(active_rows)
 
     aggregate = aggregate_focus_time(rows, day_start, moment, now=moment)
-    # Keep rejecting malformed, foreign, future, and otherwise invalid
-    # intervals.  Only the derived bucket sums are tolerated here: the
-    # display must use the union total, rather than falling back to a stale
-    # cached value when subsecond truncation makes a bucket sum differ by a
-    # second.  FocusSession and the shared aggregator remain untouched.
+    # Keep rejecting malformed, foreign, future-start, and otherwise invalid
+    # intervals.  Closed future-end rows were clipped to ``moment`` by the
+    # display-only normalizer above.  Only the derived bucket sums are
+    # tolerated here: the display must use the union total, rather than
+    # falling back to a stale cached value when subsecond truncation makes a
+    # bucket sum differ by a second.  FocusSession and the shared aggregator
+    # remain untouched.
     errors = tuple(
         error
         for error in aggregate.errors

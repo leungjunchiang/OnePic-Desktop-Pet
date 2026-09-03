@@ -70,6 +70,24 @@ def test_cross_device_display_clips_to_beijing_today_and_now() -> None:
     assert get_cross_device_today_display_seconds("account-1", NOW, rows) == 2 * 60 * 60
 
 
+def test_cross_device_display_clips_a_closed_future_end_without_mutating_rows() -> None:
+    """A timer/pause race must not make the whole account display stale."""
+
+    rows = [
+        {
+            "user_id": "account-1",
+            "segment_id": "future-end-race",
+            "session_id": "session",
+            "start_at": "2026-08-31T14:00:00+08:00",
+            "end_at": "2026-08-31T16:00:00+08:00",
+        }
+    ]
+
+    before = deepcopy(rows)
+    assert get_cross_device_today_display_seconds("account-1", NOW, rows) == 60 * 60
+    assert rows == before
+
+
 def test_cross_device_display_includes_an_open_local_session_without_mutating_rows() -> None:
     rows = _rows(("09:00", "10:00"))
     before = deepcopy(rows)
