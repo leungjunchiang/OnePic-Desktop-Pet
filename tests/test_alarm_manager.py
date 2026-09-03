@@ -83,7 +83,7 @@ def test_weekday_alarm_skips_weekends(tmp_path) -> None:
     assert manager.get(alarm.id).active is False
 
 
-def test_stale_one_off_alarm_is_requeued_for_thirty_minutes(tmp_path) -> None:
+def test_stale_one_off_alarm_is_skipped_without_a_late_popup(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 19, 12, 10, 1))
     manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
     alarm = manager.add("错过的闹钟", "2026-08-19T12:00:00")
@@ -93,7 +93,25 @@ def test_stale_one_off_alarm_is_requeued_for_thirty_minutes(tmp_path) -> None:
     assert restored is not None
     assert restored.enabled is True
     assert restored.active is False
-    assert restored.snooze_until.startswith("2026-08-19T12:40:01")
+    assert restored.snooze_until is None
+    assert restored.last_triggered_slot.startswith("2026-08-19T12:00:00")
+
+    clock.value += timedelta(minutes=30)
+    assert manager.claim_due() == []
+
+
+def test_explicit_snooze_still_retries_after_a_delayed_scheduler_tick(tmp_path) -> None:
+    clock = Clock(datetime(2026, 8, 19, 12, 0))
+    manager = AlarmManager(tmp_path / "alarms.json", now_provider=clock)
+    alarm = manager.add("主动贪睡", clock.value)
+    manager.claim_due()
+    manager.snooze(alarm.id, 10)
+
+    clock.value += timedelta(minutes=21)
+    assert manager.claim_due() == []
+    restored = manager.get(alarm.id)
+    assert restored is not None
+    assert restored.snooze_until.startswith("2026-08-19T12:51:00")
 
     clock.value += timedelta(minutes=30)
     assert [item.id for item in manager.claim_due()] == [alarm.id]

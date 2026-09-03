@@ -22,8 +22,9 @@ REPEAT_DAILY = "daily"
 REPEAT_WEEKDAYS = "weekdays"
 
 # A firing card must not remain stuck forever when Lili is closed while the
-# user is away.  The next attempt is stored as a snooze on the same alarm so
-# recurring alarms keep their original daily/weekly schedule.
+# user is away.  An already-open firing card may be retried on the same alarm;
+# a scheduled occurrence that was never shown is handled separately below so
+# a stale alarm cannot unexpectedly ring much later.
 MISSED_ALARM_GRACE_MINUTES = 10
 MISSED_ALARM_RETRY_MINUTES = 30
 
@@ -412,11 +413,12 @@ class AlarmManager:
         being persisted as simultaneously ringing and then appearing one
         after another after a restart.
 
-        A firing alarm that is at least ``grace_minutes`` late is not
-        disabled.  It is requeued on the same alarm for 30 minutes from the
-        current check.  The retry uses ``snooze_until`` so a daily/weekly
-        alarm still retains its original recurring time after the retry is
-        handled.
+        A scheduled occurrence that is at least ``grace_minutes`` late is
+        marked handled without showing a late popup.  This prevents an alarm
+        configured for an earlier time from unexpectedly ringing much later
+        after a delayed scheduler tick.  An already-open firing card still
+        uses the existing retry lane, and an explicit user snooze is honored
+        as a separate reminder.
         """
 
         current = now_local(now or self._now)
@@ -461,7 +463,8 @@ class AlarmManager:
                 continue
             if not allow_during_dnd and not item.allow_during_dnd:
                 continue
-            slot = self._snooze_slot(item, current)
+            snooze_slot = self._snooze_slot(item, current)
+            slot = snooze_slot
             if slot is None:
                 slot = self._scheduled_slot(item, current)
             if slot is None or slot <= current and self._was_triggered(item, slot):
@@ -473,10 +476,13 @@ class AlarmManager:
                 changed = True
                 continue
             if self._is_late(slot, current, grace_minutes):
-                if self._skip_missed_non_delivery_day(item, current, slot):
-                    self._finish_missed_occurrence(item, slot)
-                else:
+                if snooze_slot is not None:
                     self._reschedule_after_missed(item, current, slot)
+                else:
+                    # Never turn a missed scheduled occurrence into a new
+                    # surprise alarm.  Recurring alarms will be evaluated at
+                    # their next configured occurrence.
+                    self._finish_missed_occurrence(item, slot)
                 changed = True
                 continue
 
@@ -557,7 +563,7 @@ class AlarmManager:
         return current.weekday() not in allowed and slot.date() != current.date()
 
     def _finish_missed_occurrence(self, item: Alarm, slot: datetime) -> None:
-        """Mark an excluded recurring occurrence as handled without a retry."""
+        """Mark an occurrence as handled without creating a retry."""
 
         item.active = False
         item.last_triggered_slot = slot.isoformat()
@@ -567,12 +573,10 @@ class AlarmManager:
     def _should_skip_startup_catchup(self, item: Alarm, slot: datetime) -> bool:
         """Return whether *slot* belongs to a period before this process.
 
-        Persisted alarms are allowed to retry only when the process was alive
-        before the configured slot.  This preserves the requested “10 minutes
-        late → 30-minute retry” behavior for a running app while preventing a
-        stale 10:00 alarm from appearing at 17:00 just because Lili was
-        restarted.  Newly created alarms are exempt so a user can intentionally
-        add an already-due reminder and receive the normal late retry.
+        Persisted alarms are not allowed to catch up after the process starts,
+        while newly created alarms are exempt from this startup guard.  The
+        normal grace-window check still decides whether a newly created alarm
+        is close enough to its configured time to show immediately.
         """
 
         if slot >= self._started_at:
