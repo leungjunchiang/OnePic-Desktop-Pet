@@ -352,6 +352,26 @@ def test_remote_focus_segments_are_facts_not_daily_maxima(tmp_path) -> None:
     assert day["focus_intervals"][0]["started_at"].startswith("2026-08-26T09:00")
 
 
+def test_focus_segment_sync_cursor_persists_without_changing_focus_facts(tmp_path) -> None:
+    now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    path = tmp_path / "focus.json"
+    store = FocusAnalyticsStore(path=path, now_provider=lambda: now, persist=True)
+    store.record_session(
+        30 * 60,
+        started_at=datetime(2026, 8, 26, 9, 0, tzinfo=timezone(timedelta(hours=8))),
+        record_id="local-1",
+    )
+    facts_before = store.focus_segments_payload()
+
+    assert store.focus_segments_sync_cursor() is None
+    assert store.set_focus_segments_sync_cursor("2026-08-26T04:00:00+00:00") is True
+    assert store.set_focus_segments_sync_cursor("2026-08-26T04:00:00+00:00") is False
+
+    reloaded = FocusAnalyticsStore(path=path, now_provider=lambda: now, persist=True)
+    assert reloaded.focus_segments_sync_cursor() == "2026-08-26T04:00:00+00:00"
+    assert reloaded.focus_segments_payload() == facts_before
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

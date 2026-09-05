@@ -275,6 +275,31 @@ class FocusAnalyticsStore:
             rows.append(segment.to_dict())
         return rows
 
+    def focus_segments_sync_cursor(self) -> str | None:
+        """Return the last server delta cursor for this account, if valid."""
+
+        state = self._state.get("account_state")
+        if not isinstance(state, dict):
+            return None
+        value = str(state.get("focus_segments_sync_cursor") or "").strip()
+        return value[:80] or None
+
+    def set_focus_segments_sync_cursor(self, cursor: Any) -> bool:
+        """Persist a server delta cursor without touching focus facts."""
+
+        value = str(cursor or "").strip()[:80]
+        if not value:
+            return False
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        if state.get("focus_segments_sync_cursor") == value:
+            return False
+        state["focus_segments_sync_cursor"] = value
+        self._save()
+        return True
+
     def merge_remote_segments(self, payload: Any) -> bool:
         """Merge server-returned interval facts without importing aggregates."""
 

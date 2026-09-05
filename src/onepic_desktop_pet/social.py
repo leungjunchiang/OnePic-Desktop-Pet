@@ -1975,6 +1975,7 @@ class HttpSocialBackend:
             "lili_economy_leaderboard": "/economy/leaderboard",
             "lili_focus_weekly_leaderboard": "/leaderboard/focus-week",
             "lili_sync_focus_segments": "/rpc/lili_sync_focus_segments",
+            "lili_sync_focus_segments_delta": "/rpc/lili_sync_focus_segments_delta",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 

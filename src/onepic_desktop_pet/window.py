@@ -5923,6 +5923,7 @@ class PetWindow(QWidget):
             # Raw closed intervals are the cross-device source of truth.
             # Daily/profile totals remain compatibility fields only.
             "focus_segments": self.focus_analytics.focus_segments_payload(),
+            "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
         }
@@ -6527,7 +6528,22 @@ class PetWindow(QWidget):
             week_seconds=int(remote_week_seconds or 0),
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
-        segment_changed = self.focus_analytics.merge_remote_segments(data.get("_focus_segments"))
+        focus_segments_payload = data.get("_focus_segments")
+        segment_changed = self.focus_analytics.merge_remote_segments(focus_segments_payload)
+        # The delta cursor is transport state only.  Advance it after the
+        # payload has passed the existing raw-fact merge path, never before;
+        # malformed or legacy responses therefore cannot make a later sync
+        # skip facts.  FocusSession records and their union semantics remain
+        # untouched.
+        if (
+            isinstance(focus_segments_payload, dict)
+            and focus_segments_payload.get("_sync_mode") == "delta"
+            and isinstance(focus_segments_payload.get("segments"), list)
+            and focus_segments_payload.get("next_cursor")
+        ):
+            self.focus_analytics.set_focus_segments_sync_cursor(
+                focus_segments_payload.get("next_cursor")
+            )
         # merge_remote_segments already reconciles derived caches and folds
         # that result into its return value.  Avoid a second full-ledger scan
         # on every dashboard response, which can starve the macOS event loop.

@@ -792,14 +792,41 @@ class SocialSyncThread(QThread):
                         LOGGER.info("daily focus history sync deferred: %s", exc)
                     try:
                         focus_segments_result = sync_rpc(
-                            "lili_sync_focus_segments",
-                            {"p_segments": personal_state.get("focus_segments") or []},
+                            "lili_sync_focus_segments_delta",
+                            {
+                                "p_segments": personal_state.get("focus_segments") or [],
+                                "p_since": personal_state.get("focus_segments_sync_cursor"),
+                            },
                         )
                     except (SocialError, AttributeError, TypeError) as exc:
-                        # Older relays do not expose the raw-fact migration;
-                        # the legacy profile/daily compatibility path remains
-                        # usable until they are upgraded.
-                        LOGGER.info("focus segment sync deferred: %s", exc)
+                        # Keep mixed-version deployments usable.  Only an
+                        # explicitly missing endpoint falls back to the old
+                        # full-snapshot RPC; transient failures must not turn
+                        # every poll into an 80 KB response.
+                        status = getattr(exc, "status", None)
+                        error_code = str(getattr(exc, "error_code", "") or "").casefold()
+                        raw_error = str(exc).casefold()
+                        unsupported = (
+                            status in {404, 405}
+                            or error_code in {"pgrst202", "42883"}
+                            or "lili_sync_focus_segments_delta" in raw_error
+                        )
+                        if unsupported:
+                            try:
+                                focus_segments_result = sync_rpc(
+                                    "lili_sync_focus_segments",
+                                    {"p_segments": personal_state.get("focus_segments") or []},
+                                )
+                                if isinstance(focus_segments_result, dict):
+                                    focus_segments_result = dict(focus_segments_result)
+                                    focus_segments_result["_sync_mode"] = "legacy"
+                            except (SocialError, AttributeError, TypeError) as fallback_exc:
+                                LOGGER.info("legacy focus segment sync deferred: %s", fallback_exc)
+                        else:
+                            LOGGER.info("incremental focus segment sync deferred: %s", exc)
+                    if isinstance(focus_segments_result, dict):
+                        focus_segments_result = dict(focus_segments_result)
+                        focus_segments_result.setdefault("_sync_mode", "delta")
             # Taunts are separate from room events because the receiver must
             # keep the state across devices until the first work heartbeat
             # plus twenty minutes.  Older relays may not know this optional

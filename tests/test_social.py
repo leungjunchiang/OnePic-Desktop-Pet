@@ -1919,6 +1919,32 @@ def test_multi_device_presence_policy_is_explicit_deny_only():
     assert "insert into public.lili_focus_segments" not in normalized
 
 
+def test_incremental_focus_segment_sync_is_idempotent_and_allowlisted():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260906090000_lili_incremental_focus_segments_sync.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create or replace function public.lili_sync_focus_segments_delta" in normalized
+    assert "p_since timestamptz" in normalized
+    assert "s.updated_at >= p_since" in normalized
+    assert "lili_focus_segments_user_updated_idx" in normalized
+    assert "is distinct from excluded" in normalized
+    assert "revoke execute on function public.lili_sync_focus_segments_delta" in normalized
+    assert "grant execute on function public.lili_sync_focus_segments_delta" in normalized
+
+    for path in (
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        assert "lili_sync_focus_segments_delta" in path.read_text(encoding="utf-8")
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")
