@@ -1,3 +1,9 @@
+## v0.23.221 — 修复工作报告分桶舍入导致的统计异常
+
+- 修复跨小时 FocusSegment 按整数秒分桶时重复截断小数秒，导致 hourly/daily 合计与 canonical interval union 相差数秒、工作报告误显示“统计异常”的问题。
+- 改为累计差分取整，保证 hourly、daily 与 canonical total 始终严格一致，同时保留真正超出时间窗口或区间数据异常时的 consistency guard。
+- 增加跨小时小数秒分桶回归测试；不改变 FocusSegment 同步协议，也不会增加 Supabase 请求或 Egress。
+
 ## v0.23.220 — P0：修复历史报告污染并完成账号账本收敛审计
 
 - 将工作报告的日/周/月/年及自选历史区间统一收口到 `sealed FocusSegments ∪ fresh per-device live intervals → interval union`；历史日严格使用北京时间 `[D 00:00, D+1 00:00)`，不再读取旧 daily checkpoint、today/week 汇总或当前日期的“较昨日”缓存。
