@@ -6187,6 +6187,7 @@ class PetWindow(QWidget):
             # Daily/profile totals remain compatibility fields only.
             "focus_segments": self.focus_analytics.focus_segments_payload(),
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
+            "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
         }
@@ -6829,7 +6830,7 @@ class PetWindow(QWidget):
             if isinstance(focus_segments_payload, dict)
             else None
         )
-        if isinstance(uploaded_segments, list) and uploaded_segments:
+        if isinstance(uploaded_segments, list) and uploaded_segments and merge_ok:
             try:
                 self.focus_analytics.acknowledge_focus_segments_upload(uploaded_segments)
             except Exception as exc:
@@ -6837,6 +6838,12 @@ class PetWindow(QWidget):
                 # safe: the unchanged rows retry idempotently next cycle.
                 merge_error = merge_error or "upload_ack_persist_failed"
                 LOGGER.warning("focus segment upload acknowledgement failed: %s", exc)
+        elif isinstance(uploaded_segments, list) and uploaded_segments and not merge_ok:
+            # Keep the SHA batch dirty when the RPC returned but the local
+            # AccountFocusStore transaction did not validate/persist. The
+            # next delta retry is idempotent and prevents a local merge error
+            # from permanently hiding a sealed fact.
+            merge_error = merge_error or "upload_ack_deferred_merge_failed"
         # The delta cursor is transport state only.  Advance it after the
         # complete raw-fact transaction has succeeded.  A malformed response,
         # merge failure, or local cursor persistence failure remains retryable.

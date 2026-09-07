@@ -1,3 +1,10 @@
+## v0.23.216 — 修复权限故障遗留的封闭专注片段回填
+
+- 修复旧版本在 Supabase 权限故障期间可能把本机 sealed FocusSegment 错误记为“已上传”，导致后续 `upload_count=0` 但云端仍缺少凌晨/昨天历史的问题。
+- 首次升级到本版本时，仅执行一次有界 `recovery_backfill`：重传本地已有的封闭事实；成功持久化 SHA-256 确认后立即恢复严格的 owner-filtered delta 模式。
+- 不上传进行中的 `end_at=NULL`，不刷新未变化记录的 `updated_at`，不因桌宠每秒刷新或报告切换增加 Supabase 请求。
+- 同步诊断增加 `sync_mode`，并继续记录 cursor、upload/return/merge 数量和错误状态。
+
 ## v0.23.215 — 修复生产 delta 权限与跨设备状态说明
 
 - 修复 `v0.23.214` 生产环境中的专注增量同步权限回归：`lili_sync_focus_segments_delta` 保持 `SECURITY INVOKER`，仅向已登录用户授予 RLS 所需的 `SELECT / INSERT / UPDATE`；匿名访问与删除权限仍禁止。

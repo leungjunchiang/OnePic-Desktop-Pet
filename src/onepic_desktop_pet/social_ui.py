@@ -731,6 +731,7 @@ class SocialSyncThread(QThread):
             focus_segments_cursor_before = ""
             focus_segments_upload_count = 0
             focus_segments_device_id = ""
+            focus_segments_sync_mode = "delta"
             focus_segments_sync_started = 0.0
             personal_state = self.presence.get("personal_state")
             personal_state_factory = self.presence.get("_personal_state_factory")
@@ -817,6 +818,9 @@ class SocialSyncThread(QThread):
                         focus_segments_cursor_before = str(
                             personal_state.get("focus_segments_sync_cursor") or ""
                         )
+                        focus_segments_sync_mode = str(
+                            personal_state.get("focus_segments_sync_mode") or "delta"
+                        )[:40]
                         focus_segments_upload_count = (
                             len(focus_segments) if isinstance(focus_segments, list) else 0
                         )
@@ -846,7 +850,7 @@ class SocialSyncThread(QThread):
                             upload_count=focus_segments_upload_count,
                             returned_count=0,
                             cursor_after=focus_segments_cursor_before,
-                            sync_mode="delta",
+                            sync_mode=focus_segments_sync_mode,
                             device_id=focus_segments_device_id,
                             duration_ms=focus_segments_sync_duration_ms,
                             error=focus_segments_sync_error,
@@ -865,7 +869,7 @@ class SocialSyncThread(QThread):
                             upload_count=focus_segments_upload_count,
                             returned_count=0,
                             cursor_after=focus_segments_cursor_before,
-                            sync_mode="delta",
+                            sync_mode=focus_segments_sync_mode,
                             device_id=focus_segments_device_id,
                             duration_ms=focus_segments_sync_duration_ms,
                             error=focus_segments_sync_error,
@@ -883,7 +887,7 @@ class SocialSyncThread(QThread):
                             * 1000,
                             1,
                         )
-                        focus_segments_result["_sync_mode"] = "delta"
+                        focus_segments_result["_sync_mode"] = focus_segments_sync_mode
                         returned_segments = focus_segments_result.get("segments")
                         returned_count = (
                             len(returned_segments)
@@ -898,7 +902,7 @@ class SocialSyncThread(QThread):
                                 focus_segments_result.get("next_cursor") or ""
                             ),
                             "full_sync": bool(focus_segments_result.get("full_sync")),
-                            "sync_mode": "delta",
+                            "sync_mode": focus_segments_sync_mode,
                             "device_id": focus_segments_device_id,
                             "duration_ms": focus_segments_sync_duration_ms,
                             "error": "",
@@ -912,7 +916,7 @@ class SocialSyncThread(QThread):
                                 focus_segments_result.get("next_cursor") or ""
                             ),
                             full_sync=bool(focus_segments_result.get("full_sync")),
-                            sync_mode="delta",
+                            sync_mode=focus_segments_sync_mode,
                             device_id=focus_segments_device_id,
                             duration_ms=focus_segments_sync_duration_ms,
                             error="",

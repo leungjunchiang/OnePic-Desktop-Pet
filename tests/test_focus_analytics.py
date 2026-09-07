@@ -562,6 +562,50 @@ def test_focus_segment_upload_ack_failure_keeps_batch_retryable(tmp_path, monkey
     assert store.focus_segments_payload() == batch
 
 
+def test_legacy_acknowledgements_trigger_one_bounded_recovery_backfill(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    path = tmp_path / "focus.json"
+    store = FocusAnalyticsStore(
+        path=path,
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=3), record_id="local-a")
+    store.merge_remote_segments({
+        "segments": [{
+            "segment_id": "remote-b",
+            "session_id": "remote-session",
+            "start_at": "2026-09-07T08:00:00+08:00",
+            "end_at": "2026-09-07T09:00:00+08:00",
+            "device_id": "device-b",
+        }],
+    })
+    first = store.focus_segments_payload()
+    store.acknowledge_focus_segments_upload(first)
+
+    # Simulate the pre-grant release: fingerprints exist, but no version was
+    # recorded to prove that the RPC transaction really accepted them.
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["account_state"].pop("focus_segment_upload_ack_version", None)
+    raw["account_state"].pop("focus_segment_upload_repair_pending", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    recovered = FocusAnalyticsStore(
+        path=path,
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    repair = recovered.focus_segments_payload()
+    assert recovered.focus_segments_sync_mode() == "recovery_backfill"
+    assert {item["segment_id"] for item in repair} == {"local-a", "remote-b"}
+
+    recovered.acknowledge_focus_segments_upload(repair)
+    assert recovered.focus_segments_sync_mode() == "delta"
+    assert recovered.focus_segments_payload() == []
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

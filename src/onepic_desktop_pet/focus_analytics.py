@@ -43,6 +43,12 @@ from .focus_segments import (
 MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60 - 1
 INTERRUPTION_GRACE_SECONDS = 10 * 60
 BEIJING_TIMEZONE = FOCUS_BEIJING_TIMEZONE
+# The previous release persisted upload fingerprints without recording which
+# client acknowledged them.  Those fingerprints may have been written while
+# the production table was still rejecting INSERT, so the first client that
+# sees that legacy state performs one bounded repair upload.  Afterwards the
+# normal fingerprint/delta protocol resumes permanently.
+FOCUS_SEGMENT_UPLOAD_ACK_VERSION = 2
 
 
 def _as_beijing(value: datetime) -> datetime:
@@ -169,13 +175,19 @@ class FocusAnalyticsStore:
         }
         if self._persist:
             self._load()
+        upload_state_changed = self._ensure_focus_segment_upload_state()
         # ``days.seconds`` is derived data.  Older releases added cumulative
         # timer checkpoints as if they were independent sessions, which could
         # produce impossible values such as 38 hours in one calendar day.
         # Rebuild from the raw records on load while keeping those records for
         # diagnostics and future migrations.
         projection_changed = self._ensure_daily_focus_projection()
-        if self._rebuild_days_from_records() or self._trim_days() or projection_changed:
+        if (
+            self._rebuild_days_from_records()
+            or self._trim_days()
+            or projection_changed
+            or upload_state_changed
+        ):
             self._save()
 
     def switch_account(self, account_id: str | None) -> bool:
@@ -287,16 +299,24 @@ class FocusAnalyticsStore:
         )
         if not isinstance(acknowledgements, dict):
             acknowledgements = {}
+        repair_pending = bool(
+            isinstance(state, dict)
+            and state.get("focus_segment_upload_repair_pending")
+        )
         max_rows = max(1, min(500, int(limit)))
         for segment in self.focus_segments():
             if segment.end_at is None:
                 # Active intervals are projected locally and sealed on pause;
                 # never make a remote device guess an end timestamp.
                 continue
-            # The account ledger also contains downloaded facts from other
-            # devices. Never echo those rows back to Supabase. Empty device ids
-            # are legacy facts owned by this installation and are uploaded once.
-            if segment.device_id and segment.device_id != self._device_id:
+            # A one-time repair is deliberately allowed to include the
+            # account's bounded local ledger. It is needed for upgrades from
+            # the release that could persist an acknowledgement before the
+            # server transaction actually inserted the row. Existing rows are
+            # idempotent and unchanged rows do not refresh updated_at. Once
+            # this batch is acknowledged, the normal owner filter below again
+            # prevents echoing downloaded facts from another device.
+            if not repair_pending and segment.device_id and segment.device_id != self._device_id:
                 continue
             payload = segment.to_dict()
             fingerprint = self._focus_segment_upload_fingerprint(payload)
@@ -306,6 +326,46 @@ class FocusAnalyticsStore:
             if len(rows) >= max_rows:
                 break
         return rows
+
+    def focus_segments_sync_mode(self) -> str:
+        """Return the bounded transport mode for diagnostics and UI sync."""
+
+        state = self._state.get("account_state")
+        if isinstance(state, dict) and state.get("focus_segment_upload_repair_pending"):
+            return "recovery_backfill"
+        return "delta"
+
+    def _ensure_focus_segment_upload_state(self) -> bool:
+        """Detect acknowledgements written before the production grant fix.
+
+        This is intentionally a one-time local migration. It does not reset
+        the delta cursor and never causes a historical download. A bounded
+        upload of the local sealed ledger repairs rows that were stranded by
+        the old permission failure; the server's conflict clause keeps
+        unchanged rows from acquiring a new ``updated_at`` value.
+        """
+
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        version = state.get("focus_segment_upload_ack_version")
+        fingerprints = state.get("focus_segment_upload_fingerprints")
+        changed = False
+        if fingerprints and version != FOCUS_SEGMENT_UPLOAD_ACK_VERSION:
+            state["focus_segment_upload_ack_version"] = FOCUS_SEGMENT_UPLOAD_ACK_VERSION
+            state["focus_segment_upload_repair_pending"] = True
+            # Do not retain stale acknowledgements: they are precisely what
+            # could have hidden a local sealed fact during the permission
+            # incident. The repair is retried until its post-RPC ack persists.
+            state.pop("focus_segment_upload_fingerprints", None)
+            changed = True
+        elif version == FOCUS_SEGMENT_UPLOAD_ACK_VERSION:
+            # Keep the state compact and repair flags explicit across reloads.
+            if "focus_segment_upload_repair_pending" not in state:
+                state["focus_segment_upload_repair_pending"] = False
+                changed = True
+        return changed
 
     @staticmethod
     def _focus_segment_upload_fingerprint(payload: dict[str, Any]) -> str:
@@ -360,6 +420,16 @@ class FocusAnalyticsStore:
             return False
         previous = copy.deepcopy(self._state)
         state["focus_segment_upload_fingerprints"] = updated
+        state["focus_segment_upload_ack_version"] = FOCUS_SEGMENT_UPLOAD_ACK_VERSION
+        if state.get("focus_segment_upload_repair_pending"):
+            closed_count = sum(
+                1 for segment in self.focus_segments() if segment.end_at is not None
+            )
+            # The store is bounded to 500 rows and the transport batch is
+            # bounded to the same size. If every closed local fact was in the
+            # successful transaction, the one-time recovery is complete.
+            if len(payload) >= closed_count:
+                state["focus_segment_upload_repair_pending"] = False
         try:
             self._save()
         except Exception:
