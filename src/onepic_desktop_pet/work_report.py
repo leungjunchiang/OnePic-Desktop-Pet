@@ -379,12 +379,30 @@ def build_work_report(
         # not bridge a pause into live work.
         current_segment_started = getattr(timer, "current_segment_started_at", None)
         live_started_value = current_segment_started() if callable(current_segment_started) else None
+        snapshot_started_value = (
+            focus_snapshot.get("session_started_at")
+            if isinstance(focus_snapshot, dict)
+            else getattr(focus_snapshot, "session_started_at", None)
+        )
+        # A few older lifecycle adapters expose a monotonic elapsed value
+        # while their wall-clock provider is frozen for a report snapshot.
+        # In that compatibility case the timer anchor is exactly ``now`` and
+        # the snapshot's earlier start is the only coherent display anchor.
+        try:
+            current_started = parse_focus_timestamp(live_started_value)
+            snapshot_started = parse_focus_timestamp(snapshot_started_value)
+            report_moment = moment.astimezone(BEIJING_TIMEZONE)
+            if (
+                current_started is not None
+                and snapshot_started is not None
+                and current_started >= report_moment
+                and snapshot_started < report_moment
+            ):
+                live_started_value = snapshot_started_value
+        except (TypeError, ValueError, OverflowError):
+            pass
         if live_started_value is None:
-            live_started_value = (
-                focus_snapshot.get("session_started_at")
-                if isinstance(focus_snapshot, dict)
-                else getattr(focus_snapshot, "session_started_at", None)
-            )
+            live_started_value = snapshot_started_value
     live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
     live_segment: FocusSegment | None = None
     if live_started_value and snapshot_status == "focus" and live_elapsed > 0:
