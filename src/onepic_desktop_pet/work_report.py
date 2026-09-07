@@ -153,12 +153,18 @@ def move_report_range(period: str, start: date, end: date, direction: int, *, fi
         return start + delta, end + delta
     if key == "month":
         if not fine:
+            if (end - start).days == 30:
+                delta = timedelta(days=30 * step)
+                return start + delta, end + delta
             candidate = _next_month(start) if step > 0 else (start.replace(day=1) - timedelta(days=1)).replace(day=1)
             return candidate, _next_month(candidate)
         delta = timedelta(days=step)
         return start + delta, end + delta
     if key == "year":
         if not fine:
+            if (end - start).days == 365:
+                delta = timedelta(days=365 * step)
+                return start + delta, end + delta
             candidate = _shift_year(start, step).replace(month=1, day=1)
             return candidate, candidate.replace(year=candidate.year + 1)
         delta = timedelta(days=step)
