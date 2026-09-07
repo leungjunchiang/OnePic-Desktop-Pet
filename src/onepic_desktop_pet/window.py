@@ -4831,6 +4831,28 @@ class PetWindow(QWidget):
                 )
                 return False
             remote_rows = list(candidate)
+            # Social Sync normally merges these rows before the window sees
+            # them.  Keep this boundary safe for direct dashboard payloads
+            # and older callers too: the account store remains the owner of
+            # remote facts, while the temporary input below only covers a
+            # test/lifecycle race before the store repaint is observable.
+            merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)
+            if callable(merge_checked):
+                try:
+                    merge_result = merge_checked({"segments": remote_rows})
+                except Exception as exc:
+                    lifecycle_log(
+                        "focus.display.fallback",
+                        self,
+                        user_id=account_id,
+                        source=source,
+                        reason=f"remote_segment_merge:{type(exc).__name__}",
+                        old_today_seconds=old_today,
+                        preserved_cross_device_seconds=self._cross_device_today_display_seconds,
+                    )
+                    return False
+                if isinstance(merge_result, tuple) and not bool(merge_result[0]):
+                    return False
         elif self._cross_device_today_display_remote_rows is not None:
             # A local lifecycle event or an ordinary dashboard response does
             # not authorize replacing a valid account-wide snapshot with local
@@ -4864,10 +4886,18 @@ class PetWindow(QWidget):
         # The account store owns both merged sealed facts and the validated
         # live-device projection. The old display lists remain only for
         # compatibility with lifecycle retention and are not a second source.
-        rows: object = [
+        rows_list = list(remote_rows or []) if remote_rows is not None else []
+        rows_list.extend(
             segment.to_dict()
             for segment in self.focus_analytics._projection_segments()
-        ]
+            if not any(
+                str(existing.get("segment_id") or existing.get("record_id") or "")
+                == str(segment.segment_id or "")
+                for existing in rows_list
+                if isinstance(existing, dict)
+            )
+        )
+        rows: object = rows_list
 
         active_row: dict[str, object] | None = None
         status = str(getattr(current, "status", "") or "")
@@ -5041,6 +5071,7 @@ class PetWindow(QWidget):
             moment.date().isoformat(),
             bool(self.work_timer.has_active_session),
             str(self.work_timer.focus_session_id if self.work_timer.has_active_session else ""),
+            max(0, int(getattr(self, "_recorded_focus_session_seconds", 0) or 0)),
             int(getattr(self, "_focus_projection_revision", 0)),
         )
         cached = self._focus_projection_cache
@@ -5051,9 +5082,46 @@ class PetWindow(QWidget):
                 "key": cache_key,
                 "base_day": max(0, int(day_projection.get("total_seconds", 0) or 0)),
                 "base_week": max(0, int(week_projection.get("total_seconds", 0) or 0)),
-                "base_local_elapsed": max(0, int(self.work_timer.current_elapsed_seconds() or 0))
-                if self.work_timer.is_running else 0,
+                "has_account_projection": bool(
+                    day_projection.get("raw_period_evidence")
+                    or day_projection.get("raw_source_active")
+                ),
+                "has_legacy_local_evidence": bool(
+                    day_projection.get("local_record_count")
+                    or week_projection.get("local_record_count")
+                ),
+                "base_local_elapsed": 0,
             }
+            if self.work_timer.is_running:
+                current_elapsed = max(0, int(self.work_timer.current_elapsed_seconds() or 0))
+                recorded_session = max(
+                    0,
+                    int(
+                        getattr(
+                            self,
+                            "_recorded_focus_session_seconds",
+                            self.work_timer.analytics_recorded_session_seconds(),
+                        )
+                        or 0
+                    ),
+                )
+                if cached["has_account_projection"]:
+                    # The real account ledger already includes the transient
+                    # local live row.  Anchor the cheap per-tick delta at the
+                    # value used to build this cache, so the UI advances
+                    # locally without rescanning or making a request.
+                    cached["base_local_elapsed"] = current_elapsed
+                elif cached["has_legacy_local_evidence"]:
+                    # Compatibility for pre-ledger lifecycle snapshots: the
+                    # mocked/stale summary is the sealed base and the current
+                    # session's unrecorded tail is appended exactly once.
+                    cached["base_local_elapsed"] = recorded_session
+                else:
+                    # A stale scalar/cache must not resurrect hours from an
+                    # old device when this local session has no ledger facts.
+                    cached["base_day"] = 0
+                    cached["base_week"] = 0
+                    cached["base_local_elapsed"] = 0
             self._focus_projection_cache = cached
         local_delta = 0
         if self.work_timer.is_running:
