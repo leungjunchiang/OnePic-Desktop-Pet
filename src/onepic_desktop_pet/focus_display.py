@@ -107,6 +107,63 @@ def _normalise_rows(
     return rows
 
 
+def live_projection_rows(
+    user_id: str,
+    projection: Any,
+    *,
+    now: datetime,
+) -> list[FocusSegment]:
+    """Validate the small per-device live projection for display only.
+
+    Active rows remain open intervals and recently stopped rows carry a
+    display-only ``end_at`` bridge.  The result is made of immutable
+    ``FocusSegment`` values in memory; it is never merged into the local
+    analytics ledger or uploaded as a FocusSession fact.
+    """
+
+    if not isinstance(projection, Mapping) or "devices" not in projection:
+        raise CrossDeviceDisplayDataError("focus live projection missing devices")
+    devices = projection.get("devices")
+    if not isinstance(devices, (list, tuple)):
+        raise CrossDeviceDisplayDataError("focus live projection devices is not a list")
+    account_id = str(user_id or "").strip()
+    if not account_id:
+        raise CrossDeviceDisplayDataError("focus live projection requires an account id")
+    moment = as_beijing(now)
+    rows: list[FocusSegment] = []
+    seen_devices: set[str] = set()
+    for index, raw in enumerate(devices):
+        if not isinstance(raw, Mapping):
+            raise CrossDeviceDisplayDataError(f"invalid focus live projection row:{index}")
+        row_user_id = str(raw.get("user_id") or "").strip()
+        if row_user_id and row_user_id != account_id:
+            raise CrossDeviceDisplayDataError(f"focus live projection account mismatch:{index}")
+        device_id = str(raw.get("device_id") or "").strip()
+        if not device_id or device_id in seen_devices:
+            raise CrossDeviceDisplayDataError(f"invalid focus live projection device:{index}")
+        seen_devices.add(device_id)
+        session_id = str(raw.get("session_id") or "").strip()
+        if not session_id:
+            raise CrossDeviceDisplayDataError(f"invalid focus live projection session:{index}")
+        is_live = bool(raw.get("live", raw.get("working", False)))
+        end_at = None if is_live else raw.get("end_at")
+        if not is_live and not end_at:
+            raise CrossDeviceDisplayDataError(f"stopped focus live projection missing end:{index}")
+        candidate = {
+            "user_id": account_id,
+            "segment_id": f"display-live-device:{device_id}",
+            "session_id": session_id,
+            "start_at": raw.get("start_at") or raw.get("session_started_at"),
+            "end_at": end_at,
+            "device_id": device_id,
+        }
+        parsed = segment_from_record(candidate, index)
+        if parsed is None:
+            raise CrossDeviceDisplayDataError(f"invalid focus live projection interval:{index}")
+        rows.append(_display_safe_segment(parsed, moment))
+    return rows
+
+
 def get_cross_device_today_display_seconds(
     user_id: str,
     now: datetime,
@@ -159,4 +216,5 @@ def get_cross_device_today_display_seconds(
 __all__ = [
     "CrossDeviceDisplayDataError",
     "get_cross_device_today_display_seconds",
+    "live_projection_rows",
 ]

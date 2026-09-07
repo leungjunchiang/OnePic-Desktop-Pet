@@ -1945,6 +1945,36 @@ def test_incremental_focus_segment_sync_is_idempotent_and_allowlisted():
         assert "lili_sync_focus_segments_delta" in path.read_text(encoding="utf-8")
 
 
+def test_live_focus_projection_is_display_only_and_allowlisted():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907090000_lili_focus_live_projection_read.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create or replace function public.lili_focus_live_projection()" in normalized
+    assert "create or replace function public.lili_capture_focus_device_projection_stop()" in normalized
+    assert "last_session_started_at" in normalized
+    assert "last_session_ended_at" in normalized
+    assert "grant execute on function public.lili_focus_live_projection() to authenticated" in normalized
+    assert "revoke execute on function public.lili_focus_live_projection() from public, anon" in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "src" / "onepic_desktop_pet" / "social_ui.py",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+    ):
+        assert "lili_focus_live_projection" in path.read_text(encoding="utf-8")
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")

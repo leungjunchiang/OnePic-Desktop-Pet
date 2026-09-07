@@ -1976,6 +1976,7 @@ class HttpSocialBackend:
             "lili_focus_weekly_leaderboard": "/leaderboard/focus-week",
             "lili_sync_focus_segments": "/rpc/lili_sync_focus_segments",
             "lili_sync_focus_segments_delta": "/rpc/lili_sync_focus_segments_delta",
+            "lili_focus_live_projection": "/rpc/lili_focus_live_projection",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
 
@@ -3577,6 +3578,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self._private_notes_loaded = False
         self._private_notes_cache: dict[str, tuple[float, dict[str, str]]] = {}
         self._auxiliary_cache_account_id = ""
+        # Optional during mixed-version rollout.  A missing live-projection
+        # RPC is negative-cached so old relays do not receive a 404 every
+        # passive sync cycle.
+        self._live_projection_unavailable_until = 0.0
         # Both the main window and the study-room window use this one client
         # instance.  Keep their reads behind shared coordinators so opening a
         # tab, a startup refresh, and a passive timer cannot fan out into
@@ -3864,6 +3869,32 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return result
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._manager.request("rpc", name, body)
+
+    def focus_live_projection(self) -> dict[str, Any] | None:
+        """Read the tiny per-device live interval projection, if available."""
+
+        now = time.monotonic()
+        if now < self._live_projection_unavailable_until:
+            return None
+        try:
+            payload = self.rpc("lili_focus_live_projection", {})
+        except SocialError as exc:
+            status = getattr(exc, "status", None)
+            error_code = str(getattr(exc, "error_code", "") or "").casefold()
+            raw_error = str(exc).casefold()
+            unsupported = (
+                status in {404, 405}
+                or error_code in {"pgrst202", "42883"}
+                or "lili_focus_live_projection" in raw_error
+            )
+            if unsupported:
+                self._live_projection_unavailable_until = now + 300.0
+                return None
+            raise
+        if not isinstance(payload, dict):
+            return None
+        return dict(payload)
+
     def update_profile(self, **kwargs: Any) -> None: self._manager.request("update_profile", **kwargs)
     def update_owner_nickname(self, nickname: str) -> None: self._manager.request("update_owner_nickname", nickname)
     def heartbeat(self, **kwargs: Any) -> None: self._manager.request("heartbeat", **kwargs)

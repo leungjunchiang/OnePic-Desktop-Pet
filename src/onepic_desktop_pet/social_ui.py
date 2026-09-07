@@ -706,6 +706,7 @@ class SocialSyncThread(QThread):
             heartbeat_error = ""
             focus_history_result = None
             focus_segments_result = None
+            focus_live_projection_result = None
             personal_state_result = None
             presence_context_updated: bool | None = None
             taunt_state_result = None
@@ -827,6 +828,23 @@ class SocialSyncThread(QThread):
                     if isinstance(focus_segments_result, dict):
                         focus_segments_result = dict(focus_segments_result)
                         focus_segments_result.setdefault("_sync_mode", "delta")
+            # Active FocusSession intervals remain local/canonical until they
+            # close.  Read the separate per-device liveness projection so the
+            # display can union all currently active devices without mutating
+            # the fact ledger.  The production client negative-caches a
+            # missing RPC during mixed-version rollout; older test/backends
+            # can still use the generic RPC path.
+            live_projection_reader = getattr(self.client, "focus_live_projection", None)
+            live_rpc = getattr(self.client, "rpc", None)
+            if callable(live_projection_reader) or callable(live_rpc):
+                try:
+                    focus_live_projection_result = (
+                        live_projection_reader()
+                        if callable(live_projection_reader)
+                        else live_rpc("lili_focus_live_projection", {})
+                    )
+                except (SocialError, AttributeError, TypeError) as exc:
+                    LOGGER.info("focus live projection deferred: %s", exc)
             # Taunts are separate from room events because the receiver must
             # keep the state across devices until the first work heartbeat
             # plus twenty minutes.  Older relays may not know this optional
@@ -897,6 +915,9 @@ class SocialSyncThread(QThread):
             if isinstance(focus_segments_result, dict):
                 data = dict(data or {})
                 data["_focus_segments"] = focus_segments_result
+            if isinstance(focus_live_projection_result, dict):
+                data = dict(data or {})
+                data["_focus_live_projection"] = focus_live_projection_result
             if isinstance(personal_state_result, dict):
                 data = dict(data or {})
                 # The dashboard function on older deployments does not yet

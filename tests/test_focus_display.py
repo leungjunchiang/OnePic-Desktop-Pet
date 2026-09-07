@@ -8,6 +8,7 @@ import pytest
 from onepic_desktop_pet.focus_display import (
     CrossDeviceDisplayDataError,
     get_cross_device_today_display_seconds,
+    live_projection_rows,
 )
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
 from onepic_desktop_pet.focus_segments import BEIJING_TIMEZONE
@@ -105,6 +106,97 @@ def test_cross_device_display_includes_an_open_local_session_without_mutating_ro
     )
     assert result == 2 * 60 * 60
     assert rows == before
+
+
+def test_live_projection_unions_two_active_devices_without_double_counting() -> None:
+    live_rows = live_projection_rows(
+        "account-1",
+        {
+            "devices": [
+                {
+                    "device_id": "mac",
+                    "session_id": "mac-session",
+                    "start_at": "2026-08-31T09:00:00+08:00",
+                    "live": True,
+                },
+                {
+                    "device_id": "win",
+                    "session_id": "win-session",
+                    "start_at": "2026-08-31T10:00:00+08:00",
+                    "live": True,
+                },
+            ]
+        },
+        now=NOW,
+    )
+
+    assert get_cross_device_today_display_seconds("account-1", NOW, live_rows) == 6 * 60 * 60
+
+
+def test_live_projection_bridge_keeps_a_stopped_device_until_closed_fact_arrives() -> None:
+    live_rows = live_projection_rows(
+        "account-1",
+        {
+            "devices": [
+                {
+                    "device_id": "mac",
+                    "session_id": "mac-session",
+                    "start_at": "2026-08-31T09:00:00+08:00",
+                    "end_at": "2026-08-31T11:00:00+08:00",
+                    "working": False,
+                },
+                {
+                    "device_id": "win",
+                    "session_id": "win-session",
+                    "start_at": "2026-08-31T10:00:00+08:00",
+                    "live": True,
+                },
+            ]
+        },
+        now=NOW,
+    )
+
+    assert get_cross_device_today_display_seconds("account-1", NOW, live_rows) == 6 * 60 * 60
+
+
+def test_live_projection_rejects_foreign_or_duplicate_devices() -> None:
+    with pytest.raises(CrossDeviceDisplayDataError):
+        live_projection_rows(
+            "account-1",
+            {
+                "devices": [
+                    {
+                        "user_id": "account-2",
+                        "device_id": "mac",
+                        "session_id": "session",
+                        "start_at": "2026-08-31T09:00:00+08:00",
+                        "live": True,
+                    }
+                ]
+            },
+            now=NOW,
+        )
+    with pytest.raises(CrossDeviceDisplayDataError):
+        live_projection_rows(
+            "account-1",
+            {
+                "devices": [
+                    {
+                        "device_id": "mac",
+                        "session_id": "session-1",
+                        "start_at": "2026-08-31T09:00:00+08:00",
+                        "live": True,
+                    },
+                    {
+                        "device_id": "mac",
+                        "session_id": "session-2",
+                        "start_at": "2026-08-31T10:00:00+08:00",
+                        "live": True,
+                    },
+                ]
+            },
+            now=NOW,
+        )
 
 
 def test_cross_device_display_uses_union_when_only_bucket_sums_round_down() -> None:
