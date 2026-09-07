@@ -1135,3 +1135,11 @@
 - 保护完整的社交资料快照；不再让不完整的同步响应清空已有搭子、搭子码和备注。
 - 空昵称不再覆盖持久化身份；中转层保留已有公开昵称，排行榜和搭子列表继续使用真实身份信息。
 - 工作快捷菜单和计时显示改用轻量 FocusSession 快照，减少双击快捷按钮、右键菜单和周期刷新对 Qt 主线程的阻塞。
+## v0.23.207 — P0 多设备专注时间一致性与低 Egress 账本收口
+
+- 新增语义明确的 `AccountFocusStore / AccountFocusProjection`：sealed FocusSegment 历史事实与 per-device live presence 分层，桌宠今日时间、工作报告和本人排行榜统一消费账号级 interval union。
+- 远端 FocusSegment 按稳定 `segment_id` upsert/merge，增量响应不会覆盖此前已同步的其他设备片段；暂停、结束、idle seal 和退出 seal 继续只上传 closed segment。
+- delta cursor 升级为 `(updated_at, segment_id)` 复合游标，分页、同一时间戳和断点重试不漏记录；只有 merge 与 cursor 落盘都成功后才确认 cursor。
+- 工作报告的日/周/月/年及历史窗口继续本地计算，使用增量 daily projection；左右移动、图表和指标不触发 Supabase 历史请求。
+- 排行榜好友仍只接收服务器聚合秒数，本人行由本地账号 projection 覆盖，不因个人计时变化重新请求排行榜。
+- live projection 设有本地 120 秒 TTL；网络中断后不会让旧设备状态无限增长。

@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any, Callable
 
 from .focus_segments import (
@@ -150,6 +151,11 @@ class FocusAnalyticsStore:
         self._persist = bool(persist)
         self._device_id = str(device_id or "").strip()[:120]
         self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None, "account_state": {}}
+        # ``records`` are the durable account ledger.  These live intervals
+        # are a read-only projection supplied by the per-device presence RPC;
+        # they are intentionally never serialized or uploaded as facts.
+        self._live_projection_segments: list[FocusSegment] = []
+        self._live_projection_expires_at: float | None = None
         self._live: dict[str, Any] = {
             "session_active": False,
             "running": False,
@@ -165,7 +171,8 @@ class FocusAnalyticsStore:
         # produce impossible values such as 38 hours in one calendar day.
         # Rebuild from the raw records on load while keeping those records for
         # diagnostics and future migrations.
-        if self._rebuild_days_from_records() or self._trim_days():
+        projection_changed = self._ensure_daily_focus_projection()
+        if self._rebuild_days_from_records() or self._trim_days() or projection_changed:
             self._save()
 
     def switch_account(self, account_id: str | None) -> bool:
@@ -197,7 +204,8 @@ class FocusAnalyticsStore:
             "current_continuous_seconds": 0,
         }
         self._load()
-        if self._rebuild_days_from_records() or self._trim_days():
+        projection_changed = self._ensure_daily_focus_projection()
+        if self._rebuild_days_from_records() or self._trim_days() or projection_changed:
             self._save()
         return True
 
@@ -289,12 +297,15 @@ class FocusAnalyticsStore:
         if not isinstance(state, dict):
             return None
         value = str(state.get("focus_segments_sync_cursor") or "").strip()
-        return value[:80] or None
+        # Composite cursors contain an updated_at value and a stable
+        # segment_id.  Keep enough room for the full JSON cursor instead of
+        # truncating it and silently losing the tie-breaker.
+        return value[:320] or None
 
     def set_focus_segments_sync_cursor(self, cursor: Any) -> bool:
         """Persist a server delta cursor without touching focus facts."""
 
-        value = str(cursor or "").strip()[:80]
+        value = str(cursor or "").strip()[:320]
         if not value:
             return False
         state = self._state.setdefault("account_state", {})
@@ -368,6 +379,7 @@ class FocusAnalyticsStore:
         }
         changed = False
         merged_count = 0
+        affected_dates: set[date] = set()
         for index, item in enumerate(entries):
             if not isinstance(item, dict):
                 continue
@@ -393,28 +405,40 @@ class FocusAnalyticsStore:
                 "device_id": segment.device_id,
             }
             existing_index = by_id.get(record_id)
+            row_changed = False
             if existing_index is None:
                 records.append(record)
                 by_id[record_id] = len(records) - 1
                 changed = True
+                row_changed = True
                 merged_count += 1
             elif records[existing_index] != record:
+                previous_segment = segment_from_record(records[existing_index], existing_index)
+                if previous_segment is not None:
+                    affected_dates.update(self._segment_dates(previous_segment))
                 records[existing_index] = record
                 changed = True
+                row_changed = True
                 merged_count += 1
+            if row_changed:
+                affected_dates.update(self._segment_dates(segment))
         if len(records) > 500:
+            for removed in records[:-500]:
+                removed_segment = segment_from_record(removed, 0)
+                if removed_segment is not None:
+                    affected_dates.update(self._segment_dates(removed_segment))
             del records[:-500]
             changed = True
         if changed:
-            self._rebuild_days_from_records()
+            # Only dates touched by the inserted/replaced fact are rebuilt.
+            # The durable account cache is still one ledger; this avoids
+            # re-unioning months of history for a one-row delta.
+            self._rebuild_daily_focus_projection(affected_dates)
             self._trim_days()
             self._save()
-        # A server daily/profile snapshot can be written before the raw
-        # segment RPC in the same heartbeat.  Rebuild every derived value
-        # after facts arrive so a stale midnight cache cannot be republished.
-        # Return the reconciliation result as part of the merge result so
-        # callers do not need to scan the raw ledger a second time.
-        derived_changed = self.reconcile_derived_totals()
+        # Do not run a full-ledger reconciliation here.  The affected-date
+        # projection above is the authoritative local cache update.
+        derived_changed = bool(changed and affected_dates)
         return changed or derived_changed, merged_count
 
     def merge_remote_segments(self, payload: Any) -> bool:
@@ -548,8 +572,19 @@ class FocusAnalyticsStore:
             "record_id": clean_record_id,
             "device_id": clean_device_id,
         })
+        removed_records = records[:-500] if len(records) > 500 else []
         self._state["records"] = records[-500:]
-        self._rebuild_days_from_records()
+        affected_record_dates = {started.date()}
+        for removed in removed_records:
+            removed_segment = segment_from_record(removed, 0)
+            if removed_segment is not None:
+                affected_record_dates.update(self._segment_dates(removed_segment))
+        segment = segment_from_record(records[-1], len(records) - 1)
+        self._rebuild_daily_focus_projection(
+            affected_record_dates | (
+                self._segment_dates(segment) if segment is not None else {started.date()}
+            )
+        )
         self._trim_days()
         self._save()
         return quality
@@ -825,6 +860,60 @@ class FocusAnalyticsStore:
                 result.append(segment)
         return result
 
+    def set_live_projection_segments(self, segments: Any, *, renew_ttl: bool = True) -> bool:
+        """Replace the transient per-device live projection.
+
+        The projection is deliberately separate from ``focus_segments``:
+        open presence rows never become FocusSession facts and therefore can
+        never be uploaded by ``focus_segments_payload`` or affect the cursor.
+        """
+
+        # Expire the previous snapshot before comparing a new server result.
+        # A fresh response with the same interval must renew its local TTL.
+        previous_live = self.live_projection_segments()
+        candidate: list[FocusSegment] = []
+        if isinstance(segments, (list, tuple)):
+            for item in segments:
+                if not isinstance(item, FocusSegment):
+                    continue
+                normalized = item.normalized()
+                if not normalized.segment_id or not normalized.session_id:
+                    continue
+                candidate.append(normalized)
+        changed = candidate != previous_live
+        if changed:
+            self._live_projection_segments = candidate
+            # The server RPC only returns fresh rows. If the network goes
+            # offline, a last-known live row must stop contributing locally
+            # instead of growing forever.
+            self._live_projection_expires_at = monotonic() + 120.0 if candidate else None
+        elif renew_ttl and candidate:
+            self._live_projection_expires_at = monotonic() + 120.0
+        return changed
+
+    def live_projection_segments(self) -> list[FocusSegment]:
+        """Return a copy of the current in-memory device projection."""
+
+        if (
+            self._live_projection_expires_at is not None
+            and monotonic() >= self._live_projection_expires_at
+        ):
+            self._live_projection_segments = []
+            self._live_projection_expires_at = None
+        return list(self._live_projection_segments)
+
+    def _projection_segments(
+        self,
+        extra_segments: list[FocusSegment] | None = None,
+    ) -> list[FocusSegment]:
+        """Return sealed account facts plus transient live intervals."""
+
+        segments = self.focus_segments()
+        segments.extend(self.live_projection_segments())
+        if extra_segments:
+            segments.extend(extra_segments)
+        return segments
+
     def _raw_day_seconds(self, focus_date: date, moment: datetime | None = None) -> int:
         """Return the exact union of valid facts intersecting one Beijing day."""
 
@@ -837,7 +926,7 @@ class FocusAnalyticsStore:
         }
         segments = [
             segment
-            for segment in self.focus_segments()
+            for segment in self._projection_segments()
             if segment.start_at.date().isoformat() not in untrusted_dates
         ]
         return max(
@@ -869,9 +958,7 @@ class FocusAnalyticsStore:
         moment = _as_beijing(at or self._now())
         validation_moment = _as_beijing(self._now())
         range_start, range_end, _ = calendar_window(period, moment)
-        segments = self.focus_segments()
-        if extra_segments:
-            segments.extend(extra_segments)
+        segments = self._projection_segments(extra_segments)
         # Legacy cumulative checkpoint rows are retained for diagnostics but
         # are marked untrusted by ``_rebuild_days_from_records``.  Exclude all
         # records on those dates from user-visible aggregates.
@@ -915,9 +1002,7 @@ class FocusAnalyticsStore:
         if window_end <= window_start:
             raise ValueError("end_at must be after start_at")
         validation_moment = _as_beijing(self._now())
-        raw_segments = self.focus_segments()
-        if extra_segments:
-            raw_segments.extend(extra_segments)
+        raw_segments = self._projection_segments(extra_segments)
         untrusted_dates = {
             str(key)
             for key, value in (self._state.get("days", {}) or {}).items()
@@ -928,6 +1013,10 @@ class FocusAnalyticsStore:
             for item in raw_segments
             if item.start_at.date().isoformat() not in untrusted_dates
         ]
+        daily_projection = self._state.get("account_state", {}).get("daily_focus_projection", {})
+        if not isinstance(daily_projection, dict):
+            daily_projection = {}
+        has_live_projection = bool(self._live_projection_segments or extra_segments)
         aggregate = aggregate_focus_time(
             segments,
             window_start,
@@ -967,7 +1056,13 @@ class FocusAnalyticsStore:
             if is_future or untrusted:
                 seconds = None
             else:
-                seconds = max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
+                if not has_live_projection and isinstance(daily_projection.get(cursor.isoformat()), dict):
+                    seconds = max(
+                        0,
+                        int(daily_projection[cursor.isoformat()].get("seconds", 0) or 0),
+                    )
+                else:
+                    seconds = max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
             weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[cursor.weekday()]
             daily.append({
                 "date": cursor.isoformat(),
@@ -1144,6 +1239,94 @@ class FocusAnalyticsStore:
             "overlap_seconds": max(0, raw_sum - effective_seconds),
         }
 
+    @staticmethod
+    def _segment_dates(segment: FocusSegment | None) -> set[date]:
+        """Return every Beijing date touched by one interval."""
+
+        if segment is None:
+            return set()
+        start = _as_beijing(segment.start_at)
+        end = _as_beijing(segment.end_at or start)
+        if end <= start:
+            return {start.date()}
+        cursor = start.date()
+        last = (end - timedelta(microseconds=1)).date()
+        result: set[date] = set()
+        while cursor <= last:
+            result.add(cursor)
+            cursor += timedelta(days=1)
+        return result
+
+    def _rebuild_daily_focus_projection(self, dates: set[date] | list[date] | tuple[date, ...]) -> bool:
+        """Incrementally rebuild the account projection for affected days."""
+
+        affected = {item for item in dates if isinstance(item, date)}
+        if not affected:
+            return False
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        projection = state.setdefault("daily_focus_projection", {})
+        if not isinstance(projection, dict):
+            projection = {}
+            state["daily_focus_projection"] = projection
+        sealed = self.focus_segments()
+        now = _as_beijing(self._now())
+        changed = False
+        days = self._state.setdefault("days", {})
+        for focus_date in sorted(affected):
+            day_start = datetime.combine(focus_date, time.min, tzinfo=BEIJING_TIMEZONE)
+            day_end = day_start + timedelta(days=1)
+            aggregate = aggregate_focus_time(
+                sealed,
+                day_start,
+                day_end,
+                now=now,
+                interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+            )
+            seconds = max(0, int(aggregate.total_seconds))
+            key = focus_date.isoformat()
+            value = {"seconds": seconds}
+            if projection.get(key) != value:
+                projection[key] = value
+                changed = True
+            # Keep the old compatibility day cache aligned for widgets that
+            # still read its descriptive fields; it is never used as the
+            # source of duration facts.
+            day = days.setdefault(key, self._empty_day())
+            if not isinstance(day, dict):
+                day = self._empty_day()
+                days[key] = day
+            for field, value in (
+                ("seconds", seconds),
+                ("rounds", max(0, int(aggregate.segment_count))),
+                ("longest", max(0, int(aggregate.longest_seconds))),
+                ("interruptions", max(0, int(aggregate.interruption_count))),
+            ):
+                if int(day.get(field, 0) or 0) != value:
+                    day[field] = value
+                    changed = True
+            if day.get("seconds_untrusted"):
+                day["seconds_untrusted"] = False
+                changed = True
+        return changed
+
+    def _ensure_daily_focus_projection(self) -> bool:
+        """Backfill the projection once for ledgers created by older builds."""
+
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        projection = state.get("daily_focus_projection")
+        if isinstance(projection, dict) and projection:
+            return False
+        dates: set[date] = set()
+        for segment in self.focus_segments():
+            dates.update(self._segment_dates(segment))
+        return self._rebuild_daily_focus_projection(dates)
+
     def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
         """Calculate a day/week/month/year report from account-local history.
 
@@ -1187,7 +1370,7 @@ class FocusAnalyticsStore:
         # error) is the precise signal that this period has interval evidence.
         # This matters for a segment crossing midnight: its start date can be
         # yesterday while its overlap belongs to today's report.
-        raw_segments = self.focus_segments()
+        raw_segments = self._projection_segments()
         raw_period_evidence = any(
             segment.start_at < range_end
             and segment.effective_end(moment) > range_start
@@ -1199,6 +1382,10 @@ class FocusAnalyticsStore:
         stored = self._state.get("days", {})
         if not isinstance(stored, dict):
             stored = {}
+        daily_projection = self._state.get("account_state", {}).get("daily_focus_projection", {})
+        if not isinstance(daily_projection, dict):
+            daily_projection = {}
+        has_live_projection = bool(self._live_projection_segments)
         daily: list[dict[str, Any]] = []
         total_seconds = 0
         completed_rounds = 0
@@ -1232,7 +1419,17 @@ class FocusAnalyticsStore:
                 # facts, the authoritative answer is zero regardless of an
                 # old derived day row.
                 seconds = (
-                    max(0, int(aggregate.daily.get(date_key, 0) or 0))
+                    max(
+                        0,
+                        int(
+                            aggregate.daily.get(date_key, 0)
+                            if has_live_projection
+                            else daily_projection.get(date_key, {}).get("seconds", aggregate.daily.get(date_key, 0))
+                            if isinstance(daily_projection.get(date_key, {}), dict)
+                            else aggregate.daily.get(date_key, 0)
+                            or 0
+                        ),
+                    )
                     if has_raw_facts
                     else 0
                 )
@@ -1640,3 +1837,76 @@ class FocusAnalyticsStore:
         temp = self.path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.path)
+
+
+class AccountFocusProjection:
+    """Read-only account projection over sealed facts and live device rows."""
+
+    def __init__(self, store: "AccountFocusStore") -> None:
+        self.store = store
+
+    def set_live_segments(self, segments: Any) -> bool:
+        return self.store.set_live_projection_segments(segments)
+
+    def clear_live_segments(self) -> bool:
+        return self.store.set_live_projection_segments([])
+
+    def seconds_for_range(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        *,
+        at: datetime | None = None,
+    ) -> int:
+        aggregate = aggregate_focus_time(
+            self.store._projection_segments(),
+            _as_beijing(start_at),
+            _as_beijing(end_at),
+            now=_as_beijing(at or self.store.current_time()),
+            interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+        )
+        return max(0, int(aggregate.total_seconds))
+
+    def today_seconds(self, at: datetime | None = None) -> int:
+        moment = _as_beijing(at or self.store.current_time())
+        start = datetime.combine(moment.date(), time.min, tzinfo=BEIJING_TIMEZONE)
+        return self.seconds_for_range(start, moment, at=moment)
+
+    def week_seconds(self, at: datetime | None = None) -> int:
+        moment = _as_beijing(at or self.store.current_time())
+        start = moment.date() - timedelta(days=moment.date().weekday())
+        start_at = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
+        end_at = start_at + timedelta(days=7)
+        return self.seconds_for_range(start_at, end_at, at=moment)
+
+
+class AccountFocusStore(FocusAnalyticsStore):
+    """Canonical local account ledger used by every focus surface.
+
+    This is intentionally a semantic name over the existing durable
+    ``FocusAnalyticsStore`` implementation, not a second database.  The
+    durable rows remain sealed FocusSegments; the projection object only adds
+    transient per-device presence intervals for read-only calculations.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.account_projection = AccountFocusProjection(self)
+
+    def account_today_seconds(self, at: datetime | None = None) -> int:
+        return self.account_projection.today_seconds(at)
+
+    def account_week_seconds(self, at: datetime | None = None) -> int:
+        return self.account_projection.week_seconds(at)
+
+
+__all__ = [
+    "AccountFocusProjection",
+    "AccountFocusStore",
+    "BEIJING_TIMEZONE",
+    "FocusAnalyticsStore",
+    "FocusAnalyticsSummary",
+    "FocusQuality",
+    "FocusQualityTracker",
+    "score_focus_quality",
+]

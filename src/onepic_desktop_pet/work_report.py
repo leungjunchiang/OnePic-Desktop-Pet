@@ -374,11 +374,17 @@ def build_work_report(
     # when the normal analytics checkpoint is written.
     live_started_value = None
     if snapshot_status == "focus" and focus_snapshot is not None:
-        live_started_value = (
-            focus_snapshot.get("session_started_at")
-            if isinstance(focus_snapshot, dict)
-            else getattr(focus_snapshot, "session_started_at", None)
-        )
+        # A paused/resumed FocusSession has one session start but several
+        # working segments. Use the current segment anchor so the report does
+        # not bridge a pause into live work.
+        current_segment_started = getattr(timer, "current_segment_started_at", None)
+        live_started_value = current_segment_started() if callable(current_segment_started) else None
+        if live_started_value is None:
+            live_started_value = (
+                focus_snapshot.get("session_started_at")
+                if isinstance(focus_snapshot, dict)
+                else getattr(focus_snapshot, "session_started_at", None)
+            )
     live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
     live_segment: FocusSegment | None = None
     if live_started_value and snapshot_status == "focus" and live_elapsed > 0:

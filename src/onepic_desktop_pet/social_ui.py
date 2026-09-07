@@ -15,7 +15,7 @@ from copy import deepcopy
 from functools import cmp_to_key
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QLocale, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtCore import QCollator
@@ -2446,6 +2446,11 @@ class SocialHubDialog(QDialog):
         self._leaderboard_rows: list[Any] = []
         self._leaderboard_loaded = False
         self._leaderboard_error = False
+        # The server supplies friend rows as aggregate seconds. The current
+        # user's row is refreshed from the local account projection without
+        # causing another leaderboard RPC.
+        self._local_focus_week_seconds_provider: Callable[[], int] | None = None
+        self._local_focus_week_seconds: int | None = None
         self._applying_dashboard = False
         self._room_goal_state: dict[str, Any] = {}
         self._room_schedule_state: dict[str, Any] = {}
@@ -2885,6 +2890,27 @@ class SocialHubDialog(QDialog):
         self.owner_nickname = clean_owner_nickname(value)
         self._owner_nickname_dirty = True
         self._render_self_identity()
+
+    def set_local_focus_week_seconds_provider(self, provider: Callable[[], int] | None) -> None:
+        """Attach the local account projection for the viewer's own row."""
+
+        self._local_focus_week_seconds_provider = provider
+        self.refresh_local_focus_week_seconds()
+
+    def refresh_local_focus_week_seconds(self) -> None:
+        provider = self._local_focus_week_seconds_provider
+        if not callable(provider):
+            return
+        try:
+            seconds = max(0, int(provider()))
+        except (TypeError, ValueError, OverflowError):
+            return
+        if self._local_focus_week_seconds == seconds:
+            return
+        self._local_focus_week_seconds = seconds
+        if self._leaderboard_rows:
+            self._leaderboard_rows = self._decorate_leaderboard_rows(self._leaderboard_rows)
+            self._render_wealth_leaderboard(self._leaderboard_rows)
 
     def set_focus_analytics(self, snapshot: dict[str, Any] | None) -> None:
         """Render local continuity metrics and the one-task countdown."""
@@ -3867,6 +3893,32 @@ class SocialHubDialog(QDialog):
                 # only the current viewer's authorized dashboard can supply it.
                 copy.pop("private_note_name", None)
             decorated.append(copy)
+        provider = self._local_focus_week_seconds_provider
+        local_seconds = self._local_focus_week_seconds
+        if callable(provider):
+            try:
+                local_seconds = max(0, int(provider()))
+                self._local_focus_week_seconds = local_seconds
+            except (TypeError, ValueError, OverflowError):
+                pass
+        if own_id and local_seconds is not None:
+            own_row = next((row for row in decorated if str(row.get("user_id") or "") == own_id), None)
+            if own_row is None:
+                own_row = {
+                    "user_id": own_id,
+                    "is_self": True,
+                    "week_seconds": int(local_seconds),
+                }
+                decorated.append(own_row)
+            else:
+                own_row["is_self"] = True
+                own_row["week_seconds"] = int(local_seconds)
+        decorated.sort(
+            key=lambda row: (
+                -max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0)),
+                str(row.get("owner_nickname") or row.get("nickname") or ""),
+            )
+        )
         return decorated
 
     def _add_inbox_item(

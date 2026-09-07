@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore, FocusQualityTracker, score_focus_quality
+from onepic_desktop_pet.focus_analytics import (
+    AccountFocusStore,
+    FocusAnalyticsStore,
+    FocusQualityTracker,
+    score_focus_quality,
+)
 
 
 def test_focus_quality_explains_switches_and_away_time() -> None:
@@ -717,3 +722,130 @@ def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypa
 
     assert store.switch_account("account-a")
     assert store.summary().weekly_total_seconds == 90
+
+
+def test_account_focus_store_merges_two_devices_and_deduplicates_overlap(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 13, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    ok, changed, count = store.merge_remote_segments_checked({
+        "segments": [
+            {
+                "segment_id": "a",
+                "session_id": "sa",
+                "start_at": "2026-09-07T09:00:00+08:00",
+                "end_at": "2026-09-07T10:05:06+08:00",
+                "device_id": "mac",
+            },
+            {
+                "segment_id": "b",
+                "session_id": "sb",
+                "start_at": "2026-09-07T10:05:06+08:00",
+                "end_at": "2026-09-07T12:16:50+08:00",
+                "device_id": "win",
+            },
+        ],
+    })
+    assert (ok, changed, count) == (True, True, 2)
+    assert store.account_today_seconds(now) == 3 * 60 * 60 + 16 * 60 + 50
+
+    overlap = AccountFocusStore(path=tmp_path / "overlap.json", now_provider=lambda: now, persist=False)
+    overlap.merge_remote_segments({
+        "segments": [
+            {
+                "segment_id": "a-overlap",
+                "session_id": "sa",
+                "start_at": "2026-09-07T09:00:00+08:00",
+                "end_at": "2026-09-07T10:00:00+08:00",
+                "device_id": "mac",
+            },
+            {
+                "segment_id": "b-overlap",
+                "session_id": "sb",
+                "start_at": "2026-09-07T09:30:00+08:00",
+                "end_at": "2026-09-07T11:00:00+08:00",
+                "device_id": "win",
+            },
+        ]
+    })
+    assert overlap.account_today_seconds(now) == 2 * 60 * 60
+
+
+def test_account_focus_store_delta_upsert_preserves_previous_devices(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    first = {"segments": [
+        {"segment_id": "a", "session_id": "sa", "start_at": "2026-09-07T09:00:00+08:00", "end_at": "2026-09-07T10:00:00+08:00", "device_id": "mac"},
+        {"segment_id": "b", "session_id": "sb", "start_at": "2026-09-07T11:00:00+08:00", "end_at": "2026-09-07T12:00:00+08:00", "device_id": "win"},
+    ]}
+    second = {"segments": [
+        {"segment_id": "c", "session_id": "sc", "start_at": "2026-09-07T13:00:00+08:00", "end_at": "2026-09-07T13:30:00+08:00", "device_id": "mac"},
+    ]}
+    assert store.merge_remote_segments_checked(first)[0]
+    assert store.merge_remote_segments_checked(second)[0]
+    assert {segment.segment_id for segment in store.focus_segments()} == {"a", "b", "c"}
+
+
+def test_account_focus_store_live_projection_is_not_uploaded_or_persisted(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    path = tmp_path / "focus.json"
+    store = AccountFocusStore(path=path, now_provider=lambda: now, persist=True)
+    from onepic_desktop_pet.focus_segments import FocusSegment
+
+    store.set_live_projection_segments([
+        FocusSegment(
+            segment_id="live-b",
+            session_id="sb",
+            start_at=now - timedelta(minutes=30),
+            end_at=None,
+            device_id="win",
+        )
+    ])
+    assert store.account_today_seconds(now) == 30 * 60
+    assert store.focus_segments_payload() == []
+    reloaded = AccountFocusStore(path=path, now_provider=lambda: now, persist=True)
+    assert reloaded.live_projection_segments() == []
+    assert reloaded.account_today_seconds(now) == 0
+
+
+def test_account_focus_store_drops_stale_live_projection_before_union(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    from onepic_desktop_pet.focus_segments import FocusSegment
+
+    store.set_live_projection_segments([
+        FocusSegment(
+            segment_id="live-stale",
+            session_id="stale-session",
+            start_at=now - timedelta(minutes=30),
+            end_at=None,
+            device_id="mac",
+        )
+    ])
+    store._live_projection_expires_at = 0.0
+    assert store.account_today_seconds(now) == 0
+
+
+def test_account_focus_store_does_not_double_count_sealed_and_live_overlap(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.merge_remote_segments({
+        "segments": [{
+            "segment_id": "sealed-a",
+            "session_id": "sealed-session",
+            "start_at": "2026-09-07T09:00:00+08:00",
+            "end_at": "2026-09-07T11:00:00+08:00",
+            "device_id": "mac",
+        }]
+    })
+    from onepic_desktop_pet.focus_segments import FocusSegment
+
+    store.set_live_projection_segments([
+        FocusSegment(
+            segment_id="live-b",
+            session_id="live-session",
+            start_at=datetime(2026, 9, 7, 9, 0, tzinfo=timezone(timedelta(hours=8))),
+            end_at=None,
+            device_id="win",
+        )
+    ])
+    assert store.account_today_seconds(now) == 3 * 60 * 60

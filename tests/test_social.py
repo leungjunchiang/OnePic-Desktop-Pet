@@ -1945,6 +1945,29 @@ def test_incremental_focus_segment_sync_is_idempotent_and_allowlisted():
         assert "lili_sync_focus_segments_delta" in path.read_text(encoding="utf-8")
 
 
+def test_latest_focus_delta_uses_composite_cursor_and_never_downloads_open_facts():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907143000_lili_focus_delta_composite_cursor.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "drop function if exists public.lili_sync_focus_segments_delta(jsonb, timestamptz)" in normalized
+    assert "p_since text" in normalized
+    assert "s.updated_at > cursor_updated_at" in normalized
+    assert "s.updated_at = cursor_updated_at and s.segment_id > cursor_segment_id" in normalized
+    assert "limit 500" in normalized
+    assert "s.end_at is not null" in normalized
+    assert "segment_end is not null" in normalized
+    assert "segment_end > segment_start" in normalized
+    assert "grant execute on function public.lili_sync_focus_segments_delta(jsonb, text) to authenticated" in normalized
+    assert "end_at = excluded.end_at" in normalized
+    assert "where public.lili_focus_segments.session_id is distinct from excluded.session_id" in normalized
+
+
 def test_live_focus_projection_is_display_only_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (
