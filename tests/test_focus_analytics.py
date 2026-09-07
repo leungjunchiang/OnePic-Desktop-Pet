@@ -417,8 +417,8 @@ def test_focus_segment_upload_does_not_strand_older_closed_facts(tmp_path) -> No
     payload = store.focus_segments_payload()
 
     assert len(payload) == 120
-    assert payload[0]["record_id"] == "closed-0"
-    assert payload[-1]["record_id"] == "closed-119"
+    assert payload[0]["segment_id"] == "closed-0"
+    assert payload[-1]["segment_id"] == "closed-119"
 
 
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
