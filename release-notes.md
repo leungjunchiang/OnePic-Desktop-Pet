@@ -1,3 +1,11 @@
+## v0.23.217 — 原子确认跨设备历史并修复更新期素材闪退
+
+- 找到两台电脑短暂出现 6 小时、随后又收敛到 4 小时 58 分的真实根因：生产 delta RPC 缺少时间解析函数的执行授权，并把逐条权限异常吞掉后仍返回成功，导致客户端错误保存 SHA-256“已上传”指纹，实际云端少了一条 sealed FocusSegment。
+- 新增严格的 `lili_sync_focus_segments_delta_v2`：完整批次先校验、事务内上传、再逐项返回 `accepted_segment_ids`；任一条未被服务器接受都会回滚。客户端只有在 ack 完整匹配且本地 merge/落盘成功后才保存指纹和推进复合 cursor。
+- 将确认协议升级到 v3，旧客户端留下的 v2 指纹会触发一次最多 500 条的幂等 recovery backfill；之后继续 owner-only delta，不恢复 400 天周期性全量下载，也不改写进行中的 FocusSegment。
+- 修复更新安装过程中单张宠物素材短暂缺失会直接让主窗口启动崩溃的问题：单帧损坏或缺失时记录诊断并使用其余帧，只有整份清单完全不可用才停止启动。
+- 删除账号注销线程重复调用 `deleteLater()` 的 Qt 生命周期隐患；同步日志新增 `accepted_count / upload_ack_ok / transaction_ok`，不记录任务文本。
+
 ## v0.23.216 — 修复权限故障遗留的封闭专注片段回填
 
 - 修复旧版本在 Supabase 权限故障期间可能把本机 sealed FocusSegment 错误记为“已上传”，导致后续 `upload_count=0` 但云端仍缺少凌晨/昨天历史的问题。

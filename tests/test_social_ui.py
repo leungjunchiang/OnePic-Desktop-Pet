@@ -20,6 +20,7 @@ from onepic_desktop_pet.social_ui import (
     SocialHubDialog,
     SocialSignupThread,
     SocialVisitResponseThread,
+    _focus_upload_ack_status,
     _reaction_label,
     _merge_dashboard_snapshot,
     _study_focus_summary_text,
@@ -27,6 +28,31 @@ from onepic_desktop_pet.social_ui import (
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
 )
+
+
+def test_focus_upload_ack_requires_every_requested_segment_id() -> None:
+    uploaded = [{"segment_id": "a"}, {"segment_id": "b"}]
+
+    assert _focus_upload_ack_status(
+        uploaded,
+        {"accepted_segment_ids": ["a", "b"]},
+    ) == (True, {"a", "b"})
+    assert _focus_upload_ack_status(
+        uploaded,
+        {"accepted_segment_ids": ["a"]},
+    ) == (False, {"a"})
+    assert _focus_upload_ack_status(uploaded, {}) == (False, set())
+
+
+def test_focus_upload_ack_rejects_duplicate_or_malformed_local_ids() -> None:
+    assert _focus_upload_ack_status(
+        [{"segment_id": "a"}, {"segment_id": "a"}],
+        {"accepted_segment_ids": ["a"]},
+    )[0] is False
+    assert _focus_upload_ack_status(
+        [{"segment_id": "a"}, {"session_id": "missing-id"}],
+        {"accepted_segment_ids": ["a"]},
+    )[0] is False
 
 
 class SignedOutClient:

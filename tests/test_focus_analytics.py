@@ -606,6 +606,34 @@ def test_legacy_acknowledgements_trigger_one_bounded_recovery_backfill(tmp_path)
     assert recovered.focus_segments_payload() == []
 
 
+def test_version_two_acknowledgements_are_requeued_for_explicit_server_ack(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    path = tmp_path / "focus.json"
+    store = FocusAnalyticsStore(
+        path=path,
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=1), record_id="local-a")
+    batch = store.focus_segments_payload()
+    assert store.acknowledge_focus_segments_upload(batch)
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["account_state"]["focus_segment_upload_ack_version"] = 2
+    raw["account_state"]["focus_segment_upload_repair_pending"] = False
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    recovered = FocusAnalyticsStore(
+        path=path,
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    assert recovered.focus_segments_sync_mode() == "recovery_backfill"
+    assert [item["segment_id"] for item in recovered.focus_segments_payload()] == ["local-a"]
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

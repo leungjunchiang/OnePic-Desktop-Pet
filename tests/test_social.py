@@ -1942,7 +1942,9 @@ def test_incremental_focus_segment_sync_is_idempotent_and_allowlisted():
         root / "relay" / "cloudbase-function" / "index.js",
         root / "relay" / "cloudflare-worker" / "src" / "index.js",
     ):
-        assert "lili_sync_focus_segments_delta" in path.read_text(encoding="utf-8")
+        relay_source = path.read_text(encoding="utf-8")
+        assert "lili_sync_focus_segments_delta" in relay_source
+        assert "lili_sync_focus_segments_delta_v2" in relay_source
 
 
 def test_latest_focus_delta_uses_composite_cursor_and_never_downloads_open_facts():
@@ -1992,6 +1994,26 @@ def test_focus_delta_invoker_has_only_owner_scoped_table_operations():
     base_normalized = " ".join(base_migration.casefold().split())
     assert "using ((select auth.uid()) = user_id)" in base_normalized
     assert "with check ((select auth.uid()) = user_id)" in base_normalized
+
+
+def test_strict_focus_delta_requires_explicit_atomic_upload_ack():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907170000_lili_focus_delta_explicit_upload_ack.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "grant execute on function public.lili_parse_client_focus_timestamp(text) to authenticated" in normalized
+    assert "create or replace function public.lili_sync_focus_segments_delta_v2" in normalized
+    assert "security invoker" in normalized
+    assert "accepted_segment_ids" in normalized
+    assert "focus segment upload was not accepted" in normalized
+    assert "result := public.lili_sync_focus_segments_delta(p_segments, p_since)" in normalized
+    assert "raise exception 'invalid sealed focus segment'" in normalized
+    assert "exception when others" not in normalized
 
 
 def test_live_focus_projection_is_display_only_and_allowlisted():

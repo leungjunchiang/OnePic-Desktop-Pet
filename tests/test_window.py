@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import os
+import json
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -121,6 +123,34 @@ def _create_window() -> tuple[QApplication, PetWindow]:
     window.show()
     app.processEvents()
     return app, window
+
+
+def test_missing_single_packaged_pet_frame_does_not_crash_startup(tmp_path) -> None:
+    """An installer race may hide one frame briefly; remaining frames stay usable."""
+
+    app, window = _create_window()
+    source_frame = Path(__file__).resolve().parents[1] / "assets" / "pet" / "idle" / "idle_01.png"
+    shutil.copyfile(source_frame, tmp_path / "frame.png")
+    animations = {
+        state: ["frame.png"]
+        for state in (
+            "idle", "walk", "sleep", "wave", "happy", "shy", "surprised",
+            "annoyed", "sleepy", "curious", "selfie", "drag",
+        )
+    }
+    animations["sit"] = ["missing-during-update.png", "frame.png"]
+    manifest = {
+        "animations": animations,
+        "walk_motion_factors": [1.0],
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    pixmaps = window._load_manifest_pixmaps(manifest_path)
+
+    assert len(pixmaps[PetState.SIT]) == 1
+    assert not pixmaps[PetState.SIT][0].isNull()
+    window.close(); window.deleteLater(); app.processEvents()
 
 
 def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:

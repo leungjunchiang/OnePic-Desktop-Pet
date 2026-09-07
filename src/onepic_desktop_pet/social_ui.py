@@ -64,6 +64,40 @@ _DASHBOARD_IDENTITY_FIELDS = (
 )
 
 
+def _focus_upload_ack_status(
+    uploaded_segments: object,
+    response: object,
+) -> tuple[bool, set[str]]:
+    """Validate the server's per-segment acknowledgement without side effects."""
+
+    uploaded = uploaded_segments if isinstance(uploaded_segments, list) else []
+    expected_ids = [
+        str(item.get("segment_id") or "").strip()
+        for item in uploaded
+        if isinstance(item, dict) and str(item.get("segment_id") or "").strip()
+    ]
+    accepted_raw = (
+        response.get("accepted_segment_ids")
+        if isinstance(response, dict)
+        else None
+    )
+    accepted_ids = {
+        str(value or "").strip()
+        for value in accepted_raw
+        if str(value or "").strip()
+    } if isinstance(accepted_raw, list) else set()
+    if not uploaded:
+        return True, accepted_ids
+    expected_set = set(expected_ids)
+    return (
+        isinstance(accepted_raw, list)
+        and len(expected_ids) == len(uploaded)
+        and len(expected_set) == len(uploaded)
+        and expected_set == accepted_ids,
+        accepted_ids,
+    )
+
+
 def _merge_dashboard_snapshot(
     previous: dict[str, Any], incoming: dict[str, Any]
 ) -> tuple[dict[str, Any], bool]:
@@ -830,7 +864,7 @@ class SocialSyncThread(QThread):
                             or str(self.presence.get("user_id") or "")
                         )
                         focus_segments_result = sync_rpc(
-                            "lili_sync_focus_segments_delta",
+                            "lili_sync_focus_segments_delta_v2",
                             {
                                 "p_segments": focus_segments,
                                 "p_since": focus_segments_cursor_before or None,
@@ -876,12 +910,20 @@ class SocialSyncThread(QThread):
                         )
                     if isinstance(focus_segments_result, dict):
                         focus_segments_result = dict(focus_segments_result)
-                        # This acknowledgement remains process-local until the
-                        # account store persists compact fingerprints. It is not
-                        # sent over the network and contains no new server data.
-                        focus_segments_result["_uploaded_segments"] = list(
+                        uploaded_segments = list(
                             focus_segments if isinstance(focus_segments, list) else []
                         )
+                        # A successful HTTP/RPC response is not sufficient:
+                        # the server must explicitly acknowledge every sealed
+                        # fact in this transaction.  Missing/partial acks keep
+                        # the whole batch dirty and also fence the delta cursor.
+                        upload_ack_ok, accepted_segment_ids = _focus_upload_ack_status(
+                            uploaded_segments,
+                            focus_segments_result,
+                        )
+                        focus_segments_result["_uploaded_segments"] = uploaded_segments
+                        focus_segments_result["_upload_ack_ok"] = upload_ack_ok
+                        focus_segments_result["_accepted_count"] = len(accepted_segment_ids)
                         focus_segments_sync_duration_ms = round(
                             (time.monotonic() - focus_segments_sync_started)
                             * 1000,
@@ -897,6 +939,7 @@ class SocialSyncThread(QThread):
                         focus_segments_result["_sync_diagnostics"] = {
                             "cursor_before": focus_segments_cursor_before,
                             "upload_count": focus_segments_upload_count,
+                            "accepted_count": len(accepted_segment_ids),
                             "returned_count": returned_count,
                             "cursor_after": str(
                                 focus_segments_result.get("next_cursor") or ""
@@ -905,12 +948,13 @@ class SocialSyncThread(QThread):
                             "sync_mode": focus_segments_sync_mode,
                             "device_id": focus_segments_device_id,
                             "duration_ms": focus_segments_sync_duration_ms,
-                            "error": "",
+                            "error": "" if upload_ack_ok else "upload_ack_missing_or_mismatch",
                         }
                         lifecycle_log(
                             "focus.segment_sync.transport",
                             cursor_before=focus_segments_cursor_before,
                             upload_count=focus_segments_upload_count,
+                            accepted_count=len(accepted_segment_ids),
                             returned_count=returned_count,
                             cursor_after=str(
                                 focus_segments_result.get("next_cursor") or ""
@@ -919,7 +963,7 @@ class SocialSyncThread(QThread):
                             sync_mode=focus_segments_sync_mode,
                             device_id=focus_segments_device_id,
                             duration_ms=focus_segments_sync_duration_ms,
-                            error="",
+                            error="" if upload_ack_ok else "upload_ack_missing_or_mismatch",
                         )
             # Active FocusSession intervals remain local/canonical until they
             # close.  Read the separate per-device liveness projection so the
@@ -2365,7 +2409,6 @@ class AccountSecurityDialog(QDialog):
             self._delete_thread = None
         self._set_busy(False)
         thread.deleteLater()
-        self._set_busy(False); thread.deleteLater()
 
 
 class InboxEntryWidget(QFrame):

@@ -43,12 +43,12 @@ from .focus_segments import (
 MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60 - 1
 INTERRUPTION_GRACE_SECONDS = 10 * 60
 BEIJING_TIMEZONE = FOCUS_BEIJING_TIMEZONE
-# The previous release persisted upload fingerprints without recording which
-# client acknowledged them.  Those fingerprints may have been written while
-# the production table was still rejecting INSERT, so the first client that
-# sees that legacy state performs one bounded repair upload.  Afterwards the
-# normal fingerprint/delta protocol resumes permanently.
-FOCUS_SEGMENT_UPLOAD_ACK_VERSION = 2
+# Version 2 still trusted an RPC-wide success response.  The production RPC
+# could swallow a per-row permission error and return success without having
+# inserted that row, which stranded a sealed fact behind a local fingerprint.
+# Version 3 requires an explicit server acknowledgement for every segment id
+# and performs one bounded, idempotent recovery upload for older fingerprints.
+FOCUS_SEGMENT_UPLOAD_ACK_VERSION = 3
 
 
 def _as_beijing(value: datetime) -> datetime:

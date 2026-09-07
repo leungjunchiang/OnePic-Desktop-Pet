@@ -1200,7 +1200,6 @@ class PetWindow(QWidget):
         )
         if len(motion_factors) != len(animations["walk"]):
             raise ValueError("走路位移曲线必须与走路动画帧数一致")
-        self._walk_motion_factors = tuple(float(value) for value in motion_factors)
         mapping = {
             PetState.IDLE: animations["idle"],
             PetState.WALK: animations["walk"],
@@ -1217,19 +1216,56 @@ class PetWindow(QWidget):
             PetState.DRAG: animations["drag"],
         }
         pixmaps: dict[PetState, list[QPixmap]] = {}
+        loaded_walk_factors: list[float] = []
+        unavailable_states: list[PetState] = []
         for state, relative_paths in mapping.items():
             state_frames = []
-            for relative in relative_paths:
+            for frame_index, relative in enumerate(relative_paths):
                 path = manifest_path.parent / relative
                 if not path.is_file():
-                    raise FileNotFoundError(f"缺少宠物素材：{path}")
+                    LOGGER.error("pet asset frame is missing; continuing with remaining frames: %s", path)
+                    lifecycle_log(
+                        "pet.asset.frame_missing",
+                        self,
+                        state=state.value,
+                        frame=str(relative)[:180],
+                    )
+                    continue
                 pixmap = QPixmap(str(path))
                 if pixmap.isNull():
-                    raise ValueError(f"无法加载宠物素材：{path}")
+                    LOGGER.error("pet asset frame cannot be decoded; continuing: %s", path)
+                    lifecycle_log(
+                        "pet.asset.frame_invalid",
+                        self,
+                        state=state.value,
+                        frame=str(relative)[:180],
+                    )
+                    continue
                 state_frames.append(pixmap)
+                if state is PetState.WALK:
+                    loaded_walk_factors.append(float(motion_factors[frame_index]))
             if not state_frames:
-                raise ValueError(f"状态 {state.value} 没有可用素材帧")
+                unavailable_states.append(state)
+                continue
             pixmaps[state] = state_frames
+        fallback_frames = pixmaps.get(PetState.IDLE)
+        if not fallback_frames:
+            fallback_frames = next(iter(pixmaps.values()), None)
+        if not fallback_frames:
+            raise ValueError("宠物素材清单中没有任何可加载帧")
+        for state in unavailable_states:
+            pixmaps[state] = list(fallback_frames)
+            lifecycle_log(
+                "pet.asset.state_fallback",
+                self,
+                state=state.value,
+                fallback=PetState.IDLE.value if PetState.IDLE in pixmaps else "first_available",
+            )
+        self._walk_motion_factors = (
+            tuple(loaded_walk_factors)
+            if loaded_walk_factors and PetState.WALK not in unavailable_states
+            else tuple(1.0 for _ in pixmaps[PetState.WALK])
+        )
         return pixmaps
 
     def _load_selfie_photo(self) -> QPixmap:
@@ -6830,26 +6866,36 @@ class PetWindow(QWidget):
             if isinstance(focus_segments_payload, dict)
             else None
         )
-        if isinstance(uploaded_segments, list) and uploaded_segments and merge_ok:
+        upload_ack_ok = bool(
+            isinstance(focus_segments_payload, dict)
+            and focus_segments_payload.get("_upload_ack_ok", not uploaded_segments)
+        )
+        transaction_ok = bool(merge_ok and upload_ack_ok)
+        if isinstance(uploaded_segments, list) and uploaded_segments and transaction_ok:
             try:
                 self.focus_analytics.acknowledge_focus_segments_upload(uploaded_segments)
             except Exception as exc:
                 # The upload already reached Supabase. A failed local ack is
                 # safe: the unchanged rows retry idempotently next cycle.
                 merge_error = merge_error or "upload_ack_persist_failed"
+                transaction_ok = False
                 LOGGER.warning("focus segment upload acknowledgement failed: %s", exc)
-        elif isinstance(uploaded_segments, list) and uploaded_segments and not merge_ok:
+        elif isinstance(uploaded_segments, list) and uploaded_segments and not transaction_ok:
             # Keep the SHA batch dirty when the RPC returned but the local
             # AccountFocusStore transaction did not validate/persist. The
             # next delta retry is idempotent and prevents a local merge error
             # from permanently hiding a sealed fact.
-            merge_error = merge_error or "upload_ack_deferred_merge_failed"
+            merge_error = merge_error or (
+                "upload_ack_missing_or_mismatch"
+                if merge_ok and not upload_ack_ok
+                else "upload_ack_deferred_merge_failed"
+            )
         # The delta cursor is transport state only.  Advance it after the
         # complete raw-fact transaction has succeeded.  A malformed response,
         # merge failure, or local cursor persistence failure remains retryable.
         cursor_advanced = False
         if (
-            merge_ok
+            transaction_ok
             and isinstance(focus_segments_payload, dict)
             and focus_segments_payload.get("_sync_mode") == "delta"
             and isinstance(focus_segments_payload.get("segments"), list)
@@ -6886,6 +6932,7 @@ class PetWindow(QWidget):
                 self,
                 cursor_before=str(sync_diagnostics.get("cursor_before") or ""),
                 upload_count=max(0, int(sync_diagnostics.get("upload_count") or 0)),
+                accepted_count=max(0, int(sync_diagnostics.get("accepted_count") or 0)),
                 returned_count=max(0, int(sync_diagnostics.get("returned_count") or 0)),
                 merge_count=max(0, int(merged_segment_count or 0)),
                 cursor_after=str(sync_diagnostics.get("cursor_after") or ""),
@@ -6895,6 +6942,8 @@ class PetWindow(QWidget):
                 duration_ms=float(sync_diagnostics.get("duration_ms") or 0),
                 error=str(sync_diagnostics.get("error") or ""),
                 merge_ok=bool(merge_ok),
+                upload_ack_ok=bool(upload_ack_ok),
+                transaction_ok=bool(transaction_ok),
                 cursor_advanced=bool(cursor_advanced),
             )
         live_projection_payload = data.get("_focus_live_projection") if isinstance(data, dict) else None
