@@ -97,6 +97,16 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     assert window._refresh_cross_device_today_display(payload, snapshot=snapshot, source="test")
     assert window._cross_device_today_display_seconds == 4 * 60 * 60
 
+    # A valid empty delta is not a new account snapshot.  It must retain the
+    # already validated remote row instead of dropping the account total back
+    # to the local device's one-hour interval.
+    assert window._refresh_cross_device_today_display(
+        {"_focus_segments": {"segments": [], "full_sync": False}},
+        snapshot=snapshot,
+        source="test-empty-delta",
+    )
+    assert window._cross_device_today_display_seconds == 4 * 60 * 60
+
     # This is the pause race: the status callback can run before the local
     # segment is committed, so the temporary candidate is lower than the
     # already validated account-wide value.

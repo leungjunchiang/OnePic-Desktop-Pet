@@ -2016,6 +2016,22 @@ def test_strict_focus_delta_requires_explicit_atomic_upload_ack():
     assert "exception when others" not in normalized
 
 
+def test_strict_focus_delta_keeps_cursor_on_empty_increment():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907190000_lili_focus_delta_empty_cursor_guard.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "jsonb_array_length(coalesce(result->'segments', '[]'::jsonb)) = 0" in normalized
+    assert "result := jsonb_set(result, '{next_cursor}', to_jsonb(p_since), true)" in normalized
+    assert "create or replace function public.lili_sync_focus_segments_delta_v2" in normalized
+    assert "grant execute on function public.lili_sync_focus_segments_delta_v2(jsonb, text) to authenticated" in normalized
+
+
 def test_live_focus_projection_is_display_only_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (

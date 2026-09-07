@@ -4816,6 +4816,48 @@ class PetWindow(QWidget):
             )
         setter(rows, renew_ttl=False)
 
+    @staticmethod
+    def _merge_cross_device_display_rows(
+        previous: list[object] | None,
+        incoming: list[object],
+    ) -> list[object]:
+        """Append a sealed delta to the in-memory display snapshot.
+
+        ``lili_sync_focus_segments_delta_v2`` returns only rows after the
+        cursor.  The durable AccountFocusStore is normally enough to rebuild
+        the display, but keeping this small process-local snapshot additive is
+        important during a rolling sync: an empty/partial delta must never be
+        interpreted as permission to discard already validated account rows.
+        There are no deletes in the sealed FocusSegment protocol, so a stable
+        segment id is the correct merge key.
+        """
+
+        merged = list(previous or [])
+        indexes: dict[str, int] = {}
+
+        def row_key(row: object) -> str:
+            if isinstance(row, dict):
+                return str(row.get("segment_id") or row.get("record_id") or "").strip()
+            return str(
+                getattr(row, "segment_id", "")
+                or getattr(row, "record_id", "")
+                or ""
+            ).strip()
+
+        for index, row in enumerate(merged):
+            key = row_key(row)
+            if key:
+                indexes[key] = index
+        for row in incoming:
+            key = row_key(row)
+            if key and key in indexes:
+                merged[indexes[key]] = row
+            else:
+                if key:
+                    indexes[key] = len(merged)
+                merged.append(row)
+        return merged
+
     def _refresh_cross_device_today_display(
         self,
         data: dict[str, object] | None = None,
@@ -4854,7 +4896,9 @@ class PetWindow(QWidget):
             # local pending facts too.  Duplicate rows are harmless because
             # the projection is an interval union.
             candidate = data.get("_focus_segments")
+            is_full_snapshot = False
             if isinstance(candidate, dict):
+                is_full_snapshot = bool(candidate.get("full_sync"))
                 candidate = candidate.get("segments")
             if not isinstance(candidate, list):
                 lifecycle_log(
@@ -4867,7 +4911,17 @@ class PetWindow(QWidget):
                     preserved_cross_device_seconds=self._cross_device_today_display_seconds,
                 )
                 return False
-            remote_rows = list(candidate)
+            # A delta page is additive.  Replacing the retained snapshot with
+            # an empty page was the source of the observed "7h -> 6h"
+            # regression when the next 30-second sync had no new rows.
+            remote_rows = (
+                list(candidate)
+                if is_full_snapshot or self._cross_device_today_display_remote_rows is None
+                else self._merge_cross_device_display_rows(
+                    self._cross_device_today_display_remote_rows,
+                    list(candidate),
+                )
+            )
         elif self._cross_device_today_display_remote_rows is not None:
             # A local lifecycle event or an ordinary dashboard response does
             # not authorize replacing a valid account-wide snapshot with local
