@@ -97,6 +97,31 @@ def test_overlapping_devices_are_counted_once_and_hour_buckets_reconcile() -> No
     assert not result.errors
 
 
+def test_fractional_cross_hour_buckets_reconcile_without_false_quality_error() -> None:
+    """Integer bucket display must preserve the canonical union total."""
+
+    result = aggregate_focus_time(
+        [
+            FocusSegment(
+                "fractional",
+                "session",
+                datetime(2026, 8, 26, 9, 59, 59, 800000),
+                datetime(2026, 8, 26, 11, 0, 0, 800000),
+            )
+        ],
+        datetime(2026, 8, 26),
+        datetime(2026, 8, 27),
+    )
+
+    assert result.total_seconds == 60 * 60 + 1
+    assert result.hourly[9]["seconds"] == 0
+    assert result.hourly[10]["seconds"] == 60 * 60
+    assert result.hourly[11]["seconds"] == 1
+    assert sum(int(item["seconds"]) for item in result.hourly) == result.total_seconds
+    assert sum(result.daily.values()) == result.total_seconds
+    assert not result.errors
+
+
 def test_open_segment_is_projected_to_now_without_persisting_an_end() -> None:
     now = datetime(2026, 8, 26, 10, 19, tzinfo=BEIJING_TIMEZONE)
     result = aggregate_focus_time(

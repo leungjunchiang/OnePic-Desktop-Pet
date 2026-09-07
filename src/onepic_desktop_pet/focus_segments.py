@@ -334,10 +334,20 @@ def aggregate_focus_time(
     daily: dict[str, int] = {}
     for interval_start, interval_end in merged:
         cursor = interval_start
+        # Partition one merged interval with cumulative truncation instead
+        # of truncating every bucket independently.  If an interval contains
+        # fractional seconds at an hour/day boundary, independently calling
+        # ``_seconds(cursor, bucket_end)`` drops the fractional remainder at
+        # every boundary and can make hourly/daily totals smaller than the
+        # canonical union by several seconds.  Taking the difference of the
+        # cumulative integer elapsed values makes the buckets telescope back
+        # exactly to ``_seconds(interval_start, interval_end)``.
         while cursor < interval_end:
             next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
             bucket_end = min(interval_end, next_hour)
-            seconds = _seconds(cursor, bucket_end)
+            elapsed_before = _seconds(interval_start, cursor)
+            elapsed_after = _seconds(interval_start, bucket_end)
+            seconds = max(0, elapsed_after - elapsed_before)
             if seconds:
                 by_hour[cursor.hour] += seconds
                 date_key = cursor.date().isoformat()
