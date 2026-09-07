@@ -400,6 +400,27 @@ def test_focus_segment_sync_cursor_persists_without_changing_focus_facts(tmp_pat
     assert reloaded.focus_segments_payload() == facts_before
 
 
+def test_focus_segment_upload_does_not_strand_older_closed_facts(tmp_path) -> None:
+    now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+    )
+    for index in range(120):
+        store.record_session(
+            60,
+            started_at=now - timedelta(days=1, minutes=index + 1),
+            record_id=f"closed-{index}",
+        )
+
+    payload = store.focus_segments_payload()
+
+    assert len(payload) == 120
+    assert payload[0]["record_id"] == "closed-0"
+    assert payload[-1]["record_id"] == "closed-119"
+
+
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)

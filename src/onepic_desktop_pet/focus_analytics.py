@@ -263,11 +263,17 @@ class FocusAnalyticsStore:
         # corresponding work interval.
         return False
 
-    def focus_segments_payload(self, limit: int = 96) -> list[dict[str, Any]]:
+    def focus_segments_payload(self, limit: int = 500) -> list[dict[str, Any]]:
         """Serialize closed local facts for the server fact-sync RPC."""
 
         rows: list[dict[str, Any]] = []
-        for segment in self.focus_segments()[-max(1, min(256, int(limit))):]:
+        # The delta RPC already limits its *response* by the cursor.  This
+        # payload is the idempotent upload side, so truncating it to 96 rows
+        # silently stranded older closed segments on this device: a second
+        # computer could never receive them unless they happened to be in the
+        # newest slice.  Keep the local ledger cap (500) as the upper bound;
+        # uploading the same closed facts is cheap and conflict-safe.
+        for segment in self.focus_segments()[-max(1, min(500, int(limit))):]:
             if segment.end_at is None:
                 # Active intervals are projected locally and sealed on pause;
                 # never make a remote device guess an end timestamp.
@@ -300,12 +306,16 @@ class FocusAnalyticsStore:
         self._save()
         return True
 
-    def merge_remote_segments(self, payload: Any) -> bool:
-        """Merge server-returned interval facts without importing aggregates."""
+    def merge_remote_segments_with_count(self, payload: Any) -> tuple[bool, int]:
+        """Merge server interval facts and report how many rows changed.
+
+        The count is transport diagnostics only.  It does not alter the raw
+        FocusSession semantics or treat a server aggregate as a local fact.
+        """
 
         entries = payload.get("segments") if isinstance(payload, dict) else payload
         if not isinstance(entries, list):
-            return False
+            return False, 0
         today = _as_beijing(self._now()).date()
         cutoff = today - timedelta(days=400)
         records = self._state.setdefault("records", [])
@@ -315,6 +325,7 @@ class FocusAnalyticsStore:
             if isinstance(raw, dict) and (raw.get("record_id") or raw.get("segment_id"))
         }
         changed = False
+        merged_count = 0
         for index, item in enumerate(entries):
             if not isinstance(item, dict):
                 continue
@@ -344,9 +355,11 @@ class FocusAnalyticsStore:
                 records.append(record)
                 by_id[record_id] = len(records) - 1
                 changed = True
+                merged_count += 1
             elif records[existing_index] != record:
                 records[existing_index] = record
                 changed = True
+                merged_count += 1
         if len(records) > 500:
             del records[:-500]
             changed = True
@@ -360,7 +373,13 @@ class FocusAnalyticsStore:
         # Return the reconciliation result as part of the merge result so
         # callers do not need to scan the raw ledger a second time.
         derived_changed = self.reconcile_derived_totals()
-        return changed or derived_changed
+        return changed or derived_changed, merged_count
+
+    def merge_remote_segments(self, payload: Any) -> bool:
+        """Merge server-returned interval facts without importing aggregates."""
+
+        changed, _merged_count = self.merge_remote_segments_with_count(payload)
+        return changed
 
     def reconcile_derived_totals(self, at: datetime | None = None) -> bool:
         """Rebuild local day/week caches from interval facts.

@@ -5252,12 +5252,14 @@ class PetWindow(QWidget):
             self.work_timer,
             self.daily_stats,
             best_buddy=self._best_buddy_for_report(),
-            # Keep the report headline/chart on the exact projection already
-            # used by the pet duration bubble and the study-room focus page.
-            # The snapshot still carries only live UI state; the calendar
-            # totals come from this one shared provider call.
+            # Do not overlay the old day/week compatibility counters here.
+            # WorkReport rebuilds every calendar page from the closed ledger
+            # plus all cached per-device live intervals below.  Passing the
+            # old local-only projection would overwrite that union again and
+            # is exactly how a remote active computer disappeared from this
+            # window while the pet/study-room display was correct.
             focus_snapshot=self.focus_session.snapshot(include_projection=False),
-            focus_projection=self._shared_focus_period_seconds(moment),
+            focus_projection=None,
             task_stats={
                 "day": self.time_memory.records.stats(start=current_date, end=current_date),
                 "week": self.time_memory.records.week_stats(current_date.isoformat()),
@@ -6651,7 +6653,14 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         focus_segments_payload = data.get("_focus_segments")
-        segment_changed = self.focus_analytics.merge_remote_segments(focus_segments_payload)
+        merge_with_count = getattr(
+            self.focus_analytics, "merge_remote_segments_with_count", None
+        )
+        if callable(merge_with_count):
+            segment_changed, merged_segment_count = merge_with_count(focus_segments_payload)
+        else:
+            segment_changed = self.focus_analytics.merge_remote_segments(focus_segments_payload)
+            merged_segment_count = 0
         # The delta cursor is transport state only.  Advance it after the
         # payload has passed the existing raw-fact merge path, never before;
         # malformed or legacy responses therefore cannot make a later sync
@@ -6665,6 +6674,29 @@ class PetWindow(QWidget):
         ):
             self.focus_analytics.set_focus_segments_sync_cursor(
                 focus_segments_payload.get("next_cursor")
+            )
+        sync_diagnostics = (
+            focus_segments_payload.get("_sync_diagnostics")
+            if isinstance(focus_segments_payload, dict)
+            else None
+        )
+        if isinstance(sync_diagnostics, dict):
+            sync_diagnostics = dict(sync_diagnostics)
+            sync_diagnostics["merge_count"] = max(0, int(merged_segment_count or 0))
+            sync_diagnostics["cursor_after"] = str(
+                self.focus_analytics.focus_segments_sync_cursor()
+                or sync_diagnostics.get("cursor_after")
+                or ""
+            )
+            lifecycle_log(
+                "focus.segment_sync.merge",
+                self,
+                cursor_before=str(sync_diagnostics.get("cursor_before") or ""),
+                upload_count=max(0, int(sync_diagnostics.get("upload_count") or 0)),
+                returned_count=max(0, int(sync_diagnostics.get("returned_count") or 0)),
+                merge_count=max(0, int(merged_segment_count or 0)),
+                cursor_after=str(sync_diagnostics.get("cursor_after") or ""),
+                full_sync=bool(sync_diagnostics.get("full_sync")),
             )
         # merge_remote_segments already reconciles derived caches and folds
         # that result into its return value.  Avoid a second full-ledger scan

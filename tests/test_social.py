@@ -1975,6 +1975,27 @@ def test_live_focus_projection_is_display_only_and_allowlisted():
         assert "lili_focus_live_projection" in path.read_text(encoding="utf-8")
 
 
+def test_server_focus_union_uses_per_device_live_presence_for_all_totals():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907110000_lili_focus_union_device_presence.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create or replace function public.lili_focus_union_seconds" in normalized
+    assert "public.lili_focus_device_presence d" in normalized
+    assert "d.last_seen > now() - interval '2 minutes'" in normalized
+    assert "range_agg(tstzrange(source.start_at, source.end_at, '[)'))" in normalized
+    assert "create or replace function public.lili_effective_focus_stats" in normalized
+    assert "lili_focus_presence f" in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")

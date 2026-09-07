@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - "release/v*"
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -25,3 +27,8 @@ jobs:
         run: |
           ./scripts/apply_supabase_focus_history.ps1 `
             -MigrationPath "supabase/migrations/20260907090000_lili_focus_live_projection_read.sql"
+      - name: Apply account-level device-presence interval-union migration
+        shell: pwsh
+        run: |
+          ./scripts/apply_supabase_focus_history.ps1 `
+            -MigrationPath "supabase/migrations/20260907110000_lili_focus_union_device_presence.sql"

@@ -792,11 +792,18 @@ class SocialSyncThread(QThread):
                         # sync and local cache continue to work.
                         LOGGER.info("daily focus history sync deferred: %s", exc)
                     try:
+                        focus_segments = personal_state.get("focus_segments") or []
+                        focus_segments_cursor_before = str(
+                            personal_state.get("focus_segments_sync_cursor") or ""
+                        )
+                        focus_segments_upload_count = (
+                            len(focus_segments) if isinstance(focus_segments, list) else 0
+                        )
                         focus_segments_result = sync_rpc(
                             "lili_sync_focus_segments_delta",
                             {
-                                "p_segments": personal_state.get("focus_segments") or [],
-                                "p_since": personal_state.get("focus_segments_sync_cursor"),
+                                "p_segments": focus_segments,
+                                "p_since": focus_segments_cursor_before or None,
                             },
                         )
                     except (SocialError, AttributeError, TypeError) as exc:
@@ -828,6 +835,31 @@ class SocialSyncThread(QThread):
                     if isinstance(focus_segments_result, dict):
                         focus_segments_result = dict(focus_segments_result)
                         focus_segments_result.setdefault("_sync_mode", "delta")
+                        returned_segments = focus_segments_result.get("segments")
+                        returned_count = (
+                            len(returned_segments)
+                            if isinstance(returned_segments, list)
+                            else 0
+                        )
+                        focus_segments_result["_sync_diagnostics"] = {
+                            "cursor_before": focus_segments_cursor_before,
+                            "upload_count": focus_segments_upload_count,
+                            "returned_count": returned_count,
+                            "cursor_after": str(
+                                focus_segments_result.get("next_cursor") or ""
+                            ),
+                            "full_sync": bool(focus_segments_result.get("full_sync")),
+                        }
+                        lifecycle_log(
+                            "focus.segment_sync.transport",
+                            cursor_before=focus_segments_cursor_before,
+                            upload_count=focus_segments_upload_count,
+                            returned_count=returned_count,
+                            cursor_after=str(
+                                focus_segments_result.get("next_cursor") or ""
+                            ),
+                            full_sync=bool(focus_segments_result.get("full_sync")),
+                        )
             # Active FocusSession intervals remain local/canonical until they
             # close.  Read the separate per-device liveness projection so the
             # display can union all currently active devices without mutating
