@@ -2337,7 +2337,11 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     ]
     display = next(action for action in menu.actions() if action.text() == "显示与窗口")
     assert [action.text() for action in display.menu().actions()] == [
-        "六毛大小…", "显示本轮工作时长", "始终置顶", "桌面模式"
+        "六毛大小…", "显示本轮工作时长", "氛围特效", "始终置顶", "桌面模式"
+    ]
+    aura = next(action for action in display.menu().actions() if action.text() == "氛围特效")
+    assert [action.text() for action in aura.menu().actions()] == [
+        "自动", "关闭", "", "红色雾气", "金色雾气", "蓝色雾气", "紫色雾气"
     ]
     outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
     outfit_labels = [action.text() for action in outfit.menu().actions()]

@@ -22,6 +22,7 @@
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
+- 复用现有表情动画 tick 合成可选的本地 Aura 雾气，不新增窗口、线程、定时器或网络路径；
 - 优先从用户私有素材目录显示自拍成片气泡，按当前屏幕 DPI 保持清晰度，并贴近人物真实轮廓定位；
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
 - 维护亲密度、精力、无聊度与饱食度的会话内状态；
@@ -176,6 +177,17 @@ from .food_scene_ui import FoodSceneDialog
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
+from .aura_effects import (
+    AURA_MODE_AUTO,
+    AURA_MODE_MANUAL,
+    AURA_MODE_OFF,
+    AuraKind,
+    AuraTransitionController,
+    AuraVisualState,
+    draw_aura_transition_effect,
+    normalize_aura_kind,
+    resolve_aura_state,
+)
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
 from .focus_analytics import (
@@ -591,6 +603,9 @@ class PetWindow(QWidget):
         self._poke_times: deque[float] = deque()
         self._bob_phase = False
         self._effect_phase = 0
+        # Aura is an optional local compositing layer.  Its transition state
+        # is plain Python and advances on the existing effect timer.
+        self._aura_controller = AuraTransitionController()
         self._frame_index = 0
         self._animation_direction = 1
         self._animation_finished: Callable[[], None] | None = None
@@ -1301,6 +1316,25 @@ class PetWindow(QWidget):
             y = self.settings.start_y
         self.move(self._constrained_position(QPoint(x, y)))
 
+    def _resolved_aura_state(self, display_state: PetState | None = None) -> AuraVisualState:
+        """Resolve the local Aura preference without touching business state."""
+
+        state = display_state or self.state
+        return resolve_aura_state(
+            state,
+            getattr(self.settings, "aura_mode", AURA_MODE_AUTO),
+            getattr(self.settings, "aura_manual_effect", AuraKind.BLUE.value),
+            phase=self._effect_phase,
+        )
+
+    def _aura_timer_needed(self) -> bool:
+        """Return whether the existing effect timer has visual work to do."""
+
+        return emotion_effect_name(self.state) is not None or self._aura_controller.needs_animation
+
+    def _refresh_aura_target(self, display_state: PetState | None = None) -> None:
+        self._aura_controller.set_target(self._resolved_aura_state(display_state))
+
     def set_state(self, state: PetState) -> None:
         """切换行为状态、重置帧序号并刷新当前图片。"""
 
@@ -1323,7 +1357,8 @@ class PetWindow(QWidget):
         else:
             self.label.move(6, 0)
         self._effect_phase = 0
-        if emotion_effect_name(display_state) is None:
+        self._refresh_aura_target(display_state)
+        if not self._aura_timer_needed():
             self.effect_timer.stop()
         else:
             self.effect_timer.start()
@@ -1369,6 +1404,7 @@ class PetWindow(QWidget):
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
 
         display_state, pixmap = self._current_source()
+        self._refresh_aura_target(display_state)
         ratio = max(1.0, self.devicePixelRatioF())
         direction_key = self.direction if display_state is PetState.WALK else 0
         cache_key = (
@@ -1392,11 +1428,25 @@ class PetWindow(QWidget):
             )
             scaled.setDevicePixelRatio(ratio)
             self._remember_cache_item(self._render_cache, cache_key, scaled)
-        composed = draw_emotion_effect(
-            scaled,
-            display_state,
-            self._effect_phase,
-        )
+        # Keep the pre-Aura character/effect image for the native mask.  Aura
+        # pixels are intentionally visual only and must never become a new
+        # clickable region around the pet.
+        mask_source = draw_emotion_effect(scaled, display_state, self._effect_phase)
+        from_aura, to_aura, aura_progress = self._aura_controller.render_states()
+        try:
+            composed = draw_aura_transition_effect(
+                scaled,
+                from_aura,
+                to_aura,
+                aura_progress,
+                phase=self._effect_phase,
+            )
+            composed = draw_emotion_effect(composed, display_state, self._effect_phase)
+        except Exception:
+            # Aura is an optional visual enhancement.  A renderer failure
+            # must leave the normal character/effect pipeline usable.
+            LOGGER.exception("[Aura] render failed; using character frame")
+            composed = mask_source
         activity = self._ambient_activity
         food_scene = self.economy.active_food_scene() or {}
         scene_activity = {
@@ -1442,11 +1492,24 @@ class PetWindow(QWidget):
             self._effect_phase,
             food_scene=food_scene_active,
         )
+        mask_source = draw_activity_overlay(
+            mask_source,
+            activity,
+            self.settings.equipped_outfit,
+            self._effect_phase,
+            food_scene=food_scene_active,
+        )
         visible = self._blend_activity_transition(composed)
         self.label.setPixmap(visible)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
         overlay_key = hash((activity, self.settings.equipped_outfit, food_scene_active, self._effect_phase % 2))
-        self._refresh_window_mask(display_state, visible, direction_key, effect_key ^ overlay_key)
+        self._refresh_window_mask(
+            display_state,
+            visible,
+            direction_key,
+            effect_key ^ overlay_key,
+            mask_source=mask_source,
+        )
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
         """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
@@ -1507,6 +1570,8 @@ class PetWindow(QWidget):
         pixmap: QPixmap,
         direction_key: int,
         effect_key: int,
+        *,
+        mask_source: QPixmap | None = None,
     ) -> None:
         """按当前人物轮廓设置窗口遮罩，使透明留白不拦截桌面点击。"""
 
@@ -1520,7 +1585,8 @@ class PetWindow(QWidget):
         )
         region = self._mask_cache.get(cache_key)
         if region is None:
-            logical = pixmap.scaled(
+            mask_pixmap = mask_source if mask_source is not None else pixmap
+            logical = mask_pixmap.scaled(
                 self.label.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
@@ -1533,9 +1599,10 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _effect_tick(self) -> None:
-        """推进表情符号的轻微漂浮动画并刷新合成帧。"""
+        """推进表情与 Aura，共用一个既有动画 tick。"""
 
-        if emotion_effect_name(self.state) is None:
+        self._aura_controller.tick()
+        if not self._aura_timer_needed():
             self.effect_timer.stop()
             return
         self._effect_phase = (self._effect_phase + 1) % 12
@@ -7647,6 +7714,35 @@ class PetWindow(QWidget):
             3000,
         )
 
+    def _restart_aura_animation(self) -> None:
+        self._refresh_aura_target(self.state)
+        if self._aura_timer_needed():
+            self.effect_timer.start()
+        else:
+            self.effect_timer.stop()
+        self._refresh_pixmap()
+
+    def set_aura_mode(self, mode: str) -> None:
+        """Persist the local Aura mode and fade to its new visual target."""
+
+        value = str(mode or AURA_MODE_AUTO).strip().casefold()
+        if value not in {AURA_MODE_AUTO, AURA_MODE_OFF, AURA_MODE_MANUAL}:
+            value = AURA_MODE_AUTO
+        self.settings.aura_mode = value
+        save_settings(self.settings)
+        self._restart_aura_animation()
+
+    def set_aura_manual_effect(self, effect: AuraKind | str) -> None:
+        """Select one local Aura color and switch to manual mode."""
+
+        kind = normalize_aura_kind(effect)
+        if kind is AuraKind.NONE:
+            return
+        self.settings.aura_mode = AURA_MODE_MANUAL
+        self.settings.aura_manual_effect = kind.value
+        save_settings(self.settings)
+        self._restart_aura_animation()
+
     def set_hourly_announcement(self, enabled: bool) -> None:
         """启用或停用整点报时。"""
 
@@ -8244,6 +8340,12 @@ class PetWindow(QWidget):
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
             "show_work_duration": bool(self.settings.show_work_duration),
+            "aura_mode": getattr(self.settings, "aura_mode", AURA_MODE_AUTO),
+            "aura_manual_effect": getattr(
+                self.settings,
+                "aura_manual_effect",
+                AuraKind.BLUE.value,
+            ),
             "artist_music_service": getattr(self.settings, "artist_music_service", "auto"),
             "program_version": __version__,
             "content_version": "内置内容",
@@ -8275,6 +8377,12 @@ class PetWindow(QWidget):
             "rename": lambda _checked=False: self.rename_pet(),
             "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),
             "show_work_duration": lambda checked=False: self.set_work_duration_display(checked),
+            "aura_auto": lambda _checked=False: self.set_aura_mode(AURA_MODE_AUTO),
+            "aura_off": lambda _checked=False: self.set_aura_mode(AURA_MODE_OFF),
+            "aura_red": lambda _checked=False: self.set_aura_manual_effect(AuraKind.RED),
+            "aura_gold": lambda _checked=False: self.set_aura_manual_effect(AuraKind.GOLD),
+            "aura_blue": lambda _checked=False: self.set_aura_manual_effect(AuraKind.BLUE),
+            "aura_purple": lambda _checked=False: self.set_aura_manual_effect(AuraKind.PURPLE),
             "size": lambda _checked=False: self.open_size_control(),
             "show_todos": lambda _checked=False: self.show_compact_todos(manual=True),
             "hide_todos": lambda _checked=False: self.hide_compact_todos(),

@@ -171,6 +171,30 @@ def test_unified_menu_model_exposes_optional_duration_in_display_menu() -> None:
     assert duration.checked is False
 
 
+def test_unified_menu_model_projects_aura_modes_and_effects() -> None:
+    commands = {
+        "aura_auto",
+        "aura_off",
+        "aura_red",
+        "aura_gold",
+        "aura_blue",
+        "aura_purple",
+    }
+    model = UnifiedMenuModel(
+        pet_name="六毛",
+        state_provider=lambda: {"aura_mode": "manual", "aura_manual_effect": "purple"},
+        callbacks={command: lambda _checked=False: None for command in commands},
+    )
+    display = next(item for item in model.items() if item.title == "显示与窗口")
+    aura = next(item for item in display.children if item.title == "氛围特效")
+    assert [item.title for item in aura.children] == [
+        "自动", "关闭", "", "红色雾气", "金色雾气", "蓝色雾气", "紫色雾气"
+    ]
+    assert aura.children[-1].checked is True
+    assert not aura.children[0].checked
+    assert not aura.children[1].checked
+
+
 def test_unified_menu_model_projects_outfits_as_hover_submenu_items() -> None:
     model = UnifiedMenuModel(
         pet_name="六毛",

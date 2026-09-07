@@ -8,6 +8,7 @@
 - 校验窗口、移动、动画和转身节奏的数值范围并忽略未知字段；
 - 持久化键鼠空闲/视频全屏自动暂停及返回后的“继续工作”提醒偏好；
 - 默认启动时显示紧凑待办；没有未完成待办时由共享投影自动隐藏，并兼容旧版显示策略；
+- 持久化仅保存在本地的 Aura 模式与手动颜色，并兼容没有 Aura 字段的旧配置；
 - 仅在用户配置目录保存窗口、AI 提供方、陪伴开关和音乐 Provider 成败统计，不保存任何 API 令牌。
 
 Agent 快速定位：
@@ -36,6 +37,8 @@ from .local_data import platform_app_data_root
 
 PET_NAME = "六毛"
 DEFAULT_OWNER_NICKNAME = "搭子"
+AURA_MODE_VALUES = ("auto", "off", "manual")
+AURA_EFFECT_VALUES = ("red", "gold", "blue", "purple")
 
 
 def clean_owner_nickname(value: Any) -> str:
@@ -155,6 +158,10 @@ class PetSettings:
     # requires an explicit user confirmation before the verified installer
     # is launched.
     program_updates_enabled: bool = True
+    # Aura is a local-only visual preference.  Missing fields in older
+    # settings files intentionally fall back to these defaults.
+    aura_mode: str = "auto"
+    aura_manual_effect: str = "blue"
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -323,6 +330,12 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.today_note_hide_completed = bool(settings.today_note_hide_completed)
     settings.content_updates_enabled = bool(settings.content_updates_enabled)
     settings.program_updates_enabled = bool(settings.program_updates_enabled)
+    settings.aura_mode = str(settings.aura_mode or "auto").strip().casefold()
+    if settings.aura_mode not in AURA_MODE_VALUES:
+        settings.aura_mode = "auto"
+    settings.aura_manual_effect = str(settings.aura_manual_effect or "blue").strip().casefold()
+    if settings.aura_manual_effect not in AURA_EFFECT_VALUES:
+        settings.aura_manual_effect = "blue"
     return settings
 
 
@@ -399,6 +412,8 @@ def load_settings(
                 "today_note_hide_completed",
                 "content_updates_enabled",
                 "program_updates_enabled",
+                "aura_mode",
+                "aura_manual_effect",
             }
         }
     )
@@ -521,6 +536,8 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "today_note_hide_completed": settings.today_note_hide_completed,
         "content_updates_enabled": settings.content_updates_enabled,
         "program_updates_enabled": settings.program_updates_enabled,
+        "aura_mode": settings.aura_mode,
+        "aura_manual_effect": settings.aura_manual_effect,
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

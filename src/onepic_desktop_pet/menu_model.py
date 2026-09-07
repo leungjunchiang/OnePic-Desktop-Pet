@@ -4,6 +4,8 @@ The menu is deliberately represented as small, platform-neutral specifications.
 Windows and Qt render the same specs as ``QMenu`` actions, while the macOS
 status item can render them as ``NSMenu`` items without maintaining another
 command list. The macOS Dock menu is another projection of this same model.
+
+氛围特效入口也只作为本地菜单命令投影，不在菜单模型中执行网络或计时逻辑。
 """
 
 from __future__ import annotations
@@ -182,9 +184,50 @@ class UnifiedMenuModel:
             if "show_work_duration" in self._callbacks
             else None
         )
+        aura_mode = str(state.get("aura_mode") or "auto").casefold()
+        aura_effect = str(state.get("aura_manual_effect") or "blue").casefold()
+        aura_children: list[MenuItemSpec] = []
+        if "aura_auto" in self._callbacks:
+            aura_children.extend(
+                (
+                    MenuItemSpec("自动", "aura_auto", checkable=True, checked=aura_mode == "auto"),
+                    MenuItemSpec("关闭", "aura_off", checkable=True, checked=aura_mode == "off"),
+                    MenuItemSpec.divider(),
+                    MenuItemSpec(
+                        "红色雾气",
+                        "aura_red",
+                        checkable=True,
+                        checked=aura_mode == "manual" and aura_effect == "red",
+                    ),
+                    MenuItemSpec(
+                        "金色雾气",
+                        "aura_gold",
+                        checkable=True,
+                        checked=aura_mode == "manual" and aura_effect == "gold",
+                    ),
+                    MenuItemSpec(
+                        "蓝色雾气",
+                        "aura_blue",
+                        checkable=True,
+                        checked=aura_mode == "manual" and aura_effect == "blue",
+                    ),
+                    MenuItemSpec(
+                        "紫色雾气",
+                        "aura_purple",
+                        checkable=True,
+                        checked=aura_mode == "manual" and aura_effect == "purple",
+                    ),
+                )
+            )
+        aura_item = (
+            MenuItemSpec("氛围特效", children=tuple(aura_children))
+            if aura_children
+            else None
+        )
         display_children = [
             self._optional("六毛大小…", "size"),
             duration_item,
+            aura_item,
             MenuItemSpec(
                 "始终置顶",
                 "topmost_on",

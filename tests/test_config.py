@@ -358,3 +358,34 @@ def test_window_mode_is_loaded_from_user_settings(tmp_path) -> None:
     override_path.write_text('{"always_on_top": false}', encoding="utf-8")
 
     assert load_settings(default_path, override_path).always_on_top is False
+
+
+def test_aura_settings_are_local_validated_and_persisted(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps({"aura_mode": "invalid", "aura_manual_effect": "invalid"}),
+        encoding="utf-8",
+    )
+    settings = load_settings(default_path, override_path)
+    assert settings.aura_mode == "auto"
+    assert settings.aura_manual_effect == "blue"
+
+    settings.aura_mode = "manual"
+    settings.aura_manual_effect = "purple"
+    saved = tmp_path / "saved.json"
+    save_settings(settings, saved)
+    restored = load_settings(default_path, saved)
+    assert restored.aura_mode == "manual"
+    assert restored.aura_manual_effect == "purple"
+
+
+def test_old_settings_without_aura_fields_keep_safe_defaults(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(json.dumps({"display_height": 180}), encoding="utf-8")
+    settings = load_settings(default_path, override_path)
+    assert settings.aura_mode == "auto"
+    assert settings.aura_manual_effect == "blue"
