@@ -8,11 +8,14 @@ offline.  Period summaries are calculated on demand from the account-scoped
 history; no report images or extra server-side report rows are created.  Raw
 focus intervals are the canonical source once present; daily/profile counters
 are compatibility projections and never override a raw interval result.
+Successful sealed-fact uploads are remembered only as compact local digests,
+so unchanged rows and facts downloaded from other devices are not re-uploaded.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -273,22 +276,96 @@ class FocusAnalyticsStore:
         return False
 
     def focus_segments_payload(self, limit: int = 500) -> list[dict[str, Any]]:
-        """Serialize closed local facts for the server fact-sync RPC."""
+        """Serialize only closed local facts not acknowledged by the server."""
 
         rows: list[dict[str, Any]] = []
-        # The delta RPC already limits its *response* by the cursor.  This
-        # payload is the idempotent upload side, so truncating it to 96 rows
-        # silently stranded older closed segments on this device: a second
-        # computer could never receive them unless they happened to be in the
-        # newest slice.  Keep the local ledger cap (500) as the upper bound;
-        # uploading the same closed facts is cheap and conflict-safe.
-        for segment in self.focus_segments()[-max(1, min(500, int(limit))):]:
+        state = self._state.get("account_state")
+        acknowledgements = (
+            state.get("focus_segment_upload_fingerprints", {})
+            if isinstance(state, dict)
+            else {}
+        )
+        if not isinstance(acknowledgements, dict):
+            acknowledgements = {}
+        max_rows = max(1, min(500, int(limit)))
+        for segment in self.focus_segments():
             if segment.end_at is None:
                 # Active intervals are projected locally and sealed on pause;
                 # never make a remote device guess an end timestamp.
                 continue
-            rows.append(segment.to_dict())
+            # The account ledger also contains downloaded facts from other
+            # devices. Never echo those rows back to Supabase. Empty device ids
+            # are legacy facts owned by this installation and are uploaded once.
+            if segment.device_id and segment.device_id != self._device_id:
+                continue
+            payload = segment.to_dict()
+            fingerprint = self._focus_segment_upload_fingerprint(payload)
+            if str(acknowledgements.get(segment.segment_id) or "") == fingerprint:
+                continue
+            rows.append(payload)
+            if len(rows) >= max_rows:
+                break
         return rows
+
+    @staticmethod
+    def _focus_segment_upload_fingerprint(payload: dict[str, Any]) -> str:
+        """Return a task-safe digest for one canonical upload payload."""
+
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def acknowledge_focus_segments_upload(self, payload: Any) -> bool:
+        """Persist successful upload fingerprints so unchanged facts stay quiet.
+
+        A transport failure never calls this method. If persistence fails, the
+        previous state is restored and the same small batch remains retryable.
+        """
+
+        if not isinstance(payload, list):
+            return False
+        acknowledgements: dict[str, str] = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            segment_id = str(item.get("segment_id") or "").strip()[:160]
+            if not segment_id:
+                continue
+            acknowledgements[segment_id] = self._focus_segment_upload_fingerprint(item)
+        if not acknowledgements:
+            return False
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        existing = state.get("focus_segment_upload_fingerprints")
+        if not isinstance(existing, dict):
+            existing = {}
+        updated = dict(existing)
+        updated.update(acknowledgements)
+        # The local ledger is bounded to 500 facts. Keep acknowledgement state
+        # bounded as well, retaining only ids still represented in the ledger.
+        valid_ids = {segment.segment_id for segment in self.focus_segments()}
+        updated = {
+            segment_id: fingerprint
+            for segment_id, fingerprint in updated.items()
+            if segment_id in valid_ids
+        }
+        if updated == existing:
+            return False
+        previous = copy.deepcopy(self._state)
+        state["focus_segment_upload_fingerprints"] = updated
+        try:
+            self._save()
+        except Exception:
+            self._state = previous
+            raise
+        return True
 
     def focus_segments_sync_cursor(self) -> str | None:
         """Return the last server delta cursor for this account, if valid."""

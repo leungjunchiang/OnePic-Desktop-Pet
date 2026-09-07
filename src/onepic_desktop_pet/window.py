@@ -16,6 +16,7 @@
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
+- 今日时长读取账号级 sealed/live 区间并集，同时把本机暂停与另一台设备工作明确区分；
 - 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
 - Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
@@ -5139,11 +5140,51 @@ class PetWindow(QWidget):
 
         return self._shared_focus_period_seconds()["today_seconds"]
 
+    def _remote_focus_device_is_working(self) -> bool:
+        """Return whether a fresh account projection contains another device.
+
+        This is a local read of the already-fetched, two-minute-TTL projection.
+        It deliberately performs no dashboard/RPC refresh, so a one-second UI
+        repaint cannot increase Supabase traffic.
+        """
+
+        account_id = self._current_social_user_id()
+        if not account_id:
+            return False
+        active_scope = str(getattr(self, "_active_focus_account_id", "") or "")
+        if active_scope and active_scope != account_id:
+            return False
+        local_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
+        try:
+            live_segments = self.focus_analytics.live_projection_segments()
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return any(
+            isinstance(segment, FocusSegment)
+            and segment.end_at is None
+            and str(segment.device_id or "")
+            and str(segment.device_id or "") != local_device_id
+            and str(segment.segment_id or "").startswith("display-live-device:")
+            for segment in live_segments
+        )
+
+    def _shared_work_status_suffix(self) -> str:
+        """Describe local controls separately from account-wide live work."""
+
+        remote_working = self._remote_focus_device_is_working()
+        if self.work_timer.is_running:
+            return " · 本机与另一台设备正在工作" if remote_working else " · 正在计时"
+        if remote_working:
+            return " · 本机已暂停，另一台设备正在工作"
+        return " · 已暂停"
+
     def _shared_work_status_text(self) -> str:
         """Return the user-facing work status with the canonical day total."""
 
-        suffix = " · 正在计时" if self.work_timer.is_running else " · 已暂停"
-        return f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}{suffix}"
+        return (
+            f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}"
+            f"{self._shared_work_status_suffix()}"
+        )
 
     def _record_economy_performance(self, title: str, task_id: str) -> None:
         events = []
@@ -6783,6 +6824,19 @@ class PetWindow(QWidget):
             merge_ok = True
         if not merge_ok and focus_segments_payload is not None:
             merge_error = "payload_invalid_or_local_persist_failed"
+        uploaded_segments = (
+            focus_segments_payload.get("_uploaded_segments")
+            if isinstance(focus_segments_payload, dict)
+            else None
+        )
+        if isinstance(uploaded_segments, list) and uploaded_segments:
+            try:
+                self.focus_analytics.acknowledge_focus_segments_upload(uploaded_segments)
+            except Exception as exc:
+                # The upload already reached Supabase. A failed local ack is
+                # safe: the unchanged rows retry idempotently next cycle.
+                merge_error = merge_error or "upload_ack_persist_failed"
+                LOGGER.warning("focus segment upload acknowledgement failed: %s", exc)
         # The delta cursor is transport state only.  Advance it after the
         # complete raw-fact transaction has succeeded.  A malformed response,
         # merge failure, or local cursor persistence failure remains retryable.
@@ -7948,7 +8002,10 @@ class PetWindow(QWidget):
             display_seconds = self._cross_device_today_display_value(snapshot)
             if display_seconds is None:
                 display_seconds = int(snapshot.today_seconds)
-            work_status_text = f"⏱ 今日已工作 {format_elapsed_clock(display_seconds)}"
+            work_status_text = (
+                f"⏱ 今日已工作 {format_elapsed_clock(display_seconds)}"
+                f"{self._shared_work_status_suffix()}"
+            )
         unlocked_keys = {
             item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
         }

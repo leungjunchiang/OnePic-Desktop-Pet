@@ -1,3 +1,10 @@
+## v0.23.215 — 修复生产 delta 权限与跨设备状态说明
+
+- 修复 `v0.23.214` 生产环境中的专注增量同步权限回归：`lili_sync_focus_segments_delta` 保持 `SECURITY INVOKER`，仅向已登录用户授予 RLS 所需的 `SELECT / INSERT / UPDATE`；匿名访问与删除权限仍禁止。
+- 六毛的“今日已工作”继续显示账号级 `sealed segments ∪ fresh device presence` 区间并集；本机暂停但另一台电脑仍在工作时明确显示“本机已暂停，另一台设备正在工作”，不会误导为本机仍在计时。
+- 上传侧改为只发送本设备尚未确认或确实发生变化的 sealed FocusSegment；其他设备下载到本地的记录不再回传，成功后仅保存 SHA-256 指纹。首次升级最多补传一次，之后空轮询不携带整份本地历史。
+- 没有新增每秒请求、报告查询或全量历史回退。实时状态仍复用小型 per-device presence，UI 每秒增长只做本地 interval union。
+
 ## v0.23.206 — sealed 专注事实、可靠增量确认与统一账号并集
 
 - 固定数据语义：`lili_focus_segments` 只接受已封存的正时长 FocusSession；实时工作只来自 `lili_focus_device_presence`，不通过上传 `end_at = NULL` 或周期性改写 canonical `end_at` 计时。

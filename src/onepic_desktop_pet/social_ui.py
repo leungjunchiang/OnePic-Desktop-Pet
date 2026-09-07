@@ -2,6 +2,7 @@
 
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
+专注后台同步只传本设备待确认的 sealed facts；上传成功后把本地确认信息交给账号账本持久化。
 """
 
 from __future__ import annotations
@@ -871,6 +872,12 @@ class SocialSyncThread(QThread):
                         )
                     if isinstance(focus_segments_result, dict):
                         focus_segments_result = dict(focus_segments_result)
+                        # This acknowledgement remains process-local until the
+                        # account store persists compact fingerprints. It is not
+                        # sent over the network and contains no new server data.
+                        focus_segments_result["_uploaded_segments"] = list(
+                            focus_segments if isinstance(focus_segments, list) else []
+                        )
                         focus_segments_sync_duration_ms = round(
                             (time.monotonic() - focus_segments_sync_started)
                             * 1000,

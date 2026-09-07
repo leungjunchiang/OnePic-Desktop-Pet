@@ -1968,6 +1968,32 @@ def test_latest_focus_delta_uses_composite_cursor_and_never_downloads_open_facts
     assert "where public.lili_focus_segments.session_id is distinct from excluded.session_id" in normalized
 
 
+def test_focus_delta_invoker_has_only_owner_scoped_table_operations():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907150000_lili_focus_segment_invoker_grants.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "revoke all on table public.lili_focus_segments from anon" in normalized
+    assert "grant select, insert, update on table public.lili_focus_segments to authenticated" in normalized
+    assert "revoke delete, truncate, references, trigger on table public.lili_focus_segments from authenticated" in normalized
+    assert "grant delete" not in normalized
+
+    base_migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260826000100_lili_focus_segments.sql"
+    ).read_text(encoding="utf-8")
+    base_normalized = " ".join(base_migration.casefold().split())
+    assert "using ((select auth.uid()) = user_id)" in base_normalized
+    assert "with check ((select auth.uid()) = user_id)" in base_normalized
+
+
 def test_live_focus_projection_is_display_only_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (

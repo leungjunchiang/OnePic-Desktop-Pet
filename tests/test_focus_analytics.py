@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from onepic_desktop_pet.focus_analytics import (
     AccountFocusStore,
     FocusAnalyticsStore,
@@ -496,6 +498,68 @@ def test_focus_segment_upload_does_not_strand_older_closed_facts(tmp_path) -> No
     assert len(payload) == 120
     assert payload[0]["segment_id"] == "closed-0"
     assert payload[-1]["segment_id"] == "closed-119"
+
+
+def test_focus_segment_upload_ack_suppresses_unchanged_rows_and_remote_echo(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(
+        60,
+        started_at=now - timedelta(minutes=2),
+        record_id="local-a",
+    )
+    store.merge_remote_segments({
+        "segments": [{
+            "segment_id": "remote-b",
+            "session_id": "remote-session",
+            "start_at": "2026-09-07T08:00:00+08:00",
+            "end_at": "2026-09-07T09:00:00+08:00",
+            "device_id": "device-b",
+        }],
+    })
+
+    first = store.focus_segments_payload()
+    assert [item["segment_id"] for item in first] == ["local-a"]
+    assert store.acknowledge_focus_segments_upload(first)
+    for _ in range(100):
+        assert store.focus_segments_payload() == []
+
+    store.record_session(
+        60,
+        started_at=now - timedelta(minutes=1),
+        record_id="local-c",
+    )
+    assert [item["segment_id"] for item in store.focus_segments_payload()] == ["local-c"]
+
+    reloaded = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    assert [item["segment_id"] for item in reloaded.focus_segments_payload()] == ["local-c"]
+
+
+def test_focus_segment_upload_ack_failure_keeps_batch_retryable(tmp_path, monkeypatch) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=False,
+        device_id="device-a",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=1), record_id="local-a")
+    batch = store.focus_segments_payload()
+    monkeypatch.setattr(store, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+
+    with pytest.raises(OSError):
+        store.acknowledge_focus_segments_upload(batch)
+    assert store.focus_segments_payload() == batch
 
 
 def test_overlapping_raw_focus_intervals_are_counted_once(tmp_path) -> None:

@@ -44,6 +44,7 @@ from onepic_desktop_pet.compact_todo import CompactTodoPanel, TodoRow
 from onepic_desktop_pet.today_note import TimeMemoryWindow, TodayNoteWindow
 from onepic_desktop_pet.work_timer import WorkTimerModel
 from onepic_desktop_pet.controls import RoundedSurfaceLabel
+from onepic_desktop_pet.focus_segments import FocusSegment
 
 
 def test_phase1_social_read_gates_keep_heartbeat_separate() -> None:
@@ -2618,6 +2619,77 @@ def test_shared_focus_totals_include_checkpointed_current_session(monkeypatch) -
     )
     assert window._work_report_snapshot() == {"ok": True}
     assert reconcile_calls == []
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_paused_pet_labels_fresh_remote_device_work_without_network(monkeypatch) -> None:
+    """A remote live interval advances the union but does not change local controls."""
+
+    app, window = _create_window()
+    now = datetime.now(timezone(timedelta(hours=8)))
+    local_device_id = str(window.focus_analytics._device_id)
+    account_id = "account-1"
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    window._active_focus_account_id = account_id
+    window.focus_analytics.set_live_projection_segments(
+        [
+            FocusSegment(
+                segment_id="display-live-device:remote-device",
+                session_id="remote-session",
+                start_at=now - timedelta(minutes=20),
+                end_at=None,
+                device_id="remote-device",
+            ),
+            FocusSegment(
+                segment_id="display-live-local",
+                session_id="local-stopped",
+                start_at=now - timedelta(minutes=10),
+                end_at=now,
+                device_id=local_device_id,
+            ),
+        ]
+    )
+    monkeypatch.setattr(window, "_shared_today_focus_seconds", lambda: 20 * 60)
+
+    assert not window.work_timer.is_running
+    assert "本机已暂停，另一台设备正在工作" in window._shared_work_status_text()
+    assert window._remote_focus_device_is_working()
+    monkeypatch.setattr(
+        window.focus_session,
+        "snapshot",
+        lambda **_kwargs: SimpleNamespace(status="rest", today_seconds=20 * 60),
+    )
+    monkeypatch.setattr(
+        window,
+        "_cross_device_today_display_value",
+        lambda _snapshot=None: 20 * 60,
+    )
+    assert "本机已暂停，另一台设备正在工作" in window._menu_state()["work_status_text"]
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_remote_device_label_expires_with_local_projection_ttl(monkeypatch) -> None:
+    app, window = _create_window()
+    now = datetime.now(timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
+    window._active_focus_account_id = "account-1"
+    window.focus_analytics.set_live_projection_segments(
+        [
+            FocusSegment(
+                segment_id="display-live-device:remote-device",
+                session_id="remote-session",
+                start_at=now - timedelta(minutes=20),
+                end_at=None,
+                device_id="remote-device",
+            )
+        ]
+    )
+    window.focus_analytics._live_projection_expires_at = time.monotonic() - 1
+
+    assert not window._remote_focus_device_is_working()
+    assert "另一台设备" not in window._shared_work_status_suffix()
+
     window.close(); window.deleteLater(); app.processEvents()
 
 
