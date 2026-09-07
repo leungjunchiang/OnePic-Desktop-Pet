@@ -4870,7 +4870,7 @@ class PetWindow(QWidget):
             for segment in self.focus_analytics._projection_segments()
             if not any(
                 str(existing.get("segment_id") or existing.get("record_id") or "")
-                == str(segment.segment_id or "")
+                == str(getattr(segment, "segment_id", "") or "")
                 for existing in rows_list
                 if isinstance(existing, dict)
             )
