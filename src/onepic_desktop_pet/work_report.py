@@ -953,10 +953,9 @@ class ReportBarChart(QWidget):
         if self._hourly:
             label_step = 3
         else:
-            # The report only uses daily bars for a week at a time.  Show
-            # every day so the x-axis is self-explanatory; the month view uses
-            # a calendar heatmap instead of squeezing 31 dates into bars.
-            label_step = 1
+            # Natural weeks show every date.  A moved month uses the same
+            # daily chart but must leave enough horizontal room for labels.
+            label_step = 1 if count <= 12 else 2 if count <= 20 else 4
         for index, (row, value) in enumerate(zip(self._rows, values)):
             x = plot.left() + index * (bar_width + gap)
             # Scale bars against the axis upper bound, not the observed
@@ -1720,13 +1719,28 @@ class WorkReportDialog(QDialog):
         except ValueError:
             period_start = None
         if key == "month":
-            layout.addWidget(
-                self._heatmap_card(
-                    "本月工作日历",
-                    "颜色越深表示当天有效工作时间越长；悬停日期可查看具体数值。",
-                    daily_rows,
+            if report_range_is_standard(
+                key,
+                range_start,
+                range_end,
+                datetime.now(BEIJING_TIMEZONE).date(),
+            ):
+                layout.addWidget(
+                    self._heatmap_card(
+                        "本月工作日历",
+                        "颜色越深表示当天有效工作时间越长；悬停日期可查看具体数值。",
+                        daily_rows,
+                    )
                 )
-            )
+            else:
+                layout.addWidget(
+                    self._chart_card(
+                        "区间每日工作时长",
+                        "滚动月份按选定区间显示每日有效工作时长；左右拖动可继续按天平移。",
+                        daily_rows,
+                        drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                    )
+                )
             layout.addWidget(
                 self._chart_card(
                     "本月典型工作节律",
