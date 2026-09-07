@@ -1,3 +1,11 @@
+## v0.23.206 — sealed 专注事实、可靠增量确认与统一账号并集
+
+- 固定数据语义：`lili_focus_segments` 只接受已封存的正时长 FocusSession；实时工作只来自 `lili_focus_device_presence`，不通过上传 `end_at = NULL` 或周期性改写 canonical `end_at` 计时。
+- 增量同步改为“本地事实成功 merge 且 cursor 成功落盘后才确认游标”；异常 payload、merge 失败或本地持久化失败都会保留旧 cursor，等待重试。
+- 移除增量 RPC 不可用时的 full-snapshot fallback，避免旧路径重新每轮传输 400 天历史；暂停、结束、idle/day-rollover seal 和退出前 seal 都会请求一次可合并的轻量 delta sync。
+- 同步诊断补充 `sync_mode`、`device_id`、`duration_ms` 和 `error`，继续记录 `cursor_before`、`upload_count`、`returned_count`、`merge_count`、`cursor_after`，不记录完整 task 文本。
+- 工作报告、六毛、自习室和搭子排行榜统一使用“sealed segments ∪ 新鲜 per-device live intervals → interval union”；排行榜仅返回 today/week seconds 等聚合结果，不暴露设备或 session 级字段。日/周/月/年默认入口及历史可移动时间窗保持不变。
+
 ## v0.23.205 — 账号级实时/历史专注并集闭环
 
 - 修复跨设备历史片段只上传最近 96 条导致较早 FocusSession 永远无法落到另一台电脑的问题；增量同步现在覆盖本地保留的全部封闭事实，服务端响应仍按游标增量返回。

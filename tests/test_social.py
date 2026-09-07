@@ -1996,6 +1996,34 @@ def test_server_focus_union_uses_per_device_live_presence_for_all_totals():
     assert "insert into public.lili_focus_segments" not in normalized
 
 
+def test_sealed_focus_contract_and_aggregate_leaderboard_are_explicit():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907130000_lili_sealed_focus_contract.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "lili_reject_open_focus_segment" in normalized
+    assert "lili_focus_device_presence d" in normalized
+    assert "d.last_seen > now() - interval '2 minutes'" in normalized
+    assert "range_agg(tstzrange(source.start_at, source.end_at, '[)'))" in normalized
+    assert "lili_focus_presence f" not in normalized
+    assert "'device_id'" not in normalized
+    assert "'session_id'" not in normalized
+    assert "'session_started_at'" not in normalized
+    assert "create or replace function public.lili_focus_weekly_leaderboard" in normalized
+
+
+def test_focus_segment_sync_never_falls_back_to_full_snapshot():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "onepic_desktop_pet" / "social_ui.py").read_text(encoding="utf-8")
+    assert "lili_sync_focus_segments_delta" in source
+    assert '"lili_sync_focus_segments"' not in source
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")

@@ -108,6 +108,30 @@ def test_cross_device_display_includes_an_open_local_session_without_mutating_ro
     assert rows == before
 
 
+def test_sealed_and_live_same_interval_are_unioned_once() -> None:
+    rows = [{
+        "user_id": "account-1",
+        "segment_id": "sealed-a",
+        "session_id": "sealed",
+        "start_at": "2026-08-31T09:00:00+08:00",
+        "end_at": "2026-08-31T11:00:00+08:00",
+        "device_id": "mac",
+    }]
+    assert get_cross_device_today_display_seconds(
+        "account-1",
+        NOW,
+        rows,
+        active_session={
+            "user_id": "account-1",
+            "segment_id": "live-a",
+            "session_id": "live",
+            "start_at": "2026-08-31T09:00:00+08:00",
+            "end_at": None,
+            "device_id": "mac",
+        },
+    ) == 6 * 60 * 60
+
+
 def test_live_projection_unions_two_active_devices_without_double_counting() -> None:
     live_rows = live_projection_rows(
         "account-1",

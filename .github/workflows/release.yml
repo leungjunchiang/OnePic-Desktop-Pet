@@ -188,4 +188,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --verify-tag \
             --title "Lili $release_tag - 跨设备实时专注与可移动工作报告" \
-            --notes "修复跨设备历史片段只上传最近 96 条导致较早 FocusSession 无法同步的问题；增量同步现在覆盖本地保留的全部封闭事实，并记录 cursor_before、upload_count、returned_count、merge_count、cursor_after 诊断。工作报告、六毛、自习室和搭子排行榜统一按封闭 FocusSession 与现有每设备新鲜 presence 的账号级区间并集计算，两台电脑重叠时间只计算一次，原始 FocusSession 不被高频改写；工作报告继续支持日/周/月/年自然周期、箭头移动、图表拖动和精确起止日期选择。"
+            --notes "固定 sealed FocusSession 与 per-device live projection 的数据语义；禁止上传 end_at=NULL 或高频改写 canonical end_at。增量同步只有在本地事实成功 merge 且 cursor 成功落盘后才确认，失败会保留旧 cursor；移除 full-snapshot fallback，并为 pause/finish/idle seal/exit seal 请求轻量 delta sync。工作报告、六毛、自习室和搭子排行榜统一按 sealed segments 与新鲜 device presence 做账号级 interval union，两台电脑重叠时间只计算一次；同步诊断包含 cursor_before、upload_count、returned_count、merge_count、cursor_after、sync_mode、device_id、duration_ms、error，不记录完整 task 文本。"

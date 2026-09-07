@@ -380,6 +380,78 @@ def test_remote_focus_segments_are_facts_not_daily_maxima(tmp_path) -> None:
     assert day["focus_intervals"][0]["started_at"].startswith("2026-08-26T09:00")
 
 
+def test_remote_delta_merge_failure_keeps_cursor_and_facts_retryable(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.set_focus_segments_sync_cursor("before")
+
+    success, changed, count = store.merge_remote_segments_checked({
+        "segments": [{
+            "segment_id": "open-remote",
+            "session_id": "open-session",
+            "start_at": "2026-09-07T09:00:00+08:00",
+            "end_at": None,
+            "device_id": "device-b",
+        }],
+    })
+
+    assert (success, changed, count) == (False, False, 0)
+    assert store.focus_segments_sync_cursor() == "before"
+    assert store.focus_segments() == []
+
+
+def test_remote_delta_merge_persistence_failure_does_not_ack_cursor(tmp_path, monkeypatch) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    store.set_focus_segments_sync_cursor("before")
+    monkeypatch.setattr(store, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+
+    success, changed, count = store.merge_remote_segments_checked({
+        "segments": [{
+            "segment_id": "sealed-remote",
+            "session_id": "sealed-session",
+            "start_at": "2026-09-07T09:00:00+08:00",
+            "end_at": "2026-09-07T10:00:00+08:00",
+            "device_id": "device-b",
+        }],
+    })
+
+    assert (success, changed, count) == (False, False, 0)
+    assert store.focus_segments_sync_cursor() == "before"
+    assert store.focus_segments() == []
+
+
+def test_yesterday_remote_devices_union_to_three_hours_without_id_collision(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    success, changed, count = store.merge_remote_segments_checked({
+        "segments": [
+            {
+                "segment_id": "device-a-yesterday",
+                "session_id": "session-a",
+                "start_at": "2026-09-06T09:00:00+08:00",
+                "end_at": "2026-09-06T10:00:00+08:00",
+                "device_id": "device-a",
+            },
+            {
+                "segment_id": "device-b-yesterday",
+                "session_id": "session-b",
+                "start_at": "2026-09-06T14:00:00+08:00",
+                "end_at": "2026-09-06T16:00:00+08:00",
+                "device_id": "device-b",
+            },
+        ],
+    })
+
+    assert (success, changed, count) == (True, True, 2)
+    assert store.period_summary("day", now - timedelta(days=1))["total_seconds"] == 3 * 60 * 60
+    assert {item.device_id for item in store.focus_segments()} == {"device-a", "device-b"}
+    assert {item.segment_id for item in store.focus_segments()} == {
+        "device-a-yesterday",
+        "device-b-yesterday",
+    }
+
+
 def test_focus_segment_sync_cursor_persists_without_changing_focus_facts(tmp_path) -> None:
     now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     path = tmp_path / "focus.json"

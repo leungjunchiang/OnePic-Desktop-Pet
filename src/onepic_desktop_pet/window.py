@@ -4672,6 +4672,18 @@ class PetWindow(QWidget):
         self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
         self._invalidate_focus_projection("focus_segment_recorded")
+        # A newly sealed fact is immediately eligible for the lightweight
+        # delta sync.  The existing single-shot social timer coalesces this
+        # with a nearby heartbeat; no canonical end_at is updated while the
+        # session is live.
+        self._schedule_social_tick()
+        lifecycle_log(
+            "focus.segment.sealed",
+            self,
+            seconds=seconds,
+            completed=bool(completed),
+            sync_requested=True,
+        )
         return seconds
 
     def _seal_focus_at_day_rollover(
@@ -6653,28 +6665,45 @@ class PetWindow(QWidget):
         )
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         focus_segments_payload = data.get("_focus_segments")
-        merge_with_count = getattr(
-            self.focus_analytics, "merge_remote_segments_with_count", None
-        )
-        if callable(merge_with_count):
-            segment_changed, merged_segment_count = merge_with_count(focus_segments_payload)
+        merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)
+        merge_ok = False
+        merge_error = ""
+        if callable(merge_checked):
+            merge_ok, segment_changed, merged_segment_count = merge_checked(
+                focus_segments_payload
+            )
         else:
-            segment_changed = self.focus_analytics.merge_remote_segments(focus_segments_payload)
-            merged_segment_count = 0
+            merge_with_count = getattr(
+                self.focus_analytics, "merge_remote_segments_with_count", None
+            )
+            if callable(merge_with_count):
+                segment_changed, merged_segment_count = merge_with_count(focus_segments_payload)
+            else:
+                segment_changed = self.focus_analytics.merge_remote_segments(focus_segments_payload)
+                merged_segment_count = 0
+            merge_ok = True
+        if not merge_ok and focus_segments_payload is not None:
+            merge_error = "payload_invalid_or_local_persist_failed"
         # The delta cursor is transport state only.  Advance it after the
-        # payload has passed the existing raw-fact merge path, never before;
-        # malformed or legacy responses therefore cannot make a later sync
-        # skip facts.  FocusSession records and their union semantics remain
-        # untouched.
+        # complete raw-fact transaction has succeeded.  A malformed response,
+        # merge failure, or local cursor persistence failure remains retryable.
+        cursor_advanced = False
         if (
-            isinstance(focus_segments_payload, dict)
+            merge_ok
+            and isinstance(focus_segments_payload, dict)
             and focus_segments_payload.get("_sync_mode") == "delta"
             and isinstance(focus_segments_payload.get("segments"), list)
             and focus_segments_payload.get("next_cursor")
         ):
-            self.focus_analytics.set_focus_segments_sync_cursor(
-                focus_segments_payload.get("next_cursor")
-            )
+            try:
+                cursor_advanced = bool(
+                    self.focus_analytics.set_focus_segments_sync_cursor(
+                        focus_segments_payload.get("next_cursor")
+                    )
+                )
+            except Exception as exc:
+                merge_error = "cursor_persist_failed"
+                LOGGER.warning("focus segment cursor persistence failed: %s", exc)
         sync_diagnostics = (
             focus_segments_payload.get("_sync_diagnostics")
             if isinstance(focus_segments_payload, dict)
@@ -6684,9 +6713,13 @@ class PetWindow(QWidget):
             sync_diagnostics = dict(sync_diagnostics)
             sync_diagnostics["merge_count"] = max(0, int(merged_segment_count or 0))
             sync_diagnostics["cursor_after"] = str(
-                self.focus_analytics.focus_segments_sync_cursor()
-                or sync_diagnostics.get("cursor_after")
-                or ""
+                self.focus_analytics.focus_segments_sync_cursor() or ""
+            )
+            sync_diagnostics["sync_mode"] = str(sync_diagnostics.get("sync_mode") or "delta")
+            sync_diagnostics["device_id"] = str(sync_diagnostics.get("device_id") or "")
+            sync_diagnostics["duration_ms"] = float(sync_diagnostics.get("duration_ms") or 0)
+            sync_diagnostics["error"] = str(
+                merge_error or sync_diagnostics.get("error") or ""
             )
             lifecycle_log(
                 "focus.segment_sync.merge",
@@ -6697,6 +6730,12 @@ class PetWindow(QWidget):
                 merge_count=max(0, int(merged_segment_count or 0)),
                 cursor_after=str(sync_diagnostics.get("cursor_after") or ""),
                 full_sync=bool(sync_diagnostics.get("full_sync")),
+                sync_mode=str(sync_diagnostics.get("sync_mode") or "delta"),
+                device_id=str(sync_diagnostics.get("device_id") or ""),
+                duration_ms=float(sync_diagnostics.get("duration_ms") or 0),
+                error=str(sync_diagnostics.get("error") or ""),
+                merge_ok=bool(merge_ok),
+                cursor_advanced=bool(cursor_advanced),
             )
         # merge_remote_segments already reconciles derived caches and folds
         # that result into its return value.  Avoid a second full-ledger scan

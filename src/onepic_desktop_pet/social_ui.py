@@ -41,6 +41,7 @@ from .social import (
     _private_notes_from_dashboard,
     _dashboard_payload_has_core_shape,
     _merge_dashboard_overlay,
+    presence_device_id,
     social_user_message,
 )
 from .config import PET_NAME, clean_owner_nickname, clean_social_pet_name, social_pet_label
@@ -711,6 +712,10 @@ class SocialSyncThread(QThread):
             presence_context_updated: bool | None = None
             taunt_state_result = None
             encouragement_state_result = None
+            focus_segments_cursor_before = ""
+            focus_segments_upload_count = 0
+            focus_segments_device_id = ""
+            focus_segments_sync_started = 0.0
             personal_state = self.presence.get("personal_state")
             personal_state_factory = self.presence.get("_personal_state_factory")
             if personal_state is None and callable(personal_state_factory):
@@ -799,6 +804,11 @@ class SocialSyncThread(QThread):
                         focus_segments_upload_count = (
                             len(focus_segments) if isinstance(focus_segments, list) else 0
                         )
+                        focus_segments_sync_started = time.monotonic()
+                        focus_segments_device_id = presence_device_id(
+                            _session_user_id(self.client)
+                            or str(self.presence.get("user_id") or "")
+                        )
                         focus_segments_result = sync_rpc(
                             "lili_sync_focus_segments_delta",
                             {
@@ -807,34 +817,51 @@ class SocialSyncThread(QThread):
                             },
                         )
                     except (SocialError, AttributeError, TypeError) as exc:
-                        # Keep mixed-version deployments usable.  Only an
-                        # explicitly missing endpoint falls back to the old
-                        # full-snapshot RPC; transient failures must not turn
-                        # every poll into an 80 KB response.
-                        status = getattr(exc, "status", None)
-                        error_code = str(getattr(exc, "error_code", "") or "").casefold()
-                        raw_error = str(exc).casefold()
-                        unsupported = (
-                            status in {404, 405}
-                            or error_code in {"pgrst202", "42883"}
-                            or "lili_sync_focus_segments_delta" in raw_error
+                        focus_segments_sync_error = str(exc)[:240]
+                        focus_segments_sync_duration_ms = round(
+                            (time.monotonic() - focus_segments_sync_started)
+                            * 1000,
+                            1,
                         )
-                        if unsupported:
-                            try:
-                                focus_segments_result = sync_rpc(
-                                    "lili_sync_focus_segments",
-                                    {"p_segments": personal_state.get("focus_segments") or []},
-                                )
-                                if isinstance(focus_segments_result, dict):
-                                    focus_segments_result = dict(focus_segments_result)
-                                    focus_segments_result["_sync_mode"] = "legacy"
-                            except (SocialError, AttributeError, TypeError) as fallback_exc:
-                                LOGGER.info("legacy focus segment sync deferred: %s", fallback_exc)
-                        else:
-                            LOGGER.info("incremental focus segment sync deferred: %s", exc)
+                        LOGGER.info("incremental focus segment sync deferred: %s", exc)
+                        lifecycle_log(
+                            "focus.segment_sync.transport",
+                            cursor_before=focus_segments_cursor_before,
+                            upload_count=focus_segments_upload_count,
+                            returned_count=0,
+                            cursor_after=focus_segments_cursor_before,
+                            sync_mode="delta",
+                            device_id=focus_segments_device_id,
+                            duration_ms=focus_segments_sync_duration_ms,
+                            error=focus_segments_sync_error,
+                        )
+                    except Exception as exc:
+                        focus_segments_sync_error = str(exc)[:240]
+                        focus_segments_sync_duration_ms = round(
+                            (time.monotonic() - focus_segments_sync_started)
+                            * 1000,
+                            1,
+                        )
+                        LOGGER.exception("incremental focus segment sync crashed")
+                        lifecycle_log(
+                            "focus.segment_sync.transport",
+                            cursor_before=focus_segments_cursor_before,
+                            upload_count=focus_segments_upload_count,
+                            returned_count=0,
+                            cursor_after=focus_segments_cursor_before,
+                            sync_mode="delta",
+                            device_id=focus_segments_device_id,
+                            duration_ms=focus_segments_sync_duration_ms,
+                            error=focus_segments_sync_error,
+                        )
                     if isinstance(focus_segments_result, dict):
                         focus_segments_result = dict(focus_segments_result)
-                        focus_segments_result.setdefault("_sync_mode", "delta")
+                        focus_segments_sync_duration_ms = round(
+                            (time.monotonic() - focus_segments_sync_started)
+                            * 1000,
+                            1,
+                        )
+                        focus_segments_result["_sync_mode"] = "delta"
                         returned_segments = focus_segments_result.get("segments")
                         returned_count = (
                             len(returned_segments)
@@ -849,6 +876,10 @@ class SocialSyncThread(QThread):
                                 focus_segments_result.get("next_cursor") or ""
                             ),
                             "full_sync": bool(focus_segments_result.get("full_sync")),
+                            "sync_mode": "delta",
+                            "device_id": focus_segments_device_id,
+                            "duration_ms": focus_segments_sync_duration_ms,
+                            "error": "",
                         }
                         lifecycle_log(
                             "focus.segment_sync.transport",
@@ -859,6 +890,10 @@ class SocialSyncThread(QThread):
                                 focus_segments_result.get("next_cursor") or ""
                             ),
                             full_sync=bool(focus_segments_result.get("full_sync")),
+                            sync_mode="delta",
+                            device_id=focus_segments_device_id,
+                            duration_ms=focus_segments_sync_duration_ms,
+                            error="",
                         )
             # Active FocusSession intervals remain local/canonical until they
             # close.  Read the separate per-device liveness projection so the

@@ -12,6 +12,7 @@ are compatibility projections and never override a raw interval result.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -302,9 +303,50 @@ class FocusAnalyticsStore:
             self._state["account_state"] = state
         if state.get("focus_segments_sync_cursor") == value:
             return False
+        previous = copy.deepcopy(self._state)
         state["focus_segments_sync_cursor"] = value
-        self._save()
+        try:
+            self._save()
+        except Exception:
+            # A cursor is an acknowledgement, not a best-effort cache.  If
+            # the local ledger cannot be persisted, keep the old cursor so a
+            # later sync retries the server response instead of losing facts.
+            self._state = previous
+            raise
         return True
+
+    def merge_remote_segments_checked(self, payload: Any) -> tuple[bool, bool, int]:
+        """Validate and transactionally merge a delta response.
+
+        Returns ``(success, changed, merge_count)``.  ``success`` is distinct
+        from ``changed``: a valid duplicate/empty response is an acknowledged
+        response and may advance the cursor, while malformed data or a local
+        persistence failure must leave both facts and cursor retryable.
+        """
+
+        entries = payload.get("segments") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return False, False, 0
+        today = _as_beijing(self._now()).date()
+        cutoff = today - timedelta(days=400)
+        for index, item in enumerate(entries):
+            if not isinstance(item, dict):
+                return False, False, 0
+            segment = segment_from_record(item, index)
+            if segment is None or segment.end_at is None:
+                return False, False, 0
+            if segment.start_at.date() < cutoff or segment.start_at.date() > today:
+                return False, False, 0
+            if int((segment.end_at - segment.start_at).total_seconds()) <= 0:
+                return False, False, 0
+
+        previous = copy.deepcopy(self._state)
+        try:
+            changed, merged_count = self.merge_remote_segments_with_count(payload)
+        except Exception:
+            self._state = previous
+            return False, False, 0
+        return True, changed, merged_count
 
     def merge_remote_segments_with_count(self, payload: Any) -> tuple[bool, int]:
         """Merge server interval facts and report how many rows changed.
