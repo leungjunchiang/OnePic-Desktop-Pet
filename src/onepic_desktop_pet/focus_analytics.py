@@ -829,6 +829,202 @@ class FocusAnalyticsStore:
             interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
         )
 
+    def range_summary(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        *,
+        at: datetime | None = None,
+        period: str = "custom",
+        extra_segments: list[FocusSegment] | None = None,
+    ) -> dict[str, Any]:
+        """Summarize any half-open Beijing interval from the canonical union.
+
+        The standard day/week/month/year report predates movable windows and
+        has a few compatibility fields for the old UI.  This method is the
+        deliberately small common path for arbitrary report windows.  It
+        never adds daily counters or timer checkpoints as evidence: every
+        duration is produced by :func:`aggregate_focus_time`, so overlapping
+        devices are counted once and a session crossing midnight is clipped
+        correctly at both ends.
+        """
+
+        window_start = _as_beijing(start_at)
+        window_end = _as_beijing(end_at)
+        if window_end <= window_start:
+            raise ValueError("end_at must be after start_at")
+        validation_moment = _as_beijing(self._now())
+        raw_segments = self.focus_segments()
+        if extra_segments:
+            raw_segments.extend(extra_segments)
+        untrusted_dates = {
+            str(key)
+            for key, value in (self._state.get("days", {}) or {}).items()
+            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
+        }
+        segments = [
+            item
+            for item in raw_segments
+            if item.start_at.date().isoformat() not in untrusted_dates
+        ]
+        aggregate = aggregate_focus_time(
+            segments,
+            window_start,
+            window_end,
+            now=validation_moment,
+            interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+        )
+        daily_rounds: dict[str, int] = {}
+        for segment in segments:
+            try:
+                if segment.validation_error(validation_moment):
+                    continue
+                clipped_start = max(segment.start_at, window_start)
+                clipped_end = min(segment.effective_end(validation_moment), window_end)
+                if clipped_end <= clipped_start:
+                    continue
+                day_cursor = clipped_start.date()
+                last_segment_day = (clipped_end - timedelta(microseconds=1)).date()
+                while day_cursor <= last_segment_day:
+                    daily_rounds[day_cursor.isoformat()] = daily_rounds.get(day_cursor.isoformat(), 0) + 1
+                    day_cursor += timedelta(days=1)
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+        # Build full daily rows from the same clipped union.  A future day is
+        # intentionally represented as ``None`` just like the standard
+        # reports; a current day contains the live value available right now.
+        daily: list[dict[str, Any]] = []
+        cursor = window_start.date()
+        last_date = (window_end - timedelta(microseconds=1)).date()
+        while cursor <= last_date:
+            day_start = datetime.combine(cursor, time.min, tzinfo=BEIJING_TIMEZONE)
+            day_end = day_start + timedelta(days=1)
+            is_future = cursor > validation_moment.date()
+            untrusted = cursor.isoformat() in untrusted_dates
+            seconds: int | None
+            if is_future or untrusted:
+                seconds = None
+            else:
+                seconds = max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
+            weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[cursor.weekday()]
+            daily.append({
+                "date": cursor.isoformat(),
+                "label": f"{cursor.month}/{cursor.day}",
+                "weekday": weekday,
+                "display_label": f"{cursor.month}/{cursor.day} {weekday}",
+                "seconds": seconds,
+                "rounds": daily_rounds.get(cursor.isoformat(), 0) if seconds is not None else None,
+                "trusted": not is_future and not untrusted,
+                "is_today": cursor == validation_moment.date(),
+                "is_future": is_future,
+                "status": "future" if is_future else "untrusted" if untrusted else "observed",
+            })
+            cursor += timedelta(days=1)
+
+        # Quality and completion are descriptive metadata only.  Totals and
+        # all chart values remain the unioned interval metrics above.
+        quality_values = [max(0, min(100, int(value))) for value in aggregate.quality_values]
+        valid_source_count = 0
+        completed_source_count = 0
+        for segment in segments:
+            try:
+                if segment.validation_error(validation_moment):
+                    continue
+                effective_end = segment.effective_end(validation_moment)
+                clipped_start = max(segment.start_at, window_start)
+                clipped_end = min(effective_end, window_end)
+                if clipped_end <= clipped_start:
+                    continue
+                valid_source_count += 1
+                completed_source_count += 1 if segment.completed or segment.end_at is not None else 0
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+        observed_daily = [row for row in daily if row.get("seconds") is not None]
+        total_seconds = max(0, int(aggregate.total_seconds))
+        active_days = sum(1 for row in observed_daily if int(row.get("seconds", 0) or 0) > 0)
+        monthly: list[dict[str, Any]] = []
+        month_keys = sorted({str(row.get("date") or "")[:7] for row in daily if row.get("date")})
+        for month_key in month_keys:
+            month_rows = [row for row in daily if str(row.get("date") or "").startswith(month_key)]
+            known = [row for row in month_rows if row.get("seconds") is not None]
+            month_seconds = sum(max(0, int(row.get("seconds", 0) or 0)) for row in known)
+            try:
+                month_date = date.fromisoformat(f"{month_key}-01")
+                month_label = f"{month_date.year}年{month_date.month}月"
+            except ValueError:
+                month_label = month_key
+            monthly.append({
+                "date": f"{month_key}-01",
+                "label": month_label,
+                "year_label": month_label,
+                "seconds": month_seconds if known else None,
+                "active_days": sum(1 for row in known if int(row.get("seconds", 0) or 0) > 0),
+                "workday_average_seconds": month_seconds // max(1, sum(1 for row in known if int(row.get("seconds", 0) or 0) > 0)),
+                "is_future": bool(month_rows) and not known,
+            })
+
+        interval_rows = [dict(row) for row in aggregate.intervals]
+        first_started = interval_rows[0].get("started_at") if interval_rows else "暂无记录"
+        last_ended = interval_rows[-1].get("ended_at") if interval_rows else "暂无记录"
+        try:
+            first_started_text = parse_focus_timestamp(first_started).strftime("%H:%M") if first_started else "暂无记录"
+        except (AttributeError, TypeError, ValueError):
+            first_started_text = "暂无记录"
+        try:
+            last_ended_text = parse_focus_timestamp(last_ended).strftime("%H:%M") if last_ended else "暂无记录"
+        except (AttributeError, TypeError, ValueError):
+            last_ended_text = "暂无记录"
+        end_date = last_date
+        return {
+            "period": str(period or "custom"),
+            "start": window_start.date().isoformat(),
+            "end": end_date.isoformat(),
+            "total_seconds": total_seconds,
+            "completed_rounds": completed_source_count,
+            "longest_focus_seconds": max(0, int(aggregate.longest_seconds)),
+            "interruptions": max(0, int(aggregate.interruption_count)),
+            "average_quality": round(sum(quality_values) / len(quality_values)) if quality_values else 0,
+            "active_days": active_days,
+            "started_rounds": max(0, int(aggregate.segment_count)),
+            "completion_rate": round(completed_source_count / valid_source_count * 100, 1) if valid_source_count else 0.0,
+            "average_session_seconds": max(0, int(aggregate.average_seconds)),
+            "high_quality_seconds": total_seconds if aggregate.longest_seconds >= 25 * 60 else 0,
+            "deep_focus_seconds": total_seconds if aggregate.longest_seconds >= 25 * 60 else 0,
+            "first_started_at": first_started_text,
+            "last_ended_at": last_ended_text,
+            "strongest_window": self._best_window(end_date, start=window_start.date()),
+            "hourly": [dict(row) for row in aggregate.hourly],
+            "focus_intervals": interval_rows,
+            "daily": daily,
+            "monthly": monthly,
+            "untrusted_days": sorted(untrusted_dates.intersection({str(row.get("date")) for row in daily})),
+            "data_quality": {
+                "trusted": not bool(untrusted_dates.intersection({str(row.get("date")) for row in daily}) or aggregate.errors),
+                "untrusted_days": sorted(untrusted_dates.intersection({str(row.get("date")) for row in daily})),
+                "consistency_errors": list(aggregate.errors),
+                "message": (
+                    "本区间包含旧版异常计时记录；异常日期已剔除。"
+                    if untrusted_dates.intersection({str(row.get("date")) for row in daily})
+                    else "本区间统计存在一致性异常，异常区间已剔除。"
+                    if aggregate.errors
+                    else "本区间数据口径正常。"
+                ),
+            },
+            "local_record_count": sum(
+                1 for raw in self._state.get("records", [])
+                if isinstance(raw, dict)
+                and self._record_date(raw) is not None
+                and window_start.date() <= self._record_date(raw) <= end_date
+            ),
+            "local_evidence": bool(valid_source_count),
+            "raw_segment_count": len(segments),
+            "raw_period_evidence": bool(valid_source_count),
+            "raw_source_active": bool(valid_source_count),
+            "workday_average_seconds": total_seconds // max(1, active_days),
+        }
+
     def focus_device_diagnostics(
         self,
         period: str = "day",

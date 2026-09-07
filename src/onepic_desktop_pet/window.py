@@ -54,7 +54,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Callable
@@ -183,6 +183,7 @@ from .focus_display import (
     get_cross_device_today_display_seconds,
     live_projection_rows,
 )
+from .focus_segments import FocusSegment
 from .focus_session import FocusSessionManager
 from .work_report import WorkReportDialog, build_work_report
 from .growth import (
@@ -5186,7 +5187,13 @@ class PetWindow(QWidget):
         seconds, name = max(candidates, key=lambda item: (item[0], item[1]))
         return f"{name} · 本周 {format_work_duration(seconds)}"
 
-    def _work_report_snapshot(self) -> dict[str, object]:
+    def _work_report_snapshot(
+        self,
+        *,
+        period: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict[str, object]:
         """Build a fresh report from the currently active account namespace."""
 
         moment = datetime.now(BEIJING_TIMEZONE)
@@ -5203,6 +5210,20 @@ class PetWindow(QWidget):
             self.work_timer.reconcile_today_seconds(
                 int(day_projection.get("total_seconds", 0) or 0)
             )
+        selected_range = None
+        if period and start and end:
+            try:
+                selected_start = date.fromisoformat(str(start)[:10])
+                selected_end = date.fromisoformat(str(end)[:10])
+                if selected_end > selected_start:
+                    selected_range = (str(period), selected_start, selected_end)
+            except (TypeError, ValueError):
+                selected_range = None
+        extra_live_segments = [
+            item
+            for item in (self._cross_device_today_display_live_rows or [])
+            if isinstance(item, FocusSegment)
+        ]
         return build_work_report(
             self.focus_analytics,
             self.work_timer,
@@ -5219,6 +5240,8 @@ class PetWindow(QWidget):
                 "week": self.time_memory.records.week_stats(current_date.isoformat()),
                 "month": self.time_memory.records.month_stats(current_date.isoformat()),
             },
+            selected_range=selected_range,
+            extra_live_segments=extra_live_segments,
             now=moment,
         )
 

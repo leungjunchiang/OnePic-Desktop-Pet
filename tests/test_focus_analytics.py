@@ -72,6 +72,34 @@ def test_period_summary_projects_day_week_and_month_without_network(tmp_path) ->
     assert all(row["seconds"] is None for row in month["daily"] if row["date"] > "2026-08-13")
 
 
+def test_range_summary_uses_one_union_for_overlapping_devices(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0)
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.record_session(
+        2 * 60 * 60,
+        started_at=datetime(2026, 9, 2, 9, 0),
+        completed=True,
+        device_id="mac",
+    )
+    store.record_session(
+        2 * 60 * 60,
+        started_at=datetime(2026, 9, 2, 10, 0),
+        completed=True,
+        device_id="win",
+    )
+
+    report = store.range_summary(
+        datetime(2026, 9, 2),
+        datetime(2026, 9, 9),
+    )
+
+    assert report["total_seconds"] == 3 * 60 * 60
+    assert report["active_days"] == 1
+    assert len(report["daily"]) == 7
+    assert report["daily"][0]["seconds"] == 3 * 60 * 60
+    assert report["daily"][1]["seconds"] == 0
+
+
 def test_period_summary_projects_current_calendar_year_without_network(tmp_path) -> None:
     now = datetime(2026, 8, 13, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)

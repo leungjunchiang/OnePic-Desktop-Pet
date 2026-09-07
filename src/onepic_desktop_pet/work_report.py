@@ -12,16 +12,18 @@ from datetime import date, datetime, timedelta
 from time import monotonic
 from typing import Any, Callable
 
-from PySide6.QtCore import QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QDate, QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
     QPushButton,
+    QDateEdit,
     QScrollArea,
     QSizePolicy,
     QTabWidget,
@@ -108,6 +110,105 @@ def _signed_delta(seconds: int | None) -> str:
     return f"较昨日 {sign}{format_work_duration(abs(value))}"
 
 
+REPORT_PERIODS = ("day", "week", "month", "year")
+
+
+def _next_month(value: date) -> date:
+    return (value.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+def _shift_year(value: date, amount: int) -> date:
+    year = value.year + int(amount)
+    # February 29 is a valid anchor only in leap years.  Keep the window
+    # navigation deterministic instead of raising halfway through a click.
+    return value.replace(year=year, day=min(value.day, 28 if value.month == 2 else value.day))
+
+
+def standard_report_range(period: str, anchor: date) -> tuple[date, date]:
+    """Return the natural preset range as ``[start, end)`` dates."""
+
+    key = str(period or "day").strip().casefold()
+    if key == "week":
+        start = anchor - timedelta(days=anchor.weekday())
+        return start, start + timedelta(days=7)
+    if key == "month":
+        start = anchor.replace(day=1)
+        return start, _next_month(start)
+    if key == "year":
+        start = anchor.replace(month=1, day=1)
+        return start, start.replace(year=start.year + 1)
+    return anchor, anchor + timedelta(days=1)
+
+
+def move_report_range(period: str, start: date, end: date, direction: int, *, fine: bool = False) -> tuple[date, date]:
+    """Move a report window while retaining its semantic width."""
+
+    step = -1 if int(direction) < 0 else 1
+    key = str(period or "day").strip().casefold()
+    if key == "day":
+        delta = timedelta(days=step)
+        return start + delta, end + delta
+    if key == "week":
+        delta = timedelta(days=step if fine else 7 * step)
+        return start + delta, end + delta
+    if key == "month":
+        if not fine:
+            candidate = _next_month(start) if step > 0 else (start.replace(day=1) - timedelta(days=1)).replace(day=1)
+            return candidate, _next_month(candidate)
+        delta = timedelta(days=step)
+        return start + delta, end + delta
+    if key == "year":
+        if not fine:
+            candidate = _shift_year(start, step).replace(month=1, day=1)
+            return candidate, candidate.replace(year=candidate.year + 1)
+        delta = timedelta(days=step)
+        return start + delta, end + delta
+    delta = timedelta(days=step)
+    return start + delta, end + delta
+
+
+def report_range_is_standard(period: str, start: date, end: date, today: date) -> bool:
+    natural_start, natural_end = standard_report_range(period, today)
+    return start == natural_start and end == natural_end
+
+
+def report_range_title(period: str, start: date, end: date, today: date) -> tuple[str, str, str]:
+    """Return title, width text and reset text for the shared navigator."""
+
+    key = str(period or "day").strip().casefold()
+    standard = report_range_is_standard(key, start, end, today)
+    if key == "day":
+        if standard:
+            title = f"今天 · {start.month:02d}/{start.day:02d}"
+        elif start == today - timedelta(days=1):
+            title = f"昨天 · {start.month:02d}/{start.day:02d}"
+        else:
+            title = f"{start.month:02d}月{start.day:02d}日"
+        return title, "1 天", "回到今天"
+    if key == "week":
+        title = (
+            f"本周 · {start.month:02d}/{start.day:02d} – {end - timedelta(days=1):%m/%d}"
+            if standard
+            else f"{start:%m/%d} – {(end - timedelta(days=1)):%m/%d}"
+        )
+        return title, "7 天", "回到本周"
+    if key == "month":
+        if standard:
+            title = f"{start.year}年{start.month}月"
+            width = f"{(end - start).days} 天"
+        else:
+            title = f"{start:%m/%d} – {(end - timedelta(days=1)):%m/%d}"
+            width = f"{(end - start).days} 天"
+        return title, width, "回到本月"
+    if standard:
+        title = f"{start.year}年"
+        width = f"{(end - start).days} 天"
+    else:
+        title = f"{start:%Y/%m/%d} – {(end - timedelta(days=1)):%Y/%m/%d}"
+        width = f"{(end - start).days} 天"
+    return title, width, "回到今年"
+
+
 def _populate_annual_overview(item: dict[str, Any]) -> None:
     """Derive annual trend and milestones from the report's canonical daily rows.
 
@@ -191,6 +292,8 @@ def build_work_report(
     focus_snapshot: Any | None = None,
     focus_projection: dict[str, Any] | None = None,
     task_stats: dict[str, dict[str, Any]] | None = None,
+    selected_range: tuple[str, date, date] | None = None,
+    extra_live_segments: list[FocusSegment] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build an account-scoped report snapshot without writing a file."""
@@ -199,6 +302,9 @@ def build_work_report(
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=BEIJING_TIMEZONE)
     summary = analytics.summary(moment)
+    selected_key = str(selected_range[0]).strip().casefold() if selected_range else ""
+    selected_key = selected_key if selected_key in REPORT_PERIODS else ""
+    custom_range_selected = bool(selected_key and selected_range)
     daily_stats_snapshot = daily_stats.snapshot()
     canonical_today: int | None = None
     canonical_week: int | None = None
@@ -321,7 +427,10 @@ def build_work_report(
                 current_average = max(0, int(item.get("average_session_seconds", 0) or 0))
                 item["average_session_seconds"] = live_elapsed if not current_average else min(current_average, int(item["longest_focus_seconds"]))
         # Invalid live timestamps are ignored; persisted facts remain intact.
+    display_live_segments = list(extra_live_segments or [])
     if live_segment is not None:
+        display_live_segments.append(live_segment)
+    if display_live_segments:
         # Rebuild every live period from the same interval set.  This replaces
         # the old path that appended one interval to a separately calculated
         # hourly chart and could leave count/average/longest inconsistent.
@@ -331,7 +440,7 @@ def build_work_report(
             aggregate = analytics.focus_aggregate(
                 period,
                 moment,
-                extra_segments=[live_segment],
+                extra_segments=display_live_segments,
             )
             item = report[period]
             item["total_seconds"] = aggregate.total_seconds
@@ -341,6 +450,33 @@ def build_work_report(
             item["longest_focus_seconds"] = aggregate.longest_seconds
             item["average_session_seconds"] = aggregate.average_seconds
             item["interruptions"] = max(item.get("interruptions", 0), aggregate.interruption_count)
+            for row in item.get("daily") or []:
+                date_key = str(row.get("date") or "")
+                if date_key in aggregate.daily and not row.get("is_future") and row.get("status") != "untrusted":
+                    row["seconds"] = max(0, int(aggregate.daily.get(date_key, 0) or 0))
+    if custom_range_selected and selected_range is not None:
+        _, selected_start, selected_end = selected_range
+        range_start_at = datetime.combine(selected_start, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        range_end_at = datetime.combine(selected_end, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        selected_extras = list(extra_live_segments or [])
+        if live_segment is not None:
+            selected_extras.append(live_segment)
+        # The selected page is rebuilt from exactly the same interval union as
+        # the natural pages.  Canonical day/week compatibility overlays below
+        # are skipped for this page so an arbitrary historical window cannot be
+        # overwritten by today's projection.
+        report[selected_key] = analytics.range_summary(
+            range_start_at,
+            range_end_at,
+            at=moment,
+            period=selected_key,
+            extra_segments=selected_extras or None,
+        )
+        report["selected_range"] = {
+            "period": selected_key,
+            "start": selected_start.isoformat(),
+            "end": (selected_end - timedelta(days=1)).isoformat(),
+        }
     # The live aggregate above is the same interval union used by the daily
     # rows.  Reuse its day projection instead of applying a second max/cache
     # fallback to the report headline.
@@ -402,6 +538,8 @@ def build_work_report(
     # analytics behavior above.
     if canonical_today is not None:
         for key in ("day", "week", "month", "year"):
+            if custom_range_selected and key == selected_key:
+                continue
             rows = report[key].get("daily") or []
             today_row = next((row for row in rows if row.get("is_today")), None)
             if isinstance(today_row, dict):
@@ -424,9 +562,9 @@ def build_work_report(
         )
         # Daily projections are the canonical projection of the same clipped
         # interval union.  Never resurrect a stale snapshot with max().
-        if key == "day" and canonical_today is not None:
+        if key == "day" and canonical_today is not None and not (custom_range_selected and key == selected_key):
             item["total_seconds"] = canonical_today
-        elif key == "week" and canonical_week is not None:
+        elif key == "week" and canonical_week is not None and not (custom_range_selected and key == selected_key):
             item["total_seconds"] = canonical_week
         else:
             item["total_seconds"] = rows_total
@@ -441,7 +579,8 @@ def build_work_report(
         )
         item["quality_label"] = _quality_label(int(item.get("average_quality", 0) or 0))
 
-    _populate_annual_overview(report["year"])
+    if not (custom_range_selected and selected_key == "year"):
+        _populate_annual_overview(report["year"])
 
     day["week_total_seconds"] = int(report["week"]["total_seconds"])
     report["data_quality"] = {
@@ -505,6 +644,8 @@ def _parse_interval(value: Any) -> datetime | None:
 class ReportTimeIntervalChart(QWidget):
     """Apple-Sleep-like interval chart for real FocusSession time ranges."""
 
+    range_dragged = Signal(int)
+
     def __init__(
         self,
         intervals: list[dict[str, Any]],
@@ -524,6 +665,8 @@ class ReportTimeIntervalChart(QWidget):
         self._period = period
         self._start_date = start_date
         self._hover: tuple[QRect, str] | None = None
+        self._drag_origin_x: int | None = None
+        self._drag_last_days = 0
         self.setMouseTracking(True)
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -553,7 +696,11 @@ class ReportTimeIntervalChart(QWidget):
                     first = date.fromisoformat(first.isoformat())
                 except (AttributeError, ValueError):
                     first = datetime.now(BEIJING_TIMEZONE).date()
-            first -= timedelta(days=first.weekday())
+            # A moved 7-day window may start on any weekday.  Only the
+            # natural default is Monday–Sunday; snapping every window back to
+            # Monday would make the chart disagree with the selected range.
+            if self._start_date is None:
+                first -= timedelta(days=first.weekday())
             rows = [(index, datetime.combine(first + timedelta(days=index), datetime.min.time(), tzinfo=BEIJING_TIMEZONE), datetime.combine(first + timedelta(days=index + 1), datetime.min.time(), tzinfo=BEIJING_TIMEZONE)) for index in range(7)]
         left = 78
         right = max(left + 120, self.width() - 18)
@@ -616,9 +763,28 @@ class ReportTimeIntervalChart(QWidget):
     def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
         point = event.position().toPoint(); found = next((item for item in getattr(self, "_segments", []) if item[0].contains(point)), None)
         self._hover = found
+        if self._drag_origin_x is not None:
+            days = int((self._drag_origin_x - point.x()) / 60)
+            if days != self._drag_last_days:
+                self.range_dragged.emit(days - self._drag_last_days)
+                self._drag_last_days = days
         if found: QToolTip.showText(QCursor.pos(), found[1], self)
         else: QToolTip.hideText()
         self.update(); super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = event.position().toPoint().x()
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = None
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().mouseReleaseEvent(event)
 
     def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
         self._hover = None; QToolTip.hideText(); self.update(); super().leaveEvent(event)
@@ -626,6 +792,8 @@ class ReportTimeIntervalChart(QWidget):
 
 class ReportBarChart(QWidget):
     """Draw a compact bar chart without creating image files."""
+
+    range_dragged = Signal(int)
 
     def __init__(
         self,
@@ -645,6 +813,8 @@ class ReportBarChart(QWidget):
         self._plot_rect = QRect()
         self._axis_upper = 0
         self._hover_index = -1
+        self._drag_origin_x: int | None = None
+        self._drag_last_days = 0
         # Leave enough room for a real x-axis: daily charts show date +
         # weekday, hourly charts show the hour tick.  The old 178px height
         # clipped those labels and left only the misleading caption visible.
@@ -701,7 +871,26 @@ class ReportBarChart(QWidget):
             QToolTip.showText(QCursor.pos(), self._tooltip_for(index), self)
         else:
             QToolTip.hideText()
+        if self._drag_origin_x is not None:
+            days = int((self._drag_origin_x - position.x()) / 60)
+            if days != self._drag_last_days:
+                self.range_dragged.emit(days - self._drag_last_days)
+                self._drag_last_days = days
         super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = event.position().toPoint().x()
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = None
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().mouseReleaseEvent(event)
 
     def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
         self._hover_index = -1
@@ -1098,7 +1287,7 @@ class WorkReportDialog(QDialog):
 
     def __init__(
         self,
-        snapshot_provider: Callable[[], dict[str, Any]],
+        snapshot_provider: Callable[..., dict[str, Any]],
         *,
         pet_name: str = "六毛",
         parent: QWidget | None = None,
@@ -1129,9 +1318,37 @@ class WorkReportDialog(QDialog):
         subtitle.setObjectName("reportSubtitle")
         root.addWidget(title)
         root.addWidget(subtitle)
+        today = datetime.now(BEIJING_TIMEZONE).date()
+        self._ranges: dict[str, tuple[date, date]] = {
+            key: standard_report_range(key, today) for key in REPORT_PERIODS
+        }
+        self._navigator = QHBoxLayout()
+        self._navigator.setSpacing(8)
+        self.previous_button = QPushButton("‹")
+        self.previous_button.setToolTip("查看上一个时间窗口")
+        self.previous_button.clicked.connect(lambda: self._shift_range(-1))
+        self.next_button = QPushButton("›")
+        self.next_button.setToolTip("查看下一个时间窗口")
+        self.next_button.clicked.connect(lambda: self._shift_range(1))
+        self.range_title_button = QPushButton()
+        self.range_title_button.setFlat(True)
+        self.range_title_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.range_title_button.clicked.connect(self._open_range_picker)
+        self.range_title_button.setToolTip("点击选择精确起止日期")
+        self.range_width_label = QLabel()
+        self.range_width_label.setObjectName("reportHint")
+        self.reset_range_button = QPushButton()
+        self.reset_range_button.setFlat(True)
+        self.reset_range_button.clicked.connect(self._reset_range)
+        self._navigator.addWidget(self.previous_button)
+        self._navigator.addWidget(self.range_title_button, 1)
+        self._navigator.addWidget(self.range_width_label)
+        self._navigator.addWidget(self.next_button)
+        self._navigator.addWidget(self.reset_range_button)
+        root.addLayout(self._navigator)
         self.tabs = QTabWidget(self)
         self._pages: dict[str, QVBoxLayout] = {}
-        for key, label in (("day", "日度"), ("week", "本周"), ("month", "月度"), ("year", "年度")):
+        for key, label in (("day", "日"), ("week", "周"), ("month", "月"), ("year", "年")):
             scroll = QScrollArea(self)
             scroll.setWidgetResizable(True)
             page = QWidget()
@@ -1141,6 +1358,7 @@ class WorkReportDialog(QDialog):
             scroll.setWidget(page)
             self.tabs.addTab(scroll, label)
             self._pages[key] = page_layout
+        self.tabs.currentChanged.connect(lambda _index: self._update_navigator())
         root.addWidget(self.tabs, 1)
         footer = QHBoxLayout()
         footer.addStretch(1)
@@ -1163,6 +1381,7 @@ class WorkReportDialog(QDialog):
         self._last_render_fingerprint: str | None = None
         self._cached_report: dict[str, Any] | None = None
         self._last_provider_refresh_at = 0.0
+        self._update_navigator()
 
     def showEvent(self, event) -> None:
         lifecycle_log("work_report.show_event.begin", self)
@@ -1184,6 +1403,81 @@ class WorkReportDialog(QDialog):
         super().closeEvent(event)
         lifecycle_log("work_report.close_event.end", self)
 
+    def _current_period(self) -> str:
+        return REPORT_PERIODS[max(0, min(self.tabs.currentIndex(), len(REPORT_PERIODS) - 1))]
+
+    def _update_navigator(self) -> None:
+        key = self._current_period()
+        start, end = self._ranges[key]
+        title, width, reset = report_range_title(key, start, end, datetime.now(BEIJING_TIMEZONE).date())
+        self.range_title_button.setText(title)
+        self.range_width_label.setText(width)
+        self.reset_range_button.setText(reset)
+        self.range_title_button.setToolTip("点击选择精确起止日期；也可以左右拖动图表")
+
+    def _reset_range(self) -> None:
+        key = self._current_period()
+        self._ranges[key] = standard_report_range(key, datetime.now(BEIJING_TIMEZONE).date())
+        self._update_navigator()
+        self.refresh(force=True)
+
+    def _shift_range(self, direction: int) -> None:
+        key = self._current_period()
+        start, end = self._ranges[key]
+        self._ranges[key] = move_report_range(key, start, end, direction, fine=False)
+        self._update_navigator()
+        self.refresh(force=True)
+
+    def _shift_by_days(self, days: int, *, period: str | None = None) -> None:
+        key = period or self._current_period()
+        if key not in self._ranges or not int(days):
+            return
+        start, end = self._ranges[key]
+        today = datetime.now(BEIJING_TIMEZONE).date()
+        if report_range_is_standard(key, start, end, today):
+            if key == "month":
+                end = start + timedelta(days=30)
+            elif key == "year":
+                end = start + timedelta(days=365)
+        delta = timedelta(days=int(days))
+        self._ranges[key] = start + delta, end + delta
+        self._update_navigator()
+        self.refresh(force=True)
+
+    def _open_range_picker(self) -> None:
+        key = self._current_period()
+        start, end = self._ranges[key]
+        picker = QDialog(self)
+        picker.setWindowTitle("选择工作时间区间")
+        form = QFormLayout(picker)
+        start_edit = QDateEdit(picker)
+        end_edit = QDateEdit(picker)
+        for editor, value in ((start_edit, start), (end_edit, end - timedelta(days=1))):
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("yyyy-MM-dd")
+            editor.setDate(QDate(value.year, value.month, value.day))
+        form.addRow("起始日期", start_edit)
+        form.addRow("结束日期", end_edit)
+        buttons = QHBoxLayout()
+        apply_button = QPushButton("应用")
+        cancel_button = QPushButton("取消")
+        buttons.addStretch(1)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(apply_button)
+        form.addRow(buttons)
+        cancel_button.clicked.connect(picker.reject)
+        def apply() -> None:
+            selected_start = start_edit.date().toPython()
+            selected_end = end_edit.date().toPython()
+            if selected_end < selected_start:
+                return
+            self._ranges[key] = selected_start, selected_end + timedelta(days=1)
+            picker.accept()
+        apply_button.clicked.connect(apply)
+        if picker.exec() == QDialog.DialogCode.Accepted:
+            self._update_navigator()
+            self.refresh(force=True)
+
     def refresh(self, *, force: bool = False) -> None:
         now = monotonic()
         if (
@@ -1193,7 +1487,24 @@ class WorkReportDialog(QDialog):
         ):
             return
         try:
-            report = self._snapshot_provider()
+            key = self._current_period()
+            start, end = self._ranges[key]
+            today = datetime.now(BEIJING_TIMEZONE).date()
+            if report_range_is_standard(key, start, end, today):
+                report = self._snapshot_provider()
+            else:
+                report = self._snapshot_provider(
+                    period=key,
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                )
+        except TypeError:
+            # Keep lightweight unit-test and plugin providers that still use
+            # the original zero-argument callback contract.
+            try:
+                report = self._snapshot_provider()
+            except Exception as exc:  # pragma: no cover - defensive UI boundary
+                report = {"error": f"报告暂时无法读取：{exc}"}
         except Exception as exc:  # pragma: no cover - defensive UI boundary
             report = {"error": f"报告暂时无法读取：{exc}"}
         self._cached_report = (
@@ -1254,6 +1565,7 @@ class WorkReportDialog(QDialog):
         hourly: bool = False,
         monthly: bool = False,
         hourly_tooltip_label: str = "本月",
+        drag_callback: Callable[[int], None] | None = None,
     ) -> QFrame:
         frame = QFrame()
         frame.setObjectName("reportChart")
@@ -1268,15 +1580,15 @@ class WorkReportDialog(QDialog):
             note.setObjectName("reportHint")
             note.setWordWrap(True)
             box.addWidget(note)
-        box.addWidget(
-            ReportBarChart(
-                rows,
-                hourly=hourly,
-                monthly=monthly,
-                hourly_tooltip_label=hourly_tooltip_label,
-            ),
-            1,
+        chart = ReportBarChart(
+            rows,
+            hourly=hourly,
+            monthly=monthly,
+            hourly_tooltip_label=hourly_tooltip_label,
         )
+        if drag_callback is not None:
+            chart.range_dragged.connect(drag_callback)
+        box.addWidget(chart, 1)
         return frame
 
     @staticmethod
@@ -1320,23 +1632,44 @@ class WorkReportDialog(QDialog):
         intervals: list[dict[str, Any]],
         period: str,
         start_date: date | None = None,
+        drag_callback: Callable[[int], None] | None = None,
     ) -> QFrame:
         frame = QFrame(); frame.setObjectName("reportChart")
         box = QVBoxLayout(frame); box.setContentsMargins(14, 12, 14, 10); box.setSpacing(4)
         heading = QLabel(title); heading.setObjectName("reportSection"); box.addWidget(heading)
         note = QLabel(subtitle); note.setObjectName("reportHint"); note.setWordWrap(True); box.addWidget(note)
-        box.addWidget(ReportTimeIntervalChart(intervals, period=period, start_date=start_date), 1)
+        chart = ReportTimeIntervalChart(intervals, period=period, start_date=start_date)
+        if drag_callback is not None:
+            chart.range_dragged.connect(drag_callback)
+        box.addWidget(chart, 1)
         return frame
 
     def _render_period(self, layout: QVBoxLayout, key: str, report: dict[str, Any]) -> None:
         data = report.get(key) or {}
         total = max(0, int(data.get("total_seconds", 0) or 0))
+        range_start, range_end = self._ranges.get(
+            key,
+            standard_report_range(key, datetime.now(BEIJING_TIMEZONE).date()),
+        )
+        range_title, _range_width, _reset = report_range_title(
+            key,
+            range_start,
+            range_end,
+            datetime.now(BEIJING_TIMEZONE).date(),
+        )
         title = {
             "day": "今天陪你工作",
             "week": "这周陪你工作",
             "month": "这个月陪你工作",
             "year": "这一年陪你工作",
         }[key]
+        if not report_range_is_standard(
+            key,
+            range_start,
+            range_end,
+            datetime.now(BEIJING_TIMEZONE).date(),
+        ):
+            title = f"{range_title}陪你工作"
         hero = QFrame()
         hero.setObjectName("reportHero")
         hero_layout = QVBoxLayout(hero)
@@ -1397,9 +1730,10 @@ class WorkReportDialog(QDialog):
             layout.addWidget(
                 self._chart_card(
                     "本月典型工作节律",
-                    "每根柱子代表 1 小时；横轴每 3 小时显示一个刻度，悬停可查看完整时间段和本月累计专注。",
+                    "每根柱子代表 1 小时；横轴每 3 小时显示一个刻度。左右拖动图表可按天平移区间。",
                     data.get("hourly") or [],
                     hourly=True,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
                 )
             )
         elif key == "year":
@@ -1413,9 +1747,10 @@ class WorkReportDialog(QDialog):
             layout.addWidget(
                 self._chart_card(
                     "12个月工作趋势",
-                    "每根柱子代表一个月累计有效工作时长；悬停可查看工作天数和工作日日均。",
+                    "每根柱子代表一个月累计有效工作时长；左右拖动图表可平移年度窗口。",
                     data.get("monthly") or [],
                     monthly=True,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
                 )
             )
             layout.addWidget(
@@ -1425,6 +1760,7 @@ class WorkReportDialog(QDialog):
                     data.get("hourly") or [],
                     hourly=True,
                     hourly_tooltip_label="全年",
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
                 )
             )
         elif key == "day":
@@ -1435,14 +1771,16 @@ class WorkReportDialog(QDialog):
                     data.get("focus_intervals") or [],
                     "day",
                     period_start,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
                 )
             )
         else:
             layout.addWidget(
                 self._chart_card(
                     "本周工作时长",
-                    "横轴显示月/日和星期，纵轴显示易读的有效工作时长；悬停柱子可查看精确值。",
+                    "横轴显示月/日和星期；左右拖动图表可按天平移 7 天窗口。",
                     daily_rows,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
                 )
             )
             layout.addWidget(
@@ -1452,6 +1790,7 @@ class WorkReportDialog(QDialog):
                     data.get("focus_intervals") or [],
                     "week",
                     period_start,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
                 )
             )
 

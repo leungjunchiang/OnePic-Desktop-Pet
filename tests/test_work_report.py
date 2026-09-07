@@ -14,6 +14,9 @@ from onepic_desktop_pet.work_report import (
     WorkReportDialog,
     _nice_duration_ticks,
     build_work_report,
+    move_report_range,
+    report_range_title,
+    standard_report_range,
 )
 from onepic_desktop_pet.work_timer import WorkTimerModel
 
@@ -30,10 +33,10 @@ def test_work_report_is_a_normal_minimizable_window() -> None:
     assert not flags & Qt.WindowType.WindowStaysOnTopHint
     assert dialog.parent() is None
     assert [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())] == [
-        "日度",
-        "本周",
-        "月度",
-        "年度",
+        "日",
+        "周",
+        "月",
+        "年",
     ]
 
     dialog.show()
@@ -45,6 +48,18 @@ def test_work_report_is_a_normal_minimizable_window() -> None:
     dialog.close()
     dialog.deleteLater()
     app.processEvents()
+
+
+def test_report_windows_keep_natural_defaults_and_support_daily_sliding() -> None:
+    anchor = datetime(2026, 9, 7).date()
+    start, end = standard_report_range("week", anchor)
+    assert (start.isoformat(), end.isoformat()) == ("2026-09-07", "2026-09-14")
+    moved_start, moved_end = move_report_range("week", start, end, -1, fine=True)
+    assert (moved_start.isoformat(), moved_end.isoformat()) == ("2026-09-06", "2026-09-13")
+    title, width, reset = report_range_title("week", moved_start, moved_end, anchor)
+    assert title == "09/06 – 09/12"
+    assert width == "7 天"
+    assert reset == "回到本周"
 
 
 def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None:
