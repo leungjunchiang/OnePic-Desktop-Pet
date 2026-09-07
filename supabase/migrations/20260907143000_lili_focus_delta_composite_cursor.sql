@@ -101,6 +101,8 @@ begin
             then public.lili_focus_segments.start_at
           else excluded.start_at
         end,
+        -- The ordinary path is equivalent to `end_at = excluded.end_at`;
+        -- keep corrected canonical timestamps protected from client retries.
         end_at = case
           when public.lili_focus_segments.time_corrected_at is not null
             then public.lili_focus_segments.end_at
