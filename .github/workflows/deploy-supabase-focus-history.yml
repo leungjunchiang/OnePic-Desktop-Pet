@@ -20,3 +20,8 @@ jobs:
       - name: Apply account-scoped daily focus history migration
         shell: pwsh
         run: ./scripts/apply_supabase_focus_history.ps1
+      - name: Apply per-device live focus display migration
+        shell: pwsh
+        run: |
+          ./scripts/apply_supabase_focus_history.ps1 `
+            -MigrationPath "supabase/migrations/20260907090000_lili_focus_live_projection_read.sql"

@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - 专注片段增量同步与网络流量优化" \
-            --notes "新增专注片段增量同步：首次登录/新设备获取一次近 400 天快照，之后按服务端游标只接收新增或实际变化的片段，降低多设备长期运行时的 Supabase Egress。旧版 lili_sync_focus_segments 保留兼容返回格式并改为幂等更新时间；客户端沿用现有原始 FocusSession 合并与账号级今日区间并集，不修改计时规则、Presence、统计口径或原始事实。"
+            --title "Lili $release_tag - 跨设备实时专注与可移动工作报告" \
+            --notes "新增每设备临时实时专注投影：两台电脑同时工作时，工作报告、六毛和自习室按账号级 FocusSession 区间并集显示，重叠时间只计算一次，原始 FocusSession 不被高频改写。工作报告保留日/周/月/年自然周期入口，并支持箭头移动、图表按天拖动和精确起止日期选择；所有任意区间统计继续使用同一套区间并集计算。此前 v0.23.201 的专注片段增量同步与网络流量优化继续保留。"
