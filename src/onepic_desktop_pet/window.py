@@ -3725,6 +3725,29 @@ class PetWindow(QWidget):
             break
         if x is None or y is None:
             # Extremely small work areas can make both horizontal placements
+            # unavailable. First preserve a valid horizontal gap while
+            # clamping only the vertical coordinate; this matters on macOS
+            # Intel where the centered candidate can be just outside the
+            # available vertical work area even though the side still fits.
+            # Prefer a clamped below/above placement only after that, before
+            # the final monitor clamp; this keeps the panel out of the
+            # character even when the monitor starts at a non-zero
+            # virtual-screen x.
+            for side_x in (left_x, right_x):
+                candidate_x = max(
+                    available.left(),
+                    min(side_x, available.right() - panel_width + 1),
+                )
+                candidate_y = max(
+                    available.top(),
+                    min(center_y, available.bottom() - panel_height + 1),
+                )
+                candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+                if not candidate.intersects(pet_rect):
+                    x, y = candidate_x, candidate_y
+                    break
+        if x is None or y is None:
+            # Extremely small work areas can make both horizontal placements
             # unavailable. Prefer a clamped below/above placement before the
             # final monitor clamp; this keeps the panel out of the character
             # even when the monitor starts at a non-zero virtual-screen x.
