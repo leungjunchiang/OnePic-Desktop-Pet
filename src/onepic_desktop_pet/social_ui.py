@@ -439,6 +439,21 @@ def _owner_label(record: dict[str, Any] | None) -> str:
     return social_pet_label(_public_owner_nickname(record))
 
 
+def _leaderboard_focus_seconds(record: dict[str, Any] | None) -> int:
+    """Read the server aggregate while keeping old payloads usable."""
+
+    if not isinstance(record, dict):
+        return 0
+    for key in ("week_seconds", "period_seconds", "focus_seconds", "period_income"):
+        try:
+            value = record.get(key)
+            if value is not None:
+                return max(0, int(value))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return 0
+
+
 def _notification_sender_id(record: dict[str, Any] | None) -> str:
     if not isinstance(record, dict):
         return ""
@@ -3809,10 +3824,7 @@ class SocialHubDialog(QDialog):
             nickname = _owner_label(row)
             if bool(row.get("is_self")) and not nickname.endswith("（我）"):
                 nickname += "（我）"
-            try:
-                week_seconds = max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0))
-            except (TypeError, ValueError):
-                week_seconds = 0
+            week_seconds = _leaderboard_focus_seconds(row)
             self.wealth_leaderboard.addItem(
                 f"{index}. {nickname}　本周专注 {format_work_duration(week_seconds)}"
             )
@@ -3915,7 +3927,7 @@ class SocialHubDialog(QDialog):
                 own_row["week_seconds"] = int(local_seconds)
         decorated.sort(
             key=lambda row: (
-                -max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0)),
+                -_leaderboard_focus_seconds(row),
                 str(row.get("owner_nickname") or row.get("nickname") or ""),
             )
         )
