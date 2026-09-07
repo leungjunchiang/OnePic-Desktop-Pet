@@ -1298,9 +1298,16 @@ class FocusAnalyticsStore:
             if not isinstance(day, dict):
                 day = self._empty_day()
                 days[key] = day
+            completed_rounds = sum(
+                1
+                for segment in sealed
+                if segment.completed
+                and segment.start_at < day_end
+                and segment.effective_end(now) > day_start
+            )
             for field, value in (
                 ("seconds", seconds),
-                ("rounds", max(0, int(aggregate.segment_count))),
+                ("rounds", max(0, int(completed_rounds))),
                 ("longest", max(0, int(aggregate.longest_seconds))),
                 ("interruptions", max(0, int(aggregate.interruption_count))),
             ):
