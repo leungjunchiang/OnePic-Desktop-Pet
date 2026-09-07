@@ -88,6 +88,95 @@ def _sleep_inference(summary: Any, now: datetime) -> str:
     return "睡眠状态：暂无足够数据。六毛不能测量真实睡眠质量，不会把“没有操作”直接当作睡着，只会在系统锁屏/睡眠时暂停计时。"
 
 
+def _period_consistency_errors(
+    data: dict[str, Any],
+    period: str,
+    *,
+    range_start: date | None = None,
+    range_end: date | None = None,
+) -> list[str]:
+    """Validate one report payload before it reaches the UI.
+
+    The report must be a projection of one interval union.  These checks are
+    intentionally independent of legacy counters so a bad cache cannot make
+    an impossible day look plausible.
+    """
+
+    errors: list[str] = []
+    try:
+        total = int(data.get("total_seconds", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        total = -1
+    if total < 0:
+        errors.append("negative_total_seconds")
+
+    if period == "day":
+        limit = 24 * 60 * 60
+    elif period == "week":
+        limit = 7 * 24 * 60 * 60
+    elif range_start is not None and range_end is not None:
+        limit = max(0, (range_end - range_start).days) * 24 * 60 * 60
+    else:
+        limit = None
+    if limit is not None and total > limit:
+        errors.append(f"window_limit:{total}>{limit}")
+
+    hourly = data.get("hourly") or []
+    daily = data.get("daily") or []
+    try:
+        hourly_sum = sum(
+            max(0, int(item.get("seconds", 0) or 0))
+            for item in hourly
+            if isinstance(item, dict) and item.get("seconds") is not None
+        )
+        daily_sum = sum(
+            max(0, int(item.get("seconds", 0) or 0))
+            for item in daily
+            if isinstance(item, dict) and item.get("seconds") is not None
+        )
+    except (TypeError, ValueError, OverflowError):
+        hourly_sum = daily_sum = -1
+    if hourly_sum != total:
+        errors.append(f"hourly_sum:{hourly_sum}!={total}")
+    if daily_sum != total:
+        errors.append(f"daily_sum:{daily_sum}!={total}")
+
+    try:
+        average = max(0, int(data.get("average_session_seconds", 0) or 0))
+        longest = max(0, int(data.get("longest_focus_seconds", 0) or 0))
+    except (TypeError, ValueError, OverflowError):
+        average = longest = -1
+    if average > longest:
+        errors.append(f"average_above_longest:{average}>{longest}")
+    if longest > total:
+        errors.append(f"longest_above_total:{longest}>{total}")
+    return errors
+
+
+def _mark_consistency_error(
+    data: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Suppress an impossible metric instead of rendering a false number."""
+
+    if not errors:
+        return
+    quality = dict(data.get("data_quality") or {})
+    existing = [str(item) for item in quality.get("consistency_errors") or []]
+    quality["trusted"] = False
+    quality["consistency_error"] = True
+    quality["consistency_errors"] = list(dict.fromkeys([*existing, *errors]))
+    quality["message"] = "本区间统计存在一致性异常，已停止展示错误累计值。"
+    data["data_quality"] = quality
+    data["consistency_error"] = True
+    data["consistency_errors"] = quality["consistency_errors"]
+    data["raw_total_seconds"] = max(0, int(data.get("total_seconds", 0) or 0))
+    data["total_seconds"] = 0
+    data["longest_focus_seconds"] = 0
+    data["average_session_seconds"] = 0
+    data["deep_focus_seconds"] = 0
+
+
 def _rest_state(summary: Any, current_status: str, now: datetime) -> str:
     """Return a clearly labelled local rest-state inference."""
 
@@ -301,6 +390,8 @@ def build_work_report(
     selected_range: tuple[str, date, date] | None = None,
     extra_live_segments: list[FocusSegment] | None = None,
     now: datetime | None = None,
+    account_id: str = "",
+    current_device_id: str = "",
 ) -> dict[str, Any]:
     """Build an account-scoped report snapshot without writing a file."""
 
@@ -312,24 +403,9 @@ def build_work_report(
     selected_key = selected_key if selected_key in REPORT_PERIODS else ""
     custom_range_selected = bool(selected_key and selected_range)
     daily_stats_snapshot = daily_stats.snapshot()
-    canonical_today: int | None = None
-    canonical_week: int | None = None
-    if isinstance(focus_projection, dict):
-        for field, target in (
-            ("today_seconds", "today"),
-            ("week_seconds", "week"),
-        ):
-            try:
-                value = focus_projection.get(field)
-                if value is None:
-                    continue
-                normalized = max(0, int(value))
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if target == "today":
-                canonical_today = normalized
-            else:
-                canonical_week = normalized
+    # ``focus_projection`` remains an accepted compatibility argument for
+    # older callers, but report durations are never taken from its today/week
+    # summaries.  The selected account interval ledger is the sole source.
     snapshot_status = ""
     snapshot_session = 0
     snapshot_room = ""
@@ -484,6 +560,7 @@ def build_work_report(
                 date_key = str(row.get("date") or "")
                 if date_key in aggregate.daily and not row.get("is_future") and row.get("status") != "untrusted":
                     row["seconds"] = max(0, int(aggregate.daily.get(date_key, 0) or 0))
+    selected_provenance: dict[str, Any] | None = None
     if custom_range_selected and selected_range is not None:
         _, selected_start, selected_end = selected_range
         range_start_at = datetime.combine(selected_start, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
@@ -491,6 +568,17 @@ def build_work_report(
         selected_extras = list(extra_live_segments or [])
         if live_segment is not None:
             selected_extras.append(live_segment)
+        # A selected day is exactly one Beijing calendar day.  Reject a
+        # widened day range before it can be mistaken for a natural week or
+        # the entire ledger.
+        selected_errors: list[str] = []
+        if selected_key == "day" and selected_end - selected_start != timedelta(days=1):
+            selected_errors.append("day_window_not_one_calendar_day")
+        selected_aggregate = analytics.range_aggregate(
+            range_start_at,
+            range_end_at,
+            extra_segments=selected_extras or None,
+        )
         # The selected page is rebuilt from exactly the same interval union as
         # the natural pages.  Canonical day/week compatibility overlays below
         # are skipped for this page so an arbitrary historical window cannot be
@@ -502,38 +590,98 @@ def build_work_report(
             period=selected_key,
             extra_segments=selected_extras or None,
         )
+        if selected_aggregate.errors:
+            selected_errors.extend(str(item) for item in selected_aggregate.errors)
+        selected_provenance = {
+            "account_id": str(account_id or ""),
+            "current_device_id": str(current_device_id or ""),
+            "selected_start": range_start_at.isoformat(),
+            "selected_end": range_end_at.isoformat(),
+            "segment_count": len(analytics.range_segments(
+                range_start_at,
+                range_end_at,
+                extra_segments=selected_extras or None,
+            )),
+            "segments": [
+                {
+                    "segment_id": str(segment.segment_id or ""),
+                    "device_id": str(segment.device_id or ""),
+                    "start_at": segment.start_at.isoformat(),
+                    "end_at": segment.end_at.isoformat() if segment.end_at else None,
+                }
+                for segment in analytics.range_segments(
+                    range_start_at,
+                    range_end_at,
+                    extra_segments=selected_extras or None,
+                )[:500]
+            ],
+            "aggregate_total_seconds": int(selected_aggregate.total_seconds),
+            "aggregate_daily_sum_seconds": sum(selected_aggregate.daily.values()),
+            "range_summary_total_seconds": int(report[selected_key].get("total_seconds", 0) or 0),
+            "selected_errors": selected_errors,
+        }
+        _mark_consistency_error(
+            report[selected_key],
+            selected_errors,
+        )
         report["selected_range"] = {
             "period": selected_key,
             "start": selected_start.isoformat(),
             "end": (selected_end - timedelta(days=1)).isoformat(),
         }
+        report["selected_range_provenance"] = selected_provenance
+    selected_day_page = custom_range_selected and selected_key == "day"
     # The live aggregate above is the same interval union used by the daily
     # rows.  Reuse its day projection instead of applying a second max/cache
     # fallback to the report headline.
     live_today = int(report["day"].get("total_seconds", 0) or 0)
     day = report["day"]
     day["total_seconds"] = live_today
-    day["completed_rounds"] = max(
-        int(day["completed_rounds"]),
-        int(daily_stats_snapshot.get("completed_tasks", 0) or 0),
-    )
-    day["longest_focus_seconds"] = max(
-        int(day["longest_focus_seconds"]),
-        int(daily_stats_snapshot.get("longest_focus_seconds", 0) or 0),
-        int(summary.current_continuous_seconds or 0),
-    )
-    day["interruptions"] = max(int(day["interruptions"]), int(summary.today_interruptions or 0))
+    if not selected_day_page:
+        day["completed_rounds"] = max(
+            int(day["completed_rounds"]),
+            int(daily_stats_snapshot.get("completed_tasks", 0) or 0),
+        )
     day["quality_label"] = _quality_label(int(day["average_quality"]))
     day["touches"] = int(daily_stats_snapshot.get("touches", 0) or 0)
     day["pet_sleeps"] = int(daily_stats_snapshot.get("sleeps", 0) or 0)
     day["current_task"] = analytics.current_task()
     day["sleep_note"] = report["sleep_note"]
-    day["week_total_seconds"] = int(report["week"]["total_seconds"])
-    day["yesterday_seconds"] = summary.yesterday_seconds
-    day["difference_vs_yesterday_seconds"] = summary.difference_vs_yesterday_seconds
-    day["current_streak_days"] = int(summary.current_streak_days)
-    day["rest_state"] = report["rest_state"]
+    day["week_total_seconds"] = (
+        int(day["total_seconds"])
+        if selected_day_page
+        else int(report["week"]["total_seconds"])
+    )
+    # Never reuse today's compact summary for a historical page.  Both sides
+    # of the comparison are calculated from the same account interval ledger.
+    comparison_day = (
+        selected_range[1]
+        if selected_day_page and selected_range is not None
+        else moment.astimezone(BEIJING_TIMEZONE).date()
+    )
+    comparison_start = datetime.combine(
+        comparison_day,
+        datetime.min.time(),
+        tzinfo=BEIJING_TIMEZONE,
+    )
+    comparison_previous_start = comparison_start - timedelta(days=1)
+    comparison_previous_end = comparison_start
+    comparison_extras = list(extra_live_segments or [])
+    if live_segment is not None:
+        comparison_extras.append(live_segment)
+    previous_day_summary = analytics.range_summary(
+        comparison_previous_start,
+        comparison_previous_end,
+        at=moment,
+        period="day",
+        extra_segments=comparison_extras or None,
+    )
+    day["yesterday_seconds"] = int(previous_day_summary.get("total_seconds", 0) or 0)
+    day["difference_vs_yesterday_seconds"] = int(day["total_seconds"]) - day["yesterday_seconds"]
+    day["current_streak_days"] = int(summary.current_streak_days) if not selected_day_page else 0
+    day["rest_state"] = report["rest_state"] if not selected_day_page else ""
     day["current_status_label"] = report["current_status_label"]
+    day["current_device_status_label"] = report["current_status_label"]
     day["focus_session_seconds"] = live_elapsed if timer.is_running else snapshot_session
     day["focus_room_id"] = snapshot_room
     if day.get("daily"):
@@ -561,21 +709,6 @@ def build_work_report(
             item["total_seconds"] = int(item.get("total_seconds", 0) or 0) + visible_today - stored_day
             today_row["seconds"] = visible_today
 
-    # The window supplies the same cached FocusSession calendar projection used
-    # by the pet bubble and the study-room focus page.  Update today's row in
-    # every chart first, then use the exact day/week totals for the headlines.
-    # Standalone callers that do not own that projection retain the raw local
-    # analytics behavior above.
-    if canonical_today is not None:
-        for key in ("day", "week", "month", "year"):
-            if custom_range_selected and key == selected_key:
-                continue
-            rows = report[key].get("daily") or []
-            today_row = next((row for row in rows if row.get("is_today")), None)
-            if isinstance(today_row, dict):
-                today_row["seconds"] = canonical_today
-                today_row["status"] = "observed" if canonical_today else today_row.get("status", "observed")
-
     for key in ("day", "week", "month", "year"):
         item = report[key]
         if isinstance(task_stats, dict) and isinstance(task_stats.get(key), dict):
@@ -592,10 +725,10 @@ def build_work_report(
         )
         # Daily projections are the canonical projection of the same clipped
         # interval union.  Never resurrect a stale snapshot with max().
-        if key == "day" and canonical_today is not None and not (custom_range_selected and key == selected_key):
-            item["total_seconds"] = canonical_today
-        elif key == "week" and canonical_week is not None and not (custom_range_selected and key == selected_key):
-            item["total_seconds"] = canonical_week
+        if item.get("consistency_error"):
+            # Keep the guard's suppressed value.  A malformed daily row must
+            # not be able to restore the impossible hero on this pass.
+            item["total_seconds"] = 0
         else:
             item["total_seconds"] = rows_total
         longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
@@ -612,7 +745,53 @@ def build_work_report(
     if not (custom_range_selected and selected_key == "year"):
         _populate_annual_overview(report["year"])
 
-    day["week_total_seconds"] = int(report["week"]["total_seconds"])
+    day["week_total_seconds"] = (
+        int(day["total_seconds"])
+        if selected_day_page
+        else int(report["week"]["total_seconds"])
+    )
+    for key in ("day", "week", "month", "year"):
+        item = report[key]
+        range_start_value = None
+        range_end_value = None
+        try:
+            range_start_value = date.fromisoformat(str(item.get("start") or ""))
+            # ``end`` is inclusive in report payloads.
+            range_end_value = date.fromisoformat(str(item.get("end") or "")) + timedelta(days=1)
+        except ValueError:
+            pass
+        _mark_consistency_error(
+            item,
+            _period_consistency_errors(
+                item,
+                key,
+                range_start=range_start_value,
+                range_end=range_end_value,
+            ),
+        )
+    if selected_provenance is not None:
+        selected_item = report.get(selected_key) or {}
+        selected_provenance["report_day_total_seconds"] = int(
+            selected_item.get("total_seconds", 0) or 0
+        )
+        selected_provenance["selected_range_total_seconds"] = int(
+            selected_item.get("total_seconds", 0) or 0
+        )
+        lifecycle_log(
+            "work_report.historical_provenance",
+            None,
+            account_id=str(account_id or ""),
+            current_device_id=str(current_device_id or ""),
+            selected_start=str(selected_provenance.get("selected_start") or ""),
+            selected_end=str(selected_provenance.get("selected_end") or ""),
+            segment_count=max(0, int(selected_provenance.get("segment_count") or 0)),
+            segment_summary=selected_provenance.get("segments") or [],
+            aggregate_total_seconds=int(selected_provenance.get("aggregate_total_seconds") or 0),
+            aggregate_daily_sum_seconds=int(selected_provenance.get("aggregate_daily_sum_seconds") or 0),
+            range_summary_total_seconds=int(selected_provenance.get("range_summary_total_seconds") or 0),
+            report_day_total_seconds=int(selected_provenance.get("report_day_total_seconds") or 0),
+            consistency_errors=selected_provenance.get("selected_errors") or [],
+        )
     report["data_quality"] = {
         "average_not_above_longest": all(
             int(report[key].get("average_session_seconds", 0) or 0)
@@ -1675,6 +1854,16 @@ class WorkReportDialog(QDialog):
 
     def _render_period(self, layout: QVBoxLayout, key: str, report: dict[str, Any]) -> None:
         data = report.get(key) or {}
+        selected_provenance = report.get("selected_range_provenance") or {}
+        lifecycle_log(
+            "work_report.render_input",
+            self,
+            period=str(key),
+            selected_start=str(selected_provenance.get("selected_start") or data.get("start") or ""),
+            selected_end=str(selected_provenance.get("selected_end") or data.get("end") or ""),
+            data_total_seconds=max(0, int(data.get("total_seconds", 0) or 0)),
+            consistency_error=bool(data.get("consistency_error")),
+        )
         total = max(0, int(data.get("total_seconds", 0) or 0))
         range_start, range_end = self._ranges.get(
             key,
@@ -1686,18 +1875,20 @@ class WorkReportDialog(QDialog):
             range_end,
             datetime.now(BEIJING_TIMEZONE).date(),
         )
+        is_standard = report_range_is_standard(
+            key,
+            range_start,
+            range_end,
+            datetime.now(BEIJING_TIMEZONE).date(),
+        )
+        is_historical_day = key == "day" and not is_standard
         title = {
             "day": "今天陪你工作",
             "week": "这周陪你工作",
             "month": "这个月陪你工作",
             "year": "这一年陪你工作",
         }[key]
-        if not report_range_is_standard(
-            key,
-            range_start,
-            range_end,
-            datetime.now(BEIJING_TIMEZONE).date(),
-        ):
+        if not is_standard:
             title = f"{range_title}陪你工作"
         hero = QFrame()
         hero.setObjectName("reportHero")
@@ -1705,15 +1896,26 @@ class WorkReportDialog(QDialog):
         hero_layout.setContentsMargins(18, 16, 18, 16)
         hero_title = QLabel(title)
         hero_title.setObjectName("reportSection")
-        hero_value = QLabel(format_work_duration(total))
+        hero_value = QLabel(
+            "统计异常"
+            if bool(data.get("consistency_error"))
+            else format_work_duration(total)
+        )
         hero_value.setObjectName("reportHeroValue")
         hero_layout.addWidget(hero_title)
         hero_layout.addWidget(hero_value)
         if key == "day":
-            overview = QLabel(
-                f"{_signed_delta(data.get('difference_vs_yesterday_seconds'))}  ·  "
-                f"当前：{data.get('current_status_label') or report.get('current_status_label', '未开始工作')}"
-            )
+            if is_historical_day:
+                overview_text = (
+                    f"较前一日 {_signed_delta(data.get('difference_vs_yesterday_seconds'))}  ·  "
+                    f"当前设备状态：{data.get('current_device_status_label') or report.get('current_status_label', '未开始工作')}"
+                )
+            else:
+                overview_text = (
+                    f"{_signed_delta(data.get('difference_vs_yesterday_seconds'))}  ·  "
+                    f"当前：{data.get('current_status_label') or report.get('current_status_label', '未开始工作')}"
+                )
+            overview = QLabel(overview_text)
             overview.setObjectName("reportHint")
             hero_layout.addWidget(overview)
         elif key == "week":
@@ -1736,6 +1938,18 @@ class WorkReportDialog(QDialog):
         layout.addWidget(hero)
 
         quality = data.get("data_quality") or {}
+        if bool(data.get("consistency_error") or quality.get("consistency_error")):
+            warning = QLabel(
+                "ⓘ 本日统计存在一致性异常，已停止展示错误累计值。请稍后重新同步或查看诊断日志。"
+                if key == "day"
+                else "ⓘ 本区间统计存在一致性异常，已停止展示错误累计值。请查看诊断日志。"
+            )
+            warning.setObjectName("reportWarning")
+            warning.setWordWrap(True)
+            layout.addWidget(warning)
+            # Do not render charts/metrics sourced from an invalid payload.
+            # The raw value remains in provenance logs for root-cause work.
+            return
         if not bool(quality.get("trusted", True)):
             days = len(quality.get("untrusted_days") or [])
             warning = QLabel(f"ⓘ 已排除 {days} 天旧版异常计时记录，未纳入本页统计。")
@@ -1810,7 +2024,7 @@ class WorkReportDialog(QDialog):
         elif key == "day":
             layout.addWidget(
                 self._interval_card(
-                    "今天工作节律",
+                    "当日工作节律" if is_historical_day else "今天工作节律",
                     "按真实开始/结束时间显示工作区间；暂停和中断会保留为空白。悬停区间查看时间、时长和任务。",
                     data.get("focus_intervals") or [],
                     "day",

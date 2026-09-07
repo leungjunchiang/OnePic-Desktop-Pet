@@ -625,7 +625,6 @@ def test_integrity_audit_malformed_or_unpersisted_reply_preserves_acknowledgemen
         "missing_segment_ids": ["local-a"],
     }) == (False, 0)
     assert store.focus_segments_payload() == []
-
     monkeypatch.setattr(store, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(OSError):
         store.apply_focus_segment_integrity_audit({
@@ -637,6 +636,58 @@ def test_integrity_audit_malformed_or_unpersisted_reply_preserves_acknowledgemen
         })
     assert store.focus_segments_payload() == []
 
+
+def test_reconciliation_audit_recovers_cloud_only_rows_and_queues_local_gaps(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 21, 30, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=2), record_id="local-a", device_id="device-a")
+    assert store.acknowledge_focus_segments_upload(store.focus_segments_payload())
+    requested = ["local-a"]
+    success, requeued, recovered = store.apply_focus_segment_reconciliation_audit({
+        "_requested_segment_ids": requested,
+        "checked_count": 1,
+        "present_count": 1,
+        "missing_count": 0,
+        "missing_segment_ids": [],
+        "server_total_count": 2,
+        "server_manifest": [
+            {"segment_id": "local-a", "updated_at": "2026-09-07T13:28:00+00:00"},
+            {"segment_id": "remote-b", "updated_at": "2026-09-07T13:29:00+00:00"},
+        ],
+        "missing_local_segments": [{
+            "segment_id": "remote-b",
+            "session_id": "remote-session",
+            "start_at": "2026-09-07T20:00:00+08:00",
+            "end_at": "2026-09-07T20:10:00+08:00",
+            "device_id": "device-b",
+            "completed": True,
+        }],
+    })
+
+    assert (success, requeued, recovered) == (True, 0, 1)
+    assert {segment.segment_id for segment in store.focus_segments()} == {"local-a", "remote-b"}
+
+    # A cloud-missing local fact is targeted for upload even when it belongs to
+    # another device; this is a bounded repair, not a full historical upload.
+    success, requeued, recovered = store.apply_focus_segment_reconciliation_audit({
+        "_requested_segment_ids": ["local-a", "remote-b"],
+        "checked_count": 2,
+        "present_count": 1,
+        "missing_count": 1,
+        "missing_segment_ids": ["remote-b"],
+        "server_total_count": 1,
+        "server_manifest": [
+            {"segment_id": "local-a", "updated_at": "2026-09-07T13:28:00+00:00"},
+        ],
+        "missing_local_segments": [],
+    })
+    assert (success, requeued, recovered) == (True, 1, 0)
+    assert [row["segment_id"] for row in store.focus_segments_payload()] == ["remote-b"]
 
 def test_legacy_acknowledgements_trigger_one_bounded_recovery_backfill(tmp_path) -> None:
     now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))

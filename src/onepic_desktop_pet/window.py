@@ -5493,6 +5493,8 @@ class PetWindow(QWidget):
             selected_range=selected_range,
             extra_live_segments=extra_live_segments,
             now=moment,
+            account_id=str(_session_user_id(self.social_client) or ""),
+            current_device_id=str(getattr(self.focus_analytics, "_device_id", "") or ""),
         )
 
     def show_work_report(self) -> None:
@@ -6279,7 +6281,7 @@ class PetWindow(QWidget):
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
             "focus_segment_integrity_manifest": (
-                self.focus_analytics.focus_segment_integrity_manifest()
+                self.focus_analytics.focus_segment_reconciliation_manifest()
             ),
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
@@ -7018,6 +7020,7 @@ class PetWindow(QWidget):
 
             audit_ok = False
             requeued_count = 0
+            recovered_count = 0
             audit_error = str(
                 integrity_payload.get("_error") or ""
                 if isinstance(integrity_payload, dict)
@@ -7025,11 +7028,19 @@ class PetWindow(QWidget):
             )
             if isinstance(integrity_payload, dict) and not audit_error:
                 try:
-                    audit_ok, requeued_count = (
-                        self.focus_analytics.apply_focus_segment_integrity_audit(
+                    reconcile = getattr(
+                        self.focus_analytics,
+                        "apply_focus_segment_reconciliation_audit",
+                        None,
+                    )
+                    if callable(reconcile) and "missing_local_segments" in integrity_payload:
+                        audit_ok, requeued_count, recovered_count = reconcile(
                             integrity_payload
                         )
-                    )
+                    else:
+                        audit_ok, requeued_count = self.focus_analytics.apply_focus_segment_integrity_audit(
+                            integrity_payload
+                        )
                     if not audit_ok:
                         audit_error = "payload_invalid_or_local_persist_failed"
                 except Exception as exc:
@@ -7042,7 +7053,39 @@ class PetWindow(QWidget):
                 present_count=audit_number("present_count"),
                 missing_count=audit_number("missing_count"),
                 requeued_count=max(0, int(requeued_count)),
+                recovered_count=max(0, int(recovered_count)),
                 server_total_count=audit_number("server_total_count"),
+                local_manifest_count=audit_number("checked_count"),
+                server_manifest_count=(
+                    len(integrity_payload.get("server_manifest") or [])
+                    if isinstance(integrity_payload, dict)
+                    and isinstance(integrity_payload.get("server_manifest"), list)
+                    else 0
+                ),
+                cloud_only_count=(
+                    len(integrity_payload.get("missing_local_segments") or [])
+                    if isinstance(integrity_payload, dict)
+                    and isinstance(integrity_payload.get("missing_local_segments"), list)
+                    else 0
+                ),
+                local_only_segment_ids=(
+                    [
+                        str(value)[:160]
+                        for value in (integrity_payload.get("missing_segment_ids") or [])[:100]
+                        if isinstance(value, str)
+                    ]
+                    if isinstance(integrity_payload, dict)
+                    else []
+                ),
+                cloud_only_segment_ids=(
+                    [
+                        str(item.get("segment_id") or "")[:160]
+                        for item in (integrity_payload.get("missing_local_segments") or [])[:100]
+                        if isinstance(item, dict) and item.get("segment_id")
+                    ]
+                    if isinstance(integrity_payload, dict)
+                    else []
+                ),
                 device_id=str(
                     integrity_payload.get("_device_id") or ""
                     if isinstance(integrity_payload, dict) else ""
@@ -7051,7 +7094,7 @@ class PetWindow(QWidget):
                 error=audit_error,
                 success=bool(audit_ok),
             )
-            if audit_ok and requeued_count:
+            if audit_ok and (requeued_count or recovered_count):
                 self._schedule_social_tick()
         live_projection_payload = data.get("_focus_live_projection") if isinstance(data, dict) else None
         live_projection_changed = False

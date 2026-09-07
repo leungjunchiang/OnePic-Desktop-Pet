@@ -143,10 +143,81 @@ def test_work_report_is_account_scoped_and_does_not_create_png(tmp_path) -> None
         focus_projection={"today_seconds": 2 * 60 * 60, "week_seconds": 3 * 60 * 60},
         now=now,
     )
-    assert projected_report["day"]["total_seconds"] == 2 * 60 * 60
-    assert projected_report["week"]["total_seconds"] == 3 * 60 * 60
-    assert projected_report["day"]["week_total_seconds"] == 3 * 60 * 60
-    assert next(row for row in projected_report["week"]["daily"] if row["is_today"])["seconds"] == 2 * 60 * 60
+    # Compatibility projections are no longer allowed to overwrite the
+    # account interval ledger.
+    assert projected_report["day"]["total_seconds"] == 45 * 60
+    assert projected_report["week"]["total_seconds"] == 45 * 60
+    assert projected_report["day"]["week_total_seconds"] == 45 * 60
+    assert next(row for row in projected_report["week"]["daily"] if row["is_today"])["seconds"] == 45 * 60
+
+
+def test_historical_day_uses_selected_union_not_stale_daily_projection(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 18, 0)
+    analytics = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    analytics.record_session(4 * 60 * 60, started_at=datetime(2026, 9, 1, 9, 0), completed=True)
+    analytics.record_session(11 * 60 * 60, started_at=datetime(2026, 9, 5, 9, 0), completed=True)
+    analytics.record_session(3 * 60 * 60, started_at=datetime(2026, 9, 6, 9, 0), completed=True)
+    analytics.record_session(9 * 60 * 60, started_at=datetime(2026, 9, 7, 9, 0), completed=True)
+    # Reproduce the old contaminated cache that could turn a one-day page
+    # into a 126-hour hero after build_work_report re-summed daily rows.
+    analytics._state.setdefault("account_state", {}).setdefault("daily_focus_projection", {})[
+        "2026-09-01"
+    ] = {"seconds": 126 * 60 * 60}
+
+    timer = WorkTimerModel(path=tmp_path / "timer.json", now_provider=lambda: now, persist=True)
+    daily = DailyCompanionStats(path=tmp_path / "daily.json", now_provider=lambda: now, persist=True)
+    report = build_work_report(
+        analytics,
+        timer,
+        daily,
+        selected_range=("day", datetime(2026, 9, 1).date(), datetime(2026, 9, 2).date()),
+        now=now,
+    )
+
+    assert report["day"]["total_seconds"] == 4 * 60 * 60
+    assert report["day"]["total_seconds"] <= 24 * 60 * 60
+    assert report["day"]["difference_vs_yesterday_seconds"] == 4 * 60 * 60
+    provenance = report["selected_range_provenance"]
+    assert provenance["aggregate_total_seconds"] == 4 * 60 * 60
+    assert provenance["aggregate_daily_sum_seconds"] == 4 * 60 * 60
+    assert provenance["range_summary_total_seconds"] == 4 * 60 * 60
+    assert provenance["report_day_total_seconds"] == 4 * 60 * 60
+
+
+def test_historical_day_diff_is_not_today_difference(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 18, 0)
+    analytics = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    analytics.record_session(2 * 60 * 60, started_at=datetime(2026, 9, 5, 9, 0), completed=True)
+    analytics.record_session(3 * 60 * 60, started_at=datetime(2026, 9, 6, 9, 0), completed=True)
+    analytics.record_session(9 * 60 * 60, started_at=datetime(2026, 9, 7, 9, 0), completed=True)
+    report = build_work_report(
+        analytics,
+        WorkTimerModel(path=tmp_path / "timer.json", now_provider=lambda: now, persist=True),
+        DailyCompanionStats(path=tmp_path / "daily.json", now_provider=lambda: now, persist=True),
+        selected_range=("day", datetime(2026, 9, 6).date(), datetime(2026, 9, 7).date()),
+        now=now,
+    )
+
+    assert report["day"]["total_seconds"] == 3 * 60 * 60
+    assert report["day"]["yesterday_seconds"] == 2 * 60 * 60
+    assert report["day"]["difference_vs_yesterday_seconds"] == 60 * 60
+
+
+def test_day_page_rejects_widened_historical_window(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 18, 0)
+    analytics = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    analytics.record_session(4 * 60 * 60, started_at=datetime(2026, 9, 1, 9, 0), completed=True)
+    report = build_work_report(
+        analytics,
+        WorkTimerModel(path=tmp_path / "timer.json", now_provider=lambda: now, persist=True),
+        DailyCompanionStats(path=tmp_path / "daily.json", now_provider=lambda: now, persist=True),
+        selected_range=("day", datetime(2026, 9, 1).date(), datetime(2026, 9, 8).date()),
+        now=now,
+    )
+
+    assert report["day"]["consistency_error"] is True
+    assert report["day"]["total_seconds"] == 0
+    assert "day_window_not_one_calendar_day" in report["day"]["consistency_errors"]
 
 
 def test_annual_report_builds_monthly_trend_and_milestones(tmp_path) -> None:

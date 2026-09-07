@@ -310,6 +310,15 @@ class FocusAnalyticsStore:
             isinstance(state, dict)
             and state.get("focus_segment_upload_repair_pending")
         )
+        targeted_repair_ids = {
+            str(value).strip()[:160]
+            for value in (
+                state.get("focus_segment_repair_segment_ids", [])
+                if isinstance(state, dict)
+                else []
+            )
+            if isinstance(value, str) and str(value).strip()
+        }
         max_rows = max(1, min(500, int(limit)))
         for segment in self.focus_segments():
             if segment.end_at is None:
@@ -323,7 +332,13 @@ class FocusAnalyticsStore:
             # idempotent and unchanged rows do not refresh updated_at. Once
             # this batch is acknowledged, the normal owner filter below again
             # prevents echoing downloaded facts from another device.
-            if not repair_pending and segment.device_id and segment.device_id != self._device_id:
+            targeted_repair = segment.segment_id in targeted_repair_ids
+            if (
+                not repair_pending
+                and not targeted_repair
+                and segment.device_id
+                and segment.device_id != self._device_id
+            ):
                 continue
             payload = segment.to_dict()
             fingerprint = self._focus_segment_upload_fingerprint(payload)
@@ -338,6 +353,8 @@ class FocusAnalyticsStore:
         """Return the bounded transport mode for diagnostics and UI sync."""
 
         state = self._state.get("account_state")
+        if isinstance(state, dict) and state.get("focus_segment_repair_segment_ids"):
+            return "reconciliation_backfill"
         if isinstance(state, dict) and state.get("focus_segment_upload_repair_pending"):
             return "recovery_backfill"
         return "delta"
@@ -413,6 +430,11 @@ class FocusAnalyticsStore:
         existing = state.get("focus_segment_upload_fingerprints")
         if not isinstance(existing, dict):
             existing = {}
+        targeted_repair_ids = {
+            str(value).strip()[:160]
+            for value in state.get("focus_segment_repair_segment_ids", [])
+            if isinstance(value, str) and str(value).strip()
+        }
         updated = dict(existing)
         updated.update(acknowledgements)
         # The local ledger is bounded to 500 facts. Keep acknowledgement state
@@ -423,7 +445,13 @@ class FocusAnalyticsStore:
             for segment_id, fingerprint in updated.items()
             if segment_id in valid_ids
         }
-        if updated == existing:
+        uploaded_ids = {
+            str(item.get("segment_id") or "").strip()[:160]
+            for item in payload
+            if isinstance(item, dict) and str(item.get("segment_id") or "").strip()
+        }
+        remaining_repair_ids = targeted_repair_ids - uploaded_ids
+        if updated == existing and remaining_repair_ids == targeted_repair_ids:
             return False
         previous = copy.deepcopy(self._state)
         state["focus_segment_upload_fingerprints"] = updated
@@ -437,6 +465,8 @@ class FocusAnalyticsStore:
             # successful transaction, the one-time recovery is complete.
             if len(payload) >= closed_count:
                 state["focus_segment_upload_repair_pending"] = False
+        if targeted_repair_ids:
+            state["focus_segment_repair_segment_ids"] = sorted(remaining_repair_ids)
         try:
             self._save()
         except Exception:
@@ -491,6 +521,147 @@ class FocusAnalyticsStore:
                 monotonic() + FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS
             )
         return manifest
+
+    def focus_segment_reconciliation_manifest(self, limit: int = 500) -> list[str]:
+        """Return all local sealed ids for a low-frequency convergence audit.
+
+        Unlike the legacy acknowledgement audit, this deliberately includes
+        downloaded facts from other devices.  It is an id-only manifest and is
+        rate-limited; it never downloads the history by itself.
+        """
+
+        if monotonic() < self._focus_integrity_next_attempt_monotonic:
+            return []
+        state = self._state.get("account_state")
+        if not isinstance(state, dict):
+            return []
+        last_success = parse_focus_timestamp(
+            state.get("focus_segment_integrity_last_success_at")
+        )
+        current = self.current_time()
+        audit_version = int(state.get("focus_segment_integrity_audit_version") or 0)
+        if (
+            audit_version == FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION
+            and last_success is not None
+            and current - last_success < FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL
+        ):
+            return []
+        max_rows = max(1, min(500, int(limit)))
+        manifest = sorted(
+            {
+                segment.segment_id
+                for segment in self.focus_segments()
+                if segment.end_at is not None and segment.segment_id
+            }
+        )[:max_rows]
+        if manifest:
+            self._focus_integrity_next_attempt_monotonic = (
+                monotonic() + FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS
+            )
+        return manifest
+
+    def apply_focus_segment_reconciliation_audit(
+        self,
+        payload: Any,
+    ) -> tuple[bool, int, int]:
+        """Merge targeted cloud gaps and queue local gaps for backfill.
+
+        Returns ``(success, local_requeued_count, recovered_remote_count)``.
+        The normal delta path remains unchanged; this is a low-frequency
+        convergence repair for a cursor that may already have passed a row.
+        """
+
+        if not isinstance(payload, dict):
+            return False, 0, 0
+        requested_raw = payload.get("_requested_segment_ids")
+        missing_raw = payload.get("missing_segment_ids")
+        recovery_raw = payload.get("missing_local_segments", [])
+        if (
+            not isinstance(requested_raw, list)
+            or not isinstance(missing_raw, list)
+            or not isinstance(recovery_raw, list)
+            or not isinstance(payload.get("server_manifest"), list)
+        ):
+            return False, 0, 0
+        if payload.get("server_manifest_complete") is False:
+            return False, 0, 0
+        requested = {
+            str(value).strip()[:160]
+            for value in requested_raw
+            if isinstance(value, str) and str(value).strip()
+        }
+        missing = {
+            str(value).strip()[:160]
+            for value in missing_raw
+            if isinstance(value, str) and str(value).strip()
+        }
+        if not requested or not missing.issubset(requested):
+            return False, 0, 0
+        try:
+            checked_count = int(payload.get("checked_count"))
+            present_count = int(payload.get("present_count"))
+            missing_count = int(payload.get("missing_count"))
+        except (TypeError, ValueError, OverflowError):
+            return False, 0, 0
+        if (
+            checked_count != len(requested)
+            or missing_count != len(missing)
+            or present_count + missing_count != checked_count
+        ):
+            return False, 0, 0
+
+        # The server only returns rows whose ids are absent from the local
+        # manifest. Validate them before merging so an integrity reply cannot
+        # inject an unrelated account row.
+        recovery_ids: set[str] = set()
+        for index, item in enumerate(recovery_raw):
+            if not isinstance(item, dict):
+                return False, 0, 0
+            segment = segment_from_record(item, index)
+            if segment is None or segment.end_at is None or not segment.segment_id:
+                return False, 0, 0
+            recovery_ids.add(segment.segment_id)
+        previous = copy.deepcopy(self._state)
+        recovered_count = 0
+        if recovery_raw:
+            try:
+                _changed, recovered_count = self.merge_remote_segments_with_count(
+                    {"segments": recovery_raw}
+                )
+            except Exception:
+                self._state = previous
+                return False, 0, 0
+
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            self._state = previous
+            return False, 0, 0
+        existing = state.get("focus_segment_upload_fingerprints")
+        if not isinstance(existing, dict):
+            existing = {}
+        updated = dict(existing)
+        for segment_id in missing:
+            updated.pop(segment_id, None)
+        pending = {
+            str(value).strip()[:160]
+            for value in state.get("focus_segment_repair_segment_ids", [])
+            if isinstance(value, str) and str(value).strip()
+        }
+        pending.update(missing)
+        state["focus_segment_upload_fingerprints"] = updated
+        state["focus_segment_repair_segment_ids"] = sorted(pending)
+        state["focus_segment_integrity_audit_version"] = FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION
+        state["focus_segment_integrity_last_success_at"] = self.current_time().isoformat()
+        state["focus_segment_integrity_last_checked_count"] = checked_count
+        state["focus_segment_integrity_last_present_count"] = present_count
+        state["focus_segment_integrity_last_missing_count"] = missing_count
+        state["focus_segment_integrity_last_recovered_count"] = recovered_count
+        try:
+            self._save()
+        except Exception:
+            self._state = previous
+            raise
+        return True, len(missing), recovered_count
 
     def apply_focus_segment_integrity_audit(
         self, payload: Any
@@ -1250,6 +1421,76 @@ class FocusAnalyticsStore:
             interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
         )
 
+    def range_segments(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        *,
+        extra_segments: list[FocusSegment] | None = None,
+    ) -> list[FocusSegment]:
+        """Return canonical facts intersecting ``[start_at, end_at)``.
+
+        This is a diagnostic/read model helper only.  It deliberately returns
+        raw segment identities (including the device id) so a report can prove
+        which facts fed a historical calculation without serialising task
+        text or using a derived daily counter.
+        """
+
+        window_start = _as_beijing(start_at)
+        window_end = _as_beijing(end_at)
+        if window_end <= window_start:
+            return []
+        validation_moment = _as_beijing(self._now())
+        untrusted_dates = {
+            str(key)
+            for key, value in (self._state.get("days", {}) or {}).items()
+            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
+        }
+        result: list[FocusSegment] = []
+        for segment in self._projection_segments(extra_segments):
+            if segment.start_at.date().isoformat() in untrusted_dates:
+                continue
+            try:
+                if segment.validation_error(validation_moment):
+                    continue
+                if segment.start_at < window_end and segment.effective_end(validation_moment) > window_start:
+                    result.append(segment)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        return result
+
+    def range_aggregate(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        *,
+        extra_segments: list[FocusSegment] | None = None,
+    ) -> FocusAggregate:
+        """Aggregate the canonical account ledger over one half-open range."""
+
+        window_start = _as_beijing(start_at)
+        window_end = _as_beijing(end_at)
+        if window_end <= window_start:
+            raise ValueError("end_at must be after start_at")
+        validation_moment = _as_beijing(self._now())
+        untrusted_dates = {
+            str(key)
+            for key, value in (self._state.get("days", {}) or {}).items()
+            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
+        }
+        segments = [
+            item
+            for item in self._projection_segments(extra_segments)
+            if item.start_at.date().isoformat() not in untrusted_dates
+        ]
+        return aggregate_focus_time(
+            segments,
+            window_start,
+            window_end,
+            now=validation_moment,
+            interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+        )
+
     def range_summary(
         self,
         start_at: datetime,
@@ -1286,16 +1527,13 @@ class FocusAnalyticsStore:
             for item in raw_segments
             if item.start_at.date().isoformat() not in untrusted_dates
         ]
-        daily_projection = self._state.get("account_state", {}).get("daily_focus_projection", {})
-        if not isinstance(daily_projection, dict):
-            daily_projection = {}
-        has_live_projection = bool(self._live_projection_segments or extra_segments)
-        aggregate = aggregate_focus_time(
-            segments,
+        # The daily projection is an incremental cache, not a second source
+        # of truth.  In particular, never let an old checkpoint overwrite a
+        # selected historical day's clipped union.
+        aggregate = self.range_aggregate(
             window_start,
             window_end,
-            now=validation_moment,
-            interruption_grace_seconds=INTERRUPTION_GRACE_SECONDS,
+            extra_segments=extra_segments,
         )
         daily_rounds: dict[str, int] = {}
         for segment in segments:
@@ -1329,13 +1567,11 @@ class FocusAnalyticsStore:
             if is_future or untrusted:
                 seconds = None
             else:
-                if not has_live_projection and isinstance(daily_projection.get(cursor.isoformat()), dict):
-                    seconds = max(
-                        0,
-                        int(daily_projection[cursor.isoformat()].get("seconds", 0) or 0),
-                    )
-                else:
-                    seconds = max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
+                # Always use the clipped interval-union bucket.  The
+                # incremental daily projection is maintained for lightweight
+                # consumers, but it must never be allowed to resurrect a
+                # stale/corrupt historical counter in a report.
+                seconds = max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
             weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[cursor.weekday()]
             daily.append({
                 "date": cursor.isoformat(),
@@ -1662,10 +1898,6 @@ class FocusAnalyticsStore:
         stored = self._state.get("days", {})
         if not isinstance(stored, dict):
             stored = {}
-        daily_projection = self._state.get("account_state", {}).get("daily_focus_projection", {})
-        if not isinstance(daily_projection, dict):
-            daily_projection = {}
-        has_live_projection = bool(self._live_projection_segments)
         daily: list[dict[str, Any]] = []
         total_seconds = 0
         completed_rounds = 0
@@ -1698,18 +1930,12 @@ class FocusAnalyticsStore:
                 # segment crossing midnight is split correctly.  Without raw
                 # facts, the authoritative answer is zero regardless of an
                 # old derived day row.
+                # ``daily_focus_projection`` is an incremental cache for
+                # lightweight surfaces, never a competing report source.
+                # Historical and standard report rows must come from the
+                # same clipped union as the headline and hourly buckets.
                 seconds = (
-                    max(
-                        0,
-                        int(
-                            aggregate.daily.get(date_key, 0)
-                            if has_live_projection
-                            else daily_projection.get(date_key, {}).get("seconds", aggregate.daily.get(date_key, 0))
-                            if isinstance(daily_projection.get(date_key, {}), dict)
-                            else aggregate.daily.get(date_key, 0)
-                            or 0
-                        ),
-                    )
+                    max(0, int(aggregate.daily.get(date_key, 0) or 0))
                     if has_raw_facts
                     else 0
                 )

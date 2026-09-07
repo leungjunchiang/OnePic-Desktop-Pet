@@ -1,3 +1,11 @@
+## v0.23.220 — P0：修复历史报告污染并完成账号账本收敛审计
+
+- 将工作报告的日/周/月/年及自选历史区间统一收口到 `sealed FocusSegments ∪ fresh per-device live intervals → interval union`；历史日严格使用北京时间 `[D 00:00, D+1 00:00)`，不再读取旧 daily checkpoint、today/week 汇总或当前日期的“较昨日”缓存。
+- 增加历史报告 provenance 与一致性不变量：记录选定区间、输入片段摘要、各层 total/daily/hourly 结果；单日超过 24 小时、窗口被意外扩张或各层不一致时停止展示错误累计值，并提示“本日统计存在一致性异常，已停止展示错误累计值”。历史日明确显示“当前设备状态”，节律标题改为“当日工作节律”。
+- 增加低频 `lili_focus_segment_integrity_v1` 账本收敛审计：只提交本地 sealed `segment_id` 清单；云端缺失的本地事实进入定向 backfill，云端存在但本地缺失的记录按 `segment_id` 定向合并。空 delta 不清空缓存，不推进历史 cursor，不恢复 400 天全量下载。
+- 保持 `lili_focus_segments` 只保存已封存历史事实，实时状态继续来自每设备 presence；不上传 `end_at = NULL`，不高频改写 canonical `updated_at`。桌宠、报告和本人时间投影继续本地计算，报告打开、日期切换、窗口滑动不发历史 Supabase 请求。
+- 新增回归覆盖：历史日期被错误累计为超过 24 小时、历史“较前一日”误用今天差值、空/部分 delta 合并、云端缺失定向回填、本地缺失定向重传和 provenance 一致性。
+
 ## v0.23.219 — 找回云端缺失的已封存专注事实并增强闪退诊断
 
 - 针对“短暂显示 7 小时、live projection 过期后又回到 6 小时”的真实数据缺口，新增每天最多一次的 sealed FocusSegment 完整性审计：客户端只发送本机已确认记录的稳定 ID，服务器只返回当前账号云端缺失的 ID；缺失记录会清除本地 SHA 确认并通过既有轻量 delta 自动重传。
