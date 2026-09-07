@@ -4831,28 +4831,6 @@ class PetWindow(QWidget):
                 )
                 return False
             remote_rows = list(candidate)
-            # Social Sync normally merges these rows before the window sees
-            # them.  Keep this boundary safe for direct dashboard payloads
-            # and older callers too: the account store remains the owner of
-            # remote facts, while the temporary input below only covers a
-            # test/lifecycle race before the store repaint is observable.
-            merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)
-            if callable(merge_checked):
-                try:
-                    merge_result = merge_checked({"segments": remote_rows})
-                except Exception as exc:
-                    lifecycle_log(
-                        "focus.display.fallback",
-                        self,
-                        user_id=account_id,
-                        source=source,
-                        reason=f"remote_segment_merge:{type(exc).__name__}",
-                        old_today_seconds=old_today,
-                        preserved_cross_device_seconds=self._cross_device_today_display_seconds,
-                    )
-                    return False
-                if isinstance(merge_result, tuple) and not bool(merge_result[0]):
-                    return False
         elif self._cross_device_today_display_remote_rows is not None:
             # A local lifecycle event or an ordinary dashboard response does
             # not authorize replacing a valid account-wide snapshot with local
@@ -5070,7 +5048,9 @@ class PetWindow(QWidget):
             str(getattr(self, "_active_focus_account_id", "")),
             moment.date().isoformat(),
             bool(self.work_timer.has_active_session),
+            bool(self.work_timer.is_running),
             str(self.work_timer.focus_session_id if self.work_timer.has_active_session else ""),
+            str(self.work_timer.current_segment_started_at() or "") if self.work_timer.is_running else "",
             max(0, int(getattr(self, "_recorded_focus_session_seconds", 0) or 0)),
             int(getattr(self, "_focus_projection_revision", 0)),
         )
@@ -5125,9 +5105,14 @@ class PetWindow(QWidget):
             self._focus_projection_cache = cached
         local_delta = 0
         if self.work_timer.is_running:
+            elapsed_reader = (
+                self.work_timer.current_elapsed_seconds
+                if cached.get("has_account_projection")
+                else self.work_timer.session_seconds
+            )
             local_delta = max(
                 0,
-                int(self.work_timer.current_elapsed_seconds() or 0)
+                int(elapsed_reader() or 0)
                 - int(cached.get("base_local_elapsed", 0) or 0),
             )
         today_seconds = max(0, int(cached.get("base_day", 0) or 0)) + local_delta
