@@ -110,6 +110,9 @@ def test_qt_6112_thread_lifecycle_guards_are_packaged() -> None:
     assert "request_stop_all(*thread_roots)" in window_source
     assert "running_threads(*thread_roots)" in window_source
     assert "wait_for_thread" in lifecycle_source
+    assert 'stopper = getattr(thread, "stop", None)' in lifecycle_source
+    assert "faulthandler.enable" in app_source
+    assert "sys.unraisablehook" in app_source
     assert "Qt.ConnectionType.QueuedConnection" in social_source
     assert "pyinstaller_qt_runtime.py" in spec_source
     assert "os.add_dll_directory" in runtime_hook_source

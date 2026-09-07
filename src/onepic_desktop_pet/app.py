@@ -30,6 +30,7 @@ Agent 快速定位：
 from __future__ import annotations
 
 import os
+import faulthandler
 import logging
 import sys
 import threading
@@ -89,6 +90,8 @@ LOGGER = logging.getLogger(__name__)
 
 _RUNTIME_HANDLER_MARKER = "_lili_runtime_handler"
 _EXCEPTION_HOOK_MARKER = "_lili_exception_hook"
+_UNRAISABLE_HOOK_MARKER = "_lili_unraisable_hook"
+_FAULT_HANDLER_STREAM = None
 
 
 def _configure_runtime_diagnostics() -> None:
@@ -131,11 +134,27 @@ def _configure_runtime_diagnostics() -> None:
             log_path=lifecycle_path,
             runtime_log=log_path,
         )
+        _enable_native_fault_diagnostics(log_dir)
         _install_process_exception_hooks()
     except Exception:
         # Diagnostics are deliberately non-critical.  Import/startup must
         # still succeed when an endpoint blocks file creation.
         return
+
+
+def _enable_native_fault_diagnostics(log_dir: Path) -> None:
+    """Enable best-effort native crash traces that Python hooks cannot catch."""
+
+    global _FAULT_HANDLER_STREAM
+    if faulthandler.is_enabled():
+        return
+    try:
+        native_path = log_dir / "native-crash.log"
+        _FAULT_HANDLER_STREAM = native_path.open("a", encoding="utf-8")
+        faulthandler.enable(file=_FAULT_HANDLER_STREAM, all_threads=True)
+        lifecycle_log("runtime.faulthandler.enabled", path=native_path)
+    except Exception:
+        _FAULT_HANDLER_STREAM = None
 
 
 def _install_process_exception_hooks() -> None:
@@ -176,6 +195,29 @@ def _install_process_exception_hooks() -> None:
 
         setattr(thread_excepthook, _EXCEPTION_HOOK_MARKER, True)
         threading.excepthook = thread_excepthook
+    if hasattr(sys, "unraisablehook") and not getattr(
+        sys.unraisablehook, _UNRAISABLE_HOOK_MARKER, False
+    ):
+        previous_unraisable_hook = sys.unraisablehook
+
+        def unraisablehook(args) -> None:
+            LOGGER.critical(
+                "[Crash] unraisable exception object=%r error=%s",
+                getattr(args, "object", None),
+                getattr(args, "err_msg", None),
+                exc_info=(
+                    getattr(args, "exc_type", None),
+                    getattr(args, "exc_value", None),
+                    getattr(args, "exc_traceback", None),
+                ),
+            )
+            try:
+                previous_unraisable_hook(args)
+            except Exception:
+                pass
+
+        setattr(unraisablehook, _UNRAISABLE_HOOK_MARKER, True)
+        sys.unraisablehook = unraisablehook
 
 
 def _guard_qt_callback(method):

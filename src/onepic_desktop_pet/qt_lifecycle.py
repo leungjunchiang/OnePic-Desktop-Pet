@@ -117,6 +117,9 @@ def wait_for_thread(thread: QThread | None, timeout_ms: int) -> bool:
             thread_class=type(thread).__name__,
             timeout_ms=int(timeout_ms),
         )
+        stopper = getattr(thread, "stop", None)
+        if callable(stopper):
+            stopper()
         thread.quit()
         stopped = bool(thread.wait(max(0, int(timeout_ms))))
         if not stopped:

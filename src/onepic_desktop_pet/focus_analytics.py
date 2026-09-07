@@ -49,6 +49,12 @@ BEIJING_TIMEZONE = FOCUS_BEIJING_TIMEZONE
 # Version 3 requires an explicit server acknowledgement for every segment id
 # and performs one bounded, idempotent recovery upload for older fingerprints.
 FOCUS_SEGMENT_UPLOAD_ACK_VERSION = 3
+# A compact integrity manifest is checked at most once per day.  It contains
+# only stable ids for locally-owned sealed facts that this device previously
+# persisted as server-acknowledged; it never downloads or uploads history.
+FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION = 1
+FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL = timedelta(hours=24)
+FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 10 * 60
 
 
 def _as_beijing(value: datetime) -> datetime:
@@ -165,6 +171,7 @@ class FocusAnalyticsStore:
         # they are intentionally never serialized or uploaded as facts.
         self._live_projection_segments: list[FocusSegment] = []
         self._live_projection_expires_at: float | None = None
+        self._focus_integrity_next_attempt_monotonic = 0.0
         self._live: dict[str, Any] = {
             "session_active": False,
             "running": False,
@@ -436,6 +443,125 @@ class FocusAnalyticsStore:
             self._state = previous
             raise
         return True
+
+    def focus_segment_integrity_manifest(self, limit: int = 500) -> list[str]:
+        """Return a bounded, low-frequency manifest of acknowledged local facts.
+
+        The manifest repairs a narrow failure mode: an old client may have
+        saved a SHA acknowledgement even though the corresponding sealed row
+        never reached Supabase.  Only ids are sent, and only once per day (or
+        once per process retry cooldown after transport failure), so this does
+        not turn the delta protocol back into a historical full sync.
+        """
+
+        if monotonic() < self._focus_integrity_next_attempt_monotonic:
+            return []
+        state = self._state.get("account_state")
+        if not isinstance(state, dict):
+            return []
+        last_success = parse_focus_timestamp(
+            state.get("focus_segment_integrity_last_success_at")
+        )
+        current = self.current_time()
+        audit_version = int(state.get("focus_segment_integrity_audit_version") or 0)
+        if (
+            audit_version == FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION
+            and last_success is not None
+            and current - last_success < FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL
+        ):
+            return []
+        acknowledgements = state.get("focus_segment_upload_fingerprints")
+        if not isinstance(acknowledgements, dict) or not acknowledgements:
+            return []
+        max_rows = max(1, min(500, int(limit)))
+        manifest = sorted(
+            {
+                segment.segment_id
+                for segment in self.focus_segments()
+                if segment.end_at is not None
+                and segment.segment_id in acknowledgements
+                and (not segment.device_id or segment.device_id == self._device_id)
+            }
+        )[:max_rows]
+        if manifest:
+            # A missing/old relay must not make the ordinary 30-second social
+            # cycle retry this optional check.  This timer is intentionally
+            # transient: restarting the app remains an escape hatch.
+            self._focus_integrity_next_attempt_monotonic = (
+                monotonic() + FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS
+            )
+        return manifest
+
+    def apply_focus_segment_integrity_audit(
+        self, payload: Any
+    ) -> tuple[bool, int]:
+        """Validate an audit reply and requeue only server-missing sealed ids.
+
+        Returns ``(success, requeued_count)``.  A malformed response or local
+        persistence failure cannot clear acknowledgements or mark the audit
+        successful.  The normal idempotent delta upload performs the repair
+        on the next coalesced social tick.
+        """
+
+        if not isinstance(payload, dict):
+            return False, 0
+        requested_raw = payload.get("_requested_segment_ids")
+        missing_raw = payload.get("missing_segment_ids")
+        if not isinstance(requested_raw, list) or not isinstance(missing_raw, list):
+            return False, 0
+        requested = {
+            str(value).strip()[:160]
+            for value in requested_raw
+            if isinstance(value, str) and str(value).strip()
+        }
+        missing = {
+            str(value).strip()[:160]
+            for value in missing_raw
+            if isinstance(value, str) and str(value).strip()
+        }
+        try:
+            checked_count = int(payload.get("checked_count"))
+            present_count = int(payload.get("present_count"))
+            missing_count = int(payload.get("missing_count"))
+        except (TypeError, ValueError, OverflowError):
+            return False, 0
+        if (
+            not requested
+            or checked_count != len(requested)
+            or missing_count != len(missing)
+            or present_count + missing_count != checked_count
+            or not missing.issubset(requested)
+        ):
+            return False, 0
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            return False, 0
+        existing = state.get("focus_segment_upload_fingerprints")
+        if not isinstance(existing, dict):
+            existing = {}
+        updated = dict(existing)
+        requeued = 0
+        for segment_id in missing:
+            if segment_id in updated:
+                updated.pop(segment_id, None)
+                requeued += 1
+        previous = copy.deepcopy(self._state)
+        state["focus_segment_upload_fingerprints"] = updated
+        state["focus_segment_integrity_audit_version"] = (
+            FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION
+        )
+        state["focus_segment_integrity_last_success_at"] = (
+            self.current_time().isoformat()
+        )
+        state["focus_segment_integrity_last_checked_count"] = checked_count
+        state["focus_segment_integrity_last_present_count"] = present_count
+        state["focus_segment_integrity_last_missing_count"] = missing_count
+        try:
+            self._save()
+        except Exception:
+            self._state = previous
+            raise
+        return True, requeued
 
     def focus_segments_sync_cursor(self) -> str | None:
         """Return the last server delta cursor for this account, if valid."""

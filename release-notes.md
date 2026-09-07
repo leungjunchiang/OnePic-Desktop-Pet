@@ -1,3 +1,10 @@
+## v0.23.219 — 找回云端缺失的已封存专注事实并增强闪退诊断
+
+- 针对“短暂显示 7 小时、live projection 过期后又回到 6 小时”的真实数据缺口，新增每天最多一次的 sealed FocusSegment 完整性审计：客户端只发送本机已确认记录的稳定 ID，服务器只返回当前账号云端缺失的 ID；缺失记录会清除本地 SHA 确认并通过既有轻量 delta 自动重传。
+- 完整性审计最多 500 个 ID，不下载历史、不传任务文本、不推进历史 cursor，也不改写 canonical FocusSegment；RPC/响应/本地落盘任一失败都不会误标成功。桌宠每秒刷新、报告切换和时间窗滑动继续保持 0 次额外 Supabase 请求。
+- 生产 Supabase 新增 RLS 约束下的 `SECURITY INVOKER` RPC `lili_focus_segment_integrity_v1`，匿名用户无执行权；新增 checked/present/missing/server total/requeued 诊断，便于在持有原始记录的电脑上追踪具体缺失 segment。
+- 增强闪退诊断：启用 `faulthandler` 写入 `native-crash.log`，记录析构期间的 unraisable exception；所有同步等待 QThread 的路径会先调用 cooperative `stop()` 再 `quit()+wait()`。补充 Windows WER LocalDumps 私密取证指引。
+
 ## v0.23.218 — 防止增量同步导致账号时间回退
 
 - 修复空/部分 FocusSegment delta 被误当成完整账号快照的问题；已验证的远端 sealed 片段现在按 `segment_id` 追加合并，不会在下一轮空同步后从显示集合消失。

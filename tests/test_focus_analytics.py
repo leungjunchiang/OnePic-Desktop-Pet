@@ -562,6 +562,82 @@ def test_focus_segment_upload_ack_failure_keeps_batch_retryable(tmp_path, monkey
     assert store.focus_segments_payload() == batch
 
 
+def test_integrity_audit_requeues_only_acknowledged_local_server_gaps(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 21, 30, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(3600, started_at=now - timedelta(hours=3), record_id="local-a")
+    store.record_session(1800, started_at=now - timedelta(hours=2), record_id="local-b")
+    store.merge_remote_segments({
+        "segments": [{
+            "segment_id": "remote-c",
+            "session_id": "remote-session",
+            "start_at": "2026-09-07T12:00:00+08:00",
+            "end_at": "2026-09-07T13:00:00+08:00",
+            "device_id": "device-b",
+        }],
+    })
+    upload = store.focus_segments_payload()
+    assert {row["segment_id"] for row in upload} == {"local-a", "local-b"}
+    assert store.acknowledge_focus_segments_upload(upload)
+
+    manifest = store.focus_segment_integrity_manifest()
+    assert manifest == ["local-a", "local-b"]
+    success, requeued = store.apply_focus_segment_integrity_audit({
+        "_requested_segment_ids": manifest,
+        "checked_count": 2,
+        "present_count": 1,
+        "missing_count": 1,
+        "missing_segment_ids": ["local-a"],
+        "server_total_count": 236,
+    })
+
+    assert success is True
+    assert requeued == 1
+    assert [row["segment_id"] for row in store.focus_segments_payload()] == ["local-a"]
+    assert store.focus_segment_integrity_manifest() == []
+
+
+def test_integrity_audit_malformed_or_unpersisted_reply_preserves_acknowledgements(
+    tmp_path, monkeypatch
+) -> None:
+    now = datetime(2026, 9, 7, 21, 30, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=False,
+        device_id="device-a",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=2), record_id="local-a")
+    upload = store.focus_segments_payload()
+    assert store.acknowledge_focus_segments_upload(upload)
+    manifest = store.focus_segment_integrity_manifest()
+
+    assert store.apply_focus_segment_integrity_audit({
+        "_requested_segment_ids": manifest,
+        "checked_count": 1,
+        "present_count": 1,
+        "missing_count": 1,
+        "missing_segment_ids": ["local-a"],
+    }) == (False, 0)
+    assert store.focus_segments_payload() == []
+
+    monkeypatch.setattr(store, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        store.apply_focus_segment_integrity_audit({
+            "_requested_segment_ids": manifest,
+            "checked_count": 1,
+            "present_count": 0,
+            "missing_count": 1,
+            "missing_segment_ids": ["local-a"],
+        })
+    assert store.focus_segments_payload() == []
+
+
 def test_legacy_acknowledgements_trigger_one_bounded_recovery_backfill(tmp_path) -> None:
     now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     path = tmp_path / "focus.json"

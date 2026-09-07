@@ -2111,6 +2111,32 @@ def test_focus_segment_sync_never_falls_back_to_full_snapshot():
     assert '"lili_sync_focus_segments"' not in source
 
 
+def test_focus_segment_integrity_audit_is_bounded_owner_only_and_id_only():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260907213000_lili_focus_segment_integrity_audit.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "security invoker" in normalized
+    assert "current_user_id uuid := (select auth.uid())" in normalized
+    assert "jsonb_array_length" in normalized
+    assert "> 500" in normalized
+    assert "s.user_id = current_user_id" in normalized
+    assert "missing_segment_ids" in normalized
+    assert "server_total_count" in normalized
+    assert "revoke execute on function public.lili_focus_segment_integrity_v1(jsonb)" in normalized
+    assert "grant execute on function public.lili_focus_segment_integrity_v1(jsonb) to authenticated" in normalized
+    assert "select *" not in normalized
+    assert "task" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+
+
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():
     root = Path(__file__).resolve().parents[1]
     migration = (root / "supabase" / "migrations" / "20260822000200_lili_buddy_request_state_machine.sql").read_text(encoding="utf-8")

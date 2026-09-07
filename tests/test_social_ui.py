@@ -19,6 +19,7 @@ from onepic_desktop_pet.social_ui import (
     RoomPetCardWidget,
     SocialHubDialog,
     SocialSignupThread,
+    SocialSyncThread,
     SocialVisitResponseThread,
     _focus_upload_ack_status,
     _reaction_label,
@@ -49,6 +50,66 @@ def test_focus_upload_ack_rejects_duplicate_or_malformed_local_ids() -> None:
         [{"segment_id": "a"}, {"segment_id": "a"}],
         {"accepted_segment_ids": ["a"]},
     )[0] is False
+
+
+def test_social_sync_runs_compact_integrity_audit_without_full_history() -> None:
+    class Session:
+        user_id = "account-a"
+
+    class Client(SignedInClient):
+        session = Session()
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, dict(body)))
+            if name == "lili_sync_focus_segments_delta_v2":
+                return {
+                    "segments": [],
+                    "next_cursor": body.get("p_since"),
+                    "accepted_segment_ids": [],
+                }
+            if name == "lili_focus_segment_integrity_v1":
+                return {
+                    "checked_count": 2,
+                    "present_count": 1,
+                    "missing_count": 1,
+                    "missing_segment_ids": ["local-missing"],
+                    "server_total_count": 10,
+                }
+            return {}
+
+    client = Client()
+    completed: list[dict] = []
+    thread = SocialSyncThread(
+        client,
+        {
+            "personal_state": {
+                "focus_segments": [],
+                "focus_segments_sync_cursor": "cursor-before",
+                "focus_segments_sync_mode": "delta",
+                "focus_history": [],
+                "focus_segment_integrity_manifest": ["local-ok", "local-missing"],
+            },
+        },
+    )
+    thread.completed.connect(completed.append)
+    thread.run()
+
+    audit_calls = [item for item in client.calls if item[0] == "lili_focus_segment_integrity_v1"]
+    assert audit_calls == [(
+        "lili_focus_segment_integrity_v1",
+        {"p_segment_ids": ["local-ok", "local-missing"]},
+    )]
+    assert completed[-1]["_focus_segment_integrity"]["missing_segment_ids"] == [
+        "local-missing"
+    ]
+    assert completed[-1]["_focus_segment_integrity"]["_requested_segment_ids"] == [
+        "local-ok",
+        "local-missing",
+    ]
+    assert all(name != "lili_sync_focus_segments" for name, _body in client.calls)
     assert _focus_upload_ack_status(
         [{"segment_id": "a"}, {"session_id": "missing-id"}],
         {"accepted_segment_ids": ["a"]},

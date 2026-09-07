@@ -6278,6 +6278,9 @@ class PetWindow(QWidget):
             "focus_segments": self.focus_analytics.focus_segments_payload(),
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
+            "focus_segment_integrity_manifest": (
+                self.focus_analytics.focus_segment_integrity_manifest()
+            ),
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
         }
@@ -7000,6 +7003,56 @@ class PetWindow(QWidget):
                 transaction_ok=bool(transaction_ok),
                 cursor_advanced=bool(cursor_advanced),
             )
+        integrity_payload = data.get("_focus_segment_integrity") if isinstance(data, dict) else None
+        if integrity_payload is not None:
+            def audit_number(key: str, *, decimal: bool = False) -> int | float:
+                try:
+                    value = (
+                        integrity_payload.get(key) or 0
+                        if isinstance(integrity_payload, dict)
+                        else 0
+                    )
+                    return max(0.0, float(value)) if decimal else max(0, int(value))
+                except (TypeError, ValueError, OverflowError):
+                    return 0.0 if decimal else 0
+
+            audit_ok = False
+            requeued_count = 0
+            audit_error = str(
+                integrity_payload.get("_error") or ""
+                if isinstance(integrity_payload, dict)
+                else "invalid_payload"
+            )
+            if isinstance(integrity_payload, dict) and not audit_error:
+                try:
+                    audit_ok, requeued_count = (
+                        self.focus_analytics.apply_focus_segment_integrity_audit(
+                            integrity_payload
+                        )
+                    )
+                    if not audit_ok:
+                        audit_error = "payload_invalid_or_local_persist_failed"
+                except Exception as exc:
+                    audit_error = "audit_persist_failed"
+                    LOGGER.warning("focus segment integrity audit persistence failed: %s", exc)
+            lifecycle_log(
+                "focus.segment_integrity.audit",
+                self,
+                checked_count=audit_number("checked_count"),
+                present_count=audit_number("present_count"),
+                missing_count=audit_number("missing_count"),
+                requeued_count=max(0, int(requeued_count)),
+                server_total_count=audit_number("server_total_count"),
+                device_id=str(
+                    integrity_payload.get("_device_id") or ""
+                    if isinstance(integrity_payload, dict) else ""
+                ),
+                duration_ms=audit_number("_duration_ms", decimal=True),
+                error=audit_error,
+                success=bool(audit_ok),
+            )
+            if audit_ok and requeued_count:
+                self._schedule_social_tick()
         live_projection_payload = data.get("_focus_live_projection") if isinstance(data, dict) else None
         live_projection_changed = False
         if live_projection_payload is not None:

@@ -757,6 +757,7 @@ class SocialSyncThread(QThread):
             heartbeat_error = ""
             focus_history_result = None
             focus_segments_result = None
+            focus_segment_integrity_result = None
             focus_live_projection_result = None
             personal_state_result = None
             presence_context_updated: bool | None = None
@@ -965,6 +966,41 @@ class SocialSyncThread(QThread):
                             duration_ms=focus_segments_sync_duration_ms,
                             error="" if upload_ack_ok else "upload_ack_missing_or_mismatch",
                         )
+                    integrity_manifest = personal_state.get(
+                        "focus_segment_integrity_manifest"
+                    )
+                    if isinstance(integrity_manifest, list) and integrity_manifest:
+                        integrity_started = time.monotonic()
+                        try:
+                            audit_result = sync_rpc(
+                                "lili_focus_segment_integrity_v1",
+                                {"p_segment_ids": integrity_manifest},
+                            )
+                            if isinstance(audit_result, dict):
+                                focus_segment_integrity_result = dict(audit_result)
+                                focus_segment_integrity_result[
+                                    "_requested_segment_ids"
+                                ] = list(integrity_manifest)
+                        except (SocialError, AttributeError, TypeError) as exc:
+                            LOGGER.info("focus segment integrity audit deferred: %s", exc)
+                            focus_segment_integrity_result = {
+                                "_error": str(exc)[:240],
+                                "_requested_segment_ids": list(integrity_manifest),
+                            }
+                        except Exception as exc:
+                            LOGGER.exception("focus segment integrity audit crashed")
+                            focus_segment_integrity_result = {
+                                "_error": str(exc)[:240],
+                                "_requested_segment_ids": list(integrity_manifest),
+                            }
+                        if isinstance(focus_segment_integrity_result, dict):
+                            focus_segment_integrity_result["_duration_ms"] = round(
+                                (time.monotonic() - integrity_started) * 1000,
+                                1,
+                            )
+                            focus_segment_integrity_result["_device_id"] = (
+                                focus_segments_device_id
+                            )
             # Active FocusSession intervals remain local/canonical until they
             # close.  Read the separate per-device liveness projection so the
             # display can union all currently active devices without mutating
@@ -1052,6 +1088,9 @@ class SocialSyncThread(QThread):
             if isinstance(focus_segments_result, dict):
                 data = dict(data or {})
                 data["_focus_segments"] = focus_segments_result
+            if isinstance(focus_segment_integrity_result, dict):
+                data = dict(data or {})
+                data["_focus_segment_integrity"] = focus_segment_integrity_result
             if isinstance(focus_live_projection_result, dict):
                 data = dict(data or {})
                 data["_focus_live_projection"] = focus_live_projection_result
