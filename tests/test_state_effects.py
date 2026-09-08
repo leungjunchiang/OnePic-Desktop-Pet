@@ -6,6 +6,8 @@ from onepic_desktop_pet.state_effects import (
     LocalEffectKind,
     LocalEffectManager,
     MANIA_SEQUENCE,
+    MANIA_CROSSFADE_MS,
+    MANIA_CYCLE_MS,
     MANIA_SLOT_MS,
     MANIA_TOTAL_MS,
     resolve_event_effect,
@@ -47,6 +49,7 @@ def test_random_pet_states_do_not_trigger_colors() -> None:
 
 def test_explicit_work_and_event_resolvers_are_stable_and_explainable() -> None:
     assert resolve_work_effect("focus") is LocalEffectKind.BLUE
+    assert resolve_work_effect("focus", focus_blue_enabled=False) is LocalEffectKind.NONE
     assert resolve_work_effect("rest") is LocalEffectKind.GREEN
     assert resolve_work_effect("idle") is LocalEffectKind.NONE
     assert resolve_event_effect("annoyed") is LocalEffectKind.RED
@@ -135,13 +138,70 @@ def test_mania_sequence_has_six_three_second_slots_for_ten_cycles() -> None:
     assert manager.mania_active is False
 
 
-def test_mania_retrigger_reuses_policy_and_does_not_add_an_overlay_callback() -> None:
+def test_mania_timeline_crossfades_without_entering_none() -> None:
+    clock = Clock()
+    frames: list[tuple] = []
+    manager = LocalEffectManager(
+        on_start=lambda _kind: None,
+        on_switch=lambda _kind: None,
+        on_sustain=lambda _kind: None,
+        on_release=lambda _kind, _duration: None,
+        on_stop=lambda: None,
+        on_mania_frame=lambda current, following, mix, phase: frames.append(
+            (current, following, mix, phase)
+        ),
+        now=clock,
+    )
+    manager.start_mania()
+    clock.value = (MANIA_SLOT_MS - MANIA_CROSSFADE_MS / 2) / 1000.0
+    manager.tick()
+    current, following, mix, _phase = frames[-1]
+    assert current is LocalEffectKind.RED
+    assert following is LocalEffectKind.GOLD
+    assert 0.0 < mix < 1.0
+    clock.value = MANIA_SLOT_MS / 1000.0
+    manager.tick()
+    assert frames[-1][0] is LocalEffectKind.GOLD
+    assert frames[-1][2] == 0.0
+    assert manager.current_kind is LocalEffectKind.GOLD
+
+
+def test_mania_retrigger_extends_deadline_without_restarting_timeline() -> None:
     clock = Clock()
     events: list[tuple] = []
     manager = _manager(clock, events)
     manager.start_mania()
     starts = len([event for event in events if event[0] == "start"])
+    clock.value = 2.7
+    manager.tick()
+    kind_before = manager.current_kind
     manager.start_mania()
     assert manager.mania_active is True
     assert len([event for event in events if event[0] == "start"]) == starts
-    assert len([event for event in events if event[0] == "switch"]) == 1
+    assert len([event for event in events if event[0] == "switch"]) == 0
+    assert manager.current_kind is kind_before
+    clock.value = 2.7 + MANIA_TOTAL_MS / 1000.0 - 0.01
+    manager.tick()
+    assert manager.mania_active is True
+    assert MANIA_CYCLE_MS == 18_000
+
+
+def test_mania_restores_the_latest_background_state_not_the_entry_snapshot() -> None:
+    clock = Clock()
+    resumed: list[LocalEffectKind] = []
+    manager = LocalEffectManager(
+        on_start=lambda _kind: None,
+        on_switch=lambda _kind: None,
+        on_sustain=lambda _kind: None,
+        on_release=lambda _kind, _duration: None,
+        on_stop=lambda: None,
+        on_mania_resume=lambda kind: resumed.append(kind),
+        now=clock,
+    )
+    manager.start_mania()
+    manager.request_state(LocalEffectKind.BLUE)
+    clock.value = MANIA_TOTAL_MS / 1000.0 + 0.01
+    manager.tick()
+    assert manager.mania_active is False
+    assert resumed == [LocalEffectKind.BLUE]
+    assert manager.current_kind is LocalEffectKind.BLUE

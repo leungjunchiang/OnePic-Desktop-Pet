@@ -174,6 +174,7 @@ def test_unified_menu_model_exposes_optional_duration_in_display_menu() -> None:
 def test_unified_menu_model_projects_local_burst_effects() -> None:
     commands = {
         "state_effects_toggle",
+        "focus_blue_effect_toggle",
         "state_effect_red",
         "state_effect_gold",
         "state_effect_blue",
@@ -192,6 +193,7 @@ def test_unified_menu_model_projects_local_burst_effects() -> None:
     burst = next(item for item in display.children if item.title == "六毛特效")
     assert [item.title for item in burst.children] == [
         "根据六毛状态自动显示",
+        "工作时显示蓝色专注光雾",
         "",
         "红色烟花",
         "金色闪光",

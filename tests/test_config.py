@@ -399,6 +399,7 @@ def test_state_effect_settings_are_local_validated_and_persisted(tmp_path) -> No
         json.dumps(
             {
                 "state_effects_enabled": "yes",
+                "focus_blue_effect_enabled": 0,
                 "state_effect_duration": "invalid",
                 "mania_mode_enabled": 0,
             }
@@ -407,15 +408,18 @@ def test_state_effect_settings_are_local_validated_and_persisted(tmp_path) -> No
     )
     settings = load_settings(default_path, override_path)
     assert settings.state_effects_enabled is True
+    assert settings.focus_blue_effect_enabled is False
     assert settings.state_effect_duration == "standard"
     assert settings.mania_mode_enabled is False
 
     settings.state_effects_enabled = False
+    settings.focus_blue_effect_enabled = True
     settings.state_effect_duration = "long"
     settings.mania_mode_enabled = True
     saved = tmp_path / "saved.json"
     save_settings(settings, saved)
     restored = load_settings(default_path, saved)
     assert restored.state_effects_enabled is False
+    assert restored.focus_blue_effect_enabled is True
     assert restored.state_effect_duration == "long"
     assert restored.mania_mode_enabled is True

@@ -166,6 +166,9 @@ class PetSettings:
     # Local state effects are the event/status visual system.  These remain
     # local-only and are intentionally separate from focus/social settings.
     state_effects_enabled: bool = True
+    # The sustained focus-state blue visual can be disabled without disabling
+    # event effects or the mania color sequence.
+    focus_blue_effect_enabled: bool = True
     state_effect_duration: str = "standard"
     # Hidden five-click mania is local-only and can be disabled independently.
     mania_mode_enabled: bool = True
@@ -344,6 +347,9 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     if settings.aura_manual_effect not in AURA_EFFECT_VALUES:
         settings.aura_manual_effect = "blue"
     settings.state_effects_enabled = bool(getattr(settings, "state_effects_enabled", True))
+    settings.focus_blue_effect_enabled = bool(
+        getattr(settings, "focus_blue_effect_enabled", True)
+    )
     settings.state_effect_duration = str(
         getattr(settings, "state_effect_duration", "standard") or "standard"
     ).strip().casefold()
@@ -429,6 +435,7 @@ def load_settings(
                 "aura_mode",
                 "aura_manual_effect",
                 "state_effects_enabled",
+                "focus_blue_effect_enabled",
                 "state_effect_duration",
                 "mania_mode_enabled",
             }
@@ -556,6 +563,9 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "aura_mode": settings.aura_mode,
         "aura_manual_effect": settings.aura_manual_effect,
         "state_effects_enabled": bool(getattr(settings, "state_effects_enabled", True)),
+        "focus_blue_effect_enabled": bool(
+            getattr(settings, "focus_blue_effect_enabled", True)
+        ),
         "state_effect_duration": getattr(settings, "state_effect_duration", "standard"),
         "mania_mode_enabled": bool(getattr(settings, "mania_mode_enabled", True)),
     }

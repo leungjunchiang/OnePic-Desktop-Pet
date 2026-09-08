@@ -2389,11 +2389,10 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "六毛大小…", "显示本轮工作时长", "六毛特效", "始终置顶", "桌面模式"
     ]
     burst = next(action for action in display.menu().actions() if action.text() == "六毛特效")
-    assert [action.text() for action in burst.menu().actions()][:7] + [
-        action.text() for action in burst.menu().actions()
-    ][-1:] == [
-        "根据六毛状态自动显示", "", "红色烟花", "金色闪光", "蓝色静谧",
-        "紫色神秘", "绿色恢复", "停止当前特效"
+    assert [action.text() for action in burst.menu().actions()] == [
+        "根据六毛状态自动显示", "工作时显示蓝色专注光雾", "", "红色烟花",
+        "金色闪光", "蓝色静谧", "紫色神秘", "绿色恢复", "青色活跃",
+        "测试发癫模式", "停止当前特效",
     ]
     outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
     outfit_labels = [action.text() for action in outfit.menu().actions()]

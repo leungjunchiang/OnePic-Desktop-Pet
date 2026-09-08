@@ -924,6 +924,14 @@ class AISettingsDialog(QDialog):
             "根据明确的工作/休息状态和互动事件显示局部特效；完全本地运行，不产生网络请求。"
         )
         layout.addWidget(self.state_effects_enabled)
+        self.focus_blue_effect_enabled = QCheckBox("工作时显示蓝色专注光雾")
+        self.focus_blue_effect_enabled.setChecked(
+            getattr(settings, "focus_blue_effect_enabled", True)
+        )
+        self.focus_blue_effect_enabled.setToolTip(
+            "只控制正常工作状态下的蓝色持续光雾；红、金、绿、青、紫及发癫模式不受影响。"
+        )
+        layout.addWidget(self.focus_blue_effect_enabled)
         self.mania_mode_enabled = QCheckBox("启用隐藏五连点击彩蛋（发癫模式）")
         self.mania_mode_enabled.setChecked(
             getattr(settings, "mania_mode_enabled", True)
@@ -1333,6 +1341,9 @@ class AISettingsDialog(QDialog):
         self.settings.codex_executable_path = self.codex_path.text().strip()[:1200]
         self.settings.always_on_top = self.always_on_top.isChecked()
         self.settings.state_effects_enabled = self.state_effects_enabled.isChecked()
+        self.settings.focus_blue_effect_enabled = (
+            self.focus_blue_effect_enabled.isChecked()
+        )
         self.settings.mania_mode_enabled = self.mania_mode_enabled.isChecked()
         self.settings.state_effect_duration = str(
             self.state_effect_duration.currentData() or "standard"

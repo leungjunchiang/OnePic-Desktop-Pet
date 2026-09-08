@@ -689,6 +689,11 @@ class LocalBurstEffectWindow(QWidget):
         self._previous_stage_started_at = 0.0
         self._crossfade_started_at = 0.0
         self._crossfade_duration_ms = 360
+        self._mania_mode = False
+        self._mania_current_kind = LocalEffectKind.RED
+        self._mania_next_kind = LocalEffectKind.GOLD
+        self._mania_mix = 0.0
+        self._mania_phase = 0.0
         self._pet_global_rect = QRect()
         self._pet_rect = QRectF()
         self._exclusion_global_regions: tuple[EffectExclusionRegion, ...] = ()
@@ -830,6 +835,11 @@ class LocalBurstEffectWindow(QWidget):
                 self.stop()
                 return
             self._previous_kind = None
+            self._mania_mode = False
+            self._mania_current_kind = self._kind
+            self._mania_next_kind = self._kind
+            self._mania_mix = 0.0
+            self._mania_phase = 0.0
             self._manual = not managed
             self._stage = "entry"
             self._active = True
@@ -869,6 +879,10 @@ class LocalBurstEffectWindow(QWidget):
             return
         if not self._active:
             return
+        self._mania_mode = False
+        self._mania_current_kind = target
+        self._mania_next_kind = target
+        self._mania_mix = 0.0
         if target is self._kind:
             # A mania restart may begin with the same color that was already
             # visible. Replay its entry phase on the same window instead of
@@ -893,8 +907,65 @@ class LocalBurstEffectWindow(QWidget):
         self._timer.start()
         self.update()
 
+    def set_mania_frame(
+        self,
+        current_kind: LocalEffectKind | str,
+        next_kind: LocalEffectKind | str,
+        mix: float,
+        *,
+        phase: float = 0.0,
+    ) -> None:
+        """Update one continuous mania timeline without restarting entry.
+
+        The manager owns the monotonic timeline.  This window only receives
+        the two adjacent presets and paints their crossfade into the same
+        reusable surface.
+        """
+
+        if not self._active:
+            return
+        self._mania_mode = True
+        self._mania_current_kind = normalize_effect_kind(current_kind)
+        self._mania_next_kind = normalize_effect_kind(next_kind)
+        self._kind = self._mania_current_kind
+        self._mania_mix = max(0.0, min(1.0, float(mix)))
+        self._mania_phase = float(phase)
+        self._manual = False
+        self._timer.start()
+        self.update()
+
+    def resume_managed(self, kind: LocalEffectKind | str) -> None:
+        """Leave mania directly into the current semantic state."""
+
+        target = normalize_effect_kind(kind)
+        if target is LocalEffectKind.NONE:
+            self.release(DEFAULT_RELEASE_DURATION_MS)
+            return
+        if not self._active:
+            return
+        now = time.monotonic()
+        previous = self._kind
+        self._mania_mode = False
+        self._mania_current_kind = target
+        self._mania_next_kind = target
+        self._mania_mix = 0.0
+        self._mania_phase = 0.0
+        self._manual = False
+        if previous is not target:
+            self._previous_kind = previous
+            self._previous_stage_started_at = self._stage_started_at
+            self._kind = target
+            self._crossfade_started_at = now
+        else:
+            self._previous_kind = None
+        self._stage = "sustain"
+        self._stage_started_at = now
+        self._timer.start()
+        self.update()
+
     def set_sustain(self) -> None:
         if self._active and not self._manual:
+            self._mania_mode = False
             self._stage = "sustain"
             self._stage_started_at = time.monotonic()
             self.update()
@@ -903,6 +974,7 @@ class LocalBurstEffectWindow(QWidget):
         if not self._active:
             return
         self._manual = False
+        self._mania_mode = False
         self._stage = "release"
         self._stage_started_at = time.monotonic()
         self._release_duration_ms = max(220, int(duration_ms))
@@ -911,6 +983,7 @@ class LocalBurstEffectWindow(QWidget):
     def stop(self) -> None:
         self._timer.stop()
         self._active = False
+        self._mania_mode = False
         self.hide()
         self.update()
 
@@ -929,6 +1002,16 @@ class LocalBurstEffectWindow(QWidget):
                 self.stop()
                 self.finished.emit()
                 return
+        if (
+            not self._manual
+            and self._mania_mode
+            and self._stage == "entry"
+            and (now - self._stage_started_at) * 1000.0 >= ENTRY_DURATION_MS
+        ):
+            # Mania has one entry burst only.  After that it remains a
+            # continuous sustain while the color timeline keeps moving.
+            self._stage = "sustain"
+            self._stage_started_at = now
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -953,6 +1036,92 @@ class LocalBurstEffectWindow(QWidget):
                     pet_rect=self._pet_rect, exclusion_regions=self._exclusion_regions,
                     stage="release", phase=stage_elapsed / 1000.0,
                 )
+            elif self._mania_mode:
+                current = self._mania_current_kind
+                following = self._mania_next_kind
+                mix = self._mania_mix
+                if self._stage == "entry":
+                    entry_progress = stage_elapsed / ENTRY_DURATION_MS
+                    if self._previous_kind is not None:
+                        fade = min(
+                            1.0,
+                            max(
+                                0.0,
+                                (now - self._crossfade_started_at)
+                                * 1000.0
+                                / self._crossfade_duration_ms,
+                            ),
+                        )
+                        painter.save()
+                        painter.setOpacity(1.0 - fade)
+                        paint_local_effect(
+                            painter,
+                            bounds,
+                            kind=self._previous_kind,
+                            progress=0.5,
+                            pet_rect=self._pet_rect,
+                            exclusion_regions=self._exclusion_regions,
+                            stage="sustain",
+                            phase=self._mania_phase,
+                        )
+                        painter.restore()
+                        painter.save()
+                        painter.setOpacity(fade)
+                        paint_local_effect(
+                            painter,
+                            bounds,
+                            kind=current,
+                            progress=entry_progress,
+                            pet_rect=self._pet_rect,
+                            exclusion_regions=self._exclusion_regions,
+                            stage="entry",
+                            phase=self._mania_phase,
+                        )
+                        painter.restore()
+                        if fade >= 1.0:
+                            self._previous_kind = None
+                    else:
+                        paint_local_effect(
+                            painter,
+                            bounds,
+                            kind=current,
+                            progress=entry_progress,
+                            pet_rect=self._pet_rect,
+                            exclusion_regions=self._exclusion_regions,
+                            stage="entry",
+                            phase=self._mania_phase,
+                        )
+                else:
+                    if mix < 1.0:
+                        painter.save()
+                        painter.setOpacity(1.0 - mix)
+                        paint_local_effect(
+                            painter,
+                            bounds,
+                            kind=current,
+                            progress=0.0,
+                            pet_rect=self._pet_rect,
+                            exclusion_regions=self._exclusion_regions,
+                            stage="sustain",
+                            phase=self._mania_phase,
+                            opacity_scale=1.0,
+                        )
+                        painter.restore()
+                    if mix > 0.0:
+                        painter.save()
+                        painter.setOpacity(mix)
+                        paint_local_effect(
+                            painter,
+                            bounds,
+                            kind=following,
+                            progress=0.0,
+                            pet_rect=self._pet_rect,
+                            exclusion_regions=self._exclusion_regions,
+                            stage="sustain",
+                            phase=self._mania_phase,
+                            opacity_scale=1.0,
+                        )
+                        painter.restore()
             else:
                 current_painter_saved = False
                 if self._previous_kind is not None:

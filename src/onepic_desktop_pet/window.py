@@ -599,6 +599,7 @@ class PetWindow(QWidget):
         self._last_stroke_reaction = 0.0
         self._poke_times: deque[float] = deque()
         self._mania_click_times: deque[float] = deque(maxlen=5)
+        self._mania_click_candidate = False
         self._bob_phase = False
         self._effect_phase = 0
         self._frame_index = 0
@@ -906,6 +907,8 @@ class PetWindow(QWidget):
             on_sustain=self._sustain_managed_local_effect,
             on_release=self._release_managed_local_effect,
             on_stop=self._stop_managed_local_effect,
+            on_mania_frame=self._update_mania_local_effect,
+            on_mania_resume=self._resume_managed_local_effect,
             duration_profile=getattr(self.settings, "state_effect_duration", "standard"),
         )
         self._local_burst_effect.progressed.connect(self._local_effect_tick)
@@ -7820,6 +7823,34 @@ class PetWindow(QWidget):
             LOGGER.exception("[LocalEffect] managed effect switch failed")
             effect.stop()
 
+    def _update_mania_local_effect(
+        self,
+        current: LocalEffectKind,
+        following: LocalEffectKind,
+        mix: float,
+        phase: float,
+    ) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        try:
+            effect.set_mania_frame(current, following, mix, phase=phase)
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] mania frame update failed")
+            effect.stop()
+
+    def _resume_managed_local_effect(self, kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        try:
+            effect.resume_managed(kind)
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] resume after mania failed")
+            effect.stop()
+
     def _sustain_managed_local_effect(self, _kind: LocalEffectKind) -> None:
         effect = getattr(self, "_local_burst_effect", None)
         if effect is not None:
@@ -7870,7 +7901,12 @@ class PetWindow(QWidget):
         """Return the explicit work lifecycle color, never a random PetState."""
 
         if self.work_timer.is_running:
-            return resolve_work_effect("focus")
+            return resolve_work_effect(
+                "focus",
+                focus_blue_enabled=bool(
+                    getattr(self.settings, "focus_blue_effect_enabled", True)
+                ),
+            )
         if self.work_timer.has_active_session:
             return resolve_work_effect("rest")
         return resolve_work_effect("none")
@@ -7905,12 +7941,16 @@ class PetWindow(QWidget):
         times = self._mania_click_times
         if times and now - times[-1] > 0.7:
             times.clear()
+            self._mania_click_candidate = False
+            self._poke_times.clear()
         times.append(now)
         while times and now - times[0] > 2.8:
             times.popleft()
         if len(times) < 5:
+            self._mania_click_candidate = len(times) >= 3
             return False
         times.clear()
+        self._mania_click_candidate = False
         return self._start_mania_mode()
 
     def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
@@ -7927,6 +7967,16 @@ class PetWindow(QWidget):
         manager = getattr(self, "_local_effect_manager", None)
         if manager is not None:
             manager.set_duration_profile(normalized)
+        if persist:
+            save_settings(self.settings)
+
+    def set_focus_blue_effect_enabled(
+        self, enabled: bool, *, persist: bool = True
+    ) -> None:
+        """Toggle only the normal focus-state blue effect."""
+
+        self.settings.focus_blue_effect_enabled = bool(enabled)
+        self._sync_state_effect()
         if persist:
             save_settings(self.settings)
 
@@ -8606,6 +8656,9 @@ class PetWindow(QWidget):
             "state_effects_enabled": bool(
                 getattr(self.settings, "state_effects_enabled", True)
             ),
+            "focus_blue_effect_enabled": bool(
+                getattr(self.settings, "focus_blue_effect_enabled", True)
+            ),
             "state_effect_kind": getattr(
                 getattr(self, "_local_burst_effect", None),
                 "current_kind",
@@ -8662,6 +8715,7 @@ class PetWindow(QWidget):
             "state_effect_mania": lambda _checked=False: self.trigger_mania_effect(),
             "state_effect_stop": lambda _checked=False: self.stop_local_effect(),
             "state_effects_toggle": lambda checked=False: self.set_state_effects_enabled(checked),
+            "focus_blue_effect_toggle": lambda checked=False: self.set_focus_blue_effect_enabled(checked),
             "size": lambda _checked=False: self.open_size_control(),
             "show_todos": lambda _checked=False: self.show_compact_todos(manual=True),
             "hide_todos": lambda _checked=False: self.hide_compact_todos(),
@@ -8986,7 +9040,9 @@ class PetWindow(QWidget):
         # Work controls are available from explicit work/menu actions only;
         # a normal left click on the pet must never create a floating button bar.
         self.work_controls.hide()
-        if self._record_mania_click():
+        mania_triggered = self._record_mania_click()
+        mania_candidate = self._mania_click_candidate
+        if mania_triggered:
             self.mood.receive_poke(True)
             self._show_emotion(PetState.ANNOYED, 1800)
             self.show_speech("六毛发癫啦！颜色开始大循环！", 3600)
@@ -9009,7 +9065,10 @@ class PetWindow(QWidget):
         while self._poke_times and now - self._poke_times[0] > 2.5:
             self._poke_times.popleft()
         repeated = len(self._poke_times) >= 5
-        if len(self._poke_times) >= 3:
+        # Hold a three-to-four-click burst as a mania candidate so the third
+        # click does not visibly start RED when the same burst is about to
+        # become the five-click easter egg.
+        if len(self._poke_times) >= 3 and not mania_candidate:
             self._request_local_effect_event(LocalEffectKind.RED)
         self.mood.receive_poke(repeated)
         self._show_emotion(

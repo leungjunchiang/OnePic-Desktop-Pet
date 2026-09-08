@@ -194,6 +194,14 @@ class UnifiedMenuModel:
                     checked=bool(state.get("state_effects_enabled", True)),
                 )
             )
+            burst_children.append(
+                MenuItemSpec(
+                    "工作时显示蓝色专注光雾",
+                    "focus_blue_effect_toggle",
+                    checkable=True,
+                    checked=bool(state.get("focus_blue_effect_enabled", True)),
+                )
+            )
             burst_children.append(MenuItemSpec.divider())
         effect_commands = (
             ("红色烟花", "state_effect_red", "red_burst"),

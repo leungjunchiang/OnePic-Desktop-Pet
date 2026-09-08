@@ -8,6 +8,7 @@ ordinary autonomous animation cannot make colors appear at random.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -84,12 +85,16 @@ def resolve_state_effect(state: PetState) -> LocalEffectKind:
     return LocalEffectKind.NONE
 
 
-def resolve_work_effect(work_status: str | None) -> LocalEffectKind:
+def resolve_work_effect(
+    work_status: str | None,
+    *,
+    focus_blue_enabled: bool = True,
+) -> LocalEffectKind:
     """Resolve the explicit work lifecycle into a sustained local effect."""
 
     status = str(work_status or "").strip().casefold()
     if status == "focus":
-        return LocalEffectKind.BLUE
+        return LocalEffectKind.BLUE if focus_blue_enabled else LocalEffectKind.NONE
     if status == "rest":
         return LocalEffectKind.GREEN
     return LocalEffectKind.NONE
@@ -121,6 +126,8 @@ MANIA_SEQUENCE: tuple[LocalEffectKind, ...] = (
 )
 MANIA_SLOT_MS = 3_000
 MANIA_TOTAL_MS = 180_000
+MANIA_CYCLE_MS = len(MANIA_SEQUENCE) * MANIA_SLOT_MS
+MANIA_CROSSFADE_MS = 350
 
 
 @dataclass
@@ -129,13 +136,45 @@ class ManiaSessionState:
     ends_at: float
     seed: int = 0
     last_slot_index: int = -1
+    visual_origin_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.visual_origin_at:
+            self.visual_origin_at = self.started_at
+
+    def elapsed_ms(self, now: float) -> float:
+        return max(0.0, (float(now) - self.visual_origin_at) * 1000.0)
 
     def slot_index(self, now: float) -> int:
-        elapsed_ms = max(0.0, (float(now) - self.started_at) * 1000.0)
+        elapsed_ms = self.elapsed_ms(now)
         return int(elapsed_ms // MANIA_SLOT_MS)
 
     def kind_at(self, now: float) -> LocalEffectKind:
         return MANIA_SEQUENCE[self.slot_index(now) % len(MANIA_SEQUENCE)]
+
+    def visual_state(
+        self, now: float
+    ) -> tuple[LocalEffectKind, LocalEffectKind, float, float]:
+        """Return current/next kinds, crossfade mix, and continuous phase.
+
+        The color timeline never enters ``NONE``.  The renderer can therefore
+        keep one stable geometry and blend the two neighboring presets during
+        the final 350ms of each slot.
+        """
+
+        elapsed_ms = self.elapsed_ms(now)
+        cycle_position = elapsed_ms % MANIA_CYCLE_MS
+        slot_index = int(cycle_position // MANIA_SLOT_MS)
+        slot_elapsed = cycle_position % MANIA_SLOT_MS
+        current = MANIA_SEQUENCE[slot_index % len(MANIA_SEQUENCE)]
+        following = MANIA_SEQUENCE[(slot_index + 1) % len(MANIA_SEQUENCE)]
+        transition_start = MANIA_SLOT_MS - MANIA_CROSSFADE_MS
+        if slot_elapsed < transition_start:
+            mix = 0.0
+        else:
+            raw = (slot_elapsed - transition_start) / MANIA_CROSSFADE_MS
+            mix = -(math.cos(math.pi * max(0.0, min(1.0, raw))) - 1.0) / 2.0
+        return current, following, mix, elapsed_ms / 1000.0
 
 
 def normalize_effect_kind(value: LocalEffectKind | str | None) -> LocalEffectKind:
@@ -169,6 +208,10 @@ class LocalEffectManager:
         on_sustain: Callable[[LocalEffectKind], None],
         on_release: Callable[[LocalEffectKind, int], None],
         on_stop: Callable[[], None],
+        on_mania_frame: Callable[
+            [LocalEffectKind, LocalEffectKind, float, float], None
+        ] | None = None,
+        on_mania_resume: Callable[[LocalEffectKind], None] | None = None,
         now: Callable[[], float] = time.monotonic,
         duration_profile: str = "standard",
     ) -> None:
@@ -177,6 +220,8 @@ class LocalEffectManager:
         self._on_sustain = on_sustain
         self._on_release = on_release
         self._on_stop = on_stop
+        self._on_mania_frame = on_mania_frame or (lambda *_args: None)
+        self._on_mania_resume = on_mania_resume or (lambda *_args: None)
         self._now = now
         self.duration_profile = str(duration_profile or "standard")
         self.enabled = True
@@ -340,20 +385,37 @@ class LocalEffectManager:
             self._apply_kind(requested, now, source=EffectSource.EVENT)
 
     def start_mania(self, now: float | None = None, *, seed: int = 0) -> bool:
-        """Start or restart the deterministic 3-minute local easter egg."""
+        """Start or extend one continuous deterministic 3-minute timeline."""
 
         if not self.enabled:
             return False
         now = self._now() if now is None else float(now)
+        if self._mania is not None:
+            # Extend only the deadline.  Keeping visual_origin_at means a
+            # repeated five-click trigger never jumps or restarts the colors.
+            self._mania.ends_at = now + MANIA_TOTAL_MS / 1000.0
+            self._mania.seed = int(seed)
+            self._emit_mania_frame(now)
+            return True
         self._mania = ManiaSessionState(
             started_at=now,
             ends_at=now + MANIA_TOTAL_MS / 1000.0,
             seed=int(seed),
             last_slot_index=-1,
+            visual_origin_at=now,
         )
         self._apply_kind(MANIA_SEQUENCE[0], now, source=EffectSource.MANIA)
         self._mania.last_slot_index = 0
+        self._emit_mania_frame(now)
         return True
+
+    def _emit_mania_frame(self, now: float) -> None:
+        if self._mania is None:
+            return
+        current, following, mix, phase = self._mania.visual_state(now)
+        self.current_kind = current
+        self.current_source = EffectSource.MANIA
+        self._on_mania_frame(current, following, mix, phase)
 
     def stop_mania(self, now: float | None = None) -> None:
         """Stop mania and restore the stable state without a blank frame."""
@@ -366,12 +428,14 @@ class LocalEffectManager:
         self.requested_kind = desired
         if desired is LocalEffectKind.NONE:
             self._begin_release(now)
-        elif desired is self.current_kind:
+        else:
+            self.current_kind = desired
             self.current_source = EffectSource.STATE
             self.phase = EffectPhase.SUSTAINING
-            self._on_sustain(desired)
-        else:
-            self._apply_kind(desired, now, source=EffectSource.STATE)
+            self.entered_at = now
+            self.min_hold_until = now
+            self.release_after = 0.0
+            self._on_mania_resume(desired)
 
     def _begin_release(self, now: float) -> None:
         if self.current_kind is LocalEffectKind.NONE or self.phase is EffectPhase.RELEASING:
@@ -388,13 +452,8 @@ class LocalEffectManager:
                 self.stop_mania(now)
                 return
             slot_index = self._mania.slot_index(now)
-            if slot_index != self._mania.last_slot_index:
-                self._mania.last_slot_index = slot_index
-                self._apply_kind(
-                    MANIA_SEQUENCE[slot_index % len(MANIA_SEQUENCE)],
-                    now,
-                    source=EffectSource.MANIA,
-                )
+            self._mania.last_slot_index = slot_index
+            self._emit_mania_frame(now)
             return
 
         if self.current_kind is LocalEffectKind.NONE:
