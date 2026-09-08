@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.aura_effects import (
@@ -107,3 +107,30 @@ def test_aura_and_emotion_layers_can_be_composed() -> None:
     assert not aura.isNull()
     assert not composed.isNull()
     assert composed.size() == source.size()
+
+
+def test_aura_remains_visible_inside_character_only_window_mask() -> None:
+    """The native character mask must not clip every visible Aura pixel."""
+
+    source = _source(180, 180)
+    painter = QPainter(source)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#f7cf43"))
+    painter.drawEllipse(30, 20, 120, 150)
+    painter.end()
+
+    renderer = AuraRenderer()
+    result = renderer.render(
+        source,
+        AuraVisualState(AuraKind.PURPLE, 0.68, 0.58),
+        phase=3,
+    )
+    before = source.toImage()
+    after = result.toImage()
+    changed_inside_character = 0
+    for y in range(before.height()):
+        for x in range(before.width()):
+            original = before.pixelColor(x, y)
+            if original.alpha() and after.pixelColor(x, y) != original:
+                changed_inside_character += 1
+    assert changed_inside_character > 100

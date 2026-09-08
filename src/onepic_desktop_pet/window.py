@@ -667,6 +667,7 @@ class PetWindow(QWidget):
         self._selfie_photo = self._load_selfie_photo()
         self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
         self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
+        self._last_applied_mask_key: tuple[object, ...] | None = None
         self.credentials = CredentialStore()
         self.ai_service = AIChatService(
             self.credentials,
@@ -1332,6 +1333,21 @@ class PetWindow(QWidget):
 
         return emotion_effect_name(self.state) is not None or self._aura_controller.needs_animation
 
+    def _configure_effect_timer(self) -> None:
+        """Run semantic symbols promptly and persistent Aura at a calm rate."""
+
+        if not self._aura_timer_needed():
+            self.effect_timer.stop()
+            return
+        # Emotion symbols keep their original responsive cadence.  A
+        # persistent Aura only needs slow breathing motion; 180 ms halves the
+        # GUI compositing work compared with the old 90 ms hot loop.
+        interval = 90 if emotion_effect_name(self.state) is not None else 180
+        if self.effect_timer.interval() != interval:
+            self.effect_timer.setInterval(interval)
+        if not self.effect_timer.isActive():
+            self.effect_timer.start()
+
     def _refresh_aura_target(self, display_state: PetState | None = None) -> None:
         self._aura_controller.set_target(self._resolved_aura_state(display_state))
 
@@ -1358,10 +1374,7 @@ class PetWindow(QWidget):
             self.label.move(6, 0)
         self._effect_phase = 0
         self._refresh_aura_target(display_state)
-        if not self._aura_timer_needed():
-            self.effect_timer.stop()
-        else:
-            self.effect_timer.start()
+        self._configure_effect_timer()
         self._refresh_pixmap()
 
     def _frame_interval(self, state: PetState, frame_index: int) -> int:
@@ -1428,25 +1441,6 @@ class PetWindow(QWidget):
             )
             scaled.setDevicePixelRatio(ratio)
             self._remember_cache_item(self._render_cache, cache_key, scaled)
-        # Keep the pre-Aura character/effect image for the native mask.  Aura
-        # pixels are intentionally visual only and must never become a new
-        # clickable region around the pet.
-        mask_source = draw_emotion_effect(scaled, display_state, self._effect_phase)
-        from_aura, to_aura, aura_progress = self._aura_controller.render_states()
-        try:
-            composed = draw_aura_transition_effect(
-                scaled,
-                from_aura,
-                to_aura,
-                aura_progress,
-                phase=self._effect_phase,
-            )
-            composed = draw_emotion_effect(composed, display_state, self._effect_phase)
-        except Exception:
-            # Aura is an optional visual enhancement.  A renderer failure
-            # must leave the normal character/effect pipeline usable.
-            LOGGER.exception("[Aura] render failed; using character frame")
-            composed = mask_source
         activity = self._ambient_activity
         food_scene = self.economy.active_food_scene() or {}
         scene_activity = {
@@ -1485,24 +1479,39 @@ class PetWindow(QWidget):
             food_scene_active = False
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
-        composed = draw_activity_overlay(
-            composed,
+        # Resolve the actual character/activity sprite before Aura.  Full
+        # activity sprites replace their input, so applying them afterwards
+        # used to erase the Aura completely.  This also avoids drawing the
+        # same activity overlay twice on every effect tick.
+        base_frame = draw_activity_overlay(
+            scaled,
             activity,
             self.settings.equipped_outfit,
             self._effect_phase,
             food_scene=food_scene_active,
         )
-        mask_source = draw_activity_overlay(
-            mask_source,
-            activity,
-            self.settings.equipped_outfit,
-            self._effect_phase,
-            food_scene=food_scene_active,
-        )
+        mask_source = draw_emotion_effect(base_frame, display_state, self._effect_phase)
+        from_aura, to_aura, aura_progress = self._aura_controller.render_states()
+        try:
+            composed = draw_aura_transition_effect(
+                base_frame,
+                from_aura,
+                to_aura,
+                aura_progress,
+                phase=self._effect_phase,
+            )
+            composed = draw_emotion_effect(composed, display_state, self._effect_phase)
+        except Exception:
+            # Aura is an optional visual enhancement.  A renderer failure
+            # must leave the normal character/effect pipeline usable.
+            LOGGER.exception("[Aura] render failed; using character frame")
+            composed = mask_source
         visible = self._blend_activity_transition(composed)
         self.label.setPixmap(visible)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
-        overlay_key = hash((activity, self.settings.equipped_outfit, food_scene_active, self._effect_phase % 2))
+        # The computer indicator changes colour, not geometry.  Aura phase
+        # must never invalidate the native QRegion or call setMask() at 11 Hz.
+        overlay_key = hash((activity, self.settings.equipped_outfit, food_scene_active))
         self._refresh_window_mask(
             display_state,
             visible,
@@ -1582,7 +1591,14 @@ class PetWindow(QWidget):
             effect_key,
             self.label.width(),
             self.label.height(),
+            self.label.x(),
+            self.label.y(),
         )
+        # Aura changes pixels but deliberately never changes the native input
+        # silhouette.  Avoid calling the relatively costly native setMask()
+        # again while that silhouette key is unchanged.
+        if cache_key == self._last_applied_mask_key and cache_key in self._mask_cache:
+            return
         region = self._mask_cache.get(cache_key)
         if region is None:
             mask_pixmap = mask_source if mask_source is not None else pixmap
@@ -1596,6 +1612,7 @@ class PetWindow(QWidget):
             region = QRegion(logical.mask()).translated(offset_x, offset_y)
             self._remember_cache_item(self._mask_cache, cache_key, region)
         self.setMask(region.translated(self.label.x(), self.label.y()))
+        self._last_applied_mask_key = cache_key
 
     @_guard_qt_callback
     def _effect_tick(self) -> None:
@@ -1605,6 +1622,7 @@ class PetWindow(QWidget):
         if not self._aura_timer_needed():
             self.effect_timer.stop()
             return
+        self._configure_effect_timer()
         self._effect_phase = (self._effect_phase + 1) % 12
         self._refresh_pixmap()
 
@@ -7716,10 +7734,7 @@ class PetWindow(QWidget):
 
     def _restart_aura_animation(self) -> None:
         self._refresh_aura_target(self.state)
-        if self._aura_timer_needed():
-            self.effect_timer.start()
-        else:
-            self.effect_timer.stop()
+        self._configure_effect_timer()
         self._refresh_pixmap()
 
     def set_aura_mode(self, mode: str) -> None:

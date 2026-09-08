@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QRadialGradient, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QRadialGradient, QPixmap
 
 from .behavior import PetState
 
@@ -84,11 +84,11 @@ class AuraVisualState:
 
 
 _AUTO_AURA: dict[PetState, AuraVisualState] = {
-    PetState.ANNOYED: AuraVisualState(AuraKind.RED, 0.68, 0.48),
-    PetState.HAPPY: AuraVisualState(AuraKind.GOLD, 0.58, 0.40),
-    PetState.WAVE: AuraVisualState(AuraKind.GOLD, 0.50, 0.34),
-    PetState.SLEEPY: AuraVisualState(AuraKind.BLUE, 0.34, 0.25),
-    PetState.CURIOUS: AuraVisualState(AuraKind.PURPLE, 0.38, 0.30),
+    PetState.ANNOYED: AuraVisualState(AuraKind.RED, 0.74, 0.62),
+    PetState.HAPPY: AuraVisualState(AuraKind.GOLD, 0.65, 0.56),
+    PetState.WAVE: AuraVisualState(AuraKind.GOLD, 0.58, 0.50),
+    PetState.SLEEPY: AuraVisualState(AuraKind.BLUE, 0.48, 0.44),
+    PetState.CURIOUS: AuraVisualState(AuraKind.PURPLE, 0.56, 0.50),
 }
 
 
@@ -119,7 +119,10 @@ def resolve_aura_state(
         kind = normalize_aura_kind(manual_effect)
         if kind is AuraKind.NONE:
             kind = AuraKind.BLUE
-        return AuraVisualState(kind, 0.55, 0.34, phase)
+        # Manual mode is an explicit preview/selection, so it must remain
+        # clearly visible even when the native pet window keeps its original
+        # character-only mask.
+        return AuraVisualState(kind, 0.68, 0.58, phase)
     return resolve_auto_aura(pet_state, phase=phase)
 
 
@@ -202,16 +205,16 @@ class _ParticleSeed:
 # Symmetric, edge-biased positions keep the face readable and do not require
 # image segmentation or any character-specific knowledge.
 _FOG_SEEDS = (
-    _FogSeed(0.16, 0.63, 0.18, 0.2, 0.82),
-    _FogSeed(0.30, 0.80, 0.17, 1.4, 0.70),
-    _FogSeed(0.72, 0.76, 0.19, 2.0, 0.80),
-    _FogSeed(0.86, 0.61, 0.17, 2.8, 0.72),
-    _FogSeed(0.22, 0.43, 0.14, 3.7, 0.62),
-    _FogSeed(0.78, 0.42, 0.14, 4.6, 0.62),
-    _FogSeed(0.38, 0.91, 0.16, 5.3, 0.58),
-    _FogSeed(0.62, 0.90, 0.16, 5.9, 0.58),
-    _FogSeed(0.10, 0.82, 0.13, 6.6, 0.52),
-    _FogSeed(0.90, 0.82, 0.13, 7.2, 0.52),
+    _FogSeed(0.22, 0.62, 0.20, 0.2, 0.88),
+    _FogSeed(0.35, 0.78, 0.19, 1.4, 0.78),
+    _FogSeed(0.65, 0.76, 0.20, 2.0, 0.86),
+    _FogSeed(0.78, 0.61, 0.19, 2.8, 0.80),
+    _FogSeed(0.28, 0.44, 0.16, 3.7, 0.70),
+    _FogSeed(0.72, 0.43, 0.16, 4.6, 0.70),
+    _FogSeed(0.42, 0.88, 0.18, 5.3, 0.66),
+    _FogSeed(0.58, 0.88, 0.18, 5.9, 0.66),
+    _FogSeed(0.16, 0.80, 0.15, 6.6, 0.58),
+    _FogSeed(0.84, 0.80, 0.15, 7.2, 0.58),
 )
 
 _PARTICLE_SEEDS = (
@@ -277,8 +280,12 @@ class AuraRenderer:
         ratio = max(1.0, float(source.devicePixelRatio()))
         logical_width = max(1.0, source.width() / ratio)
         logical_height = max(1.0, source.height() / ratio)
-        width = max(8, int(round(logical_width / 16.0) * 16))
-        height = max(8, int(round(logical_height / 16.0) * 16))
+        # The cache is already strictly bounded.  Keeping the exact logical
+        # size avoids a SmoothTransformation of the cached layer on every
+        # animation tick (the previous 16 px bucket was cheaper to store but
+        # noticeably more expensive to display continuously).
+        width = max(1, int(round(logical_width)))
+        height = max(1, int(round(logical_height)))
         return width, height, round(ratio, 2)
 
     def _cache_key(self, source: QPixmap, state: AuraVisualState) -> tuple[object, ...]:
@@ -333,7 +340,7 @@ class AuraRenderer:
             cx = width * seed.x + dx
             cy = height * seed.y + dy
             radius = max(2.0, min(width, height) * seed.radius)
-            center_alpha = int(70.0 * state.opacity * (0.72 + 0.28 * state.intensity) * seed.weight)
+            center_alpha = int(220.0 * state.opacity * (0.72 + 0.28 * state.intensity) * seed.weight)
             gradient = QRadialGradient(QPointF(cx, cy), radius)
             gradient.setColorAt(0.0, _with_alpha(colors[0], center_alpha))
             gradient.setColorAt(0.42, _with_alpha(colors[1], int(center_alpha * 0.42)))
@@ -382,6 +389,47 @@ class AuraRenderer:
         scaled.setDevicePixelRatio(ratio)
         return scaled
 
+    @staticmethod
+    def _draw_visible_inner_mist(
+        painter: QPainter,
+        source: QPixmap,
+        layer: QPixmap,
+        strength: float,
+    ) -> None:
+        """Add a soft peripheral glow that survives the native window mask.
+
+        The desktop pet deliberately retains a character-only QWidget mask so
+        transparent Aura pixels never enlarge its click target.  A background
+        layer alone is therefore clipped by the operating system.  Repainting
+        a restrained portion of the same fog over the body's outer/lower area
+        makes the Aura visible without changing window geometry or hit tests.
+        The approximate face region stays untouched.
+        """
+
+        strength = clamp01(strength)
+        if strength <= 0.0:
+            return
+        ratio = max(1.0, float(source.devicePixelRatio()))
+        width = source.width() / ratio
+        height = source.height() / ratio
+        visible_area = QPainterPath()
+        visible_area.addRect(QRectF(0.0, 0.0, width, height))
+        face_safe = QPainterPath()
+        face_safe.addRoundedRect(
+            QRectF(width * 0.29, height * 0.07, width * 0.42, height * 0.40),
+            width * 0.08,
+            width * 0.08,
+        )
+        painter.save()
+        painter.setClipPath(visible_area.subtracted(face_safe))
+        # Source-over preserves the selected hue on yellow/red outfits much
+        # better than Screen, which mostly turned the old Aura into an almost
+        # imperceptible pale highlight.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.setOpacity(0.94 * strength)
+        painter.drawPixmap(0, 0, layer)
+        painter.restore()
+
     def render_transition(
         self,
         source: QPixmap,
@@ -418,6 +466,23 @@ class AuraRenderer:
             painter.drawPixmap(0, 0, self._scaled_layer(self._layer_for(source, to_state), source))
         painter.setOpacity(1.0)
         painter.drawPixmap(0, 0, source)
+        # QWidget.setMask() clips background fog outside the character.  Keep
+        # that input-safe mask, and add a face-safe inner glow so the effect is
+        # still unmistakably visible on Windows and macOS.
+        if from_state.kind is not AuraKind.NONE and from_state.opacity > 0.0 and progress < 1.0:
+            self._draw_visible_inner_mist(
+                painter,
+                source,
+                self._scaled_layer(self._layer_for(source, from_state), source),
+                1.0 - progress,
+            )
+        if to_state.kind is not AuraKind.NONE and to_state.opacity > 0.0 and progress > 0.0:
+            self._draw_visible_inner_mist(
+                painter,
+                source,
+                self._scaled_layer(self._layer_for(source, to_state), source),
+                progress,
+            )
         self._draw_particles(painter, output, to_state, phase if phase is not None else to_state.phase, progress)
         painter.end()
         return output
