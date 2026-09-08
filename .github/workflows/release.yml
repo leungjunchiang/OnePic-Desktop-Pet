@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - Aura 可见性与流畅度修复" \
-            --notes "修复 Aura 已绘制却被角色轮廓 native mask 裁掉、完整动作素材覆盖 Aura 的问题；现在四种颜色会在保留面部清晰和原点击范围的前提下显示身体外缘柔光。持续 Aura 动画降至 180ms，相同角色轮廓不再反复调用原生 setMask，并取消缓存层每帧缩放，降低 GUI 热路径开销。Aura 仍完全本地运行，没有新增 QTimer、QThread、窗口、Supabase 请求或其他网络行为。"
+            --title "Lili $release_tag - 炫光迷雾 Aura" \
+            --notes "Aura 升级为底部炫光环、周身雾化气场和少量亮点粒子的三层视觉结构，增强四种颜色的存在感与流动感。红色偏余烬，金色偏奖励星芒，蓝色偏冷静微光，紫色偏神秘蓝紫；同时保留面部清晰、原窗口 geometry、native mask 和点击范围。Aura 继续完全本地运行，没有新增 QTimer、QThread、独立窗口、Supabase 请求或其他网络行为。"
