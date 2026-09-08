@@ -178,6 +178,12 @@ from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
 from .local_burst_effect import LocalBurstEffectWindow
+from .state_effects import (
+    LocalEffectKind,
+    LocalEffectManager,
+    normalize_effect_kind,
+    resolve_state_effect,
+)
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
 from .focus_analytics import (
@@ -892,6 +898,16 @@ class PetWindow(QWidget):
         # character frame and is created once to avoid repeated QObject/native
         # window churn on rapid menu clicks.
         self._local_burst_effect = LocalBurstEffectWindow()
+        self._local_effect_manager = LocalEffectManager(
+            on_start=self._start_managed_local_effect,
+            on_switch=self._switch_managed_local_effect,
+            on_sustain=self._sustain_managed_local_effect,
+            on_release=self._release_managed_local_effect,
+            on_stop=self._stop_managed_local_effect,
+            duration_profile=getattr(self.settings, "state_effect_duration", "standard"),
+        )
+        self._local_burst_effect.progressed.connect(self._local_effect_tick)
+        self._local_burst_effect.finished.connect(self._local_effect_finished)
         self._qt_application = QApplication.instance()
         if self._qt_application is not None:
             self._qt_application.installEventFilter(self)
@@ -1332,6 +1348,7 @@ class PetWindow(QWidget):
         """切换行为状态、重置帧序号并刷新当前图片。"""
 
         self.state = state
+        self._sync_state_effect()
         self._frame_index = 0
         self._animation_direction = 1
         self._animation_finished = None
@@ -1878,6 +1895,8 @@ class PetWindow(QWidget):
         self.quick_panel.hide()
         if hasattr(self, "_local_burst_effect"):
             self._local_burst_effect.stop()
+        if hasattr(self, "_local_effect_manager"):
+            self._local_effect_manager.force_stop()
         if self._compact_todo_panel is not None:
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
             self._compact_todo_panel.hide()
@@ -6079,6 +6098,7 @@ class PetWindow(QWidget):
                 self.settings.allow_autonomous_walk,
                 persist=False,
             )
+        self._sync_state_effect()
         save_settings(self.settings)
         self._schedule_ambient()
         self._schedule_song_inspiration()
@@ -7733,17 +7753,26 @@ class PetWindow(QWidget):
             return
         effect.reposition(self._local_burst_anchor(), self._local_burst_exclusions())
 
-    def trigger_red_burst(self) -> None:
-        """Play one local red firework burst without touching focus timing."""
+    def _raise_local_effect_accessories(self) -> None:
+        """Keep the pet and its readable bubbles above the local effect."""
 
+        self._raise_accessory(self)
+        for widget in (
+            self.work_duration_bubble,
+            self.speech_bubble,
+            self.work_controls,
+            self.visit_status_bubble,
+        ):
+            if widget.isVisible():
+                self._raise_accessory(widget)
+
+    def _start_managed_local_effect(self, kind: LocalEffectKind) -> None:
         effect = getattr(self, "_local_burst_effect", None)
-        if effect is None:
+        if effect is None or self._fullscreen_hidden or self._manually_hidden:
             return
-        self._record_user_interaction()
         try:
-            if self._fullscreen_hidden or self._manually_hidden:
-                return
-            effect.trigger(
+            effect.begin_managed(
+                kind,
                 self._local_burst_anchor(),
                 self._local_burst_exclusions(),
                 always_on_top=bool(self.settings.always_on_top),
@@ -7753,20 +7782,130 @@ class PetWindow(QWidget):
                 effect,
                 always_on_top=bool(self.settings.always_on_top),
             )
-            # Keep the character and already visible bubbles readable above
-            # the overlay.  This is a normal Qt ordering operation; the
-            # overlay itself remains mouse-transparent and non-activating.
-            self._raise_accessory(self)
-            for widget in (
-                self.work_duration_bubble,
-                self.speech_bubble,
-                self.work_controls,
-                self.visit_status_bubble,
-            ):
-                if widget.isVisible():
-                    self._raise_accessory(widget)
+            self._raise_local_effect_accessories()
         except Exception:
-            LOGGER.exception("[Burst] trigger failed; pet remains unaffected")
+            LOGGER.exception("[LocalEffect] managed effect start failed")
+            effect.stop()
+
+    def _switch_managed_local_effect(self, kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        try:
+            effect.switch_managed(kind)
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] managed effect switch failed")
+            effect.stop()
+
+    def _sustain_managed_local_effect(self, _kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None:
+            effect.set_sustain()
+
+    def _release_managed_local_effect(self, _kind: LocalEffectKind, duration_ms: int) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None:
+            effect.release(duration_ms)
+
+    def _stop_managed_local_effect(self) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None and effect.active:
+            effect.stop()
+
+    def _local_effect_tick(self, now: float) -> None:
+        """Advance policy from the existing local effect timer only."""
+
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.tick(now)
+
+    def _local_effect_finished(self) -> None:
+        manager = getattr(self, "_local_effect_manager", None)
+        effect = getattr(self, "_local_burst_effect", None)
+        if manager is not None and (effect is None or effect.managed):
+            manager.finished()
+        elif manager is not None and bool(getattr(self.settings, "state_effects_enabled", True)):
+            # A manual developer preview temporarily owns the same reusable
+            # window. Restore the current PetState projection after it ends,
+            # without changing that PetState itself.
+            self._sync_state_effect()
+
+    def _sync_state_effect(self) -> None:
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is None:
+            return
+        manager.set_duration_profile(
+            getattr(self.settings, "state_effect_duration", "standard")
+        )
+        manager.set_enabled(
+            bool(getattr(self.settings, "state_effects_enabled", True))
+        )
+        if bool(getattr(self.settings, "state_effects_enabled", True)):
+            manager.request(resolve_state_effect(self.state))
+
+    def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
+        self.settings.state_effects_enabled = bool(enabled)
+        self._sync_state_effect()
+        if persist:
+            save_settings(self.settings)
+
+    def set_state_effect_duration(self, value: str, *, persist: bool = True) -> None:
+        normalized = str(value or "standard").strip().casefold()
+        if normalized not in {"short", "standard", "long"}:
+            normalized = "standard"
+        self.settings.state_effect_duration = normalized
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.set_duration_profile(normalized)
+        if persist:
+            save_settings(self.settings)
+
+    def trigger_local_effect(self, kind: LocalEffectKind | str) -> None:
+        """Developer/manual one-shot effect; never changes PetState."""
+
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        self._record_user_interaction()
+        try:
+            if self._fullscreen_hidden or self._manually_hidden:
+                return
+            manager = getattr(self, "_local_effect_manager", None)
+            if manager is not None:
+                manager.force_stop()
+            effect.trigger(
+                self._local_burst_anchor(),
+                self._local_burst_exclusions(),
+                kind=normalize_effect_kind(kind),
+                always_on_top=bool(self.settings.always_on_top),
+                show_window=False,
+                managed=False,
+            )
+            self._show_nonactivating(
+                effect,
+                always_on_top=bool(self.settings.always_on_top),
+            )
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] manual effect trigger failed")
+
+    def trigger_red_burst(self) -> None:
+        """Backward-compatible red test command."""
+
+        self.trigger_local_effect(LocalEffectKind.RED)
+
+    def trigger_gold_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.GOLD)
+
+    def trigger_blue_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.BLUE)
+
+    def trigger_purple_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.PURPLE)
+
+    def trigger_green_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.GREEN)
 
     def stop_red_burst(self) -> None:
         """Stop the reusable local effect window without changing pet state."""
@@ -7774,6 +7913,13 @@ class PetWindow(QWidget):
         effect = getattr(self, "_local_burst_effect", None)
         if effect is not None:
             effect.stop()
+
+    def stop_local_effect(self) -> None:
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.force_stop()
+        else:
+            self.stop_red_burst()
 
     def set_hourly_announcement(self, enabled: bool) -> None:
         """启用或停用整点报时。"""
@@ -8372,6 +8518,14 @@ class PetWindow(QWidget):
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
             "show_work_duration": bool(self.settings.show_work_duration),
+            "state_effects_enabled": bool(
+                getattr(self.settings, "state_effects_enabled", True)
+            ),
+            "state_effect_kind": getattr(
+                getattr(self, "_local_burst_effect", None),
+                "current_kind",
+                LocalEffectKind.NONE,
+            ).value,
             "red_burst_active": bool(
                 getattr(getattr(self, "_local_burst_effect", None), "active", False)
             ),
@@ -8407,7 +8561,14 @@ class PetWindow(QWidget):
             "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),
             "show_work_duration": lambda checked=False: self.set_work_duration_display(checked),
             "red_burst": lambda _checked=False: self.trigger_red_burst(),
-            "red_burst_stop": lambda _checked=False: self.stop_red_burst(),
+            "red_burst_stop": lambda _checked=False: self.stop_local_effect(),
+            "state_effect_red": lambda _checked=False: self.trigger_red_burst(),
+            "state_effect_gold": lambda _checked=False: self.trigger_gold_effect(),
+            "state_effect_blue": lambda _checked=False: self.trigger_blue_effect(),
+            "state_effect_purple": lambda _checked=False: self.trigger_purple_effect(),
+            "state_effect_green": lambda _checked=False: self.trigger_green_effect(),
+            "state_effect_stop": lambda _checked=False: self.stop_local_effect(),
+            "state_effects_toggle": lambda checked=False: self.set_state_effects_enabled(checked),
             "size": lambda _checked=False: self.open_size_control(),
             "show_todos": lambda _checked=False: self.show_compact_todos(manual=True),
             "hide_todos": lambda _checked=False: self.hide_compact_todos(),

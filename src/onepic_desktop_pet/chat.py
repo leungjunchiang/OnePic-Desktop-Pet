@@ -916,6 +916,26 @@ class AISettingsDialog(QDialog):
         self.always_on_top.setChecked(settings.always_on_top)
         layout.addWidget(self.always_on_top)
 
+        self.state_effects_enabled = QCheckBox("根据六毛当前状态显示局部特效")
+        self.state_effects_enabled.setChecked(
+            getattr(settings, "state_effects_enabled", True)
+        )
+        self.state_effects_enabled.setToolTip(
+            "只在六毛出现明显情绪时显示局部红/金/蓝/紫特效；完全本地运行，不产生网络请求。"
+        )
+        layout.addWidget(self.state_effects_enabled)
+        self.state_effect_duration = QComboBox()
+        for label, key in (("短暂", "short"), ("标准", "standard"), ("较长", "long")):
+            self.state_effect_duration.addItem(label, key)
+        duration_index = self.state_effect_duration.findData(
+            getattr(settings, "state_effect_duration", "standard")
+        )
+        self.state_effect_duration.setCurrentIndex(max(0, duration_index))
+        self.state_effect_duration.setToolTip(
+            "控制状态结束后的最短保留时间；状态仍持续时，特效不会被强制提前关闭。"
+        )
+        form.addRow("状态特效停留", self.state_effect_duration)
+
         self.content_updates = QCheckBox(
             "自动检查补充内容更新（知识库、配置和素材，不替换程序）"
         )
@@ -1304,6 +1324,10 @@ class AISettingsDialog(QDialog):
         self.settings.ai_model = self.model.text().strip()
         self.settings.codex_executable_path = self.codex_path.text().strip()[:1200]
         self.settings.always_on_top = self.always_on_top.isChecked()
+        self.settings.state_effects_enabled = self.state_effects_enabled.isChecked()
+        self.settings.state_effect_duration = str(
+            self.state_effect_duration.currentData() or "standard"
+        )
         self.settings.content_updates_enabled = self.content_updates.isChecked()
         self.settings.program_updates_enabled = self.program_updates.isChecked()
         self.settings.allow_autonomous_walk = self.allow_autonomous_walk.isChecked()

@@ -12,8 +12,10 @@ from onepic_desktop_pet.local_burst_effect import (
     LocalBurstEffectWindow,
     OVERLAY_HEIGHT_RATIO,
     OVERLAY_WIDTH_RATIO,
+    paint_local_effect,
     paint_red_burst,
 )
+from onepic_desktop_pet.state_effects import LocalEffectKind
 
 
 def _app() -> QApplication:
@@ -51,6 +53,32 @@ def test_red_burst_has_flash_bloom_and_fade_phases() -> None:
     assert flash.pixelColor(192, 120).alpha() > 0
     assert sustain.pixelColor(192, 212).alpha() >= flash.pixelColor(192, 212).alpha()
     assert fade.pixelColor(192, 212).alpha() < sustain.pixelColor(192, 212).alpha()
+
+
+def test_all_state_effect_presets_render_with_the_same_local_pipeline() -> None:
+    for kind in (
+        LocalEffectKind.RED,
+        LocalEffectKind.GOLD,
+        LocalEffectKind.BLUE,
+        LocalEffectKind.PURPLE,
+        LocalEffectKind.GREEN,
+    ):
+        _app()
+        canvas = QPixmap(384, 272)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(canvas)
+        paint_local_effect(
+            painter,
+            QRectF(canvas.rect()),
+            kind=kind,
+            progress=0.52,
+            pet_rect=QRectF(144, 52, 160, 160),
+            stage="entry",
+            phase=0.52,
+        )
+        painter.end()
+        assert not canvas.isNull()
+        assert canvas.toImage().pixelColor(192, 212).alpha() > 0
 
 
 def test_face_safe_region_and_bubble_exclusion_are_clear() -> None:

@@ -173,8 +173,13 @@ def test_unified_menu_model_exposes_optional_duration_in_display_menu() -> None:
 
 def test_unified_menu_model_projects_local_burst_effects() -> None:
     commands = {
-        "red_burst",
-        "red_burst_stop",
+        "state_effects_toggle",
+        "state_effect_red",
+        "state_effect_gold",
+        "state_effect_blue",
+        "state_effect_purple",
+        "state_effect_green",
+        "state_effect_stop",
     }
     model = UnifiedMenuModel(
         pet_name="六毛",
@@ -183,7 +188,16 @@ def test_unified_menu_model_projects_local_burst_effects() -> None:
     )
     display = next(item for item in model.items() if item.title == "显示与窗口")
     burst = next(item for item in display.children if item.title == "六毛特效")
-    assert [item.title for item in burst.children] == ["红色烟花", "停止当前特效"]
+    assert [item.title for item in burst.children] == [
+        "根据六毛状态自动显示",
+        "",
+        "红色烟花",
+        "金色闪光",
+        "蓝色静谧",
+        "紫色神秘",
+        "绿色恢复",
+        "停止当前特效",
+    ]
 
 
 def test_unified_menu_model_projects_outfits_as_hover_submenu_items() -> None:

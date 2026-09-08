@@ -389,3 +389,29 @@ def test_old_settings_without_aura_fields_keep_safe_defaults(tmp_path) -> None:
     settings = load_settings(default_path, override_path)
     assert settings.aura_mode == "auto"
     assert settings.aura_manual_effect == "blue"
+
+
+def test_state_effect_settings_are_local_validated_and_persisted(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps(
+            {
+                "state_effects_enabled": "yes",
+                "state_effect_duration": "invalid",
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(default_path, override_path)
+    assert settings.state_effects_enabled is True
+    assert settings.state_effect_duration == "standard"
+
+    settings.state_effects_enabled = False
+    settings.state_effect_duration = "long"
+    saved = tmp_path / "saved.json"
+    save_settings(settings, saved)
+    restored = load_settings(default_path, saved)
+    assert restored.state_effects_enabled is False
+    assert restored.state_effect_duration == "long"

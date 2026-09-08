@@ -2365,7 +2365,8 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     ]
     burst = next(action for action in display.menu().actions() if action.text() == "六毛特效")
     assert [action.text() for action in burst.menu().actions()] == [
-        "红色烟花", "停止当前特效"
+        "根据六毛状态自动显示", "", "红色烟花", "金色闪光", "蓝色静谧",
+        "紫色神秘", "绿色恢复", "停止当前特效"
     ]
     outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
     outfit_labels = [action.text() for action in outfit.menu().actions()]

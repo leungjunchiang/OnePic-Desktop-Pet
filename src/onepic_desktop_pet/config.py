@@ -39,6 +39,7 @@ PET_NAME = "六毛"
 DEFAULT_OWNER_NICKNAME = "搭子"
 AURA_MODE_VALUES = ("auto", "off", "manual")
 AURA_EFFECT_VALUES = ("red", "gold", "blue", "purple")
+STATE_EFFECT_DURATION_VALUES = ("short", "standard", "long")
 
 
 def clean_owner_nickname(value: Any) -> str:
@@ -162,6 +163,10 @@ class PetSettings:
     # settings files intentionally fall back to these defaults.
     aura_mode: str = "auto"
     aura_manual_effect: str = "blue"
+    # Local state effects are the event/status visual system.  These remain
+    # local-only and are intentionally separate from focus/social settings.
+    state_effects_enabled: bool = True
+    state_effect_duration: str = "standard"
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -336,6 +341,12 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     settings.aura_manual_effect = str(settings.aura_manual_effect or "blue").strip().casefold()
     if settings.aura_manual_effect not in AURA_EFFECT_VALUES:
         settings.aura_manual_effect = "blue"
+    settings.state_effects_enabled = bool(getattr(settings, "state_effects_enabled", True))
+    settings.state_effect_duration = str(
+        getattr(settings, "state_effect_duration", "standard") or "standard"
+    ).strip().casefold()
+    if settings.state_effect_duration not in STATE_EFFECT_DURATION_VALUES:
+        settings.state_effect_duration = "standard"
     return settings
 
 
@@ -414,6 +425,8 @@ def load_settings(
                 "program_updates_enabled",
                 "aura_mode",
                 "aura_manual_effect",
+                "state_effects_enabled",
+                "state_effect_duration",
             }
         }
     )
@@ -538,6 +551,8 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "program_updates_enabled": settings.program_updates_enabled,
         "aura_mode": settings.aura_mode,
         "aura_manual_effect": settings.aura_manual_effect,
+        "state_effects_enabled": bool(getattr(settings, "state_effects_enabled", True)),
+        "state_effect_duration": getattr(settings, "state_effect_duration", "standard"),
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",

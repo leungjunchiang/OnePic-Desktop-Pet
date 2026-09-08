@@ -185,9 +185,31 @@ class UnifiedMenuModel:
             else None
         )
         burst_children: list[MenuItemSpec] = []
-        if "red_burst" in self._callbacks:
-            burst_children.append(MenuItemSpec("红色烟花", "red_burst"))
-        if "red_burst_stop" in self._callbacks:
+        if "state_effects_toggle" in self._callbacks:
+            burst_children.append(
+                MenuItemSpec(
+                    "根据六毛状态自动显示",
+                    "state_effects_toggle",
+                    checkable=True,
+                    checked=bool(state.get("state_effects_enabled", True)),
+                )
+            )
+            burst_children.append(MenuItemSpec.divider())
+        effect_commands = (
+            ("红色烟花", "state_effect_red", "red_burst"),
+            ("金色闪光", "state_effect_gold", None),
+            ("蓝色静谧", "state_effect_blue", None),
+            ("紫色神秘", "state_effect_purple", None),
+            ("绿色恢复", "state_effect_green", None),
+        )
+        for title, command, legacy in effect_commands:
+            if command in self._callbacks:
+                burst_children.append(MenuItemSpec(title, command))
+            elif legacy and legacy in self._callbacks:
+                burst_children.append(MenuItemSpec(title, legacy))
+        if "state_effect_stop" in self._callbacks:
+            burst_children.append(MenuItemSpec("停止当前特效", "state_effect_stop"))
+        elif "red_burst_stop" in self._callbacks:
             burst_children.append(MenuItemSpec("停止当前特效", "red_burst_stop"))
         burst_item = (
             MenuItemSpec("六毛特效", children=tuple(burst_children))
