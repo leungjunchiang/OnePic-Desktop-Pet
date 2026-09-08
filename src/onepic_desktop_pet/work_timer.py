@@ -923,11 +923,13 @@ class WorkTimerModel:
             if self._running_started_at is not None else None,
             "last_trusted_checkpoint_at": self._last_trusted_checkpoint_at.isoformat()
             if self._last_trusted_checkpoint_at is not None else None,
-            "active_session_schema": 2,
+            "active_session_schema": 3,
             "device_id": self._device_id,
             "state": self._state,
             "pause_reason": self._pause_reason,
             "last_update_reason": self._last_update_reason,
+            "last_saved_at": self._now().isoformat(),
+            "updated_at": self._now().isoformat(),
         }
         temporary.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n",

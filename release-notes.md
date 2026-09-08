@@ -1212,3 +1212,9 @@
 - 工作报告的日/周/月/年及历史窗口继续本地计算，使用增量 daily projection；左右移动、图表和指标不触发 Supabase 历史请求。
 - 排行榜好友仍只接收服务器聚合秒数，本人行由本地账号 projection 覆盖，不因个人计时变化重新请求排行榜。
 - live projection 设有本地 120 秒 TTL；网络中断后不会让旧设备状态无限增长。
+## v0.23.228 — P0 Focus 时间事实可靠性与无缝暂停交接
+
+- 新增本地 append-only Focus Recovery WAL：sealed FocusSegment 先于 AccountFocusStore 正式写入，进程崩溃后启动时幂等回放，冲突只记录诊断不覆盖事实。
+- 本地 Store 写盘失败时回滚内存投影，保留 WAL 作为恢复边界，避免暂停路径把未落盘的 segment 当成已完成事实。
+- 暂停/结束后的 inactive presence 严格等待对应 sealed segment 获得逐条 delta ACK；沿用现有 stable segment identity、delta cursor、additive merge、empty delta no-op 和 interval union，未新增历史全量下载或 heartbeat 频率。
+- 新增 WAL 回放、写盘失败、ACK 交接和 heartbeat 延迟 inactive 的回归测试。

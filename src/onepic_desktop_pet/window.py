@@ -4943,12 +4943,6 @@ class PetWindow(QWidget):
             started_at = started_at.replace(tzinfo=BEIJING_TIMEZONE)
         else:
             started_at = started_at.astimezone(BEIJING_TIMEZONE)
-        self.time_memory.record_focus(
-            seconds,
-            completed_session=completed,
-            started_at=started_at,
-        )
-        self._record_economy_focus(seconds, started_at)
         stable_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "").strip()
         stable_session_id = str(session_id or self.work_timer.focus_session_id or "").strip()
         stable_segment_id = (
@@ -4963,11 +4957,20 @@ class PetWindow(QWidget):
             application_switches=self._focus_quality_tracker.application_switches,
             away_count=self._focus_quality_tracker.away_count,
             task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            session_id=stable_session_id,
             # Device identity is part of the stable fact key. Two computers
             # on one account must never upsert one another's segments even
             # if a legacy timer happens to reuse a session identifier.
             record_id=stable_segment_id,
         )
+        # The sealed local FocusSegment/WAL is the first durable business fact.
+        # Only after that succeeds may secondary local projections advance.
+        self.time_memory.record_focus(
+            seconds,
+            completed_session=completed,
+            started_at=started_at,
+        )
+        self._record_economy_focus(seconds, started_at)
         self.focus_analytics.update_current_task_progress(seconds)
         if update_daily_stats:
             self.daily_stats.record_focus(seconds, completed=completed)
@@ -6607,6 +6610,11 @@ class PetWindow(QWidget):
             "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
             if self._room_quick_status_expires_at is not None else None,
         }
+        if not active_session and self.focus_analytics.has_pending_focus_handoff():
+            # Strict ACK-before-inactive fallback: keep the last remote live
+            # projection untouched until the sealed local fact is accepted by
+            # the existing delta RPC. This adds no polling or history pull.
+            presence["_defer_inactive_until_focus_ack"] = True
         presence_context_signature = (
             str(room_id or ""),
             str(self.settings.equipped_outfit or "")[:60],
@@ -7229,6 +7237,11 @@ class PetWindow(QWidget):
                 if merge_ok and not upload_ack_ok
                 else "upload_ack_deferred_merge_failed"
             )
+        if transaction_ok and not self.focus_analytics.has_pending_focus_handoff():
+            # The heartbeat worker skipped inactive presence while the
+            # handoff marker was pending. Send the normal inactive snapshot
+            # on the next coalesced tick after the local ACK is durable.
+            self._schedule_social_tick()
         note_upload_result = getattr(
             self.focus_analytics, "note_focus_segment_upload_result", None
         )

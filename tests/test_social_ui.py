@@ -18,6 +18,7 @@ from onepic_desktop_pet.social_ui import (
     IncomingVisitNotice,
     RoomPetCardWidget,
     SocialHubDialog,
+    SocialHeartbeatWorker,
     SocialSignupThread,
     SocialSyncThread,
     SocialVisitResponseThread,
@@ -29,6 +30,43 @@ from onepic_desktop_pet.social_ui import (
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
 )
+
+
+def test_heartbeat_worker_defers_inactive_presence_until_focus_ack() -> None:
+    class Client:
+        pass
+
+    worker = SocialHeartbeatWorker(Client())
+    worker.update_presence(
+        {
+            "user_id": "account-a",
+            "working": False,
+            "session_active": False,
+            "_defer_inactive_until_focus_ack": True,
+        },
+        immediate=True,
+    )
+    assert worker._pending is None
+    worker.update_presence(
+        {
+            "user_id": "account-a",
+            "working": True,
+            "session_active": True,
+            "session_id": "session-a",
+            "session_started_at": "2026-09-09T09:00:00+08:00",
+        },
+        immediate=True,
+    )
+    assert worker._pending["session_id"] == "session-a"
+    worker.stop(
+        {
+            "user_id": "account-a",
+            "working": False,
+            "session_active": False,
+            "_defer_inactive_until_focus_ack": True,
+        }
+    )
+    assert worker._shutdown_payload is None
 
 
 def test_focus_upload_ack_requires_every_requested_segment_id() -> None:

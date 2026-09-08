@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - 炫光迷雾 Aura" \
-            --notes "Aura 升级为底部炫光环、周身雾化气场和少量亮点粒子的三层视觉结构，增强四种颜色的存在感与流动感。红色偏余烬，金色偏奖励星芒，蓝色偏冷静微光，紫色偏神秘蓝紫；同时保留面部清晰、原窗口 geometry、native mask 和点击范围。Aura 继续完全本地运行，没有新增 QTimer、QThread、独立窗口、Supabase 请求或其他网络行为。"
+            --title "Lili $release_tag - Focus 时间事实可靠性" \
+            --notes "P0 Focus 可靠性修复：增加崩溃安全的 Focus Recovery WAL，确保 sealed FocusSegment 先于本地计时状态转换落盘；本地 Store 写入失败时保持可恢复的 active identity。暂停/结束后的 inactive presence 严格等待对应 sealed segment 获得逐条 delta ACK，避免跨设备实时投影在交接窗口丢失。保留稳定 segment identity、账号级 interval union、首次 bootstrap/后续 delta、empty delta no-op 和低频 integrity reconciliation；不新增历史全量下载、网络轮询、QThread 或 Focus 业务旁路。"

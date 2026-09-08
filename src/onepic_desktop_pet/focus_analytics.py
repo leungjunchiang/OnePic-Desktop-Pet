@@ -35,6 +35,10 @@ from .focus_segments import (
     parse_focus_timestamp,
     segment_from_record,
 )
+from .focus_durability import (
+    FocusRecoveryJournal,
+    segment_as_store_record,
+)
 
 
 # A day may legitimately contain a very long work period.  The only hard
@@ -173,6 +177,8 @@ class FocusAnalyticsStore:
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
         self._device_id = str(device_id or "").strip()[:120]
+        self._recovery_journal = FocusRecoveryJournal(self.path.parent, now_provider=self._now)
+        self._durability_conflicts: tuple[str, ...] = ()
         self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None, "account_state": {}}
         # ``records`` are the durable account ledger.  These live intervals
         # are a read-only projection supplied by the per-device presence RPC;
@@ -193,6 +199,9 @@ class FocusAnalyticsStore:
         }
         if self._persist:
             self._load()
+            journal_changed = self._recover_focus_journal()
+        else:
+            journal_changed = False
         upload_state_changed = self._ensure_focus_segment_upload_state()
         # ``days.seconds`` is derived data.  Older releases added cumulative
         # timer checkpoints as if they were independent sessions, which could
@@ -205,6 +214,7 @@ class FocusAnalyticsStore:
             or self._trim_days()
             or projection_changed
             or upload_state_changed
+            or journal_changed
         ):
             self._save()
 
@@ -218,6 +228,7 @@ class FocusAnalyticsStore:
             return False
         self._save()
         self.path = target
+        self._recovery_journal = FocusRecoveryJournal(self.path.parent, now_provider=self._now)
         # Device attribution is rebound by the account/session owner after the
         # account switch. Never carry an installation ID across accounts.
         self._device_id = ""
@@ -237,11 +248,12 @@ class FocusAnalyticsStore:
             "current_continuous_seconds": 0,
         }
         self._load()
+        journal_changed = self._recover_focus_journal()
         self._focus_upload_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
         self._focus_sync_metrics = {}
         projection_changed = self._ensure_daily_focus_projection()
-        if self._rebuild_days_from_records() or self._trim_days() or projection_changed:
+        if self._rebuild_days_from_records() or self._trim_days() or projection_changed or journal_changed:
             self._save()
         return True
 
@@ -542,12 +554,16 @@ class FocusAnalyticsStore:
             for item in payload
             if isinstance(item, dict) and str(item.get("segment_id") or "").strip()
         }
+        handoff_id = str(state.get("focus_handoff_segment_id") or "").strip()[:160]
         remaining_repair_ids = targeted_repair_ids - uploaded_ids
-        if updated == existing and remaining_repair_ids == targeted_repair_ids:
+        handoff_acked = bool(handoff_id and handoff_id in uploaded_ids)
+        if updated == existing and remaining_repair_ids == targeted_repair_ids and not handoff_acked:
             return False
         previous = copy.deepcopy(self._state)
         state["focus_segment_upload_fingerprints"] = updated
         state["focus_segment_upload_ack_version"] = FOCUS_SEGMENT_UPLOAD_ACK_VERSION
+        if handoff_acked:
+            state.pop("focus_handoff_segment_id", None)
         if state.get("focus_segment_upload_repair_pending"):
             closed_count = sum(
                 1 for segment in self.focus_segments() if segment.end_at is not None
@@ -1066,6 +1082,7 @@ class FocusAnalyticsStore:
         interruptions: int = 0,
         record_id: str | None = None,
         device_id: str | None = None,
+        session_id: str | None = None,
     ) -> FocusQuality:
         duration = max(0, int(seconds))
         started = _as_beijing(started_at or self._now())
@@ -1074,6 +1091,7 @@ class FocusAnalyticsStore:
         clean_device_id = str(
             self._device_id if device_id is None else device_id
         ).strip()[:120]
+        clean_session_id = str(session_id or "").strip()[:160]
         if clean_record_id:
             for raw in self._state.get("records", []):
                 if isinstance(raw, dict) and str(raw.get("record_id") or "") == clean_record_id:
@@ -1082,22 +1100,11 @@ class FocusAnalyticsStore:
                     # segment must be harmless.
                     return quality
         day_key = started.date().isoformat()
-        days = self._state.setdefault("days", {})
-        day = days.setdefault(day_key, self._empty_day())
-        day["seconds"] = max(0, int(day.get("seconds", 0))) + duration
-        day["rounds"] = max(0, int(day.get("rounds", 0))) + (1 if completed else 0)
-        day["longest"] = max(max(0, int(day.get("longest", 0))), duration)
-        day["quality"] = [*list(day.get("quality", []))[-49:], quality.score]
-        day["switches"] = max(0, int(day.get("switches", 0))) + max(0, int(application_switches))
-        day["away"] = max(0, int(day.get("away", 0))) + max(0, int(away_count))
-        day["interruptions"] = max(0, int(day.get("interruptions", 0))) + max(0, int(interruptions))
-        day["longest_continuous"] = max(
-            max(0, int(day.get("longest_continuous", 0))), duration
-        )
-        records = self._state.setdefault("records", [])
-        records.append({
+        end_at = started + timedelta(seconds=duration)
+        record = {
             "date": day_key,
             "started_at": started.isoformat(),
+            "end_at": end_at.isoformat(),
             "seconds": duration,
             "completed": bool(completed),
             "application_switches": max(0, int(application_switches)),
@@ -1106,24 +1113,97 @@ class FocusAnalyticsStore:
             "task": str(task)[:120],
             "interruptions": max(0, int(interruptions)),
             "record_id": clean_record_id,
+            "session_id": clean_session_id or clean_record_id,
             "device_id": clean_device_id,
-        })
-        removed_records = records[:-500] if len(records) > 500 else []
-        self._state["records"] = records[-500:]
-        affected_record_dates = {started.date()}
-        for removed in removed_records:
-            removed_segment = segment_from_record(removed, 0)
-            if removed_segment is not None:
-                affected_record_dates.update(self._segment_dates(removed_segment))
-        segment = segment_from_record(records[-1], len(records) - 1)
-        self._rebuild_daily_focus_projection(
-            affected_record_dates | (
-                self._segment_dates(segment) if segment is not None else {started.date()}
+        }
+        if self._persist and duration > 0 and clean_record_id and record["session_id"]:
+            # The journal is the durability boundary.  If the following
+            # store write fails, startup replay can restore this exact row;
+            # no caller needs to invent a replacement interval.
+            self._recovery_journal.append_segment(
+                FocusSegment(
+                    segment_id=clean_record_id,
+                    session_id=str(record["session_id"]),
+                    device_id=clean_device_id,
+                    start_at=started,
+                    end_at=end_at,
+                    completed=bool(completed),
+                    quality=quality.score,
+                    task=str(task)[:120],
+                    interruptions=max(0, int(interruptions)),
+                ),
+                reason="completed" if completed else "sealed",
             )
-        )
-        self._trim_days()
-        self._save()
+            # Do not close remote live presence until this exact sealed fact
+            # has received an explicit server ACK. This marker is transport
+            # state only; reporting continues to use raw interval union.
+            account_state = self._state.setdefault("account_state", {})
+            if not isinstance(account_state, dict):
+                account_state = {}
+                self._state["account_state"] = account_state
+            account_state["focus_handoff_segment_id"] = clean_record_id
+        previous_state = copy.deepcopy(self._state)
+        try:
+            days = self._state.setdefault("days", {})
+            day = days.setdefault(day_key, self._empty_day())
+            day["seconds"] = max(0, int(day.get("seconds", 0))) + duration
+            day["rounds"] = max(0, int(day.get("rounds", 0))) + (1 if completed else 0)
+            day["longest"] = max(max(0, int(day.get("longest", 0))), duration)
+            day["quality"] = [*list(day.get("quality", []))[-49:], quality.score]
+            day["switches"] = max(0, int(day.get("switches", 0))) + max(0, int(application_switches))
+            day["away"] = max(0, int(day.get("away", 0))) + max(0, int(away_count))
+            day["interruptions"] = max(0, int(day.get("interruptions", 0))) + max(0, int(interruptions))
+            day["longest_continuous"] = max(
+                max(0, int(day.get("longest_continuous", 0))), duration
+            )
+            records = self._state.setdefault("records", [])
+            records.append(record)
+            removed_records = records[:-500] if len(records) > 500 else []
+            self._state["records"] = records[-500:]
+            affected_record_dates = {started.date()}
+            for removed in removed_records:
+                removed_segment = segment_from_record(removed, 0)
+                if removed_segment is not None:
+                    affected_record_dates.update(self._segment_dates(removed_segment))
+            segment = segment_from_record(records[-1], len(records) - 1)
+            self._rebuild_daily_focus_projection(
+                affected_record_dates | (
+                    self._segment_dates(segment) if segment is not None else {started.date()}
+                )
+            )
+            self._trim_days()
+            self._save()
+        except Exception:
+            # The WAL remains the durable recovery boundary, but a failed
+            # Store write must not leave a phantom in-memory record that a
+            # second pause would mistake for a persisted duplicate.
+            self._state = previous_state
+            raise
         return quality
+
+    def pending_focus_handoff_segment_id(self) -> str:
+        """Return the bounded sealed fact awaiting its upload ACK."""
+
+        state = self._state.get("account_state")
+        if not isinstance(state, dict):
+            return ""
+        value = str(state.get("focus_handoff_segment_id") or "").strip()[:160]
+        if not value:
+            return ""
+        segment = next(
+            (item for item in self.focus_segments() if item.segment_id == value),
+            None,
+        )
+        if segment is None or segment.end_at is None:
+            return ""
+        acknowledgements = state.get("focus_segment_upload_fingerprints")
+        if isinstance(acknowledgements, dict):
+            if str(acknowledgements.get(value) or "") == self._focus_segment_upload_fingerprint(segment.to_dict()):
+                return ""
+        return value
+
+    def has_pending_focus_handoff(self) -> bool:
+        return bool(self.pending_focus_handoff_segment_id())
 
     @staticmethod
     def _empty_day() -> dict[str, Any]:
@@ -2411,6 +2491,56 @@ class FocusAnalyticsStore:
 
     def _has_local_evidence(self, start: date, end: date) -> bool:
         return self._has_local_records(start, end) or self._has_observed_days(start, end)
+
+    def _recover_focus_journal(self) -> bool:
+        """Replay only WAL rows missing from the local sealed-fact store.
+
+        A WAL row is never used directly by reports.  It first becomes an
+        ordinary local ``records`` row, after which all existing interval
+        projection code remains the only statistics path.  Hash conflicts are
+        retained as diagnostics and deliberately do not overwrite either side.
+        """
+
+        if not self._persist:
+            return False
+        recovery = self._recovery_journal.recover(self.focus_segments())
+        self._durability_conflicts = recovery.conflicts
+        if recovery.conflicts:
+            state = self._state.setdefault("account_state", {})
+            if not isinstance(state, dict):
+                state = {}
+                self._state["account_state"] = state
+            state["focus_durability_conflicts"] = list(recovery.conflicts)[-50:]
+        if not recovery.segments:
+            return bool(recovery.conflicts)
+        records = self._state.setdefault("records", [])
+        existing_ids = {
+            str(raw.get("record_id") or raw.get("segment_id") or "")
+            for raw in records
+            if isinstance(raw, dict)
+        }
+        changed = False
+        for segment in recovery.segments:
+            if segment.segment_id in existing_ids:
+                continue
+            records.append(segment_as_store_record(segment))
+            existing_ids.add(segment.segment_id)
+            changed = True
+        if changed:
+            affected = set()
+            for segment in recovery.segments:
+                affected.update(self._segment_dates(segment))
+            # A recovered WAL row is a sealed fact whose Store write completed
+            # only during this startup. Keep the handoff gate armed until the
+            # normal delta path explicitly ACKs the recovered id.
+            state = self._state.setdefault("account_state", {})
+            if not isinstance(state, dict):
+                state = {}
+                self._state["account_state"] = state
+            state["focus_handoff_segment_id"] = recovery.segments[-1].segment_id
+            self._rebuild_daily_focus_projection(affected)
+            self._trim_days()
+        return changed or bool(recovery.conflicts)
 
     def _trim_days(self) -> bool:
         days = self._state.setdefault("days", {})

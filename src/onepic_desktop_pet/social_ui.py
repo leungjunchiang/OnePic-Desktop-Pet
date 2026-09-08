@@ -626,8 +626,15 @@ class SocialHeartbeatWorker:
         return not thread.is_alive()
 
     def update_presence(self, presence: dict[str, Any], *, immediate: bool = False) -> None:
-        payload = _heartbeat_payload(dict(presence))
+        raw = dict(presence)
+        defer_inactive = bool(raw.pop("_defer_inactive_until_focus_ack", False))
+        payload = _heartbeat_payload(raw)
         with self._condition:
+            # A local pause has already sealed a WAL/store fact, but its
+            # delta ACK may still be in flight. Do not replace a queued live
+            # heartbeat with inactive presence before that ACK exists.
+            if defer_inactive and not bool(payload.get("session_active")):
+                return
             self._pending = dict(payload)
             self._send_now = self._send_now or bool(immediate)
             self._condition.notify()
@@ -640,7 +647,9 @@ class SocialHeartbeatWorker:
                 # the desktop must never wait on a network socket, while an
                 # explicit finalize helps peers stop showing a ghost session
                 # before the normal server freshness timeout.
-                self._shutdown_payload = _heartbeat_payload(dict(final_presence))
+                raw = dict(final_presence)
+                if not bool(raw.pop("_defer_inactive_until_focus_ack", False)):
+                    self._shutdown_payload = _heartbeat_payload(raw)
             self._stopped = True
             self._condition.notify_all()
 
