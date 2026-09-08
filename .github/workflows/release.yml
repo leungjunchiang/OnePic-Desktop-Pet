@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - 多设备专注同步生产修复" \
-            --notes "修复 composite cursor delta RPC 的生产表权限回归：保持 SECURITY INVOKER 与账号 owner RLS，只向 authenticated 授予 SELECT、INSERT、UPDATE，匿名和删除权限仍禁止。六毛继续按 sealed FocusSegments 与新鲜 per-device presence 做账号级 interval union；本机暂停但另一台设备工作时会明确注明。上传端只发送本设备新增或实际变化的 sealed facts，不回传其他设备记录，成功后保存本地指纹；没有新增每秒请求、报告查询、全量历史回退或高频 canonical 更新。"
+            --title "Lili $release_tag - 本地 Aura 氛围特效" \
+            --notes "新增红色雾气、金色光雾、蓝色柔雾和紫色气场。Aura 使用 QPainter 在现有角色 pixmap 内完成程序化合成，复用原有动画 tick，支持淡入淡出、高 DPI、缩放及与表情特效同时显示；统一菜单提供自动、关闭和手动颜色选择，设置仅保存在本机。Aura-only 图层使用有界缓存，渲染异常自动回退原始角色帧；没有新增 QTimer、QThread、原生窗口、Supabase 请求或其他网络行为。"
