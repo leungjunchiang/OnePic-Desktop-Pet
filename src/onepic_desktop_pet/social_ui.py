@@ -56,6 +56,22 @@ LOGGER = logging.getLogger(__name__)
 _NO_PENDING_OWNER_NICKNAME = object()
 
 
+def _json_payload_bytes(value: object) -> int:
+    """Return a bounded UTF-8 size estimate for one RPC JSON payload."""
+
+    try:
+        return len(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 _DASHBOARD_IDENTITY_FIELDS = (
     "user_id",
     "id",
@@ -748,6 +764,18 @@ class SocialSyncThread(QThread):
             focus_segments_device_id = ""
             focus_segments_sync_mode = "delta"
             focus_segments_sync_started = 0.0
+            focus_sync_metrics = {
+                "delta_rpc_calls": 0,
+                "integrity_rpc_calls": 0,
+                "reconciliation_rpc_calls": 0,
+                "upload_rows": 0,
+                "returned_segment_rows": 0,
+                "manifest_rows": 0,
+                "request_bytes": 0,
+                "response_bytes": 0,
+                "manifest_bytes": 0,
+                "full_bootstrap_count": 0,
+            }
             personal_state = self.presence.get("personal_state")
             personal_state_factory = self.presence.get("_personal_state_factory")
             if personal_state is None and callable(personal_state_factory):
@@ -844,12 +872,21 @@ class SocialSyncThread(QThread):
                             _session_user_id(self.client)
                             or str(self.presence.get("user_id") or "")
                         )
+                        focus_segments_request_body = {
+                            "p_segments": focus_segments,
+                            "p_since": focus_segments_cursor_before or None,
+                        }
+                        focus_sync_metrics["delta_rpc_calls"] += 1
+                        focus_sync_metrics["upload_rows"] += focus_segments_upload_count
+                        focus_sync_metrics["request_bytes"] += _json_payload_bytes(
+                            focus_segments_request_body
+                        )
                         focus_segments_result = sync_rpc(
                             "lili_sync_focus_segments_delta_v2",
-                            {
-                                "p_segments": focus_segments,
-                                "p_since": focus_segments_cursor_before or None,
-                            },
+                            focus_segments_request_body,
+                        )
+                        focus_sync_metrics["response_bytes"] += _json_payload_bytes(
+                            focus_segments_result
                         )
                     except (SocialError, AttributeError, TypeError) as exc:
                         focus_segments_sync_error = str(exc)[:240]
@@ -930,6 +967,9 @@ class SocialSyncThread(QThread):
                             if isinstance(returned_segments, list)
                             else 0
                         )
+                        focus_sync_metrics["returned_segment_rows"] += returned_count
+                        if bool(focus_segments_result.get("full_sync")):
+                            focus_sync_metrics["full_bootstrap_count"] += 1
                         focus_segments_result["_sync_diagnostics"] = {
                             "cursor_before": focus_segments_cursor_before,
                             "upload_count": focus_segments_upload_count,
@@ -946,6 +986,12 @@ class SocialSyncThread(QThread):
                             "duration_ms": focus_segments_sync_duration_ms,
                             "error": "" if upload_ack_ok else (
                                 protocol_error or "upload_ack_missing_or_mismatch"
+                            ),
+                            "request_bytes": _json_payload_bytes(
+                                focus_segments_request_body
+                            ),
+                            "response_bytes": _json_payload_bytes(
+                                focus_segments_result
                             ),
                         }
                         lifecycle_log(
@@ -971,11 +1017,31 @@ class SocialSyncThread(QThread):
                         "focus_segment_integrity_manifest"
                     )
                     if isinstance(integrity_manifest, list) and integrity_manifest:
+                        integrity_manifest_kind = str(
+                            personal_state.get("focus_segment_integrity_manifest_kind")
+                            or "integrity"
+                        ).strip().lower()[:32]
+                        integrity_request_body = {
+                            "p_segment_ids": integrity_manifest,
+                        }
+                        focus_sync_metrics["integrity_rpc_calls"] += 1
+                        if integrity_manifest_kind == "reconciliation":
+                            focus_sync_metrics["reconciliation_rpc_calls"] += 1
+                        focus_sync_metrics["manifest_rows"] += len(integrity_manifest)
+                        focus_sync_metrics["manifest_bytes"] += _json_payload_bytes(
+                            integrity_request_body
+                        )
+                        focus_sync_metrics["request_bytes"] += _json_payload_bytes(
+                            integrity_request_body
+                        )
                         integrity_started = time.monotonic()
                         try:
                             audit_result = sync_rpc(
                                 "lili_focus_segment_integrity_v1",
-                                {"p_segment_ids": integrity_manifest},
+                                integrity_request_body,
+                            )
+                            focus_sync_metrics["response_bytes"] += _json_payload_bytes(
+                                audit_result
                             )
                             if isinstance(audit_result, dict):
                                 focus_segment_integrity_result = dict(audit_result)
@@ -1108,6 +1174,8 @@ class SocialSyncThread(QThread):
             if isinstance(encouragement_state_result, dict):
                 data = dict(data or {})
                 data["_encouragement_state"] = encouragement_state_result
+            data = dict(data or {})
+            data["_focus_sync_metrics"] = dict(focus_sync_metrics)
             if isinstance(data, dict) and self.request_generation:
                 data = dict(data)
                 data["_request_generation"] = self.request_generation
@@ -1116,11 +1184,11 @@ class SocialSyncThread(QThread):
             cached_loader = getattr(self.client, "cached_dashboard", None)
             cached = cached_loader(self.presence.get("room_id")) if callable(cached_loader) else None
             if cached is not None:
+                cached = dict(cached)
+                cached["_focus_sync_metrics"] = dict(focus_sync_metrics)
                 if presence_context_updated is not None:
-                    cached = dict(cached)
                     cached["_presence_context_updated"] = presence_context_updated
                 if self.request_generation:
-                    cached = dict(cached)
                     cached["_request_generation"] = self.request_generation
                 self.completed.emit(cached)
             else:

@@ -54,7 +54,15 @@ FOCUS_SEGMENT_UPLOAD_ACK_VERSION = 3
 # persisted as server-acknowledged; it never downloads or uploads history.
 FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION = 1
 FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL = timedelta(hours=24)
-FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 10 * 60
+# A failed audit is retried on the next daily window, not on every passive
+# dashboard tick.  Missing facts are still repaired through the normal
+# targeted segment-id backfill once an audit succeeds.
+FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 24 * 60 * 60
+# A malformed/partial acknowledgement must remain retryable, but retrying a
+# bounded batch on every 30-second social tick can create an egress storm when
+# a relay is unhealthy.  The normal delta read continues during this cooldown;
+# only the same dirty upload batch is held back.
+FOCUS_SEGMENT_UPLOAD_RETRY_SECONDS = 60
 
 
 def _as_beijing(value: datetime) -> datetime:
@@ -172,6 +180,9 @@ class FocusAnalyticsStore:
         self._live_projection_segments: list[FocusSegment] = []
         self._live_projection_expires_at: float | None = None
         self._focus_integrity_next_attempt_monotonic = 0.0
+        self._focus_upload_retry_not_before_monotonic = 0.0
+        self._focus_sync_metrics_date = ""
+        self._focus_sync_metrics: dict[str, int] = {}
         self._live: dict[str, Any] = {
             "session_active": False,
             "running": False,
@@ -226,6 +237,9 @@ class FocusAnalyticsStore:
             "current_continuous_seconds": 0,
         }
         self._load()
+        self._focus_upload_retry_not_before_monotonic = 0.0
+        self._focus_sync_metrics_date = ""
+        self._focus_sync_metrics = {}
         projection_changed = self._ensure_daily_focus_projection()
         if self._rebuild_days_from_records() or self._trim_days() or projection_changed:
             self._save()
@@ -297,6 +311,11 @@ class FocusAnalyticsStore:
     def focus_segments_payload(self, limit: int = 500) -> list[dict[str, Any]]:
         """Serialize only closed local facts not acknowledged by the server."""
 
+        if monotonic() < self._focus_upload_retry_not_before_monotonic:
+            # Keep the ordinary delta read alive, but do not resend an
+            # unchanged dirty batch while a relay/backend is failing.  A
+            # successful acknowledgement clears the cooldown immediately.
+            return []
         rows: list[dict[str, Any]] = []
         state = self._state.get("account_state")
         acknowledgements = (
@@ -348,6 +367,79 @@ class FocusAnalyticsStore:
             if len(rows) >= max_rows:
                 break
         return rows
+
+    def note_focus_segment_upload_result(
+        self,
+        *,
+        attempted_count: int,
+        success: bool,
+    ) -> None:
+        """Bound retries for a dirty upload batch without changing facts.
+
+        This is deliberately process-local transport state.  It never changes
+        segment identity, the delta cursor, acknowledgement fingerprints or
+        AccountFocusStore merge semantics.
+        """
+
+        if int(attempted_count or 0) <= 0:
+            return
+        if success:
+            self._focus_upload_retry_not_before_monotonic = 0.0
+            return
+        self._focus_upload_retry_not_before_monotonic = (
+            monotonic() + FOCUS_SEGMENT_UPLOAD_RETRY_SECONDS
+        )
+
+    def _ensure_focus_sync_metrics_day(self) -> None:
+        current = self.current_time().date().isoformat()
+        if current == self._focus_sync_metrics_date:
+            return
+        self._focus_sync_metrics_date = current
+        self._focus_sync_metrics = {
+            "delta_rpc_calls": 0,
+            "integrity_rpc_calls": 0,
+            "reconciliation_rpc_calls": 0,
+            "upload_rows": 0,
+            "returned_segment_rows": 0,
+            "manifest_rows": 0,
+            "request_bytes": 0,
+            "response_bytes": 0,
+            "manifest_bytes": 0,
+            "full_bootstrap_count": 0,
+        }
+
+    def record_focus_sync_metrics(self, metrics: Any) -> None:
+        """Accumulate bounded transport counters for the current Beijing day.
+
+        These counters are diagnostics only.  They are intentionally not
+        persisted into the focus ledger, because egress accounting must never
+        become a source of duration or synchronization truth.
+        """
+
+        if not isinstance(metrics, dict):
+            return
+        self._ensure_focus_sync_metrics_day()
+        for key in self._focus_sync_metrics:
+            try:
+                value = max(0, int(metrics.get(key) or 0))
+            except (TypeError, ValueError, OverflowError):
+                value = 0
+            self._focus_sync_metrics[key] += value
+
+    def focus_sync_metrics_snapshot(self) -> dict[str, Any]:
+        """Return per-device, per-Beijing-day sync/egress diagnostics."""
+
+        self._ensure_focus_sync_metrics_day()
+        return {
+            "date": self._focus_sync_metrics_date,
+            "account_scoped": True,
+            "device_id": self._device_id,
+            **dict(self._focus_sync_metrics),
+            "upload_retry_cooldown_seconds": FOCUS_SEGMENT_UPLOAD_RETRY_SECONDS,
+            "integrity_interval_seconds": int(
+                FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL.total_seconds()
+            ),
+        }
 
     def focus_segments_sync_mode(self) -> str:
         """Return the bounded transport mode for diagnostics and UI sync."""

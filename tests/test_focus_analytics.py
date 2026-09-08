@@ -562,6 +562,103 @@ def test_focus_segment_upload_ack_failure_keeps_batch_retryable(tmp_path, monkey
     assert store.focus_segments_payload() == batch
 
 
+def test_failed_upload_batch_has_bounded_retry_without_changing_ledger(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=False,
+        device_id="windows-b",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=1), record_id="local-a")
+    batch = store.focus_segments_payload()
+    assert [row["segment_id"] for row in batch] == ["local-a"]
+
+    store.note_focus_segment_upload_result(attempted_count=1, success=False)
+    assert store.focus_segments_payload() == []
+    assert [segment.segment_id for segment in store.focus_segments()] == ["local-a"]
+
+    # The cooldown is transport-only and does not require a rebootstrap.  Once
+    # it expires the same stable segment remains retryable.
+    store._focus_upload_retry_not_before_monotonic = 0.0
+    assert [row["segment_id"] for row in store.focus_segments_payload()] == ["local-a"]
+
+
+def test_three_devices_overlap_union_counts_each_second_once(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 14, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(
+        path=tmp_path / "account-focus.json",
+        now_provider=lambda: now,
+        persist=False,
+        device_id="mac-a",
+    )
+    # Mac A: 09:00-10:00; Windows B overlaps from 09:30-11:00; Windows C is
+    # disjoint at 12:00-13:00.  The account result is 3 hours, not 4.
+    store.record_session(
+        60 * 60,
+        started_at=now.replace(hour=9, minute=0) - timedelta(days=0),
+        record_id="mac-a-segment",
+        device_id="mac-a",
+    )
+    store.merge_remote_segments({
+        "segments": [
+            {
+                "segment_id": "windows-b-segment",
+                "session_id": "windows-b-session",
+                "start_at": "2026-09-07T09:30:00+08:00",
+                "end_at": "2026-09-07T11:00:00+08:00",
+                "device_id": "windows-b",
+            },
+            {
+                "segment_id": "windows-c-segment",
+                "session_id": "windows-c-session",
+                "start_at": "2026-09-07T12:00:00+08:00",
+                "end_at": "2026-09-07T13:00:00+08:00",
+                "device_id": "windows-c",
+            },
+        ],
+    })
+
+    day = store.period_summary("day", now)
+    assert day["total_seconds"] == 3 * 60 * 60
+    assert store.account_today_seconds(now) == 3 * 60 * 60
+    assert store.account_week_seconds(now) == 3 * 60 * 60
+    assert {segment.device_id for segment in store.focus_segments()} == {
+        "mac-a",
+        "windows-b",
+        "windows-c",
+    }
+
+
+def test_sync_metrics_are_daily_transport_diagnostics_only(tmp_path) -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(
+        path=tmp_path / "metrics.json",
+        now_provider=lambda: now,
+        persist=False,
+        device_id="windows-c",
+    )
+    store.record_focus_sync_metrics({
+        "delta_rpc_calls": 2,
+        "integrity_rpc_calls": 1,
+        "reconciliation_rpc_calls": 1,
+        "upload_rows": 3,
+        "returned_segment_rows": 4,
+        "manifest_rows": 5,
+        "request_bytes": 600,
+        "response_bytes": 700,
+        "manifest_bytes": 180,
+        "full_bootstrap_count": 1,
+    })
+    snapshot = store.focus_sync_metrics_snapshot()
+    assert snapshot["date"] == "2026-09-07"
+    assert snapshot["device_id"] == "windows-c"
+    assert snapshot["delta_rpc_calls"] == 2
+    assert snapshot["reconciliation_rpc_calls"] == 1
+    assert snapshot["full_bootstrap_count"] == 1
+    assert snapshot["upload_retry_cooldown_seconds"] == 60
+
+
 def test_integrity_audit_requeues_only_acknowledged_local_server_gaps(tmp_path) -> None:
     now = datetime(2026, 9, 7, 21, 30, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(

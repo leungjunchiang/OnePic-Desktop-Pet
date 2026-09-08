@@ -125,6 +125,11 @@ def test_social_sync_runs_compact_integrity_audit_without_full_history() -> None
         "local-ok",
         "local-missing",
     ]
+    metrics = completed[-1]["_focus_sync_metrics"]
+    assert metrics["delta_rpc_calls"] == 1
+    assert metrics["integrity_rpc_calls"] == 1
+    assert metrics["reconciliation_rpc_calls"] == 0
+    assert metrics["manifest_rows"] == 2
     assert all(name != "lili_sync_focus_segments" for name, _body in client.calls)
     assert _focus_upload_ack_status(
         [{"segment_id": "a"}, {"session_id": "missing-id"}],

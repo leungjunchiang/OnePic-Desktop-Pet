@@ -6509,6 +6509,7 @@ class PetWindow(QWidget):
             "focus_segment_integrity_manifest": (
                 self.focus_analytics.focus_segment_reconciliation_manifest()
             ),
+            "focus_segment_integrity_manifest_kind": "reconciliation",
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
         }
@@ -7052,6 +7053,42 @@ class PetWindow(QWidget):
 
         if data.get("_sync_offline") or data.get("data_source") == "local_cache":
             return
+        sync_metrics = data.get("_focus_sync_metrics")
+        record_sync_metrics = getattr(
+            self.focus_analytics, "record_focus_sync_metrics", None
+        )
+        if callable(record_sync_metrics):
+            record_sync_metrics(sync_metrics)
+        if isinstance(sync_metrics, dict) and any(
+            int(sync_metrics.get(key) or 0) > 0
+            for key in (
+                "delta_rpc_calls",
+                "integrity_rpc_calls",
+                "reconciliation_rpc_calls",
+            )
+        ):
+            lifecycle_log(
+                "focus.sync.metrics",
+                self,
+                delta_rpc_calls=max(0, int(sync_metrics.get("delta_rpc_calls") or 0)),
+                integrity_rpc_calls=max(
+                    0, int(sync_metrics.get("integrity_rpc_calls") or 0)
+                ),
+                reconciliation_rpc_calls=max(
+                    0, int(sync_metrics.get("reconciliation_rpc_calls") or 0)
+                ),
+                upload_rows=max(0, int(sync_metrics.get("upload_rows") or 0)),
+                returned_segment_rows=max(
+                    0, int(sync_metrics.get("returned_segment_rows") or 0)
+                ),
+                manifest_rows=max(0, int(sync_metrics.get("manifest_rows") or 0)),
+                request_bytes=max(0, int(sync_metrics.get("request_bytes") or 0)),
+                response_bytes=max(0, int(sync_metrics.get("response_bytes") or 0)),
+                manifest_bytes=max(0, int(sync_metrics.get("manifest_bytes") or 0)),
+                full_bootstrap_count=max(
+                    0, int(sync_metrics.get("full_bootstrap_count") or 0)
+                ),
+            )
         profile = data.get("me") if isinstance(data, dict) else None
         profile = profile if isinstance(profile, dict) else {}
         user_id = self._current_social_user_id()
@@ -7186,6 +7223,23 @@ class PetWindow(QWidget):
                 if merge_ok and not upload_ack_ok
                 else "upload_ack_deferred_merge_failed"
             )
+        note_upload_result = getattr(
+            self.focus_analytics, "note_focus_segment_upload_result", None
+        )
+        if callable(note_upload_result):
+            upload_attempted_count = 0
+            if isinstance(sync_metrics, dict):
+                try:
+                    upload_attempted_count = max(
+                        0, int(sync_metrics.get("upload_rows") or 0)
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    upload_attempted_count = 0
+            if upload_attempted_count:
+                note_upload_result(
+                    attempted_count=upload_attempted_count,
+                    success=bool(transaction_ok),
+                )
         # The delta cursor is transport state only.  Advance it after the
         # complete raw-fact transaction has succeeded.  A malformed response,
         # merge failure, or local cursor persistence failure remains retryable.
@@ -7241,6 +7295,12 @@ class PetWindow(QWidget):
                 upload_ack_ok=bool(upload_ack_ok),
                 transaction_ok=bool(transaction_ok),
                 cursor_advanced=bool(cursor_advanced),
+                request_bytes=max(
+                    0, int(sync_diagnostics.get("request_bytes") or 0)
+                ),
+                response_bytes=max(
+                    0, int(sync_diagnostics.get("response_bytes") or 0)
+                ),
             )
         integrity_payload = data.get("_focus_segment_integrity") if isinstance(data, dict) else None
         if integrity_payload is not None:
