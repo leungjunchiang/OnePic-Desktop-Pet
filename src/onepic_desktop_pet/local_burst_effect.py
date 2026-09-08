@@ -689,11 +689,11 @@ class LocalBurstEffectWindow(QWidget):
         self._previous_stage_started_at = 0.0
         self._crossfade_started_at = 0.0
         self._crossfade_duration_ms = 360
-        self._mania_mode = False
-        self._mania_current_kind = LocalEffectKind.RED
-        self._mania_next_kind = LocalEffectKind.GOLD
-        self._mania_mix = 0.0
-        self._mania_phase = 0.0
+        self._color_mist_world_mode = False
+        self._color_mist_world_current_kind = LocalEffectKind.RED
+        self._color_mist_world_next_kind = LocalEffectKind.GOLD
+        self._color_mist_world_mix = 0.0
+        self._color_mist_world_phase = 0.0
         self._pet_global_rect = QRect()
         self._pet_rect = QRectF()
         self._exclusion_global_regions: tuple[EffectExclusionRegion, ...] = ()
@@ -835,11 +835,11 @@ class LocalBurstEffectWindow(QWidget):
                 self.stop()
                 return
             self._previous_kind = None
-            self._mania_mode = False
-            self._mania_current_kind = self._kind
-            self._mania_next_kind = self._kind
-            self._mania_mix = 0.0
-            self._mania_phase = 0.0
+            self._color_mist_world_mode = False
+            self._color_mist_world_current_kind = self._kind
+            self._color_mist_world_next_kind = self._kind
+            self._color_mist_world_mix = 0.0
+            self._color_mist_world_phase = 0.0
             self._manual = not managed
             self._stage = "entry"
             self._active = True
@@ -879,12 +879,12 @@ class LocalBurstEffectWindow(QWidget):
             return
         if not self._active:
             return
-        self._mania_mode = False
-        self._mania_current_kind = target
-        self._mania_next_kind = target
-        self._mania_mix = 0.0
+        self._color_mist_world_mode = False
+        self._color_mist_world_current_kind = target
+        self._color_mist_world_next_kind = target
+        self._color_mist_world_mix = 0.0
         if target is self._kind:
-            # A mania restart may begin with the same color that was already
+            # A color-mist restart may begin with the same color that was already
             # visible. Replay its entry phase on the same window instead of
             # creating a second overlay or leaving the old phase untouched.
             now = time.monotonic()
@@ -907,7 +907,7 @@ class LocalBurstEffectWindow(QWidget):
         self._timer.start()
         self.update()
 
-    def set_mania_frame(
+    def set_color_mist_world_frame(
         self,
         current_kind: LocalEffectKind | str,
         next_kind: LocalEffectKind | str,
@@ -915,7 +915,7 @@ class LocalBurstEffectWindow(QWidget):
         *,
         phase: float = 0.0,
     ) -> None:
-        """Update one continuous mania timeline without restarting entry.
+        """Update one continuous color-mist timeline without restarting entry.
 
         The manager owns the monotonic timeline.  This window only receives
         the two adjacent presets and paints their crossfade into the same
@@ -924,18 +924,18 @@ class LocalBurstEffectWindow(QWidget):
 
         if not self._active:
             return
-        self._mania_mode = True
-        self._mania_current_kind = normalize_effect_kind(current_kind)
-        self._mania_next_kind = normalize_effect_kind(next_kind)
-        self._kind = self._mania_current_kind
-        self._mania_mix = max(0.0, min(1.0, float(mix)))
-        self._mania_phase = float(phase)
+        self._color_mist_world_mode = True
+        self._color_mist_world_current_kind = normalize_effect_kind(current_kind)
+        self._color_mist_world_next_kind = normalize_effect_kind(next_kind)
+        self._kind = self._color_mist_world_current_kind
+        self._color_mist_world_mix = max(0.0, min(1.0, float(mix)))
+        self._color_mist_world_phase = float(phase)
         self._manual = False
         self._timer.start()
         self.update()
 
     def resume_managed(self, kind: LocalEffectKind | str) -> None:
-        """Leave mania directly into the current semantic state."""
+        """Leave color mist world directly into the current semantic state."""
 
         target = normalize_effect_kind(kind)
         if target is LocalEffectKind.NONE:
@@ -945,11 +945,11 @@ class LocalBurstEffectWindow(QWidget):
             return
         now = time.monotonic()
         previous = self._kind
-        self._mania_mode = False
-        self._mania_current_kind = target
-        self._mania_next_kind = target
-        self._mania_mix = 0.0
-        self._mania_phase = 0.0
+        self._color_mist_world_mode = False
+        self._color_mist_world_current_kind = target
+        self._color_mist_world_next_kind = target
+        self._color_mist_world_mix = 0.0
+        self._color_mist_world_phase = 0.0
         self._manual = False
         if previous is not target:
             self._previous_kind = previous
@@ -965,7 +965,7 @@ class LocalBurstEffectWindow(QWidget):
 
     def set_sustain(self) -> None:
         if self._active and not self._manual:
-            self._mania_mode = False
+            self._color_mist_world_mode = False
             self._stage = "sustain"
             self._stage_started_at = time.monotonic()
             self.update()
@@ -974,7 +974,7 @@ class LocalBurstEffectWindow(QWidget):
         if not self._active:
             return
         self._manual = False
-        self._mania_mode = False
+        self._color_mist_world_mode = False
         self._stage = "release"
         self._stage_started_at = time.monotonic()
         self._release_duration_ms = max(220, int(duration_ms))
@@ -983,7 +983,7 @@ class LocalBurstEffectWindow(QWidget):
     def stop(self) -> None:
         self._timer.stop()
         self._active = False
-        self._mania_mode = False
+        self._color_mist_world_mode = False
         self.hide()
         self.update()
 
@@ -1004,11 +1004,11 @@ class LocalBurstEffectWindow(QWidget):
                 return
         if (
             not self._manual
-            and self._mania_mode
+            and self._color_mist_world_mode
             and self._stage == "entry"
             and (now - self._stage_started_at) * 1000.0 >= ENTRY_DURATION_MS
         ):
-            # Mania has one entry burst only.  After that it remains a
+            # Color mist world has one entry burst only.  After that it remains a
             # continuous sustain while the color timeline keeps moving.
             self._stage = "sustain"
             self._stage_started_at = now
@@ -1036,10 +1036,10 @@ class LocalBurstEffectWindow(QWidget):
                     pet_rect=self._pet_rect, exclusion_regions=self._exclusion_regions,
                     stage="release", phase=stage_elapsed / 1000.0,
                 )
-            elif self._mania_mode:
-                current = self._mania_current_kind
-                following = self._mania_next_kind
-                mix = self._mania_mix
+            elif self._color_mist_world_mode:
+                current = self._color_mist_world_current_kind
+                following = self._color_mist_world_next_kind
+                mix = self._color_mist_world_mix
                 if self._stage == "entry":
                     entry_progress = stage_elapsed / ENTRY_DURATION_MS
                     if self._previous_kind is not None:
@@ -1062,7 +1062,7 @@ class LocalBurstEffectWindow(QWidget):
                             pet_rect=self._pet_rect,
                             exclusion_regions=self._exclusion_regions,
                             stage="sustain",
-                            phase=self._mania_phase,
+                            phase=self._color_mist_world_phase,
                         )
                         painter.restore()
                         painter.save()
@@ -1075,7 +1075,7 @@ class LocalBurstEffectWindow(QWidget):
                             pet_rect=self._pet_rect,
                             exclusion_regions=self._exclusion_regions,
                             stage="entry",
-                            phase=self._mania_phase,
+                            phase=self._color_mist_world_phase,
                         )
                         painter.restore()
                         if fade >= 1.0:
@@ -1089,7 +1089,7 @@ class LocalBurstEffectWindow(QWidget):
                             pet_rect=self._pet_rect,
                             exclusion_regions=self._exclusion_regions,
                             stage="entry",
-                            phase=self._mania_phase,
+                            phase=self._color_mist_world_phase,
                         )
                 else:
                     if mix < 1.0:
@@ -1103,7 +1103,7 @@ class LocalBurstEffectWindow(QWidget):
                             pet_rect=self._pet_rect,
                             exclusion_regions=self._exclusion_regions,
                             stage="sustain",
-                            phase=self._mania_phase,
+                            phase=self._color_mist_world_phase,
                             opacity_scale=1.0,
                         )
                         painter.restore()
@@ -1118,7 +1118,7 @@ class LocalBurstEffectWindow(QWidget):
                             pet_rect=self._pet_rect,
                             exclusion_regions=self._exclusion_regions,
                             stage="sustain",
-                            phase=self._mania_phase,
+                            phase=self._color_mist_world_phase,
                             opacity_scale=1.0,
                         )
                         painter.restore()

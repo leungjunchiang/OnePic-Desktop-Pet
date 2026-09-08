@@ -19,5 +19,6 @@
   "local_lyrics_path": "",
   "lyric_interval_minutes": 8,
   "show_work_duration": true,
-  "show_away_recovery_prompt": true
+  "show_away_recovery_prompt": true,
+  "color_mist_world_enabled": true
 }

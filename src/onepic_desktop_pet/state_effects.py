@@ -2,7 +2,7 @@
 
 The renderer/window owns no PetState knowledge.  This module deliberately has
 no network, timer, thread, or QWidget code.  Stable work states, explicit
-semantic events, and the deterministic mania easter egg are kept separate so
+semantic events, and the deterministic color-mist easter egg are kept separate so
 ordinary autonomous animation cannot make colors appear at random.
 """
 
@@ -30,7 +30,7 @@ class LocalEffectKind(str, Enum):
 class EffectSource(str, Enum):
     STATE = "state"
     EVENT = "event"
-    MANIA = "mania"
+    COLOR_MIST_WORLD = "color_mist_world"
 
 
 class EffectPhase(str, Enum):
@@ -116,7 +116,7 @@ def resolve_event_effect(event: str | None) -> LocalEffectKind:
     }.get(str(event or "").strip().casefold(), LocalEffectKind.NONE)
 
 
-MANIA_SEQUENCE: tuple[LocalEffectKind, ...] = (
+COLOR_MIST_SEQUENCE: tuple[LocalEffectKind, ...] = (
     LocalEffectKind.RED,
     LocalEffectKind.GOLD,
     LocalEffectKind.BLUE,
@@ -124,14 +124,14 @@ MANIA_SEQUENCE: tuple[LocalEffectKind, ...] = (
     LocalEffectKind.CYAN,
     LocalEffectKind.PURPLE,
 )
-MANIA_SLOT_MS = 3_000
-MANIA_TOTAL_MS = 180_000
-MANIA_CYCLE_MS = len(MANIA_SEQUENCE) * MANIA_SLOT_MS
-MANIA_CROSSFADE_MS = 350
+COLOR_MIST_SLOT_MS = 3_000
+COLOR_MIST_TOTAL_MS = 180_000
+COLOR_MIST_CYCLE_MS = len(COLOR_MIST_SEQUENCE) * COLOR_MIST_SLOT_MS
+COLOR_MIST_CROSSFADE_MS = 350
 
 
 @dataclass
-class ManiaSessionState:
+class ColorMistWorldState:
     started_at: float
     ends_at: float
     seed: int = 0
@@ -147,10 +147,10 @@ class ManiaSessionState:
 
     def slot_index(self, now: float) -> int:
         elapsed_ms = self.elapsed_ms(now)
-        return int(elapsed_ms // MANIA_SLOT_MS)
+        return int(elapsed_ms // COLOR_MIST_SLOT_MS)
 
     def kind_at(self, now: float) -> LocalEffectKind:
-        return MANIA_SEQUENCE[self.slot_index(now) % len(MANIA_SEQUENCE)]
+        return COLOR_MIST_SEQUENCE[self.slot_index(now) % len(COLOR_MIST_SEQUENCE)]
 
     def visual_state(
         self, now: float
@@ -163,16 +163,16 @@ class ManiaSessionState:
         """
 
         elapsed_ms = self.elapsed_ms(now)
-        cycle_position = elapsed_ms % MANIA_CYCLE_MS
-        slot_index = int(cycle_position // MANIA_SLOT_MS)
-        slot_elapsed = cycle_position % MANIA_SLOT_MS
-        current = MANIA_SEQUENCE[slot_index % len(MANIA_SEQUENCE)]
-        following = MANIA_SEQUENCE[(slot_index + 1) % len(MANIA_SEQUENCE)]
-        transition_start = MANIA_SLOT_MS - MANIA_CROSSFADE_MS
+        cycle_position = elapsed_ms % COLOR_MIST_CYCLE_MS
+        slot_index = int(cycle_position // COLOR_MIST_SLOT_MS)
+        slot_elapsed = cycle_position % COLOR_MIST_SLOT_MS
+        current = COLOR_MIST_SEQUENCE[slot_index % len(COLOR_MIST_SEQUENCE)]
+        following = COLOR_MIST_SEQUENCE[(slot_index + 1) % len(COLOR_MIST_SEQUENCE)]
+        transition_start = COLOR_MIST_SLOT_MS - COLOR_MIST_CROSSFADE_MS
         if slot_elapsed < transition_start:
             mix = 0.0
         else:
-            raw = (slot_elapsed - transition_start) / MANIA_CROSSFADE_MS
+            raw = (slot_elapsed - transition_start) / COLOR_MIST_CROSSFADE_MS
             mix = -(math.cos(math.pi * max(0.0, min(1.0, raw))) - 1.0) / 2.0
         return current, following, mix, elapsed_ms / 1000.0
 
@@ -208,10 +208,10 @@ class LocalEffectManager:
         on_sustain: Callable[[LocalEffectKind], None],
         on_release: Callable[[LocalEffectKind, int], None],
         on_stop: Callable[[], None],
-        on_mania_frame: Callable[
+        on_color_mist_world_frame: Callable[
             [LocalEffectKind, LocalEffectKind, float, float], None
         ] | None = None,
-        on_mania_resume: Callable[[LocalEffectKind], None] | None = None,
+        on_color_mist_world_resume: Callable[[LocalEffectKind], None] | None = None,
         now: Callable[[], float] = time.monotonic,
         duration_profile: str = "standard",
     ) -> None:
@@ -220,8 +220,8 @@ class LocalEffectManager:
         self._on_sustain = on_sustain
         self._on_release = on_release
         self._on_stop = on_stop
-        self._on_mania_frame = on_mania_frame or (lambda *_args: None)
-        self._on_mania_resume = on_mania_resume or (lambda *_args: None)
+        self._on_color_mist_world_frame = on_color_mist_world_frame or (lambda *_args: None)
+        self._on_color_mist_world_resume = on_color_mist_world_resume or (lambda *_args: None)
         self._now = now
         self.duration_profile = str(duration_profile or "standard")
         self.enabled = True
@@ -237,23 +237,23 @@ class LocalEffectManager:
         self._candidate_since = 0.0
         self._background_kind = LocalEffectKind.NONE
         self._event_until = 0.0
-        self._mania: ManiaSessionState | None = None
+        self._color_mist_world: ColorMistWorldState | None = None
 
     @property
     def active(self) -> bool:
         return self.phase is not EffectPhase.OFF
 
     @property
-    def mania_active(self) -> bool:
-        return self._mania is not None
+    def color_mist_world_active(self) -> bool:
+        return self._color_mist_world is not None
 
     @staticmethod
-    def mania_kind_at(started_at: float, now: float) -> LocalEffectKind:
-        """Return the deterministic mania slot for monotonic timestamps."""
+    def color_mist_world_kind_at(started_at: float, now: float) -> LocalEffectKind:
+        """Return the deterministic color-mist slot for monotonic timestamps."""
 
-        session = ManiaSessionState(
+        session = ColorMistWorldState(
             started_at,
-            started_at + MANIA_TOTAL_MS / 1000.0,
+            started_at + COLOR_MIST_TOTAL_MS / 1000.0,
         )
         return session.kind_at(now)
 
@@ -273,7 +273,7 @@ class LocalEffectManager:
         self.enabled = bool(enabled)
         if self.enabled:
             return
-        self._mania = None
+        self._color_mist_world = None
         self.requested_kind = LocalEffectKind.NONE
         self._background_kind = LocalEffectKind.NONE
         self._begin_release(self._now())
@@ -333,7 +333,7 @@ class LocalEffectManager:
         requested = normalize_effect_kind(kind) if self.enabled else LocalEffectKind.NONE
         self.requested_kind = requested
         self._background_kind = requested
-        if self._mania is not None:
+        if self._color_mist_world is not None:
             return
         if self.current_source is EffectSource.EVENT:
             return
@@ -368,7 +368,7 @@ class LocalEffectManager:
         if requested not in _EVENT_KINDS:
             self.request_state(requested, now=now)
             return
-        if self._mania is not None:
+        if self._color_mist_world is not None:
             return
         if self.current_source is EffectSource.EVENT and requested is self.current_kind:
             timing = self._timing(requested)
@@ -384,46 +384,46 @@ class LocalEffectManager:
             self.state_last_seen_at = now
             self._apply_kind(requested, now, source=EffectSource.EVENT)
 
-    def start_mania(self, now: float | None = None, *, seed: int = 0) -> bool:
+    def start_color_mist_world(self, now: float | None = None, *, seed: int = 0) -> bool:
         """Start or extend one continuous deterministic 3-minute timeline."""
 
         if not self.enabled:
             return False
         now = self._now() if now is None else float(now)
-        if self._mania is not None:
+        if self._color_mist_world is not None:
             # Extend only the deadline.  Keeping visual_origin_at means a
-            # repeated five-click trigger never jumps or restarts the colors.
-            self._mania.ends_at = now + MANIA_TOTAL_MS / 1000.0
-            self._mania.seed = int(seed)
-            self._emit_mania_frame(now)
+            # repeated trigger never jumps or restarts the colors.
+            self._color_mist_world.ends_at = now + COLOR_MIST_TOTAL_MS / 1000.0
+            self._color_mist_world.seed = int(seed)
+            self._emit_color_mist_world_frame(now)
             return True
-        self._mania = ManiaSessionState(
+        self._color_mist_world = ColorMistWorldState(
             started_at=now,
-            ends_at=now + MANIA_TOTAL_MS / 1000.0,
+            ends_at=now + COLOR_MIST_TOTAL_MS / 1000.0,
             seed=int(seed),
             last_slot_index=-1,
             visual_origin_at=now,
         )
-        self._apply_kind(MANIA_SEQUENCE[0], now, source=EffectSource.MANIA)
-        self._mania.last_slot_index = 0
-        self._emit_mania_frame(now)
+        self._apply_kind(COLOR_MIST_SEQUENCE[0], now, source=EffectSource.COLOR_MIST_WORLD)
+        self._color_mist_world.last_slot_index = 0
+        self._emit_color_mist_world_frame(now)
         return True
 
-    def _emit_mania_frame(self, now: float) -> None:
-        if self._mania is None:
+    def _emit_color_mist_world_frame(self, now: float) -> None:
+        if self._color_mist_world is None:
             return
-        current, following, mix, phase = self._mania.visual_state(now)
+        current, following, mix, phase = self._color_mist_world.visual_state(now)
         self.current_kind = current
-        self.current_source = EffectSource.MANIA
-        self._on_mania_frame(current, following, mix, phase)
+        self.current_source = EffectSource.COLOR_MIST_WORLD
+        self._on_color_mist_world_frame(current, following, mix, phase)
 
-    def stop_mania(self, now: float | None = None) -> None:
-        """Stop mania and restore the stable state without a blank frame."""
+    def stop_color_mist_world(self, now: float | None = None) -> None:
+        """Stop color mist world and restore the stable state without a blank frame."""
 
-        if self._mania is None:
+        if self._color_mist_world is None:
             return
         now = self._now() if now is None else float(now)
-        self._mania = None
+        self._color_mist_world = None
         desired = self._background_kind if self.enabled else LocalEffectKind.NONE
         self.requested_kind = desired
         if desired is LocalEffectKind.NONE:
@@ -435,7 +435,7 @@ class LocalEffectManager:
             self.entered_at = now
             self.min_hold_until = now
             self.release_after = 0.0
-            self._on_mania_resume(desired)
+            self._on_color_mist_world_resume(desired)
 
     def _begin_release(self, now: float) -> None:
         if self.current_kind is LocalEffectKind.NONE or self.phase is EffectPhase.RELEASING:
@@ -447,13 +447,13 @@ class LocalEffectManager:
 
     def tick(self, now: float | None = None) -> None:
         now = self._now() if now is None else float(now)
-        if self._mania is not None:
-            if now >= self._mania.ends_at:
-                self.stop_mania(now)
+        if self._color_mist_world is not None:
+            if now >= self._color_mist_world.ends_at:
+                self.stop_color_mist_world(now)
                 return
-            slot_index = self._mania.slot_index(now)
-            self._mania.last_slot_index = slot_index
-            self._emit_mania_frame(now)
+            slot_index = self._color_mist_world.slot_index(now)
+            self._color_mist_world.last_slot_index = slot_index
+            self._emit_color_mist_world_frame(now)
             return
 
         if self.current_kind is LocalEffectKind.NONE:
@@ -523,7 +523,7 @@ class LocalEffectManager:
             self.request_state(desired)
 
     def force_stop(self) -> None:
-        self._mania = None
+        self._color_mist_world = None
         self.requested_kind = LocalEffectKind.NONE
         self._background_kind = LocalEffectKind.NONE
         self._candidate_kind = LocalEffectKind.NONE

@@ -929,17 +929,17 @@ class AISettingsDialog(QDialog):
             getattr(settings, "focus_blue_effect_enabled", True)
         )
         self.focus_blue_effect_enabled.setToolTip(
-            "只控制正常工作状态下的蓝色持续光雾；红、金、绿、青、紫及发癫模式不受影响。"
+            "只控制正常工作状态下的蓝色持续光雾；红、金、绿、青、紫及彩雾世界不受影响。"
         )
         layout.addWidget(self.focus_blue_effect_enabled)
-        self.mania_mode_enabled = QCheckBox("启用隐藏五连点击彩蛋（发癫模式）")
-        self.mania_mode_enabled.setChecked(
-            getattr(settings, "mania_mode_enabled", True)
+        self.color_mist_world_enabled = QCheckBox("启用隐藏彩雾世界彩蛋")
+        self.color_mist_world_enabled.setChecked(
+            getattr(settings, "color_mist_world_enabled", True)
         )
-        self.mania_mode_enabled.setToolTip(
-            "连续快速左键点击六毛 5 下触发本地颜色循环；不联网、不影响计时。"
+        self.color_mist_world_enabled.setToolTip(
+            "快速右键双击六毛触发本地六色循环；不联网、不影响计时。"
         )
-        layout.addWidget(self.mania_mode_enabled)
+        layout.addWidget(self.color_mist_world_enabled)
         self.state_effect_duration = QComboBox()
         for label, key in (("短暂", "short"), ("标准", "standard"), ("较长", "long")):
             self.state_effect_duration.addItem(label, key)
@@ -1004,7 +1004,7 @@ class AISettingsDialog(QDialog):
         self.app_awareness = QCheckBox("根据当前应用切换陪伴动作（只识别应用类别）")
         self.app_awareness.setChecked(settings.app_awareness)
         layout.addWidget(self.app_awareness)
-        self.voice = QCheckBox("双击右键时让六毛说“巴布达”")
+        self.voice = QCheckBox("启用巴布达语音提示（本地音频设置）")
         self.voice.setChecked(settings.voice_enabled)
         layout.addWidget(self.voice)
         self.lyric_inspiration = QCheckBox("定时显示歌名意象或本地歌词")
@@ -1344,7 +1344,7 @@ class AISettingsDialog(QDialog):
         self.settings.focus_blue_effect_enabled = (
             self.focus_blue_effect_enabled.isChecked()
         )
-        self.settings.mania_mode_enabled = self.mania_mode_enabled.isChecked()
+        self.settings.color_mist_world_enabled = self.color_mist_world_enabled.isChecked()
         self.settings.state_effect_duration = str(
             self.state_effect_duration.currentData() or "standard"
         )

@@ -22,8 +22,8 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QContextMenuEvent, QFontMetrics
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
+from PySide6.QtGui import QContextMenuEvent, QFontMetrics, QMouseEvent
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
 
@@ -2392,7 +2392,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert [action.text() for action in burst.menu().actions()] == [
         "根据六毛状态自动显示", "工作时显示蓝色专注光雾", "", "红色烟花",
         "金色闪光", "蓝色静谧", "紫色神秘", "绿色恢复", "青色活跃",
-        "测试发癫模式", "停止当前特效",
+        "测试彩雾世界", "停止当前特效",
     ]
     outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
     outfit_labels = [action.text() for action in outfit.menu().actions()]
@@ -3137,26 +3137,28 @@ def test_interaction_zones_map_head_face_body_and_camera() -> None:
     app.processEvents()
 
 
-def test_five_confirmed_pet_clicks_trigger_mania_without_new_window() -> None:
-    """点头应歪头好奇，短时间连续戳五次身体才切换到轻微生气。"""
+def test_double_right_click_triggers_color_mist_world_without_new_window() -> None:
+    """左键继续是普通戳击，快速双右键才进入彩雾世界。"""
 
     app, window = _create_window()
-    initial_affinity = window.mood.affinity
-    head = QPoint(window.width() // 2, 20)
     body = QPoint(window.width() // 2, round(window.label.height() * 0.7))
 
-    window._handle_click(head)
-    assert window.mood.affinity == initial_affinity + 5
-    assert window.state is PetState.CURIOUS
-
-    for _ in range(3):
+    for _ in range(5):
         window._handle_click(body)
-        assert window.state is PetState.SHY
-    window._handle_click(body)
     assert window.state is PetState.ANNOYED
-    assert window._local_effect_manager.mania_active is True
+    assert window._local_effect_manager.color_mist_world_active is False
     assert window.daily_stats.touches >= 5
-    assert window.mood.affinity < initial_affinity + 5
+
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonDblClick,
+        QPointF(window.width() / 2.0, window.height() / 2.0),
+        Qt.MouseButton.RightButton,
+        Qt.MouseButton.RightButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    window.mouseDoubleClickEvent(event)
+    assert window._local_effect_manager.color_mist_world_active is True
+    assert not window.context_menu_timer.isActive()
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -3233,7 +3235,7 @@ def test_song_inspiration_uses_independent_timer() -> None:
 
 
 def test_babuda_fallback_changes_system_voice_tone() -> None:
-    """未选择本地音频时，连续双击右键仍会获得不同语气的系统语音。"""
+    """兼容的本地巴布达语音 helper 仍能产生不同语气。"""
 
     class SpeechRecorder:
         def __init__(self) -> None:

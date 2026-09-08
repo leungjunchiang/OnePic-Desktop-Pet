@@ -598,8 +598,6 @@ class PetWindow(QWidget):
         self._stroke_points: deque[tuple[float, QPoint]] = deque()
         self._last_stroke_reaction = 0.0
         self._poke_times: deque[float] = deque()
-        self._mania_click_times: deque[float] = deque(maxlen=5)
-        self._mania_click_candidate = False
         self._bob_phase = False
         self._effect_phase = 0
         self._frame_index = 0
@@ -907,8 +905,8 @@ class PetWindow(QWidget):
             on_sustain=self._sustain_managed_local_effect,
             on_release=self._release_managed_local_effect,
             on_stop=self._stop_managed_local_effect,
-            on_mania_frame=self._update_mania_local_effect,
-            on_mania_resume=self._resume_managed_local_effect,
+            on_color_mist_world_frame=self._update_color_mist_world_local_effect,
+            on_color_mist_world_resume=self._resume_managed_local_effect,
             duration_profile=getattr(self.settings, "state_effect_duration", "standard"),
         )
         self._local_burst_effect.progressed.connect(self._local_effect_tick)
@@ -7823,7 +7821,7 @@ class PetWindow(QWidget):
             LOGGER.exception("[LocalEffect] managed effect switch failed")
             effect.stop()
 
-    def _update_mania_local_effect(
+    def _update_color_mist_world_local_effect(
         self,
         current: LocalEffectKind,
         following: LocalEffectKind,
@@ -7834,10 +7832,10 @@ class PetWindow(QWidget):
         if effect is None:
             return
         try:
-            effect.set_mania_frame(current, following, mix, phase=phase)
+            effect.set_color_mist_world_frame(current, following, mix, phase=phase)
             self._raise_local_effect_accessories()
         except Exception:
-            LOGGER.exception("[LocalEffect] mania frame update failed")
+            LOGGER.exception("[LocalEffect] color mist world frame update failed")
             effect.stop()
 
     def _resume_managed_local_effect(self, kind: LocalEffectKind) -> None:
@@ -7848,7 +7846,7 @@ class PetWindow(QWidget):
             effect.resume_managed(kind)
             self._raise_local_effect_accessories()
         except Exception:
-            LOGGER.exception("[LocalEffect] resume after mania failed")
+            LOGGER.exception("[LocalEffect] resume after color mist world failed")
             effect.stop()
 
     def _sustain_managed_local_effect(self, _kind: LocalEffectKind) -> None:
@@ -7920,38 +7918,17 @@ class PetWindow(QWidget):
         if manager is not None:
             manager.request_event(normalize_effect_kind(kind))
 
-    def _start_mania_mode(self) -> bool:
-        """Start the local five-click easter egg without touching app state."""
+    def _start_color_mist_world(self) -> bool:
+        """Start the local double-right-click easter egg without touching app state."""
 
-        if not bool(getattr(self.settings, "mania_mode_enabled", True)):
+        if not bool(getattr(self.settings, "color_mist_world_enabled", True)):
             return False
         if not bool(getattr(self.settings, "state_effects_enabled", True)):
             return False
         manager = getattr(self, "_local_effect_manager", None)
         if manager is not None:
-            return bool(manager.start_mania())
+            return bool(manager.start_color_mist_world())
         return False
-
-    def _record_mania_click(self) -> bool:
-        """Return True exactly when five quick confirmed pet clicks are reached."""
-
-        if not bool(getattr(self.settings, "mania_mode_enabled", True)):
-            return False
-        now = time.monotonic()
-        times = self._mania_click_times
-        if times and now - times[-1] > 0.7:
-            times.clear()
-            self._mania_click_candidate = False
-            self._poke_times.clear()
-        times.append(now)
-        while times and now - times[0] > 2.8:
-            times.popleft()
-        if len(times) < 5:
-            self._mania_click_candidate = len(times) >= 3
-            return False
-        times.clear()
-        self._mania_click_candidate = False
-        return self._start_mania_mode()
 
     def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
         self.settings.state_effects_enabled = bool(enabled)
@@ -8029,10 +8006,10 @@ class PetWindow(QWidget):
     def trigger_cyan_effect(self) -> None:
         self.trigger_local_effect(LocalEffectKind.CYAN)
 
-    def trigger_mania_effect(self) -> None:
-        """Developer menu entry for the same reusable mania timeline."""
+    def trigger_color_mist_world(self) -> None:
+        """Developer menu entry for the same reusable color-mist timeline."""
 
-        self._start_mania_mode()
+        self._start_color_mist_world()
 
     def stop_red_burst(self) -> None:
         """Stop the reusable local effect window without changing pet state."""
@@ -8664,11 +8641,15 @@ class PetWindow(QWidget):
                 "current_kind",
                 LocalEffectKind.NONE,
             ).value,
-            "mania_mode_enabled": bool(
-                getattr(self.settings, "mania_mode_enabled", True)
+            "color_mist_world_enabled": bool(
+                getattr(self.settings, "color_mist_world_enabled", True)
             ),
-            "mania_active": bool(
-                getattr(getattr(self, "_local_effect_manager", None), "mania_active", False)
+            "color_mist_world_active": bool(
+                getattr(
+                    getattr(self, "_local_effect_manager", None),
+                    "color_mist_world_active",
+                    False,
+                )
             ),
             "red_burst_active": bool(
                 getattr(getattr(self, "_local_burst_effect", None), "active", False)
@@ -8712,7 +8693,7 @@ class PetWindow(QWidget):
             "state_effect_purple": lambda _checked=False: self.trigger_purple_effect(),
             "state_effect_green": lambda _checked=False: self.trigger_green_effect(),
             "state_effect_cyan": lambda _checked=False: self.trigger_cyan_effect(),
-            "state_effect_mania": lambda _checked=False: self.trigger_mania_effect(),
+            "state_effect_color_mist_world": lambda _checked=False: self.trigger_color_mist_world(),
             "state_effect_stop": lambda _checked=False: self.stop_local_effect(),
             "state_effects_toggle": lambda checked=False: self.set_state_effects_enabled(checked),
             "focus_blue_effect_toggle": lambda checked=False: self.set_focus_blue_effect_enabled(checked),
@@ -9040,13 +9021,6 @@ class PetWindow(QWidget):
         # Work controls are available from explicit work/menu actions only;
         # a normal left click on the pet must never create a floating button bar.
         self.work_controls.hide()
-        mania_triggered = self._record_mania_click()
-        mania_candidate = self._mania_click_candidate
-        if mania_triggered:
-            self.mood.receive_poke(True)
-            self._show_emotion(PetState.ANNOYED, 1800)
-            self.show_speech("六毛发癫啦！颜色开始大循环！", 3600)
-            return
         if zone == "camera":
             self.trigger_selfie()
             return
@@ -9065,10 +9039,7 @@ class PetWindow(QWidget):
         while self._poke_times and now - self._poke_times[0] > 2.5:
             self._poke_times.popleft()
         repeated = len(self._poke_times) >= 5
-        # Hold a three-to-four-click burst as a mania candidate so the third
-        # click does not visibly start RED when the same burst is about to
-        # become the five-click easter egg.
-        if len(self._poke_times) >= 3 and not mania_candidate:
+        if len(self._poke_times) >= 3:
             self._request_local_effect_event(LocalEffectKind.RED)
         self.mood.receive_poke(repeated)
         self._show_emotion(
@@ -9081,7 +9052,7 @@ class PetWindow(QWidget):
         )
 
     def play_babuda_voice(self) -> None:
-        """双击右键时轮换播放用户本地音频；缺少文件则用系统语音轻微变调。"""
+        """兼容旧的本地巴布达语音入口；不再绑定右键双击。"""
 
         if not self.settings.voice_enabled:
             self.show_speech("巴布达！", 2600)
@@ -9121,7 +9092,6 @@ class PetWindow(QWidget):
         if not self._press_pending or self.dragging:
             return
         self._press_pending = False
-        self._mania_click_times.clear()
         self._long_press_triggered = True
         self.daily_stats.record_sleep()
         self._set_temporary_activity("sleep", 60_000)
@@ -9260,9 +9230,8 @@ class PetWindow(QWidget):
         return menu
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """稍候显示六毛本体菜单，为双击右键语音留出判定时间。"""
+        """稍候显示六毛本体菜单，为双击右键彩雾世界留出判定时间。"""
 
-        self._mania_click_times.clear()
         self._record_user_interaction()
         if time.monotonic() < self._suppress_context_until:
             event.accept()
@@ -9394,7 +9363,6 @@ class PetWindow(QWidget):
                 self.long_press_timer.stop()
                 self._press_pending = False
                 self.dragging = True
-                self._mania_click_times.clear()
                 self.mood.receive_drag()
                 self.set_state(PetState.DRAG)
             if not self.dragging:
@@ -9435,12 +9403,11 @@ class PetWindow(QWidget):
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """双击左键打开快捷口袋；双击右键播放一声不同语气的巴布达。"""
+        """双击左键打开快捷口袋；双击右键进入彩雾世界。"""
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
             self._press_pending = False
-            self._mania_click_times.clear()
             self._record_user_interaction()
             self.show_quick_panel()
             event.accept()
@@ -9448,9 +9415,9 @@ class PetWindow(QWidget):
         if event.button() == Qt.MouseButton.RightButton:
             self.context_menu_timer.stop()
             self._suppress_context_until = time.monotonic() + 0.8
-            self._mania_click_times.clear()
             self._record_user_interaction()
-            self.play_babuda_voice()
+            if self._start_color_mist_world():
+                self.show_speech("彩雾世界开始了！", 1500)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
