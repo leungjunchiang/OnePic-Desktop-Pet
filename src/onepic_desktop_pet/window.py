@@ -66,6 +66,7 @@ from PySide6.QtCore import (
     QObject,
     QPoint,
     QRect,
+    QRectF,
     QSize,
     QTime,
     Qt,
@@ -177,7 +178,7 @@ from .food_scene_ui import FoodSceneDialog
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
-from .local_burst_effect import LocalBurstEffectWindow
+from .local_burst_effect import EffectExclusionRegion, LocalBurstEffectWindow
 from .state_effects import (
     LocalEffectKind,
     LocalEffectManager,
@@ -7729,10 +7730,15 @@ class PetWindow(QWidget):
 
         return QRect(self.label.mapToGlobal(QPoint(0, 0)), self.label.size())
 
-    def _local_burst_exclusions(self) -> tuple[QRect, ...]:
-        """Reserve readable space for detached status bubbles."""
+    def _local_burst_exclusions(self) -> tuple[EffectExclusionRegion, ...]:
+        """Protect only visible accessory surfaces from local effects.
 
-        exclusions: list[QRect] = []
+        In particular, the work-duration bubble exposes its painted capsule;
+        its top-level widget/frame may contain transparent layout/native
+        padding and must never become an invisible rectangular effect hole.
+        """
+
+        exclusions: list[EffectExclusionRegion] = []
         for widget in (
             self.work_duration_bubble,
             self.speech_bubble,
@@ -7742,7 +7748,19 @@ class PetWindow(QWidget):
         ):
             try:
                 if widget.isVisible():
-                    exclusions.append(widget.frameGeometry())
+                    if widget is self.work_duration_bubble:
+                        pill_rect = widget.visual_pill_global_rect()
+                        if not pill_rect.isEmpty():
+                            exclusions.append(
+                                EffectExclusionRegion.from_rect(
+                                    pill_rect,
+                                    radius=widget.visual_pill_radius(),
+                                )
+                            )
+                    else:
+                        rect = widget.frameGeometry()
+                        if not rect.isEmpty():
+                            exclusions.append(EffectExclusionRegion.from_rect(QRectF(rect)))
             except RuntimeError:
                 continue
         return tuple(exclusions)
@@ -8345,6 +8363,14 @@ class PetWindow(QWidget):
                 )
             self._raise_accessory(self.work_duration_bubble)
         self._duration_bubble_pet_anchor = pet_anchor if visible else None
+        # A changing clock label can cross a width boundary (mm:ss ->
+        # h:mm:ss, or add the paused suffix).  Refresh the local effect's
+        # visible-pill path only when visibility/geometry actually changed;
+        # never query bubble geometry from every plume paint call.
+        if (visible != was_visible or geometry_changed) and getattr(
+            getattr(self, "_local_burst_effect", None), "active", False
+        ):
+            self._position_local_burst_effect()
 
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""

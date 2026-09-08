@@ -43,6 +43,8 @@ diagnostics/procdump/*.txt
 .test-tmp/
 .test-localappdata/
 .test-localdata-*/
+build-pill-exclusion/
+dist-pill-exclusion/
 
 # Cloudflare Worker local state
 relay/cloudflare-worker/node_modules/

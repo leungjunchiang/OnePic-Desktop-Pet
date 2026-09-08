@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient
-from PySide6.QtGui import QRegion
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .state_effects import LocalEffectKind, normalize_effect_kind
@@ -34,7 +33,8 @@ DEFAULT_RELEASE_DURATION_MS = 900
 OVERLAY_WIDTH_RATIO = 2.4
 OVERLAY_HEIGHT_RATIO = 1.7
 PET_CENTER_Y_RATIO = 0.43
-EXCLUSION_MARGIN = 12
+EXCLUSION_HARD_MARGIN = 4.0
+EXCLUSION_FEATHER_MARGIN = 6.0
 
 
 # x, y, rx, ry, phase, strength.  Positions are normalized to the overlay,
@@ -65,6 +65,67 @@ RED_PARTICLE_SEEDS: tuple[tuple[float, float, float, float, float, float, float]
     (0.70, 0.70, 0.62, 0.05, 0.012, 2.80, 0.62),
     (0.47, 0.85, 0.47, 0.05, 0.012, 4.70, 0.58),
 )
+
+
+@dataclass(frozen=True)
+class EffectExclusionRegion:
+    """The visible-shape protection used by a local effect.
+
+    The old implementation converted every accessory widget into an expanded
+    rectangular clip.  That made transparent widget padding look like a
+    second, invisible UI panel.  This value deliberately stores the actual
+    hard and feather paths instead, so a rounded work-duration pill remains a
+    rounded protection shape.
+    """
+
+    hard_path: QPainterPath
+    feather_path: QPainterPath
+    hard_margin: float = EXCLUSION_HARD_MARGIN
+    feather_margin: float = EXCLUSION_FEATHER_MARGIN
+
+    @classmethod
+    def from_rect(
+        cls,
+        rect: QRectF,
+        *,
+        radius: float | None = None,
+        hard_margin: float = EXCLUSION_HARD_MARGIN,
+        feather_margin: float = EXCLUSION_FEATHER_MARGIN,
+    ) -> "EffectExclusionRegion":
+        """Build a small rounded exclusion around a visible rect."""
+
+        visible = QRectF(rect)
+        if visible.isEmpty():
+            return cls(QPainterPath(), QPainterPath(), hard_margin, feather_margin)
+        hard = visible.adjusted(-hard_margin, -hard_margin, hard_margin, hard_margin)
+        outer_margin = hard_margin + feather_margin
+        feather = visible.adjusted(-outer_margin, -outer_margin, outer_margin, outer_margin)
+        hard_radius = max(0.0, float(radius if radius is not None else 0.0) + hard_margin)
+        feather_radius = max(0.0, float(radius if radius is not None else 0.0) + outer_margin)
+        hard_radius = min(hard_radius, hard.width() / 2.0, hard.height() / 2.0)
+        feather_radius = min(feather_radius, feather.width() / 2.0, feather.height() / 2.0)
+        hard_path = QPainterPath()
+        feather_path = QPainterPath()
+        hard_path.addRoundedRect(hard, hard_radius, hard_radius)
+        feather_path.addRoundedRect(feather, feather_radius, feather_radius)
+        return cls(hard_path, feather_path, hard_margin, feather_margin)
+
+    def translated(self, dx: float, dy: float) -> "EffectExclusionRegion":
+        """Return a copy translated into overlay-local coordinates."""
+
+        hard_path = QPainterPath(self.hard_path)
+        feather_path = QPainterPath(self.feather_path)
+        hard_path.translate(dx, dy)
+        feather_path.translate(dx, dy)
+        return EffectExclusionRegion(
+            hard_path,
+            feather_path,
+            self.hard_margin,
+            self.feather_margin,
+        )
+
+    def contains_hard(self, point: QPointF) -> bool:
+        return self.hard_path.contains(point)
 
 
 @dataclass(frozen=True)
@@ -344,42 +405,38 @@ def _apply_face_safety(painter: QPainter, pet_rect: QRectF) -> None:
     painter.restore()
 
 
-def paint_local_effect(
+def _paint_local_effect_pass(
     painter: QPainter,
     bounds: QRectF,
     *,
-    kind: LocalEffectKind | str = LocalEffectKind.RED,
+    preset: LocalEffectPreset,
     progress: float,
     pet_rect: QRectF,
-    exclusion_rects: Iterable[QRectF] = (),
-    stage: str = "entry",
-    phase: float = 0.0,
-    opacity_scale: float = 1.0,
+    exclusion_path: QPainterPath | None,
+    include_path: QPainterPath | None,
+    exclusion_hard_paths: tuple[QPainterPath, ...],
+    allow_ground_under_exclusion: bool,
+    stage: str,
+    phase: float,
+    opacity_scale: float,
+    painter_alpha_scale: float,
 ) -> None:
-    """Paint one local effect frame into an already-created overlay.
-
-    ``bounds`` and ``pet_rect`` are logical coordinates in the overlay.  The
-    function never changes window geometry and never performs random sampling.
-    ``stage`` is one of ``entry``, ``sustain`` or ``release``.  All three
-    stages use the same parameterized renderer; only their envelope differs.
-    """
-
-    kind = normalize_effect_kind(kind)
-    preset = LOCAL_EFFECT_PRESETS.get(kind)
-    if preset is None:
-        return
-    progress = max(0.0, min(1.0, float(progress)))
-    opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
-    if bounds.isEmpty() or pet_rect.isEmpty() or opacity_scale <= 0:
-        return
+    """Paint one pass, optionally outside a rounded exclusion path."""
 
     painter.save()
-    clip = QRegion(bounds.toAlignedRect())
-    for exclusion in exclusion_rects:
-        if not exclusion.isEmpty():
-            clip = clip.subtracted(QRegion(exclusion.toAlignedRect()))
-    painter.setClipRegion(clip, Qt.ClipOperation.ReplaceClip)
+    bounds_clip = QPainterPath()
+    bounds_clip.addRect(bounds)
+    if allow_ground_under_exclusion:
+        painter.setClipPath(bounds_clip, Qt.ClipOperation.ReplaceClip)
+    else:
+        painter.setClipPath(
+            bounds_clip.subtracted(exclusion_path)
+            if exclusion_path is not None and not exclusion_path.isEmpty()
+            else bounds_clip,
+            Qt.ClipOperation.ReplaceClip,
+        )
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setOpacity(max(0.0, min(1.0, painter.opacity() * painter_alpha_scale)))
 
     if stage == "sustain":
         envelope = 0.84 + math.sin(phase * 0.92) * 0.08
@@ -418,6 +475,17 @@ def paint_local_effect(
             preset.shockwave_strength,
         )
 
+    # Keep the ground glow continuous behind an opaque bubble.  Only smoke,
+    # flash and particles use the pill-shaped exclusion, so a small ring can
+    # visually pass underneath the bubble instead of being cut into a gap.
+    painter.save()
+    effect_clip = QPainterPath(bounds_clip)
+    if include_path is not None and not include_path.isEmpty():
+        effect_clip = effect_clip.intersected(include_path)
+    if exclusion_path is not None and not exclusion_path.isEmpty():
+        effect_clip = effect_clip.subtracted(exclusion_path)
+    painter.setClipPath(effect_clip, Qt.ClipOperation.ReplaceClip)
+
     smoke_strength = envelope * bloom
     for index, (x, y, rx, ry, offset, seed_strength) in enumerate(RED_FOG_SEEDS):
         drift_x = math.sin(phase * preset.fog_speed + offset) * bounds.width() * 0.030
@@ -447,14 +515,15 @@ def paint_local_effect(
         travel = min(1.0, (progress if stage != "sustain" else 0.65) * 1.18)
         px = bounds.left() + bounds.width() * x + math.sin(phase * 0.75 + offset) * bounds.width() * drift
         py = bounds.top() + bounds.height() * y - bounds.height() * rise * travel
+        point = QPointF(px, py)
         radius = max(1.5, bounds.width() * size * (1.0 + 0.08 * math.sin(phase + offset)))
         particle_color = palette[3] if index % 3 == 0 else palette[1]
         particle_alpha = 155.0 * particle_strength * seed_strength * max(0.0, 1.0 - progress * 0.34)
-        if _face_safe_rect(pet_rect).contains(QPointF(px, py)):
+        if _face_safe_rect(pet_rect).contains(point) or any(path.contains(point) for path in exclusion_hard_paths):
             continue
         _draw_particle(
             painter,
-            QPointF(px, py),
+            point,
             radius,
             particle_alpha,
             particle_color,
@@ -462,6 +531,108 @@ def paint_local_effect(
             style=preset.particle_style,
         )
     painter.restore()
+    painter.restore()
+
+
+def paint_local_effect(
+    painter: QPainter,
+    bounds: QRectF,
+    *,
+    kind: LocalEffectKind | str = LocalEffectKind.RED,
+    progress: float,
+    pet_rect: QRectF,
+    exclusion_rects: Iterable[QRectF] = (),
+    exclusion_regions: Iterable[EffectExclusionRegion] = (),
+    stage: str = "entry",
+    phase: float = 0.0,
+    opacity_scale: float = 1.0,
+) -> None:
+    """Paint one local effect frame into an already-created overlay.
+
+    ``exclusion_rects`` remains as a compatibility input for callers that
+    already own a hard rectangle.  New window code uses
+    ``EffectExclusionRegion`` so the work-duration pill is protected by its
+    rounded visual shape rather than its transparent widget geometry.
+    """
+
+    kind = normalize_effect_kind(kind)
+    preset = LOCAL_EFFECT_PRESETS.get(kind)
+    progress = max(0.0, min(1.0, float(progress)))
+    opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
+    if preset is None or bounds.isEmpty() or pet_rect.isEmpty() or opacity_scale <= 0:
+        return
+
+    regions = list(exclusion_regions)
+    regions.extend(
+        EffectExclusionRegion.from_rect(
+            QRectF(rect), hard_margin=0.0, feather_margin=0.0
+        )
+        for rect in exclusion_rects
+        if not QRectF(rect).isEmpty()
+    )
+    if not regions:
+        _paint_local_effect_pass(
+            painter,
+            bounds,
+            preset=preset,
+            progress=progress,
+            pet_rect=pet_rect,
+            exclusion_path=None,
+            include_path=None,
+            exclusion_hard_paths=(),
+            allow_ground_under_exclusion=False,
+            stage=stage,
+            phase=phase,
+            opacity_scale=opacity_scale,
+            painter_alpha_scale=1.0,
+        )
+        return
+
+    hard_paths = tuple(region.hard_path for region in regions if not region.hard_path.isEmpty())
+    allow_ground_under_exclusion = any(
+        region.hard_margin > 0 or region.feather_margin > 0
+        for region in regions
+    )
+    hard_path = QPainterPath()
+    feather_path = QPainterPath()
+    for region in regions:
+        if not region.hard_path.isEmpty():
+            hard_path = hard_path.united(region.hard_path)
+        if not region.feather_path.isEmpty():
+            feather_path = feather_path.united(region.feather_path)
+    # A low-alpha pass fills the narrow feather band; the normal pass starts
+    # outside the outer capsule.  Together they avoid the old rectangular
+    # hole while keeping text and the pill border readable.
+    _paint_local_effect_pass(
+        painter,
+        bounds,
+        preset=preset,
+        progress=progress,
+        pet_rect=pet_rect,
+        exclusion_path=hard_path,
+        include_path=feather_path,
+        exclusion_hard_paths=hard_paths,
+        allow_ground_under_exclusion=allow_ground_under_exclusion,
+        stage=stage,
+        phase=phase,
+        opacity_scale=opacity_scale,
+        painter_alpha_scale=0.16,
+    )
+    _paint_local_effect_pass(
+        painter,
+        bounds,
+        preset=preset,
+        progress=progress,
+        pet_rect=pet_rect,
+        exclusion_path=feather_path,
+        include_path=None,
+        exclusion_hard_paths=hard_paths,
+        allow_ground_under_exclusion=allow_ground_under_exclusion,
+        stage=stage,
+        phase=phase,
+        opacity_scale=opacity_scale,
+        painter_alpha_scale=1.0,
+    )
 
 
 def paint_red_burst(
@@ -516,8 +687,8 @@ class LocalBurstEffectWindow(QWidget):
         self._crossfade_duration_ms = 360
         self._pet_global_rect = QRect()
         self._pet_rect = QRectF()
-        self._exclusion_global_rects: tuple[QRect, ...] = ()
-        self._exclusion_rects: tuple[QRectF, ...] = ()
+        self._exclusion_global_regions: tuple[EffectExclusionRegion, ...] = ()
+        self._exclusion_regions: tuple[EffectExclusionRegion, ...] = ()
         self._always_on_top = False
         self._configure_flags(False)
         self.resize(1, 1)
@@ -592,22 +763,37 @@ class LocalBurstEffectWindow(QWidget):
             self._pet_global_rect.width(),
             self._pet_global_rect.height(),
         )
-        self._exclusion_rects = tuple(
-            QRectF(rect.x() - x, rect.y() - y, rect.width(), rect.height())
-            for rect in self._exclusion_global_rects
+        self._exclusion_regions = tuple(
+            region.translated(-x, -y)
+            for region in self._exclusion_global_regions
         )
 
-    def reposition(self, pet_global_rect: QRect, exclusion_rects: Iterable[QRect] = ()) -> None:
+    @staticmethod
+    def _normalize_exclusion_regions(
+        exclusions: Iterable[EffectExclusionRegion | QRect | QRectF],
+    ) -> tuple[EffectExclusionRegion, ...]:
+        regions: list[EffectExclusionRegion] = []
+        for item in exclusions:
+            if isinstance(item, EffectExclusionRegion):
+                if not item.hard_path.isEmpty() or not item.feather_path.isEmpty():
+                    regions.append(item)
+                continue
+            rect = QRectF(item)
+            if not rect.isEmpty():
+                regions.append(EffectExclusionRegion.from_rect(rect))
+        return tuple(regions)
+
+    def reposition(
+        self,
+        pet_global_rect: QRect,
+        exclusion_regions: Iterable[EffectExclusionRegion | QRect | QRectF] = (),
+    ) -> None:
         """Re-anchor an active effect without changing its animation phase."""
 
         if pet_global_rect.isEmpty():
             return
         self._pet_global_rect = QRect(pet_global_rect)
-        self._exclusion_global_rects = tuple(
-            QRect(rect).adjusted(-EXCLUSION_MARGIN, -EXCLUSION_MARGIN, EXCLUSION_MARGIN, EXCLUSION_MARGIN)
-            for rect in exclusion_rects
-            if not rect.isEmpty()
-        )
+        self._exclusion_global_regions = self._normalize_exclusion_regions(exclusion_regions)
         self._set_geometry_from_anchor()
         if self._active:
             self.update()
@@ -615,7 +801,7 @@ class LocalBurstEffectWindow(QWidget):
     def trigger(
         self,
         pet_global_rect: QRect,
-        exclusion_rects: Iterable[QRect] = (),
+        exclusion_regions: Iterable[EffectExclusionRegion | QRect | QRectF] = (),
         *,
         kind: LocalEffectKind | str = LocalEffectKind.RED,
         always_on_top: bool = False,
@@ -631,7 +817,7 @@ class LocalBurstEffectWindow(QWidget):
 
         try:
             self._configure_flags(always_on_top)
-            self.reposition(pet_global_rect, exclusion_rects)
+            self.reposition(pet_global_rect, exclusion_regions)
             now = time.monotonic()
             self._started_at = now
             self._stage_started_at = now
@@ -656,14 +842,14 @@ class LocalBurstEffectWindow(QWidget):
         self,
         kind: LocalEffectKind | str,
         pet_global_rect: QRect,
-        exclusion_rects: Iterable[QRect] = (),
+        exclusion_regions: Iterable[EffectExclusionRegion | QRect | QRectF] = (),
         *,
         always_on_top: bool = False,
         show_window: bool = True,
     ) -> None:
         self.trigger(
             pet_global_rect,
-            exclusion_rects,
+            exclusion_regions,
             kind=kind,
             always_on_top=always_on_top,
             show_window=show_window,
@@ -742,14 +928,14 @@ class LocalBurstEffectWindow(QWidget):
                 progress = stage_elapsed / self._duration_ms
                 paint_local_effect(
                     painter, bounds, kind=self._kind, progress=progress,
-                    pet_rect=self._pet_rect, exclusion_rects=self._exclusion_rects,
+                    pet_rect=self._pet_rect, exclusion_regions=self._exclusion_regions,
                     stage="entry", phase=stage_elapsed / 1000.0,
                 )
             elif self._stage == "release":
                 progress = stage_elapsed / max(1, self._release_duration_ms)
                 paint_local_effect(
                     painter, bounds, kind=self._kind, progress=progress,
-                    pet_rect=self._pet_rect, exclusion_rects=self._exclusion_rects,
+                    pet_rect=self._pet_rect, exclusion_regions=self._exclusion_regions,
                     stage="release", phase=stage_elapsed / 1000.0,
                 )
             else:
@@ -763,7 +949,7 @@ class LocalBurstEffectWindow(QWidget):
                     painter.setOpacity(1.0 - fade)
                     paint_local_effect(
                         painter, bounds, kind=self._previous_kind, progress=0.5,
-                        pet_rect=self._pet_rect, exclusion_rects=self._exclusion_rects,
+                        pet_rect=self._pet_rect, exclusion_regions=self._exclusion_regions,
                         stage="sustain", phase=(now - self._previous_stage_started_at),
                     )
                     painter.restore()
@@ -778,7 +964,7 @@ class LocalBurstEffectWindow(QWidget):
                 progress = stage_elapsed / ENTRY_DURATION_MS if stage == "entry" else 0.0
                 paint_local_effect(
                     painter, bounds, kind=self._kind, progress=progress,
-                    pet_rect=self._pet_rect, exclusion_rects=self._exclusion_rects,
+                    pet_rect=self._pet_rect, exclusion_regions=self._exclusion_regions,
                     stage=stage, phase=stage_elapsed / 1000.0,
                 )
                 if current_painter_saved:

@@ -197,6 +197,31 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
     app.processEvents()
 
 
+def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> None:
+    app, window = _create_window()
+    bubble = window.work_duration_bubble
+    bubble.set_session("focus", 6 * 60 * 60 + 10, True)
+    bubble.move(100, 100)
+    bubble.show()
+    app.processEvents()
+
+    exclusions = window._local_burst_exclusions()
+    assert len(exclusions) == 1
+    pill = bubble.visual_pill_global_rect()
+    hard_bounds = exclusions[0].hard_path.boundingRect()
+    assert hard_bounds.left() == pytest.approx(pill.left() - 4.0)
+    assert hard_bounds.top() == pytest.approx(pill.top() - 4.0)
+    assert hard_bounds.width() == pytest.approx(pill.width() + 8.0)
+    assert hard_bounds.height() == pytest.approx(pill.height() + 8.0)
+
+    bubble.hide()
+    app.processEvents()
+    assert window._local_burst_exclusions() == ()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_taunt_state_schedules_periodic_followup_speech() -> None:
     app, window = _create_window()
     window._apply_taunt_state(

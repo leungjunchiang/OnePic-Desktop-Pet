@@ -4,11 +4,14 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect, QRectF, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.local_burst_effect import (
+    EXCLUSION_FEATHER_MARGIN,
+    EXCLUSION_HARD_MARGIN,
+    EffectExclusionRegion,
     LocalBurstEffectWindow,
     OVERLAY_HEIGHT_RATIO,
     OVERLAY_WIDTH_RATIO,
@@ -88,6 +91,49 @@ def test_face_safe_region_and_bubble_exclusion_are_clear() -> None:
     # A status bubble exclusion remains transparent with its margin already
     # applied by the window layer in the real path.
     assert image.pixelColor(192, 220).alpha() == 0
+
+
+def test_visible_pill_exclusion_is_rounded_and_tightly_bounded() -> None:
+    region = EffectExclusionRegion.from_rect(
+        QRectF(100, 100, 120, 30),
+        radius=15,
+    )
+    hard_bounds = region.hard_path.boundingRect()
+    feather_bounds = region.feather_path.boundingRect()
+    assert hard_bounds.left() == 100 - EXCLUSION_HARD_MARGIN
+    assert hard_bounds.right() == 220 + EXCLUSION_HARD_MARGIN
+    assert feather_bounds.left() == 100 - EXCLUSION_HARD_MARGIN - EXCLUSION_FEATHER_MARGIN
+    assert feather_bounds.right() == 220 + EXCLUSION_HARD_MARGIN + EXCLUSION_FEATHER_MARGIN
+    # The capsule's rounded corner is not treated like a rectangular widget
+    # corner, while its center remains fully protected.
+    assert not region.hard_path.contains(QPointF(96, 96))
+    assert region.hard_path.contains(QPointF(160, 115))
+
+
+def test_rounded_pill_feather_keeps_effect_outside_the_pill() -> None:
+    _app()
+    canvas = QPixmap(384, 272)
+    canvas.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(canvas)
+    paint_local_effect(
+        painter,
+        QRectF(canvas.rect()),
+        kind=LocalEffectKind.PURPLE,
+        progress=0.52,
+        pet_rect=QRectF(144, 52, 160, 160),
+        exclusion_regions=(EffectExclusionRegion.from_rect(QRectF(150, 205, 84, 42), radius=21),),
+        stage="entry",
+        phase=0.52,
+    )
+    painter.end()
+    image = canvas.toImage()
+    # The center is protected by the rounded hard path for smoke/particles;
+    # the opaque bubble itself is raised above the overlay, so its ground
+    # glow may continue underneath it.  Nearby outside space is not swallowed
+    # by a large rectangular exclusion.
+    region = EffectExclusionRegion.from_rect(QRectF(150, 205, 84, 42), radius=21)
+    assert region.contains_hard(QPointF(192, 220))
+    assert image.pixelColor(145, 220).alpha() > 0
 
 
 def test_local_burst_window_is_reused_and_has_one_timer() -> None:

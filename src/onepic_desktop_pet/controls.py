@@ -280,6 +280,33 @@ class WorkDurationBubble(RoundedSurfaceLabel):
         self._last_text = ""
         self.hide()
 
+    def visual_pill_rect(self) -> QRectF:
+        """Return only the painted capsule, in this widget's coordinates.
+
+        The top-level label can have native/layout bookkeeping around it, but
+        the visible surface is the rounded shape painted by
+        ``RoundedSurfaceLabel.paintEvent``.  Local effects must use this shape
+        rather than treating the whole widget frame as a rectangular hole.
+        """
+
+        if self.width() <= 0 or self.height() <= 0:
+            return QRectF()
+        return QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+
+    def visual_pill_global_rect(self) -> QRectF:
+        """Return the visible capsule in global logical coordinates."""
+
+        local = self.visual_pill_rect()
+        if local.isEmpty():
+            return QRectF()
+        top_left = self.mapToGlobal(local.topLeft().toPoint())
+        return QRectF(top_left.x(), top_left.y(), local.width(), local.height())
+
+    def visual_pill_radius(self) -> float:
+        """Return the radius used by the painted capsule."""
+
+        return min(self._surface_radius, self.height() / 2.0)
+
     def set_session(self, status: str, seconds: int, visible: bool) -> bool:
         """Project the shared calendar-day snapshot; never owns a timer."""
 
