@@ -19,21 +19,6 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
     steps:
       - uses: actions/checkout@v4
-      - name: Apply account-scoped daily focus history migration
+      - name: Apply ordered sealed-focus sync contract
         shell: pwsh
-        run: ./scripts/apply_supabase_focus_history.ps1
-      - name: Apply per-device live focus display migration
-        shell: pwsh
-        run: |
-          ./scripts/apply_supabase_focus_history.ps1 `
-            -MigrationPath "supabase/migrations/20260907090000_lili_focus_live_projection_read.sql"
-      - name: Apply account-level device-presence interval-union migration
-        shell: pwsh
-        run: |
-          ./scripts/apply_supabase_focus_history.ps1 `
-            -MigrationPath "supabase/migrations/20260907110000_lili_focus_union_device_presence.sql"
-      - name: Apply sealed-focus contract and aggregate leaderboard migration
-        shell: pwsh
-        run: |
-          ./scripts/apply_supabase_focus_history.ps1 `
-            -MigrationPath "supabase/migrations/20260907130000_lili_sealed_focus_contract.sql"
+        run: ./scripts/apply_supabase_focus_sync_migrations.ps1

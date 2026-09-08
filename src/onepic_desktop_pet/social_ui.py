@@ -47,6 +47,7 @@ from .social import (
 )
 from .config import PET_NAME, clean_owner_nickname, clean_social_pet_name, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
+from .focus_sync_protocol import validate_focus_delta_response
 from .login_rewards import login_reward_granted, login_streak_days
 from .work_timer import format_work_duration
 from .lifecycle_log import lifecycle_log
@@ -68,34 +69,13 @@ def _focus_upload_ack_status(
     uploaded_segments: object,
     response: object,
 ) -> tuple[bool, set[str]]:
-    """Validate the server's per-segment acknowledgement without side effects."""
+    """Validate the v2 acknowledgement without changing local state."""
 
-    uploaded = uploaded_segments if isinstance(uploaded_segments, list) else []
-    expected_ids = [
-        str(item.get("segment_id") or "").strip()
-        for item in uploaded
-        if isinstance(item, dict) and str(item.get("segment_id") or "").strip()
-    ]
-    accepted_raw = (
-        response.get("accepted_segment_ids")
-        if isinstance(response, dict)
-        else None
+    valid, _reason, accepted_ids = validate_focus_delta_response(
+        response,
+        uploaded_segments,
     )
-    accepted_ids = {
-        str(value or "").strip()
-        for value in accepted_raw
-        if str(value or "").strip()
-    } if isinstance(accepted_raw, list) else set()
-    if not uploaded:
-        return True, accepted_ids
-    expected_set = set(expected_ids)
-    return (
-        isinstance(accepted_raw, list)
-        and len(expected_ids) == len(uploaded)
-        and len(expected_set) == len(uploaded)
-        and expected_set == accepted_ids,
-        accepted_ids,
-    )
+    return valid, accepted_ids
 
 
 def _merge_dashboard_snapshot(
@@ -916,14 +896,27 @@ class SocialSyncThread(QThread):
                         )
                         # A successful HTTP/RPC response is not sufficient:
                         # the server must explicitly acknowledge every sealed
-                        # fact in this transaction.  Missing/partial acks keep
-                        # the whole batch dirty and also fence the delta cursor.
-                        upload_ack_ok, accepted_segment_ids = _focus_upload_ack_status(
-                            uploaded_segments,
-                            focus_segments_result,
+                        # fact and return a complete ordered-stream page.
+                        # Missing/partial ACKs, malformed rows, and an empty
+                        # response that advances the cursor keep the whole
+                        # transaction retryable.
+                        protocol_ok, protocol_error, accepted_segment_ids = (
+                            validate_focus_delta_response(
+                                focus_segments_result,
+                                uploaded_segments,
+                                cursor_before=focus_segments_cursor_before,
+                            )
                         )
+                        upload_ack_ok = protocol_ok
+                        if not protocol_ok:
+                            LOGGER.warning(
+                                "focus segment delta response rejected: %s",
+                                protocol_error,
+                            )
                         focus_segments_result["_uploaded_segments"] = uploaded_segments
                         focus_segments_result["_upload_ack_ok"] = upload_ack_ok
+                        focus_segments_result["_protocol_valid"] = protocol_ok
+                        focus_segments_result["_protocol_error"] = protocol_error
                         focus_segments_result["_accepted_count"] = len(accepted_segment_ids)
                         focus_segments_sync_duration_ms = round(
                             (time.monotonic() - focus_segments_sync_started)
@@ -940,6 +933,8 @@ class SocialSyncThread(QThread):
                         focus_segments_result["_sync_diagnostics"] = {
                             "cursor_before": focus_segments_cursor_before,
                             "upload_count": focus_segments_upload_count,
+                            "requested_count": focus_segments_result.get("requested_count"),
+                            "server_accepted_count": focus_segments_result.get("accepted_count"),
                             "accepted_count": len(accepted_segment_ids),
                             "returned_count": returned_count,
                             "cursor_after": str(
@@ -949,12 +944,16 @@ class SocialSyncThread(QThread):
                             "sync_mode": focus_segments_sync_mode,
                             "device_id": focus_segments_device_id,
                             "duration_ms": focus_segments_sync_duration_ms,
-                            "error": "" if upload_ack_ok else "upload_ack_missing_or_mismatch",
+                            "error": "" if upload_ack_ok else (
+                                protocol_error or "upload_ack_missing_or_mismatch"
+                            ),
                         }
                         lifecycle_log(
                             "focus.segment_sync.transport",
                             cursor_before=focus_segments_cursor_before,
                             upload_count=focus_segments_upload_count,
+                            requested_count=focus_segments_result.get("requested_count"),
+                            server_accepted_count=focus_segments_result.get("accepted_count"),
                             accepted_count=len(accepted_segment_ids),
                             returned_count=returned_count,
                             cursor_after=str(
@@ -964,7 +963,9 @@ class SocialSyncThread(QThread):
                             sync_mode=focus_segments_sync_mode,
                             device_id=focus_segments_device_id,
                             duration_ms=focus_segments_sync_duration_ms,
-                            error="" if upload_ack_ok else "upload_ack_missing_or_mismatch",
+                            error="" if upload_ack_ok else (
+                                protocol_error or "upload_ack_missing_or_mismatch"
+                            ),
                         )
                     integrity_manifest = personal_state.get(
                         "focus_segment_integrity_manifest"

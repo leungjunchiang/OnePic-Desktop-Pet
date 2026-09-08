@@ -33,22 +33,38 @@ from onepic_desktop_pet.social_ui import (
 
 def test_focus_upload_ack_requires_every_requested_segment_id() -> None:
     uploaded = [{"segment_id": "a"}, {"segment_id": "b"}]
+    base = {
+        "segments": [],
+        "full_sync": False,
+        "next_cursor": '{"updated_at":"2026-09-08T08:00:00+00:00","segment_id":"s"}',
+        "has_more": False,
+        "requested_count": 2,
+        "accepted_count": 2,
+    }
 
     assert _focus_upload_ack_status(
         uploaded,
-        {"accepted_segment_ids": ["a", "b"]},
+        {**base, "accepted_segment_ids": ["a", "b"]},
     ) == (True, {"a", "b"})
     assert _focus_upload_ack_status(
         uploaded,
-        {"accepted_segment_ids": ["a"]},
+        {**base, "accepted_count": 1, "accepted_segment_ids": ["a"]},
     ) == (False, {"a"})
-    assert _focus_upload_ack_status(uploaded, {}) == (False, set())
+    assert _focus_upload_ack_status(uploaded, {**base}) == (False, set())
 
 
 def test_focus_upload_ack_rejects_duplicate_or_malformed_local_ids() -> None:
     assert _focus_upload_ack_status(
         [{"segment_id": "a"}, {"segment_id": "a"}],
-        {"accepted_segment_ids": ["a"]},
+        {
+            "segments": [],
+            "full_sync": False,
+            "next_cursor": '{"updated_at":"2026-09-08T08:00:00+00:00","segment_id":"s"}',
+            "has_more": False,
+            "requested_count": 2,
+            "accepted_count": 1,
+            "accepted_segment_ids": ["a"],
+        },
     )[0] is False
 
 

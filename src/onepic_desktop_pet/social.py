@@ -1977,6 +1977,7 @@ class HttpSocialBackend:
             "lili_sync_focus_segments": "/rpc/lili_sync_focus_segments",
             "lili_sync_focus_segments_delta": "/rpc/lili_sync_focus_segments_delta",
             "lili_sync_focus_segments_delta_v2": "/rpc/lili_sync_focus_segments_delta_v2",
+            "lili_focus_segment_integrity_v1": "/rpc/lili_focus_segment_integrity_v1",
             "lili_focus_live_projection": "/rpc/lili_focus_live_projection",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)

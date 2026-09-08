@@ -2083,6 +2083,22 @@ def test_server_focus_union_uses_per_device_live_presence_for_all_totals():
     assert "insert into public.lili_focus_segments" not in normalized
 
 
+def test_weekly_canonical_function_uses_the_same_interval_union():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260908090000_lili_focus_week_canonical_union.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+    assert "create or replace function public.lili_effective_focus_week_seconds" in normalized
+    assert "public.lili_focus_union_seconds" in normalized
+    assert "least(604800" in normalized
+    assert "focus_week_seconds" not in normalized
+    assert "focus_daily" not in normalized
+
+
 def test_sealed_focus_contract_and_aggregate_leaderboard_are_explicit():
     root = Path(__file__).resolve().parents[1]
     migration = (
@@ -2135,6 +2151,42 @@ def test_focus_segment_integrity_audit_is_bounded_owner_only_and_id_only():
     assert "insert into public.lili_focus_segments" not in normalized
     assert "update public.lili_focus_segments" not in normalized
     assert "delete from public.lili_focus_segments" not in normalized
+
+
+def test_focus_segment_integrity_audit_is_available_through_every_relay():
+    root = Path(__file__).resolve().parents[1]
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "lili_focus_segment_integrity_v1" in source
+
+
+def test_focus_sync_deploy_workflow_applies_the_complete_ordered_contract():
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        root / "scripts" / "apply_supabase_focus_sync_migrations.ps1"
+    ).read_text(encoding="utf-8")
+    workflow = (
+        root / ".github" / "workflows" / "deploy-supabase-focus-history.yml"
+    ).read_text(encoding="utf-8")
+    assert "apply_supabase_focus_sync_migrations.ps1" in workflow
+    expected = (
+        "20260906090000_lili_incremental_focus_segments_sync.sql",
+        "20260906093000_lili_incremental_focus_segments_invoker.sql",
+        "20260907130000_lili_sealed_focus_contract.sql",
+        "20260907143000_lili_focus_delta_composite_cursor.sql",
+        "20260907170000_lili_focus_delta_explicit_upload_ack.sql",
+        "20260907190000_lili_focus_delta_empty_cursor_guard.sql",
+        "20260907213000_lili_focus_segment_integrity_audit.sql",
+        "20260907230000_lili_focus_segment_reconciliation_manifest.sql",
+        "20260908090000_lili_focus_week_canonical_union.sql",
+    )
+    positions = [script.index(name) for name in expected]
+    assert positions == sorted(positions)
 
 
 def test_buddy_request_state_machine_is_idempotent_and_allowlisted():

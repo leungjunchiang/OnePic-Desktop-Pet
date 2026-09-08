@@ -7130,7 +7130,18 @@ class PetWindow(QWidget):
         merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)
         merge_ok = False
         merge_error = ""
-        if callable(merge_checked):
+        segment_changed = False
+        merged_segment_count = 0
+        protocol_valid = bool(
+            isinstance(focus_segments_payload, dict)
+            and focus_segments_payload.get("_protocol_valid", True)
+        )
+        if isinstance(focus_segments_payload, dict) and not protocol_valid:
+            merge_error = str(
+                focus_segments_payload.get("_protocol_error")
+                or "focus_delta_protocol_invalid"
+            )[:120]
+        elif callable(merge_checked):
             merge_ok, segment_changed, merged_segment_count = merge_checked(
                 focus_segments_payload
             )
@@ -7145,7 +7156,7 @@ class PetWindow(QWidget):
                 merged_segment_count = 0
             merge_ok = True
         if not merge_ok and focus_segments_payload is not None:
-            merge_error = "payload_invalid_or_local_persist_failed"
+            merge_error = merge_error or "payload_invalid_or_local_persist_failed"
         uploaded_segments = (
             focus_segments_payload.get("_uploaded_segments")
             if isinstance(focus_segments_payload, dict)
