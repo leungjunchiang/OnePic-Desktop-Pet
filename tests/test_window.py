@@ -1549,16 +1549,15 @@ def test_window_uses_character_mask_and_reuses_render_cache() -> None:
     app.processEvents()
 
 
-def test_manual_aura_keeps_character_mask_stable_and_uses_slow_tick(monkeypatch) -> None:
-    """Persistent Aura must not rebuild the native input mask every phase."""
+def test_local_burst_keeps_character_mask_stable_and_is_reusable(monkeypatch) -> None:
+    """The local event effect must not rebuild the character input mask."""
 
     app, window = _create_window()
     monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
     baseline_bounds = window.mask().boundingRect()
-    window.set_aura_manual_effect("blue")
-    assert window.effect_timer.isActive()
-    assert window.effect_timer.interval() == 180
-    assert window._aura_controller.target.kind.value == "blue"
+    window.trigger_red_burst()
+    assert window._local_burst_effect.active
+    assert window._local_burst_effect.timer.interval() == 33
     cache_size = len(window._mask_cache)
 
     for _ in range(8):
@@ -1566,7 +1565,9 @@ def test_manual_aura_keeps_character_mask_stable_and_uses_slow_tick(monkeypatch)
 
     assert window.mask().boundingRect() == baseline_bounds
     assert len(window._mask_cache) == cache_size
-    assert window._aura_controller.progress == 1.0
+    window.trigger_red_burst()
+    assert window._local_burst_effect.active
+    window.stop_red_burst()
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -2360,11 +2361,11 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     ]
     display = next(action for action in menu.actions() if action.text() == "显示与窗口")
     assert [action.text() for action in display.menu().actions()] == [
-        "六毛大小…", "显示本轮工作时长", "氛围特效", "始终置顶", "桌面模式"
+        "六毛大小…", "显示本轮工作时长", "六毛特效", "始终置顶", "桌面模式"
     ]
-    aura = next(action for action in display.menu().actions() if action.text() == "氛围特效")
-    assert [action.text() for action in aura.menu().actions()] == [
-        "自动", "关闭", "", "红色雾气", "金色雾气", "蓝色雾气", "紫色雾气"
+    burst = next(action for action in display.menu().actions() if action.text() == "六毛特效")
+    assert [action.text() for action in burst.menu().actions()] == [
+        "红色烟花", "停止当前特效"
     ]
     outfit = next(action for action in menu.actions() if action.text() == "百变六毛")
     outfit_labels = [action.text() for action in outfit.menu().actions()]

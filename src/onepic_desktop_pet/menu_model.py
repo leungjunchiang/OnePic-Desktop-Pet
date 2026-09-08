@@ -184,50 +184,20 @@ class UnifiedMenuModel:
             if "show_work_duration" in self._callbacks
             else None
         )
-        aura_mode = str(state.get("aura_mode") or "auto").casefold()
-        aura_effect = str(state.get("aura_manual_effect") or "blue").casefold()
-        aura_children: list[MenuItemSpec] = []
-        if "aura_auto" in self._callbacks:
-            aura_children.extend(
-                (
-                    MenuItemSpec("自动", "aura_auto", checkable=True, checked=aura_mode == "auto"),
-                    MenuItemSpec("关闭", "aura_off", checkable=True, checked=aura_mode == "off"),
-                    MenuItemSpec.divider(),
-                    MenuItemSpec(
-                        "红色雾气",
-                        "aura_red",
-                        checkable=True,
-                        checked=aura_mode == "manual" and aura_effect == "red",
-                    ),
-                    MenuItemSpec(
-                        "金色雾气",
-                        "aura_gold",
-                        checkable=True,
-                        checked=aura_mode == "manual" and aura_effect == "gold",
-                    ),
-                    MenuItemSpec(
-                        "蓝色雾气",
-                        "aura_blue",
-                        checkable=True,
-                        checked=aura_mode == "manual" and aura_effect == "blue",
-                    ),
-                    MenuItemSpec(
-                        "紫色雾气",
-                        "aura_purple",
-                        checkable=True,
-                        checked=aura_mode == "manual" and aura_effect == "purple",
-                    ),
-                )
-            )
-        aura_item = (
-            MenuItemSpec("氛围特效", children=tuple(aura_children))
-            if aura_children
+        burst_children: list[MenuItemSpec] = []
+        if "red_burst" in self._callbacks:
+            burst_children.append(MenuItemSpec("红色烟花", "red_burst"))
+        if "red_burst_stop" in self._callbacks:
+            burst_children.append(MenuItemSpec("停止当前特效", "red_burst_stop"))
+        burst_item = (
+            MenuItemSpec("六毛特效", children=tuple(burst_children))
+            if burst_children
             else None
         )
         display_children = [
             self._optional("六毛大小…", "size"),
             duration_item,
-            aura_item,
+            burst_item,
             MenuItemSpec(
                 "始终置顶",
                 "topmost_on",

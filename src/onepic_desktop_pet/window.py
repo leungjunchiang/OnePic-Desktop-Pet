@@ -22,7 +22,7 @@
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
-- 复用现有表情动画 tick 合成可选的本地 Aura 雾气，不新增窗口、线程、定时器或网络路径；
+- 通过可复用的局部透明窗口播放本地红色烟花 Burst，不进入角色帧、不新增网络路径；
 - 优先从用户私有素材目录显示自拍成片气泡，按当前屏幕 DPI 保持清晰度，并贴近人物真实轮廓定位；
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
 - 维护亲密度、精力、无聊度与饱食度的会话内状态；
@@ -177,17 +177,7 @@ from .food_scene_ui import FoodSceneDialog
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
-from .aura_effects import (
-    AURA_MODE_AUTO,
-    AURA_MODE_MANUAL,
-    AURA_MODE_OFF,
-    AuraKind,
-    AuraTransitionController,
-    AuraVisualState,
-    draw_aura_transition_effect,
-    normalize_aura_kind,
-    resolve_aura_state,
-)
+from .local_burst_effect import LocalBurstEffectWindow
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
 from .focus_analytics import (
@@ -603,9 +593,6 @@ class PetWindow(QWidget):
         self._poke_times: deque[float] = deque()
         self._bob_phase = False
         self._effect_phase = 0
-        # Aura is an optional local compositing layer.  Its transition state
-        # is plain Python and advances on the existing effect timer.
-        self._aura_controller = AuraTransitionController()
         self._frame_index = 0
         self._animation_direction = 1
         self._animation_finished: Callable[[], None] | None = None
@@ -901,6 +888,10 @@ class PetWindow(QWidget):
         self.work_controls = WorkControlBubble()
         self.coffee_scene_prompt = CoffeeScenePrompt()
         self.work_duration_bubble = WorkDurationBubble()
+        # One reusable local overlay.  It is intentionally not a child of the
+        # character frame and is created once to avoid repeated QObject/native
+        # window churn on rapid menu clicks.
+        self._local_burst_effect = LocalBurstEffectWindow()
         self._qt_application = QApplication.instance()
         if self._qt_application is not None:
             self._qt_application.installEventFilter(self)
@@ -1317,39 +1308,25 @@ class PetWindow(QWidget):
             y = self.settings.start_y
         self.move(self._constrained_position(QPoint(x, y)))
 
-    def _resolved_aura_state(self, display_state: PetState | None = None) -> AuraVisualState:
-        """Resolve the local Aura preference without touching business state."""
+    def _effect_timer_needed(self) -> bool:
+        """Return whether the existing timer has semantic emotion work."""
 
-        state = display_state or self.state
-        return resolve_aura_state(
-            state,
-            getattr(self.settings, "aura_mode", AURA_MODE_AUTO),
-            getattr(self.settings, "aura_manual_effect", AuraKind.BLUE.value),
-            phase=self._effect_phase,
-        )
-
-    def _aura_timer_needed(self) -> bool:
-        """Return whether the existing effect timer has visual work to do."""
-
-        return emotion_effect_name(self.state) is not None or self._aura_controller.needs_animation
+        # The old persistent Aura no longer participates in the character
+        # frame pipeline.  LocalBurstEffectWindow owns its one short-lived
+        # 30 FPS timer and is completely idle while hidden.
+        return emotion_effect_name(self.state) is not None
 
     def _configure_effect_timer(self) -> None:
-        """Run semantic symbols promptly and persistent Aura at a calm rate."""
+        """Run semantic symbols promptly; burst animation has its own timer."""
 
-        if not self._aura_timer_needed():
+        if not self._effect_timer_needed():
             self.effect_timer.stop()
             return
-        # Emotion symbols keep their original responsive cadence.  A
-        # persistent Aura only needs slow breathing motion; 180 ms halves the
-        # GUI compositing work compared with the old 90 ms hot loop.
-        interval = 90 if emotion_effect_name(self.state) is not None else 180
+        interval = 90
         if self.effect_timer.interval() != interval:
             self.effect_timer.setInterval(interval)
         if not self.effect_timer.isActive():
             self.effect_timer.start()
-
-    def _refresh_aura_target(self, display_state: PetState | None = None) -> None:
-        self._aura_controller.set_target(self._resolved_aura_state(display_state))
 
     def set_state(self, state: PetState) -> None:
         """切换行为状态、重置帧序号并刷新当前图片。"""
@@ -1373,7 +1350,6 @@ class PetWindow(QWidget):
         else:
             self.label.move(6, 0)
         self._effect_phase = 0
-        self._refresh_aura_target(display_state)
         self._configure_effect_timer()
         self._refresh_pixmap()
 
@@ -1417,7 +1393,6 @@ class PetWindow(QWidget):
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
 
         display_state, pixmap = self._current_source()
-        self._refresh_aura_target(display_state)
         ratio = max(1.0, self.devicePixelRatioF())
         direction_key = self.direction if display_state is PetState.WALK else 0
         cache_key = (
@@ -1479,10 +1454,9 @@ class PetWindow(QWidget):
             food_scene_active = False
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
-        # Resolve the actual character/activity sprite before Aura.  Full
-        # activity sprites replace their input, so applying them afterwards
-        # used to erase the Aura completely.  This also avoids drawing the
-        # same activity overlay twice on every effect tick.
+        # Resolve the actual character/activity sprite before semantic
+        # emotion effects. The local Burst is a separate overlay window, so
+        # it cannot be erased by activity sprites or tint the character frame.
         base_frame = draw_activity_overlay(
             scaled,
             activity,
@@ -1491,26 +1465,15 @@ class PetWindow(QWidget):
             food_scene=food_scene_active,
         )
         mask_source = draw_emotion_effect(base_frame, display_state, self._effect_phase)
-        from_aura, to_aura, aura_progress = self._aura_controller.render_states()
-        try:
-            composed = draw_aura_transition_effect(
-                base_frame,
-                from_aura,
-                to_aura,
-                aura_progress,
-                phase=self._effect_phase,
-            )
-            composed = draw_emotion_effect(composed, display_state, self._effect_phase)
-        except Exception:
-            # Aura is an optional visual enhancement.  A renderer failure
-            # must leave the normal character/effect pipeline usable.
-            LOGGER.exception("[Aura] render failed; using character frame")
-            composed = mask_source
+        # Persistent Aura compositing is intentionally disabled.  The only
+        # new visual effect is LocalBurstEffectWindow, which remains outside
+        # this character pixmap and therefore cannot tint or mask the pet.
+        composed = mask_source
         visible = self._blend_activity_transition(composed)
         self.label.setPixmap(visible)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
-        # The computer indicator changes colour, not geometry.  Aura phase
-        # must never invalidate the native QRegion or call setMask() at 11 Hz.
+        # The computer indicator changes colour, not geometry. A Burst never
+        # invalidates the native QRegion because it is outside this window.
         overlay_key = hash((activity, self.settings.equipped_outfit, food_scene_active))
         self._refresh_window_mask(
             display_state,
@@ -1594,8 +1557,8 @@ class PetWindow(QWidget):
             self.label.x(),
             self.label.y(),
         )
-        # Aura changes pixels but deliberately never changes the native input
-        # silhouette.  Avoid calling the relatively costly native setMask()
+        # Detached Burst pixels deliberately never change the native input
+        # silhouette. Avoid calling the relatively costly native setMask()
         # again while that silhouette key is unchanged.
         if cache_key == self._last_applied_mask_key and cache_key in self._mask_cache:
             return
@@ -1616,10 +1579,9 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _effect_tick(self) -> None:
-        """推进表情与 Aura，共用一个既有动画 tick。"""
+        """推进短暂表情符号；局部 Burst 使用自己的 bounded timer。"""
 
-        self._aura_controller.tick()
-        if not self._aura_timer_needed():
+        if not self._effect_timer_needed():
             self.effect_timer.stop()
             return
         self._configure_effect_timer()
@@ -1901,6 +1863,7 @@ class PetWindow(QWidget):
 
         super().moveEvent(event)
         self._position_accessories()
+        self._position_local_burst_effect()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
@@ -1913,6 +1876,8 @@ class PetWindow(QWidget):
         self.work_duration_bubble.hide()
         self.visit_status_bubble.hide()
         self.quick_panel.hide()
+        if hasattr(self, "_local_burst_effect"):
+            self._local_burst_effect.stop()
         if self._compact_todo_panel is not None:
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
             self._compact_todo_panel.hide()
@@ -1961,6 +1926,8 @@ class PetWindow(QWidget):
             self.photo_bubble,
             self.visit_status_bubble,
         ]
+        if getattr(self, "_local_burst_effect", None) is not None:
+            surfaces.append(self._local_burst_effect)
         for optional in (
             self._compact_todo_panel,
             self._alarm_card,
@@ -1996,6 +1963,7 @@ class PetWindow(QWidget):
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
                     widget: bool(widget.isVisible())
+                    and widget is not getattr(self, "_local_burst_effect", None)
                     for widget in self._fullscreen_surfaces()
                 }
                 self._fullscreen_hidden = True
@@ -2079,6 +2047,9 @@ class PetWindow(QWidget):
             self._close_alarm_card()
         if self._away_recovery_card is not None:
             self._close_away_recovery_card()
+        if getattr(self, "_local_burst_effect", None) is not None:
+            self._local_burst_effect.stop()
+            self._local_burst_effect.close()
         if self._economy_dialog is not None:
             self._economy_dialog.close()
         if self._work_report_dialog is not None:
@@ -3996,6 +3967,7 @@ class PetWindow(QWidget):
         if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
             self._position_compact_todos()
         self._position_sticky_note()
+        self._position_local_burst_effect()
 
     def hide_today_note(self) -> None:
         self._restore_compact_todos_after_show = False
@@ -7732,31 +7704,76 @@ class PetWindow(QWidget):
             3000,
         )
 
-    def _restart_aura_animation(self) -> None:
-        self._refresh_aura_target(self.state)
-        self._configure_effect_timer()
-        self._refresh_pixmap()
+    def _local_burst_anchor(self) -> QRect:
+        """Return the visible character body in global logical coordinates."""
 
-    def set_aura_mode(self, mode: str) -> None:
-        """Persist the local Aura mode and fade to its new visual target."""
+        return QRect(self.label.mapToGlobal(QPoint(0, 0)), self.label.size())
 
-        value = str(mode or AURA_MODE_AUTO).strip().casefold()
-        if value not in {AURA_MODE_AUTO, AURA_MODE_OFF, AURA_MODE_MANUAL}:
-            value = AURA_MODE_AUTO
-        self.settings.aura_mode = value
-        save_settings(self.settings)
-        self._restart_aura_animation()
+    def _local_burst_exclusions(self) -> tuple[QRect, ...]:
+        """Reserve readable space for detached status bubbles."""
 
-    def set_aura_manual_effect(self, effect: AuraKind | str) -> None:
-        """Select one local Aura color and switch to manual mode."""
+        exclusions: list[QRect] = []
+        for widget in (
+            self.work_duration_bubble,
+            self.speech_bubble,
+            self.work_controls,
+            self.coffee_scene_prompt,
+            self.visit_status_bubble,
+        ):
+            try:
+                if widget.isVisible():
+                    exclusions.append(widget.frameGeometry())
+            except RuntimeError:
+                continue
+        return tuple(exclusions)
 
-        kind = normalize_aura_kind(effect)
-        if kind is AuraKind.NONE:
+    def _position_local_burst_effect(self) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None or not effect.active:
             return
-        self.settings.aura_mode = AURA_MODE_MANUAL
-        self.settings.aura_manual_effect = kind.value
-        save_settings(self.settings)
-        self._restart_aura_animation()
+        effect.reposition(self._local_burst_anchor(), self._local_burst_exclusions())
+
+    def trigger_red_burst(self) -> None:
+        """Play one local red firework burst without touching focus timing."""
+
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        self._record_user_interaction()
+        try:
+            if self._fullscreen_hidden or self._manually_hidden:
+                return
+            effect.trigger(
+                self._local_burst_anchor(),
+                self._local_burst_exclusions(),
+                always_on_top=bool(self.settings.always_on_top),
+                show_window=False,
+            )
+            self._show_nonactivating(
+                effect,
+                always_on_top=bool(self.settings.always_on_top),
+            )
+            # Keep the character and already visible bubbles readable above
+            # the overlay.  This is a normal Qt ordering operation; the
+            # overlay itself remains mouse-transparent and non-activating.
+            self._raise_accessory(self)
+            for widget in (
+                self.work_duration_bubble,
+                self.speech_bubble,
+                self.work_controls,
+                self.visit_status_bubble,
+            ):
+                if widget.isVisible():
+                    self._raise_accessory(widget)
+        except Exception:
+            LOGGER.exception("[Burst] trigger failed; pet remains unaffected")
+
+    def stop_red_burst(self) -> None:
+        """Stop the reusable local effect window without changing pet state."""
+
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None:
+            effect.stop()
 
     def set_hourly_announcement(self, enabled: bool) -> None:
         """启用或停用整点报时。"""
@@ -8355,11 +8372,8 @@ class PetWindow(QWidget):
             "visible": self.isVisible(),
             "always_on_top": bool(self.settings.always_on_top),
             "show_work_duration": bool(self.settings.show_work_duration),
-            "aura_mode": getattr(self.settings, "aura_mode", AURA_MODE_AUTO),
-            "aura_manual_effect": getattr(
-                self.settings,
-                "aura_manual_effect",
-                AuraKind.BLUE.value,
+            "red_burst_active": bool(
+                getattr(getattr(self, "_local_burst_effect", None), "active", False)
             ),
             "artist_music_service": getattr(self.settings, "artist_music_service", "auto"),
             "program_version": __version__,
@@ -8392,12 +8406,8 @@ class PetWindow(QWidget):
             "rename": lambda _checked=False: self.rename_pet(),
             "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),
             "show_work_duration": lambda checked=False: self.set_work_duration_display(checked),
-            "aura_auto": lambda _checked=False: self.set_aura_mode(AURA_MODE_AUTO),
-            "aura_off": lambda _checked=False: self.set_aura_mode(AURA_MODE_OFF),
-            "aura_red": lambda _checked=False: self.set_aura_manual_effect(AuraKind.RED),
-            "aura_gold": lambda _checked=False: self.set_aura_manual_effect(AuraKind.GOLD),
-            "aura_blue": lambda _checked=False: self.set_aura_manual_effect(AuraKind.BLUE),
-            "aura_purple": lambda _checked=False: self.set_aura_manual_effect(AuraKind.PURPLE),
+            "red_burst": lambda _checked=False: self.trigger_red_burst(),
+            "red_burst_stop": lambda _checked=False: self.stop_red_burst(),
             "size": lambda _checked=False: self.open_size_control(),
             "show_todos": lambda _checked=False: self.show_compact_todos(manual=True),
             "hide_todos": lambda _checked=False: self.hide_compact_todos(),
