@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - 本地 Aura 氛围特效" \
-            --notes "新增红色雾气、金色光雾、蓝色柔雾和紫色气场。Aura 使用 QPainter 在现有角色 pixmap 内完成程序化合成，复用原有动画 tick，支持淡入淡出、高 DPI、缩放及与表情特效同时显示；统一菜单提供自动、关闭和手动颜色选择，设置仅保存在本机。Aura-only 图层使用有界缓存，渲染异常自动回退原始角色帧；没有新增 QTimer、QThread、原生窗口、Supabase 请求或其他网络行为。"
+            --title "Lili $release_tag - Aura 可见性与流畅度修复" \
+            --notes "修复 Aura 已绘制却被角色轮廓 native mask 裁掉、完整动作素材覆盖 Aura 的问题；现在四种颜色会在保留面部清晰和原点击范围的前提下显示身体外缘柔光。持续 Aura 动画降至 180ms，相同角色轮廓不再反复调用原生 setMask，并取消缓存层每帧缩放，降低 GUI 热路径开销。Aura 仍完全本地运行，没有新增 QTimer、QThread、窗口、Supabase 请求或其他网络行为。"
