@@ -179,6 +179,8 @@ def test_unified_menu_model_projects_local_burst_effects() -> None:
         "state_effect_blue",
         "state_effect_purple",
         "state_effect_green",
+        "state_effect_cyan",
+        "state_effect_mania",
         "state_effect_stop",
     }
     model = UnifiedMenuModel(
@@ -196,6 +198,8 @@ def test_unified_menu_model_projects_local_burst_effects() -> None:
         "蓝色静谧",
         "紫色神秘",
         "绿色恢复",
+        "青色活跃",
+        "测试发癫模式",
         "停止当前特效",
     ]
 

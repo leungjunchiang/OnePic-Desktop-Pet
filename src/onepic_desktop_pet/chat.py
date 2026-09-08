@@ -921,9 +921,17 @@ class AISettingsDialog(QDialog):
             getattr(settings, "state_effects_enabled", True)
         )
         self.state_effects_enabled.setToolTip(
-            "只在六毛出现明显情绪时显示局部红/金/蓝/紫特效；完全本地运行，不产生网络请求。"
+            "根据明确的工作/休息状态和互动事件显示局部特效；完全本地运行，不产生网络请求。"
         )
         layout.addWidget(self.state_effects_enabled)
+        self.mania_mode_enabled = QCheckBox("启用隐藏五连点击彩蛋（发癫模式）")
+        self.mania_mode_enabled.setChecked(
+            getattr(settings, "mania_mode_enabled", True)
+        )
+        self.mania_mode_enabled.setToolTip(
+            "连续快速左键点击六毛 5 下触发本地颜色循环；不联网、不影响计时。"
+        )
+        layout.addWidget(self.mania_mode_enabled)
         self.state_effect_duration = QComboBox()
         for label, key in (("短暂", "short"), ("标准", "standard"), ("较长", "long")):
             self.state_effect_duration.addItem(label, key)
@@ -1325,6 +1333,7 @@ class AISettingsDialog(QDialog):
         self.settings.codex_executable_path = self.codex_path.text().strip()[:1200]
         self.settings.always_on_top = self.always_on_top.isChecked()
         self.settings.state_effects_enabled = self.state_effects_enabled.isChecked()
+        self.settings.mania_mode_enabled = self.mania_mode_enabled.isChecked()
         self.settings.state_effect_duration = str(
             self.state_effect_duration.currentData() or "standard"
         )

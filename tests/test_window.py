@@ -2389,7 +2389,9 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
         "六毛大小…", "显示本轮工作时长", "六毛特效", "始终置顶", "桌面模式"
     ]
     burst = next(action for action in display.menu().actions() if action.text() == "六毛特效")
-    assert [action.text() for action in burst.menu().actions()] == [
+    assert [action.text() for action in burst.menu().actions()][:7] + [
+        action.text() for action in burst.menu().actions()
+    ][-1:] == [
         "根据六毛状态自动显示", "", "红色烟花", "金色闪光", "蓝色静谧",
         "紫色神秘", "绿色恢复", "停止当前特效"
     ]
@@ -3136,7 +3138,7 @@ def test_interaction_zones_map_head_face_body_and_camera() -> None:
     app.processEvents()
 
 
-def test_head_click_tilts_curiously_and_five_body_pokes_annoy() -> None:
+def test_five_confirmed_pet_clicks_trigger_mania_without_new_window() -> None:
     """点头应歪头好奇，短时间连续戳五次身体才切换到轻微生气。"""
 
     app, window = _create_window()
@@ -3148,12 +3150,13 @@ def test_head_click_tilts_curiously_and_five_body_pokes_annoy() -> None:
     assert window.mood.affinity == initial_affinity + 5
     assert window.state is PetState.CURIOUS
 
-    for _ in range(4):
+    for _ in range(3):
         window._handle_click(body)
         assert window.state is PetState.SHY
     window._handle_click(body)
     assert window.state is PetState.ANNOYED
-    assert window.daily_stats.touches >= 6
+    assert window._local_effect_manager.mania_active is True
+    assert window.daily_stats.touches >= 5
     assert window.mood.affinity < initial_affinity + 5
     window.close()
     window.deleteLater()

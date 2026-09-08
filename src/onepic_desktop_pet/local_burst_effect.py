@@ -170,6 +170,10 @@ LOCAL_EFFECT_PRESETS: dict[LocalEffectKind, LocalEffectPreset] = {
         LocalEffectKind.GREEN, "#55C99D", "#329D78", "#B7F4D7", "#25705B",
         0.72, "leaf", 5, 0.86, 0.76, 0.72,
     ),
+    LocalEffectKind.CYAN: LocalEffectPreset(
+        LocalEffectKind.CYAN, "#55D6E7", "#2FB5C8", "#B9F5FF", "#1B7E91",
+        0.82, "glow", 6, 0.96, 0.82, 0.78,
+    ),
 }
 
 
@@ -866,6 +870,17 @@ class LocalBurstEffectWindow(QWidget):
         if not self._active:
             return
         if target is self._kind:
+            # A mania restart may begin with the same color that was already
+            # visible. Replay its entry phase on the same window instead of
+            # creating a second overlay or leaving the old phase untouched.
+            now = time.monotonic()
+            self._previous_kind = None
+            self._stage = "entry"
+            self._stage_started_at = now
+            self._crossfade_started_at = now
+            self._manual = False
+            self._timer.start()
+            self.update()
             return
         now = time.monotonic()
         self._previous_kind = self._kind

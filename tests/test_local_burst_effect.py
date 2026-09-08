@@ -65,6 +65,7 @@ def test_all_state_effect_presets_render_with_the_same_local_pipeline() -> None:
         LocalEffectKind.BLUE,
         LocalEffectKind.PURPLE,
         LocalEffectKind.GREEN,
+        LocalEffectKind.CYAN,
     ):
         _app()
         canvas = QPixmap(384, 272)

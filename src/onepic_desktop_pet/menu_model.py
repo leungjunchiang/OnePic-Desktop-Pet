@@ -201,6 +201,8 @@ class UnifiedMenuModel:
             ("蓝色静谧", "state_effect_blue", None),
             ("紫色神秘", "state_effect_purple", None),
             ("绿色恢复", "state_effect_green", None),
+            ("青色活跃", "state_effect_cyan", None),
+            ("测试发癫模式", "state_effect_mania", None),
         )
         for title, command, legacy in effect_commands:
             if command in self._callbacks:

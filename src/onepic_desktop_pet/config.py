@@ -167,6 +167,8 @@ class PetSettings:
     # local-only and are intentionally separate from focus/social settings.
     state_effects_enabled: bool = True
     state_effect_duration: str = "standard"
+    # Hidden five-click mania is local-only and can be disabled independently.
+    mania_mode_enabled: bool = True
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "pet_name":
@@ -347,6 +349,7 @@ def _validated(data: dict[str, Any]) -> PetSettings:
     ).strip().casefold()
     if settings.state_effect_duration not in STATE_EFFECT_DURATION_VALUES:
         settings.state_effect_duration = "standard"
+    settings.mania_mode_enabled = bool(getattr(settings, "mania_mode_enabled", True))
     return settings
 
 
@@ -427,6 +430,7 @@ def load_settings(
                 "aura_manual_effect",
                 "state_effects_enabled",
                 "state_effect_duration",
+                "mania_mode_enabled",
             }
         }
     )
@@ -553,6 +557,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "aura_manual_effect": settings.aura_manual_effect,
         "state_effects_enabled": bool(getattr(settings, "state_effects_enabled", True)),
         "state_effect_duration": getattr(settings, "state_effect_duration", "standard"),
+        "mania_mode_enabled": bool(getattr(settings, "mania_mode_enabled", True)),
     }
     temporary.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
