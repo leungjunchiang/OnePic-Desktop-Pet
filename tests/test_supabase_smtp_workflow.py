@@ -77,14 +77,16 @@ def test_password_reset_page_uses_publishable_client_and_update_user():
 def test_focus_history_deployment_uses_existing_management_token_and_public_project_ref():
     workflow = (ROOT / ".github" / "workflows" / "deploy-supabase-focus-history.yml").read_text(encoding="utf-8")
     script = (ROOT / "scripts" / "apply_supabase_focus_history.ps1").read_text(encoding="utf-8")
+    ordered_script = (ROOT / "scripts" / "apply_supabase_focus_sync_migrations.ps1").read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
     assert "SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}" in workflow
     assert "vars.SUPABASE_PROJECT_REF" in workflow
-    assert "./scripts/apply_supabase_focus_history.ps1" in workflow
+    assert "./scripts/apply_supabase_focus_sync_migrations.ps1" in workflow
+    assert "20260907190000_lili_focus_delta_empty_cursor_guard.sql" in ordered_script
+    assert "20260907230000_lili_focus_segment_reconciliation_manifest.sql" in ordered_script
     assert "/database/query" in script
     assert "config/social_backend.json" in script
     assert "database_write" in script
     assert "20260822000400_lili_focus_daily_visibility.sql" in script
-
 
