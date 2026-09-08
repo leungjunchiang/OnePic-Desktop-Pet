@@ -134,3 +134,18 @@ def test_aura_remains_visible_inside_character_only_window_mask() -> None:
             if original.alpha() and after.pixelColor(x, y) != original:
                 changed_inside_character += 1
     assert changed_inside_character > 100
+
+
+def test_aura_has_a_visible_lower_light_ring() -> None:
+    """The stronger aura keeps a readable light-platform center near the feet."""
+
+    source = _source(180, 180)
+    renderer = AuraRenderer()
+    result = renderer.render(
+        source,
+        AuraVisualState(AuraKind.GOLD, 0.68, 0.58),
+        phase=4,
+    )
+    center = result.toImage().pixelColor(90, 150)
+    assert center.alpha() > 0
+    assert center.red() >= center.blue()

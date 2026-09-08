@@ -241,6 +241,16 @@ _DRIFT = {
     AuraKind.PURPLE: (0.62, -0.008, 0.022),
 }
 
+# The ring is deliberately a visual layer, not a window/geometry change.  Its
+# center stays in the lower body so the existing character-only native mask
+# can still reveal the effect without enlarging the click target.
+_RING_STYLE = {
+    AuraKind.RED: (0.835, 0.92, 0.74),
+    AuraKind.GOLD: (0.825, 1.00, 0.86),
+    AuraKind.BLUE: (0.845, 0.78, 0.54),
+    AuraKind.PURPLE: (0.835, 0.88, 0.72),
+}
+
 _PARTICLE_COUNTS = {
     AuraKind.RED: 4,
     AuraKind.GOLD: 7,
@@ -333,6 +343,7 @@ class AuraRenderer:
         painter = QPainter(layer)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
+        self._draw_bottom_ring(painter, layer, state)
         for seed in _FOG_SEEDS[:count]:
             dx = math.sin(angle * speed + seed.phase_offset) * width * drift_amplitude
             dy = math.cos(angle * (speed * 0.82) + seed.phase_offset) * height * drift_amplitude
@@ -340,7 +351,7 @@ class AuraRenderer:
             cx = width * seed.x + dx
             cy = height * seed.y + dy
             radius = max(2.0, min(width, height) * seed.radius)
-            center_alpha = int(220.0 * state.opacity * (0.72 + 0.28 * state.intensity) * seed.weight)
+            center_alpha = int(235.0 * state.opacity * (0.78 + 0.22 * state.intensity) * seed.weight)
             gradient = QRadialGradient(QPointF(cx, cy), radius)
             gradient.setColorAt(0.0, _with_alpha(colors[0], center_alpha))
             gradient.setColorAt(0.42, _with_alpha(colors[1], int(center_alpha * 0.42)))
@@ -349,6 +360,90 @@ class AuraRenderer:
             painter.setBrush(gradient)
             painter.drawEllipse(QPointF(cx, cy), radius, radius * 0.76)
         painter.end()
+
+    def _draw_bottom_ring(self, painter: QPainter, layer: QPixmap, state: AuraVisualState) -> None:
+        """Draw the aura's visible lower-body glow/"light platform".
+
+        A single outline looked like a UI shadow and disappeared behind the
+        character mask.  The ring is therefore built from three soft layers:
+        a broad radial haze, a denser inner glow, and a restrained colored
+        band.  The compositing path later repeats the cached layer through a
+        face-safe clip, so the ring remains visible without changing window
+        geometry or hit testing.
+        """
+
+        if state.kind is AuraKind.NONE or state.opacity <= 0.0 or state.intensity <= 0.0:
+            return
+        colors = _PALETTE[state.kind]
+        ring_y, brightness, drift = _RING_STYLE[state.kind]
+        ratio = max(1.0, float(layer.devicePixelRatio()))
+        width = layer.width() / ratio
+        height = layer.height() / ratio
+        angle = state.phase / 12.0 * math.tau
+        breathe = 0.91 + 0.09 * math.sin(angle * 0.72 + 0.8)
+        cx = width * 0.5 + math.sin(angle * 0.48 + 0.25) * width * 0.006
+        cy = height * ring_y + math.cos(angle * 0.55 + 0.4) * height * 0.006
+        rx = width * (0.34 + 0.045 * state.intensity)
+        ry = max(2.0, height * (0.062 + 0.014 * state.intensity))
+        alpha = int(238.0 * state.opacity * (0.78 + 0.22 * state.intensity) * brightness * breathe)
+
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Wide atmospheric halo: this is what makes the effect feel like
+        # misty light instead of a crisp ellipse.
+        halo = QRadialGradient(QPointF(cx, cy), max(rx, ry) * 1.24)
+        halo.setColorAt(0.0, _with_alpha(colors[1], int(alpha * 0.08)))
+        halo.setColorAt(0.42, _with_alpha(colors[0], int(alpha * 0.22)))
+        halo.setColorAt(0.66, _with_alpha(colors[1], int(alpha * 0.78)))
+        halo.setColorAt(0.84, _with_alpha(colors[2], int(alpha * 0.28)))
+        halo.setColorAt(1.0, _with_alpha(colors[2], 0))
+        painter.setBrush(halo)
+        painter.drawEllipse(QRectF(cx - rx * 1.20, cy - ry * 1.85, rx * 2.40, ry * 3.70))
+
+        # A denser, slightly drifting inner haze gives the ring a luminous
+        # center without turning it into a solid platform.
+        inner_haze = QRadialGradient(QPointF(cx, cy), max(rx, ry) * 0.92)
+        inner_haze.setColorAt(0.0, _with_alpha(colors[1], int(alpha * 0.30)))
+        inner_haze.setColorAt(0.50, _with_alpha(colors[0], int(alpha * 0.45)))
+        inner_haze.setColorAt(0.82, _with_alpha(colors[2], int(alpha * 0.12)))
+        inner_haze.setColorAt(1.0, _with_alpha(colors[2], 0))
+        painter.setBrush(inner_haze)
+        painter.drawEllipse(QRectF(cx - rx * 0.98, cy - ry * 1.04, rx * 1.96, ry * 2.08))
+
+        # Broad band with an even-odd hole.  It is intentionally thicker than
+        # a line so the aura reads at a glance even on small pet frames.
+        outer = QRectF(cx - rx * 0.88, cy - ry * 0.72, rx * 1.76, ry * 1.44)
+        thickness = max(1.6, min(width, height) * (0.010 + 0.006 * state.intensity))
+        inner = outer.adjusted(thickness, thickness * 0.58, -thickness, -thickness * 0.58)
+        band = QPainterPath()
+        band.setFillRule(Qt.FillRule.OddEvenFill)
+        band.addEllipse(outer)
+        band.addEllipse(inner)
+        painter.setBrush(_with_alpha(colors[1], int(alpha * 0.64)))
+        painter.drawPath(band)
+
+        # A subtle lower highlight creates the flowing, racing-light feeling
+        # while remaining a few pixels wide and cheap to render.
+        highlight = QPainterPath()
+        highlight.setFillRule(Qt.FillRule.OddEvenFill)
+        highlight_outer = QRectF(
+            cx - rx * 0.72,
+            cy - ry * 0.34 + math.sin(angle * 0.8) * height * 0.004,
+            rx * 1.44,
+            ry * 0.68,
+        )
+        highlight_inner = highlight_outer.adjusted(
+            thickness * 1.2,
+            thickness * 0.50,
+            -thickness * 1.2,
+            -thickness * 0.50,
+        )
+        highlight.addEllipse(highlight_outer)
+        highlight.addEllipse(highlight_inner)
+        painter.setBrush(_with_alpha(colors[1], int(alpha * (0.22 + 0.10 * drift))))
+        painter.drawPath(highlight)
+        painter.restore()
 
     def _draw_particles(
         self,
@@ -371,9 +466,19 @@ class AuraRenderer:
             x = width * seed.x + math.sin(angle * 0.55 + seed.phase_offset) * width * 0.012
             y = height * seed.y + math.cos(angle * 0.45 + seed.phase_offset) * height * 0.010
             size = max(1.0, min(width, height) * seed.size * (0.8 + state.intensity * 0.35))
-            alpha = int(115.0 * state.opacity * strength)
+            alpha = int(150.0 * state.opacity * strength)
+            halo = QRadialGradient(QPointF(x, y), size * 3.2)
+            halo.setColorAt(0.0, _with_alpha(color, int(alpha * 0.42)))
+            halo.setColorAt(0.45, _with_alpha(color, int(alpha * 0.16)))
+            halo.setColorAt(1.0, _with_alpha(color, 0))
+            painter.setBrush(halo)
+            painter.drawEllipse(QPointF(x, y), size * 3.2, size * 3.2)
             painter.setBrush(_with_alpha(color, alpha))
             painter.drawEllipse(QPointF(x, y), size, size)
+            if state.kind is AuraKind.RED:
+                painter.setPen(_with_alpha(_PALETTE[state.kind][1], int(alpha * 0.72)))
+                painter.drawLine(QPointF(x, y + size * 0.8), QPointF(x, y - size * 2.1))
+                painter.setPen(Qt.PenStyle.NoPen)
             if state.kind is AuraKind.GOLD and size >= 1.0:
                 painter.setPen(_with_alpha(_PALETTE[state.kind][1], int(alpha * 0.72)))
                 painter.drawLine(QPointF(x - size * 1.8, y), QPointF(x + size * 1.8, y))
