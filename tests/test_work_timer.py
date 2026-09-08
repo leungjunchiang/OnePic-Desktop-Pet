@@ -69,6 +69,32 @@ def test_current_elapsed_excludes_previous_checkpoint_segments(tmp_path) -> None
     assert timer.session_seconds() == 3 * 60 * 60 + 90
 
 
+def test_effective_pause_end_at_seals_at_idle_threshold(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(17 * 60)
+    effective_end = clock.now - timedelta(minutes=7)
+    assert timer.pause("idle_10m", effective_end_at=effective_end)
+    assert timer.session_seconds() == 10 * 60
+    assert timer.today_seconds() == 10 * 60
+    assert timer.pause_reason == "idle_10m"
+
+
+def test_effective_pause_end_at_respects_checkpointed_episode(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(10 * 60)
+    assert timer.checkpoint(minimum_interval_seconds=1)
+    clock.advance(7 * 60)
+    effective_end = clock.now - timedelta(minutes=4)
+    assert timer.pause("idle_10m", effective_end_at=effective_end)
+    assert timer.session_seconds() == 13 * 60
+
+
 def test_checkpoint_keeps_the_real_current_segment_start_for_reports(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)

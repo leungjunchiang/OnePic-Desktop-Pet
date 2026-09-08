@@ -56,7 +56,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Callable
@@ -175,6 +175,15 @@ from .controls import (
 from .economy import EconomyLedger
 from .economy_ui import EconomyDialog
 from .food_scene_ui import FoodSceneDialog
+from .focus_activity import (
+    AUTO_PAUSE_DISPLAY_OFF,
+    AUTO_PAUSE_IDLE,
+    AUTO_PAUSE_LOCK,
+    AUTO_PAUSE_SLEEP,
+    FocusActivityGuard,
+    MacOSFocusActivityBridge,
+    WindowsFocusActivityBridge,
+)
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
@@ -635,7 +644,22 @@ class PetWindow(QWidget):
         self._idle_hint_classification: IdleClassification | None = None
         self._idle_hint_record: dict[str, object] | None = None
         self._idle_recovery_dialog: IdleRecoveryDialog | None = None
-        self._last_session_probe = {"locked": False, "sleeping": False}
+        self._last_session_probe = {
+            "locked": False,
+            "sleeping": False,
+            "display_state": "unknown",
+        }
+        self._last_auto_pause_reason: str | None = None
+        self._focus_activity_guard = FocusActivityGuard(
+            idle_provider=lambda: system_idle_seconds(),
+            session_provider=lambda: system_session_state(),
+        )
+        bridge_type = (
+            MacOSFocusActivityBridge
+            if sys.platform == "darwin"
+            else WindowsFocusActivityBridge
+        )
+        self._focus_activity_bridge = bridge_type(self._on_native_focus_activity_event)
         self._fullscreen_video_started_at: float | None = None
         self._pause_notice_shown = False
         self._away_recovery_reason: str | None = None
@@ -914,6 +938,8 @@ class PetWindow(QWidget):
         self._qt_application = QApplication.instance()
         if self._qt_application is not None:
             self._qt_application.installEventFilter(self)
+            if sys.platform == "win32":
+                self._qt_application.installNativeEventFilter(self._focus_activity_bridge)
             self._qt_application.applicationStateChanged.connect(
                 self._on_application_state_changed
             )
@@ -1679,6 +1705,8 @@ class PetWindow(QWidget):
         lifecycle_log("pet_window.show_event.begin", self)
         self.ensure_pet_window_policy(event="Show")
         super().showEvent(event)
+        if not self._focus_activity_bridge.active:
+            self._focus_activity_bridge.start(self)
         handle = self.windowHandle()
         if handle is not None and not self._screen_change_connected:
             handle.screenChanged.connect(self._on_screen_changed)
@@ -2037,6 +2065,9 @@ class PetWindow(QWidget):
         lifecycle_log("pet_window.close_event.begin", self)
         if self._qt_application is not None:
             self._qt_application.removeEventFilter(self)
+            if sys.platform == "win32":
+                self._qt_application.removeNativeEventFilter(self._focus_activity_bridge)
+        self._focus_activity_bridge.stop()
         # Ask every descendant/top-level utility window worker to stop before
         # any parent widget can be closed.  The study-room and chat windows
         # are intentionally top-level, so they are not children of ``self``.
@@ -2291,6 +2322,65 @@ class PetWindow(QWidget):
         self._away_recovery_prompt_shown = False
         self._close_away_recovery_card()
 
+    def activity_diagnostics(self) -> dict[str, object]:
+        """Return the last local activity probe for developer diagnostics."""
+
+        diagnostics = self._focus_activity_guard.diagnostics()
+        diagnostics.update(
+            {
+                "auto_pause_on_idle": bool(
+                    getattr(self.settings, "auto_pause_on_idle", True)
+                ),
+                "idle_pause_seconds": max(
+                    600,
+                    int(getattr(self.settings, "idle_pause_seconds", 600)),
+                ),
+                "input_idle_timer_active": bool(
+                    getattr(self, "input_idle_timer", None)
+                    and self.input_idle_timer.isActive()
+                ),
+                "focus_running": bool(self.work_timer.is_running),
+                "last_auto_pause_reason": self._last_auto_pause_reason,
+            }
+        )
+        return diagnostics
+
+    @_guard_qt_callback
+    def _on_native_focus_activity_event(
+        self,
+        kind: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Apply lock/power/display events through the canonical pause path."""
+
+        normalized = str(kind or "").strip().casefold()
+        decision = self._focus_activity_guard.handle_event(
+            normalized,
+            working=self.work_timer.is_running,
+            at=occurred_at,
+        )
+        if normalized in {"resume", "unlock", "display_on", "display_dimmed"}:
+            # A resume/unlock is evidence that the user is back, never a
+            # command to restart work.  Poll once to reconcile a native event
+            # that may have arrived while Qt was suspended.
+            if normalized == "resume":
+                self._check_input_idle()
+            return
+        if decision is None:
+            return
+        self._focus_quality_tracker.note_away()
+        self._last_auto_pause_reason = decision.reason
+        LOGGER.info(
+            "[focus-activity] auto pause reason=%s effective_end_at=%s source=%s",
+            decision.reason,
+            decision.effective_at.isoformat(),
+            decision.source,
+        )
+        self.pause_work_timer(
+            reason=decision.reason,
+            effective_end_at=decision.effective_at,
+        )
+
     def _close_away_recovery_card(self) -> None:
         """Close the transient return-to-work card without changing focus."""
 
@@ -2453,19 +2543,32 @@ class PetWindow(QWidget):
     def _check_input_idle(self) -> None:
         """Apply the only automatic pause rules; never resume from input."""
 
-        session = system_session_state()
-        locked = bool(session.get("locked"))
-        sleeping = bool(session.get("sleeping"))
-        self._last_session_probe = {"locked": locked, "sleeping": sleeping}
+        decision = self._focus_activity_guard.poll(
+            working=self.work_timer.is_running,
+            auto_pause_on_idle=bool(
+                getattr(self.settings, "auto_pause_on_idle", True)
+            ),
+            idle_threshold_seconds=max(
+                600,
+                int(getattr(self.settings, "idle_pause_seconds", 600)),
+            ),
+        )
+        self._last_session_probe = self._focus_activity_guard.last_session
 
         if self.work_timer.is_running:
-            if sleeping:
+            if decision is not None:
                 self._focus_quality_tracker.note_away()
-                self.pause_work_timer(reason="sleep")
-                return
-            if locked:
-                self._focus_quality_tracker.note_away()
-                self.pause_work_timer(reason="lock")
+                self._last_auto_pause_reason = decision.reason
+                LOGGER.info(
+                    "[focus-activity] auto pause reason=%s effective_end_at=%s source=%s",
+                    decision.reason,
+                    decision.effective_at.isoformat(),
+                    decision.source,
+                )
+                self.pause_work_timer(
+                    reason=decision.reason,
+                    effective_end_at=decision.effective_at,
+                )
                 return
 
             # A real player/browser video or known game fullscreen counts, and
@@ -2487,11 +2590,6 @@ class PetWindow(QWidget):
             else:
                 self._fullscreen_video_started_at = None
 
-            threshold = max(600, int(getattr(self.settings, "idle_pause_seconds", 600)))
-            if bool(getattr(self.settings, "auto_pause_on_idle", True)) and system_idle_seconds() >= threshold:
-                self._focus_quality_tracker.note_away()
-                self.pause_work_timer(reason="idle_10m")
-                return
             return
 
         # Input only proves that the user is back.  It is never a resume
@@ -2500,7 +2598,11 @@ class PetWindow(QWidget):
         if (
             self.work_timer.has_active_session
             and self.work_timer.pause_reason == "idle_10m"
-            and system_idle_seconds() < max(600, int(getattr(self.settings, "idle_pause_seconds", 600)))
+            and self._focus_activity_guard.last_snapshot.available
+            and (self._focus_activity_guard.last_snapshot.idle_seconds or 0) < max(
+                600,
+                int(getattr(self.settings, "idle_pause_seconds", 600)),
+            )
             and not self._pause_notice_shown
         ):
             self._pause_notice_shown = True
@@ -3365,6 +3467,8 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         self._reset_idle_episode()
+        self._focus_activity_guard.reset_for_new_session()
+        self._last_auto_pause_reason = None
         self._pause_notice_shown = False
         self._fullscreen_video_started_at = None
         if not self.work_timer.has_active_session:
@@ -3412,24 +3516,43 @@ class PetWindow(QWidget):
             return None
         return ManagedChatReply(reply.text, reply.state, "local-action")
 
-    def pause_work_timer(self, reason: str = "") -> CompanionReply:
+    def pause_work_timer(
+        self,
+        reason: str = "",
+        *,
+        effective_end_at: datetime | None = None,
+    ) -> CompanionReply:
         """Pause the shared timer through one path, preserving the reason."""
 
         reason = str(reason or "manual").strip().casefold()
-        automatic_reason = reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}
+        automatic_reason = reason in {
+            "idle",
+            AUTO_PAUSE_IDLE,
+            AUTO_PAUSE_LOCK,
+            AUTO_PAUSE_DISPLAY_OFF,
+            AUTO_PAUSE_SLEEP,
+            "fullscreen_video",
+            "video",
+        }
         if not automatic_reason:
             self._record_user_interaction()
             self._reset_idle_episode()
-        session_seconds = self.work_timer.session_seconds()
         segment_started_at = self.work_timer.current_segment_started_at()
-        was_running = self.focus_session.pause(reason)
+        was_running = self.focus_session.pause(
+            reason,
+            effective_end_at=effective_end_at,
+        )
+        # Read the cumulative session only after WorkTimerModel has applied
+        # the effective cutoff.  Reading it before the canonical pause would
+        # reintroduce the delayed poll time into FocusSegment/analytics.
+        session_seconds = self.work_timer.session_seconds()
         if was_running and reason in {"idle_10m", "fullscreen_video"}:
             self._away_recovery_reason = reason
             self._away_recovery_started_at = time.monotonic()
             self._away_recovery_prompt_shown = False
             self._close_away_recovery_card()
         if was_running:
-            self.focus_analytics.pause_focus_session()
+            self.focus_analytics.pause_focus_session(at=effective_end_at)
             self._record_focus_segment(
                 session_seconds,
                 completed=False,
@@ -3445,14 +3568,26 @@ class PetWindow(QWidget):
             # room and report immediately see the same reconciled day total.
             self.focus_session.refresh()
             self._pause_notice_shown = False
-            if automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
+            if automatic_reason and reason in {
+                "idle",
+                "idle_10m",
+                "lock",
+                "display_off",
+                "sleep",
+                "fullscreen_video",
+                "video",
+            }:
                 self._pause_notice_shown = reason != "idle_10m"
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("thermos", 25_000)
         duration = format_work_duration(self._shared_today_focus_seconds())
-        if was_running and reason in {"sleep", "lock"}:
-            system_event = "电脑已锁屏" if reason == "lock" else "电脑进入睡眠"
+        if was_running and reason in {"sleep", "lock", "display_off"}:
+            system_event = {
+                "lock": "电脑已锁屏",
+                "sleep": "电脑进入睡眠",
+                "display_off": "屏幕已关闭",
+            }[reason]
             reply = CompanionReply(
                 f"{system_event}，六毛已暂停这轮计时；回来后点继续工作就好。",
                 PetState.SLEEPY,
@@ -3486,7 +3621,15 @@ class PetWindow(QWidget):
         # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
         self.work_controls.hide()
         self._refresh_pixmap()
-        if was_running and automatic_reason and reason in {"idle", "idle_10m", "lock", "sleep", "fullscreen_video", "video"}:
+        if was_running and automatic_reason and reason in {
+            "idle",
+            "idle_10m",
+            "lock",
+            "display_off",
+            "sleep",
+            "fullscreen_video",
+            "video",
+        }:
             # A food-led work scene is an active commitment, not a second
             # timer.  Once the system has auto-paused, close that scene so its
             # visual state cannot claim that coffee work is still active.
@@ -7906,6 +8049,18 @@ class PetWindow(QWidget):
                 ),
             )
         if self.work_timer.has_active_session:
+            if self.work_timer.pause_reason in {
+                "idle",
+                AUTO_PAUSE_IDLE,
+                AUTO_PAUSE_LOCK,
+                AUTO_PAUSE_DISPLAY_OFF,
+                AUTO_PAUSE_SLEEP,
+                "fullscreen_video",
+                "video",
+            }:
+                # The user is away or the display/session is unavailable;
+                # don't keep a sustained rest aura rendering off-screen.
+                return resolve_work_effect("none")
             return resolve_work_effect("rest")
         return resolve_work_effect("none")
 

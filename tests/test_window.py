@@ -2911,6 +2911,39 @@ def test_verified_lock_screen_can_pause_work_timer(monkeypatch) -> None:
     assert "锁屏" in window.speech_bubble.text()
     window.close(); window.deleteLater(); app.processEvents()
 
+
+def test_native_display_off_event_pauses_without_waiting_for_idle_poll() -> None:
+    app, window = _create_window()
+    window.start_work_timer()
+    window._on_native_focus_activity_event("display_off", datetime.now(timezone.utc))
+    assert not window.work_timer.is_running
+    assert window.work_timer.pause_reason == "display_off"
+    assert "屏幕已关闭" in window.speech_bubble.text()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_auto_pause_records_effective_cutoff_in_shared_focus_path(tmp_path) -> None:
+    now = [datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+    timer = WorkTimerModel(
+        path=Path(tmp_path) / "timer.json",
+        now_provider=lambda: now[0],
+        monotonic_provider=lambda: monotonic[0],
+    )
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(PetSettings(), work_timer=timer)
+    window.focus_analytics._now = lambda: now[0]
+    window.start_work_timer()
+    now[0] += timedelta(minutes=17)
+    monotonic[0] += 17 * 60
+    effective = now[0] - timedelta(minutes=7)
+    window.pause_work_timer(reason="idle_10m", effective_end_at=effective)
+    assert timer.session_seconds() == 10 * 60
+    segments = window.focus_analytics.focus_segments()
+    assert segments
+    assert int((segments[-1].end_at - segments[-1].start_at).total_seconds()) == 10 * 60
+    window.close(); window.deleteLater(); app.processEvents()
+
 def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     """工作计时应显示今日累计，并在连续工作过久时劝用户休息。"""
 

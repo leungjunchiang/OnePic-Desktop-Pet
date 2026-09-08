@@ -218,8 +218,13 @@ class FocusSessionManager(QObject):
         self.refresh()
         return changed
 
-    def pause(self, reason: str = "manual") -> bool:
-        changed = self.timer.pause(reason)
+    def pause(
+        self,
+        reason: str = "manual",
+        *,
+        effective_end_at: datetime | None = None,
+    ) -> bool:
+        changed = self.timer.pause(reason, effective_end_at=effective_end_at)
         if changed:
             self._resting = True
         self.refresh()

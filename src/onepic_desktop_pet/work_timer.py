@@ -32,6 +32,7 @@ WORK_STATE_WORKING = "working"
 WORK_STATE_PAUSED_MANUAL = "paused_manual"
 WORK_STATE_PAUSED_IDLE = "paused_idle"
 WORK_STATE_PAUSED_LOCK = "paused_lock"
+WORK_STATE_PAUSED_DISPLAY_OFF = "paused_display_off"
 WORK_STATE_PAUSED_SLEEP = "paused_sleep"
 WORK_STATE_PAUSED_VIDEO = "paused_video"
 
@@ -45,6 +46,7 @@ _PAUSE_STATE_BY_REASON = {
     "idle": WORK_STATE_PAUSED_IDLE,
     "idle_10m": WORK_STATE_PAUSED_IDLE,
     "lock": WORK_STATE_PAUSED_LOCK,
+    "display_off": WORK_STATE_PAUSED_DISPLAY_OFF,
     "sleep": WORK_STATE_PAUSED_SLEEP,
     "fullscreen_video": WORK_STATE_PAUSED_VIDEO,
     "video": WORK_STATE_PAUSED_VIDEO,
@@ -288,6 +290,7 @@ class WorkTimerModel:
                 WORK_STATE_PAUSED_MANUAL,
                 WORK_STATE_PAUSED_IDLE,
                 WORK_STATE_PAUSED_LOCK,
+                WORK_STATE_PAUSED_DISPLAY_OFF,
                 WORK_STATE_PAUSED_SLEEP,
                 WORK_STATE_PAUSED_VIDEO,
             }:
@@ -589,13 +592,45 @@ class WorkTimerModel:
         self._save()
         return True
 
-    def pause(self, reason: str = "manual") -> bool:
-        """Pause the current episode and persist the explicit pause reason."""
+    def pause(
+        self,
+        reason: str = "manual",
+        *,
+        effective_end_at: datetime | None = None,
+    ) -> bool:
+        """Pause the current episode at the real observed cutoff.
+
+        ``effective_end_at`` is used by delayed idle polling and native power
+        events.  It prevents the GUI callback's discovery time from adding
+        seconds after the user actually became idle or the system suspended.
+        """
 
         self._rollover_if_needed()
         if not self.is_running:
             return False
         elapsed = self._current_elapsed()
+        if effective_end_at is not None and self._running_started_at is not None:
+            current = self._now()
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=BEIJING_TIMEZONE)
+            else:
+                current = current.astimezone(BEIJING_TIMEZONE)
+            cutoff = effective_end_at
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=BEIJING_TIMEZONE)
+            else:
+                cutoff = cutoff.astimezone(BEIJING_TIMEZONE)
+            cutoff = min(cutoff, current)
+            episode_total_at_cutoff = max(
+                0,
+                int((cutoff - self._running_started_at).total_seconds()),
+            )
+            current_episode_total = self._episode_accumulated_seconds + elapsed
+            episode_total_at_cutoff = min(episode_total_at_cutoff, current_episode_total)
+            elapsed = max(
+                0,
+                episode_total_at_cutoff - self._episode_accumulated_seconds,
+            )
         self._accumulated_seconds += elapsed
         self._lifetime_seconds += elapsed
         self._session_accumulated_seconds += elapsed
