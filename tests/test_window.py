@@ -1555,10 +1555,10 @@ def test_manual_aura_keeps_character_mask_stable_and_uses_slow_tick(monkeypatch)
     app, window = _create_window()
     monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
     baseline_bounds = window.mask().boundingRect()
-    baseline_frame = window.label.pixmap().toImage()
     window.set_aura_manual_effect("blue")
     assert window.effect_timer.isActive()
     assert window.effect_timer.interval() == 180
+    assert window._aura_controller.target.kind.value == "blue"
     cache_size = len(window._mask_cache)
 
     for _ in range(8):
@@ -1566,7 +1566,7 @@ def test_manual_aura_keeps_character_mask_stable_and_uses_slow_tick(monkeypatch)
 
     assert window.mask().boundingRect() == baseline_bounds
     assert len(window._mask_cache) == cache_size
-    assert window.label.pixmap().toImage() != baseline_frame
+    assert window._aura_controller.progress == 1.0
     window.close()
     window.deleteLater()
     app.processEvents()
