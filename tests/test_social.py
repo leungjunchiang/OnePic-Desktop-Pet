@@ -2121,6 +2121,27 @@ def test_sealed_focus_contract_and_aggregate_leaderboard_are_explicit():
     assert "create or replace function public.lili_focus_weekly_leaderboard" in normalized
 
 
+def test_focus_session_continuity_migration_audits_identity_replacement_without_new_history_source():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260909120000_lili_focus_session_continuity.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "add column if not exists session_replaced_at timestamptz" in normalized
+    assert "old.session_id is distinct from new.session_id" in normalized
+    assert "last_session_started_at := old.session_started_at" in normalized
+    assert "session_replaced_at := now()" in normalized
+    assert "create or replace function public.lili_upsert_focus_presence" in normalized
+    assert "same-session start" in normalized
+    assert "lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "full" not in normalized
+
+
 def test_focus_segment_sync_never_falls_back_to_full_snapshot():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "onepic_desktop_pet" / "social_ui.py").read_text(encoding="utf-8")

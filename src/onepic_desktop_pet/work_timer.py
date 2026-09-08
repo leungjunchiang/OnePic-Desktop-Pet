@@ -2,13 +2,13 @@
 本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
 
 职责范围：
-- 记录当天和终身累计工作秒数，并在北京时间跨日时封存旧日运行段后开始新一天；
+- 记录当天和终身累计工作秒数；日、周、月、年只是统计投影，不切断逻辑 FocusSession；
 - 支持开始、暂停、完成、状态格式化和运行中定期落盘；
+- 在 session 身份变化前保留 durable checkpoint，避免午夜、重启或账号切换丢失事实；
 - 只在本机应用数据目录保存日期与累计秒数，不保存任务名称或聊天内容；
 - 按单次连续工作时长产生 25 分钟鼓励、50 分钟休息和更长时段劝慰提醒。
 
-计时使用单调时钟避免系统时间微调造成跳变；提醒阈值按当前连续工作段计算，开始和自动检查点都会保存“仍在工作”的标记。
-异常退出后下次启动恢复到最近一次已保存的计时点，但不会把应用关闭期间的离线时间误算为工作时间。
+计时使用单调时钟避免系统时间微调造成跳变；提醒阈值按当前连续工作段计算。应用异常退出后不会自动恢复计时，而是恢复为待安全封存状态，交由 FocusSession/AccountFocusStore 先落盘后等待用户明确继续。
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ WORK_STATE_PAUSED_LOCK = "paused_lock"
 WORK_STATE_PAUSED_DISPLAY_OFF = "paused_display_off"
 WORK_STATE_PAUSED_SLEEP = "paused_sleep"
 WORK_STATE_PAUSED_VIDEO = "paused_video"
+WORK_STATE_PAUSED_RESTART = "paused_restart"
 
 # Focus statistics use one calendar everywhere.  A fixed offset is deliberate:
 # Beijing has no daylight-saving transition, and the social backend uses the
@@ -51,6 +52,7 @@ _PAUSE_STATE_BY_REASON = {
     "fullscreen_video": WORK_STATE_PAUSED_VIDEO,
     "video": WORK_STATE_PAUSED_VIDEO,
     "account_switch": WORK_STATE_PAUSED_MANUAL,
+    "restart_safe_seal": WORK_STATE_PAUSED_RESTART,
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -123,12 +125,14 @@ class WorkTimerModel:
         monotonic_provider: Callable[[], float] | None = None,
         *,
         persist: bool = True,
+        device_id: str | None = None,
     ) -> None:
         # Demo/offscreen windows must not read or mutate the user's real
         # session.  Production callers keep the historical persistent default.
         self.persist = bool(persist)
         self._uses_account_storage = path is None and self.persist
         self._account_id = "" if self._uses_account_storage else None
+        self._device_id = str(device_id or "").strip()[:120]
         self.path = (path or work_timer_path()) if self.persist else None
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._monotonic = monotonic_provider or time.monotonic
@@ -149,12 +153,14 @@ class WorkTimerModel:
         self._running_started_at: datetime | None = None
         self._state = WORK_STATE_IDLE
         self._pause_reason: str | None = None
+        self._last_update_reason = "init"
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key: str | None = None
         self._recovered_active_session = False
-        # The timer owns clock state but not the FocusSession ledger.  The
-        # window registers this small hook so an active interval can be
-        # sealed before a Beijing-midnight rollover replaces its session.
+        self._last_trusted_checkpoint_at: datetime | None = None
+        self._recovery_pending = False
+        # Kept as a compatibility no-op for older integrations.  Calendar
+        # boundaries must never own FocusSession lifecycle anymore.
         self._day_rollover_handler: Callable[[int, str, datetime | None], None] | None = None
         self._load()
 
@@ -162,12 +168,13 @@ class WorkTimerModel:
         self,
         handler: Callable[[int, str, datetime | None], None] | None,
     ) -> None:
-        """Register the owner that persists an active interval at midnight.
+        """Retain the old API without allowing midnight to split a session.
 
-        ``WorkTimerModel`` deliberately has no dependency on analytics or
-        networking.  It therefore gives its owner the pre-rollover cumulative
-        session seconds and the continuous segment start, then starts a new
-        session for the new Beijing day.
+        Older callers registered a callback that wrote a synthetic segment at
+        midnight.  That ordering made the next presence heartbeat expose a
+        new session before the old fact was guaranteed to exist.  The callback
+        is intentionally ignored; only a real pause/finish/shutdown seals a
+        FocusSegment now.
         """
 
         self._day_rollover_handler = handler
@@ -183,12 +190,26 @@ class WorkTimerModel:
             self._account_id = target_id
             return False
         if self.is_running:
-            self.pause("account_switch")
+            # The timer cannot write a FocusSegment by itself.  Refuse the
+            # namespace switch so the window owner can run the shared
+            # seal-before-transition pipeline first.
+            LOGGER.error("refusing account switch while FocusSession is running")
+            return False
         self.path = target
         self._account_id = target_id
+        self._device_id = ""
         self._reset_in_memory_state()
         self._load()
         return True
+
+    def set_device_id(self, device_id: str | None) -> None:
+        """Persist the device provenance used by the active checkpoint."""
+
+        clean = str(device_id or "").strip()[:120]
+        if clean == self._device_id:
+            return
+        self._device_id = clean
+        self._save()
 
     def _reset_in_memory_state(self) -> None:
         self._date_key = self._today_key()
@@ -204,9 +225,12 @@ class WorkTimerModel:
         self._running_started_at = None
         self._state = WORK_STATE_IDLE
         self._pause_reason = None
+        self._last_update_reason = "account_switch"
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key = None
         self._recovered_active_session = False
+        self._last_trusted_checkpoint_at = None
+        self._recovery_pending = False
 
     @property
     def is_running(self) -> bool:
@@ -254,7 +278,7 @@ class WorkTimerModel:
         return current.astimezone(BEIJING_TIMEZONE).date().isoformat()
 
     def _load(self) -> None:
-        """读取累计秒数；崩溃后恢复最近保存的运行状态。"""
+        """读取累计秒数，并把异常退出的 running 状态转为安全待恢复。"""
 
         if self.path is None:
             return
@@ -265,24 +289,20 @@ class WorkTimerModel:
             self._lifetime_seconds = max(0, int(data.get("lifetime_seconds", 0)))
             self._notified_outfit_count = max(0, int(data.get("notified_outfit_count", 0)))
             same_date = data.get("date") == self._date_key
+            # Daily counters are projections and may reset at a calendar
+            # boundary.  Session identity and its durable checkpoint are not
+            # daily data and must survive midnight/restart unchanged.
             seconds = int(data.get("accumulated_seconds", 0)) if same_date else 0
-            session_seconds = (
-                max(0, int(data.get("session_accumulated_seconds", 0)))
-                if same_date else 0
-            )
+            session_seconds = max(0, int(data.get("session_accumulated_seconds", 0)))
             analytics_cursor_present = "analytics_recorded_session_seconds" in data
-            analytics_recorded_seconds = (
-                max(0, int(data.get("analytics_recorded_session_seconds", 0)))
-                if same_date else 0
+            analytics_recorded_seconds = max(
+                0, int(data.get("analytics_recorded_session_seconds", 0))
             )
-            episode_seconds = (
-                max(0, int(data.get("episode_accumulated_seconds", 0)))
-                if same_date else 0
-            )
-            saved_running = bool(data.get("running", False)) and same_date
+            episode_seconds = max(0, int(data.get("episode_accumulated_seconds", 0)))
+            saved_running = bool(data.get("running", False))
             saved_session_active = bool(
                 data.get("session_active", saved_running or session_seconds > 0)
-            ) and same_date
+            )
             saved_state = str(data.get("state") or "").strip()
             if saved_running:
                 saved_state = WORK_STATE_WORKING
@@ -293,6 +313,7 @@ class WorkTimerModel:
                 WORK_STATE_PAUSED_DISPLAY_OFF,
                 WORK_STATE_PAUSED_SLEEP,
                 WORK_STATE_PAUSED_VIDEO,
+                WORK_STATE_PAUSED_RESTART,
             }:
                 # Old files only had session_active/running.  Treat a paused
                 # old session as a manual pause rather than auto-resuming it.
@@ -302,7 +323,7 @@ class WorkTimerModel:
         self._accumulated_seconds = max(0, seconds)
         self._session_accumulated_seconds = session_seconds
         self._episode_accumulated_seconds = episode_seconds
-        self._session_id = str(data.get("session_id") or "") if same_date else ""
+        self._session_id = str(data.get("session_id") or "")
         self._session_active = saved_session_active
         if self._session_active and not self._session_id:
             self._session_id = uuid.uuid4().hex
@@ -314,97 +335,170 @@ class WorkTimerModel:
             session_seconds,
             analytics_recorded_seconds if analytics_cursor_present else session_seconds,
         )
-        self._state = saved_state if same_date else WORK_STATE_IDLE
+        self._state = saved_state if self._session_active else WORK_STATE_IDLE
         self._pause_reason = (
             str(data.get("pause_reason") or "manual")
             if self._state != WORK_STATE_WORKING and self._session_active
             else None
         )
+        self._last_update_reason = str(
+            data.get("last_update_reason") or self._pause_reason or self._state or "load"
+        )
+        saved_device_id = str(data.get("device_id") or "").strip()[:120]
+        if saved_device_id:
+            self._device_id = saved_device_id
+        raw_started = data.get("running_started_at")
+        try:
+            if raw_started:
+                recovered_at = datetime.fromisoformat(str(raw_started).replace("Z", "+00:00"))
+                if recovered_at.tzinfo is None:
+                    recovered_at = recovered_at.replace(tzinfo=BEIJING_TIMEZONE)
+                self._running_started_at = recovered_at.astimezone(BEIJING_TIMEZONE)
+        except (TypeError, ValueError, OverflowError):
+            self._running_started_at = None
+        raw_checkpoint = data.get("last_trusted_checkpoint_at")
+        try:
+            if raw_checkpoint:
+                checkpoint = datetime.fromisoformat(str(raw_checkpoint).replace("Z", "+00:00"))
+                if checkpoint.tzinfo is None:
+                    checkpoint = checkpoint.replace(tzinfo=BEIJING_TIMEZONE)
+                self._last_trusted_checkpoint_at = checkpoint.astimezone(BEIJING_TIMEZONE)
+        except (TypeError, ValueError, OverflowError):
+            self._last_trusted_checkpoint_at = None
         if saved_running:
-            # Monotonic clocks are process-local. Resume from the last
-            # checkpoint instead of counting the period while the app was down.
-            now = self._monotonic()
-            self._running_since = now
-            self._last_checkpoint = now
-            # Time while the application was closed is not work.  Start a new
-            # observed segment at recovery rather than reviving stale wall
-            # time from the previous process.
-            recovered_at = self._now()
-            if recovered_at.tzinfo is None:
-                recovered_at = recovered_at.replace(tzinfo=BEIJING_TIMEZONE)
-            self._running_started_at = recovered_at.astimezone(BEIJING_TIMEZONE)
+            # Never auto-resume after a process restart.  The persisted
+            # checkpoint remains available for the owner to seal as a raw
+            # FocusSegment before the user can start a new session.
+            self._running_since = None
+            self._last_checkpoint = self._monotonic()
+            self._state = WORK_STATE_PAUSED_RESTART
+            self._pause_reason = "restart_safe_seal"
+            self._last_update_reason = "restart_safe_seal"
             self._recovered_active_session = True
-        elif saved_session_active and same_date:
-            raw_started = data.get("running_started_at")
-            try:
-                if raw_started:
-                    recovered_at = datetime.fromisoformat(str(raw_started).replace("Z", "+00:00"))
-                    if recovered_at.tzinfo is None:
-                        recovered_at = recovered_at.replace(tzinfo=BEIJING_TIMEZONE)
-                    self._running_started_at = recovered_at.astimezone(BEIJING_TIMEZONE)
-            except (TypeError, ValueError, OverflowError):
-                self._running_started_at = None
+            self._recovery_pending = True
+        elif saved_session_active:
+            self._recovery_pending = False
 
-    def _rollover_if_needed(self) -> None:
-        """跨日时封存旧日运行段，并从北京时间 00:00 开始新会话。"""
+    @property
+    def recovery_pending(self) -> bool:
+        """Whether a saved running interval must be sealed before new work."""
+
+        return bool(self._recovery_pending)
+
+    def pending_recovery_seal(self) -> tuple[int, str, datetime | None] | None:
+        """Return the last durable running interval awaiting safe sealing."""
+
+        if not self._recovery_pending:
+            return None
+        return (
+            max(0, int(self._session_accumulated_seconds)),
+            str(self._session_id or ""),
+            self._running_started_at or self._last_trusted_checkpoint_at,
+        )
+
+    def complete_recovery_seal(self) -> bool:
+        """Mark a restart checkpoint sealed without auto-resuming work."""
+
+        if not self._recovery_pending:
+            return False
+        self._recovery_pending = False
+        self._recovered_active_session = False
+        self._running_started_at = None
+        self._state = WORK_STATE_PAUSED_RESTART
+        self._pause_reason = "restart_safe_seal"
+        self._last_update_reason = "restart_safe_seal"
+        self._last_trusted_checkpoint_at = self._last_trusted_checkpoint_at or self._now()
+        self._save()
+        return True
+
+    def _elapsed_at(self, reference_at: datetime | None = None) -> int:
+        """Return observed running seconds at ``reference_at`` if supplied."""
+
+        if not self.is_running:
+            return 0
+        if reference_at is None:
+            return self._current_elapsed()
+        reference = reference_at
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            reference = reference.astimezone(BEIJING_TIMEZONE)
+        current = self._now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            current = current.astimezone(BEIJING_TIMEZONE)
+        reference = min(reference, current)
+        anchor = self._last_trusted_checkpoint_at or self._running_started_at
+        if anchor is None:
+            return self._current_elapsed()
+        elapsed = max(0, int((reference - anchor).total_seconds()))
+        return min(elapsed, self._current_elapsed())
+
+    def _rollover_if_needed(
+        self,
+        reference_at: datetime | None = None,
+        *,
+        persist: bool = True,
+    ) -> None:
+        """Refresh the daily projection without changing FocusSession identity.
+
+        Beijing midnight is an analytics boundary only.  The active logical
+        session and its wall-clock start remain unchanged, so a later pause
+        can persist one valid cross-midnight FocusSegment.
+        """
 
         today = self._today_key()
+        if reference_at is not None:
+            reference = reference_at
+            if reference.tzinfo is None:
+                reference = reference.replace(tzinfo=BEIJING_TIMEZONE)
+            else:
+                reference = reference.astimezone(BEIJING_TIMEZONE)
+            # A delayed pause can be discovered after midnight but have an
+            # effective cutoff before midnight.  Do not advance the daily
+            # projection before that cutoff is applied.
+            if reference.date().isoformat() == self._date_key:
+                today = self._date_key
         if today == self._date_key:
             return
         was_running = self.is_running
+        had_active_session = self._session_active
         current = self._now()
         if current.tzinfo is None:
             current = current.replace(tzinfo=BEIJING_TIMEZONE)
         else:
             current = current.astimezone(BEIJING_TIMEZONE)
         boundary = datetime.combine(current.date(), datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
-        elapsed = self._current_elapsed() if was_running else 0
-        # ``_running_since`` is reset at checkpoints, while the wall clock
-        # remembers the actual uninterrupted segment.  The monotonic delta is
-        # still the authoritative duration; use the wall clock only to split
-        # that delta at the calendar boundary.
+        elapsed = self._elapsed_at(reference_at) if was_running else 0
+        # ``_running_since`` is reset at checkpoints.  The monotonic delta is
+        # authoritative for the observed work; the wall clock only tells the
+        # daily projection how much of that delta belongs after midnight.
         post_midnight_seconds = (
             min(elapsed, max(0, int((current - boundary).total_seconds())))
             if was_running
             else 0
         )
-        pre_midnight_seconds = max(0, elapsed - post_midnight_seconds)
-        closing_session_seconds = self._session_accumulated_seconds + pre_midnight_seconds
-        if was_running and closing_session_seconds > self._analytics_recorded_session_seconds:
-            handler = self._day_rollover_handler
-            if handler is not None:
-                try:
-                    handler(
-                        closing_session_seconds,
-                        self._session_id,
-                        self._running_started_at,
-                    )
-                except Exception:
-                    # Do not clear the old day if its raw FocusSession could
-                    # not be persisted.  A later UI tick will retry instead
-                    # of silently losing the interval at midnight.
-                    LOGGER.exception("work timer midnight focus seal failed")
-                    return
         self._date_key = today
-        # The previous implementation discarded ``elapsed`` here whenever a
-        # timer was still running at 00:00.  Preserve both its lifetime value
-        # and the seconds that have already elapsed in the new day.
         if was_running:
             self._lifetime_seconds += elapsed
+            self._session_accumulated_seconds += elapsed
+            self._episode_accumulated_seconds += elapsed
         self._accumulated_seconds = post_midnight_seconds
-        self._session_accumulated_seconds = post_midnight_seconds
-        self._session_active = was_running
-        self._session_id = uuid.uuid4().hex if was_running else ""
-        self._analytics_recorded_session_seconds = 0
+        self._session_active = had_active_session
         self._running_since = self._monotonic() if was_running else None
-        self._running_started_at = boundary if was_running else None
-        self._episode_accumulated_seconds = post_midnight_seconds
-        self._state = WORK_STATE_WORKING if was_running else WORK_STATE_IDLE
-        self._pause_reason = None
+        if was_running:
+            self._state = WORK_STATE_WORKING
+            self._pause_reason = None
+            self._last_trusted_checkpoint_at = current
+        elif not had_active_session:
+            self._accumulated_seconds = 0
+            self._state = WORK_STATE_IDLE
+            self._pause_reason = None
         self._last_checkpoint = self._monotonic()
         self._last_reminder_key = None
-        self._recovered_active_session = False
-        self._save()
+        if persist:
+            self._save()
 
     def _current_elapsed(self) -> int:
         """返回当前未落盘工作段的完整秒数。"""
@@ -412,6 +506,36 @@ class WorkTimerModel:
         if self._running_since is None:
             return 0
         return max(0, int(self._monotonic() - self._running_since))
+
+    def _mutable_state_snapshot(self) -> dict[str, object]:
+        """Capture timer state so a failed durable transition can roll back."""
+
+        return {
+            "_date_key": self._date_key,
+            "_accumulated_seconds": self._accumulated_seconds,
+            "_lifetime_seconds": self._lifetime_seconds,
+            "_session_accumulated_seconds": self._session_accumulated_seconds,
+            "_episode_accumulated_seconds": self._episode_accumulated_seconds,
+            "_session_id": self._session_id,
+            "_session_active": self._session_active,
+            "_running_since": self._running_since,
+            "_running_started_at": self._running_started_at,
+            "_last_trusted_checkpoint_at": self._last_trusted_checkpoint_at,
+            "_analytics_recorded_session_seconds": self._analytics_recorded_session_seconds,
+            "_state": self._state,
+            "_pause_reason": self._pause_reason,
+            "_last_update_reason": self._last_update_reason,
+            "_last_checkpoint": self._last_checkpoint,
+            "_last_reminder_key": self._last_reminder_key,
+            "_recovered_active_session": self._recovered_active_session,
+            "_recovery_pending": self._recovery_pending,
+        }
+
+    def _restore_mutable_state(self, snapshot: dict[str, object]) -> None:
+        """Restore a pre-transition state after local persistence fails."""
+
+        for name, value in snapshot.items():
+            setattr(self, name, value)
 
     def today_seconds(self) -> int:
         """返回当天累计工作秒数，包括当前运行段。"""
@@ -424,6 +548,31 @@ class WorkTimerModel:
 
         self._rollover_if_needed()
         return self._session_accumulated_seconds + self._current_elapsed()
+
+    def session_seconds_at(self, end_at: datetime | None = None) -> int:
+        """Return the current logical session duration at a trusted cutoff.
+
+        Delayed idle/power callbacks must seal at the observed boundary, not
+        at the later GUI callback time.  This read-only helper lets the owner
+        persist the raw fact before calling :meth:`pause`.
+        """
+
+        self._rollover_if_needed(end_at, persist=end_at is None)
+        if not self.is_running or end_at is None or self._running_started_at is None:
+            return self.session_seconds()
+        cutoff = end_at
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            cutoff = cutoff.astimezone(BEIJING_TIMEZONE)
+        current = self._now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            current = current.astimezone(BEIJING_TIMEZONE)
+        cutoff = min(cutoff, current)
+        current_total = self._session_accumulated_seconds + self._current_elapsed()
+        return min(current_total, self._session_accumulated_seconds + self._elapsed_at(cutoff))
 
     def current_elapsed_seconds(self) -> int:
         """Return only the currently running segment.
@@ -566,31 +715,42 @@ class WorkTimerModel:
         self._rollover_if_needed()
         if self.is_running:
             return False
-        now = self._monotonic()
-        if not self._session_active:
+        if self._recovery_pending:
+            LOGGER.error("refusing start until restart recovery is durably sealed")
+            return False
+        snapshot = self._mutable_state_snapshot()
+        try:
+            now = self._monotonic()
+            # Every explicit resume starts a new logical FocusSession.  A paused
+            # session has already gone through the durable seal pipeline; keeping
+            # its id would make later segments look like one mutable fact.
+            resuming = self._session_active
             self._session_accumulated_seconds = 0
             self._session_id = uuid.uuid4().hex
             self._analytics_recorded_session_seconds = 0
             self._last_reminder_key = None
-        elif not self._session_id:
-            self._session_id = uuid.uuid4().hex
-        self._session_active = True
-        self._state = WORK_STATE_WORKING
-        self._pause_reason = None
-        # A resume starts a new uninterrupted work episode.  A newly created
-        # session also starts at zero; crash recovery leaves the saved episode
-        # intact because this method is not called during __init__.
-        self._episode_accumulated_seconds = 0
-        self._running_since = now
-        current = self._now()
-        if current.tzinfo is None:
-            current = current.replace(tzinfo=BEIJING_TIMEZONE)
-        self._running_started_at = current.astimezone(BEIJING_TIMEZONE)
-        self._last_checkpoint = now
-        self._last_reminder_key = None
-        self._recovered_active_session = False
-        self._save()
-        return True
+            self._session_active = True
+            self._state = WORK_STATE_WORKING
+            self._pause_reason = None
+            self._last_update_reason = "manual_resume" if resuming else "new_focus"
+            # A resume starts a new uninterrupted work episode.  A newly created
+            # session also starts at zero; crash recovery leaves the saved episode
+            # intact because this method is not called during __init__.
+            self._episode_accumulated_seconds = 0
+            self._running_since = now
+            current = self._now()
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=BEIJING_TIMEZONE)
+            self._running_started_at = current.astimezone(BEIJING_TIMEZONE)
+            self._last_trusted_checkpoint_at = self._running_started_at
+            self._last_checkpoint = now
+            self._last_reminder_key = None
+            self._recovered_active_session = False
+            self._save()
+            return True
+        except Exception:
+            self._restore_mutable_state(snapshot)
+            raise
 
     def pause(
         self,
@@ -605,48 +765,56 @@ class WorkTimerModel:
         seconds after the user actually became idle or the system suspended.
         """
 
-        self._rollover_if_needed()
-        if not self.is_running:
-            return False
-        elapsed = self._current_elapsed()
-        if effective_end_at is not None and self._running_started_at is not None:
-            current = self._now()
-            if current.tzinfo is None:
-                current = current.replace(tzinfo=BEIJING_TIMEZONE)
-            else:
-                current = current.astimezone(BEIJING_TIMEZONE)
-            cutoff = effective_end_at
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=BEIJING_TIMEZONE)
-            else:
-                cutoff = cutoff.astimezone(BEIJING_TIMEZONE)
-            cutoff = min(cutoff, current)
-            episode_total_at_cutoff = max(
-                0,
-                int((cutoff - self._running_started_at).total_seconds()),
+        snapshot = self._mutable_state_snapshot()
+        try:
+            self._rollover_if_needed(effective_end_at, persist=False)
+            if not self.is_running:
+                self._save()
+                return False
+            elapsed = self._current_elapsed()
+            if effective_end_at is not None and self._running_started_at is not None:
+                current = self._now()
+                if current.tzinfo is None:
+                    current = current.replace(tzinfo=BEIJING_TIMEZONE)
+                else:
+                    current = current.astimezone(BEIJING_TIMEZONE)
+                cutoff = effective_end_at
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=BEIJING_TIMEZONE)
+                else:
+                    cutoff = cutoff.astimezone(BEIJING_TIMEZONE)
+                cutoff = min(cutoff, current)
+                episode_total_at_cutoff = self._episode_accumulated_seconds + self._elapsed_at(cutoff)
+                current_episode_total = self._episode_accumulated_seconds + elapsed
+                episode_total_at_cutoff = min(episode_total_at_cutoff, current_episode_total)
+                elapsed = max(
+                    0,
+                    episode_total_at_cutoff - self._episode_accumulated_seconds,
+                )
+            self._accumulated_seconds += elapsed
+            self._lifetime_seconds += elapsed
+            self._session_accumulated_seconds += elapsed
+            self._episode_accumulated_seconds += elapsed
+            self._session_active = True
+            self._running_since = None
+            self._running_started_at = None
+            clean_reason = str(reason or "manual").strip().casefold()
+            self._pause_reason = clean_reason or "manual"
+            self._last_update_reason = self._pause_reason
+            self._state = _PAUSE_STATE_BY_REASON.get(
+                self._pause_reason, WORK_STATE_PAUSED_MANUAL
             )
-            current_episode_total = self._episode_accumulated_seconds + elapsed
-            episode_total_at_cutoff = min(episode_total_at_cutoff, current_episode_total)
-            elapsed = max(
-                0,
-                episode_total_at_cutoff - self._episode_accumulated_seconds,
-            )
-        self._accumulated_seconds += elapsed
-        self._lifetime_seconds += elapsed
-        self._session_accumulated_seconds += elapsed
-        self._episode_accumulated_seconds += elapsed
-        self._session_active = True
-        self._running_since = None
-        self._running_started_at = None
-        clean_reason = str(reason or "manual").strip().casefold()
-        self._pause_reason = clean_reason or "manual"
-        self._state = _PAUSE_STATE_BY_REASON.get(
-            self._pause_reason, WORK_STATE_PAUSED_MANUAL
-        )
-        self._last_reminder_key = None
-        self._recovered_active_session = False
-        self._save()
-        return True
+            current_checkpoint = effective_end_at or self._now()
+            if current_checkpoint.tzinfo is None:
+                current_checkpoint = current_checkpoint.replace(tzinfo=BEIJING_TIMEZONE)
+            self._last_trusted_checkpoint_at = current_checkpoint.astimezone(BEIJING_TIMEZONE)
+            self._last_reminder_key = None
+            self._recovered_active_session = False
+            self._save()
+            return True
+        except Exception:
+            self._restore_mutable_state(snapshot)
+            raise
 
     def finish(self) -> int:
         """完成当前工作段并返回今天累计秒数。"""
@@ -660,8 +828,11 @@ class WorkTimerModel:
         self._session_id = ""
         self._analytics_recorded_session_seconds = 0
         self._running_started_at = None
+        self._last_trusted_checkpoint_at = None
+        self._recovery_pending = False
         self._state = WORK_STATE_IDLE
         self._pause_reason = None
+        self._last_update_reason = "finish"
         self._last_reminder_key = None
         self._save()
         return total
@@ -682,6 +853,11 @@ class WorkTimerModel:
         self._episode_accumulated_seconds += elapsed
         self._running_since = now
         self._last_checkpoint = now
+        checkpoint_at = self._now()
+        if checkpoint_at.tzinfo is None:
+            checkpoint_at = checkpoint_at.replace(tzinfo=BEIJING_TIMEZONE)
+        self._last_trusted_checkpoint_at = checkpoint_at.astimezone(BEIJING_TIMEZONE)
+        self._last_update_reason = "checkpoint"
         self._save()
         return True
 
@@ -730,6 +906,7 @@ class WorkTimerModel:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".json.tmp")
         data = {
+            "account_id": self._account_id or "",
             "date": self._date_key,
             "accumulated_seconds": max(0, int(self._accumulated_seconds)),
             "lifetime_seconds": max(0, int(self._lifetime_seconds)),
@@ -744,8 +921,13 @@ class WorkTimerModel:
             ),
             "running_started_at": self._running_started_at.isoformat()
             if self._running_started_at is not None else None,
+            "last_trusted_checkpoint_at": self._last_trusted_checkpoint_at.isoformat()
+            if self._last_trusted_checkpoint_at is not None else None,
+            "active_session_schema": 2,
+            "device_id": self._device_id,
             "state": self._state,
             "pause_reason": self._pause_reason,
+            "last_update_reason": self._last_update_reason,
         }
         temporary.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n",

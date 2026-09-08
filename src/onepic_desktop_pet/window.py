@@ -16,6 +16,7 @@
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
+- 工作 FocusSession 允许跨日/跨周，暂停、完成、关闭和异常恢复均先把旧区间 durable seal 再切换身份；
 - 今日时长读取账号级 sealed/live 区间并集，同时把本机暂停与另一台设备工作明确区分；
 - 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
 - Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
@@ -560,7 +561,9 @@ class PetWindow(QWidget):
         self.focus_analytics = AccountFocusStore(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
-        self.work_timer.set_day_rollover_handler(self._seal_focus_at_day_rollover)
+        # Calendar boundaries are projection boundaries only.  The active
+        # FocusSession is allowed to cross midnight and is sealed only by a
+        # real pause/finish/shutdown transition.
         self.focus_session.set_period_seconds_provider(self._shared_focus_period_seconds)
         self._focus_quality_tracker = FocusQualityTracker()
         self._active_focus_account_id = ""
@@ -3471,8 +3474,23 @@ class PetWindow(QWidget):
         self._last_auto_pause_reason = None
         self._pause_notice_shown = False
         self._fullscreen_video_started_at = None
-        if not self.work_timer.has_active_session:
+        # A real pause ends one logical FocusSession.  Reset the per-session
+        # analytics cursor before the explicit resume creates the next stable
+        # session id.  A restart recovery is handled before this path is
+        # allowed to create another identity.
+        if (
+            not self.work_timer.has_active_session
+            or not self.work_timer.is_running
+        ):
             self._recorded_focus_session_seconds = 0
+        if getattr(self.work_timer, "recovery_pending", False):
+            self._recover_persisted_focus_session()
+            if getattr(self.work_timer, "recovery_pending", False):
+                LOGGER.error("focus start blocked: restart recovery seal is pending")
+                return CompanionReply(
+                    "上次专注还在安全封存，六毛先不重新开一轮；请稍后再点继续工作。",
+                    PetState.CURIOUS,
+                )
         self._focus_quality_tracker.start(active_application_category())
         # The paper window selects a real Todo; keep the existing focus
         # analytics task for compatibility, but attribute new seconds to the
@@ -3538,14 +3556,28 @@ class PetWindow(QWidget):
             self._record_user_interaction()
             self._reset_idle_episode()
         segment_started_at = self.work_timer.current_segment_started_at()
+        session_id = self.work_timer.focus_session_id
+        was_running = self.work_timer.is_running
+        # Seal the raw fact while the timer still owns the old active
+        # identity.  Only after this durable local write succeeds may the
+        # timer transition to paused/inactive presence.  For delayed idle and
+        # power callbacks, use the effective cutoff rather than discovery time.
+        session_seconds = (
+            self.work_timer.session_seconds_at(effective_end_at)
+            if was_running and effective_end_at is not None
+            else self.work_timer.session_seconds()
+        )
+        if was_running:
+            self._record_focus_segment(
+                session_seconds,
+                completed=False,
+                session_id=session_id,
+                started_at=segment_started_at,
+            )
         was_running = self.focus_session.pause(
             reason,
             effective_end_at=effective_end_at,
         )
-        # Read the cumulative session only after WorkTimerModel has applied
-        # the effective cutoff.  Reading it before the canonical pause would
-        # reintroduce the delayed poll time into FocusSegment/analytics.
-        session_seconds = self.work_timer.session_seconds()
         if was_running and reason in {"idle_10m", "fullscreen_video"}:
             self._away_recovery_reason = reason
             self._away_recovery_started_at = time.monotonic()
@@ -3553,19 +3585,13 @@ class PetWindow(QWidget):
             self._close_away_recovery_card()
         if was_running:
             self.focus_analytics.pause_focus_session(at=effective_end_at)
-            self._record_focus_segment(
-                session_seconds,
-                completed=False,
-                started_at=segment_started_at,
-            )
             self._refresh_cross_device_today_display(
                 snapshot=self.focus_session.snapshot(include_projection=False),
                 source="focus_paused",
             )
             self._invalidate_focus_projection("focus_paused")
-            # FocusSession emits its pause snapshot before the analytics
-            # segment is committed. Publish one more snapshot so the study
-            # room and report immediately see the same reconciled day total.
+            # Publish one more snapshot after the durable segment and paused
+            # state are both committed so the study room/report see one fact.
             self.focus_session.refresh()
             self._pause_notice_shown = False
             if automatic_reason and reason in {
@@ -4962,33 +4988,6 @@ class PetWindow(QWidget):
         )
         return seconds
 
-    def _seal_focus_at_day_rollover(
-        self,
-        session_seconds: int,
-        session_id: str,
-        started_at: datetime | None,
-    ) -> None:
-        """Persist the old-day part of a running interval before 00:00 reset.
-
-        The raw interval ends at Beijing midnight by construction in
-        ``WorkTimerModel``.  It is therefore safe for the canonical server
-        aggregation to include it in the previous day and current week.
-        Daily companion counters intentionally wait for the new day's normal
-        lifecycle so they cannot be credited to the wrong calendar date.
-        """
-
-        self._record_focus_segment(
-            session_seconds,
-            completed=False,
-            session_id=session_id,
-            started_at=started_at,
-            update_daily_stats=False,
-        )
-        # The timer creates a fresh session immediately after this callback;
-        # its analytics cursor starts at zero too.
-        self._recorded_focus_session_seconds = 0
-        self._invalidate_focus_projection("focus_day_rollover_sealed")
-
     def _invalidate_focus_projection(self, reason: str = "") -> None:
         """Invalidate the closed-session projection after a lifecycle event."""
 
@@ -5576,12 +5575,19 @@ class PetWindow(QWidget):
         if hasattr(self, "work_timer"):
             if self.work_timer.is_running:
                 session_seconds = self.work_timer.session_seconds()
+                session_id = self.work_timer.focus_session_id
+                segment_started_at = self.work_timer.current_segment_started_at()
                 # Persist the same final running segment in the local time-memory
                 # store before the shared timer is paused.  Without this, a
                 # normal app close could update the legacy daily card while
                 # losing the Todo attribution and daily check-in record.
-                self._record_focus_segment(session_seconds, completed=False)
-            self.focus_session.pause()
+                self._record_focus_segment(
+                    session_seconds,
+                    completed=False,
+                    session_id=session_id,
+                    started_at=segment_started_at,
+                )
+                self.focus_session.pause(reason="shutdown")
 
     def _generate_daily_report(self, *, show_dialog: bool, mark_generated: bool = False) -> Path | None:
         """生成只保存在本机的工作日报；可选展示预览窗口。"""
@@ -7619,17 +7625,78 @@ class PetWindow(QWidget):
             return ""
         return _session_user_id(client)
 
+    def _recover_persisted_focus_session(self) -> bool:
+        """Safely seal a saved running checkpoint before allowing new work.
+
+        ``WorkTimerModel`` never auto-resumes after a process restart.  It
+        leaves the last durable observed interval and its stable identity
+        available here.  The raw FocusSegment is written first; only after
+        that succeeds is the timer marked paused and eligible for explicit
+        user resume.
+        """
+
+        pending = getattr(self.work_timer, "pending_recovery_seal", None)
+        complete = getattr(self.work_timer, "complete_recovery_seal", None)
+        if not callable(pending) or not callable(complete):
+            return True
+        candidate = pending()
+        if candidate is None:
+            return True
+        total, session_id, started_at = candidate
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
+        try:
+            if int(total) > self._recorded_focus_session_seconds:
+                self._record_focus_segment(
+                    int(total),
+                    completed=False,
+                    session_id=str(session_id or ""),
+                    started_at=started_at,
+                )
+            if started_at is not None:
+                checkpoint_end = started_at + timedelta(seconds=max(0, int(total)))
+                self.focus_analytics.pause_focus_session(at=checkpoint_end)
+            complete()
+            self._recorded_focus_session_seconds = 0
+            self._invalidate_focus_projection("focus_restart_safe_seal")
+            lifecycle_log(
+                "focus.session.restart_safe_seal",
+                self,
+                session_id=str(session_id or ""),
+                seconds=max(0, int(total)),
+            )
+            return True
+        except Exception:
+            LOGGER.exception("persisted FocusSession recovery seal failed")
+            lifecycle_log(
+                "focus.session.restart_safe_seal_failed",
+                self,
+                session_id=str(session_id or ""),
+                seconds=max(0, int(total)),
+            )
+            return False
+
     def _switch_focus_account(self, account_id: str | None) -> None:
         """在本地加载目标账号的计时与分析命名空间。"""
 
         clean = str(account_id or "").strip()
         if clean == self._active_focus_account_id:
+            self._recover_persisted_focus_session()
             return
+        if self.work_timer.is_running:
+            # Account switching is a lifecycle handoff.  Do not let
+            # WorkTimerModel silently pause without first writing its raw
+            # FocusSegment through the shared owner pipeline.
+            self.pause_work_timer(reason="account_switch")
         if hasattr(self, "_owner_nickname_remote_loaded_for"):
             self._owner_nickname_remote_loaded_for = ""
         self.focus_session.switch_account(clean or None)
         self.focus_analytics.switch_account(clean or None)
-        self.focus_analytics.set_device_id(presence_device_id(clean))
+        device_id = presence_device_id(clean)
+        self.focus_analytics.set_device_id(device_id)
+        self.work_timer.set_device_id(device_id)
+        self._recover_persisted_focus_session()
         self.daily_stats.switch_account(clean or None)
         self.time_memory.switch_account(clean or None)
         self._rebind_todo_surfaces_to_current_memory()
