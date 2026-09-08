@@ -2095,8 +2095,9 @@ def test_weekly_canonical_function_uses_the_same_interval_union():
     assert "create or replace function public.lili_effective_focus_week_seconds" in normalized
     assert "public.lili_focus_union_seconds" in normalized
     assert "least(604800" in normalized
-    assert "focus_week_seconds" not in normalized
-    assert "focus_daily" not in normalized
+    function_body = normalized.split("as $$", 1)[1].split("$$;", 1)[0]
+    assert "focus_week_seconds" not in function_body
+    assert "focus_daily" not in function_body
 
 
 def test_sealed_focus_contract_and_aggregate_leaderboard_are_explicit():
