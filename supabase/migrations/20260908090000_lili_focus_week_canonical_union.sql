@@ -13,8 +13,7 @@ set search_path = ''
 as $$
   select greatest(
     0,
-    least(
-      604800,
+    least(604800,
       public.lili_focus_union_seconds(
         p_user_id,
         (date_trunc('week', (now() at time zone 'Asia/Shanghai'))::date::timestamp
