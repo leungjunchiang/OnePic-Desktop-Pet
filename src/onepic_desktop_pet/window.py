@@ -6611,6 +6611,16 @@ class PetWindow(QWidget):
         if today_seconds > 0:
             focus_history.append({"focus_date": today_key, "seconds": today_seconds})
         focus_history.sort(key=lambda item: str(item.get("focus_date") or ""))
+        payload_builder = getattr(
+            self.focus_analytics,
+            "focus_segments_payload_with_diagnostics",
+            None,
+        )
+        if callable(payload_builder):
+            focus_segments, focus_segments_diagnostics = payload_builder()
+        else:
+            focus_segments = self.focus_analytics.focus_segments_payload()
+            focus_segments_diagnostics = {}
         return {
             "focus_date": today_key,
             "today_seconds": today_seconds,
@@ -6622,7 +6632,10 @@ class PetWindow(QWidget):
             "focus_history": focus_history,
             # Raw closed intervals are the cross-device source of truth.
             # Daily/profile totals remain compatibility fields only.
-            "focus_segments": self.focus_analytics.focus_segments_payload(),
+            "focus_segments": focus_segments,
+            "focus_segments_sources": focus_segments_diagnostics.get(
+                "source_entries", []
+            ),
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
             "focus_segment_integrity_manifest": (

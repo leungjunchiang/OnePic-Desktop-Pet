@@ -47,7 +47,10 @@ from .social import (
 )
 from .config import PET_NAME, clean_owner_nickname, clean_social_pet_name, social_pet_label
 from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
-from .focus_sync_protocol import validate_focus_delta_response
+from .focus_sync_protocol import (
+    canonicalize_focus_upload_segments,
+    validate_focus_delta_response,
+)
 from .login_rewards import login_reward_granted, login_streak_days
 from .work_timer import format_work_duration
 from .lifecycle_log import lifecycle_log
@@ -773,6 +776,8 @@ class SocialSyncThread(QThread):
             focus_segments_device_id = ""
             focus_segments_sync_mode = "delta"
             focus_segments_sync_started = 0.0
+            focus_upload_gate_blocked = False
+            focus_upload_payload_diagnostics: dict[str, Any] = {}
             focus_sync_metrics = {
                 "delta_rpc_calls": 0,
                 "integrity_rpc_calls": 0,
@@ -867,33 +872,78 @@ class SocialSyncThread(QThread):
                         LOGGER.info("daily focus history sync deferred: %s", exc)
                     try:
                         focus_segments = personal_state.get("focus_segments") or []
+                        focus_segments_sources = personal_state.get(
+                            "focus_segments_sources"
+                        )
                         focus_segments_cursor_before = str(
                             personal_state.get("focus_segments_sync_cursor") or ""
                         )
                         focus_segments_sync_mode = str(
                             personal_state.get("focus_segments_sync_mode") or "delta"
                         )[:40]
-                        focus_segments_upload_count = (
-                            len(focus_segments) if isinstance(focus_segments, list) else 0
-                        )
                         focus_segments_sync_started = time.monotonic()
                         focus_segments_device_id = presence_device_id(
                             _session_user_id(self.client)
                             or str(self.presence.get("user_id") or "")
                         )
+                        canonical_segments, focus_upload_payload_diagnostics = (
+                            canonicalize_focus_upload_segments(
+                                focus_segments,
+                                source_entries=focus_segments_sources,
+                            )
+                        )
+                        focus_upload_gate_blocked = not bool(
+                            focus_upload_payload_diagnostics.get("ok")
+                        )
+                        focus_segments_upload_count = len(canonical_segments)
                         focus_segments_request_body = {
-                            "p_segments": focus_segments,
+                            "p_segments": canonical_segments,
                             "p_since": focus_segments_cursor_before or None,
                         }
-                        focus_sync_metrics["delta_rpc_calls"] += 1
-                        focus_sync_metrics["upload_rows"] += focus_segments_upload_count
-                        focus_sync_metrics["request_bytes"] += _json_payload_bytes(
-                            focus_segments_request_body
-                        )
-                        focus_segments_result = sync_rpc(
-                            "lili_sync_focus_segments_delta_v2",
-                            focus_segments_request_body,
-                        )
+                        if focus_upload_gate_blocked:
+                            # A duplicate/conflicting local batch is a local
+                            # protocol failure.  Do not call Supabase and do
+                            # not manufacture an ACK, fingerprint, or cursor.
+                            LOGGER.error(
+                                "focus segment upload blocked before RPC: %s",
+                                focus_upload_payload_diagnostics,
+                            )
+                            lifecycle_log(
+                                "focus.segment_sync.blocked",
+                                cursor_before=focus_segments_cursor_before,
+                                input_count=focus_upload_payload_diagnostics.get(
+                                    "input_count", 0
+                                ),
+                                duplicate_segment_ids=focus_upload_payload_diagnostics.get(
+                                    "duplicate_segment_ids", []
+                                ),
+                                conflict_segment_ids=focus_upload_payload_diagnostics.get(
+                                    "conflict_segment_ids", []
+                                ),
+                                error=focus_upload_payload_diagnostics.get(
+                                    "error", "upload_payload_invalid"
+                                ),
+                                device_id=focus_segments_device_id,
+                            )
+                            focus_segments_result = {
+                                "segments": [],
+                                "full_sync": False,
+                                "next_cursor": focus_segments_cursor_before or None,
+                                "has_more": False,
+                                "requested_count": 0,
+                                "accepted_count": 0,
+                                "accepted_segment_ids": [],
+                            }
+                        else:
+                            focus_sync_metrics["delta_rpc_calls"] += 1
+                            focus_sync_metrics["upload_rows"] += focus_segments_upload_count
+                            focus_sync_metrics["request_bytes"] += _json_payload_bytes(
+                                focus_segments_request_body
+                            )
+                            focus_segments_result = sync_rpc(
+                                "lili_sync_focus_segments_delta_v2",
+                                focus_segments_request_body,
+                            )
                         focus_sync_metrics["response_bytes"] += _json_payload_bytes(
                             focus_segments_result
                         )
@@ -938,7 +988,13 @@ class SocialSyncThread(QThread):
                     if isinstance(focus_segments_result, dict):
                         focus_segments_result = dict(focus_segments_result)
                         uploaded_segments = list(
-                            focus_segments if isinstance(focus_segments, list) else []
+                            []
+                            if focus_upload_gate_blocked
+                            else (
+                                focus_segments_request_body.get("p_segments")
+                                if isinstance(focus_segments_request_body, dict)
+                                else []
+                            )
                         )
                         # A successful HTTP/RPC response is not sufficient:
                         # the server must explicitly acknowledge every sealed
@@ -946,13 +1002,21 @@ class SocialSyncThread(QThread):
                         # Missing/partial ACKs, malformed rows, and an empty
                         # response that advances the cursor keep the whole
                         # transaction retryable.
-                        protocol_ok, protocol_error, accepted_segment_ids = (
-                            validate_focus_delta_response(
-                                focus_segments_result,
-                                uploaded_segments,
-                                cursor_before=focus_segments_cursor_before,
+                        if focus_upload_gate_blocked:
+                            protocol_ok = False
+                            protocol_error = str(
+                                focus_upload_payload_diagnostics.get("error")
+                                or "focus_upload_payload_invalid"
                             )
-                        )
+                            accepted_segment_ids: set[str] = set()
+                        else:
+                            protocol_ok, protocol_error, accepted_segment_ids = (
+                                validate_focus_delta_response(
+                                    focus_segments_result,
+                                    uploaded_segments,
+                                    cursor_before=focus_segments_cursor_before,
+                                )
+                            )
                         upload_ack_ok = protocol_ok
                         if not protocol_ok:
                             LOGGER.warning(
@@ -964,6 +1028,9 @@ class SocialSyncThread(QThread):
                         focus_segments_result["_protocol_valid"] = protocol_ok
                         focus_segments_result["_protocol_error"] = protocol_error
                         focus_segments_result["_accepted_count"] = len(accepted_segment_ids)
+                        focus_segments_result["_upload_payload_diagnostics"] = (
+                            focus_upload_payload_diagnostics
+                        )
                         focus_segments_sync_duration_ms = round(
                             (time.monotonic() - focus_segments_sync_started)
                             * 1000,
@@ -982,6 +1049,15 @@ class SocialSyncThread(QThread):
                         focus_segments_result["_sync_diagnostics"] = {
                             "cursor_before": focus_segments_cursor_before,
                             "upload_count": focus_segments_upload_count,
+                            "payload_input_count": focus_upload_payload_diagnostics.get(
+                                "input_count", focus_segments_upload_count
+                            ),
+                            "payload_duplicate_segment_ids": focus_upload_payload_diagnostics.get(
+                                "duplicate_segment_ids", []
+                            ),
+                            "payload_conflict_segment_ids": focus_upload_payload_diagnostics.get(
+                                "conflict_segment_ids", []
+                            ),
                             "requested_count": focus_segments_result.get("requested_count"),
                             "server_accepted_count": focus_segments_result.get("accepted_count"),
                             "accepted_count": len(accepted_segment_ids),

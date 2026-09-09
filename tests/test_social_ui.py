@@ -175,6 +175,114 @@ def test_social_sync_runs_compact_integrity_audit_without_full_history() -> None
     )[0] is False
 
 
+def _upload_segment_row(segment_id: str, *, end_at: str = "2026-09-08T09:00:00+08:00"):
+    return {
+        "segment_id": segment_id,
+        "session_id": "session-a",
+        "device_id": "device-a",
+        "start_at": "2026-09-08T08:00:00+08:00",
+        "end_at": end_at,
+        "completed": False,
+        "quality": 50,
+        "task": "focus",
+        "interruptions": 0,
+    }
+
+
+def test_social_sync_deduplicates_identical_upload_rows_before_delta_rpc() -> None:
+    class Client(SignedInClient):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, dict(body)))
+            if name == "lili_sync_focus_segments_delta_v2":
+                ids = [item["segment_id"] for item in body["p_segments"]]
+                return {
+                    "segments": [],
+                    "full_sync": False,
+                    "next_cursor": body.get("p_since")
+                    or '{"updated_at":"2026-09-08T08:00:00+00:00","segment_id":"s"}',
+                    "has_more": False,
+                    "requested_count": len(ids),
+                    "accepted_count": len(ids),
+                    "accepted_segment_ids": ids,
+                }
+            return {}
+
+    row = _upload_segment_row("same")
+    client = Client()
+    completed: list[dict] = []
+    thread = SocialSyncThread(
+        client,
+        {
+            "personal_state": {
+                "focus_segments": [row, dict(row)],
+                "focus_segments_sources": [
+                    {"segment_id": "same", "source": "canonical_focus_store"},
+                    {"segment_id": "same", "source": "wal_recovery"},
+                ],
+                "focus_segments_sync_mode": "delta",
+                "focus_history": [],
+            }
+        },
+    )
+    thread.completed.connect(completed.append)
+    thread.run()
+
+    delta_calls = [
+        body for name, body in client.calls
+        if name == "lili_sync_focus_segments_delta_v2"
+    ]
+    assert len(delta_calls) == 1
+    assert [item["segment_id"] for item in delta_calls[0]["p_segments"]] == ["same"]
+    result = completed[-1]["_focus_segments"]
+    assert result["_protocol_valid"] is True
+    assert result["_accepted_count"] == 1
+    assert result["_upload_payload_diagnostics"]["duplicate_segment_ids"] == ["same"]
+    assert result["_upload_payload_diagnostics"]["groups"][0]["records"][0]["hash"] == (
+        result["_upload_payload_diagnostics"]["groups"][0]["records"][1]["hash"]
+    )
+
+
+def test_social_sync_blocks_conflicting_duplicate_without_delta_rpc() -> None:
+    class Client(SignedInClient):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, dict(body)))
+            return {}
+
+    client = Client()
+    completed: list[dict] = []
+    thread = SocialSyncThread(
+        client,
+        {
+            "personal_state": {
+                "focus_segments": [
+                    _upload_segment_row("conflict"),
+                    _upload_segment_row("conflict", end_at="2026-09-08T09:01:00+08:00"),
+                ],
+                "focus_segments_sources": ["canonical_focus_store", "pending_upload"],
+                "focus_segments_sync_mode": "delta",
+                "focus_segments_sync_cursor": "cursor-before",
+                "focus_history": [],
+            }
+        },
+    )
+    thread.completed.connect(completed.append)
+    thread.run()
+
+    assert all(name != "lili_sync_focus_segments_delta_v2" for name, _body in client.calls)
+    result = completed[-1]["_focus_segments"]
+    assert result["_protocol_valid"] is False
+    assert result["_upload_ack_ok"] is False
+    assert result["_protocol_error"] == "duplicate_focus_segment_id_conflict"
+    assert result["_uploaded_segments"] == []
+    assert result["_upload_payload_diagnostics"]["conflict_segment_ids"] == ["conflict"]
+
+
 class SignedOutClient:
     signed_in = False
 

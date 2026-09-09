@@ -180,14 +180,18 @@ class FocusAnalyticsStore:
                 None,
                 destination=self.path.parent / "focus_recovery.jsonl",
             )
-            adopt_legacy_account_file(
+            legacy_focus_source = adopt_legacy_account_file(
                 "focus_analytics.json",
                 None,
                 destination=self.path,
             )
+        else:
+            legacy_focus_source = None
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
         self._device_id = str(device_id or "").strip()[:120]
+        self._legacy_focus_store_adopted = legacy_focus_source is not None
+        self._focus_segment_source_by_id: dict[str, str] = {}
         self._recovery_journal = FocusRecoveryJournal(self.path.parent, now_provider=self._now)
         self._durability_conflicts: tuple[str, ...] = ()
         self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None, "account_state": {}}
@@ -210,6 +214,16 @@ class FocusAnalyticsStore:
         }
         if self._persist:
             self._load()
+            if self._legacy_focus_store_adopted:
+                for raw in self._state.get("records", []):
+                    if isinstance(raw, dict):
+                        segment_id = str(
+                            raw.get("record_id") or raw.get("segment_id") or ""
+                        ).strip()[:160]
+                        if segment_id:
+                            self._focus_segment_source_by_id.setdefault(
+                                segment_id, "legacy_migrated_store"
+                            )
             journal_changed = self._recover_focus_journal()
         else:
             journal_changed = False
@@ -246,11 +260,13 @@ class FocusAnalyticsStore:
             account_id,
             destination=self.path.parent / "focus_recovery.jsonl",
         )
-        adopt_legacy_account_file(
+        legacy_focus_source = adopt_legacy_account_file(
             "focus_analytics.json",
             account_id,
             destination=self.path,
         )
+        self._legacy_focus_store_adopted = legacy_focus_source is not None
+        self._focus_segment_source_by_id = {}
         self._recovery_journal = FocusRecoveryJournal(self.path.parent, now_provider=self._now)
         # Device attribution is rebound by the account/session owner after the
         # account switch. Never carry an installation ID across accounts.
@@ -271,6 +287,16 @@ class FocusAnalyticsStore:
             "current_continuous_seconds": 0,
         }
         self._load()
+        if self._legacy_focus_store_adopted:
+            for raw in self._state.get("records", []):
+                if isinstance(raw, dict):
+                    segment_id = str(
+                        raw.get("record_id") or raw.get("segment_id") or ""
+                    ).strip()[:160]
+                    if segment_id:
+                        self._focus_segment_source_by_id.setdefault(
+                            segment_id, "legacy_migrated_store"
+                        )
         journal_changed = self._recover_focus_journal()
         # Account switching happens after the restored Supabase session is
         # known.  Run upload-ACK migration for the actual account, not only
@@ -357,11 +383,23 @@ class FocusAnalyticsStore:
     def focus_segments_payload(self, limit: int = 500) -> list[dict[str, Any]]:
         """Serialize only closed local facts not acknowledged by the server."""
 
+        rows, _diagnostics = self.focus_segments_payload_with_diagnostics(limit)
+        return rows
+
+    def focus_segments_payload_with_diagnostics(
+        self, limit: int = 500
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Return pending facts plus diagnostic-only local provenance."""
+
         if monotonic() < self._focus_upload_retry_not_before_monotonic:
             # Keep the ordinary delta read alive, but do not resend an
             # unchanged dirty batch while a relay/backend is failing.  A
             # successful acknowledgement clears the cooldown immediately.
-            return []
+            return [], {
+                "source_entries": [],
+                "input_count": 0,
+                "retry_cooldown": True,
+            }
         rows: list[dict[str, Any]] = []
         state = self._state.get("account_state")
         acknowledgements = (
@@ -385,6 +423,7 @@ class FocusAnalyticsStore:
             if isinstance(value, str) and str(value).strip()
         }
         max_rows = max(1, min(500, int(limit)))
+        source_entries: list[dict[str, str]] = []
         for segment in self.focus_segments():
             if segment.end_at is None:
                 # Active intervals are projected locally and sealed on pause;
@@ -410,9 +449,21 @@ class FocusAnalyticsStore:
             if str(acknowledgements.get(segment.segment_id) or "") == fingerprint:
                 continue
             rows.append(payload)
+            source_entries.append(
+                {
+                    "segment_id": segment.segment_id,
+                    "source": self._focus_segment_source_by_id.get(
+                        segment.segment_id, "canonical_focus_store"
+                    ),
+                }
+            )
             if len(rows) >= max_rows:
                 break
-        return rows
+        return rows, {
+            "source_entries": source_entries,
+            "input_count": len(rows),
+            "retry_cooldown": False,
+        }
 
     def note_focus_segment_upload_result(
         self,
@@ -1192,6 +1243,10 @@ class FocusAnalyticsStore:
             )
             records = self._state.setdefault("records", [])
             records.append(record)
+            if clean_record_id:
+                self._focus_segment_source_by_id[clean_record_id] = (
+                    "canonical_focus_store"
+                )
             removed_records = records[:-500] if len(records) > 500 else []
             self._state["records"] = records[-500:]
             affected_record_dates = {started.date()}
@@ -2559,6 +2614,7 @@ class FocusAnalyticsStore:
                 continue
             records.append(segment_as_store_record(segment))
             existing_ids.add(segment.segment_id)
+            self._focus_segment_source_by_id[segment.segment_id] = "wal_recovery"
             changed = True
         if changed:
             affected = set()
