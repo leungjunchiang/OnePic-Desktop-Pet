@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - Mac Focus 账本迁移与定向补传" \
-            --notes "修复 macOS Focus 结构化账本曾写入旧 ~/.desktop_pet 命名空间、而其他账号数据使用 Application Support 的目录分裂。升级后首次绑定账号会原子复制并保留旧 focus_analytics、focus_recovery WAL 与 work_timer 文件，重放完整 raw FocusSegment，并通过既有每日 integrity manifest 只定位服务器缺失 ID、再走 strict v2 ACK 定向补传；不读取日志文字、不依据今日/本周汇总制造区间。修复账号切换后 ACK-v3 恢复与 integrity 首次审计未对真实登录账号执行的问题。即使本地 sealed 写入暂时失败，暂停仍会立即停止计时并保存精确 checkpoint；新一轮开始前必须完成 raw interval 恢复。保留 stable FocusSegment identity、per-device provenance、delta cursor、AccountFocusStore additive merge 和 interval union；不新增 RPC、轮询、全量历史拉取、QThread 或 Supabase 历史数据改写。"
+            --title "Lili $release_tag - Focus delta 重复 segment 防护" \
+            --notes "修复 delta-v2 上传批次可能因 canonical store、legacy migrated store、WAL recovery 或 pending upload 合并而携带重复 segment_id，触发 production Postgres 22023。最终 RPC 前新增确定性唯一性闸门：同 ID 同 payload 只保留一条并记录来源、完整 payload 与 SHA-256；同 ID 不同 payload 标记 conflict，阻断 Supabase 调用，不更新 ACK fingerprint 或 cursor。保持 stable FocusSegment identity、per-device provenance、delta cursor、AccountFocusStore additive merge、interval union、strict ACK 与 bounded legacy recovery；不根据 aggregate 制造 segment，不新增网络频率、全量历史拉取或 QThread。"
