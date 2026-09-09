@@ -417,6 +417,7 @@ def _paint_local_effect_pass(
     phase: float,
     opacity_scale: float,
     painter_alpha_scale: float,
+    draw_ground_glow: bool,
 ) -> None:
     """Paint one pass, optionally outside a rounded exclusion path."""
 
@@ -450,17 +451,20 @@ def _paint_local_effect_pass(
     base_ry = pet_rect.height() * 0.115
     palette = preset.palette
 
-    _draw_ring_layer(
-        painter,
-        ground,
-        base_rx,
-        base_ry,
-        palette[0],
-        palette[3],
-        168.0 * envelope,
-        preset.glow_strength,
-    )
-    if stage == "entry":
+    # 彩雾世界只保留雾气和粒子。macOS 的半透明顶层窗口会把这类
+    # 地面椭圆与系统阴影叠成一圈深色边缘；普通事件特效仍可保留它。
+    if draw_ground_glow:
+        _draw_ring_layer(
+            painter,
+            ground,
+            base_rx,
+            base_ry,
+            palette[0],
+            palette[3],
+            168.0 * envelope,
+            preset.glow_strength,
+        )
+    if draw_ground_glow and stage == "entry":
         _draw_shockwave(
             painter,
             ground,
@@ -543,6 +547,7 @@ def paint_local_effect(
     stage: str = "entry",
     phase: float = 0.0,
     opacity_scale: float = 1.0,
+    draw_ground_glow: bool = True,
 ) -> None:
     """Paint one local effect frame into an already-created overlay.
 
@@ -582,6 +587,7 @@ def paint_local_effect(
             phase=phase,
             opacity_scale=opacity_scale,
             painter_alpha_scale=1.0,
+            draw_ground_glow=bool(draw_ground_glow),
         )
         return
 
@@ -614,6 +620,7 @@ def paint_local_effect(
         phase=phase,
         opacity_scale=opacity_scale,
         painter_alpha_scale=0.16,
+        draw_ground_glow=bool(draw_ground_glow),
     )
     _paint_local_effect_pass(
         painter,
@@ -629,6 +636,7 @@ def paint_local_effect(
         phase=phase,
         opacity_scale=opacity_scale,
         painter_alpha_scale=1.0,
+        draw_ground_glow=bool(draw_ground_glow),
     )
 
 
@@ -727,6 +735,10 @@ class LocalBurstEffectWindow(QWidget):
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowDoesNotAcceptFocus
             | Qt.WindowType.WindowTransparentForInput
+            # Cocoa otherwise adds a native drop shadow to this transparent
+            # top-level surface. Around color mist that shadow looks like a
+            # dark outline enclosing the whole cloud.
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         if always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
@@ -1072,6 +1084,7 @@ class LocalBurstEffectWindow(QWidget):
                             exclusion_regions=self._exclusion_regions,
                             stage="sustain",
                             phase=self._color_mist_world_phase,
+                            draw_ground_glow=False,
                         )
                         painter.restore()
                         painter.save()
@@ -1085,6 +1098,7 @@ class LocalBurstEffectWindow(QWidget):
                             exclusion_regions=self._exclusion_regions,
                             stage="entry",
                             phase=self._color_mist_world_phase,
+                            draw_ground_glow=False,
                         )
                         painter.restore()
                         if fade >= 1.0:
@@ -1099,6 +1113,7 @@ class LocalBurstEffectWindow(QWidget):
                             exclusion_regions=self._exclusion_regions,
                             stage="entry",
                             phase=self._color_mist_world_phase,
+                            draw_ground_glow=False,
                         )
                 else:
                     if mix < 1.0:
@@ -1114,6 +1129,7 @@ class LocalBurstEffectWindow(QWidget):
                             stage="sustain",
                             phase=self._color_mist_world_phase,
                             opacity_scale=1.0,
+                            draw_ground_glow=False,
                         )
                         painter.restore()
                     if mix > 0.0:
@@ -1129,6 +1145,7 @@ class LocalBurstEffectWindow(QWidget):
                             stage="sustain",
                             phase=self._color_mist_world_phase,
                             opacity_scale=1.0,
+                            draw_ground_glow=False,
                         )
                         painter.restore()
             else:

@@ -155,6 +155,15 @@ def test_local_burst_window_is_reused_and_has_one_timer() -> None:
     window.close()
 
 
+def test_translucent_effect_surface_disables_native_drop_shadow() -> None:
+    """彩雾浮层在 macOS 上不得让 Cocoa 额外绘制黑色阴影边。"""
+
+    _app()
+    window = LocalBurstEffectWindow()
+    assert window.windowFlags() & Qt.WindowType.NoDropShadowWindowHint
+    window.close()
+
+
 def test_translucent_effect_surface_is_cleared_when_frame_becomes_inactive() -> None:
     app = _app()
     window = LocalBurstEffectWindow()

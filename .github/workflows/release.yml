@@ -199,4 +199,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Lili $release_tag - 专注时间防回退与彩雾修复" \
-            --notes "修复旧版 daily aggregate 与部分 raw segment 并存时，周专注时间从较大历史值回退到 raw-only 值的问题。迁移时一次性冻结可信 legacy daily floor；每个北京时间自然日按 max(sealed segment + fresh live presence 的 interval union, frozen legacy floor) 计算，不相加、不重复计算，也不伪造历史 segment。修复发布流水线迁移顺序，确保后续自动部署不会恢复 raw-only 函数；个人日/周累计和历史同步改为单调更新，暂停或重启后的较小本地值不能覆盖服务器较大值。彩雾世界双击关闭后清理其他彩雾状态，并移除外围黑色硬圆环。"
+            --notes "修复旧版 daily aggregate 与部分 raw segment 并存时，周专注时间从较大历史值回退到 raw-only 值的问题。迁移时一次性冻结可信 legacy daily floor；每个北京时间自然日按 max(sealed segment + fresh live presence 的 interval union, frozen legacy floor) 计算，不相加、不重复计算，也不伪造历史 segment。修复发布流水线迁移顺序，确保后续自动部署不会恢复 raw-only 函数；个人日/周累计和历史同步改为单调更新，暂停或重启后的较小本地值不能覆盖服务器较大值。彩雾世界双击关闭后清理其他彩雾状态；macOS 透明浮层禁止系统投影，彩雾世界不再绘制地面环和入口冲击环。"

@@ -860,7 +860,7 @@ def test_dashboard_refresh_manager_single_flight_ttl_and_offline_cache(monkeypat
     assert results[0]["buddies"][0]["week_seconds"] == 321
     assert results[1]["buddies"][0]["week_seconds"] == 321
 
-    # Passive 90-second reads reuse the last server-confirmed payload.
+    # Passive reads reuse the last server-confirmed payload for at most 90 seconds.
     client.dashboard()
     assert manager.dashboard_calls == 1
 

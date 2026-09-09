@@ -57,7 +57,9 @@ PRESENCE_GRACE_SECONDS = 180
 # passive dashboard polling while explicit UI actions can force a refresh.
 SOCIAL_AUXILIARY_TTL_SECONDS = 300.0
 # These are client-side read gates only.  They never alter the payload, its
-# statistics, or any FocusSession / presence write path.
+# statistics, or any FocusSession / presence write path.  The desktop sync
+# tick is 30 seconds; the longer cache keeps passive dashboard reads within
+# the egress budget while explicit UI actions can still force a refresh.
 SOCIAL_DASHBOARD_BACKGROUND_TTL_SECONDS = 90.0
 SOCIAL_DASHBOARD_INTERACTION_TTL_SECONDS = 5.0
 SOCIAL_LEADERBOARD_TTL_SECONDS = 300.0
@@ -3740,7 +3742,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     ) -> dict[str, Any]:
         """Return a dashboard through the shared, last-known-good reader.
 
-        Passive callers reuse a successful snapshot for 90 seconds.  An
+        Passive callers reuse a successful snapshot for at most 30 seconds. An
         explicit study-room refresh is allowed after a five-second debounce
         window, but concurrent callers still join the same request.  This is
         intentionally only request scheduling: the Supabase RPC, its payload
