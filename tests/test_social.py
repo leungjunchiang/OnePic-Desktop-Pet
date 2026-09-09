@@ -2198,6 +2198,59 @@ def test_legacy_daily_source_marker_is_client_safe():
     assert "canonical_interval_union_legacy_daily_compat" in normalized
 
 
+def test_frozen_legacy_floor_is_monotonic_and_deployed_after_raw_only_functions():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260910110000_lili_focus_frozen_legacy_floor.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create table if not exists public.lili_focus_legacy_daily_floor" in normalized
+    assert "enable row level security" in normalized
+    assert "revoke all on table public.lili_focus_legacy_daily_floor" in normalized
+    assert "pre_interval_daily_v1" in normalized
+    assert "on conflict (snapshot_key) do nothing" in normalized
+    assert "on conflict (user_id, focus_date) do nothing" in normalized
+    assert "greatest(raw_day, legacy_floor_day)" in normalized
+    assert "canonical_interval_union_legacy_floor" in normalized
+    assert "legacy_floor" in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+
+    deploy = (
+        root / "scripts" / "apply_supabase_focus_sync_migrations.ps1"
+    ).read_text(encoding="utf-8")
+    raw_only = deploy.index("20260909150000_lili_focus_union_search_path.sql")
+    compat = deploy.index("20260910090000_lili_focus_legacy_daily_compat.sql")
+    marker = deploy.index("20260910093000_lili_focus_legacy_daily_source_marker.sql")
+    floor = deploy.index("20260910110000_lili_focus_frozen_legacy_floor.sql")
+    monotonic = deploy.index("20260910113000_lili_focus_monotonic_sync_restore.sql")
+    assert raw_only < compat < marker < floor < monotonic
+
+
+def test_monotonic_sync_restore_blocks_smaller_pause_resume_payloads():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260910113000_lili_focus_monotonic_sync_restore.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "greatest(coalesce(p.focus_today_seconds, 0), incoming_today)" in normalized
+    assert "greatest(coalesce(p.focus_week_seconds, 0), incoming_week)" in normalized
+    assert normalized.count(
+        "greatest(coalesce(public.lili_focus_daily.seconds, 0), excluded.seconds)"
+    ) == 2
+    assert "where p.user_id = current_user_id" in normalized
+    assert "current_user_id uuid := (select auth.uid())" in normalized
+
+
 def test_focus_segment_sync_never_falls_back_to_full_snapshot():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "onepic_desktop_pet" / "social_ui.py").read_text(encoding="utf-8")

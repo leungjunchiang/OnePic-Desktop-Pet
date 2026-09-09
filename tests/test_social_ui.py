@@ -25,6 +25,7 @@ from onepic_desktop_pet.social_ui import (
     _focus_upload_ack_status,
     _reaction_label,
     _merge_dashboard_snapshot,
+    _project_legacy_live_focus_totals,
     _study_focus_summary_text,
     _taunt_window_open,
     _unwrap_reaction_payload,
@@ -281,6 +282,57 @@ def test_social_sync_blocks_conflicting_duplicate_without_delta_rpc() -> None:
     assert result["_protocol_error"] == "duplicate_focus_segment_id_conflict"
     assert result["_uploaded_segments"] == []
     assert result["_upload_payload_diagnostics"]["conflict_segment_ids"] == ["conflict"]
+
+
+def test_legacy_buddy_totals_include_active_interval_without_double_counting_canonical_rows() -> None:
+    legacy = _project_legacy_live_focus_totals(
+        {
+            "status": "focus",
+            "working": True,
+            "online": True,
+            "today_seconds": 7 * 60,
+            "week_seconds": 7 * 60,
+            "session_seconds": 0,
+            "session_started_at": "2026-09-09T10:00:00+08:00",
+        },
+        server_timestamp="2026-09-09T10:39:00+08:00",
+    )
+    assert legacy["today_seconds"] == 46 * 60
+    assert legacy["week_seconds"] == 46 * 60
+    assert legacy["session_seconds"] == 39 * 60
+    repeated = _project_legacy_live_focus_totals(legacy)
+    assert repeated["today_seconds"] == 46 * 60
+    assert repeated["week_seconds"] == 46 * 60
+
+    canonical = _project_legacy_live_focus_totals(
+        {
+            "status": "focus",
+            "working": True,
+            "online": True,
+            "today_seconds": 46 * 60,
+            "week_seconds": 46 * 60,
+            "session_started_at": "2026-09-09T10:00:00+08:00",
+            "focus_totals_source": "canonical_interval_union",
+        },
+        server_timestamp="2026-09-09T10:39:00+08:00",
+    )
+    assert canonical["today_seconds"] == 46 * 60
+    assert canonical["week_seconds"] == 46 * 60
+
+    frozen_floor = _project_legacy_live_focus_totals(
+        {
+            "status": "focus",
+            "working": True,
+            "online": True,
+            "today_seconds": 27 * 3600 + 41 * 60,
+            "week_seconds": 27 * 3600 + 41 * 60,
+            "session_started_at": "2026-09-09T10:00:00+08:00",
+            "focus_totals_source": "canonical_interval_union_legacy_floor",
+        },
+        server_timestamp="2026-09-09T10:39:00+08:00",
+    )
+    assert frozen_floor["today_seconds"] == 27 * 3600 + 41 * 60
+    assert frozen_floor["week_seconds"] == 27 * 3600 + 41 * 60
 
 
 class SignedOutClient:
