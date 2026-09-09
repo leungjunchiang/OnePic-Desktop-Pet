@@ -2142,6 +2142,62 @@ def test_focus_session_continuity_migration_audits_identity_replacement_without_
     assert "full" not in normalized
 
 
+def test_latest_dashboard_wrapper_reasserts_canonical_focus_totals_after_compatibility_layers():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260909143000_lili_dashboard_canonical_focus_totals.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "public.lili_dashboard_multidevice_base_20260830()" in normalized
+    assert "public.lili_effective_focus_today_seconds(me_id)" in normalized
+    assert "public.lili_effective_focus_week_seconds(me_id)" in normalized
+    assert "public.lili_normalize_focus_today_people" in normalized
+    assert "public.lili_mark_canonical_focus_totals" in normalized
+    assert "focus_totals_source" in normalized
+    assert "canonical_interval_union" in normalized
+    assert "p_today_seconds" not in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+
+
+def test_legacy_daily_compatibility_is_bounded_and_never_creates_raw_facts():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260910090000_lili_focus_legacy_daily_compat.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "lili_focus_union_seconds" in normalized
+    assert "d.updated_at >= week_start_at" in normalized
+    assert "greatest(raw_day, legacy_day)" in normalized
+    assert "legacy_daily_compat" in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "greatest(coalesce(public.lili_focus_daily.seconds, 0), excluded.seconds)" in normalized
+
+
+def test_legacy_daily_source_marker_is_client_safe():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260910093000_lili_focus_legacy_daily_source_marker.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+    assert "lili_mark_canonical_focus_totals" in normalized
+    assert "canonical_interval_union_legacy_daily_compat" in normalized
+
+
 def test_focus_segment_sync_never_falls_back_to_full_snapshot():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "onepic_desktop_pet" / "social_ui.py").read_text(encoding="utf-8")

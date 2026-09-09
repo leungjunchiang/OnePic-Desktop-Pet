@@ -186,20 +186,32 @@ def test_color_mist_world_retrigger_extends_deadline_without_restarting_timeline
     assert COLOR_MIST_CYCLE_MS == 18_000
 
 
-def test_color_mist_world_toggle_stops_without_starting_a_second_session() -> None:
+def test_color_mist_world_toggle_stops_and_clears_all_background_state() -> None:
     clock = Clock()
     events: list[tuple] = []
     manager = _manager(clock, events)
 
+    manager.request_state(LocalEffectKind.BLUE)
+    clock.advance(0.32)
+    manager.tick()
     assert manager.toggle_color_mist_world() is True
     assert manager.color_mist_world_active is True
+    manager.request_state(LocalEffectKind.GREEN)
     clock.value = 4.0
     manager.tick()
     assert manager.toggle_color_mist_world() is False
     assert manager.color_mist_world_active is False
+    assert manager.requested_kind is LocalEffectKind.NONE
+    assert manager._background_kind is LocalEffectKind.NONE
+    assert manager._candidate_kind is LocalEffectKind.NONE
+    assert not any(event[0] == "resume" for event in events)
+    manager.finished()
+    manager.tick()
+    assert manager.current_kind is LocalEffectKind.NONE
+    assert manager.phase is EffectPhase.OFF
 
 
-def test_color_mist_world_restores_the_latest_background_state_not_the_entry_snapshot() -> None:
+def test_color_mist_world_expiry_restores_the_latest_background_state_not_the_entry_snapshot() -> None:
     clock = Clock()
     resumed: list[LocalEffectKind] = []
     manager = LocalEffectManager(

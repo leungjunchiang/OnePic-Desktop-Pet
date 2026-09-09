@@ -262,20 +262,13 @@ def _draw_ring_layer(
     alpha: float,
     strength: float = 1.0,
 ) -> None:
-    """Draw the broad, bright three-part ground platform."""
+    """Draw a soft three-part ground glow without hard circular outlines."""
 
     alpha *= strength
     _draw_soft_ellipse(painter, center, rx * 1.20, ry * 2.7, color, alpha * 0.30)
     _draw_soft_ellipse(painter, center, rx * 1.02, ry * 1.75, color, alpha * 0.52)
     _draw_soft_ellipse(painter, center, rx, ry, color, alpha * 0.82)
 
-    painter.save()
-    painter.setPen(QPen(_alpha(highlight, alpha * 0.82), max(1.2, ry * 0.13)))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawEllipse(QRectF(center.x() - rx, center.y() - ry, rx * 2.0, ry * 2.0))
-    painter.setPen(QPen(_alpha(color, alpha * 0.65), max(1.0, ry * 0.28)))
-    painter.drawEllipse(QRectF(center.x() - rx * 0.72, center.y() - ry * 0.68, rx * 1.44, ry * 1.36))
-    painter.restore()
 
 
 def _draw_shockwave(

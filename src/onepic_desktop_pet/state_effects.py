@@ -417,14 +417,34 @@ class LocalEffectManager:
         self.current_source = EffectSource.COLOR_MIST_WORLD
         self._on_color_mist_world_frame(current, following, mix, phase)
 
-    def stop_color_mist_world(self, now: float | None = None) -> None:
-        """Stop color mist world and restore the stable state without a blank frame."""
+    def stop_color_mist_world(
+        self,
+        now: float | None = None,
+        *,
+        restore_background: bool = True,
+    ) -> None:
+        """Stop the mist world, optionally restoring the previous stable state.
+
+        Natural expiry keeps the previous work/event state so the effect is
+        unobtrusive.  An explicit toggle-off is different: it is a user
+        request to return to the default no-color state, so that path clears
+        every pending background candidate before releasing the overlay.
+        """
 
         if self._color_mist_world is None:
             return
         now = self._now() if now is None else float(now)
         self._color_mist_world = None
-        desired = self._background_kind if self.enabled else LocalEffectKind.NONE
+        desired = (
+            self._background_kind
+            if restore_background and self.enabled
+            else LocalEffectKind.NONE
+        )
+        if not restore_background:
+            self._background_kind = LocalEffectKind.NONE
+            self._candidate_kind = LocalEffectKind.NONE
+            self._candidate_since = 0.0
+            self._event_until = 0.0
         self.requested_kind = desired
         if desired is LocalEffectKind.NONE:
             self._begin_release(now)
@@ -441,7 +461,7 @@ class LocalEffectManager:
         """Toggle the one color-mist session and return its resulting state."""
 
         if self._color_mist_world is not None:
-            self.stop_color_mist_world(now)
+            self.stop_color_mist_world(now, restore_background=False)
             return False
         return bool(self.start_color_mist_world(now, seed=seed))
 

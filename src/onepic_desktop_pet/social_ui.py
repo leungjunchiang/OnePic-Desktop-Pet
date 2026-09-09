@@ -622,7 +622,12 @@ def _project_legacy_live_focus_totals(
         or totals_source
         or ""
     ).strip()
-    if source in {"canonical_interval_union", "client_live_compat"}:
+    if source in {
+        "canonical_interval_union",
+        "canonical_interval_union_legacy_daily_compat",
+        "legacy_daily_compat",
+        "client_live_compat",
+    }:
         return projected
     if _presence_status(projected) != "focus" or not projected.get("session_started_at"):
         return projected

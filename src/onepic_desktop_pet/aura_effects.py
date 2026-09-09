@@ -362,12 +362,12 @@ class AuraRenderer:
         painter.end()
 
     def _draw_bottom_ring(self, painter: QPainter, layer: QPixmap, state: AuraVisualState) -> None:
-        """Draw the aura's visible lower-body glow/"light platform".
+        """Draw a soft lower-body glow without a visible outline.
 
         A single outline looked like a UI shadow and disappeared behind the
         character mask.  The ring is therefore built from three soft layers:
-        a broad radial haze, a denser inner glow, and a restrained colored
-        band.  The compositing path later repeats the cached layer through a
+        a broad radial haze and a denser inner glow.  The compositing path
+        later repeats the cached layer through a
         face-safe clip, so the ring remains visible without changing window
         geometry or hit testing.
         """
@@ -375,7 +375,7 @@ class AuraRenderer:
         if state.kind is AuraKind.NONE or state.opacity <= 0.0 or state.intensity <= 0.0:
             return
         colors = _PALETTE[state.kind]
-        ring_y, brightness, drift = _RING_STYLE[state.kind]
+        ring_y, brightness, _drift = _RING_STYLE[state.kind]
         ratio = max(1.0, float(layer.devicePixelRatio()))
         width = layer.width() / ratio
         height = layer.height() / ratio
@@ -411,38 +411,6 @@ class AuraRenderer:
         painter.setBrush(inner_haze)
         painter.drawEllipse(QRectF(cx - rx * 0.98, cy - ry * 1.04, rx * 1.96, ry * 2.08))
 
-        # Broad band with an even-odd hole.  It is intentionally thicker than
-        # a line so the aura reads at a glance even on small pet frames.
-        outer = QRectF(cx - rx * 0.88, cy - ry * 0.72, rx * 1.76, ry * 1.44)
-        thickness = max(1.6, min(width, height) * (0.010 + 0.006 * state.intensity))
-        inner = outer.adjusted(thickness, thickness * 0.58, -thickness, -thickness * 0.58)
-        band = QPainterPath()
-        band.setFillRule(Qt.FillRule.OddEvenFill)
-        band.addEllipse(outer)
-        band.addEllipse(inner)
-        painter.setBrush(_with_alpha(colors[1], int(alpha * 0.64)))
-        painter.drawPath(band)
-
-        # A subtle lower highlight creates the flowing, racing-light feeling
-        # while remaining a few pixels wide and cheap to render.
-        highlight = QPainterPath()
-        highlight.setFillRule(Qt.FillRule.OddEvenFill)
-        highlight_outer = QRectF(
-            cx - rx * 0.72,
-            cy - ry * 0.34 + math.sin(angle * 0.8) * height * 0.004,
-            rx * 1.44,
-            ry * 0.68,
-        )
-        highlight_inner = highlight_outer.adjusted(
-            thickness * 1.2,
-            thickness * 0.50,
-            -thickness * 1.2,
-            -thickness * 0.50,
-        )
-        highlight.addEllipse(highlight_outer)
-        highlight.addEllipse(highlight_inner)
-        painter.setBrush(_with_alpha(colors[1], int(alpha * (0.22 + 0.10 * drift))))
-        painter.drawPath(highlight)
         painter.restore()
 
     def _draw_particles(
