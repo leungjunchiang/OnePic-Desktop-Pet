@@ -27,7 +27,8 @@ $migrationPaths = @(
     "supabase/migrations/20260907213000_lili_focus_segment_integrity_audit.sql",
     "supabase/migrations/20260907230000_lili_focus_segment_reconciliation_manifest.sql",
     "supabase/migrations/20260908090000_lili_focus_week_canonical_union.sql",
-    "supabase/migrations/20260909143000_lili_dashboard_canonical_focus_totals.sql"
+    "supabase/migrations/20260909143000_lili_dashboard_canonical_focus_totals.sql",
+    "supabase/migrations/20260909150000_lili_focus_union_search_path.sql"
 )
 
 $scriptPath = Join-Path $PSScriptRoot "apply_supabase_focus_history.ps1"
