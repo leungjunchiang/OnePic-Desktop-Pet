@@ -1376,7 +1376,11 @@ def test_finished_social_worker_rearms_a_pending_focus_handoff(monkeypatch) -> N
 
     assert window._social_thread is None
     assert window.social_sync_timer.isActive()
-    assert window.social_sync_timer.remainingTime() <= 250
+    # Qt may coalesce a coarse 250 ms timer to a nearby native wake-up
+    # boundary (262 ms on the macOS Intel runner). The configured cadence,
+    # rather than the backend-specific remaining-time rounding, is the
+    # contract under test.
+    assert window.social_sync_timer.interval() == 250
     window.social_sync_timer.stop()
     window.close()
     window.deleteLater()
