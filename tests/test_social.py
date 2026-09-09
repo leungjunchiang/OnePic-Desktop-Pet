@@ -2229,7 +2229,8 @@ def test_frozen_legacy_floor_is_monotonic_and_deployed_after_raw_only_functions(
     marker = deploy.index("20260910093000_lili_focus_legacy_daily_source_marker.sql")
     floor = deploy.index("20260910110000_lili_focus_frozen_legacy_floor.sql")
     monotonic = deploy.index("20260910113000_lili_focus_monotonic_sync_restore.sql")
-    assert raw_only < compat < marker < floor < monotonic
+    projection = deploy.index("20260910120000_lili_focus_effective_projection_unified.sql")
+    assert raw_only < compat < marker < floor < monotonic < projection
 
 
 def test_monotonic_sync_restore_blocks_smaller_pause_resume_payloads():
@@ -2249,6 +2250,27 @@ def test_monotonic_sync_restore_blocks_smaller_pause_resume_payloads():
     ) == 2
     assert "where p.user_id = current_user_id" in normalized
     assert "current_user_id uuid := (select auth.uid())" in normalized
+
+
+def test_effective_projection_is_shared_by_dashboard_and_room_payloads():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260910120000_lili_focus_effective_projection_unified.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "lili_mark_canonical_focus_totals" in normalized
+    assert "canonical_interval_union" in normalized
+    assert "focus_totals_effective_source" in normalized
+    assert "lili_room_dashboard_social_pet_names_base" in normalized
+    assert "lili_normalize_focus_today_people" in normalized
+    assert "{current_room,room_people}" in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
 
 
 def test_focus_segment_sync_never_falls_back_to_full_snapshot():

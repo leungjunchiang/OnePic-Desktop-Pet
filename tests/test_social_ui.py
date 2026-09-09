@@ -284,7 +284,7 @@ def test_social_sync_blocks_conflicting_duplicate_without_delta_rpc() -> None:
     assert result["_upload_payload_diagnostics"]["conflict_segment_ids"] == ["conflict"]
 
 
-def test_legacy_buddy_totals_include_active_interval_without_double_counting_canonical_rows() -> None:
+def test_buddy_calendar_totals_are_server_owned_and_live_preview_stays_separate() -> None:
     legacy = _project_legacy_live_focus_totals(
         {
             "status": "focus",
@@ -297,12 +297,12 @@ def test_legacy_buddy_totals_include_active_interval_without_double_counting_can
         },
         server_timestamp="2026-09-09T10:39:00+08:00",
     )
-    assert legacy["today_seconds"] == 46 * 60
-    assert legacy["week_seconds"] == 46 * 60
+    assert legacy["today_seconds"] == 7 * 60
+    assert legacy["week_seconds"] == 7 * 60
     assert legacy["session_seconds"] == 39 * 60
     repeated = _project_legacy_live_focus_totals(legacy)
-    assert repeated["today_seconds"] == 46 * 60
-    assert repeated["week_seconds"] == 46 * 60
+    assert repeated["today_seconds"] == 7 * 60
+    assert repeated["week_seconds"] == 7 * 60
 
     canonical = _project_legacy_live_focus_totals(
         {
@@ -333,6 +333,23 @@ def test_legacy_buddy_totals_include_active_interval_without_double_counting_can
     )
     assert frozen_floor["today_seconds"] == 27 * 3600 + 41 * 60
     assert frozen_floor["week_seconds"] == 27 * 3600 + 41 * 60
+
+    crossed_midnight = _project_legacy_live_focus_totals(
+        {
+            "status": "focus",
+            "working": True,
+            "online": True,
+            "today_seconds": 2 * 60,
+            "week_seconds": 28 * 3600 + 10 * 60,
+            "session_seconds": 0,
+            "session_started_at": "2026-09-09T23:28:00+08:00",
+        },
+        server_timestamp="2026-09-10T00:52:00+08:00",
+    )
+    # The session can cross midnight, but client-side calendar totals cannot.
+    assert crossed_midnight["today_seconds"] == 2 * 60
+    assert crossed_midnight["week_seconds"] == 28 * 3600 + 10 * 60
+    assert crossed_midnight["session_seconds"] == 84 * 60
 
 
 class SignedOutClient:

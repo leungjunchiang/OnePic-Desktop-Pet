@@ -32,7 +32,8 @@ $migrationPaths = @(
     "supabase/migrations/20260910090000_lili_focus_legacy_daily_compat.sql",
     "supabase/migrations/20260910093000_lili_focus_legacy_daily_source_marker.sql",
     "supabase/migrations/20260910110000_lili_focus_frozen_legacy_floor.sql",
-    "supabase/migrations/20260910113000_lili_focus_monotonic_sync_restore.sql"
+    "supabase/migrations/20260910113000_lili_focus_monotonic_sync_restore.sql",
+    "supabase/migrations/20260910120000_lili_focus_effective_projection_unified.sql"
 )
 
 $scriptPath = Join-Path $PSScriptRoot "apply_supabase_focus_history.ps1"
