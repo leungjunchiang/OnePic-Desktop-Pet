@@ -1350,6 +1350,39 @@ def test_stale_social_thread_finished_callback_cannot_delete_new_thread() -> Non
     app.processEvents()
 
 
+def test_finished_social_worker_rearms_a_pending_focus_handoff(monkeypatch) -> None:
+    """A pause during an in-flight worker must still flush its sealed row."""
+
+    app, window = _create_window()
+
+    class StubThread:
+        def isRunning(self) -> bool:
+            return False
+
+        def deleteLater(self) -> None:
+            return None
+
+    thread = StubThread()
+    window._social_thread = thread  # type: ignore[assignment]
+    window._social_personal_sync_due = True
+    window.social_sync_timer.stop()
+    monkeypatch.setattr(
+        type(window.social_client),
+        "signed_in",
+        property(lambda _client: True),
+    )
+
+    window._social_thread_finished(thread)  # type: ignore[arg-type]
+
+    assert window._social_thread is None
+    assert window.social_sync_timer.isActive()
+    assert window.social_sync_timer.remainingTime() <= 250
+    window.social_sync_timer.stop()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_shortcut_refresh_uses_supplied_lightweight_snapshot(monkeypatch) -> None:
     """The one-second clock tick must not request a projected focus snapshot."""
 
@@ -3171,7 +3204,7 @@ def test_interaction_zones_map_head_face_body_and_camera() -> None:
 
 
 def test_double_right_click_triggers_color_mist_world_without_new_window() -> None:
-    """左键继续是普通戳击，快速双右键才进入彩雾世界。"""
+    """左键继续是普通戳击，快速双右键切换彩雾世界。"""
 
     app, window = _create_window()
     body = QPoint(window.width() // 2, round(window.label.height() * 0.7))
@@ -3192,6 +3225,70 @@ def test_double_right_click_triggers_color_mist_world_without_new_window() -> No
     window.mouseDoubleClickEvent(event)
     assert window._local_effect_manager.color_mist_world_active is True
     assert not window.context_menu_timer.isActive()
+    window.mouseDoubleClickEvent(event)
+    assert window._local_effect_manager.color_mist_world_active is False
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_pause_survives_secondary_projection_failure(monkeypatch) -> None:
+    """A non-canonical local card failure cannot leave the timer running."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    window.work_timer._running_since -= 5
+    window.work_timer._running_started_at -= timedelta(seconds=5)
+
+    def fail_secondary(*_args, **_kwargs):
+        raise OSError("simulated secondary store failure")
+
+    monkeypatch.setattr(window.time_memory, "record_focus", fail_secondary)
+    window.pause_work_timer()
+
+    assert not window.work_timer.is_running
+    assert window.work_timer.is_paused
+    assert window.focus_analytics.focus_segments_payload()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_paused_local_device_drops_stale_server_live_echo(monkeypatch) -> None:
+    """A pending strict ACK must not keep a paused local bubble ticking."""
+
+    app, window = _create_window()
+    account_id = "account-1"
+    local_device_id = "local-device"
+    window.focus_analytics.set_device_id(local_device_id)
+    window.work_timer.set_device_id(local_device_id)
+    now = datetime.now(timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    window._active_focus_account_id = account_id
+    window.focus_analytics.set_live_projection_segments(
+        [
+            FocusSegment(
+                segment_id="display-live-device:stale-local",
+                session_id="stale-local-session",
+                start_at=now - timedelta(minutes=10),
+                end_at=None,
+                device_id=local_device_id,
+            ),
+            FocusSegment(
+                segment_id="display-live-device:remote",
+                session_id="remote-session",
+                start_at=now - timedelta(minutes=20),
+                end_at=None,
+                device_id="remote-device",
+            ),
+        ]
+    )
+
+    window._set_local_live_focus_projection(
+        SimpleNamespace(status="rest", session_started_at=None)
+    )
+    rows = window.focus_analytics.live_projection_segments()
+    assert [row.device_id for row in rows] == ["remote-device"]
     window.close()
     window.deleteLater()
     app.processEvents()

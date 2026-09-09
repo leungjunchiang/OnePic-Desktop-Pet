@@ -2066,18 +2066,47 @@ class PetWindow(QWidget):
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
         lifecycle_log("pet_window.close_event.begin", self)
+        # Pause/seal first, then ask workers to stop. Do not hide the pet,
+        # bubbles, status item, or Dock integration until every Qt worker has
+        # actually drained; an ignored close event must leave a coherent,
+        # visible application instead of a headless process.
+        self.shutdown_work_timer()
+        thread_roots = self._thread_shutdown_roots()
+        request_stop_all(*thread_roots)
+        heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
+        if heartbeat_thread is not None and heartbeat_thread.isRunning():
+            final_user_id = self._current_social_user_id()
+            heartbeat_thread.stop(
+                {
+                    "user_id": final_user_id,
+                    "working": False,
+                    "session_active": False,
+                    "session_id": None,
+                    "session_started_at": None,
+                }
+                if final_user_id
+                else None
+            )
+        running = running_threads(*thread_roots)
+        if running:
+            names = ", ".join(type(thread).__name__ for thread in running)
+            LOGGER.warning(
+                "[Lifecycle] delaying PetWindow close until QThreads stop: %s",
+                names,
+            )
+            event.ignore()
+            if not self._close_retry_scheduled:
+                self._close_retry_scheduled = True
+                QTimer.singleShot(250, self._retry_close_after_threads_stop)
+            lifecycle_log("pet_window.close_event.ignored_threads_running", self)
+            return
+
         if self._qt_application is not None:
             self._qt_application.removeEventFilter(self)
             if sys.platform == "win32":
                 self._qt_application.removeNativeEventFilter(self._focus_activity_bridge)
         self._focus_activity_bridge.stop()
-        # Ask every descendant/top-level utility window worker to stop before
-        # any parent widget can be closed.  The study-room and chat windows
-        # are intentionally top-level, so they are not children of ``self``.
-        thread_roots = self._thread_shutdown_roots()
-        request_stop_all(*thread_roots)
         self.fullscreen_poll_timer.stop()
-        self.shutdown_work_timer()
         self.chat_manager.shutdown()
         if self._chat_history_dialog is not None:
             self._chat_history_dialog.close()
@@ -2125,41 +2154,6 @@ class PetWindow(QWidget):
             )
             self._media_player.stop()
 
-        # This worker uses a custom condition loop, so QThread.quit() alone is
-        # not enough. Stop it before checking the remaining Qt workers; that
-        # makes repeated test/window closes deterministic and prevents a
-        # parent widget from being destroyed while the native thread waits.
-        heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
-        if heartbeat_thread is not None and heartbeat_thread.isRunning():
-            final_user_id = self._current_social_user_id()
-            heartbeat_thread.stop(
-                {
-                    "user_id": final_user_id,
-                    "working": False,
-                    "session_active": False,
-                    "session_id": None,
-                    "session_started_at": None,
-                }
-                if final_user_id
-                else None
-            )
-            # It is a daemon Python worker and may be inside a bounded network
-            # request.  Stopping the condition loop is enough; waiting here
-            # would block the GUI during a network outage.
-
-        running = running_threads(*thread_roots)
-        if running:
-            names = ", ".join(type(thread).__name__ for thread in running)
-            LOGGER.warning(
-                "[Lifecycle] delaying PetWindow close until QThreads stop: %s",
-                names,
-            )
-            event.ignore()
-            if not self._close_retry_scheduled:
-                self._close_retry_scheduled = True
-                QTimer.singleShot(250, self._retry_close_after_threads_stop)
-            lifecycle_log("pet_window.close_event.ignored_threads_running", self)
-            return
         super().closeEvent(event)
         lifecycle_log("pet_window.close_event.end", self)
 
@@ -4963,19 +4957,48 @@ class PetWindow(QWidget):
             # if a legacy timer happens to reuse a session identifier.
             record_id=stable_segment_id,
         )
-        # The sealed local FocusSegment/WAL is the first durable business fact.
-        # Only after that succeeds may secondary local projections advance.
-        self.time_memory.record_focus(
-            seconds,
-            completed_session=completed,
-            started_at=started_at,
-        )
-        self._record_economy_focus(seconds, started_at)
-        self.focus_analytics.update_current_task_progress(seconds)
-        if update_daily_stats:
-            self.daily_stats.record_focus(seconds, completed=completed)
+        # The sealed FocusSegment/WAL is the canonical fact. Persist its
+        # timer-side cursor immediately, before touching reward/history UI
+        # projections. A failure in one of those secondary stores must never
+        # leave the real timer running after the user pressed Pause.
         self.work_timer.mark_analytics_recorded(total)
         self._recorded_focus_session_seconds = total
+        operations = [
+            (
+                "time_memory",
+                lambda: self.time_memory.record_focus(
+                    seconds,
+                    completed_session=completed,
+                    started_at=started_at,
+                ),
+            ),
+            ("economy", lambda: self._record_economy_focus(seconds, started_at)),
+            (
+                "task_progress",
+                lambda: self.focus_analytics.update_current_task_progress(seconds),
+            ),
+        ]
+        if update_daily_stats:
+            operations.append(
+                (
+                    "daily_stats",
+                    lambda: self.daily_stats.record_focus(seconds, completed=completed),
+                )
+            )
+        for label, operation in operations:
+            try:
+                operation()
+            except Exception:
+                LOGGER.exception(
+                    "secondary focus projection failed after canonical segment seal: %s",
+                    label,
+                )
+                lifecycle_log(
+                    "focus.segment.secondary_projection_failed",
+                    self,
+                    projection=label,
+                    segment_id=str(stable_segment_id or ""),
+                )
         self._invalidate_focus_projection("focus_segment_recorded")
         # A newly sealed fact is immediately eligible for the lightweight
         # delta sync.  The existing single-shot social timer coalesces this
@@ -5024,10 +5047,15 @@ class PetWindow(QWidget):
         if not callable(setter) or not callable(getter):
             return
         current = snapshot or self.focus_session.snapshot(include_projection=False)
+        local_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
         rows = [
             item
             for item in getter()
             if str(getattr(item, "segment_id", "") or "") != "display-live-local"
+            and (
+                not local_device_id
+                or str(getattr(item, "device_id", "") or "") != local_device_id
+            )
         ]
         status = str(getattr(current, "status", "") or "")
         started_at = self.work_timer.current_segment_started_at() if status == "focus" else None
@@ -5179,6 +5207,26 @@ class PetWindow(QWidget):
             self._set_local_live_focus_projection(current)
         elif self._cross_device_today_display_live_rows is not None:
             live_rows = list(self._cross_device_today_display_live_rows)
+        if live_rows is not None:
+            # The local WorkTimer is authoritative for this device. A server
+            # live row can remain cached for a few seconds after Pause while
+            # the sealed segment waits for strict ACK; never let that stale
+            # echo keep the local paused bubble counting. Other devices remain
+            # untouched and continue to advance through interval union.
+            local_device_id = str(
+                getattr(self.focus_analytics, "_device_id", "") or ""
+            )
+            if local_device_id:
+                live_rows = [
+                    row
+                    for row in live_rows
+                    if str(
+                        row.get("device_id", "")
+                        if isinstance(row, dict)
+                        else getattr(row, "device_id", "")
+                    )
+                    != local_device_id
+                ]
         # The account store owns both merged sealed facts and the validated
         # live-device projection. The old display lists remain only for
         # compatibility with lifecycle retention and are not a second source.
@@ -5315,7 +5363,20 @@ class PetWindow(QWidget):
                 moment = self.focus_analytics.current_time()
                 rows = list(self._cross_device_today_display_remote_rows or [])
                 rows.extend(segment.to_dict() for segment in self.focus_analytics.focus_segments())
-                rows.extend(self._cross_device_today_display_live_rows)
+                local_device_id = str(
+                    getattr(self.focus_analytics, "_device_id", "") or ""
+                )
+                rows.extend(
+                    row
+                    for row in self._cross_device_today_display_live_rows
+                    if not local_device_id
+                    or str(
+                        row.get("device_id", "")
+                        if isinstance(row, dict)
+                        else getattr(row, "device_id", "")
+                    )
+                    != local_device_id
+                )
                 status = str(getattr(current, "status", "") or "") if current is not None else ""
                 started_at = getattr(current, "session_started_at", None) if current is not None else None
                 active_row = None
@@ -5590,7 +5651,20 @@ class PetWindow(QWidget):
                     session_id=session_id,
                     started_at=segment_started_at,
                 )
-                self.focus_session.pause(reason="shutdown")
+                paused = self.focus_session.pause(reason="shutdown")
+                if paused:
+                    # A normal process exit is the same canonical handoff as
+                    # a manual pause. Clear the local live projection now and
+                    # queue the just-sealed segment through the existing
+                    # strict-ACK delta path before worker teardown begins.
+                    self.focus_analytics.pause_focus_session()
+                    snapshot = self.focus_session.snapshot(include_projection=False)
+                    self._set_local_live_focus_projection(snapshot)
+                    self._invalidate_focus_projection("focus_shutdown")
+                    self.focus_session.refresh()
+                    self.work_timer_changed.emit(False)
+                    self._sync_state_effect()
+                    self._schedule_social_tick()
 
     def _generate_daily_report(self, *, show_dialog: bool, mark_generated: bool = False) -> Path | None:
         """生成只保存在本机的工作日报；可选展示预览窗口。"""
@@ -8003,6 +8077,14 @@ class PetWindow(QWidget):
         if self._social_thread is thread:
             self._social_thread = None
         thread.deleteLater()
+        # A pause/finish can occur while the previous dashboard worker is in
+        # flight. In that case the due flag intentionally stays set; re-arm
+        # the coalesced timer so a sealed Mac/Windows segment is not stranded
+        # until unrelated future UI activity.
+        if self._social_personal_sync_due or self._social_heartbeat_due:
+            timer = getattr(self, "social_sync_timer", None)
+            if timer is not None and self.social_client.signed_in:
+                timer.start(250)
 
     def set_automatic_grumbling(self, enabled: bool) -> None:
         """启用或停用只在本机生成的间歇牢骚。"""
@@ -8235,6 +8317,18 @@ class PetWindow(QWidget):
         if manager is not None:
             return bool(manager.start_color_mist_world())
         return False
+
+    def _toggle_color_mist_world(self) -> bool:
+        """Use the hidden double-right-click gesture as an on/off toggle."""
+
+        if not bool(getattr(self.settings, "color_mist_world_enabled", True)):
+            return False
+        if not bool(getattr(self.settings, "state_effects_enabled", True)):
+            return False
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is None:
+            return False
+        return bool(manager.toggle_color_mist_world())
 
     def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
         self.settings.state_effects_enabled = bool(enabled)
@@ -9722,8 +9816,11 @@ class PetWindow(QWidget):
             self.context_menu_timer.stop()
             self._suppress_context_until = time.monotonic() + 0.8
             self._record_user_interaction()
-            if self._start_color_mist_world():
+            was_active = bool(self._local_effect_manager.color_mist_world_active)
+            if self._toggle_color_mist_world():
                 self.show_speech("彩雾世界开始了！", 1500)
+            elif was_active:
+                self.show_speech("彩雾世界结束了。", 1500)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)

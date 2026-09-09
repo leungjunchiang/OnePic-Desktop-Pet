@@ -187,5 +187,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --verify-tag \
-            --title "Lili $release_tag - Focus 时间事实可靠性" \
-            --notes "P0 Focus 可靠性修复：增加崩溃安全的 Focus Recovery WAL，确保 sealed FocusSegment 先于本地计时状态转换落盘；本地 Store 写入失败时保持可恢复的 active identity。暂停/结束后的 inactive presence 严格等待对应 sealed segment 获得逐条 delta ACK，避免跨设备实时投影在交接窗口丢失。保留稳定 segment identity、账号级 interval union、首次 bootstrap/后续 delta、empty delta no-op 和低频 integrity reconciliation；不新增历史全量下载、网络轮询、QThread 或 Focus 业务旁路。"
+            --title "Lili $release_tag - Mac 暂停同步与退出稳定性" \
+            --notes "修复 macOS 暂停/休息后的 FocusSegment 同步交接：canonical sealed segment 先持久化，次要本地投影失败不再阻止真正暂停；暂停恰逢后台同步进行时会复用既有 delta worker 并重新调度，避免已封口事实滞留。修复本机 paused 气泡被服务器旧 live echo 继续推进、正常退出隐藏六毛后进程仍存活并重新计时的问题。彩雾世界双右键现在可开关，且透明局部特效每帧显式清屏，消除 macOS Retina 黑色残影。保留稳定 FocusSegment identity、strict v2 ACK、账号级 interval union、既有 heartbeat 频率与单一 LocalEffectWindow；不新增网络 RPC、全量历史拉取或 QThread。"

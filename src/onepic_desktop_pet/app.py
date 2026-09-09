@@ -362,6 +362,8 @@ class DesktopPetApplication(QObject):
         self._program_update_manual = False
         self._program_release: ProgramRelease | None = None
         self._quit_started = False
+        self._quit_prepared = False
+        self._quit_retry_scheduled = False
         self.program_update_state = UpdateState.IDLE
         self.window.set_menu_external_callbacks(
             {
@@ -557,8 +559,23 @@ class DesktopPetApplication(QObject):
             return
         lifecycle_log("application.quit.request", self.qt_app)
         self._quit_started = True
-        self.settings.start_x = self.window.x()
-        self.settings.start_y = self.window.y()
+        self._continue_quit()
+
+    def _schedule_quit_retry(self) -> None:
+        """Retry teardown without ever reopening the application lifecycle."""
+
+        if self._quit_retry_scheduled:
+            return
+        self._quit_retry_scheduled = True
+        QTimer.singleShot(250, self._continue_quit)
+
+    @_guard_qt_callback
+    def _continue_quit(self) -> None:
+        """Advance one idempotent graceful-shutdown pass."""
+
+        self._quit_retry_scheduled = False
+        if not self._quit_started:
+            return
         shutdown_ready = True
         try:
             if not wait_for_thread(self._content_update_worker, 6000):
@@ -569,8 +586,12 @@ class DesktopPetApplication(QObject):
             ):
                 if not wait_for_thread(worker, 6000):
                     shutdown_ready = False
-            self.window.shutdown_work_timer()
-            save_settings(self.settings)
+            if not self._quit_prepared:
+                self.settings.start_x = self.window.x()
+                self.settings.start_y = self.window.y()
+                self.window.shutdown_work_timer()
+                save_settings(self.settings)
+                self._quit_prepared = True
         except Exception:
             # Keep the process alive long enough for the retry path to finish
             # native thread teardown instead of letting Qt destroy a worker
@@ -580,16 +601,31 @@ class DesktopPetApplication(QObject):
 
         if not shutdown_ready:
             lifecycle_log("application.quit.retry_workers", self.qt_app)
-            self._quit_started = False
-            QTimer.singleShot(250, self.quit)
+            self._schedule_quit_retry()
             return
 
-        window_closed = True
+        # Close the pet first. If a child QThread still needs to drain, its
+        # closeEvent rejects this pass while leaving the pet and native status
+        # entry intact. Older code hid every surface first and then cleared
+        # _quit_started, producing the observed "pet vanished, app survived"
+        # limbo and allowing the event loop to resurrect the timer UI.
+        window_closed = False
+        try:
+            lifecycle_log("application.close_entry", self.window, target="pet window")
+            window_closed = self.window.close() is not False
+        except Exception:
+            LOGGER.exception("[Lifecycle] failed to close pet window")
+
+        if not window_closed:
+            LOGGER.info("[Lifecycle] waiting for Qt worker threads before exit")
+            lifecycle_log("application.quit.waiting_for_window_threads", self.window)
+            self._schedule_quit_retry()
+            return
+
         for label, cleanup in (
             ("status item", self._status_item_controller.close),
             ("dock menu", self._dock_controller.close),
             ("tray", self.tray.hide if self.tray is not None else None),
-            ("pet window", self.window.close),
         ):
             if cleanup is None:
                 continue
@@ -599,23 +635,9 @@ class DesktopPetApplication(QObject):
                     cleanup if isinstance(cleanup, QObject) else None,
                     target=label,
                 )
-                result = cleanup()
-                if label == "pet window" and result is False:
-                    window_closed = False
+                cleanup()
             except Exception:
                 LOGGER.exception("[Lifecycle] failed to close %s", label)
-                if label == "pet window":
-                    window_closed = False
-
-        if not window_closed:
-            # PetWindow keeps its child QThreads alive and rejects the close
-            # event until they have actually stopped. Retry from the Qt event
-            # loop; never call QApplication.quit() while one is still live.
-            LOGGER.info("[Lifecycle] waiting for Qt worker threads before exit")
-            lifecycle_log("application.quit.waiting_for_window_threads", self.window)
-            self._quit_started = False
-            QTimer.singleShot(250, self.quit)
-            return
 
         if type(self)._active_instance is self:
             type(self)._active_instance = None

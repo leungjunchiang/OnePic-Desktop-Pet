@@ -437,6 +437,14 @@ class LocalEffectManager:
             self.release_after = 0.0
             self._on_color_mist_world_resume(desired)
 
+    def toggle_color_mist_world(self, now: float | None = None, *, seed: int = 0) -> bool:
+        """Toggle the one color-mist session and return its resulting state."""
+
+        if self._color_mist_world is not None:
+            self.stop_color_mist_world(now)
+            return False
+        return bool(self.start_color_mist_world(now, seed=seed))
+
     def _begin_release(self, now: float) -> None:
         if self.current_kind is LocalEffectKind.NONE or self.phase is EffectPhase.RELEASING:
             return

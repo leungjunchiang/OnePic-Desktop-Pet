@@ -106,7 +106,9 @@ def test_qt_6112_thread_lifecycle_guards_are_packaged() -> None:
     )
 
     assert "wait_for_thread" in app_source
-    assert "window_closed = True" in app_source
+    assert "window_closed = False" in app_source
+    assert "self._schedule_quit_retry()" in app_source
+    assert "self._quit_started = False\n            QTimer.singleShot" not in app_source
     assert "request_stop_all(*thread_roots)" in window_source
     assert "running_threads(*thread_roots)" in window_source
     assert "wait_for_thread" in lifecycle_source

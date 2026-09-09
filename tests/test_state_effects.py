@@ -186,6 +186,19 @@ def test_color_mist_world_retrigger_extends_deadline_without_restarting_timeline
     assert COLOR_MIST_CYCLE_MS == 18_000
 
 
+def test_color_mist_world_toggle_stops_without_starting_a_second_session() -> None:
+    clock = Clock()
+    events: list[tuple] = []
+    manager = _manager(clock, events)
+
+    assert manager.toggle_color_mist_world() is True
+    assert manager.color_mist_world_active is True
+    clock.value = 4.0
+    manager.tick()
+    assert manager.toggle_color_mist_world() is False
+    assert manager.color_mist_world_active is False
+
+
 def test_color_mist_world_restores_the_latest_background_state_not_the_entry_snapshot() -> None:
     clock = Clock()
     resumed: list[LocalEffectKind] = []

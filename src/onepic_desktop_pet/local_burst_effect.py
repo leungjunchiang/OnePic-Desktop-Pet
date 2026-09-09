@@ -1015,10 +1015,18 @@ class LocalBurstEffectWindow(QWidget):
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if not self._active:
-            return
         painter = QPainter(self)
         try:
+            # A translucent top-level QWidget can reuse its native backing
+            # store on macOS. WA_NoSystemBackground means Qt will not clear
+            # that store for us, so moving gradients otherwise leave dark
+            # contour trails behind (especially on Retina). Clear the small
+            # local surface explicitly before drawing every frame.
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            if not self._active:
+                return
             now = time.monotonic()
             bounds = QRectF(self.rect())
             stage_elapsed = (now - self._stage_started_at) * 1000.0

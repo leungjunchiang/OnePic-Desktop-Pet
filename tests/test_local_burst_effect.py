@@ -153,3 +153,31 @@ def test_local_burst_window_is_reused_and_has_one_timer() -> None:
     assert not window.active
     assert not window.timer.isActive()
     window.close()
+
+
+def test_translucent_effect_surface_is_cleared_when_frame_becomes_inactive() -> None:
+    app = _app()
+    window = LocalBurstEffectWindow()
+    window.trigger(QRect(100, 100, 160, 160))
+    app.processEvents()
+    painted = window.grab().toImage()
+    assert any(
+        painted.pixelColor(x, y).alpha() > 0
+        for y in range(0, painted.height(), 8)
+        for x in range(0, painted.width(), 8)
+    )
+
+    # Keep the native surface visible while asking paintEvent to draw an
+    # inactive frame. This reproduces the Retina backing-store case where an
+    # uncleared translucent widget used to retain dark fog contours.
+    window._active = False
+    window.update()
+    app.processEvents()
+    cleared = window.grab().toImage()
+    assert all(
+        cleared.pixelColor(x, y).alpha() == 0
+        for y in range(0, cleared.height(), 8)
+        for x in range(0, cleared.width(), 8)
+    )
+    window.hide()
+    window.close()
