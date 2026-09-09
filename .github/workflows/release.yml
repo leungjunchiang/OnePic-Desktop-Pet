@@ -198,5 +198,5 @@ jobs:
           gh release create "$release_tag" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - Focus delta 重复 segment 防护" \
-            --notes "修复 delta-v2 上传批次可能因 canonical store、legacy migrated store、WAL recovery 或 pending upload 合并而携带重复 segment_id，触发 production Postgres 22023。最终 RPC 前新增确定性唯一性闸门：同 ID 同 payload 只保留一条并记录来源、完整 payload 与 SHA-256；同 ID 不同 payload 标记 conflict，阻断 Supabase 调用，不更新 ACK fingerprint 或 cursor。保持 stable FocusSegment identity、per-device provenance、delta cursor、AccountFocusStore additive merge、interval union、strict ACK 与 bounded legacy recovery；不根据 aggregate 制造 segment，不新增网络频率、全量历史拉取或 QThread。"
+            --title "Lili $release_tag - 专注时间防回退与彩雾修复" \
+            --notes "修复旧版 daily aggregate 与部分 raw segment 并存时，周专注时间从较大历史值回退到 raw-only 值的问题。迁移时一次性冻结可信 legacy daily floor；每个北京时间自然日按 max(sealed segment + fresh live presence 的 interval union, frozen legacy floor) 计算，不相加、不重复计算，也不伪造历史 segment。修复发布流水线迁移顺序，确保后续自动部署不会恢复 raw-only 函数；个人日/周累计和历史同步改为单调更新，暂停或重启后的较小本地值不能覆盖服务器较大值。彩雾世界双击关闭后清理其他彩雾状态，并移除外围黑色硬圆环。"
