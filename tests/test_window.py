@@ -2981,6 +2981,38 @@ def test_auto_pause_records_effective_cutoff_in_shared_focus_path(tmp_path) -> N
     assert int((segments[-1].end_at - segments[-1].start_at).total_seconds()) == 10 * 60
     window.close(); window.deleteLater(); app.processEvents()
 
+
+def test_pause_stops_timer_and_keeps_exact_recovery_checkpoint_when_seal_fails(
+    monkeypatch,
+) -> None:
+    """A local ledger error cannot leave work running or discard the interval."""
+
+    app, window = _create_window()
+    window.start_work_timer()
+    session_id = window.work_timer.focus_session_id
+    window.work_timer._running_since -= 120
+    window.work_timer._last_trusted_checkpoint_at = datetime.now(
+        timezone(timedelta(hours=8))
+    ) - timedelta(seconds=120)
+
+    def fail_seal(*_args, **_kwargs):
+        raise OSError("simulated local ledger failure")
+
+    monkeypatch.setattr(window, "_record_focus_segment", fail_seal)
+    monkeypatch.setattr(window.focus_analytics, "pause_focus_session", fail_seal)
+    window.pause_work_timer()
+
+    assert not window.work_timer.is_running
+    assert window.work_timer.is_paused
+    assert window.work_timer.recovery_pending
+    pending = window.work_timer.pending_recovery_seal()
+    assert pending is not None
+    total, pending_session_id, started_at = pending
+    assert total >= 119
+    assert pending_session_id == session_id
+    assert started_at is not None
+    window.close(); window.deleteLater(); app.processEvents()
+
 def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     """工作计时应显示今日累计，并在连续工作过久时劝用户休息。"""
 

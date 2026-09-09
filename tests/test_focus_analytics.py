@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from onepic_desktop_pet import local_data
 from onepic_desktop_pet.focus_analytics import (
     AccountFocusStore,
     FocusAnalyticsStore,
@@ -1082,6 +1083,82 @@ def test_focus_analytics_switches_to_an_isolated_account_file(tmp_path, monkeypa
 
     assert store.switch_account("account-a")
     assert store.summary().weekly_total_seconds == 90
+
+
+def test_account_switch_runs_ack_recovery_for_the_authenticated_store(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    now = datetime(2026, 9, 9, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    account_path = (
+        tmp_path / "Lili" / "accounts" / "account-a" / "focus_analytics.json"
+    )
+    seeded = FocusAnalyticsStore(
+        path=account_path,
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    seeded.record_session(
+        90,
+        started_at=now - timedelta(minutes=2),
+        record_id="device-a:session-a:90",
+        session_id="session-a",
+    )
+    batch = seeded.focus_segments_payload()
+    assert seeded.acknowledge_focus_segments_upload(batch)
+    raw = json.loads(account_path.read_text(encoding="utf-8"))
+    raw["account_state"]["focus_segment_upload_ack_version"] = 2
+    raw["account_state"]["focus_segment_upload_repair_pending"] = False
+    account_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    store = FocusAnalyticsStore(now_provider=lambda: now, persist=True)
+    assert store.switch_account("account-a")
+    store.set_device_id("device-a")
+
+    assert store.focus_segments_sync_mode() == "recovery_backfill"
+    assert [item["segment_id"] for item in store.focus_segments_payload()] == [
+        "device-a:session-a:90"
+    ]
+
+
+def test_macos_legacy_focus_store_and_wal_are_adopted_by_account(
+    tmp_path, monkeypatch
+) -> None:
+    native_root = tmp_path / "Library" / "Application Support"
+    legacy_root = tmp_path / ".desktop_pet"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(local_data, "platform_app_data_root", lambda: native_root)
+    monkeypatch.setattr(local_data, "legacy_private_app_data_root", lambda: legacy_root)
+    now = datetime(2026, 9, 9, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    legacy_dir = legacy_root / "Lili" / "accounts" / "account-a"
+    seeded = FocusAnalyticsStore(
+        path=legacy_dir / "focus_analytics.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="mac-device",
+    )
+    seeded.record_session(
+        120,
+        started_at=now - timedelta(minutes=3),
+        record_id="mac-device:session-a:120",
+        session_id="session-a",
+    )
+
+    store = FocusAnalyticsStore(now_provider=lambda: now, persist=True)
+    assert store.switch_account("account-a")
+    store.set_device_id("mac-device")
+
+    native_dir = native_root / "Lili" / "accounts" / "account-a"
+    assert store.path == native_dir / "focus_analytics.json"
+    assert (native_dir / "focus_recovery.jsonl").is_file()
+    assert (legacy_dir / "focus_analytics.json").is_file()
+    assert [segment.segment_id for segment in store.focus_segments()] == [
+        "mac-device:session-a:120"
+    ]
+    assert [item["segment_id"] for item in store.focus_segments_payload()] == [
+        "mac-device:session-a:120"
+    ]
 
 
 def test_account_focus_store_merges_two_devices_and_deduplicates_overlap(tmp_path) -> None:

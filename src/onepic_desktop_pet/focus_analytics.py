@@ -17,8 +17,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
-import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -39,6 +37,7 @@ from .focus_durability import (
     FocusRecoveryJournal,
     segment_as_store_record,
 )
+from .local_data import account_local_data_path, adopt_legacy_account_file
 
 
 # A day may legitimately contain a very long work period.  The only hard
@@ -76,11 +75,9 @@ def _as_beijing(value: datetime) -> datetime:
 
 
 def focus_analytics_path(account_id: str | None = None) -> Path:
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".desktop_pet"
-    value = str(account_id or "").strip().casefold()
-    key = re.sub(r"[^a-z0-9._-]", "_", value)[:80] or "anonymous"
-    return root / "Lili" / "accounts" / key / "focus_analytics.json"
+    """Return the native, account-scoped focus ledger path on every OS."""
+
+    return account_local_data_path("focus_analytics.json", account_id)
 
 
 @dataclass(frozen=True)
@@ -174,6 +171,20 @@ class FocusAnalyticsStore:
     ) -> None:
         self._uses_explicit_path = path is not None
         self.path = path or focus_analytics_path()
+        if path is None:
+            # The old macOS/Linux path lived below ~/.desktop_pet.  Adopt only
+            # this account's exact structured ledger and WAL; runtime log text
+            # and aggregate counters are never converted into FocusSegments.
+            adopt_legacy_account_file(
+                "focus_recovery.jsonl",
+                None,
+                destination=self.path.parent / "focus_recovery.jsonl",
+            )
+            adopt_legacy_account_file(
+                "focus_analytics.json",
+                None,
+                destination=self.path,
+            )
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._persist = bool(persist)
         self._device_id = str(device_id or "").strip()[:120]
@@ -228,6 +239,18 @@ class FocusAnalyticsStore:
             return False
         self._save()
         self.path = target
+        # Copy WAL first: if a process stops between these two atomic copies,
+        # journal replay still reconstructs the exact sealed intervals.
+        adopt_legacy_account_file(
+            "focus_recovery.jsonl",
+            account_id,
+            destination=self.path.parent / "focus_recovery.jsonl",
+        )
+        adopt_legacy_account_file(
+            "focus_analytics.json",
+            account_id,
+            destination=self.path,
+        )
         self._recovery_journal = FocusRecoveryJournal(self.path.parent, now_provider=self._now)
         # Device attribution is rebound by the account/session owner after the
         # account switch. Never carry an installation ID across accounts.
@@ -249,11 +272,22 @@ class FocusAnalyticsStore:
         }
         self._load()
         journal_changed = self._recover_focus_journal()
+        # Account switching happens after the restored Supabase session is
+        # known.  Run upload-ACK migration for the actual account, not only
+        # for the anonymous store constructed during application startup.
+        upload_state_changed = self._ensure_focus_segment_upload_state()
+        self._focus_integrity_next_attempt_monotonic = 0.0
         self._focus_upload_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
         self._focus_sync_metrics = {}
         projection_changed = self._ensure_daily_focus_projection()
-        if self._rebuild_days_from_records() or self._trim_days() or projection_changed or journal_changed:
+        if (
+            self._rebuild_days_from_records()
+            or self._trim_days()
+            or projection_changed
+            or journal_changed
+            or upload_state_changed
+        ):
             self._save()
         return True
 

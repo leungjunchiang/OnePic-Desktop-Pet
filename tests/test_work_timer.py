@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from onepic_desktop_pet import local_data
 from onepic_desktop_pet.work_timer import (
     BEIJING_TIMEZONE,
     WorkTimerModel,
@@ -166,7 +167,9 @@ def test_running_work_timer_recovers_last_checkpoint_after_restart(tmp_path) -> 
     assert reloaded.recovery_pending
     assert reloaded.recovered_active_session
     assert reloaded.session_seconds() == 65
-    assert reloaded.pending_recovery_seal() is not None
+    pending = reloaded.pending_recovery_seal()
+    assert pending is not None
+    reloaded.mark_analytics_recorded(pending[0])
     assert reloaded.complete_recovery_seal()
     assert not reloaded.recovery_pending
     assert reloaded.start()
@@ -188,6 +191,28 @@ def test_analytics_cursor_survives_restart_without_replaying_session_total(tmp_p
     assert reloaded.has_active_session
     assert reloaded.analytics_recorded_session_seconds() == 120
     assert reloaded.focus_session_id
+
+
+def test_paused_timer_with_unrecorded_cursor_exposes_exact_recovery_interval(
+    tmp_path,
+) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    session_id = timer.focus_session_id
+    started_at = timer.current_segment_started_at()
+    clock.advance(120)
+    assert timer.pause()
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.recovery_pending
+    assert reloaded.pending_recovery_seal() == (120, session_id, started_at)
+
+    # The canonical store owner advances this cursor only after its WAL/store
+    # write succeeds.  Once persisted, explicit work may safely resume.
+    reloaded.mark_analytics_recorded(120)
+    assert reloaded.complete_recovery_seal()
+    assert not reloaded.recovery_pending
 
 
 def test_legacy_active_timer_without_cursor_is_treated_as_already_recorded(tmp_path) -> None:
@@ -438,6 +463,38 @@ def test_work_timer_switches_to_an_isolated_account_file(tmp_path, monkeypatch) 
     assert timer.switch_account("account-a")
     assert timer.today_seconds() == 90
     assert timer.lifetime_seconds() == 90
+
+
+def test_macos_legacy_account_timer_is_adopted_without_deleting_source(
+    tmp_path, monkeypatch
+) -> None:
+    native_root = tmp_path / "Library" / "Application Support"
+    legacy_root = tmp_path / ".desktop_pet"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(local_data, "platform_app_data_root", lambda: native_root)
+    monkeypatch.setattr(local_data, "legacy_private_app_data_root", lambda: legacy_root)
+    clock = FakeClock()
+    legacy_path = legacy_root / "Lili" / "accounts" / "account-a" / "work_timer.json"
+    seeded = WorkTimerModel(
+        path=legacy_path,
+        now_provider=lambda: clock.now,
+        monotonic_provider=lambda: clock.monotonic,
+    )
+    assert seeded.start()
+    clock.advance(75)
+    assert seeded.pause()
+
+    timer = WorkTimerModel(
+        now_provider=lambda: clock.now,
+        monotonic_provider=lambda: clock.monotonic,
+    )
+    assert timer.switch_account("account-a")
+
+    native_path = native_root / "Lili" / "accounts" / "account-a" / "work_timer.json"
+    assert timer.path == native_path
+    assert timer.today_seconds() == 75
+    assert timer.is_paused
+    assert legacy_path.is_file()
 
 
 def test_reminders_fire_once_at_focus_break_and_long_work_thresholds(tmp_path) -> None:

@@ -3553,21 +3553,35 @@ class PetWindow(QWidget):
         session_id = self.work_timer.focus_session_id
         was_running = self.work_timer.is_running
         # Seal the raw fact while the timer still owns the old active
-        # identity.  Only after this durable local write succeeds may the
-        # timer transition to paused/inactive presence.  For delayed idle and
-        # power callbacks, use the effective cutoff rather than discovery time.
+        # identity. If storage is temporarily unavailable, the timer still
+        # pauses and persists the same identity/cutoff as a recovery checkpoint
+        # before any new session is allowed. For delayed idle and power
+        # callbacks, use the effective cutoff rather than discovery time.
         session_seconds = (
             self.work_timer.session_seconds_at(effective_end_at)
             if was_running and effective_end_at is not None
             else self.work_timer.session_seconds()
         )
+        seal_error: Exception | None = None
         if was_running:
-            self._record_focus_segment(
-                session_seconds,
-                completed=False,
-                session_id=session_id,
-                started_at=segment_started_at,
-            )
+            try:
+                self._record_focus_segment(
+                    session_seconds,
+                    completed=False,
+                    session_id=session_id,
+                    started_at=segment_started_at,
+                )
+            except Exception as exc:
+                # A local storage failure must never make the Pause button
+                # leave the monotonic timer running. WorkTimerModel persists
+                # the exact accumulated seconds and wall-clock checkpoint in
+                # the transition below; its recovery cursor then blocks a new
+                # session until this raw interval is durably sealed. We do not
+                # manufacture a segment from daily/profile aggregate totals.
+                seal_error = exc
+                LOGGER.exception(
+                    "focus segment seal failed; pausing with exact recovery checkpoint"
+                )
         was_running = self.focus_session.pause(
             reason,
             effective_end_at=effective_end_at,
@@ -3578,7 +3592,15 @@ class PetWindow(QWidget):
             self._away_recovery_prompt_shown = False
             self._close_away_recovery_card()
         if was_running:
-            self.focus_analytics.pause_focus_session(at=effective_end_at)
+            try:
+                self.focus_analytics.pause_focus_session(at=effective_end_at)
+            except Exception:
+                # This live-quality projection is secondary to the timer and
+                # raw FocusSegment. Keep the user's explicit Pause effective
+                # even when its small analytics-state save is unavailable.
+                LOGGER.exception(
+                    "focus analytics pause projection failed after timer pause"
+                )
             self._refresh_cross_device_today_display(
                 snapshot=self.focus_session.snapshot(include_projection=False),
                 source="focus_paused",
@@ -3598,6 +3620,15 @@ class PetWindow(QWidget):
                 "video",
             }:
                 self._pause_notice_shown = reason != "idle_10m"
+            if seal_error is not None:
+                lifecycle_log(
+                    "focus.segment.seal_deferred",
+                    self,
+                    session_id=str(session_id or ""),
+                    seconds=max(0, int(session_seconds)),
+                    reason=reason,
+                    error=type(seal_error).__name__,
+                )
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("thermos", 25_000)
@@ -5008,6 +5039,11 @@ class PetWindow(QWidget):
         lifecycle_log(
             "focus.segment.sealed",
             self,
+            segment_id=str(stable_segment_id or ""),
+            session_id=stable_session_id,
+            device_id=stable_device_id,
+            start_at=started_at.isoformat(),
+            end_at=(started_at + timedelta(seconds=seconds)).isoformat(),
             seconds=seconds,
             completed=bool(completed),
             sync_requested=True,
@@ -7730,11 +7766,10 @@ class PetWindow(QWidget):
         if candidate is None:
             return True
         total, session_id, started_at = candidate
-        self._recorded_focus_session_seconds = (
-            self.work_timer.analytics_recorded_session_seconds()
-        )
+        recorded_before = self.work_timer.analytics_recorded_session_seconds()
+        self._recorded_focus_session_seconds = recorded_before
         try:
-            if int(total) > self._recorded_focus_session_seconds:
+            if int(total) > recorded_before:
                 self._record_focus_segment(
                     int(total),
                     completed=False,
@@ -7742,7 +7777,8 @@ class PetWindow(QWidget):
                     started_at=started_at,
                 )
             if started_at is not None:
-                checkpoint_end = started_at + timedelta(seconds=max(0, int(total)))
+                sealed_seconds = max(0, int(total) - int(recorded_before))
+                checkpoint_end = started_at + timedelta(seconds=sealed_seconds)
                 self.focus_analytics.pause_focus_session(at=checkpoint_end)
             complete()
             self._recorded_focus_session_seconds = 0

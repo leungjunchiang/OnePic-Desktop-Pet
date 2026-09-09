@@ -2,10 +2,41 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from onepic_desktop_pet import local_data
+
 from onepic_desktop_pet.chat_memory import ChatHistoryStore, ConversationMemory
 from onepic_desktop_pet.diary import DailyCompanionStats
 from onepic_desktop_pet.economy import EconomyLedger
 from onepic_desktop_pet.time_memory import TimeMemory
+
+
+def test_legacy_account_file_adoption_is_atomic_idempotent_and_non_destructive(
+    tmp_path,
+) -> None:
+    source = tmp_path / "legacy" / "focus_recovery.jsonl"
+    target = tmp_path / "native" / "focus_recovery.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"event":"segment_sealed"}\n', encoding="utf-8")
+
+    adopted = local_data.adopt_legacy_account_file(
+        "focus_recovery.jsonl",
+        "account-a",
+        source=source,
+        destination=target,
+    )
+
+    assert adopted == source
+    assert target.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+    assert source.is_file()
+
+    source.write_text("must-not-overwrite\n", encoding="utf-8")
+    assert local_data.adopt_legacy_account_file(
+        "focus_recovery.jsonl",
+        "account-a",
+        source=source,
+        destination=target,
+    ) is None
+    assert target.read_text(encoding="utf-8") == '{"event":"segment_sealed"}\n'
 
 
 def test_account_switch_does_not_reuse_personal_local_data(tmp_path, monkeypatch) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -53,9 +54,64 @@ def account_data_dir(account_id: str | None = None, base: str | Path | None = No
     so offline data cannot be uploaded after a later login.
     """
 
+    return app_data_dir(base) / "accounts" / account_storage_key(account_id)
+
+
+def account_storage_key(account_id: str | None = None) -> str:
+    """Return the stable, filesystem-safe namespace for one account."""
+
     value = str(account_id or "").strip().casefold()
-    key = re.sub(r"[^a-z0-9._-]", "_", value)[:80] or "anonymous"
-    return app_data_dir(base) / "accounts" / key
+    return re.sub(r"[^a-z0-9._-]", "_", value)[:80] or "anonymous"
+
+
+def legacy_private_app_data_root() -> Path:
+    """Return the pre-platform-normalization data root.
+
+    Older macOS/Linux builds stored the focus timer and analytics ledger below
+    ``~/.desktop_pet`` while logs and every other account store used the native
+    application-data directory.  Windows used ``LOCALAPPDATA`` in both paths,
+    so this helper resolves to the same directory there.
+    """
+
+    base = os.environ.get("LOCALAPPDATA")
+    return Path(base) if base else Path.home() / ".desktop_pet"
+
+
+def legacy_account_data_dir(account_id: str | None = None) -> Path:
+    """Return the exact account directory used by older focus builds."""
+
+    return legacy_private_app_data_root() / "Lili" / "accounts" / account_storage_key(account_id)
+
+
+def adopt_legacy_account_file(
+    filename: str,
+    account_id: str | None = None,
+    *,
+    destination: Path | None = None,
+    source: Path | None = None,
+) -> Path | None:
+    """Atomically copy one exact legacy account file when the target is absent.
+
+    The source is deliberately retained.  This is a one-way, idempotent
+    namespace repair, not a destructive move and not an aggregate-time import.
+    Callers decide which structured files are safe to adopt.
+    """
+
+    clean = Path(str(filename).replace("\\", "/")).name
+    if not clean:
+        return None
+    target = destination or (account_data_dir(account_id) / clean)
+    legacy = source or (legacy_account_data_dir(account_id) / clean)
+    try:
+        if target == legacy or target.exists() or not legacy.is_file():
+            return None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.legacy-import.tmp")
+        shutil.copyfile(legacy, temporary)
+        temporary.replace(target)
+        return legacy
+    except OSError:
+        return None
 
 
 def account_local_data_path(

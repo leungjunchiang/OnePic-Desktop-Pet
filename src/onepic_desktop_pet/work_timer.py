@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from .local_data import account_local_data_path, adopt_legacy_account_file
 
 
 # Persisted values are intentionally plain strings so older installations can
@@ -58,21 +58,6 @@ _PAUSE_STATE_BY_REASON = {
 LOGGER = logging.getLogger(__name__)
 
 
-def _local_data_root() -> Path:
-    base = os.environ.get("LOCALAPPDATA")
-    return Path(base) if base else Path.home() / ".desktop_pet"
-
-
-def _account_storage_key(account_id: str | None) -> str:
-    """将 Supabase user id 转成安全、稳定的本地目录名。"""
-
-    value = str(account_id or "").strip().casefold()
-    if not value:
-        return "anonymous"
-    value = re.sub(r"[^a-z0-9._-]", "_", value)
-    return value[:80] or "anonymous"
-
-
 def work_timer_path(account_id: str | None = None) -> Path:
     """返回按账号隔离的本地工作计时文件路径。
 
@@ -80,13 +65,7 @@ def work_timer_path(account_id: str | None = None) -> Path:
     迁移或读取，避免登录另一个账号时把旧账号的累计时长再次上传。
     """
 
-    return (
-        _local_data_root()
-        / "Lili"
-        / "accounts"
-        / _account_storage_key(account_id)
-        / "work_timer.json"
-    )
+    return account_local_data_path("work_timer.json", account_id)
 
 
 def format_work_duration(seconds: int) -> str:
@@ -134,6 +113,12 @@ class WorkTimerModel:
         self._account_id = "" if self._uses_account_storage else None
         self._device_id = str(device_id or "").strip()[:120]
         self.path = (path or work_timer_path()) if self.persist else None
+        if self._uses_account_storage and self.path is not None:
+            adopt_legacy_account_file(
+                "work_timer.json",
+                None,
+                destination=self.path,
+            )
         self._now = now_provider or (lambda: datetime.now(BEIJING_TIMEZONE))
         self._monotonic = monotonic_provider or time.monotonic
         self._date_key = self._today_key()
@@ -195,6 +180,11 @@ class WorkTimerModel:
             # seal-before-transition pipeline first.
             LOGGER.error("refusing account switch while FocusSession is running")
             return False
+        adopt_legacy_account_file(
+            "work_timer.json",
+            target_id,
+            destination=target,
+        )
         self.path = target
         self._account_id = target_id
         self._device_id = ""
@@ -381,15 +371,47 @@ class WorkTimerModel:
 
     @property
     def recovery_pending(self) -> bool:
-        """Whether a saved running interval must be sealed before new work."""
+        """Whether a durable local interval still needs a canonical seal."""
 
-        return bool(self._recovery_pending)
+        return bool(
+            self._recovery_pending
+            or (
+                self._session_active
+                and not self.is_running
+                and bool(self._session_id)
+                and self._last_trusted_checkpoint_at is not None
+                and self._session_accumulated_seconds
+                > self._analytics_recorded_session_seconds
+            )
+        )
 
     def pending_recovery_seal(self) -> tuple[int, str, datetime | None] | None:
-        """Return the last durable running interval awaiting safe sealing."""
+        """Return an exact durable interval awaiting the canonical store.
 
-        if not self._recovery_pending:
+        Besides abnormal-restart checkpoints, this covers a paused timer from
+        a release where the timer transition succeeded but the analytics/WAL
+        write did not.  The latter is reconstructed only from the persisted
+        session cursor and pause checkpoint; aggregate day/week totals and log
+        prose are never used.
+        """
+
+        if not self.recovery_pending:
             return None
+        if not self._recovery_pending:
+            total = max(0, int(self._session_accumulated_seconds))
+            recorded = min(
+                total,
+                max(0, int(self._analytics_recorded_session_seconds)),
+            )
+            missing = total - recorded
+            ended_at = self._last_trusted_checkpoint_at
+            if missing <= 0 or ended_at is None:
+                return None
+            return (
+                total,
+                str(self._session_id or ""),
+                ended_at - timedelta(seconds=missing),
+            )
         return (
             max(0, int(self._session_accumulated_seconds)),
             str(self._session_id or ""),
@@ -400,7 +422,9 @@ class WorkTimerModel:
         """Mark a restart checkpoint sealed without auto-resuming work."""
 
         if not self._recovery_pending:
-            return False
+            # A paused-gap repair is complete when mark_analytics_recorded()
+            # durably advances the cursor; no timer lifecycle flag changes.
+            return not self.recovery_pending
         self._recovery_pending = False
         self._recovered_active_session = False
         self._running_started_at = None
