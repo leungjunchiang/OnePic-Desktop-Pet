@@ -125,6 +125,32 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_empty_focus_delta_does_not_rearm_social_tick(monkeypatch) -> None:
+    """空的成功增量不能把后台同步重新排成高频循环。"""
+
+    app, window = _create_window()
+    scheduled: list[bool] = []
+    monkeypatch.setattr(window, "_schedule_social_tick", lambda: scheduled.append(True))
+    monkeypatch.setattr(window.focus_analytics, "has_pending_focus_handoff", lambda: False)
+
+    window._merge_remote_personal_state(
+        {
+            "data_source": "server",
+            "_focus_segments": {
+                "segments": [],
+                "_sync_mode": "delta",
+                "_upload_ack_ok": True,
+                "full_sync": False,
+            },
+        }
+    )
+
+    assert scheduled == []
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def _create_window() -> tuple[QApplication, PetWindow]:
     """创建或复用离屏 Qt 应用，并返回采用默认设置的宠物窗口。"""
 
@@ -3032,6 +3058,7 @@ def test_work_timer_start_status_reminder_and_finish(tmp_path) -> None:
     window.focus_analytics._now = lambda: now[0]
     window.show()
     app.processEvents()
+    assert window.work_clock_timer.timerType() == Qt.TimerType.PreciseTimer
 
     start_reply = window.start_work_timer()
     assert start_reply.state is PetState.SIT

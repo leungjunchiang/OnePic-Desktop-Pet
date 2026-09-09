@@ -524,21 +524,130 @@ def _compare_buddies(left: dict[str, Any], right: dict[str, Any]) -> int:
     return collator.compare(_owner_nickname(left), _owner_nickname(right))
 
 
+def _focus_timestamp(value: object) -> datetime | None:
+    """Parse a server focus timestamp and normalize it to Beijing time."""
+
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        # Keep the same compatibility rule as _format_beijing_time: a legacy
+        # server timestamp without an offset is interpreted as UTC.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(BEIJING_TIMEZONE)
+
+
 def _live_session_seconds(record: dict[str, Any]) -> int | None:
     """Calculate a peer's current round from the server start timestamp."""
+
     if _presence_status(record) != "focus":
         return 0
     started = str(record.get("session_started_at") or "")
     if not started:
         value = record.get("session_seconds")
-        return int(value) if value is not None else None
-    try:
-        stamp = str(record.get("_server_timestamp") or "")
-        now = datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else datetime.now().astimezone()
-        return max(0, int((now - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds()))
-    except (TypeError, ValueError):
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    started_at = _focus_timestamp(started)
+    if started_at is None:
         value = record.get("session_seconds")
-        return int(value) if value is not None else None
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    now = _focus_timestamp(record.get("_server_timestamp"))
+    if now is None:
+        now = _beijing_now()
+    return max(0, int((now - started_at).total_seconds()))
+
+
+def _live_focus_window_seconds(
+    record: dict[str, Any],
+    window_start: datetime,
+) -> int:
+    """Return only the active interval that belongs to one calendar window."""
+
+    if _presence_status(record) != "focus":
+        return 0
+    started_at = _focus_timestamp(record.get("session_started_at"))
+    if started_at is None:
+        return 0
+    now = _focus_timestamp(record.get("_server_timestamp"))
+    if now is None:
+        now = _beijing_now()
+    begin = max(started_at, window_start)
+    return max(0, int((now - begin).total_seconds()))
+
+
+def _safe_nonnegative_seconds(value: object) -> int | None:
+    """Read an optional duration without converting hidden values to zero."""
+
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _project_legacy_live_focus_totals(
+    record: dict[str, Any],
+    *,
+    server_timestamp: str = "",
+    totals_source: str = "",
+) -> dict[str, Any]:
+    """Patch old dashboard rows with the active interval until the SQL fix lands.
+
+    The canonical dashboard marks its totals as an interval union.  Those rows
+    already include fresh device presence and must not receive a second live
+    supplement.  Older dashboard functions expose only a stale closed counter;
+    for those rows, adding the current session interval keeps the visible card
+    aligned while the backend migration is being rolled out.
+    """
+
+    projected = dict(record)
+    if server_timestamp and not projected.get("_server_timestamp"):
+        projected["_server_timestamp"] = server_timestamp
+    source = str(
+        projected.get("focus_totals_source")
+        or projected.get("_focus_totals_source")
+        or totals_source
+        or ""
+    ).strip()
+    if source in {"canonical_interval_union", "client_live_compat"}:
+        return projected
+    if _presence_status(projected) != "focus" or not projected.get("session_started_at"):
+        return projected
+
+    now = _focus_timestamp(projected.get("_server_timestamp"))
+    if now is None:
+        now = _beijing_now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    live_today = _live_focus_window_seconds(projected, today_start)
+    live_week = _live_focus_window_seconds(projected, week_start)
+    changed = False
+    for key, live in (("today_seconds", live_today), ("week_seconds", live_week)):
+        base = _safe_nonnegative_seconds(projected.get(key))
+        if base is not None:
+            projected[key] = base + live
+            changed = True
+    current_round = _live_session_seconds(projected)
+    base_round = _safe_nonnegative_seconds(projected.get("session_seconds"))
+    if current_round is not None and base_round is not None:
+        projected["session_seconds"] = max(base_round, current_round)
+        changed = True
+    if changed:
+        projected["_focus_totals_source"] = "client_live_compat"
+    return projected
 
 
 _SOCIAL_FONT_CACHE: QFont | None = None
@@ -4918,6 +5027,55 @@ class SocialHubDialog(QDialog):
         if payload.get("data_source") != "local_cache" and not payload.get("is_stale"):
             self._initial_refresh_timer.stop()
         self.data = dict(payload)
+        # Older deployed dashboard functions return the last closed counter
+        # while a peer is still working.  Decorate every visible peer row with
+        # the response timestamp and the backend's source marker so the active
+        # interval is shown immediately without double-counting a canonical
+        # interval-union response.
+        dashboard_timestamp = str(
+            self.data.get("server_timestamp")
+            or self.data.get("_server_timestamp")
+            or ""
+        )
+        dashboard_totals_source = str(
+            self.data.get("focus_totals_source")
+            or self.data.get("_focus_totals_source")
+            or ""
+        )
+        for field in ("buddies", "room_people", "active_visits"):
+            rows = self.data.get(field)
+            if not isinstance(rows, list):
+                continue
+            self.data[field] = [
+                _project_legacy_live_focus_totals(
+                    {
+                        **row,
+                        "_server_timestamp": row.get("_server_timestamp") or dashboard_timestamp,
+                        "_focus_totals_source": row.get("_focus_totals_source") or dashboard_totals_source,
+                    },
+                    server_timestamp=dashboard_timestamp,
+                    totals_source=dashboard_totals_source,
+                )
+                for row in rows
+                if isinstance(row, dict)
+            ]
+        current_room = self.data.get("current_room")
+        if isinstance(current_room, dict) and isinstance(current_room.get("room_people"), list):
+            current_room = dict(current_room)
+            current_room["room_people"] = [
+                _project_legacy_live_focus_totals(
+                    {
+                        **row,
+                        "_server_timestamp": row.get("_server_timestamp") or dashboard_timestamp,
+                        "_focus_totals_source": row.get("_focus_totals_source") or dashboard_totals_source,
+                    },
+                    server_timestamp=dashboard_timestamp,
+                    totals_source=dashboard_totals_source,
+                )
+                for row in current_room["room_people"]
+                if isinstance(row, dict)
+            ]
+            self.data["current_room"] = current_room
         self._refresh_multi_device_focus_hint()
         self._muted_buddy_ids = {
             str(item).strip()
@@ -5159,7 +5317,15 @@ class SocialHubDialog(QDialog):
         room_people = list(room_detail.get("room_people") or self.data.get("room_people") or []) if self.current_room_id else []
         server_timestamp = str(self.data.get("server_timestamp") or self.data.get("_server_timestamp") or "")
         if server_timestamp:
-            room_people = [{**person, "_server_timestamp": server_timestamp} for person in room_people]
+            room_people = [
+                _project_legacy_live_focus_totals(
+                    {**person, "_server_timestamp": server_timestamp},
+                    server_timestamp=server_timestamp,
+                    totals_source=dashboard_totals_source,
+                )
+                for person in room_people
+                if isinstance(person, dict)
+            ]
         # Always render the local member as well.  The old SQL function only
         # returned peers, which made the room look like everybody was resting
         # when the local timer was the only state visible in the UI.

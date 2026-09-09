@@ -1026,6 +1026,11 @@ class PetWindow(QWidget):
 
         self.work_clock_timer = QTimer(self)
         self.work_clock_timer.setInterval(1000)
+        # The label is derived from the monotonic clock, so a delayed callback
+        # must never be treated as one elapsed second. PreciseTimer reduces
+        # normal Windows timer coalescing; the monotonic snapshot still keeps
+        # the accumulated value correct when the GUI thread is busy.
+        self.work_clock_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.work_clock_timer.timeout.connect(self._work_timer_tick)
         self.work_clock_timer.start()
 
@@ -7341,6 +7346,12 @@ class PetWindow(QWidget):
             and focus_segments_payload.get("_upload_ack_ok", not uploaded_segments)
         )
         transaction_ok = bool(merge_ok and upload_ack_ok)
+        # Capture this before the local ACK clears the handoff marker.  Only
+        # an actual sealed-fact handoff needs one follow-up inactive heartbeat;
+        # a normal empty/duplicate delta must not schedule another worker.
+        focus_handoff_pending_before_merge = bool(
+            self.focus_analytics.has_pending_focus_handoff()
+        )
         if isinstance(uploaded_segments, list) and uploaded_segments and transaction_ok:
             try:
                 self.focus_analytics.acknowledge_focus_segments_upload(uploaded_segments)
@@ -7360,7 +7371,7 @@ class PetWindow(QWidget):
                 if merge_ok and not upload_ack_ok
                 else "upload_ack_deferred_merge_failed"
             )
-        if transaction_ok and not self.focus_analytics.has_pending_focus_handoff():
+        if transaction_ok and focus_handoff_pending_before_merge:
             # The heartbeat worker skipped inactive presence while the
             # handoff marker was pending. Send the normal inactive snapshot
             # on the next coalesced tick after the local ACK is durable.

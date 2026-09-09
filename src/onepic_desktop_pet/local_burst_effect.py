@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .state_effects import LocalEffectKind, normalize_effect_kind
@@ -1015,16 +1015,24 @@ class LocalBurstEffectWindow(QWidget):
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
-        painter = QPainter(self)
+        # Render into a fresh premultiplied image first.  On macOS, painting
+        # translucent gradients directly into a top-level widget can preserve
+        # a one-pixel native backing-store contour even after CompositionMode_Clear.
+        # The image gives every frame an unambiguous transparent background;
+        # the native surface is then replaced in one final Source pass.
+        surface_painter = QPainter(self)
+        frame: QImage | None = None
+        painter = QPainter()
         try:
-            # A translucent top-level QWidget can reuse its native backing
-            # store on macOS. WA_NoSystemBackground means Qt will not clear
-            # that store for us, so moving gradients otherwise leave dark
-            # contour trails behind (especially on Retina). Clear the small
-            # local surface explicitly before drawing every frame.
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-            painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            device_ratio = max(1.0, float(self.devicePixelRatioF()))
+            frame = QImage(
+                max(1, round(self.width() * device_ratio)),
+                max(1, round(self.height() * device_ratio)),
+                QImage.Format.Format_ARGB32_Premultiplied,
+            )
+            frame.setDevicePixelRatio(device_ratio)
+            frame.fill(Qt.GlobalColor.transparent)
+            painter.begin(frame)
             if not self._active:
                 return
             now = time.monotonic()
@@ -1165,7 +1173,20 @@ class LocalBurstEffectWindow(QWidget):
             LOGGER.exception("[LocalEffect] paint failed; hiding local effect")
             self.stop()
         finally:
-            painter.end()
+            if painter.isActive():
+                painter.end()
+            # Replace the translucent backing store instead of blending the
+            # new frame over whatever AppKit/Qt retained from the prior frame.
+            surface_painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_Source
+            )
+            surface_painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+            if frame is not None and not frame.isNull():
+                surface_painter.setCompositionMode(
+                    QPainter.CompositionMode.CompositionMode_SourceOver
+                )
+                surface_painter.drawImage(QPointF(0, 0), frame)
+            surface_painter.end()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.stop()
