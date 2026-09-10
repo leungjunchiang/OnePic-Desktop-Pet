@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import random
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -14,15 +16,19 @@ from onepic_desktop_pet.music_control import (
     WindowsSessionSnapshot,
 )
 from onepic_desktop_pet.music_playback import (
+    BasicRandomArtistPlaybackManager,
     AppleMusicWindowsAdapter,
     ExactMusicPlaybackManager,
     KugouMusicAdapter,
     MusicPlaybackError,
+    MusicPlaybackOutcome,
     NeteaseMusicAdapter,
+    ProviderSearchError,
     QQMusicAdapter,
     SongCandidate,
     SpotifyWindowsAdapter,
     build_provider_adapters,
+    UIAutomationUnavailableError,
 )
 
 
@@ -45,6 +51,236 @@ class FakeAdapter:
     def play(self, candidate: SongCandidate) -> bool:
         self.played.append(candidate)
         return self.play_success
+
+
+class UnavailableAdapter(FakeAdapter):
+    def search(self, _title: str, _artist: str):
+        raise UIAutomationUnavailableError("UI tree unavailable")
+
+
+class NativeRandomAdapter(UnavailableAdapter):
+    """模拟 UIA 不可读但 Provider 自有回退可以真实发起播放。"""
+
+    native_calls: list[str]
+
+    def __init__(self, native_success: bool = True) -> None:
+        super().__init__()
+        self.native_success = native_success
+        self.native_calls = []
+
+    def play_random_artist(self, artist: str) -> bool:
+        self.native_calls.append(artist)
+        return self.native_success
+
+
+class NativeRandomSearchFailureAdapter(NeteaseMusicAdapter):
+    """模拟 UIA 搜索异常，但保留网易云本机随机播放回退。"""
+
+    def __init__(self) -> None:
+        super().__init__(PetSettings(), client_finder=lambda _provider, _custom: None)
+        self.native_calls: list[str] = []
+
+    def search(self, _title: str, _artist: str):
+        raise ProviderSearchError("PowerShell UIAutomation request failed")
+
+    def play_random_artist(self, artist: str) -> bool:
+        self.native_calls.append(artist)
+        return True
+
+
+class UIAutomationSearchFailureAdapter(QQMusicAdapter):
+    """模拟 QQ UI 树不可访问且没有 native fallback 的情况。"""
+
+    def __init__(self) -> None:
+        super().__init__(PetSettings(), client_finder=lambda _provider, _custom: None)
+
+    def search(self, _title: str, _artist: str):
+        raise ProviderSearchError("player window not found")
+
+
+class DelayedSearchAdapter(FakeAdapter):
+    def __init__(self) -> None:
+        super().__init__((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+        self.search_calls = 0
+
+    def search(self, _title: str, _artist: str):
+        self.search_calls += 1
+        return () if self.search_calls == 1 else self.candidates
+
+
+class FlakyPlayAdapter(FakeAdapter):
+    def __init__(self) -> None:
+        super().__init__((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+        self.play_calls = 0
+
+    def play(self, candidate: SongCandidate) -> bool:
+        self.play_calls += 1
+        self.played.append(candidate)
+        return self.play_calls >= 2
+
+
+def test_random_artist_distinguishes_ui_automation_unavailable_from_empty_results() -> None:
+    manager = BasicRandomArtistPlaybackManager({"qq": UnavailableAdapter()})
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is False
+    assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
+
+
+def test_random_artist_uses_provider_native_fallback_when_ui_tree_is_unavailable() -> None:
+    adapter = NativeRandomAdapter()
+    manager = BasicRandomArtistPlaybackManager({"qq": adapter})
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert adapter.native_calls == ["陈楚生"]
+
+
+def test_random_artist_uses_native_fallback_for_wrapped_ui_automation_errors() -> None:
+    adapter = NativeRandomSearchFailureAdapter()
+    manager = BasicRandomArtistPlaybackManager({"netease": adapter})
+
+    result = manager.play_random_artist("netease", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert adapter.native_calls == ["陈楚生"]
+
+
+def test_random_artist_reports_ui_automation_unavailable_instead_of_search_failed() -> None:
+    adapter = UIAutomationSearchFailureAdapter()
+    manager = BasicRandomArtistPlaybackManager({"qq": adapter})
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is False
+    assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
+
+
+def test_netease_default_desktop_script_is_dpi_aware_and_defers_verification_to_gsmtc() -> None:
+    script = NeteaseMusicAdapter._netease_default_desktop_script(
+        r"C:\Program Files\NetEase\CloudMusic\cloudmusic.exe",
+        "陈楚生",
+        3,
+    )
+
+    assert 'OpenDesktop("Default"' in script
+    assert "SetThreadDpiAwarenessContext" in script
+    assert 'c.ToString()=="OrpheusBrowserHost"' in script
+    assert "width*0.385" in script
+    assert "double[] songRows" in script
+    assert "width*0.32" in script
+    assert "titleArtistMatch" in script
+    assert 'result="PLAYED|' in script
+    assert "if($result -notlike 'PLAYED|*')" in script
+    assert "previousWindow" in script
+    assert "restoredForeground" in script
+    assert "new IntPtr(-1)" not in script
+    assert "$pick=3" in script
+
+
+def test_random_artist_retries_once_when_search_results_are_still_loading() -> None:
+    adapter = DelayedSearchAdapter()
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        verify_timeout_seconds=0,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert adapter.search_calls == 2
+
+
+def test_random_artist_retries_play_action_once_when_first_click_is_rejected() -> None:
+    adapter = FlakyPlayAdapter()
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        verify_timeout_seconds=0,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.play_attempts == 2
+    assert adapter.play_calls == 2
+
+
+def test_netease_native_random_retries_the_desktop_sequence_once(monkeypatch) -> None:
+    adapter = NeteaseMusicAdapter(
+        PetSettings(),
+        client_finder=lambda _provider, _custom: Path("cloudmusic.exe"),
+        process_launcher=lambda *args, **kwargs: None,
+    )
+    responses = iter(
+        (
+            subprocess.CompletedProcess([], 14, stdout="ERROR|window=0", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="PLAYED|restoredForeground=True", stderr=""),
+        )
+    )
+    monkeypatch.setattr(adapter, "_run_powershell", lambda _script: next(responses))
+
+    assert adapter.play_random_artist("陈楚生") is True
+
+
+def test_random_artist_keeps_playing_when_media_information_is_unavailable() -> None:
+    adapter = FakeAdapter((SongCandidate("qq", "山楂花", "陈楚生"),))
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        lambda _provider: None,
+        verify_timeout_seconds=0,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert adapter.played
+
+
+def test_random_artist_waits_for_gsmtc_playing_before_confirming_start() -> None:
+    adapter = FakeAdapter((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+    snapshots = iter(
+        (
+            TrackInfo("旧队列", "其他歌手", playback_status="paused"),
+            TrackInfo("随机歌曲", "陈楚生", playback_status="playing"),
+        )
+    )
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        lambda _provider: next(snapshots, None),
+        verify_timeout_seconds=1,
+        poll_interval_seconds=0.01,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+    assert result.current_title == "随机歌曲"
+    assert result.current_artist == "陈楚生"
+
+
+def test_random_artist_accepts_playing_session_without_metadata() -> None:
+    adapter = FakeAdapter((SongCandidate("qq", "随机歌曲", "陈楚生"),))
+    manager = BasicRandomArtistPlaybackManager(
+        {"qq": adapter},
+        lambda _provider: TrackInfo("", "", playback_status="playing"),
+        verify_timeout_seconds=1,
+        sleep=lambda _seconds: None,
+    )
+
+    result = manager.play_random_artist("qq", "陈楚生")
+
+    assert result.success is True
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
 
 
 def _manager(adapter: FakeAdapter, tracks, *, random_source=None) -> ExactMusicPlaybackManager:

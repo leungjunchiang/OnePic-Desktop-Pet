@@ -1,86 +1,1204 @@
 """提供不依赖系统托盘的六毛快捷面板、原生音乐控制、工作气泡和尺寸调节器。
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
-播放、暂停、切歌和歌曲状态分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
+播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
+快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
+独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
+工作报告二级按钮使用短暂悬停停留确认，快速扫过工作入口时不会闪出错误的整行按钮。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+import sys
+from collections.abc import Callable
+
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from .work_timer import format_elapsed_clock
+
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 CONTROL_STYLE = """
-QWidget#floatingPanel, QDialog#floatingPanel { background: rgba(238, 244, 247, 218); color: #27313d;
-border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px;
+QWidget#floatingPanel, QDialog#floatingPanel { background: #eef4f7; color: #27313d;
+border: 1px solid #4b6070; border-radius: 15px;
 font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+QWidget#quickActionDock { background: rgba(250, 248, 242, 238); color: #24475b;
+border: 1px solid rgba(75, 96, 112, 72); border-radius: 19px;
+font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+/* On Windows the dock keeps its two-row native geometry even before the
+   secondary action is shown.  The top-level surface stays transparent so
+   the reserved row never becomes a large background card. */
+QWidget#quickActionDock[stableWindowsDock="true"] { background: transparent; border: none; }
+QWidget#quickActionDock QPushButton { background: rgba(239, 246, 247, 150); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
+QWidget#quickActionDock QPushButton:hover { background: rgba(255, 244, 216, 228);
+border: 1px solid rgba(231, 74, 79, 145); }
+QWidget#quickActionDock QPushButton:pressed { background: rgba(217, 238, 241, 235);
+border: 1px solid rgba(40, 125, 158, 135); }
+/* Keep the report action's icon tile identical to the other shortcuts even
+   when a native style does not inherit the dock selector. */
+QPushButton#quickAction_report { background: rgba(239, 246, 247, 150); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 22); border-radius: 12px; padding: 0px; }
+QPushButton#quickAction_report:hover { background: rgba(255, 244, 216, 228);
+border: 1px solid rgba(231, 74, 79, 145); }
+QPushButton#quickAction_report:pressed { background: rgba(217, 238, 241, 235);
+border: 1px solid rgba(40, 125, 158, 135); }
+QLabel#quickActionHint { background: rgba(255, 253, 247, 245); color: #111111;
+border: 1px solid rgba(75, 96, 112, 95); border-radius: 8px;
+padding: 4px 9px; font-size: 11px; }
+QWidget#workControlDock { background: #f8fcfd; color: #24475b;
+border: 1px solid #287d9e; border-radius: 13px;
+font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+QWidget#workControlDock QPushButton { background: rgba(231, 243, 246, 235); color: #24475b;
+border: 1px solid rgba(40, 125, 158, 75); border-radius: 9px; padding: 5px 10px; }
+QWidget#workControlDock QPushButton:hover { background: #fff4d8; border: 2px solid #e74a4f; }
+QWidget#workControlDock QPushButton#finishWorkButton { background: rgba(241, 244, 245, 225); color: #5f6b73;
+border: 1px solid rgba(95, 107, 115, 60); }
+QWidget#workControlDock QPushButton#finishWorkButton:hover { background: #fff0ee; color: #b94b51; border: 1px solid #e7a0a4; }
 QPushButton { background: rgba(74, 126, 151, 225); color: white; border: none; border-radius: 10px;
 padding: 8px 12px; font-weight: 600; }
 QPushButton:hover { background: #376a82; }
 QLabel { border: none; background: transparent; }
+QLabel#workDurationHint { background: transparent; color: #24475b;
+border: none; border-radius: 10px;
+padding: 3px 8px; font-size: 11px; }
+QLabel#workDurationHint[paused="true"] { background: transparent; color: #b94b51;
+border: none; }
+QLabel#visitStatusHint { background: transparent; color: #24475b;
+border: none; border-radius: 10px;
+padding: 3px 8px; font-size: 11px; }
+QLabel#visitStatusHint[taunt="true"] { background: transparent; color: #b94b51;
+border: none; }
 """
 
 
-class WorkControlBubble(QWidget):
-    """显示暂停与结束两个明确操作，避免计时控制藏在菜单。"""
+class RoundedSurfaceLabel(QLabel):
+    """Translucent top-level label with an explicitly painted card surface.
 
+    Qt's stylesheet background painter is unreliable on a frameless,
+    translucent top-level window: on some Windows/macOS styles it paints only
+    the text and leaves the whole card transparent.  Drawing the rounded
+    surface ourselves keeps the outside corners transparent while making the
+    actual card fill and border deterministic on every platform.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        fill: str = "#f6fbfb",
+        border: str = "#287d9e",
+        radius: float = 10.0,
+    ) -> None:
+        super().__init__(parent)
+        self._surface_fill = QColor(fill)
+        self._surface_border = QColor(border)
+        self._surface_radius = float(radius)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        # The stylesheet remains responsible for font, colour and padding;
+        # painting the background here avoids native rectangular backfills.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+    def set_surface_colors(self, fill: str, border: str) -> None:
+        """Change the card colours and repaint immediately."""
+
+        self._surface_fill = QColor(fill)
+        self._surface_border = QColor(border)
+        self.update()
+
+    @property
+    def surface_fill(self) -> QColor:
+        """Return the current fill colour (useful for visual tests)."""
+
+        return QColor(self._surface_fill)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.setBrush(QBrush(self._surface_fill))
+        painter.setPen(QPen(self._surface_border, 1.0))
+        painter.drawRoundedRect(rect, self._surface_radius, self._surface_radius)
+        painter.end()
+        # QLabel draws the text/content only; all stylesheet backgrounds are
+        # transparent, so it cannot introduce a rectangular halo afterwards.
+        super().paintEvent(event)
+
+
+class WorkControlBubble(QWidget):
+    """六毛右键弹出的轻量工作控制条，不属于待办或完整菜单。"""
+
+    start_requested = Signal()
     pause_requested = Signal()
+    resume_requested = Signal()
     finish_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__(None)
-        self.setObjectName("floatingPanel")
-        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setObjectName("workControlDock")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
         self.setStyleSheet(CONTROL_STYLE)
+        # Apply this after the stylesheet: Qt style engines may reset the
+        # property while installing a stylesheet, especially on Windows.
+        self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        pause = QPushButton("暂停工作")
-        finish = QPushButton("结束工作")
-        pause.clicked.connect(self.pause_requested.emit)
-        finish.clicked.connect(self.finish_requested.emit)
-        layout.addWidget(pause); layout.addWidget(finish)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(5)
+        self._duration_visible = True
+        self.duration_label = QLabel("本轮未开始")
+        self.duration_label.setObjectName("workDurationLabel")
+        self.duration_label.setMinimumWidth(110)
+        self.duration_label.setVisible(True)
+        self.pause_button = QPushButton("暂停工作")
+        self.pause_button.setObjectName("pauseWorkButton")
+        self.pause_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.finish_button = QPushButton("结束工作")
+        self.finish_button.setObjectName("finishWorkButton")
+        self.finish_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # A child widget can report itself hidden while its top-level parent
+        # is still hidden.  Set the idle-state visibility explicitly here so
+        # it cannot become visible when the control bubble is shown later.
+        self.finish_button.setVisible(False)
+        self._session_status = "idle"
+        self.pause_button.clicked.connect(self._toggle_session)
+        self.finish_button.clicked.connect(self.finish_requested.emit)
+        layout.addWidget(self.duration_label)
+        layout.addWidget(self.pause_button)
+        layout.addWidget(self.finish_button)
+        self.set_session_status("idle")
+
+    def set_session_status(self, status: str) -> None:
+        """Render only the action(s) valid for IDLE, FOCUSING or PAUSED."""
+
+        normalized = status if status in {"idle", "focus", "rest"} else "idle"
+        label = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}[normalized]
+        changed = normalized != self._session_status
+        self._session_status = normalized
+        if self.pause_button.text() != label:
+            self.pause_button.setText(label)
+            changed = True
+        target_finish_visible = normalized != "idle"
+        if self.finish_button.isVisible() != target_finish_visible:
+            self.finish_button.setVisible(target_finish_visible)
+            changed = True
+        if self.duration_label.isVisible() != self._duration_visible:
+            self.duration_label.setVisible(self._duration_visible)
+            changed = True
+        if normalized == "idle" and self.duration_label.text() != "本轮未开始":
+            self.duration_label.setText("本轮未开始")
+            changed = True
+        if changed:
+            self.adjustSize()
+
+    def set_session_duration(self, text: str) -> None:
+        """Show the live duration so the current work session is never opaque."""
+
+        clean = str(text or "").strip() or "本轮未开始"
+        changed = False
+        if self.duration_label.text() != clean:
+            old_length = len(self.duration_label.text())
+            self.duration_label.setText(clean)
+            changed = old_length != len(clean)
+        if self.duration_label.toolTip() != clean:
+            self.duration_label.setToolTip(clean)
+        if self.duration_label.isVisible() != self._duration_visible:
+            self.duration_label.setVisible(self._duration_visible)
+            changed = True
+        if changed:
+            self.adjustSize()
+
+    def set_duration_visible(self, visible: bool) -> None:
+        """Show or hide the optional live duration without changing timer state."""
+
+        normalized = bool(visible)
+        changed = normalized != self._duration_visible
+        self._duration_visible = normalized
+        if self.duration_label.isVisible() != self._duration_visible:
+            self.duration_label.setVisible(self._duration_visible)
+            changed = True
+        if not self._duration_visible and self.duration_label.toolTip():
+            self.duration_label.setToolTip("")
+        if changed:
+            self.adjustSize()
+
+    def _toggle_session(self) -> None:
+        if self._session_status == "idle":
+            self.start_requested.emit()
+        elif self._session_status == "rest":
+            self.resume_requested.emit()
+        else:
+            self.pause_requested.emit()
 
 
-class QuickControlPanel(QWidget):
-    """双击宠物才出现的常用入口；选择后或闲置八秒会自动收起。"""
+class WorkDurationBubble(RoundedSurfaceLabel):
+    """跟随六毛脚边显示统一的本日工作时长的轻量状态标签。"""
 
-    chat_requested = Signal()
-    work_requested = Signal()
-    music_requested = Signal()
-    music_control_requested = Signal(str)
-    size_requested = Signal()
-    settings_requested = Signal(str)
+    def __init__(self) -> None:
+        super().__init__(
+            None,
+            fill="#f6fbfb",
+            border="#287d9e",
+            radius=10,
+        )
+        self.setObjectName("workDurationHint")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumWidth(100)
+        self.setStyleSheet(CONTROL_STYLE)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setProperty("paused", False)
+        self._last_status = "idle"
+        self._last_text = ""
+        self.hide()
+
+    def visual_pill_rect(self) -> QRectF:
+        """Return only the painted capsule, in this widget's coordinates.
+
+        The top-level label can have native/layout bookkeeping around it, but
+        the visible surface is the rounded shape painted by
+        ``RoundedSurfaceLabel.paintEvent``.  Local effects must use this shape
+        rather than treating the whole widget frame as a rectangular hole.
+        """
+
+        if self.width() <= 0 or self.height() <= 0:
+            return QRectF()
+        return QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+
+    def visual_pill_global_rect(self) -> QRectF:
+        """Return the visible capsule in global logical coordinates."""
+
+        local = self.visual_pill_rect()
+        if local.isEmpty():
+            return QRectF()
+        top_left = self.mapToGlobal(local.topLeft().toPoint())
+        return QRectF(top_left.x(), top_left.y(), local.width(), local.height())
+
+    def visual_pill_radius(self) -> float:
+        """Return the radius used by the painted capsule."""
+
+        return min(self._surface_radius, self.height() / 2.0)
+
+    def set_session(self, status: str, seconds: int, visible: bool) -> bool:
+        """Project the shared calendar-day snapshot; never owns a timer."""
+
+        normalized = status if status in {"focus", "rest"} else "idle"
+        active = bool(visible) and normalized in {"focus", "rest"}
+        old_visible = self.isVisible()
+        old_text = self._last_text
+        geometry_changed = False
+        if active:
+            paused = normalized == "rest"
+            if self._last_status != normalized:
+                self.setProperty("paused", paused)
+                self.set_surface_colors(
+                    "#fff0ee" if paused else "#f6fbfb",
+                    "#e74a4f" if paused else "#287d9e",
+                )
+            text = f"今日已工作 {format_elapsed_clock(seconds)}"
+            if paused:
+                text += " · 已暂停"
+            if self._last_text != text:
+                self.setText(text)
+                self._last_text = text
+            tooltip = "当前工作计时" + ("已暂停" if paused else "正在计时")
+            if self.toolTip() != tooltip:
+                self.setToolTip(tooltip)
+            # The live value changes every second, but its rendered width is
+            # stable until the clock changes from mm:ss to h:mm:ss. Avoid an
+            # adjustSize/style polish/layout cascade on every tick.
+            geometry_changed = (
+                not old_visible
+                or len(old_text) != len(text)
+                or self._last_status != normalized
+            )
+            self._last_status = normalized
+        else:
+            if self._last_text:
+                self.setText("")
+                self._last_text = ""
+            if self.toolTip():
+                self.setToolTip("")
+            self._last_status = "idle"
+        if old_visible != active:
+            self.setVisible(active)
+        if active and geometry_changed:
+            self.adjustSize()
+            self.style().unpolish(self)
+            self.style().polish(self)
+        return geometry_changed
+
+
+class VisitStatusBubble(RoundedSurfaceLabel):
+    """跟随六毛左下角显示轻量串门状态，不创建大窗口。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            None,
+            fill="#f6fbfb",
+            border="#287d9e",
+            radius=10,
+        )
+        self.setObjectName("visitStatusHint")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setWordWrap(False)
+        self.setMaximumWidth(640)
+        self.setStyleSheet(CONTROL_STYLE)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.hide()
+
+    def _set_content(self, text: str, *, allow_wrap: bool = False) -> None:
+        """Render a status line without wrapping ordinary single-sender text.
+
+        A single taunter/encourager should stay on one compact line beside the
+        pet.  Long multi-sender labels may wrap so the bubble remains usable on
+        narrow screens.
+        """
+
+        self.setWordWrap(bool(allow_wrap))
+        self.setMaximumWidth(320 if allow_wrap else 640)
+        self.setMinimumWidth(0)
+        self.setText(text)
+        self.adjustSize()
+        self.show()
+
+    def _set_taunt_style(self, active: bool) -> None:
+        self.setProperty("taunt", bool(active))
+        self.set_surface_colors(
+            "#fff0ee" if active else "#f6fbfb",
+            "#e74a4f" if active else "#287d9e",
+        )
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def set_visitor(self, nickname: str | None) -> None:
+        """Show or hide the current visitor label."""
+
+        self._set_taunt_style(False)
+        name = str(nickname or "搭子").strip()[:40]
+        if not name:
+            self.hide()
+            self.setText("")
+            return
+        self._set_content(f"{name}正在串门")
+
+    def set_taunter(
+        self,
+        nickname: str | None,
+        support_count: int = 1,
+        remaining_seconds: int | None = None,
+    ) -> None:
+        """Show the server-authoritative punishment state beside the pet."""
+
+        self._set_taunt_style(True)
+        name = str(nickname or "搭子").strip()[:180]
+        if not name:
+            self.hide()
+            self.setText("")
+            return
+        count = max(1, int(support_count or 1))
+        count_suffix = (
+            f"等{count}位搭子"
+            if count > 1 and "和" not in name and "、" not in name
+            else ""
+        )
+        display = f"{name}{count_suffix}正在嘲讽你"
+        # _format_taunt_senders uses 和/、 only when there are multiple
+        # distinct names; preserve one-line rendering for the common case.
+        if remaining_seconds is not None:
+            try:
+                seconds = max(0, int(remaining_seconds))
+            except (TypeError, ValueError):
+                seconds = 0
+            minutes, remainder = divmod(seconds, 60)
+            display += f" · 还剩 {minutes}:{remainder:02d}"
+        self._set_content(display, allow_wrap=("和" in name or "、" in name))
+
+    def set_encourager(self, nickname: str | None) -> None:
+        """Show the persistent one-hour working encouragement beside the pet."""
+
+        self._set_taunt_style(False)
+        name = str(nickname or "搭子").strip()[:40]
+        if not name:
+            self.hide()
+            self.setText("")
+            return
+        self._set_content(f"{name}送来鼓励")
+
+
+class CoffeeScenePrompt(QWidget):
+    """Non-modal coffee timeout prompt that never decides work for the user."""
+
+    continue_requested = Signal()
+    finish_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__(None)
-        self.setObjectName("floatingPanel")
-        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setObjectName("workControlDock")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        self.setStyleSheet(CONTROL_STYLE)
+        self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        self.message = QLabel("咖啡喝完啦，半小时到了。")
+        self.message.setWordWrap(True)
+        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message.setStyleSheet("QLabel { color: #24475b; padding: 2px 4px; }")
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        continue_button = QPushButton("继续工作")
+        finish_button = QPushButton("结束工作")
+        continue_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        finish_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        finish_button.setObjectName("finishWorkButton")
+        continue_button.clicked.connect(self.continue_requested.emit)
+        finish_button.clicked.connect(self.finish_requested.emit)
+        buttons.addWidget(continue_button)
+        buttons.addWidget(finish_button)
+        layout.addWidget(self.message)
+        layout.addLayout(buttons)
+        self.hide()
+
+    def set_message(self, text: str) -> None:
+        self.message.setText(str(text or "咖啡喝完啦，半小时到了。"))
+        self.adjustSize()
+
+
+def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
+    """Draw a small DPI-independent red/yellow/blue shortcut icon."""
+
+    pixmap = QPixmap(72, 72)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    blue = QColor("#287d9e")
+    red = QColor("#e74a4f")
+    yellow = QColor("#f2c84b")
+    ink = QColor("#24475b")
+    painter.setPen(QPen(blue, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+    if kind == "chat":
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(10, 13, 48, 36, 13, 13)
+        painter.drawPolygon([QPoint(20, 47), QPoint(18, 61), QPoint(34, 49)])
+    elif kind == "work":
+        painter.drawEllipse(10, 10, 52, 52)
+        painter.setPen(QPen(red, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(36, 36, 36, 20 if active else 24)
+        painter.drawLine(36, 36, 49, 44)
+        painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(30, 30, 12, 12)
+    elif kind == "social":
+        painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(8, 13, 25, 25); painter.drawEllipse(39, 13, 25, 25)
+        painter.setBrush(QBrush(blue)); painter.drawRoundedRect(7, 39, 28, 20, 9, 9); painter.drawRoundedRect(37, 39, 28, 20, 9, 9)
+    elif kind == "music":
+        # A bold pair of connected eighth notes reads clearly even when the
+        # 72px source is rendered as a 22px shortcut icon.
+        painter.setPen(QPen(blue, 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawLine(30, 18, 30, 50)
+        painter.drawLine(30, 18, 57, 12)
+        painter.drawLine(57, 12, 57, 43)
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(10, 45, 25, 16)
+        painter.drawEllipse(37, 38, 25, 16)
+        painter.setPen(QPen(red, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(8, 8, 17, 17, 35 * 16, 105 * 16)
+        painter.setPen(QPen(yellow, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(48, 49, 16, 12, 205 * 16, 120 * 16)
+    elif kind == "todo":
+        painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawRoundedRect(12, 9, 48, 55, 10, 10)
+        painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(21, 19, 10, 10, 3, 3)
+        painter.drawRoundedRect(21, 35, 10, 10, 3, 3)
+        painter.setPen(QPen(red, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawLine(38, 24, 54, 24)
+        painter.drawLine(38, 40, 54, 40)
+        painter.drawLine(22, 53, 28, 59)
+        painter.drawLine(28, 59, 39, 48)
+    elif kind == "food":
+        # Make the action unmistakably food: a steaming bowl framed by a
+        # fork and spoon, rather than a tiny cup that looked decorative.
+        painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QBrush(QColor("#d9eef1")))
+        painter.drawRoundedRect(17, 35, 39, 24, 10, 10)
+        painter.drawArc(17, 42, 39, 22, 0, -180 * 16)
+        painter.setPen(QPen(yellow, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(24, 12, 11, 20, 35 * 16, 125 * 16)
+        painter.drawArc(39, 8, 11, 24, 35 * 16, 125 * 16)
+        painter.setPen(QPen(blue, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(8, 12, 8, 48)
+        painter.drawLine(4, 12, 4, 25)
+        painter.drawLine(8, 12, 8, 25)
+        painter.drawLine(12, 12, 12, 25)
+        painter.drawLine(62, 12, 62, 55)
+        painter.drawEllipse(55, 9, 14, 16)
+    elif kind == "report":
+        painter.setPen(QPen(blue, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QBrush(QColor("#eaf5f3")))
+        painter.drawRoundedRect(11, 10, 50, 53, 9, 9)
+        painter.setPen(QPen(red, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(21, 49, 21, 39)
+        painter.drawLine(35, 49, 35, 29)
+        painter.drawLine(49, 49, 49, 20)
+        painter.setPen(QPen(yellow, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(20, 22, 30, 22)
+    else:  # settings compatibility icon
+        painter.setPen(QPen(blue, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for angle in range(0, 360, 45):
+            painter.save(); painter.translate(36, 36); painter.rotate(angle); painter.drawLine(0, -23, 0, -30); painter.restore()
+        painter.setBrush(QBrush(blue)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(15, 15, 42, 42)
+        painter.setBrush(QBrush(yellow)); painter.drawEllipse(27, 27, 18, 18)
+        painter.setBrush(QBrush(red)); painter.drawEllipse(52, 7, 12, 12)
+    painter.setPen(QPen(ink, 1)); painter.end()
+    return QIcon(pixmap)
+
+
+class QuickControlPanel(QWidget):
+    """跟随六毛移动的图标快捷坞；选择后或闲置八秒会自动收起。"""
+
+    SECONDARY_NONE = "none"
+    SECONDARY_WORK_REPORT = "work_report"
+
+    chat_requested = Signal()
+    work_requested = Signal()
+    work_report_requested = Signal()
+    todo_requested = Signal()
+    social_requested = Signal()
+    music_requested = Signal()
+    music_playlist_requested = Signal()
+    chen_artist_requested = Signal()
+    artist_music_service_requested = Signal(str)
+    music_control_requested = Signal(str)
+    food_requested = Signal(str)
+    supply_requested = Signal()
+    settings_requested = Signal()
+    size_requested = Signal()
+    rename_requested = Signal()
+    content_update_requested = Signal()
+    program_update_requested = Signal()
+    layout_changed = Signal()
+
+    def __init__(self, pet_name: str = "六毛") -> None:
+        super().__init__(None)
+        pet_name = pet_name.strip() or "六毛"
+        self.setObjectName("quickActionDock")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(CONTROL_STYLE)
+        self.hover_hint = QLabel(None)
+        self.hover_hint.setObjectName("quickActionHint")
+        self.hover_hint.setWindowFlags(
+            Qt.WindowType.ToolTip
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hover_hint.setStyleSheet(CONTROL_STYLE)
+        self.hover_hint.hide()
+        self._hint_button: QPushButton | None = None
+        self._window_behavior_callback: Callable[..., object] | None = None
+        self._artist_music_service = "auto"
+        self._work_action_label = "开始工作"
+        self._secondary_mode = self.SECONDARY_NONE
+        # Windows paints a frameless translucent top-level window between a
+        # child visibility change and its later resize/move.  With a vertical
+        # secondary row this exposed either the old primary-row geometry or
+        # the new secondary-row geometry for one frame, making the two rows
+        # look as if they briefly swapped.  Keep the native window at its
+        # maximum two-row size on Windows and only change the secondary tile's
+        # visibility.  The fixed area is transparent, so the reserved row
+        # does not become an empty card in the normal state.
+        self._stable_windows_dock = sys.platform.startswith("win")
+        self.setProperty("stableWindowsDock", self._stable_windows_dock)
+        # Native macOS Qt windows can omit Enter/Leave delivery until the
+        # first click when the panel is a non-activating Tool window. Polling
+        # the pointer over our shortcuts keeps the label a true hover
+        # affordance on both macOS and Windows, without relying on clicks.
+        self._hover_poll_timer = QTimer(self)
+        self._hover_poll_timer.setInterval(60)
+        self._hover_poll_timer.timeout.connect(self._poll_hover_button)
+        # Do not materialize the secondary report tile for a pointer that is
+        # merely sweeping across the work shortcut.  A short dwell debounce
+        # prevents the dock from growing/repositioning several times in one
+        # mouse pass, which otherwise leaves a transient row ghost on the
+        # Windows layered window while the pointer is already elsewhere.
+        self._report_show_timer = QTimer(self)
+        self._report_show_timer.setSingleShot(True)
+        self._report_show_timer.setInterval(120)
+        self._report_show_timer.timeout.connect(self._show_report_if_pointer_still_on_work)
+        self._report_hide_timer = QTimer(self)
+        self._report_hide_timer.setSingleShot(True)
+        self._report_hide_timer.setInterval(160)
+        self._report_hide_timer.timeout.connect(self._hide_report_if_pointer_outside)
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
-        layout = QVBoxLayout(self); layout.setContentsMargins(10, 9, 10, 9)
-        title = QLabel("六毛快捷口袋"); title.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(title)
-        for label, signal, source in (
-            ("聊聊", self.chat_requested, None),
-            ("工作计时", self.work_requested, None),
-            ("播放 / 暂停", self.music_control_requested, "toggle"),
-            ("上一首", self.music_control_requested, "previous"),
-            ("下一首", self.music_control_requested, "next"),
-            ("正在播放", self.music_control_requested, "status"),
-            ("随机听陈楚生", self.music_requested, None),
-            ("连续调节大小", self.size_requested, None),
-            ("设置", self.settings_requested, "user_action"),
+        self.hide_timer.timeout.connect(self._hide_hint)
+        self._ignore_initial_enter = False
+        # Primary and secondary controls deliberately have separate containers.
+        # The primary buttons never enter/leave a layout during hover; only the
+        # secondary container changes visibility.  This prevents Qt from
+        # painting a transient frame in which the primary row occupies the
+        # secondary row's geometry.  Only the individual shortcut tiles paint
+        # visible backgrounds; the parent surface stays transparent.
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 9, 10, 9)
+        shortcut_gap = 6
+        layout.setSpacing(shortcut_gap)
+        self._primary_container = QWidget(self)
+        self._primary_container.setObjectName("quickPrimaryContainer")
+        primary_layout = QHBoxLayout(self._primary_container)
+        primary_layout.setContentsMargins(0, 0, 0, 0)
+        primary_layout.setSpacing(shortcut_gap)
+        self._secondary_container = QWidget(self)
+        self._secondary_container.setObjectName("quickSecondaryContainer")
+        secondary_layout = QHBoxLayout(self._secondary_container)
+        secondary_layout.setContentsMargins(0, 0, 0, 0)
+        secondary_layout.setSpacing(shortcut_gap)
+        self.title = QLabel(f"{pet_name}快捷口袋")
+        self.title.setVisible(False)
+        self.chat_button = self._button("chat", "聊聊", self.chat_requested)
+        self.work_button = self._button("work", "开始工作", self.work_requested)
+        # Keep the report action inside the same dock as the work action. A
+        # separate top-level window could survive the dock's hide event on
+        # macOS and drift away from the work shortcut after a move.
+        self.report_button = self._button("report", "工作报告", None)
+        self.report_button.clicked.connect(self._open_report_from_button)
+        # Leave one primary-column offset before the report tile so its center
+        # is aligned with the work button without ever sharing its layout.
+        secondary_layout.addSpacing(self.work_button_width_offset())
+        secondary_layout.addWidget(self.report_button)
+        secondary_layout.addStretch(1)
+        # A visible parent would otherwise make QPushButton's default-visible
+        # state leak the report tile into the initial Windows dock.
+        self.report_button.hide()
+        if self._stable_windows_dock:
+            # Reserve the exact button-row height from construction onward.
+            # The button is still hidden until the work shortcut is hovered.
+            self._secondary_container.setFixedHeight(self.report_button.height())
+        else:
+            self._secondary_container.hide()
+        self.todo_button = self._button("todo", "待办", self.todo_requested)
+        self.social_button = self._button("social", "搭子自习室", self.social_requested)
+        self.music_button = self._button("music", "音乐", None)
+        self.food_button = self._button("food", "喂食", None)
+        self.music_button.clicked.connect(self._show_music_menu)
+        self.food_button.clicked.connect(self._show_food_menu)
+        self._quick_buttons = (
+            self.chat_button,
+            self.todo_button,
+            self.social_button,
+            self.music_button,
+            self.food_button,
+        )
+        self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button)
+        primary_buttons = (
+            self.chat_button,
+            self.work_button,
+            self.todo_button,
+            self.social_button,
+            self.music_button,
+            self.food_button,
+        )
+        for button in primary_buttons:
+            primary_layout.addWidget(button)
+            button.setMouseTracking(True)
+            button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+            button.installEventFilter(self)
+        layout.addWidget(self._secondary_container)
+        layout.addWidget(self._primary_container)
+        for button in (self.work_button, self.report_button):
+            button.setMouseTracking(True)
+            button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+            button.installEventFilter(self)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        # A non-activating macOS Tool window may not deliver child Enter/Leave
+        # events until it has been clicked.  Observe application mouse moves
+        # as well so merely passing over a button is enough to update the
+        # label; the timer below remains a fallback for native event gaps.
+        application = QApplication.instance()
+        if application is not None:
+            application.installEventFilter(self)
+
+
+    @staticmethod
+    def _button(kind: str, tooltip: str, signal: object | None) -> QPushButton:
+        button = QPushButton()
+        button.setObjectName(f"quickAction_{kind}")
+        button.setIcon(_quick_icon(kind))
+        button.setIconSize(QSize(22, 22))
+        button.setFixedSize(42, 42)
+        button.setFlat(True)
+        button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        button.setAutoDefault(False)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        if signal is not None:
+            button.clicked.connect(lambda: signal.emit())
+        return button
+
+    @staticmethod
+    def work_button_width_offset() -> int:
+        """Return the fixed secondary offset before the work-column tile."""
+
+        return 42 + 6
+
+    def set_window_behavior_callback(self, callback: Callable[..., object] | None) -> None:
+        """Let the owning window apply the same non-activating native panel rules."""
+
+        self._window_behavior_callback = callback
+
+    def set_artist_music_service(self, service: str) -> None:
+        """Refresh the check mark used by the quick music submenu."""
+
+        value = str(service or "auto").strip().casefold()
+        self._artist_music_service = value if value in {
+            "auto", "netease", "qq", "apple", "kugou", "qishui"
+        } else "auto"
+
+    def set_work_action_label(self, label: str) -> None:
+        """Refresh the dynamic work action shown in the shortcut panel."""
+
+        label = label.strip() or "开始工作"
+        if label == self._work_action_label:
+            return
+        self._work_action_label = label
+        self.work_button.setToolTip(label)
+        self.work_button.setAccessibleName(label)
+        self.work_button.setIcon(_quick_icon("work", active=label == "暂停工作"))
+        if self._hint_button is self.work_button:
+            self._show_hint(self.work_button)
+
+    def _open_report_from_button(self) -> None:
+        """Close the shortcut dock, then open the report on the next Qt turn."""
+
+        self._report_hide_timer.stop()
+        self.hide()
+        QTimer.singleShot(0, self.work_report_requested.emit)
+
+    def _collapse_report_surface(self) -> None:
+        """Hide the report action together with its parent shortcut dock."""
+
+        self._hover_poll_timer.stop()
+        self._report_show_timer.stop()
+        self._report_hide_timer.stop()
+        self._hide_hint()
+        self._set_secondary_mode(self.SECONDARY_NONE, notify_layout=False)
+
+    def hide(self) -> None:
+        """Hide the shortcut dock and its report action together."""
+
+        self._collapse_report_surface()
+        super().hide()
+
+    def _set_secondary_mode(self, mode: str, *, notify_layout: bool = True) -> None:
+        """Commit one complete secondary state without exposing a layout frame."""
+
+        normalized = (
+            self.SECONDARY_WORK_REPORT
+            if mode == self.SECONDARY_WORK_REPORT
+            else self.SECONDARY_NONE
+        )
+        target_visible = normalized == self.SECONDARY_WORK_REPORT
+        current_visible = (
+            bool(self.report_button.isVisible())
+            if self._stable_windows_dock
+            else bool(self._secondary_container.isVisible())
+        )
+        already_visible = self._secondary_mode == normalized and current_visible == target_visible
+        self._secondary_mode = normalized
+        if already_visible:
+            return
+        if not target_visible:
+            self._report_show_timer.stop()
+            if self._hint_button is self.report_button:
+                self._hide_hint()
+        else:
+            self._report_hide_timer.stop()
+
+        if self._stable_windows_dock:
+            # Do not invalidate, resize or re-anchor the native Tool window
+            # here.  Those are the three separate Windows compositor commits
+            # that caused the primary/secondary rows to flash in the wrong
+            # order during a fast pointer sweep.
+            self.setUpdatesEnabled(False)
+            try:
+                self.report_button.setVisible(target_visible)
+            finally:
+                self.setUpdatesEnabled(True)
+            self.update()
+            if target_visible:
+                self._hover_poll_timer.start()
+            return
+
+        # A top-level QWidget may repaint after each child visibility change.
+        # Freeze only this small panel while the final layout and its anchored
+        # position are committed; the GUI event loop itself remains running.
+        self.setUpdatesEnabled(False)
+        try:
+            self.report_button.setVisible(target_visible)
+            self._secondary_container.setVisible(target_visible)
+            self.layout().invalidate()
+            self.layout().activate()
+            self.adjustSize()
+            if self.isVisible() and notify_layout:
+                # The owner re-anchors the complete panel synchronously before
+                # painting resumes, so the primary row never flashes at the
+                # secondary row's temporary position.
+                self.layout_changed.emit()
+        finally:
+            self.setUpdatesEnabled(True)
+        self.update()
+        if target_visible:
+            self._hover_poll_timer.start()
+
+    def prepare_for_show(self) -> None:
+        """Materialize the final Windows dock geometry before it is shown."""
+
+        if not self._stable_windows_dock:
+            return
+        self.layout().activate()
+        self.adjustSize()
+
+    def paintEvent(self, event) -> None:
+        """Keep the fixed Windows dock's top-level surface transparent.
+
+        The native window must retain two-row geometry to prevent the old
+        hover jump, but that geometry is intentionally not visible.  Skip
+        parent painting entirely; child buttons paint their own tiles and
+        the transparent top-level window contributes no background frame.
+        """
+
+        if not self._stable_windows_dock or not hasattr(self, "_primary_container"):
+            return super().paintEvent(event)
+        event.accept()
+
+    def _set_report_button_visible(self, visible: bool) -> None:
+        """Compatibility wrapper for the work-report-only secondary mode."""
+
+        self._set_secondary_mode(
+            self.SECONDARY_WORK_REPORT if visible else self.SECONDARY_NONE
+        )
+
+    def _schedule_report_hide(self) -> None:
+        """Give the pointer a short bridge from the main button to the report."""
+
+        if self.report_button.isVisible():
+            self._report_hide_timer.start()
+
+    def _hide_report_if_pointer_outside(self) -> None:
+        """Hide the floating report button only after leaving both hover targets."""
+
+        button = self._button_at_global_pos(QCursor.pos())
+        if button in (self.work_button, self.report_button):
+            return
+        self._set_report_button_visible(False)
+
+    def _show_report_if_pointer_still_on_work(self) -> None:
+        """Materialize the report tile only after a stable work-button hover."""
+
+        if self._button_at_global_pos(QCursor.pos()) is self.work_button:
+            self._set_report_button_visible(True)
+
+    def _position_report_button(self) -> None:
+        """Keep the legacy positioning hook harmless after container split."""
+
+        # The secondary tile is owned by ``_secondary_container`` and follows
+        # the normal layout. The owning window positions the whole dock.
+        return
+
+    def position_report_button(self) -> None:
+        """Compatibility hook for callers that reposition the shortcut dock."""
+
+        if self.report_button.isVisible():
+            self._position_report_button()
+
+
+    def _show_hint(self, button: QPushButton) -> None:
+        """Show a small six-mao label without changing the dock layout."""
+
+        text = button.toolTip().strip()
+        if not text:
+            return
+        self._hint_button = button
+        self.hover_hint.setText(text)
+        self.hover_hint.adjustSize()
+        # Keep the report label above its tile so it does not add another
+        # visual row below the shortcut dock near the bottom edge of a screen.
+        is_secondary = button is self.report_button
+        above = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7))
+        below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
+        preferred = above if is_secondary else below
+        fallback = below if is_secondary else above
+        x = preferred.x() - self.hover_hint.width() // 2
+        y = preferred.y()
+        app = QGuiApplication.instance()
+        screen = app.screenAt(preferred) if app is not None else None
+        if screen is not None:
+            area = screen.availableGeometry()
+            x = min(max(x, area.left() + 4), area.right() - self.hover_hint.width() - 4)
+            if is_secondary and y < area.top() + 4:
+                y = fallback.y()
+            elif not is_secondary and y + self.hover_hint.height() > area.bottom() - 4:
+                y = fallback.y()
+            y = min(max(y, area.top() + 4), area.bottom() - self.hover_hint.height() - 4)
+        self.hover_hint.move(x, y)
+        # Configure the native window before showing it.  Reconfiguring a
+        # visible macOS Tool/ToolTip window can make AppKit hide the first
+        # hover hint, which made the label appear only after a click.
+        if sys.platform == "darwin" and self._window_behavior_callback is not None:
+            self._window_behavior_callback(self.hover_hint, always_on_top=True)
+        self.hover_hint.show()
+        # The hint is a separate top-level window. Raise it after applying
+        # the native non-activating style so it stays above the shortcut dock
+        # on macOS as well as Windows without taking keyboard focus.
+        # ``ToolTip`` windows are ordered by AppKit/Windows themselves.  A
+        # manual raise on macOS can make the desktop pet briefly become the
+        # active application, which is exactly when the hint disappears.
+        if sys.platform != "darwin":
+            self.hover_hint.raise_()
+
+    def _hide_hint(self) -> None:
+        """Hide the hover label when the pointer leaves a shortcut."""
+
+        self._hint_button = None
+        self.hover_hint.hide()
+
+    def _button_at_global_pos(self, position: QPoint) -> QPushButton | None:
+        """Return the shortcut currently under the native pointer."""
+
+        for button in self._hover_buttons:
+            if not button.isVisible():
+                continue
+            if button.rect().contains(button.mapFromGlobal(position)):
+                return button
+        return None
+
+    @staticmethod
+    def _event_global_position(event) -> QPoint:
+        """Read a mouse event's global position across Qt 5/6 event APIs."""
+
+        global_position = getattr(event, "globalPosition", None)
+        if callable(global_position):
+            return global_position().toPoint()
+        global_pos = getattr(event, "globalPos", None)
+        if callable(global_pos):
+            return global_pos()
+        return QCursor.pos()
+
+    def _set_hover_button(
+        self,
+        button: QPushButton | None,
+        *,
+        immediate: bool = True,
+    ) -> None:
+        """Keep exactly one hover label in sync with the pointer."""
+
+        if button is None:
+            self._report_show_timer.stop()
+            if self._hint_button is not None:
+                self._hide_hint()
+            self._schedule_report_hide()
+            return
+        if button in (self.work_button, self.report_button):
+            self._report_hide_timer.stop()
+            if immediate or button is self.report_button:
+                self._set_secondary_mode(self.SECONDARY_WORK_REPORT)
+            elif not self.report_button.isVisible() and not self._report_show_timer.isActive():
+                self._report_show_timer.start()
+        else:
+            # Work report is the only secondary mode. Moving to another primary
+            # shortcut cancels it immediately; the short timer is reserved for
+            # the tiny pointer bridge between work and report themselves.
+            self._report_show_timer.stop()
+            self._set_secondary_mode(self.SECONDARY_NONE)
+        if self._hint_button is not button or not self.hover_hint.isVisible():
+            self._show_hint(button)
+
+    def _poll_hover_button(self) -> None:
+        """Repair missing native hover events without changing focus."""
+
+        self._set_hover_button(
+            self._button_at_global_pos(QCursor.pos()),
+            immediate=False,
+        )
+
+    def eventFilter(self, watched, event) -> bool:
+        if self.isVisible() and event.type() in {
+            QEvent.Type.MouseMove,
+            QEvent.Type.HoverMove,
+        }:
+            # This branch also handles events delivered to the application
+            # filter, where watched is not one of our six buttons.
+            self._set_hover_button(
+                self._button_at_global_pos(self._event_global_position(event)),
+                immediate=False,
+            )
+        if watched in getattr(self, "_hover_buttons", ()):
+            if event.type() in {
+                QEvent.Type.Enter,
+                QEvent.Type.HoverEnter,
+                QEvent.Type.MouseMove,
+            }:
+                self._set_hover_button(watched, immediate=False)
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
+                QTimer.singleShot(0, self._poll_hover_button)
+        return super().eventFilter(watched, event)
+
+    def _show_music_menu(self) -> None:
+        """Open only actionable music controls; no Now Playing panel."""
+
+        menu = QMenu(self)
+        for label, command in (
+            ("播放 / 暂停", "toggle"),
+            ("上一首", "previous"),
+            ("下一首", "next"),
         ):
-            button = QPushButton(label)
-            button.clicked.connect(
-                lambda _checked=False, value=signal, value_source=source: self._choose(
-                    value, value_source
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, value=command: self._choose(
+                    self.music_control_requested, value
                 )
             )
-            layout.addWidget(button)
+        menu.addSeparator()
+        artist = menu.addAction("听陈楚生…")
+        artist.triggered.connect(lambda _checked=False: self._choose(self.chen_artist_requested))
+        platform_menu = menu.addMenu("音乐平台")
+        platform_group = QActionGroup(platform_menu)
+        platform_group.setExclusive(True)
+        for key, label in (
+            ("auto", "跟随系统默认"),
+            ("netease", "网易云音乐"),
+            ("qq", "QQ 音乐"),
+            ("apple", "Apple Music"),
+            ("kugou", "酷狗音乐"),
+            ("qishui", "汽水音乐"),
+        ):
+            action = platform_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._artist_music_service == key)
+            platform_group.addAction(action)
+            action.triggered.connect(
+                lambda _checked=False, value=key: self._choose(
+                    self.artist_music_service_requested, value
+                )
+            )
+        menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))
+
+    def _show_settings_menu(self) -> None:
+        """Keep low-frequency settings behind the single gear entry."""
+
+        menu = QMenu(self)
+        for label, signal in (
+            ("调整大小", self.size_requested),
+            ("主人称呼", self.rename_requested),
+        ):
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, chosen=signal: self._choose(chosen))
+
+        updates = menu.addMenu("更新与关于")
+        content = updates.addAction("检查补充内容更新")
+        content.triggered.connect(lambda _checked=False: self._choose(self.content_update_requested))
+        program = updates.addAction("更新到最新版本…")
+        program.triggered.connect(lambda _checked=False: self._choose(self.program_update_requested))
+        version = updates.addAction("当前版本信息")
+        version.setEnabled(False)
+
+        settings = menu.addAction("设置中心…")
+        settings.triggered.connect(lambda _checked=False: self._choose(self.settings_requested))
+        menu.exec(self.food_button.mapToGlobal(self.food_button.rect().bottomLeft()))
+
+    def set_food_inventory(self, inventory: dict[str, int]) -> None:
+        """Refresh the food pocket snapshot used by the next quick click."""
+
+        self._food_inventory = {str(key): max(0, int(value or 0)) for key, value in (inventory or {}).items()}
+
+    def _show_food_menu(self) -> None:
+        """Show a lightweight food pocket; full supply management stays elsewhere."""
+
+        menu = QMenu(self)
+        labels = (
+            ("coffee", "☕ 普通咖啡", "喝了继续干 30 分钟"),
+            ("expensive_coffee", "☕ 昂贵咖啡", "喝了认真干，满2小时再得普通咖啡"),
+            ("milk_tea", "🧋 奶茶", "想歇会儿就喝"),
+            ("cake", "🍰 小蛋糕", "想庆祝就吃"),
+            ("tea", "🍵 茶", "坐下来待一会儿"),
+        )
+        for key, label, tip in labels:
+            count = int(getattr(self, "_food_inventory", {}).get(key, 0))
+            action = menu.addAction(f"{label} × {count}")
+            action.setToolTip(tip)
+            action.setEnabled(count > 0)
+            action.triggered.connect(lambda _checked=False, item_key=key: self._choose(self.food_requested, item_key))
+        menu.addSeparator()
+        supply = menu.addAction("去六毛补给站…")
+        supply.triggered.connect(lambda _checked=False: self._choose(self.supply_requested))
+        menu.exec(self.food_button.mapToGlobal(self.food_button.rect().bottomLeft()))
+
+    def set_pet_name(self, pet_name: str) -> None:
+        """昵称保存后同步快捷口袋标题。"""
+
+        self.title.setText(f"{pet_name.strip() or '六毛'}快捷口袋")
 
     def _choose(self, signal: object, source: str | None = None) -> None:
         """先收起口袋再发出操作信号，避免新窗口被它遮挡。"""
@@ -95,19 +1213,47 @@ class QuickControlPanel(QWidget):
         """每次显示重新开始八秒自动收起计时。"""
 
         super().showEvent(event)
+        self._hover_poll_timer.start()
+        QTimer.singleShot(0, self._poll_hover_button)
+        # Native/offscreen Qt may synthesize an enterEvent while a newly
+        # positioned top-level panel is being shown. Do not interpret that
+        # synthetic event as active mouse use; real pointer entry after the
+        # first event-loop turn still pauses the timer as before.
+        self._ignore_initial_enter = True
         self.hide_timer.start(8000)
+        # Keep the guard through the first short event-loop burst. Some
+        # platform plugins deliver the synthetic enterEvent after queued
+        # zero-delay callbacks, which would otherwise stop the timer again.
+        QTimer.singleShot(500, self._clear_initial_enter_guard)
+
+    def _clear_initial_enter_guard(self) -> None:
+        self._ignore_initial_enter = False
+
+    def hideEvent(self, event) -> None:
+        # Collapse the child report action and hover surfaces along with the
+        # dock. This is intentionally done on the parent hide event as well as
+        # in ``hide()`` so every auto-hide path has the same result.
+        self._collapse_report_surface()
+        super().hideEvent(event)
 
     def enterEvent(self, event) -> None:
         """鼠标操作期间暂停自动收起。"""
 
-        self.hide_timer.stop()
+        if not self._ignore_initial_enter:
+            self.hide_timer.stop()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
         """鼠标离开后给用户三秒余量再收起。"""
 
         self.hide_timer.start(3000)
+        self._schedule_report_hide()
         super().leaveEvent(event)
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        # The report action is laid out inside the dock and therefore moves
+        # with it automatically; no detached native window needs repositioning.
 
 
 class SizeControlDialog(QDialog):
@@ -115,10 +1261,11 @@ class SizeControlDialog(QDialog):
 
     value_changed = Signal(int)
 
-    def __init__(self, value: int, parent: QWidget | None = None) -> None:
+    def __init__(self, value: int, parent: QWidget | None = None, pet_name: str = "六毛") -> None:
         super().__init__(parent)
+        pet_name = pet_name.strip() or "六毛"
         self.setObjectName("floatingPanel")
-        self.setWindowTitle("六毛大小")
+        self.setWindowTitle(f"{pet_name}大小")
         self.setStyleSheet(CONTROL_STYLE)
         layout = QVBoxLayout(self)
         self.label = QLabel(); self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)

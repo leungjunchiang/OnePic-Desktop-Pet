@@ -7,7 +7,6 @@ cd "$project_root"
 
 icon_source="assets/icons/pet.png"
 icon_root="build/macos"
-iconset="$icon_root/pet.iconset"
 icon_file="$icon_root/pet.icns"
 machine_arch="${ONEPIC_MAC_ARCH:-$(uname -m)}"
 case "$machine_arch" in
@@ -22,20 +21,12 @@ dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"
 dmg_root="$icon_root/dmg-root"
 
 mkdir -p "$icon_root"
-mkdir -p "$iconset"
-rm -f "$iconset"/*.png "$icon_file"
-
-sips -z 16 16 "$icon_source" --out "$iconset/icon_16x16.png" >/dev/null
-sips -z 32 32 "$icon_source" --out "$iconset/icon_16x16@2x.png" >/dev/null
-sips -z 32 32 "$icon_source" --out "$iconset/icon_32x32.png" >/dev/null
-sips -z 64 64 "$icon_source" --out "$iconset/icon_32x32@2x.png" >/dev/null
-sips -z 128 128 "$icon_source" --out "$iconset/icon_128x128.png" >/dev/null
-sips -z 256 256 "$icon_source" --out "$iconset/icon_128x128@2x.png" >/dev/null
-sips -z 256 256 "$icon_source" --out "$iconset/icon_256x256.png" >/dev/null
-sips -z 512 512 "$icon_source" --out "$iconset/icon_256x256@2x.png" >/dev/null
-sips -z 512 512 "$icon_source" --out "$iconset/icon_512x512.png" >/dev/null
-sips -z 1024 1024 "$icon_source" --out "$iconset/icon_512x512@2x.png" >/dev/null
-iconutil -c icns "$iconset" -o "$icon_file"
+rm -f "$icon_file"
+# macOS 15's iconutil rejects otherwise valid iconsets generated from small
+# PNGs on some runner images.  sips performs the same conversion directly and
+# produces a valid ICNS without changing the public asset.
+sips -s format icns "$icon_source" --out "$icon_file" >/dev/null
+test -s "$icon_file"
 
 ONEPIC_INCLUDE_USER_ASSETS=0 python -m PyInstaller --noconfirm --clean OnePicDesktopPet.spec
 test -d "dist/Lili.app"

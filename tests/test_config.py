@@ -8,11 +8,22 @@
 import json
 
 from onepic_desktop_pet.config import (
+    PET_NAME,
     PetSettings,
+    social_pet_label,
     load_settings,
     save_settings,
     user_settings_path,
 )
+
+
+def test_social_owner_label_keeps_pet_identity_fixed() -> None:
+    assert PET_NAME == "六毛"
+    assert social_pet_label("小梁") == "小梁家的六毛"
+    assert social_pet_label("") == "搭子家的六毛"
+    settings = PetSettings(pet_name="团团", owner_nickname="小梁")
+    assert settings.pet_name == PET_NAME
+    assert settings.owner_nickname == "小梁"
 
 
 def test_load_settings_merges_position_and_user_selected_size(tmp_path) -> None:
@@ -76,6 +87,138 @@ def test_default_inactivity_uses_five_and_ten_minutes() -> None:
     assert settings.inactive_sleep_ms == 600000
 
 
+def test_autonomous_walk_is_off_by_default_and_persistable(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.allow_autonomous_walk is False
+    settings.allow_autonomous_walk = True
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).allow_autonomous_walk is True
+
+
+def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+    settings.today_note_mode = "compact"
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).today_note_mode == "compact"
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps({"today_note_mode": "giant-task-manager"}), encoding="utf-8")
+    assert load_settings(override_path=invalid).today_note_mode == "compact"
+
+
+def test_legacy_default_todo_surface_migrates_to_compact(tmp_path) -> None:
+    legacy = tmp_path / "legacy-settings.json"
+    legacy.write_text(
+        json.dumps({"today_note_mode": "detailed", "today_note_display_mode": "pending"}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+
+
+def test_old_compact_todo_policy_migrates_to_auto_show(tmp_path) -> None:
+    legacy = tmp_path / "legacy-settings.json"
+    legacy.write_text(
+        json.dumps(
+            {
+                "today_note_mode": "compact",
+                "today_note_display_mode": "hidden",
+                "today_note_defaults_version": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+
+
+def test_transitional_hidden_todo_policy_migrates_to_auto_show(tmp_path) -> None:
+    """A v2 compact strip must not remain hidden after an application restart."""
+
+    legacy = tmp_path / "legacy-hidden-settings.json"
+    legacy.write_text(
+        json.dumps(
+            {
+                "today_note_mode": "compact",
+                "today_note_display_mode": "hidden",
+                "today_note_defaults_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+
+
+def test_legacy_fully_hidden_todo_surface_migrates_to_compact(tmp_path) -> None:
+    """Older hidden-mode settings regain the new default compact surface."""
+
+    legacy = tmp_path / "legacy-hidden-surface.json"
+    legacy.write_text(
+        json.dumps(
+            {
+                "today_note_mode": "hidden",
+                "today_note_display_mode": "hidden",
+                "today_note_defaults_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(override_path=legacy)
+
+    assert settings.today_note_mode == "compact"
+    assert settings.today_note_display_mode == "always"
+    assert settings.today_note_defaults_version == 3
+
+
+def test_content_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.content_updates_enabled is True
+    settings.content_updates_enabled = False
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).content_updates_enabled is False
+
+
+def test_program_updates_preference_is_persistent_and_defaults_on(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.program_updates_enabled is True
+    settings.program_updates_enabled = False
+    path = save_settings(settings, tmp_path / "settings.json")
+    assert load_settings(override_path=path).program_updates_enabled is False
+
+
+def test_idle_focus_pause_defaults_are_safe_and_persistable(tmp_path) -> None:
+    settings = load_settings(override_path=tmp_path / "missing.json")
+    assert settings.auto_pause_on_idle is True
+    assert settings.idle_pause_seconds == 600
+    assert settings.auto_pause_on_fullscreen_video is True
+    assert settings.show_away_recovery_prompt is True
+    settings.show_away_recovery_prompt = False
+    settings.idle_pause_seconds = 5
+    settings.idle_classification_rules = {"WINWORD.EXE": "focus", "bad": "ignore"}
+    path = save_settings(settings, tmp_path / "settings.json")
+    loaded = load_settings(override_path=path)
+    assert loaded.idle_pause_seconds == 600
+    assert loaded.show_away_recovery_prompt is False
+    assert loaded.idle_classification_rules == {"winword.exe": "focus"}
+
+
 def test_save_settings_writes_json(tmp_path) -> None:
     path = tmp_path / "nested" / "settings.json"
     saved = save_settings(
@@ -90,6 +233,9 @@ def test_save_settings_writes_json(tmp_path) -> None:
             babuda_audio_path=r"C:\Private\babuda-1.wav",
             local_lyrics_path=r"C:\Private\lyrics.txt",
             lyric_interval_minutes=6,
+            music_provider_history={
+                "qq": {"success_count": 3, "consecutive_failures": 0}
+            },
         ),
         path,
     )
@@ -102,6 +248,10 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["ai_provider"] == "offline"
     assert data["automatic_grumbling"] is True
     assert data["hourly_announcement"] is False
+    # The legacy fields remain serializable for backwards compatibility, but
+    # scheduled PNG generation is disabled by default.
+    assert data["daily_report_enabled"] is False
+    assert data["daily_report_time"] == "22:30"
     assert data["qq_music_path"].endswith("QQMusic.exe")
     assert data["kugou_music_path"].endswith("KuGou.exe")
     assert data["apple_music_path"].endswith("AppleMusic.exe")
@@ -109,6 +259,8 @@ def test_save_settings_writes_json(tmp_path) -> None:
     assert data["babuda_audio_path"].endswith("babuda-1.wav")
     assert data["local_lyrics_path"].endswith("lyrics.txt")
     assert data["lyric_interval_minutes"] == 6
+    assert data["music_service"] == "auto"
+    assert data["music_provider_history"]["qq"]["success_count"] == 3
     assert not any("token" in key or "key" in key for key in data)
     assert not path.with_suffix(".json.tmp").exists()
 
@@ -126,6 +278,66 @@ def test_local_path_and_lyric_interval_validation(tmp_path) -> None:
 
     assert settings.qq_music_path == "demo.exe"
     assert settings.lyric_interval_minutes == 2
+
+
+def test_legacy_pet_name_is_migrated_to_owner_nickname(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps({"pet_name": "  团团\u0000 "}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(default_path, override_path)
+
+    assert settings.pet_name == "六毛"
+    assert settings.owner_nickname == "团团"
+    path = save_settings(settings, tmp_path / "settings.json")
+    loaded = load_settings(override_path=path)
+    assert loaded.pet_name == "六毛"
+    assert loaded.owner_nickname == "团团"
+
+
+def test_empty_legacy_pet_name_keeps_fixed_identity_and_empty_owner(tmp_path) -> None:
+    path = tmp_path / "override.json"
+    path.write_text(json.dumps({"pet_name": "\u0000  "}), encoding="utf-8")
+
+    settings = load_settings(override_path=path)
+    assert settings.pet_name == "六毛"
+    assert settings.owner_nickname == ""
+
+
+def test_music_provider_history_is_safely_validated(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps(
+            {
+                "music_service": "auto",
+                "music_provider_history": {
+                    "qq": {
+                        "success_count": "4",
+                        "failure_count": "broken",
+                        "consecutive_failures": 999,
+                        "last_error": "X" * 200,
+                    },
+                    "unknown": {"success_count": 20},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(default_path, override_path)
+
+    assert settings.music_service == "auto"
+    assert settings.music_provider_history["qq"]["success_count"] == 4
+    assert settings.music_provider_history["qq"]["failure_count"] == 0
+    assert settings.music_provider_history["qq"]["consecutive_failures"] == 100
+    assert len(settings.music_provider_history["qq"]["last_error"]) == 80
+    assert "unknown" not in settings.music_provider_history
 
 
 def test_workmate_uses_independent_settings_directory(monkeypatch, tmp_path) -> None:
@@ -146,3 +358,68 @@ def test_window_mode_is_loaded_from_user_settings(tmp_path) -> None:
     override_path.write_text('{"always_on_top": false}', encoding="utf-8")
 
     assert load_settings(default_path, override_path).always_on_top is False
+
+
+def test_aura_settings_are_local_validated_and_persisted(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps({"aura_mode": "invalid", "aura_manual_effect": "invalid"}),
+        encoding="utf-8",
+    )
+    settings = load_settings(default_path, override_path)
+    assert settings.aura_mode == "auto"
+    assert settings.aura_manual_effect == "blue"
+
+    settings.aura_mode = "manual"
+    settings.aura_manual_effect = "purple"
+    saved = tmp_path / "saved.json"
+    save_settings(settings, saved)
+    restored = load_settings(default_path, saved)
+    assert restored.aura_mode == "manual"
+    assert restored.aura_manual_effect == "purple"
+
+
+def test_old_settings_without_aura_fields_keep_safe_defaults(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(json.dumps({"display_height": 180}), encoding="utf-8")
+    settings = load_settings(default_path, override_path)
+    assert settings.aura_mode == "auto"
+    assert settings.aura_manual_effect == "blue"
+
+
+def test_state_effect_settings_are_local_validated_and_persisted(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    override_path = tmp_path / "override.json"
+    default_path.write_text("{}", encoding="utf-8")
+    override_path.write_text(
+        json.dumps(
+            {
+                "state_effects_enabled": "yes",
+                "focus_blue_effect_enabled": 0,
+                "state_effect_duration": "invalid",
+                "color_mist_world_enabled": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(default_path, override_path)
+    assert settings.state_effects_enabled is True
+    assert settings.focus_blue_effect_enabled is False
+    assert settings.state_effect_duration == "standard"
+    assert settings.color_mist_world_enabled is False
+
+    settings.state_effects_enabled = False
+    settings.focus_blue_effect_enabled = True
+    settings.state_effect_duration = "long"
+    settings.color_mist_world_enabled = True
+    saved = tmp_path / "saved.json"
+    save_settings(settings, saved)
+    restored = load_settings(default_path, saved)
+    assert restored.state_effects_enabled is False
+    assert restored.focus_blue_effect_enabled is True
+    assert restored.state_effect_duration == "long"
+    assert restored.color_mist_world_enabled is True

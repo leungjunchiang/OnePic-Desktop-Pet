@@ -1,5 +1,6 @@
 """Validate that public release automation stays cross-platform and private-data safe."""
 
+import re
 from pathlib import Path
 
 
@@ -31,6 +32,7 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     )
     spec = (PROJECT_ROOT / "OnePicDesktopPet.spec").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
     installer = (PROJECT_ROOT / "packaging" / "windows" / "Lili.iss").read_text(
         encoding="utf-8"
     )
@@ -40,36 +42,137 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
 
     assert "Lili-Windows-x64.zip" in workflow
     assert "Lili-Windows-x64-Setup.exe" in workflow
-    assert "-Version 0.19.0" in workflow
-    assert "-Version 0.18.1" not in workflow
+    assert "GITHUB_REF_NAME" in workflow
+    assert "-Version $version" in workflow
+    assert "-Version 0.19.1" not in workflow
     assert "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
     assert 'dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"' in macos_build
     assert 'arm64) release_arch="arm64"' in macos_build
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
-    assert 'gh release view "$GITHUB_REF_NAME"' in workflow
-    assert 'gh release upload "$GITHUB_REF_NAME"' in workflow
-    assert "--clobber" in workflow
+    assert 'release_tag="${GITHUB_REF_NAME#release/}"' in workflow
+    assert 'gh release view "$release_tag"' in workflow
+    assert 'gh release delete "$release_tag"' in workflow
+    assert "--cleanup-tag" in workflow
+    assert 'gh release create "$release_tag"' in workflow
+    assert '--target "$GITHUB_SHA"' in workflow
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
     assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
-    assert 'default: "v0.19.0"' in publisher
+    assert 'default: "v0.22.0"' in publisher
     assert "BUNDLE(" in spec
     assert 'name="Lili"' in spec
     assert '"CFBundleDisplayName": "Lili"' in spec
-    assert '"CFBundleShortVersionString": "0.19.0"' in spec
+    assert '"CFBundleShortVersionString": APP_VERSION' in spec
+    assert '"CFBundleVersion": APP_VERSION' in spec
+    assert 'collect_data_files("certifi")' in spec
     assert '"NSAppleEventsUsageDescription"' in spec
     assert '"winrt.windows.media.control"' in spec
     assert '"LSUIElement": False' in spec
-    assert 'version = "0.19.0"' in pyproject
+    version_match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+    assert version_match is not None
+    assert version_match.group(1) != "0.22.0"
+    assert '"PySide6==6.11.2"' in pyproject
+    assert "PySide6==6.11.2" in requirements
     assert "winrt-Windows.Media.Control" in pyproject
     assert "pyobjc-framework-Quartz" in pyproject
+    assert "certifi" in pyproject
     assert "{localappdata}\\Programs\\Lili" in installer
     assert '{group}\\Lili' in installer
     assert "ChineseSimplified.isl" not in installer
     assert installer_script.isascii()
     assert 'ln -s /Applications "$dmg_root/Applications"' in macos_build
+
+
+def test_qt_6112_thread_lifecycle_guards_are_packaged() -> None:
+    """Qt 6.11.2 must not destroy live worker threads or run UI lambdas inline."""
+
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    window_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "window.py").read_text(
+        encoding="utf-8"
+    )
+    social_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "social_ui.py").read_text(
+        encoding="utf-8"
+    )
+    lifecycle_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "qt_lifecycle.py").read_text(
+        encoding="utf-8"
+    )
+    spec_source = (PROJECT_ROOT / "OnePicDesktopPet.spec").read_text(encoding="utf-8")
+    runtime_hook_source = (PROJECT_ROOT / "tools" / "pyinstaller_qt_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "wait_for_thread" in app_source
+    assert "window_closed = False" in app_source
+    assert "self._schedule_quit_retry()" in app_source
+    assert "self._quit_started = False\n            QTimer.singleShot" not in app_source
+    assert "request_stop_all(*thread_roots)" in window_source
+    assert "running_threads(*thread_roots)" in window_source
+    assert "wait_for_thread" in lifecycle_source
+    assert 'stopper = getattr(thread, "stop", None)' in lifecycle_source
+    assert "faulthandler.enable" in app_source
+    assert "sys.unraisablehook" in app_source
+    assert "Qt.ConnectionType.QueuedConnection" in social_source
+    assert "pyinstaller_qt_runtime.py" in spec_source
+    assert "os.add_dll_directory" in runtime_hook_source
+    assert "icudt78.dll" in spec_source
+    assert "icuuc.dll" in spec_source
+
+
+def test_tray_update_actions_are_explicit_manual_checks() -> None:
+    """QAction.triggered's bool must not silently become manual=False."""
+
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    assert "lambda _checked=False: self.check_program_updates(True)" in app_source
+    assert "lambda _checked=False: self.check_content_updates(True)" in app_source
+    assert "if not self._program_update_manual:" in app_source
+    assert "从托盘‘更新与关于’手动更新" in app_source
+
+
+def test_startup_program_update_check_is_informational_only() -> None:
+    """Startup may notify about a Release, but never launch its installer."""
+
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    settings_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "chat.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "QTimer.singleShot(5000, lambda: self.check_program_updates(False))" in app_source
+    assert "if not self._program_update_manual:" in app_source
+    assert "refusing installer launch from non-manual check" in app_source
+    assert "启用启动时检查程序更新（只提示，不会自动安装或退出）" in settings_source
+
+
+def test_program_download_exposes_progress_to_the_gui() -> None:
+    app_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    worker_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "update_worker.py").read_text(
+        encoding="utf-8"
+    )
+    updater_source = (PROJECT_ROOT / "src" / "onepic_desktop_pet" / "program_updates.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "QProgressDialog" in app_source
+    assert "PROGRAM_PROGRESS_STYLE" in app_source
+    assert 'progress.setObjectName("programUpdateProgress")' in app_source
+    assert "progress.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)" in app_source
+    assert "progress.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)" in app_source
+    assert "progress.setAutoFillBackground(True)" in app_source
+    assert "progress.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)" in app_source
+    assert "QProgressDialog#programUpdateProgress" in app_source
+    assert "worker.progress.connect(self._program_download_progress_changed)" in app_source
+    assert "progress = Signal(int, int)" in worker_source
+    assert "progress=self.progress.emit" in worker_source
+    assert "progress: Callable[[int, int], None] | None = None" in updater_source
 
 
 def test_one_command_release_script_has_safety_checks() -> None:

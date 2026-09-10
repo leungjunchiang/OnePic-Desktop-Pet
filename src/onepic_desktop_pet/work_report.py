@@ -1,0 +1,2206 @@
+"""按需计算并展示六毛工作报告，不生成或保存报告图片。
+
+报告只读取当前登录账号的本地专注历史、当前计时器和最近一次自习室同步
+快照。日度、本周、月度和年度页签在窗口打开时计算，并在窗口保持打开时定时刷新；
+正在工作的当前专注段会按真实开始时间实时叠加到小时节奏图；
+不会为每一天创建 PNG，也不会因为打开报告额外请求 Supabase。
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from time import monotonic
+from typing import Any, Callable
+
+from PySide6.QtCore import QDate, QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QFormLayout,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QDateEdit,
+    QScrollArea,
+    QSizePolicy,
+    QTabWidget,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .diary import DailyCompanionStats
+from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
+from .focus_segments import FocusSegment, parse_focus_timestamp
+from .work_timer import WorkTimerModel, format_work_duration
+from .lifecycle_log import lifecycle_log
+
+
+REPORT_STYLE = """
+QDialog#workReportDialog { background: #eef5f7; color: #243b4b; }
+QFrame#reportHero { background: #ffffff; border: 1px solid #d6e4e8; border-radius: 20px; }
+QFrame#reportMetric { background: #ffffff; border: 1px solid #d6e4e8; border-radius: 14px; }
+QFrame#reportChart { background: #ffffff; border: 1px solid #d6e4e8; border-radius: 18px; }
+QLabel#reportTitle { color: #173d55; font-size: 23px; font-weight: 700; }
+QLabel#reportSubtitle, QLabel#reportHint { color: #647b88; }
+QLabel#reportHeroValue { color: #008b83; font-size: 30px; font-weight: 700; }
+QLabel#reportMetricLabel { color: #6c7f89; font-size: 11px; }
+QLabel#reportMetricValue { color: #21475d; font-size: 16px; font-weight: 650; }
+QLabel#reportSection { color: #21475d; font-size: 15px; font-weight: 650; }
+QLabel#reportNote { background: #e0f2ee; color: #28665b; border-radius: 12px; padding: 10px; }
+QLabel#reportWarning { background: #fff3df; color: #855d2c; border: 1px solid #edd2a7; border-radius: 12px; padding: 10px; }
+QProgressBar#reportBar { background: #e7eff1; border: none; border-radius: 5px; height: 10px; text-align: right; }
+QProgressBar#reportBar::chunk { background: #51b8aa; border-radius: 5px; }
+QLabel#reportTodayLabel { color: #008b83; font-weight: 700; }
+QPushButton#reportClose { background: #cfece7; color: #1f5d57; border: none; border-radius: 10px; padding: 8px 20px; }
+QPushButton#reportClose:hover { background: #bce3dc; }
+QPushButton#reportFinish { background: #fff0d7; color: #8a5b25; border: 1px solid #edcf9c; border-radius: 10px; padding: 8px 16px; }
+QPushButton#reportFinish:hover { background: #ffe4b4; }
+QPushButton#reportFinish:disabled { background: #edf1f2; color: #91a0a6; border-color: #dbe3e5; }
+"""
+
+
+def _quality_label(score: int) -> str:
+    value = max(0, int(score))
+    if not value:
+        return "暂无足够数据"
+    if value >= 82:
+        return "专注质量较高"
+    if value >= 62:
+        return "状态比较稳定"
+    return "容易被打断"
+
+
+def _sleep_inference(summary: Any, now: datetime) -> str:
+    """Explain the conservative sleep inference instead of pretending to measure sleep."""
+
+    late_average = max(0, int(getattr(summary, "late_night_average_seconds", 0) or 0))
+    if late_average:
+        return (
+            "作息线索：最近 7 天有 23:00 后的专注记录。六毛只能看到专注、暂停、锁屏或系统睡眠等事件，"
+            "不能测量心率、睡眠阶段或真实睡眠质量。"
+        )
+    if now.hour >= 22 or now.hour < 6:
+        return "作息线索：当前处在夜间时段，暂未发现晚间专注记录；这不等于已经入睡。"
+    return "睡眠状态：暂无足够数据。六毛不能测量真实睡眠质量，不会把“没有操作”直接当作睡着，只会在系统锁屏/睡眠时暂停计时。"
+
+
+def _period_consistency_errors(
+    data: dict[str, Any],
+    period: str,
+    *,
+    range_start: date | None = None,
+    range_end: date | None = None,
+) -> list[str]:
+    """Validate one report payload before it reaches the UI.
+
+    The report must be a projection of one interval union.  These checks are
+    intentionally independent of legacy counters so a bad cache cannot make
+    an impossible day look plausible.
+    """
+
+    errors: list[str] = []
+    try:
+        total = int(data.get("total_seconds", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        total = -1
+    if total < 0:
+        errors.append("negative_total_seconds")
+
+    if period == "day":
+        limit = 24 * 60 * 60
+    elif period == "week":
+        limit = 7 * 24 * 60 * 60
+    elif range_start is not None and range_end is not None:
+        limit = max(0, (range_end - range_start).days) * 24 * 60 * 60
+    else:
+        limit = None
+    if limit is not None and total > limit:
+        errors.append(f"window_limit:{total}>{limit}")
+
+    hourly = data.get("hourly") or []
+    daily = data.get("daily") or []
+    try:
+        hourly_sum = sum(
+            max(0, int(item.get("seconds", 0) or 0))
+            for item in hourly
+            if isinstance(item, dict) and item.get("seconds") is not None
+        )
+        daily_sum = sum(
+            max(0, int(item.get("seconds", 0) or 0))
+            for item in daily
+            if isinstance(item, dict) and item.get("seconds") is not None
+        )
+    except (TypeError, ValueError, OverflowError):
+        hourly_sum = daily_sum = -1
+    if hourly_sum != total:
+        errors.append(f"hourly_sum:{hourly_sum}!={total}")
+    if daily_sum != total:
+        errors.append(f"daily_sum:{daily_sum}!={total}")
+
+    try:
+        average = max(0, int(data.get("average_session_seconds", 0) or 0))
+        longest = max(0, int(data.get("longest_focus_seconds", 0) or 0))
+    except (TypeError, ValueError, OverflowError):
+        average = longest = -1
+    if average > longest:
+        errors.append(f"average_above_longest:{average}>{longest}")
+    if longest > total:
+        errors.append(f"longest_above_total:{longest}>{total}")
+    return errors
+
+
+def _mark_consistency_error(
+    data: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Suppress an impossible metric instead of rendering a false number."""
+
+    if not errors:
+        return
+    quality = dict(data.get("data_quality") or {})
+    existing = [str(item) for item in quality.get("consistency_errors") or []]
+    quality["trusted"] = False
+    quality["consistency_error"] = True
+    quality["consistency_errors"] = list(dict.fromkeys([*existing, *errors]))
+    quality["message"] = "本区间统计存在一致性异常，已停止展示错误累计值。"
+    data["data_quality"] = quality
+    data["consistency_error"] = True
+    data["consistency_errors"] = quality["consistency_errors"]
+    data["raw_total_seconds"] = max(0, int(data.get("total_seconds", 0) or 0))
+    data["total_seconds"] = 0
+    data["longest_focus_seconds"] = 0
+    data["average_session_seconds"] = 0
+    data["deep_focus_seconds"] = 0
+
+
+def _rest_state(summary: Any, current_status: str, now: datetime) -> str:
+    """Return a clearly labelled local rest-state inference."""
+
+    if current_status == "focus":
+        return "工作中"
+    if current_status == "rest":
+        return "休息中"
+    if now.hour >= 23 or now.hour < 6:
+        return "可能已入睡（本地推断）"
+    if int(getattr(summary, "today_seconds", 0) or 0) > 0:
+        return "清醒 / 暂未工作"
+    return "暂无足够数据"
+
+
+def _signed_delta(seconds: int | None) -> str:
+    if seconds is None:
+        return "暂无可比数据"
+    value = int(seconds or 0)
+    sign = "+" if value >= 0 else "−"
+    return f"较昨日 {sign}{format_work_duration(abs(value))}"
+
+
+REPORT_PERIODS = ("day", "week", "month", "year")
+
+
+def _next_month(value: date) -> date:
+    return (value.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+def _shift_year(value: date, amount: int) -> date:
+    year = value.year + int(amount)
+    # February 29 is a valid anchor only in leap years.  Keep the window
+    # navigation deterministic instead of raising halfway through a click.
+    return value.replace(year=year, day=min(value.day, 28 if value.month == 2 else value.day))
+
+
+def standard_report_range(period: str, anchor: date) -> tuple[date, date]:
+    """Return the natural preset range as ``[start, end)`` dates."""
+
+    key = str(period or "day").strip().casefold()
+    if key == "week":
+        start = anchor - timedelta(days=anchor.weekday())
+        return start, start + timedelta(days=7)
+    if key == "month":
+        start = anchor.replace(day=1)
+        return start, _next_month(start)
+    if key == "year":
+        start = anchor.replace(month=1, day=1)
+        return start, start.replace(year=start.year + 1)
+    return anchor, anchor + timedelta(days=1)
+
+
+def move_report_range(period: str, start: date, end: date, direction: int, *, fine: bool = False) -> tuple[date, date]:
+    """Move a report window while retaining its semantic width."""
+
+    step = -1 if int(direction) < 0 else 1
+    key = str(period or "day").strip().casefold()
+    if key == "day":
+        delta = timedelta(days=step)
+        return start + delta, end + delta
+    if key == "week":
+        delta = timedelta(days=step if fine else 7 * step)
+        return start + delta, end + delta
+    if key == "month":
+        if not fine:
+            if (end - start).days == 30:
+                delta = timedelta(days=30 * step)
+                return start + delta, end + delta
+            candidate = _next_month(start) if step > 0 else (start.replace(day=1) - timedelta(days=1)).replace(day=1)
+            return candidate, _next_month(candidate)
+        delta = timedelta(days=step)
+        return start + delta, end + delta
+    if key == "year":
+        if not fine:
+            if (end - start).days == 365:
+                delta = timedelta(days=365 * step)
+                return start + delta, end + delta
+            candidate = _shift_year(start, step).replace(month=1, day=1)
+            return candidate, candidate.replace(year=candidate.year + 1)
+        delta = timedelta(days=step)
+        return start + delta, end + delta
+    delta = timedelta(days=step)
+    return start + delta, end + delta
+
+
+def report_range_is_standard(period: str, start: date, end: date, today: date) -> bool:
+    natural_start, natural_end = standard_report_range(period, today)
+    return start == natural_start and end == natural_end
+
+
+def report_range_title(period: str, start: date, end: date, today: date) -> tuple[str, str, str]:
+    """Return title, width text and reset text for the shared navigator."""
+
+    key = str(period or "day").strip().casefold()
+    standard = report_range_is_standard(key, start, end, today)
+    if key == "day":
+        if standard:
+            title = f"今天 · {start.month:02d}/{start.day:02d}"
+        elif start == today - timedelta(days=1):
+            title = f"昨天 · {start.month:02d}/{start.day:02d}"
+        else:
+            title = f"{start.month:02d}月{start.day:02d}日"
+        return title, "1 天", "回到今天"
+    if key == "week":
+        title = (
+            f"本周 · {start.month:02d}/{start.day:02d} – {end - timedelta(days=1):%m/%d}"
+            if standard
+            else f"{start:%m/%d} – {(end - timedelta(days=1)):%m/%d}"
+        )
+        return title, "7 天", "回到本周"
+    if key == "month":
+        if standard:
+            title = f"{start.year}年{start.month}月"
+            width = f"{(end - start).days} 天"
+        else:
+            title = f"{start:%m/%d} – {(end - timedelta(days=1)):%m/%d}"
+            width = f"{(end - start).days} 天"
+        return title, width, "回到本月"
+    if standard:
+        title = f"{start.year}年"
+        width = f"{(end - start).days} 天"
+    else:
+        title = f"{start:%Y/%m/%d} – {(end - timedelta(days=1)):%Y/%m/%d}"
+        width = f"{(end - start).days} 天"
+    return title, width, "回到今年"
+
+
+def _populate_annual_overview(item: dict[str, Any]) -> None:
+    """Derive annual trend and milestones from the report's canonical daily rows.
+
+    This intentionally runs after the live/canonical-today overlay: annual
+    totals, monthly bars and milestones then all describe the exact same
+    visible interval union instead of a stale copy captured before refresh.
+    """
+
+    daily = [row for row in item.get("daily") or [] if isinstance(row, dict)]
+    months: list[dict[str, Any]] = []
+    for month in range(1, 13):
+        rows = [
+            row for row in daily
+            if str(row.get("date") or "")[5:7] == f"{month:02d}"
+        ]
+        observed = [row for row in rows if row.get("seconds") is not None]
+        seconds = sum(max(0, int(row.get("seconds", 0) or 0)) for row in observed)
+        active_days = sum(max(0, int(row.get("seconds", 0) or 0)) > 0 for row in observed)
+        months.append(
+            {
+                "date": f"{str(item.get('start') or '')[:4]}-{month:02d}-01",
+                "label": f"{month}月",
+                "year_label": f"{str(item.get('start') or '')[:4]}年{month}月",
+                "seconds": seconds if observed else None,
+                "active_days": active_days,
+                "workday_average_seconds": seconds // max(1, active_days),
+                "is_future": bool(rows) and not observed,
+            }
+        )
+
+    observed_daily = [
+        row for row in daily
+        if row.get("seconds") is not None and not bool(row.get("is_future"))
+    ]
+    active_days = sum(max(0, int(row.get("seconds", 0) or 0)) > 0 for row in observed_daily)
+    streak = best_streak = 0
+    for row in observed_daily:
+        if max(0, int(row.get("seconds", 0) or 0)) > 0:
+            streak += 1
+            best_streak = max(best_streak, streak)
+        else:
+            streak = 0
+    busiest_day = max(
+        (row for row in observed_daily if max(0, int(row.get("seconds", 0) or 0)) > 0),
+        key=lambda row: (int(row.get("seconds", 0) or 0), str(row.get("date") or "")),
+        default=None,
+    )
+    busiest_month = max(
+        (row for row in months if max(0, int(row.get("seconds", 0) or 0)) > 0),
+        key=lambda row: (int(row.get("seconds", 0) or 0), str(row.get("date") or "")),
+        default=None,
+    )
+    cumulative = 0
+    hundred_hour_date = ""
+    for row in observed_daily:
+        cumulative += max(0, int(row.get("seconds", 0) or 0))
+        if cumulative >= 100 * 60 * 60:
+            hundred_hour_date = str(row.get("date") or "")
+            break
+
+    item["total_seconds"] = sum(max(0, int(row.get("seconds", 0) or 0)) for row in observed_daily)
+    item["active_days"] = active_days
+    item["workday_average_seconds"] = int(item["total_seconds"]) // max(1, active_days)
+    item["deep_focus_seconds"] = min(
+        max(0, int(item.get("deep_focus_seconds", 0) or 0)),
+        int(item["total_seconds"]),
+    )
+    item["monthly"] = months
+    item["longest_streak_days"] = best_streak
+    item["busiest_day"] = dict(busiest_day) if busiest_day is not None else None
+    item["busiest_month"] = dict(busiest_month) if busiest_month is not None else None
+    item["hundred_hour_date"] = hundred_hour_date
+
+
+def build_work_report(
+    analytics: FocusAnalyticsStore,
+    timer: WorkTimerModel,
+    daily_stats: DailyCompanionStats,
+    *,
+    best_buddy: str = "暂无自习室排行榜数据",
+    focus_snapshot: Any | None = None,
+    focus_projection: dict[str, Any] | None = None,
+    task_stats: dict[str, dict[str, Any]] | None = None,
+    selected_range: tuple[str, date, date] | None = None,
+    extra_live_segments: list[FocusSegment] | None = None,
+    now: datetime | None = None,
+    account_id: str = "",
+    current_device_id: str = "",
+) -> dict[str, Any]:
+    """Build an account-scoped report snapshot without writing a file."""
+
+    moment = now or datetime.now(BEIJING_TIMEZONE)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=BEIJING_TIMEZONE)
+    summary = analytics.summary(moment)
+    selected_key = str(selected_range[0]).strip().casefold() if selected_range else ""
+    selected_key = selected_key if selected_key in REPORT_PERIODS else ""
+    custom_range_selected = bool(selected_key and selected_range)
+    daily_stats_snapshot = daily_stats.snapshot()
+    # ``focus_projection`` remains an accepted compatibility argument for
+    # older callers, but report durations are never taken from its today/week
+    # summaries.  The selected account interval ledger is the sole source.
+    snapshot_status = ""
+    snapshot_session = 0
+    snapshot_room = ""
+    if focus_snapshot is not None:
+        if isinstance(focus_snapshot, dict):
+            snapshot_status = str(focus_snapshot.get("status") or "")
+            snapshot_session = max(0, int(focus_snapshot.get("session_seconds") or 0))
+            snapshot_room = str(focus_snapshot.get("room_id") or "")
+        else:
+            snapshot_status = str(getattr(focus_snapshot, "status", "") or "")
+            snapshot_session = max(0, int(getattr(focus_snapshot, "session_seconds", 0) or 0))
+            snapshot_room = str(getattr(focus_snapshot, "room_id", "") or "")
+    # FocusSession snapshots carry UI state (status/session start), not a
+    # second statistics source.  All displayed calendar totals below come
+    # from FocusAnalyticsStore's clipped raw interval union.
+    day_preview = analytics.period_summary("day", moment)
+    # An open segment is added once below as a FocusSegment.  Until then this
+    # is only a fallback for the headline while the live segment is prepared.
+    live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + (
+        timer.current_elapsed_seconds() if timer.is_running else 0
+    )
+    current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
+        "focus" if bool(timer.is_running)
+        else "rest" if bool(timer.has_active_session)
+        else "idle"
+    )
+    report: dict[str, Any] = {
+        "generated_at": moment.astimezone(BEIJING_TIMEZONE).strftime("%H:%M:%S"),
+        "best_buddy": str(best_buddy or "暂无自习室排行榜数据"),
+        "sleep_note": _sleep_inference(summary, moment.astimezone(BEIJING_TIMEZONE)),
+        "current_status": current_status,
+        "current_status_label": {"focus": "工作中", "rest": "休息中", "idle": "未开始工作"}[current_status],
+        "rest_state": _rest_state(summary, current_status, moment.astimezone(BEIJING_TIMEZONE)),
+        "current_streak_days": int(summary.current_streak_days),
+        "day": analytics.period_summary("day", moment),
+        "week": analytics.period_summary("week", moment),
+        "month": analytics.period_summary("month", moment),
+        "year": analytics.period_summary("year", moment),
+    }
+    # Add the currently running FocusSession to the live chart without
+    # writing a synthetic history record. It disappears from the chart only
+    # when the normal analytics checkpoint is written.
+    live_started_value = None
+    if snapshot_status == "focus" and focus_snapshot is not None:
+        # A paused/resumed FocusSession has one session start but several
+        # working segments. Use the current segment anchor so the report does
+        # not bridge a pause into live work.
+        current_segment_started = getattr(timer, "current_segment_started_at", None)
+        live_started_value = current_segment_started() if callable(current_segment_started) else None
+        snapshot_started_value = (
+            focus_snapshot.get("session_started_at")
+            if isinstance(focus_snapshot, dict)
+            else getattr(focus_snapshot, "session_started_at", None)
+        )
+        # A few older lifecycle adapters expose a monotonic elapsed value
+        # while their wall-clock provider is frozen for a report snapshot.
+        # In that compatibility case the timer anchor is exactly ``now`` and
+        # the snapshot's earlier start is the only coherent display anchor.
+        try:
+            current_started = parse_focus_timestamp(live_started_value)
+            snapshot_started = parse_focus_timestamp(snapshot_started_value)
+            report_moment = moment.astimezone(BEIJING_TIMEZONE)
+            if (
+                current_started is not None
+                and snapshot_started is not None
+                and current_started >= report_moment
+                and snapshot_started < report_moment
+            ):
+                live_started_value = snapshot_started_value
+        except (TypeError, ValueError, OverflowError):
+            pass
+        if live_started_value is None:
+            live_started_value = snapshot_started_value
+    live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
+    live_segment: FocusSegment | None = None
+    if live_started_value and snapshot_status == "focus" and live_elapsed > 0:
+        live_started = parse_focus_timestamp(live_started_value)
+        if live_started is not None:
+            live_segment = FocusSegment(
+                segment_id=f"live:{getattr(timer, 'focus_session_id', '')}",
+                session_id=getattr(timer, "focus_session_id", "") or "live",
+                start_at=live_started,
+                end_at=moment.astimezone(BEIJING_TIMEZONE),
+                task=str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
+            )
+            live_interval = {
+                "date": live_started.date().isoformat(),
+                "started_at": live_started.isoformat(),
+                "ended_at": moment.astimezone(BEIJING_TIMEZONE).isoformat(),
+                "seconds": live_elapsed,
+                "task": str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
+            }
+            for period in ("day", "week", "month", "year"):
+                if not any(item.get("started_at") == live_interval["started_at"] for item in report[period].get("focus_intervals") or []):
+                    report[period].setdefault("focus_intervals", []).append(dict(live_interval))
+                # ``FocusAnalyticsStore`` only writes a raw interval when a
+                # running segment is paused/checkpointed.  The report is also
+                # refreshed while the user is still working, so add this live
+                # interval to the hourly rhythm chart without creating a
+                # synthetic history row. Split at hour boundaries to keep the
+                # 00:00–24:00 chart anchored to the real start time.
+                hourly = report[period].get("hourly") or []
+                cursor = live_started
+                live_end = moment.astimezone(BEIJING_TIMEZONE)
+                while cursor < live_end:
+                    next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                    part_end = min(live_end, next_hour)
+                    part_seconds = max(0, int((part_end - cursor).total_seconds()))
+                    if part_seconds:
+                        bucket = next(
+                            (item for item in hourly if int(item.get("hour", -1) or -1) == cursor.hour),
+                            None,
+                        )
+                        if isinstance(bucket, dict):
+                            bucket["seconds"] = max(0, int(bucket.get("seconds", 0) or 0)) + part_seconds
+                    cursor = part_end
+                # The open interval is a real segment for the live report,
+                # even though it is not persisted until pause/finish.  Keep
+                # all four cards coherent while it is running.
+                item = report[period]
+                item["started_rounds"] = max(1, int(item.get("started_rounds", 0) or 0))
+                item["longest_focus_seconds"] = max(
+                    int(item.get("longest_focus_seconds", 0) or 0), live_elapsed
+                )
+                current_average = max(0, int(item.get("average_session_seconds", 0) or 0))
+                item["average_session_seconds"] = live_elapsed if not current_average else min(current_average, int(item["longest_focus_seconds"]))
+        # Invalid live timestamps are ignored; persisted facts remain intact.
+    display_live_segments = list(extra_live_segments or [])
+    if live_segment is not None:
+        display_live_segments.append(live_segment)
+    if display_live_segments:
+        # Rebuild every live period from the same interval set.  This replaces
+        # the old path that appended one interval to a separately calculated
+        # hourly chart and could leave count/average/longest inconsistent.
+        # The closed list may be empty for a user's very first active segment;
+        # the open segment is still a complete fact for this read-only view.
+        for period in ("day", "week", "month", "year"):
+            aggregate = analytics.focus_aggregate(
+                period,
+                moment,
+                extra_segments=display_live_segments,
+            )
+            item = report[period]
+            item["total_seconds"] = aggregate.total_seconds
+            item["hourly"] = [dict(row) for row in aggregate.hourly]
+            item["focus_intervals"] = [dict(row) for row in aggregate.intervals]
+            item["started_rounds"] = max(item.get("started_rounds", 0), aggregate.segment_count)
+            item["longest_focus_seconds"] = aggregate.longest_seconds
+            item["average_session_seconds"] = aggregate.average_seconds
+            item["interruptions"] = max(item.get("interruptions", 0), aggregate.interruption_count)
+            for row in item.get("daily") or []:
+                date_key = str(row.get("date") or "")
+                if date_key in aggregate.daily and not row.get("is_future") and row.get("status") != "untrusted":
+                    row["seconds"] = max(0, int(aggregate.daily.get(date_key, 0) or 0))
+    selected_provenance: dict[str, Any] | None = None
+    if custom_range_selected and selected_range is not None:
+        _, selected_start, selected_end = selected_range
+        range_start_at = datetime.combine(selected_start, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        range_end_at = datetime.combine(selected_end, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        selected_extras = list(extra_live_segments or [])
+        if live_segment is not None:
+            selected_extras.append(live_segment)
+        # A selected day is exactly one Beijing calendar day.  Reject a
+        # widened day range before it can be mistaken for a natural week or
+        # the entire ledger.
+        selected_errors: list[str] = []
+        if selected_key == "day" and selected_end - selected_start != timedelta(days=1):
+            selected_errors.append("day_window_not_one_calendar_day")
+        selected_aggregate = analytics.range_aggregate(
+            range_start_at,
+            range_end_at,
+            extra_segments=selected_extras or None,
+        )
+        # The selected page is rebuilt from exactly the same interval union as
+        # the natural pages.  Canonical day/week compatibility overlays below
+        # are skipped for this page so an arbitrary historical window cannot be
+        # overwritten by today's projection.
+        report[selected_key] = analytics.range_summary(
+            range_start_at,
+            range_end_at,
+            at=moment,
+            period=selected_key,
+            extra_segments=selected_extras or None,
+        )
+        if selected_aggregate.errors:
+            selected_errors.extend(str(item) for item in selected_aggregate.errors)
+        selected_provenance = {
+            "account_id": str(account_id or ""),
+            "current_device_id": str(current_device_id or ""),
+            "selected_start": range_start_at.isoformat(),
+            "selected_end": range_end_at.isoformat(),
+            "segment_count": len(analytics.range_segments(
+                range_start_at,
+                range_end_at,
+                extra_segments=selected_extras or None,
+            )),
+            "segments": [
+                {
+                    "segment_id": str(segment.segment_id or ""),
+                    "device_id": str(segment.device_id or ""),
+                    "start_at": segment.start_at.isoformat(),
+                    "end_at": segment.end_at.isoformat() if segment.end_at else None,
+                }
+                for segment in analytics.range_segments(
+                    range_start_at,
+                    range_end_at,
+                    extra_segments=selected_extras or None,
+                )[:500]
+            ],
+            "aggregate_total_seconds": int(selected_aggregate.total_seconds),
+            "aggregate_daily_sum_seconds": sum(selected_aggregate.daily.values()),
+            "range_summary_total_seconds": int(report[selected_key].get("total_seconds", 0) or 0),
+            "selected_errors": selected_errors,
+        }
+        _mark_consistency_error(
+            report[selected_key],
+            selected_errors,
+        )
+        report["selected_range"] = {
+            "period": selected_key,
+            "start": selected_start.isoformat(),
+            "end": (selected_end - timedelta(days=1)).isoformat(),
+        }
+        report["selected_range_provenance"] = selected_provenance
+    selected_day_page = custom_range_selected and selected_key == "day"
+    # The live aggregate above is the same interval union used by the daily
+    # rows.  Reuse its day projection instead of applying a second max/cache
+    # fallback to the report headline.
+    live_today = int(report["day"].get("total_seconds", 0) or 0)
+    day = report["day"]
+    day["total_seconds"] = live_today
+    if not selected_day_page:
+        day["completed_rounds"] = max(
+            int(day["completed_rounds"]),
+            int(daily_stats_snapshot.get("completed_tasks", 0) or 0),
+        )
+    day["quality_label"] = _quality_label(int(day["average_quality"]))
+    day["touches"] = int(daily_stats_snapshot.get("touches", 0) or 0)
+    day["pet_sleeps"] = int(daily_stats_snapshot.get("sleeps", 0) or 0)
+    day["current_task"] = analytics.current_task()
+    day["sleep_note"] = report["sleep_note"]
+    day["week_total_seconds"] = (
+        int(day["total_seconds"])
+        if selected_day_page
+        else int(report["week"]["total_seconds"])
+    )
+    # Never reuse today's compact summary for a historical page.  Both sides
+    # of the comparison are calculated from the same account interval ledger.
+    comparison_day = (
+        selected_range[1]
+        if selected_day_page and selected_range is not None
+        else moment.astimezone(BEIJING_TIMEZONE).date()
+    )
+    comparison_start = datetime.combine(
+        comparison_day,
+        datetime.min.time(),
+        tzinfo=BEIJING_TIMEZONE,
+    )
+    comparison_previous_start = comparison_start - timedelta(days=1)
+    comparison_previous_end = comparison_start
+    comparison_extras = list(extra_live_segments or [])
+    if live_segment is not None:
+        comparison_extras.append(live_segment)
+    previous_day_summary = analytics.range_summary(
+        comparison_previous_start,
+        comparison_previous_end,
+        at=moment,
+        period="day",
+        extra_segments=comparison_extras or None,
+    )
+    day["yesterday_seconds"] = int(previous_day_summary.get("total_seconds", 0) or 0)
+    day["difference_vs_yesterday_seconds"] = int(day["total_seconds"]) - day["yesterday_seconds"]
+    day["current_streak_days"] = int(summary.current_streak_days) if not selected_day_page else 0
+    day["rest_state"] = report["rest_state"] if not selected_day_page else ""
+    day["current_status_label"] = report["current_status_label"]
+    day["current_device_status_label"] = report["current_status_label"]
+    day["focus_session_seconds"] = live_elapsed if timer.is_running else snapshot_session
+    day["focus_room_id"] = snapshot_room
+    if day.get("daily"):
+        today_row = next((row for row in day["daily"] if row.get("is_today")), None)
+        if isinstance(today_row, dict):
+            today_row["seconds"] = live_today
+            today_row["status"] = "observed" if live_today else today_row.get("status", "observed")
+
+    def overlay_live_today(item: dict[str, Any]) -> None:
+        """Overlay the open timer once, without double-counting a period."""
+
+        if live_segment is not None:
+            # The period was already rebuilt from the closed facts plus the
+            # open interval.  Overlaying it again would count the live segment
+            # twice and make report/rhythm totals diverge.
+            return
+
+        rows = item.get("daily") or []
+        today_row = next((row for row in rows if row.get("is_today")), None)
+        if not isinstance(today_row, dict):
+            return
+        stored_day = max(0, int(today_row.get("seconds", 0) or 0))
+        visible_today = live_today
+        if visible_today > stored_day:
+            item["total_seconds"] = int(item.get("total_seconds", 0) or 0) + visible_today - stored_day
+            today_row["seconds"] = visible_today
+
+    for key in ("day", "week", "month", "year"):
+        item = report[key]
+        if isinstance(task_stats, dict) and isinstance(task_stats.get(key), dict):
+            item["completed_task_count"] = max(
+                0,
+                int(task_stats[key].get("completed_tasks", 0) or 0),
+            )
+        if key != "day":
+            overlay_live_today(item)
+        rows_total = sum(
+            max(0, int(row.get("seconds", 0) or 0))
+            for row in item.get("daily") or []
+            if row.get("seconds") is not None
+        )
+        # Daily projections are the canonical projection of the same clipped
+        # interval union.  Never resurrect a stale snapshot with max().
+        if item.get("consistency_error"):
+            # Keep the guard's suppressed value.  A malformed daily row must
+            # not be able to restore the impossible hero on this pass.
+            item["total_seconds"] = 0
+        else:
+            item["total_seconds"] = rows_total
+        longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
+        item["average_session_seconds"] = min(
+            max(0, int(item.get("average_session_seconds", 0) or 0)),
+            longest,
+        )
+        item["deep_focus_seconds"] = min(
+            max(0, int(item.get("deep_focus_seconds", item.get("high_quality_seconds", 0)) or 0)),
+            int(item["total_seconds"]),
+        )
+        item["quality_label"] = _quality_label(int(item.get("average_quality", 0) or 0))
+
+    if not (custom_range_selected and selected_key == "year"):
+        _populate_annual_overview(report["year"])
+
+    day["week_total_seconds"] = (
+        int(day["total_seconds"])
+        if selected_day_page
+        else int(report["week"]["total_seconds"])
+    )
+    for key in ("day", "week", "month", "year"):
+        item = report[key]
+        range_start_value = None
+        range_end_value = None
+        try:
+            range_start_value = date.fromisoformat(str(item.get("start") or ""))
+            # ``end`` is inclusive in report payloads.
+            range_end_value = date.fromisoformat(str(item.get("end") or "")) + timedelta(days=1)
+        except ValueError:
+            pass
+        _mark_consistency_error(
+            item,
+            _period_consistency_errors(
+                item,
+                key,
+                range_start=range_start_value,
+                range_end=range_end_value,
+            ),
+        )
+    if selected_provenance is not None:
+        selected_item = report.get(selected_key) or {}
+        selected_provenance["report_day_total_seconds"] = int(
+            selected_item.get("total_seconds", 0) or 0
+        )
+        selected_provenance["selected_range_total_seconds"] = int(
+            selected_item.get("total_seconds", 0) or 0
+        )
+        lifecycle_log(
+            "work_report.historical_provenance",
+            None,
+            account_id=str(account_id or ""),
+            current_device_id=str(current_device_id or ""),
+            selected_start=str(selected_provenance.get("selected_start") or ""),
+            selected_end=str(selected_provenance.get("selected_end") or ""),
+            segment_count=max(0, int(selected_provenance.get("segment_count") or 0)),
+            segment_summary=selected_provenance.get("segments") or [],
+            aggregate_total_seconds=int(selected_provenance.get("aggregate_total_seconds") or 0),
+            aggregate_daily_sum_seconds=int(selected_provenance.get("aggregate_daily_sum_seconds") or 0),
+            range_summary_total_seconds=int(selected_provenance.get("range_summary_total_seconds") or 0),
+            report_day_total_seconds=int(selected_provenance.get("report_day_total_seconds") or 0),
+            consistency_errors=selected_provenance.get("selected_errors") or [],
+        )
+    report["data_quality"] = {
+        "average_not_above_longest": all(
+            int(report[key].get("average_session_seconds", 0) or 0)
+            <= int(report[key].get("longest_focus_seconds", 0) or 0)
+            for key in ("day", "week", "month", "year")
+        ),
+        "deep_focus_not_above_total": all(
+            int(report[key].get("deep_focus_seconds", 0) or 0)
+            <= int(report[key].get("total_seconds", 0) or 0)
+            for key in ("day", "week", "month", "year")
+        ),
+    }
+    return report
+
+
+def _clear_layout(layout: QVBoxLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.deleteLater()
+        child = item.layout()
+        if child is not None:
+            _clear_layout(child)  # type: ignore[arg-type]
+
+
+def _nice_duration_ticks(maximum: int, count: int = 4) -> list[int]:
+    """Return human-readable duration ticks instead of arbitrary tiny values."""
+
+    maximum = max(0, int(maximum))
+    if maximum <= 0:
+        return [0, 60 * 60]
+    # For the report's daily and hourly bars, one hour is the most useful
+    # unit. Round the observed maximum up to a whole hour and reserve one
+    # additional hour above it so the tallest bar never touches the ceiling.
+    hour = 60 * 60
+    rounded_hours = (maximum + hour - 1) // hour
+    # A value just above N hours already has headroom when the next whole-hour
+    # tick is used; an exact N-hour maximum needs one extra tick explicitly.
+    # This keeps 3h02m at a readable 4h ceiling instead of jumping to 5h.
+    upper_hours = max(2, rounded_hours + (1 if maximum % hour == 0 else 0))
+    if upper_hours <= 12:
+        return [value * hour for value in range(upper_hours + 1)]
+    target = maximum / max(1, count)
+    steps = (
+        60, 5 * 60, 10 * 60, 15 * 60, 30 * 60,
+        hour, 2 * hour, 3 * hour, 4 * hour,
+        6 * 60 * 60, 8 * 60 * 60, 12 * 60 * 60, 24 * 60 * 60,
+    )
+    step = next((value for value in steps if value >= target), steps[-1])
+    upper = ((maximum + step - 1) // step) * step + step
+    return list(range(0, upper + 1, step))
+
+
+def _parse_interval(value: Any) -> datetime | None:
+    return parse_focus_timestamp(value)
+
+
+class ReportTimeIntervalChart(QWidget):
+    """Apple-Sleep-like interval chart for real FocusSession time ranges."""
+
+    range_dragged = Signal(int)
+
+    def __init__(
+        self,
+        intervals: list[dict[str, Any]],
+        *,
+        period: str,
+        start_date: date | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        lifecycle_log("work_report.construct.begin", self)
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "work_report.destroy", class_name="WorkReportDialog"
+            )
+        )
+        self._intervals = [item for item in intervals if isinstance(item, dict)]
+        self._period = period
+        self._start_date = start_date
+        self._hover: tuple[QRect, str] | None = None
+        self._drag_origin_x: int | None = None
+        self._drag_last_days = 0
+        self.setMouseTracking(True)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(170 if period == "day" else 310)
+
+    def _visible_segments(self) -> list[tuple[QRect, str]]:
+        if self._period == "day":
+            anchor = next((_parse_interval(item.get("started_at")) for item in self._intervals if _parse_interval(item.get("started_at"))), None)
+            day = self._start_date or (anchor.date() if anchor else datetime.now(BEIJING_TIMEZONE).date())
+            day_start = datetime.combine(day, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+            day_end = day_start + timedelta(days=1)
+            rows = [(0, day_start, day_end)]
+        else:
+            if self._start_date is not None:
+                first = self._start_date
+            else:
+                dates = sorted({str(item.get("date") or "")[:10] for item in self._intervals if str(item.get("date") or "")})
+                if dates:
+                    try:
+                        first = date.fromisoformat(dates[0])
+                    except ValueError:
+                        first = datetime.now(BEIJING_TIMEZONE).date()
+                else:
+                    first = datetime.now(BEIJING_TIMEZONE).date()
+            if first is not None:
+                try:
+                    first = date.fromisoformat(first.isoformat())
+                except (AttributeError, ValueError):
+                    first = datetime.now(BEIJING_TIMEZONE).date()
+            # A moved 7-day window may start on any weekday.  Only the
+            # natural default is Monday–Sunday; snapping every window back to
+            # Monday would make the chart disagree with the selected range.
+            if self._start_date is None:
+                first -= timedelta(days=first.weekday())
+            rows = [(index, datetime.combine(first + timedelta(days=index), datetime.min.time(), tzinfo=BEIJING_TIMEZONE), datetime.combine(first + timedelta(days=index + 1), datetime.min.time(), tzinfo=BEIJING_TIMEZONE)) for index in range(7)]
+        left = 78
+        right = max(left + 120, self.width() - 18)
+        top = 28
+        bottom = max(top + 70, self.height() - 42)
+        row_height = max(28, (bottom - top) // len(rows))
+        result: list[tuple[QRect, str]] = []
+        for row_index, row_start, row_end in rows:
+            band_top = top + row_index * row_height + 6
+            band_height = max(16, row_height - 12)
+            for item in self._intervals:
+                started = _parse_interval(item.get("started_at")); ended = _parse_interval(item.get("ended_at"))
+                if started is None or ended is None or ended <= started:
+                    continue
+                clipped_start = max(started, row_start); clipped_end = min(ended, row_end)
+                if clipped_end <= clipped_start:
+                    continue
+                start_ratio = (clipped_start - row_start).total_seconds() / 86400
+                end_ratio = (clipped_end - row_start).total_seconds() / 86400
+                x = left + int((right - left) * start_ratio)
+                width = max(4, int((right - left) * (end_ratio - start_ratio)))
+                seconds = max(0, int((clipped_end - clipped_start).total_seconds()))
+                label = f"{clipped_start.strftime('%m/%d %H:%M')}–{clipped_end.strftime('%H:%M')}\n有效工作：{format_work_duration(seconds)}"
+                if item.get("task"):
+                    label += f"\n任务：{item['task']}"
+                result.append((QRect(x, band_top, width, band_height), label))
+        return result
+
+    def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        del event
+        painter = QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        left = 78; right = max(left + 120, self.width() - 18); top = 28; bottom = max(top + 70, self.height() - 42)
+        painter.setPen(QPen(QColor("#dbe8eb"), 1))
+        for hour in range(0, 25, 3):
+            x = left + int((right - left) * hour / 24)
+            painter.drawLine(x, top, x, bottom)
+            painter.setPen(QColor("#647b88"))
+            painter.drawText(x - 24, bottom + 8, 48, 24, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "24:00" if hour == 24 else f"{hour:02d}:00")
+            painter.setPen(QPen(QColor("#dbe8eb"), 1))
+        segments = self._visible_segments(); painter.setPen(Qt.PenStyle.NoPen)
+        if self._period == "day":
+            day = self._start_date or next((_parse_interval(item.get("started_at")).date() for item in self._intervals if _parse_interval(item.get("started_at"))), datetime.now(BEIJING_TIMEZONE).date())
+            weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[day.weekday()]
+            painter.setPen(QColor("#647b88")); painter.drawText(0, top + 4, left - 10, 22, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{day.month}/{day.day} {weekday}")
+        else:
+            today = datetime.now(BEIJING_TIMEZONE).date()
+            week_start = self._start_date or (today - timedelta(days=today.weekday()))
+            for index, name in enumerate(("周一", "周二", "周三", "周四", "周五", "周六", "周日")):
+                y = top + index * max(28, (bottom - top) // 7) + 6
+                row_height = max(28, (bottom - top) // 7)
+                row_date = week_start + timedelta(days=index)
+                painter.setPen(QColor("#647b88")); painter.drawText(0, y - 4, left - 10, 24, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{row_date.month}/{row_date.day}")
+        for rect, _label in segments:
+            color = QColor("#4389ad")
+            if self._hover is not None and rect == self._hover[0]: color = QColor("#e19a62")
+            painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(QBrush(color)); painter.drawRoundedRect(rect, 6, 6)
+        painter.end()
+        self._segments = segments
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        point = event.position().toPoint(); found = next((item for item in getattr(self, "_segments", []) if item[0].contains(point)), None)
+        self._hover = found
+        if self._drag_origin_x is not None:
+            days = int((self._drag_origin_x - point.x()) / 60)
+            if days != self._drag_last_days:
+                self.range_dragged.emit(days - self._drag_last_days)
+                self._drag_last_days = days
+        if found: QToolTip.showText(QCursor.pos(), found[1], self)
+        else: QToolTip.hideText()
+        self.update(); super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = event.position().toPoint().x()
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = None
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        self._hover = None; QToolTip.hideText(); self.update(); super().leaveEvent(event)
+
+
+class ReportBarChart(QWidget):
+    """Draw a compact bar chart without creating image files."""
+
+    range_dragged = Signal(int)
+
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        hourly: bool = False,
+        monthly: bool = False,
+        hourly_tooltip_label: str = "本月",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rows = [row for row in rows if isinstance(row, dict)]
+        self._hourly = bool(hourly)
+        self._monthly = bool(monthly)
+        self._hourly_tooltip_label = str(hourly_tooltip_label or "本月")
+        self._bar_rects: list[QRect] = []
+        self._plot_rect = QRect()
+        self._axis_upper = 0
+        self._hover_index = -1
+        self._drag_origin_x: int | None = None
+        self._drag_last_days = 0
+        # Leave enough room for a real x-axis: daily charts show date +
+        # weekday, hourly charts show the hour tick.  The old 178px height
+        # clipped those labels and left only the misleading caption visible.
+        self.setMinimumHeight(250)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMouseTracking(True)
+
+    def _tooltip_for(self, index: int) -> str:
+        if not (0 <= index < len(self._rows)):
+            return ""
+        row = self._rows[index]
+        raw_seconds = row.get("seconds")
+        if row.get("is_future") or raw_seconds is None:
+            unit = "月份" if self._monthly else "日期"
+            return f"{row.get('display_label') or row.get('year_label') or row.get('label') or '未知日期'}\n该{unit}尚未到达，暂无数据"
+        seconds = max(0, int(raw_seconds or 0))
+        if self._hourly:
+            hour = max(0, min(23, int(row.get("hour", index) or 0)))
+            end_hour = (hour + 1) % 24
+            title = f"{hour:02d}:00–{end_hour:02d}:00"
+            detail = f"{self._hourly_tooltip_label}累计专注：{format_work_duration(seconds)}"
+        elif self._monthly:
+            title = str(row.get("year_label") or row.get("label") or "未知月份")
+            active_days = max(0, int(row.get("active_days", 0) or 0))
+            average = max(0, int(row.get("workday_average_seconds", 0) or 0))
+            detail = (
+                f"工作：{format_work_duration(seconds)}\n"
+                f"工作 {active_days} 天\n"
+                f"工作日日均 {format_work_duration(average)}"
+            )
+        else:
+            date = str(row.get("date") or row.get("label") or "未知日期")
+            weekday = str(row.get("weekday") or "")
+            title = f"{date} {weekday}".strip()
+            detail = (
+                f"工作时长：{format_work_duration(seconds)}\n"
+                f"完成专注段：{int(row.get('rounds', 0) or 0)} 段"
+            )
+        if row.get("trusted") is False:
+            detail += "\n该日期数据已剔除（旧版异常记录）"
+        return f"{title}\n{detail}"
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        position = event.position().toPoint()
+        index = next(
+            (item for item, rect in enumerate(self._bar_rects) if rect.contains(position)),
+            -1,
+        )
+        if index != self._hover_index:
+            self._hover_index = index
+            self.update()
+        if index >= 0:
+            QToolTip.showText(QCursor.pos(), self._tooltip_for(index), self)
+        else:
+            QToolTip.hideText()
+        if self._drag_origin_x is not None:
+            days = int((self._drag_origin_x - position.x()) / 60)
+            if days != self._drag_last_days:
+                self.range_dragged.emit(days - self._drag_last_days)
+                self._drag_last_days = days
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = event.position().toPoint().x()
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin_x = None
+            self._drag_last_days = 0
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        self._hover_index = -1
+        QToolTip.hideText()
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._bar_rects = []
+        values: list[int | None] = [
+            None if row.get("seconds") is None or row.get("is_future")
+            else max(0, int(row.get("seconds", 0) or 0))
+            for row in self._rows
+        ]
+        numeric_values = [value for value in values if value is not None]
+        maximum = max(numeric_values or [1])
+        ticks = _nice_duration_ticks(maximum)
+        tick_label_width = max(
+            46,
+            max((painter.fontMetrics().horizontalAdvance(format_work_duration(value)) for value in ticks), default=46) + 14,
+        )
+        # Reserve only the space actually needed by the x-axis labels.  The
+        # previous fixed 82px bottom reserve made the chart look top-heavy,
+        # especially for the monthly hourly view. QRect.adjusted() takes
+        # reductions for the right/bottom arguments, so keep them negative.
+        bottom_axis = 34 if self._hourly else 38 if self._monthly else 50
+        plot = self.rect().adjusted(tick_label_width, 14, -18, -bottom_axis)
+        self._plot_rect = plot
+
+        painter.setPen(QPen(QColor("#e3edef"), 1))
+        upper = max(ticks[-1], 1)
+        self._axis_upper = upper
+        for tick in ticks:
+            ratio = tick / upper
+            y = plot.bottom() - int(plot.height() * ratio)
+            painter.drawLine(plot.left(), y, plot.right(), y)
+        painter.setPen(QColor("#7b8d96"))
+        for tick_value in ticks:
+            ratio = tick_value / upper
+            y = plot.bottom() - int(plot.height() * ratio)
+            painter.drawText(
+                0,
+                y - 9,
+                plot.left() - 8,
+                18,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                format_work_duration(tick_value),
+            )
+        painter.setPen(QPen(QColor("#b9cbd0"), 1))
+        painter.drawLine(plot.left(), plot.bottom(), plot.right(), plot.bottom())
+
+        count = max(1, len(self._rows))
+        gap = 4 if count <= 12 else 2
+        bar_width = max(3, int((plot.width() - gap * (count - 1)) / count))
+        # Keep all daily labels readable, while still showing a useful set of
+        # hour ticks instead of squeezing 24 labels into a narrow card.
+        if self._hourly:
+            label_step = 3
+        else:
+            # Natural weeks show every date.  A moved month uses the same
+            # daily chart but must leave enough horizontal room for labels.
+            label_step = 1 if count <= 12 else 2 if count <= 20 else 4
+        for index, (row, value) in enumerate(zip(self._rows, values)):
+            x = plot.left() + index * (bar_width + gap)
+            # Scale bars against the axis upper bound, not the observed
+            # maximum. This leaves the requested visual headroom above the
+            # tallest bar.
+            height = int(plot.height() * value / upper) if value is not None and upper else 0
+            y = plot.bottom() - height
+            self._bar_rects.append(QRect(x, y, bar_width, max(4, height)) if value is not None else QRect())
+            color = QColor("#36a99d") if row.get("is_today") else QColor("#75c8bd")
+            if self._hourly:
+                color = QColor("#4389ad") if value else QColor("#dfecef")
+            if index == self._hover_index:
+                color = QColor("#e19a62")
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            if height > 0:
+                painter.drawRoundedRect(x, y, bar_width, max(3, height), 4, 4)
+            elif value is None:
+                painter.setPen(QColor("#9caeb4"))
+                painter.drawText(x, plot.bottom() - 14, bar_width, 16, Qt.AlignmentFlag.AlignHCenter, "—")
+            if not self._hourly and (index % label_step == 0 or index == count - 1):
+                painter.setPen(QColor("#647b88"))
+                # Always use the actual calendar date on the x-axis. The
+                # full date and weekday remain available in the tooltip.
+                label = str(row.get("label") or "")
+                if not label:
+                    raw_date = str(row.get("date") or "")[:10]
+                    try:
+                        parsed_date = date.fromisoformat(raw_date)
+                        label = f"{parsed_date.month}/{parsed_date.day}"
+                    except ValueError:
+                        label = str(row.get("display_label") or "")
+                weekday = "" if self._monthly else str(row.get("weekday") or "")
+                label_text = f"{label}\n{weekday}" if weekday else label
+                painter.drawText(
+                    x - 8,
+                    plot.bottom() + 6,
+                    bar_width + 16,
+                    38,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                    label_text,
+                )
+        if self._hourly:
+            # Keep all 24 hourly bars, but show only a clean three-hour axis.
+            # Full hour ranges remain available in the hover tooltip.
+            painter.setPen(QColor("#647b88"))
+            for hour in range(0, 25, 3):
+                x = plot.left() + int(plot.width() * hour / 24)
+                label = "24:00" if hour == 24 else f"{hour:02d}:00"
+                painter.drawText(
+                    x - 28,
+                    plot.bottom() + 6,
+                    56,
+                    20,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                    label,
+                )
+        painter.end()
+
+
+class ReportCalendarHeatmap(QWidget):
+    """Small month calendar showing one reliable daily duration per cell."""
+
+    _WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
+
+    def __init__(self, rows: list[dict[str, Any]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows = [row for row in rows if isinstance(row, dict)]
+        self._cells: list[tuple[QRect, dict[str, Any]]] = []
+        # A six-row month needs room for the weekday header and every
+        # calendar row.  The previous height let the final column/row run
+        # into the parent clip area on narrow report windows.
+        self.setMinimumHeight(202)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMouseTracking(True)
+
+    def sizeHint(self) -> QSize:  # pragma: no cover - queried by Qt layout
+        return QSize(560, 202)
+
+    def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # ``QRect.adjusted`` takes signed deltas; positive right/bottom
+        # values expand the rectangle.  Use negative insets so the grid is
+        # actually kept inside the widget.
+        bounds = self.rect().adjusted(8, 4, -8, -8)
+        header_height = 22
+        columns = 7
+        grid_left = bounds.left() + 28
+        grid_right = bounds.right() - 4
+        grid_width = max(columns * 16, grid_right - grid_left + 1)
+        cell_width = max(16, grid_width // columns)
+        top = bounds.top() + header_height
+        slots: list[tuple[date, int]] = []
+        for row in self._rows:
+            try:
+                focus_date = date.fromisoformat(str(row.get("date") or ""))
+            except ValueError:
+                continue
+            first = date(focus_date.year, focus_date.month, 1)
+            slots.append((focus_date, focus_date.day - 1 + first.weekday()))
+        weeks = max(1, ((max((slot for _day, slot in slots), default=0) // 7) + 1))
+        grid_bottom = bounds.bottom()
+        grid_height = max(weeks * 18, grid_bottom - top + 1)
+        cell_height = max(18, grid_height // weeks)
+        self._cells = []
+        painter.setPen(QColor("#6c7f89"))
+        for column, label in enumerate(self._WEEKDAYS):
+            painter.drawText(
+                grid_left + column * cell_width,
+                bounds.top(),
+                cell_width,
+                header_height,
+                Qt.AlignmentFlag.AlignCenter,
+                label,
+            )
+        values = [
+            None if row.get("seconds") is None or row.get("is_future")
+            else max(0, int(row.get("seconds", 0) or 0))
+            for row in self._rows
+        ]
+        maximum = max((value for value in values if value is not None), default=1)
+        for index, row in enumerate(self._rows):
+            try:
+                focus_date = date.fromisoformat(str(row.get("date") or ""))
+            except ValueError:
+                continue
+            # ``weekday()`` is zero-based; day 1 belongs at that offset, so
+            # every later date advances by ``day - 1``.  Adding ``day`` here
+            # shifted the entire month one cell and pushed the final row out
+            # of the widget.
+            slot = focus_date.day - 1 + date(focus_date.year, focus_date.month, 1).weekday()
+            column = slot % 7
+            week = slot // 7
+            cell = QRect(
+                grid_left + column * cell_width + 2,
+                top + week * cell_height + 2,
+                max(16, cell_width - 4),
+                max(16, cell_height - 4),
+            )
+            self._cells.append((cell, row))
+            value = values[index] if index < len(values) else None
+            ratio = value / maximum if value is not None and maximum else 0
+            if value is None:
+                color = QColor("#f5f7f7")
+            elif value <= 0:
+                color = QColor("#edf3f4")
+            elif ratio < 0.25:
+                color = QColor("#cfe9e4")
+            elif ratio < 0.6:
+                color = QColor("#86cec2")
+            else:
+                color = QColor("#36a99d")
+            painter.setPen(QPen(QColor("#d6e4e8"), 1))
+            painter.setBrush(QBrush(color))
+            painter.drawRoundedRect(cell, 5, 5)
+            painter.setPen(QColor("#21475d"))
+            painter.drawText(cell, Qt.AlignmentFlag.AlignCenter, str(focus_date.day))
+            if row.get("is_today"):
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor("#e19a62"), 2))
+                painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), 5, 5)
+        painter.end()
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        position = event.position().toPoint()
+        for cell, row in self._cells:
+            if cell.contains(position):
+                focus_date = str(row.get("date") or "未知日期")
+                weekday = str(row.get("weekday") or "")
+                if row.get("is_future"):
+                    tooltip = f"{focus_date} {weekday}\n该日期尚未到达，暂无数据"
+                else:
+                    tooltip = (
+                        f"{focus_date} {weekday}\n"
+                        f"工作时长：{format_work_duration(int(row.get('seconds', 0) or 0))}\n"
+                        f"专注段：{int(row.get('rounds', 0) or 0)} 段"
+                    )
+                QToolTip.showText(
+                    QCursor.pos(),
+                    tooltip,
+                    self,
+                )
+                return
+        QToolTip.hideText()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+
+class ReportYearHeatmap(QWidget):
+    """GitHub-like annual heatmap, backed by the same daily report rows."""
+
+    _WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
+
+    def __init__(self, rows: list[dict[str, Any]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows = [row for row in rows if isinstance(row, dict)]
+        self._cells: list[tuple[QRect, dict[str, Any]]] = []
+        self.setMinimumHeight(194)
+        self.setMinimumWidth(500)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMouseTracking(True)
+
+    def sizeHint(self) -> QSize:  # pragma: no cover - queried by Qt layout
+        return QSize(620, 194)
+
+    def paintEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        bounds = self.rect().adjusted(8, 4, -8, -8)
+        valid_dates: list[date] = []
+        for row in self._rows:
+            try:
+                valid_dates.append(date.fromisoformat(str(row.get("date") or "")))
+            except ValueError:
+                continue
+        if not valid_dates:
+            painter.end()
+            return
+        year = min(valid_dates).year
+        first_monday = date(year, 1, 1) - timedelta(days=date(year, 1, 1).weekday())
+        weeks = max(53, max((day - first_monday).days // 7 for day in valid_dates) + 1)
+        grid_left = bounds.left() + 27
+        grid_top = bounds.top() + 23
+        grid_width = max(weeks * 7, bounds.right() - grid_left + 1)
+        cell_width = max(7, grid_width // weeks)
+        cell_height = max(16, (bounds.bottom() - grid_top + 1) // 7)
+        painter.setPen(QColor("#6c7f89"))
+        for row_index, label in enumerate(self._WEEKDAYS):
+            painter.drawText(
+                bounds.left(),
+                grid_top + row_index * cell_height,
+                22,
+                cell_height,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+        last_label_right = -1
+        for month in range(1, 13):
+            month_start = date(year, month, 1)
+            week = (month_start - first_monday).days // 7
+            x = grid_left + week * cell_width
+            label = f"{month}月"
+            label_width = painter.fontMetrics().horizontalAdvance(label)
+            if x > last_label_right + 3:
+                painter.drawText(x, bounds.top(), label_width + 3, 18, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
+                last_label_right = x + label_width
+        values = [
+            None if row.get("seconds") is None or row.get("is_future")
+            else max(0, int(row.get("seconds", 0) or 0))
+            for row in self._rows
+        ]
+        maximum = max((value for value in values if value is not None), default=1)
+        self._cells = []
+        for index, row in enumerate(self._rows):
+            try:
+                focus_date = date.fromisoformat(str(row.get("date") or ""))
+            except ValueError:
+                continue
+            week = (focus_date - first_monday).days // 7
+            weekday = focus_date.weekday()
+            cell = QRect(
+                grid_left + week * cell_width + 1,
+                grid_top + weekday * cell_height + 1,
+                max(5, cell_width - 2),
+                max(12, cell_height - 2),
+            )
+            self._cells.append((cell, row))
+            value = values[index] if index < len(values) else None
+            ratio = value / maximum if value is not None and maximum else 0
+            if value is None:
+                color = QColor("#f5f7f7")
+            elif value <= 0:
+                color = QColor("#edf3f4")
+            elif ratio < 0.25:
+                color = QColor("#cfe9e4")
+            elif ratio < 0.6:
+                color = QColor("#86cec2")
+            else:
+                color = QColor("#36a99d")
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            painter.drawRoundedRect(cell, 3, 3)
+            if row.get("is_today"):
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor("#e19a62"), 2))
+                painter.drawRoundedRect(cell.adjusted(0, 0, -1, -1), 3, 3)
+        painter.end()
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        position = event.position().toPoint()
+        for cell, row in self._cells:
+            if not cell.contains(position):
+                continue
+            focus_date = str(row.get("date") or "未知日期")
+            weekday = str(row.get("weekday") or "")
+            if row.get("is_future"):
+                tooltip = f"{focus_date} {weekday}\n该日期尚未到达，暂无数据"
+            elif row.get("seconds") is None:
+                tooltip = f"{focus_date} {weekday}\n该日期数据已剔除（旧版异常记录）"
+            else:
+                tooltip = (
+                    f"{focus_date} {weekday}\n"
+                    f"工作时长：{format_work_duration(int(row.get('seconds', 0) or 0))}\n"
+                    f"专注段：{int(row.get('rounds', 0) or 0)} 段"
+                )
+            QToolTip.showText(QCursor.pos(), tooltip, self)
+            return
+        QToolTip.hideText()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+
+class WorkReportDialog(QDialog):
+    """Live day/week/month/year report without image-generation side effects."""
+
+    finish_requested = Signal()
+    closed = Signal()
+
+    def __init__(
+        self,
+        snapshot_provider: Callable[..., dict[str, Any]],
+        *,
+        pet_name: str = "六毛",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._snapshot_provider = snapshot_provider
+        self._pet_name = pet_name.strip() or "六毛"
+        self.setObjectName("workReportDialog")
+        self.setWindowTitle(f"{self._pet_name}工作报告")
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+        )
+        self.setMinimumSize(660, 620)
+        self.resize(760, 780)
+        self.setStyleSheet(REPORT_STYLE)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(12)
+        title = QLabel(f"{self._pet_name}工作报告")
+        title.setObjectName("reportTitle")
+        subtitle = QLabel("今天六毛陪你又往前一点 · 与搭子自习室共用 FocusSession · 实时生成")
+        subtitle.setObjectName("reportSubtitle")
+        root.addWidget(title)
+        root.addWidget(subtitle)
+        today = datetime.now(BEIJING_TIMEZONE).date()
+        self._ranges: dict[str, tuple[date, date]] = {
+            key: standard_report_range(key, today) for key in REPORT_PERIODS
+        }
+        self._navigator = QHBoxLayout()
+        self._navigator.setSpacing(8)
+        self.previous_button = QPushButton("‹")
+        self.previous_button.setToolTip("查看上一个时间窗口")
+        self.previous_button.clicked.connect(lambda: self._shift_range(-1))
+        self.next_button = QPushButton("›")
+        self.next_button.setToolTip("查看下一个时间窗口")
+        self.next_button.clicked.connect(lambda: self._shift_range(1))
+        self.range_title_button = QPushButton()
+        self.range_title_button.setFlat(True)
+        self.range_title_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.range_title_button.clicked.connect(self._open_range_picker)
+        self.range_title_button.setToolTip("点击选择精确起止日期")
+        self.range_width_label = QLabel()
+        self.range_width_label.setObjectName("reportHint")
+        self.reset_range_button = QPushButton()
+        self.reset_range_button.setFlat(True)
+        self.reset_range_button.clicked.connect(self._reset_range)
+        self._navigator.addWidget(self.previous_button)
+        self._navigator.addWidget(self.range_title_button, 1)
+        self._navigator.addWidget(self.range_width_label)
+        self._navigator.addWidget(self.next_button)
+        self._navigator.addWidget(self.reset_range_button)
+        root.addLayout(self._navigator)
+        self.tabs = QTabWidget(self)
+        self._pages: dict[str, QVBoxLayout] = {}
+        for key, label in (("day", "日"), ("week", "周"), ("month", "月"), ("year", "年")):
+            scroll = QScrollArea(self)
+            scroll.setWidgetResizable(True)
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(4, 8, 10, 8)
+            page_layout.setSpacing(12)
+            scroll.setWidget(page)
+            self.tabs.addTab(scroll, label)
+            self._pages[key] = page_layout
+        self.tabs.currentChanged.connect(lambda _index: self._update_navigator())
+        root.addWidget(self.tabs, 1)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        self.finish_button = QPushButton("结束本轮工作")
+        self.finish_button.setObjectName("reportFinish")
+        self.finish_button.clicked.connect(self.finish_requested.emit)
+        footer.addWidget(self.finish_button)
+        close = QPushButton("关闭")
+        close.setObjectName("reportClose")
+        close.clicked.connect(self.close)
+        footer.addWidget(close)
+        root.addLayout(footer)
+
+        self._refresh_timer = QTimer(self)
+        # The report is a heavier derived view.  Rebuilding all four scroll
+        # pages every five seconds was enough to create visible event-loop
+        # stalls while the pet itself was otherwise ticking cheaply.
+        self._refresh_timer.setInterval(30_000)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self._last_render_fingerprint: str | None = None
+        self._cached_report: dict[str, Any] | None = None
+        self._last_provider_refresh_at = 0.0
+        self._update_navigator()
+
+    def showEvent(self, event) -> None:
+        lifecycle_log("work_report.show_event.begin", self)
+        super().showEvent(event)
+        self.refresh()
+        self._refresh_timer.start()
+        lifecycle_log("work_report.show_event.end", self)
+
+    def hideEvent(self, event) -> None:
+        lifecycle_log("work_report.hide_event.begin", self)
+        self._refresh_timer.stop()
+        super().hideEvent(event)
+        lifecycle_log("work_report.hide_event.end", self)
+
+    def closeEvent(self, event) -> None:  # pragma: no cover - native window event
+        lifecycle_log("work_report.close_event.begin", self)
+        self._refresh_timer.stop()
+        self.closed.emit()
+        super().closeEvent(event)
+        lifecycle_log("work_report.close_event.end", self)
+
+    def _current_period(self) -> str:
+        return REPORT_PERIODS[max(0, min(self.tabs.currentIndex(), len(REPORT_PERIODS) - 1))]
+
+    def _update_navigator(self) -> None:
+        key = self._current_period()
+        start, end = self._ranges[key]
+        title, width, reset = report_range_title(key, start, end, datetime.now(BEIJING_TIMEZONE).date())
+        self.range_title_button.setText(title)
+        self.range_width_label.setText(width)
+        self.reset_range_button.setText(reset)
+        self.range_title_button.setToolTip("点击选择精确起止日期；也可以左右拖动图表")
+
+    def _reset_range(self) -> None:
+        key = self._current_period()
+        self._ranges[key] = standard_report_range(key, datetime.now(BEIJING_TIMEZONE).date())
+        self._update_navigator()
+        self.refresh(force=True)
+
+    def _shift_range(self, direction: int) -> None:
+        key = self._current_period()
+        start, end = self._ranges[key]
+        self._ranges[key] = move_report_range(key, start, end, direction, fine=False)
+        self._update_navigator()
+        self.refresh(force=True)
+
+    def _shift_by_days(self, days: int, *, period: str | None = None) -> None:
+        key = period or self._current_period()
+        if key not in self._ranges or not int(days):
+            return
+        start, end = self._ranges[key]
+        today = datetime.now(BEIJING_TIMEZONE).date()
+        if report_range_is_standard(key, start, end, today):
+            if key == "month":
+                end = start + timedelta(days=30)
+            elif key == "year":
+                end = start + timedelta(days=365)
+        delta = timedelta(days=int(days))
+        self._ranges[key] = start + delta, end + delta
+        self._update_navigator()
+        self.refresh(force=True)
+
+    def _open_range_picker(self) -> None:
+        key = self._current_period()
+        start, end = self._ranges[key]
+        picker = QDialog(self)
+        picker.setWindowTitle("选择工作时间区间")
+        form = QFormLayout(picker)
+        start_edit = QDateEdit(picker)
+        end_edit = QDateEdit(picker)
+        for editor, value in ((start_edit, start), (end_edit, end - timedelta(days=1))):
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("yyyy-MM-dd")
+            editor.setDate(QDate(value.year, value.month, value.day))
+        form.addRow("起始日期", start_edit)
+        form.addRow("结束日期", end_edit)
+        buttons = QHBoxLayout()
+        apply_button = QPushButton("应用")
+        cancel_button = QPushButton("取消")
+        buttons.addStretch(1)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(apply_button)
+        form.addRow(buttons)
+        cancel_button.clicked.connect(picker.reject)
+        def apply() -> None:
+            selected_start = start_edit.date().toPython()
+            selected_end = end_edit.date().toPython()
+            if selected_end < selected_start:
+                return
+            self._ranges[key] = selected_start, selected_end + timedelta(days=1)
+            picker.accept()
+        apply_button.clicked.connect(apply)
+        if picker.exec() == QDialog.DialogCode.Accepted:
+            self._update_navigator()
+            self.refresh(force=True)
+
+    def refresh(self, *, force: bool = False) -> None:
+        now = monotonic()
+        if (
+            not force
+            and self._cached_report is not None
+            and now - self._last_provider_refresh_at < 30.0
+        ):
+            return
+        try:
+            key = self._current_period()
+            start, end = self._ranges[key]
+            today = datetime.now(BEIJING_TIMEZONE).date()
+            if report_range_is_standard(key, start, end, today):
+                report = self._snapshot_provider()
+            else:
+                report = self._snapshot_provider(
+                    period=key,
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                )
+        except TypeError:
+            # Keep lightweight unit-test and plugin providers that still use
+            # the original zero-argument callback contract.
+            try:
+                report = self._snapshot_provider()
+            except Exception as exc:  # pragma: no cover - defensive UI boundary
+                report = {"error": f"报告暂时无法读取：{exc}"}
+        except Exception as exc:  # pragma: no cover - defensive UI boundary
+            report = {"error": f"报告暂时无法读取：{exc}"}
+        self._cached_report = (
+            dict(report)
+            if isinstance(report, dict)
+            else {"error": "报告数据格式无效。"}
+        )
+        self._last_provider_refresh_at = now
+        report = self._cached_report
+        # ``generated_at`` changes on every refresh, but rebuilding all four
+        # scroll pages for that cosmetic field needlessly creates/deletes a
+        # large widget tree.  Skip identical snapshots; a real session/data
+        # change still produces a new fingerprint and is rendered normally.
+        fingerprint = repr({
+            key: report.get(key)
+            for key in ("error", "current_status", "day", "week", "month", "year")
+            if key in report
+        })
+        if fingerprint == self._last_render_fingerprint:
+            return
+        self._last_render_fingerprint = fingerprint
+        self.finish_button.setEnabled(
+            report.get("current_status") in {"focus", "rest"}
+            if not report.get("error")
+            else False
+        )
+        for key, layout in self._pages.items():
+            _clear_layout(layout)
+            if report.get("error"):
+                label = QLabel(str(report["error"]))
+                label.setWordWrap(True)
+                layout.addWidget(label)
+                continue
+            self._render_period(layout, key, report)
+            layout.addStretch(1)
+
+    @staticmethod
+    def _metric(label: str, value: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("reportMetric")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(12, 10, 12, 10)
+        caption = QLabel(label)
+        caption.setObjectName("reportMetricLabel")
+        amount = QLabel(value)
+        amount.setObjectName("reportMetricValue")
+        amount.setWordWrap(True)
+        box.addWidget(caption)
+        box.addWidget(amount)
+        return frame
+
+    @staticmethod
+    def _chart_card(
+        title: str,
+        subtitle: str,
+        rows: list[dict[str, Any]],
+        *,
+        hourly: bool = False,
+        monthly: bool = False,
+        hourly_tooltip_label: str = "本月",
+        drag_callback: Callable[[int], None] | None = None,
+    ) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("reportChart")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(14, 12, 14, 10)
+        box.setSpacing(4)
+        heading = QLabel(title)
+        heading.setObjectName("reportSection")
+        box.addWidget(heading)
+        if subtitle:
+            note = QLabel(subtitle)
+            note.setObjectName("reportHint")
+            note.setWordWrap(True)
+            box.addWidget(note)
+        chart = ReportBarChart(
+            rows,
+            hourly=hourly,
+            monthly=monthly,
+            hourly_tooltip_label=hourly_tooltip_label,
+        )
+        if drag_callback is not None:
+            chart.range_dragged.connect(drag_callback)
+        box.addWidget(chart, 1)
+        return frame
+
+    @staticmethod
+    def _heatmap_card(title: str, subtitle: str, rows: list[dict[str, Any]]) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("reportChart")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(14, 12, 14, 10)
+        box.setSpacing(4)
+        heading = QLabel(title)
+        heading.setObjectName("reportSection")
+        box.addWidget(heading)
+        note = QLabel(subtitle)
+        note.setObjectName("reportHint")
+        note.setWordWrap(True)
+        box.addWidget(note)
+        box.addWidget(ReportCalendarHeatmap(rows), 1)
+        return frame
+
+    @staticmethod
+    def _year_heatmap_card(title: str, subtitle: str, rows: list[dict[str, Any]]) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("reportChart")
+        box = QVBoxLayout(frame)
+        box.setContentsMargins(14, 12, 14, 10)
+        box.setSpacing(4)
+        heading = QLabel(title)
+        heading.setObjectName("reportSection")
+        box.addWidget(heading)
+        note = QLabel(subtitle)
+        note.setObjectName("reportHint")
+        note.setWordWrap(True)
+        box.addWidget(note)
+        box.addWidget(ReportYearHeatmap(rows), 1)
+        return frame
+
+    @staticmethod
+    def _interval_card(
+        title: str,
+        subtitle: str,
+        intervals: list[dict[str, Any]],
+        period: str,
+        start_date: date | None = None,
+        drag_callback: Callable[[int], None] | None = None,
+    ) -> QFrame:
+        frame = QFrame(); frame.setObjectName("reportChart")
+        box = QVBoxLayout(frame); box.setContentsMargins(14, 12, 14, 10); box.setSpacing(4)
+        heading = QLabel(title); heading.setObjectName("reportSection"); box.addWidget(heading)
+        note = QLabel(subtitle); note.setObjectName("reportHint"); note.setWordWrap(True); box.addWidget(note)
+        chart = ReportTimeIntervalChart(intervals, period=period, start_date=start_date)
+        if drag_callback is not None:
+            chart.range_dragged.connect(drag_callback)
+        box.addWidget(chart, 1)
+        return frame
+
+    def _render_period(self, layout: QVBoxLayout, key: str, report: dict[str, Any]) -> None:
+        data = report.get(key) or {}
+        selected_provenance = report.get("selected_range_provenance") or {}
+        lifecycle_log(
+            "work_report.render_input",
+            self,
+            period=str(key),
+            selected_start=str(selected_provenance.get("selected_start") or data.get("start") or ""),
+            selected_end=str(selected_provenance.get("selected_end") or data.get("end") or ""),
+            data_total_seconds=max(0, int(data.get("total_seconds", 0) or 0)),
+            consistency_error=bool(data.get("consistency_error")),
+        )
+        total = max(0, int(data.get("total_seconds", 0) or 0))
+        range_start, range_end = self._ranges.get(
+            key,
+            standard_report_range(key, datetime.now(BEIJING_TIMEZONE).date()),
+        )
+        range_title, _range_width, _reset = report_range_title(
+            key,
+            range_start,
+            range_end,
+            datetime.now(BEIJING_TIMEZONE).date(),
+        )
+        is_standard = report_range_is_standard(
+            key,
+            range_start,
+            range_end,
+            datetime.now(BEIJING_TIMEZONE).date(),
+        )
+        is_historical_day = key == "day" and not is_standard
+        title = {
+            "day": "今天陪你工作",
+            "week": "这周陪你工作",
+            "month": "这个月陪你工作",
+            "year": "这一年陪你工作",
+        }[key]
+        if not is_standard:
+            title = f"{range_title}陪你工作"
+        hero = QFrame()
+        hero.setObjectName("reportHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_title = QLabel(title)
+        hero_title.setObjectName("reportSection")
+        hero_value = QLabel(
+            "统计异常"
+            if bool(data.get("consistency_error"))
+            else format_work_duration(total)
+        )
+        hero_value.setObjectName("reportHeroValue")
+        hero_layout.addWidget(hero_title)
+        hero_layout.addWidget(hero_value)
+        if key == "day":
+            if is_historical_day:
+                overview_text = (
+                    f"较前一日 {_signed_delta(data.get('difference_vs_yesterday_seconds'))}  ·  "
+                    f"当前设备状态：{data.get('current_device_status_label') or report.get('current_status_label', '未开始工作')}"
+                )
+            else:
+                overview_text = (
+                    f"{_signed_delta(data.get('difference_vs_yesterday_seconds'))}  ·  "
+                    f"当前：{data.get('current_status_label') or report.get('current_status_label', '未开始工作')}"
+                )
+            overview = QLabel(overview_text)
+            overview.setObjectName("reportHint")
+            hero_layout.addWidget(overview)
+        elif key == "week":
+            overview = QLabel(
+                f"工作 {int(data.get('active_days', 0) or 0)} / 7 天  ·  "
+                f"工作日日均 {format_work_duration(total // max(1, int(data.get('active_days', 0) or 0)))}"
+            )
+            overview.setObjectName("reportHint")
+            hero_layout.addWidget(overview)
+        else:
+            overview = QLabel(
+                f"工作 {int(data.get('active_days', 0) or 0)} 天  ·  "
+                f"工作日日均 {format_work_duration(int(data.get('workday_average_seconds', total // max(1, int(data.get('active_days', 0) or 0))) or 0))}"
+            )
+            overview.setObjectName("reportHint")
+            hero_layout.addWidget(overview)
+        generated = QLabel(f"最后更新 {report.get('generated_at', '--:--:--')}")
+        generated.setObjectName("reportHint")
+        hero_layout.addWidget(generated)
+        layout.addWidget(hero)
+
+        quality = data.get("data_quality") or {}
+        if bool(data.get("consistency_error") or quality.get("consistency_error")):
+            warning = QLabel(
+                "ⓘ 本日统计存在一致性异常，已停止展示错误累计值。请稍后重新同步或查看诊断日志。"
+                if key == "day"
+                else "ⓘ 本区间统计存在一致性异常，已停止展示错误累计值。请查看诊断日志。"
+            )
+            warning.setObjectName("reportWarning")
+            warning.setWordWrap(True)
+            layout.addWidget(warning)
+            # Do not render charts/metrics sourced from an invalid payload.
+            # The raw value remains in provenance logs for root-cause work.
+            return
+        if not bool(quality.get("trusted", True)):
+            days = len(quality.get("untrusted_days") or [])
+            warning = QLabel(f"ⓘ 已排除 {days} 天旧版异常计时记录，未纳入本页统计。")
+            warning.setObjectName("reportWarning")
+            warning.setWordWrap(True)
+            layout.addWidget(warning)
+
+        daily_rows = data.get("daily") or []
+        try:
+            period_start = date.fromisoformat(str(data.get("start") or ""))
+        except ValueError:
+            period_start = None
+        if key == "month":
+            if report_range_is_standard(
+                key,
+                range_start,
+                range_end,
+                datetime.now(BEIJING_TIMEZONE).date(),
+            ):
+                layout.addWidget(
+                    self._heatmap_card(
+                        "本月工作日历",
+                        "颜色越深表示当天有效工作时间越长；悬停日期可查看具体数值。",
+                        daily_rows,
+                    )
+                )
+            else:
+                layout.addWidget(
+                    self._chart_card(
+                        "区间每日工作时长",
+                        "滚动月份按选定区间显示每日有效工作时长；左右拖动可继续按天平移。",
+                        daily_rows,
+                        drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                    )
+                )
+            layout.addWidget(
+                self._chart_card(
+                    "本月典型工作节律",
+                    "每根柱子代表 1 小时；横轴每 3 小时显示一个刻度。左右拖动图表可按天平移区间。",
+                    data.get("hourly") or [],
+                    hourly=True,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                )
+            )
+        elif key == "year":
+            layout.addWidget(
+                self._year_heatmap_card(
+                    "年度工作日历",
+                    "全年热力图：颜色越深表示当天有效工作时间越长；悬停日期可查看工作时长和专注段。",
+                    daily_rows,
+                )
+            )
+            layout.addWidget(
+                self._chart_card(
+                    "12个月工作趋势",
+                    "每根柱子代表一个月累计有效工作时长；左右拖动图表可平移年度窗口。",
+                    data.get("monthly") or [],
+                    monthly=True,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                )
+            )
+            layout.addWidget(
+                self._chart_card(
+                    "年度典型工作节律",
+                    "横轴为 0:00–24:00，统计全年各小时段累计有效工作时间。",
+                    data.get("hourly") or [],
+                    hourly=True,
+                    hourly_tooltip_label="全年",
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                )
+            )
+        elif key == "day":
+            layout.addWidget(
+                self._interval_card(
+                    "当日工作节律" if is_historical_day else "今天工作节律",
+                    "按真实开始/结束时间显示工作区间；暂停和中断会保留为空白。悬停区间查看时间、时长和任务。",
+                    data.get("focus_intervals") or [],
+                    "day",
+                    period_start,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                )
+            )
+        else:
+            layout.addWidget(
+                self._chart_card(
+                    "本周工作时长",
+                    "横轴显示月/日和星期；左右拖动图表可按天平移 7 天窗口。",
+                    daily_rows,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                )
+            )
+            layout.addWidget(
+                self._interval_card(
+                    "本周工作节律",
+                    "横轴为 0:00–24:00，纵轴显示每个日期；每个区间来自真实 FocusSession，当前日期高亮。",
+                    data.get("focus_intervals") or [],
+                    "week",
+                    period_start,
+                    drag_callback=lambda days, period=key: self._shift_by_days(days, period=period),
+                )
+            )
+
+        core_grid = QGridLayout()
+        core_grid.setSpacing(10)
+        core_metrics = [
+            ("有效专注段", f"{int(data.get('started_rounds', 0) or 0)} 段"),
+            ("最长连续专注", format_work_duration(int(data.get("longest_focus_seconds", 0) or 0))),
+            (
+                "暂停超过10分钟",
+                f"{int(data.get('interruptions', 0) or 0)} 次",
+            ),
+            ("平均专注段时长", format_work_duration(int(data.get("average_session_seconds", 0) or 0))),
+            (
+                "累计月专注时间" if key == "month" else "年度有效专注" if key == "year" else "深度专注时间",
+                format_work_duration(total if key in {"month", "year"} else int(data.get("deep_focus_seconds", 0) or 0)),
+            ),
+            (
+                "完成任务" if data.get("completed_task_count") is not None else "完成专注段",
+                f"{int(data.get('completed_task_count', data.get('completed_rounds', 0)) or 0)} "
+                f"{'项' if data.get('completed_task_count') is not None else '段'}",
+            ),
+        ]
+        for index, (label, value) in enumerate(core_metrics):
+            core_grid.addWidget(self._metric(label, value), index // 2, index % 2)
+        layout.addLayout(core_grid)
+
+        detail_title = QLabel("工作节奏")
+        detail_title.setObjectName("reportSection")
+        layout.addWidget(detail_title)
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        if key == "day":
+            metrics = [
+                (
+                    "今日节奏",
+                    f"{data.get('first_started_at', '暂无记录')} 开始 · "
+                    f"{data.get('last_ended_at', '暂无记录')} 结束",
+                ),
+                ("本周工作时间", format_work_duration(int(data.get("week_total_seconds", 0) or 0))),
+                ("当前连续工作天数", f"{int(report.get('current_streak_days', 0) or 0)} 天"),
+                ("最强时段", str(data.get("strongest_window") or "暂无足够数据")),
+            ]
+        elif key == "week":
+            metrics = [
+                ("工作天数", f"{int(data.get('active_days', 0) or 0)} / 7 天"),
+                ("工作日日均", format_work_duration(total // max(1, int(data.get("active_days", 0) or 0)))),
+                ("最强时段", str(data.get("strongest_window") or "暂无足够数据")),
+                ("当前连续工作天数", f"{int(report.get('current_streak_days', 0) or 0)} 天"),
+                ("本周最佳搭子", str(report.get("best_buddy") or "暂无可用排行榜数据")),
+            ]
+        elif key == "year":
+            busiest_day = data.get("busiest_day") or {}
+            busiest_month = data.get("busiest_month") or {}
+            metrics = [
+                ("工作天数", f"{int(data.get('active_days', 0) or 0)} 天"),
+                ("工作日日均", format_work_duration(int(data.get("workday_average_seconds", 0) or 0))),
+                ("最长连续工作", f"{int(data.get('longest_streak_days', 0) or 0)} 天"),
+                ("最勤奋月份", str(busiest_month.get("year_label") or "暂无记录")),
+                (
+                    "最长单日工作",
+                    format_work_duration(int(busiest_day.get("seconds", 0) or 0))
+                    if busiest_day else "暂无记录",
+                ),
+                ("全年典型时段", str(data.get("strongest_window") or "暂无足够数据")),
+            ]
+        else:
+            metrics = [
+                ("工作天数", f"{int(data.get('active_days', 0) or 0)} 天"),
+                ("工作日日均", format_work_duration(total // max(1, int(data.get("active_days", 0) or 0)))),
+                ("最长连续工作", f"{int(report.get('current_streak_days', 0) or 0)} 天"),
+                ("最强时段", str(data.get("strongest_window") or "暂无足够数据")),
+            ]
+        for index, (label, value) in enumerate(metrics):
+            grid.addWidget(self._metric(label, value), index // 2, index % 2)
+        layout.addLayout(grid)
+
+        if key == "year":
+            milestones_title = QLabel("年度里程碑")
+            milestones_title.setObjectName("reportSection")
+            layout.addWidget(milestones_title)
+            busiest_day = data.get("busiest_day") or {}
+            busiest_month = data.get("busiest_month") or {}
+            milestone_grid = QGridLayout()
+            milestone_grid.setSpacing(10)
+            milestone_metrics = [
+                (
+                    "最忙的一天",
+                    (
+                        f"{busiest_day.get('display_label') or busiest_day.get('date')} · "
+                        f"{format_work_duration(int(busiest_day.get('seconds', 0) or 0))}"
+                        if busiest_day else "暂无记录"
+                    ),
+                ),
+                (
+                    "最忙的一个月",
+                    (
+                        f"{busiest_month.get('year_label') or busiest_month.get('label')} · "
+                        f"{format_work_duration(int(busiest_month.get('seconds', 0) or 0))}"
+                        if busiest_month else "暂无记录"
+                    ),
+                ),
+                ("最长连续工作", f"{int(data.get('longest_streak_days', 0) or 0)} 天"),
+                (
+                    "年度第100小时",
+                    (
+                        f"{str(data.get('hundred_hour_date') or '')} 达成"
+                        if data.get("hundred_hour_date") else "继续积累中"
+                    ),
+                ),
+            ]
+            for index, (label, value) in enumerate(milestone_metrics):
+                milestone_grid.addWidget(self._metric(label, value), index // 2, index % 2)
+            layout.addLayout(milestone_grid)
+
+        if key == "day":
+            room_label = "已连接搭子自习室" if data.get("focus_room_id") else "个人自习室"
+            session_card = self._metric(
+                "当前工作状态",
+                f"{report.get('current_status_label', '未开始工作')} · "
+                f"本轮 {format_work_duration(int(data.get('focus_session_seconds', 0) or 0))} · {room_label}",
+            )
+            layout.addWidget(session_card)
+            current_task = data.get("current_task") or {}
+            task_text = str(current_task.get("title") or "当前没有绑定专注任务") if isinstance(current_task, dict) else "当前没有绑定专注任务"
+            layout.addWidget(self._metric("当前任务", task_text))
+
+    @staticmethod
+    def _render_daily_bars(layout: QVBoxLayout, rows: list[dict[str, Any]]) -> None:
+        values = [max(0, int(row.get("seconds", 0) or 0)) for row in rows if isinstance(row, dict)]
+        maximum = max(values or [1])
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            line = QHBoxLayout()
+            label = QLabel(str(row.get("label") or "--"))
+            label.setMinimumWidth(48)
+            if bool(row.get("is_today")):
+                label.setObjectName("reportTodayLabel")
+            bar = QProgressBar()
+            bar.setObjectName("reportBar")
+            bar.setRange(0, maximum)
+            bar.setValue(max(0, int(row.get("seconds", 0) or 0)))
+            bar.setTextVisible(False)
+            bar.setToolTip(
+                f"{row.get('label', '--')} · {format_work_duration(int(row.get('seconds', 0) or 0))} · "
+                f"{int(row.get('rounds', 0) or 0)} 段"
+            )
+            value = QLabel(format_work_duration(int(row.get("seconds", 0) or 0)))
+            value.setMinimumWidth(70)
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            line.addWidget(label)
+            line.addWidget(bar, 1)
+            line.addWidget(value)
+            layout.addLayout(line)

@@ -51,6 +51,53 @@ class StateDecision:
     duration_ms: int
 
 
+@dataclass(frozen=True)
+class CompanionBehaviorDecision:
+    """工作状态驱动的陪伴动作选择结果。"""
+
+    activity: str
+    reason: str
+
+
+class CompanionBehaviorController:
+    """将计时、时间、音乐和互动状态收口为自动陪伴决策。
+
+    这里不直接操作窗口或动画；PetWindow 只需把 activity 交给
+    AnimationManager/现有动画入口，用户无需再维护“陪伴动作”菜单。
+    """
+
+    def decide(
+        self,
+        *,
+        now_hour: int,
+        working: bool,
+        session_seconds: int,
+        today_seconds: int,
+        resting: bool = False,
+        music_playing: bool = False,
+        idle_seconds: int = 0,
+    ) -> CompanionBehaviorDecision:
+        if resting:
+            return CompanionBehaviorDecision("sleep" if session_seconds > 0 else "sit", "rest")
+        if working:
+            if session_seconds >= 4 * 3600:
+                return CompanionBehaviorDecision("sleepy", "extreme_fatigue")
+            if session_seconds >= 2 * 3600:
+                return CompanionBehaviorDecision("thermos", "long_session")
+            if now_hour >= 22:
+                return CompanionBehaviorDecision("sit", "overtime")
+            if session_seconds >= 45 * 60:
+                return CompanionBehaviorDecision("book", "steady_work")
+            if music_playing:
+                return CompanionBehaviorDecision("headphones", "music_support")
+            return CompanionBehaviorDecision("sit", "work_companion")
+        if idle_seconds >= 30 * 60:
+            return CompanionBehaviorDecision("pointing", "missing_user")
+        if today_seconds >= 3 * 3600 and now_hour >= 20:
+            return CompanionBehaviorDecision("sleepy", "late_day_fatigue")
+        return CompanionBehaviorDecision("idle", "free_time")
+
+
 @dataclass
 class PetMood:
     """保存并约束宠物的亲密度、精力、无聊度和饱食度。"""
@@ -155,7 +202,7 @@ class BehaviorModel:
     def next_autonomous_state(
         self,
         current: PetState,
-        allow_walk: bool = True,
+        allow_walk: bool = False,
     ) -> StateDecision:
         """按当前状态和跑动开关选择下一生活状态及持续时间。"""
 

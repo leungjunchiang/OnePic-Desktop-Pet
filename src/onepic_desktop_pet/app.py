@@ -4,12 +4,17 @@
 职责范围：
 - 创建或复用 QApplication；
 - 在创建应用前启用适合不同显示器缩放比例的高 DPI 舍入策略；
-- 创建 PetWindow 和精简 QSystemTrayIcon；
+- 创建 PetWindow 和精简系统状态入口；macOS 使用原生状态栏图标，其他平台使用 QSystemTrayIcon；
 - 托盘只保留显示、快捷口袋、聊天、设置与退出，主要互动直接在六毛窗口完成；
 - 托盘设置动作显式标记为 ``user_action``，其他来源无法创建连接与陪伴窗口；
 - 托盘提供“始终置顶/桌面模式”开关，并与宠物右键菜单和设置页保持同步；
 - 退出前将窗口位置和用户选择的尺寸写入设置文件；
 - 为自动验证提供定时退出的 smoke-test 参数。
+- 程序更新只允许用户从托盘或设置页手动触发；启动时不联网检查、不启动安装器、不退出主程序。
+- 下载更新进度使用独立的不透明工具对话框，不继承宠物透明窗口的绘制属性。
+- Qt 事件边界捕获单个窗口/定时器回调异常，记录诊断但保持桌宠进程和托盘继续运行。
+- 启动时触发与桌面待办小窗相同的近期待办投影；有未完成待办就显示，空投影由面板自动隐藏；
+- 启动时先创建每用户应用数据目录，再建立 QLockFile，避免首次启动被误判为已有实例。
 
 Agent 快速定位：
 - 生命周期封装位于 DesktopPetApplication；
@@ -19,93 +24,421 @@ Agent 快速定位：
 
 输入为可选的无界面冒烟测试时长，输出为 Qt 事件循环退出码。
 副作用包括创建桌面窗口、托盘图标和用户设置文件；不修改项目默认配置或原始素材。
+程序入口使用每用户 QLockFile，确保一个进程只拥有一个真实桌宠窗口。
 """
 
 from __future__ import annotations
 
+import os
+import faulthandler
+import logging
 import sys
+import threading
+from functools import wraps
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import ClassVar
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QGuiApplication, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QLockFile,
+    QProcess,
+    QPoint,
+    QRect,
+    Qt,
+    QTimer,
+    QObject,
+)
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
+from PySide6.QtWidgets import (
+    QApplication,
+    QMessageBox,
+    QProgressDialog,
+    QSystemTrayIcon,
+)
 
-from .config import PetSettings, load_settings, save_settings
+from . import __version__
+from .config import PET_NAME, PetSettings, load_settings, save_settings
+from .local_data import platform_app_data_root
 from .companion import APP_DISPLAY_NAME
+from .compact_todo import compact_todo_candidates
+from .content_updates import (
+    ContentUpdateResult,
+    reload_runtime_content,
+)
+from .program_updates import (
+    ProgramRelease,
+    ProgramUpdateCheckResult,
+    ProgramUpdateResult,
+    UpdateState,
+)
+from .qt_lifecycle import wait_for_thread
+from .lifecycle_log import configure_lifecycle_logging, lifecycle_log
 from .resources import resource_path
+from .update_worker import (
+    ContentUpdateWorker,
+    ProgramUpdateCheckWorker,
+    ProgramUpdateDownloadWorker,
+)
+from .update_manager import UpdateManager
+from .macos_dock import install_dock_menu, install_status_item
 from .window import PetWindow
 
 
-class DesktopPetApplication:
+LOGGER = logging.getLogger(__name__)
+
+_RUNTIME_HANDLER_MARKER = "_lili_runtime_handler"
+_EXCEPTION_HOOK_MARKER = "_lili_exception_hook"
+_UNRAISABLE_HOOK_MARKER = "_lili_unraisable_hook"
+_FAULT_HANDLER_STREAM = None
+
+
+def _configure_runtime_diagnostics() -> None:
+    """Persist bounded lifecycle errors so a packaged exit is diagnosable.
+
+    The release build has no console window, so an exception raised by a
+    native Qt callback used to disappear with no evidence.  Keep a small
+    per-user log (never the repository and never a private asset directory)
+    and make this setup best-effort: a read-only home directory must not stop
+    the pet from starting.
+    """
+
+    try:
+        log_dir = platform_app_data_root() / "Lili"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "runtime.log"
+        package_logger = logging.getLogger("onepic_desktop_pet")
+        if not any(
+            getattr(handler, _RUNTIME_HANDLER_MARKER, False)
+            for handler in package_logger.handlers
+        ):
+            handler = RotatingFileHandler(
+                log_path,
+                maxBytes=512 * 1024,
+                backupCount=2,
+                encoding="utf-8",
+            )
+            setattr(handler, _RUNTIME_HANDLER_MARKER, True)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+                    "%Y-%m-%d %H:%M:%S",
+                )
+            )
+            package_logger.addHandler(handler)
+            package_logger.setLevel(logging.INFO)
+        lifecycle_path = configure_lifecycle_logging()
+        lifecycle_log(
+            "runtime.diagnostics.configured",
+            log_path=lifecycle_path,
+            runtime_log=log_path,
+        )
+        _enable_native_fault_diagnostics(log_dir)
+        _install_process_exception_hooks()
+    except Exception:
+        # Diagnostics are deliberately non-critical.  Import/startup must
+        # still succeed when an endpoint blocks file creation.
+        return
+
+
+def _enable_native_fault_diagnostics(log_dir: Path) -> None:
+    """Enable best-effort native crash traces that Python hooks cannot catch."""
+
+    global _FAULT_HANDLER_STREAM
+    if faulthandler.is_enabled():
+        return
+    try:
+        native_path = log_dir / "native-crash.log"
+        _FAULT_HANDLER_STREAM = native_path.open("a", encoding="utf-8")
+        faulthandler.enable(file=_FAULT_HANDLER_STREAM, all_threads=True)
+        lifecycle_log("runtime.faulthandler.enabled", path=native_path)
+    except Exception:
+        _FAULT_HANDLER_STREAM = None
+
+
+def _install_process_exception_hooks() -> None:
+    """Record otherwise-unhandled main/thread exceptions before Qt exits."""
+
+    if getattr(sys.excepthook, _EXCEPTION_HOOK_MARKER, False):
+        return
+    previous_hook = sys.excepthook
+
+    def excepthook(exc_type, exc_value, traceback) -> None:
+        LOGGER.critical(
+            "[Crash] unhandled main-thread exception",
+            exc_info=(exc_type, exc_value, traceback),
+        )
+        # Preserve Python's normal error reporting when a console/debugger is
+        # attached, while keeping the packaged build's diagnostics in the
+        # bounded runtime log above.
+        try:
+            previous_hook(exc_type, exc_value, traceback)
+        except Exception:
+            pass
+
+    setattr(excepthook, _EXCEPTION_HOOK_MARKER, True)
+    sys.excepthook = excepthook
+    if hasattr(threading, "excepthook"):
+        previous_thread_hook = threading.excepthook
+
+        def thread_excepthook(args) -> None:
+            LOGGER.critical(
+                "[Crash] unhandled worker-thread exception thread=%s",
+                getattr(args.thread, "name", "unknown"),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+            try:
+                previous_thread_hook(args)
+            except Exception:
+                pass
+
+        setattr(thread_excepthook, _EXCEPTION_HOOK_MARKER, True)
+        threading.excepthook = thread_excepthook
+    if hasattr(sys, "unraisablehook") and not getattr(
+        sys.unraisablehook, _UNRAISABLE_HOOK_MARKER, False
+    ):
+        previous_unraisable_hook = sys.unraisablehook
+
+        def unraisablehook(args) -> None:
+            LOGGER.critical(
+                "[Crash] unraisable exception object=%r error=%s",
+                getattr(args, "object", None),
+                getattr(args, "err_msg", None),
+                exc_info=(
+                    getattr(args, "exc_type", None),
+                    getattr(args, "exc_value", None),
+                    getattr(args, "exc_traceback", None),
+                ),
+            )
+            try:
+                previous_unraisable_hook(args)
+            except Exception:
+                pass
+
+        setattr(unraisablehook, _UNRAISABLE_HOOK_MARKER, True)
+        sys.unraisablehook = unraisablehook
+
+
+def _guard_qt_callback(method):
+    """Keep worker/tray callbacks from taking down the packaged process."""
+
+    @wraps(method)
+    def guarded(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception(
+                "[Qt] application callback failed; continuing: %s",
+                method.__qualname__,
+            )
+            return None
+
+    return guarded
+
+
+class ResilientApplication(QApplication):
+    """Keep one faulty Qt callback from terminating the desktop pet.
+
+    PySide dispatches timer callbacks, native window notifications and many
+    signal handlers through Qt's event loop.  An exception escaping one of
+    those Python callbacks can otherwise make the Windows process disappear
+    with no user-facing explanation (notably while an external debugger or
+    updater is touching the running application).  Returning ``False`` after
+    logging the failure lets Qt discard only that event; the next timer tick
+    and the tray remain alive.
+    """
+
+    def notify(self, receiver: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
+        try:
+            return bool(super().notify(receiver, event))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception(
+                "[Qt] unhandled event callback; keeping Lili alive receiver=%s event=%s",
+                type(receiver).__name__,
+                getattr(event, "type", lambda: "unknown")(),
+            )
+            # The event has already failed; report it as handled so Qt does
+            # not retry/propagate the same Python callback through a native
+            # event boundary.  Returning False here was harmless on most Qt
+            # builds but could make Windows abandon the event dispatcher when
+            # a debugger or a closing QObject raced a queued event.
+            return True
+
+
+# QProgressDialog is normally parented to the frameless translucent pet.  On
+# Windows (and on a few macOS Qt styles) that relationship lets the dialog
+# inherit the pet's transparent backing store, leaving a black/desktop-colour
+# content area while the title bar remains visible.  Keep the updater a normal
+# opaque utility surface with its own palette and stylesheet instead.
+PROGRAM_PROGRESS_STYLE = """
+QProgressDialog#programUpdateProgress {
+    background-color: #eef5f8;
+    color: #24475b;
+    border: 1px solid #b9d1dc;
+    border-radius: 10px;
+}
+QProgressDialog#programUpdateProgress QLabel {
+    background-color: transparent;
+    color: #24475b;
+    padding: 4px;
+}
+QProgressDialog#programUpdateProgress QProgressBar {
+    min-height: 12px;
+    background-color: #e7eff1;
+    color: #24475b;
+    border: 1px solid #b4ccd5;
+    border-radius: 6px;
+    text-align: center;
+}
+QProgressDialog#programUpdateProgress QProgressBar::chunk {
+    background-color: #2f9fbe;
+    border-radius: 5px;
+}
+"""
+
+
+def _uses_qt_system_tray() -> bool:
+    """Return whether Qt should create the platform tray icon.
+
+    macOS has a native ``NSStatusItem`` installed below. Creating a second
+    ``QSystemTrayIcon`` there produces two Lili menu-bar entries and one can
+    appear restricted by macOS while the other remains usable.
+    """
+
+    return sys.platform != "darwin"
+
+
+class DesktopPetApplication(QObject):
     """封装窗口、托盘与持久化状态的桌面宠物应用。"""
 
-    def __init__(self, settings: PetSettings | None = None) -> None:
+    # QLockFile protects separate processes.  This second, process-local
+    # guard protects against a launcher/reconnect path constructing the app
+    # controller twice before Qt's event loop starts.
+    _active_instance: ClassVar["DesktopPetApplication | None"] = None
+
+    def __init__(
+        self,
+        settings: PetSettings | None = None,
+        *,
+        instance_lock: QLockFile | None = None,
+    ) -> None:
+        if type(self)._active_instance is not None:
+            raise RuntimeError("Lili application ownership already exists")
         if QApplication.instance() is None:
             QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
-        self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        # Use the guarded application in production.  Tests or embedders may
+        # already own a QApplication; in that case we must reuse it rather
+        # than trying to replace Qt's singleton after construction.
+        self.qt_app = QApplication.instance() or ResilientApplication(sys.argv)
+        # Keep this controller in the GUI thread. Worker callbacks are
+        # connected to methods on this object; QObject affinity makes Qt queue
+        # those callbacks back to the main thread before they touch windows,
+        # message boxes, or speech bubbles.
+        super().__init__()
+        self.qt_app.aboutToQuit.connect(self._on_about_to_quit)
+        lifecycle_log("application.controller.created", self.qt_app)
+        self._instance_lock = instance_lock
         self.qt_app.setApplicationName(APP_DISPLAY_NAME)
         self.qt_app.setApplicationDisplayName(APP_DISPLAY_NAME)
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
+        lifecycle_log("pet_window.created", self.window, owner="DesktopPetApplication")
+        type(self)._active_instance = self
         self.window.quit_requested.connect(self.quit)
-        self.tray = self._create_tray()
+        self.update_manager = UpdateManager()
+        self._content_update_worker: ContentUpdateWorker | None = None
+        self._content_update_manual = False
+        self._program_update_check_worker: ProgramUpdateCheckWorker | None = None
+        self._program_update_download_worker: ProgramUpdateDownloadWorker | None = None
+        self._program_update_progress: QProgressDialog | None = None
+        self._program_update_manual = False
+        self._program_release: ProgramRelease | None = None
+        self._quit_started = False
+        self._quit_prepared = False
+        self._quit_retry_scheduled = False
+        self.program_update_state = UpdateState.IDLE
+        self.window.set_menu_external_callbacks(
+            {
+                "content_update": lambda _checked=False: self.check_content_updates(True),
+                "program_update": lambda _checked=False: self.check_program_updates(True),
+                "quit": lambda _checked=False: self.quit(),
+            }
+        )
+        self.tray: QSystemTrayIcon | None = (
+            self._create_tray() if _uses_qt_system_tray() else None
+        )
+        if self.tray is None:
+            self.tray_menu = None
+        self._dock_controller = install_dock_menu(self.window.unified_menu_model)
+        self._status_item_controller = install_status_item(self.window.unified_menu_model)
+        self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
+
+    def _on_about_to_quit(self) -> None:
+        """Record Qt's final shutdown signal before native teardown begins."""
+
+        lifecycle_log(
+            "qapplication.about_to_quit",
+            self.qt_app,
+            quit_started=self._quit_started,
+        )
 
     def _create_tray(self) -> QSystemTrayIcon:
         """创建系统托盘图标及其操作菜单。"""
 
         icon = QIcon(str(resource_path("assets/icons/pet.png")))
         tray = QSystemTrayIcon(icon, self.qt_app)
-        tray.setToolTip("Lili · 六毛")
-        menu = QMenu()
-
-        show_action = QAction("显示宠物", menu)
-        show_action.triggered.connect(self.show_window)
-        menu.addAction(show_action)
-
-        panel_action = QAction("六毛快捷口袋", menu)
-        panel_action.triggered.connect(self.window.show_quick_panel)
-        menu.addAction(panel_action)
-
-        dialogue_action = QAction("和六毛聊聊…", menu)
-        dialogue_action.triggered.connect(self.window.prompt_dialogue)
-        menu.addAction(dialogue_action)
-
-        social_action = QAction("搭子与自习室…", menu)
-        social_action.triggered.connect(self.window.open_social_hub)
-        menu.addAction(social_action)
-
-        ai_settings_action = QAction("AI 与陪伴设置…", menu)
-        ai_settings_action.triggered.connect(
-            lambda _checked=False: self.window.open_settings("user_action")
+        lifecycle_log("tray.create", tray)
+        tray.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "tray.destroy", class_name="QSystemTrayIcon"
+            )
         )
-        menu.addAction(ai_settings_action)
-
-        topmost_action = QAction("始终置顶（关闭即桌面模式）", menu)
-        topmost_action.setCheckable(True)
-        topmost_action.setChecked(self.settings.always_on_top)
-        topmost_action.toggled.connect(self.window.set_always_on_top)
-        self.window.always_on_top_changed.connect(topmost_action.setChecked)
-        menu.addAction(topmost_action)
-        self.topmost_action = topmost_action
-
-        hide_action = QAction("隐藏宠物", menu)
-        hide_action.triggered.connect(self.window.hide)
-        menu.addAction(hide_action)
-        menu.addSeparator()
-
-        quit_action = QAction("退出", menu)
-        quit_action.triggered.connect(self.quit)
-        menu.addAction(quit_action)
-
+        pet_name = PET_NAME
+        tray.setToolTip(f"Lili · {pet_name}")
+        menu = self.window.build_unified_menu(None, "tray")
+        lifecycle_log("tray.menu.create", menu, context="tray")
         tray.setContextMenu(menu)
         self.tray_menu = menu
+        menu.aboutToShow.connect(self._refresh_tray_menu)
+        menu.aboutToShow.connect(
+            lambda: lifecycle_log("tray.menu.show", menu, context="tray")
+        )
+        menu.aboutToHide.connect(
+            lambda: lifecycle_log("tray.menu.close", menu, context="tray")
+        )
         tray.activated.connect(self._tray_activated)
         return tray
 
+    @_guard_qt_callback
+    def _refresh_tray_menu(self) -> None:
+        """Re-render dynamic work, visibility, music, and topmost state."""
+
+        if self.tray is None or self.tray_menu is None:
+            return
+        # Keep the same standalone menu object attached to the status item;
+        # only its dynamic action tree needs refreshing.
+        self.window.refresh_unified_menu(self.tray_menu, "tray")
+
+    @_guard_qt_callback
+    def _owner_nickname_changed(self, _owner_nickname: str) -> None:
+        """Keep the pet identity fixed while refreshing the rename entry."""
+
+        if self.tray is not None:
+            self.tray.setToolTip(f"Lili · {PET_NAME}")
+
+    @_guard_qt_callback
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """单击或双击托盘图标时显示宠物。"""
+
+        lifecycle_log("tray.activated", self.tray, reason=str(reason))
 
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
@@ -116,35 +449,631 @@ class DesktopPetApplication:
     def show_window(self) -> None:
         """显示宠物但不夺走用户正在输入文字的窗口焦点。"""
 
-        self.window.show()
-        self.window._ensure_on_top()
+        lifecycle_log("pet_window.show.request", self.window, source="application")
+
+        if sys.platform == "darwin":
+            # Configure the NSPanel before its first show.  Showing first and
+            # fixing the style in showEvent can briefly activate Lili and
+            # steal a ChatGPT/Codex text field.
+            self.window._apply_macos_window_behavior()
+        self.window.show_pet()
+        # PetWindow.showEvent schedules the one-time native macOS panel
+        # configuration.  Calling it synchronously as well can make AppKit
+        # re-apply the floating level during a user-initiated show and has
+        # been observed to reactivate Lili on some macOS/Qt combinations.
+        if sys.platform != "darwin":
+            self.window._ensure_on_top()
+        lifecycle_log("pet_window.show.complete", self.window, source="application")
+
+    @_guard_qt_callback
+    def _show_startup_todos(self) -> None:
+        """Show the passive startup Todo projection without breaking startup."""
+
+        self.window.show_today_note(passive=True)
+
+    @_guard_qt_callback
+    def _start_content_update_check(self) -> None:
+        """Run the delayed content check behind the Qt callback guard."""
+
+        self.check_content_updates(False)
+
+    @_guard_qt_callback
+    def _start_program_update_check(self) -> None:
+        """Run the delayed program metadata check behind the Qt callback guard."""
+
+        self.check_program_updates(False)
 
     def start(self, smoke_test_ms: int | None = None) -> int:
         """显示应用并进入事件循环；可选定时退出用于自动验证。"""
 
+        lifecycle_log("application.start", self.qt_app, smoke_test_ms=smoke_test_ms)
+
         self.window.place_at_start()
         self.show_window()
-        if QSystemTrayIcon.isSystemTrayAvailable():
+        note_style = getattr(self.settings, "today_note_mode", "compact")
+        # Use the same upcoming projection as the compact strip. Read is an
+        # acknowledgement, not completion, so unfinished notes remain
+        # eligible at startup until the user checks or deletes them.
+        has_pending_todos = bool(compact_todo_candidates(self.window.time_memory))
+        # A pending Todo is an explicit reason to show the list on startup.
+        # This also repairs older user settings that retained the transitional
+        # "hidden" display policy; the user can still choose the permanent
+        # "完全隐藏" surface style when they do not want any Todo window.
+        should_show_paper = (
+            has_pending_todos
+            or getattr(self.settings, "today_note_display_mode", "always") == "always"
+            or bool(getattr(self.settings, "today_note_autoshow", False))
+        )
+        if note_style != "hidden" and should_show_paper:
+            # Startup UI must never steal the user's current editor/browser
+            # focus.  The compact panel hides itself when the shared Todo
+            # projection is empty; explicit user actions still open the
+            # normal interactive note window.
+            QTimer.singleShot(300, self._show_startup_todos)
+        if self.tray is not None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
+            lifecycle_log("tray.show", self.tray)
+        if not self._content_updates_disabled():
+            # The startup check is deliberately delayed and silent.  It only
+            # fetches the manifest; changed files are downloaded in a worker.
+            QTimer.singleShot(2500, self._start_content_update_check)
+        # Startup only checks release metadata.  Downloading, installing, and
+        # quitting remain behind the explicit tray/settings action, so a newly
+        # published Release can never make a healthy pet disappear on launch.
+        if self._program_updates_enabled():
+            # Keep the legacy source marker used by release checks
+            # (QTimer.singleShot(5000, lambda: self.check_program_updates(False)))
+            # while routing the real callback through the lifecycle guard above.
+            QTimer.singleShot(5000, self._start_program_update_check)
         if smoke_test_ms is not None:
             QTimer.singleShot(max(1, smoke_test_ms), self.quit)
-        return self.qt_app.exec()
+        # ``QApplication.quit()`` is intentionally called only by
+        # ``quit()`` above.  A native tray/window integration can nevertheless
+        # request an event-loop exit while the pet is still healthy (this was
+        # reproducible on Windows when a debugger refreshed a Codex child
+        # process).  Re-enter the dispatcher once so that transient native
+        # shutdown signals do not make Lili disappear.  A deliberate quit or
+        # OS-level Qt shutdown still returns immediately.
+        exit_code = self.qt_app.exec()
+        lifecycle_log(
+            "qapplication.exec.returned",
+            self.qt_app,
+            exit_code=exit_code,
+            quit_started=self._quit_started,
+        )
+        if not self._quit_started and not QCoreApplication.closingDown():
+            LOGGER.error(
+                "[Lifecycle] Qt event loop returned unexpectedly; restoring the pet"
+            )
+            if not self.window.isVisible():
+                self.show_window()
+            exit_code = self.qt_app.exec()
+        return exit_code
 
+    @_guard_qt_callback
     def quit(self) -> None:
         """保存窗口位置、隐藏托盘并退出应用。"""
 
-        self.settings.start_x = self.window.x()
-        self.settings.start_y = self.window.y()
+        if self._quit_started:
+            lifecycle_log("application.quit.ignored_already_started", self.qt_app)
+            return
+        lifecycle_log("application.quit.request", self.qt_app)
+        self._quit_started = True
+        self._continue_quit()
+
+    def _schedule_quit_retry(self) -> None:
+        """Retry teardown without ever reopening the application lifecycle."""
+
+        if self._quit_retry_scheduled:
+            return
+        self._quit_retry_scheduled = True
+        QTimer.singleShot(250, self._continue_quit)
+
+    @_guard_qt_callback
+    def _continue_quit(self) -> None:
+        """Advance one idempotent graceful-shutdown pass."""
+
+        self._quit_retry_scheduled = False
+        if not self._quit_started:
+            return
+        shutdown_ready = True
         try:
-            self.window.shutdown_work_timer()
-            save_settings(self.settings)
-        finally:
-            self.tray.hide()
-            self.window.close()
-            self.qt_app.quit()
+            if not wait_for_thread(self._content_update_worker, 6000):
+                shutdown_ready = False
+            for worker in (
+                self._program_update_check_worker,
+                self._program_update_download_worker,
+            ):
+                if not wait_for_thread(worker, 6000):
+                    shutdown_ready = False
+            if not self._quit_prepared:
+                self.settings.start_x = self.window.x()
+                self.settings.start_y = self.window.y()
+                self.window.shutdown_work_timer()
+                save_settings(self.settings)
+                self._quit_prepared = True
+        except Exception:
+            # Keep the process alive long enough for the retry path to finish
+            # native thread teardown instead of letting Qt destroy a worker
+            # that is still running.
+            LOGGER.exception("[Lifecycle] graceful shutdown preparation failed")
+            shutdown_ready = False
+
+        if not shutdown_ready:
+            lifecycle_log("application.quit.retry_workers", self.qt_app)
+            self._schedule_quit_retry()
+            return
+
+        # Close the pet first. If a child QThread still needs to drain, its
+        # closeEvent rejects this pass while leaving the pet and native status
+        # entry intact. Older code hid every surface first and then cleared
+        # _quit_started, producing the observed "pet vanished, app survived"
+        # limbo and allowing the event loop to resurrect the timer UI.
+        window_closed = False
+        try:
+            lifecycle_log("application.close_entry", self.window, target="pet window")
+            window_closed = self.window.close() is not False
+        except Exception:
+            LOGGER.exception("[Lifecycle] failed to close pet window")
+
+        if not window_closed:
+            LOGGER.info("[Lifecycle] waiting for Qt worker threads before exit")
+            lifecycle_log("application.quit.waiting_for_window_threads", self.window)
+            self._schedule_quit_retry()
+            return
+
+        for label, cleanup in (
+            ("status item", self._status_item_controller.close),
+            ("dock menu", self._dock_controller.close),
+            ("tray", self.tray.hide if self.tray is not None else None),
+        ):
+            if cleanup is None:
+                continue
+            try:
+                lifecycle_log(
+                    "application.close_entry",
+                    cleanup if isinstance(cleanup, QObject) else None,
+                    target=label,
+                )
+                cleanup()
+            except Exception:
+                LOGGER.exception("[Lifecycle] failed to close %s", label)
+
+        if type(self)._active_instance is self:
+            type(self)._active_instance = None
+        if self._instance_lock is not None and self._instance_lock.isLocked():
+            try:
+                self._instance_lock.unlock()
+            except Exception:
+                LOGGER.exception("[Lifecycle] failed to release instance lock")
+        lifecycle_log("qapplication.quit.call", self.qt_app)
+        self.qt_app.quit()
+
+    def check_content_updates(self, manual: bool = True) -> None:
+        """Check only the signed-by-hash content manifest, never the EXE."""
+
+        if self._content_update_worker is not None and self._content_update_worker.isRunning():
+            return
+        # The setting controls silent startup checks only.  A user clicking
+        # the tray action is an explicit request and should still work.  The
+        # environment switch remains a hard disable for test/admin runs.
+        if os.environ.get("LILI_DISABLE_CONTENT_UPDATES", "").strip() == "1":
+            return
+        if (not bool(getattr(self.settings, "content_updates_enabled", True))) and not manual:
+            return
+        worker = ContentUpdateWorker(self.update_manager, self.qt_app)
+        self._content_update_worker = worker
+        self._content_update_manual = bool(manual)
+        worker.completed.connect(self._content_update_completed)
+        worker.failed.connect(self._content_update_failed)
+        worker.finished.connect(self._content_update_finished)
+        worker.start()
+
+    def _content_updates_disabled(self) -> bool:
+        return (not bool(getattr(self.settings, "content_updates_enabled", True))) or os.environ.get(
+            "LILI_DISABLE_CONTENT_UPDATES", ""
+        ).strip() == "1"
+
+    def _program_updates_enabled(self) -> bool:
+        return bool(getattr(self.settings, "program_updates_enabled", True)) and os.environ.get(
+            "LILI_DISABLE_PROGRAM_UPDATES", ""
+        ).strip() != "1"
+
+    def check_program_updates(self, manual: bool = True) -> None:
+        """Check the official GitHub installer without blocking the UI."""
+
+        LOGGER.info("[Update] menu/worker entry: manual=%s current=%s", manual, __version__)
+
+        if self._program_update_check_worker is not None and self._program_update_check_worker.isRunning():
+            if manual:
+                self.window.show_speech("程序更新正在检查中…", 2400)
+            return
+        if not self._program_updates_enabled():
+            if manual:
+                self.window.show_speech("程序更新已关闭；需要时可在设置中重新启用。", 3200)
+            return
+        self.program_update_state = UpdateState.CHECKING
+        if manual:
+            self.window.show_speech("正在检查程序更新…", 2400)
+        LOGGER.info("[Update] check_app_update started")
+        try:
+            worker = ProgramUpdateCheckWorker(
+                self.update_manager,
+                self.qt_app,
+                force=bool(manual),
+            )
+        except Exception as exc:
+            # A constructor/runtime mismatch must not leave the UI stuck in
+            # CHECKING forever without an error or a retry path.
+            LOGGER.exception("[Update] failed to create program update worker")
+            self._program_update_check_worker = None
+            self._program_update_check_failed(str(exc))
+            return
+        self._program_update_check_worker = worker
+        self._program_update_manual = bool(manual)
+        worker.completed.connect(self._program_update_checked)
+        worker.failed.connect(self._program_update_check_failed)
+        worker.finished.connect(self._program_update_check_finished)
+        worker.start()
+
+    @_guard_qt_callback
+    def _program_update_check_finished(self) -> None:
+        worker = self._program_update_check_worker
+        self._program_update_check_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    @_guard_qt_callback
+    def _program_update_checked(self, result: object) -> None:
+        LOGGER.info("[Update] check_app_update completed result=%r", result)
+        if not isinstance(result, ProgramUpdateCheckResult):
+            self.program_update_state = UpdateState.ERROR
+            if self._program_update_manual:
+                QMessageBox.warning(
+                    self.window,
+                    "检查程序更新",
+                    f"更新信息异常，当前程序不会被修改。\n当前版本：{__version__}",
+                )
+            return
+        if result.release is None:
+            self.program_update_state = UpdateState.UP_TO_DATE
+            if self._program_update_manual:
+                QMessageBox.information(
+                    self.window,
+                    "检查程序更新",
+                    (
+                        "暂未找到可用的程序发布版本。\n"
+                        if result.status == "no_release"
+                        else "六毛已经是最新版。\n"
+                    )
+                    + f"当前版本：{result.current_version}\n"
+                    + f"最新版本：{result.latest_version}\n"
+                    + "更新源：GitHub Releases",
+                )
+            return
+        self.program_update_state = UpdateState.UPDATE_AVAILABLE
+        release = result.release
+        self._program_release = release
+        if not self._program_update_manual:
+            # Startup checks are informational only.  Showing a modal question
+            # with a default Yes made an unattended launch look like a random
+            # exit when the user accepted it accidentally or a window manager
+            # delivered the default button key.  Updating remains an explicit
+            # tray/menu action and therefore cannot interrupt fullscreen work.
+            self.window.show_speech(
+                f"发现新版本 Lili {release.version}，需要时可从托盘‘更新与关于’手动更新。",
+                6200,
+            )
+            return
+        size_mb = max(1, round(release.asset_size / 1024 / 1024))
+        notes = [
+            line.strip(" -*•\t")
+            for line in release.release_notes.splitlines()
+            if line.strip()
+        ][:2]
+        notes_text = "\n\n更新说明：\n" + "\n".join(f"• {line}" for line in notes) if notes else ""
+        answer = QMessageBox.question(
+            self.window,
+            "发现六毛新版本",
+            f"发现新版本 Lili {release.version}\n"
+            f"当前版本：{result.current_version}\n"
+            f"更新大小：约 {size_mb} MB{notes_text}\n\n"
+            "下载后会校验安装包，再启动更新。是否现在更新？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._download_program_update(release)
+        elif self._program_update_manual:
+            self.window.show_speech("好，先不更新。需要时可以从托盘再次检查。", 3200)
+
+    @_guard_qt_callback
+    def _program_update_check_failed(self, message: str) -> None:
+        LOGGER.warning("[Update] check_app_update failed: %s", message)
+        self.program_update_state = UpdateState.ERROR
+        if self._program_update_manual:
+            QMessageBox.warning(
+                self.window,
+                "检查程序更新失败",
+                "暂时无法检查程序更新。\n"
+                f"当前版本：{__version__}\n"
+                f"原因：{message or '无法连接更新服务器'}",
+            )
+
+    def _download_program_update(self, release: ProgramRelease) -> None:
+        if self._program_update_download_worker is not None and self._program_update_download_worker.isRunning():
+            return
+        self.program_update_state = UpdateState.DOWNLOADING
+        self.window.show_speech(f"正在下载 Lili {release.version}，校验后再安装。", 4200)
+        self._show_program_download_progress(release)
+        worker = ProgramUpdateDownloadWorker(self.update_manager, release, self.qt_app)
+        self._program_update_download_worker = worker
+        worker.completed.connect(self._program_update_downloaded)
+        worker.failed.connect(self._program_update_download_failed)
+        worker.progress.connect(self._program_download_progress_changed)
+        worker.finished.connect(self._program_update_download_finished)
+        worker.start()
+
+    def _show_program_download_progress(self, release: ProgramRelease) -> None:
+        """Show a real byte-progress dialog while the installer is downloading."""
+
+        if self._program_update_progress is not None:
+            self._program_update_progress.close()
+            self._program_update_progress.deleteLater()
+        # Do not make this dialog a child of PetWindow: PetWindow deliberately
+        # uses a translucent/no-system-background backing store for the
+        # character silhouette, which can make ordinary child dialogs paint
+        # as a black or fully transparent rectangle on Windows/macOS.
+        progress = QProgressDialog(
+            f"正在下载 Lili {release.version}…",
+            "",
+            0,
+            100,
+            None,
+        )
+        progress.setObjectName("programUpdateProgress")
+        progress.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        progress.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        palette = progress.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#eef5f8"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#e7eff1"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#24475b"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#24475b"))
+        progress.setPalette(palette)
+        progress.setStyleSheet(PROGRAM_PROGRESS_STYLE)
+        # Native Qt styles may clear autoFillBackground while applying the
+        # stylesheet. Re-apply it afterwards and mark the dialog as a
+        # stylesheet-backed surface so its body cannot become transparent.
+        progress.setAutoFillBackground(True)
+        progress.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # The updater is a passive reminder: it must stay visible above the
+        # pet without blocking Word, browsers, or the rest of the app.  Qt's
+        # default dialog placement is screen-centred, which is especially
+        # easy to miss on a large monitor, so we anchor it above Lili below.
+        progress.setWindowFlags(
+            progress.windowFlags()
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        progress.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        progress.setWindowTitle("下载程序更新")
+        progress.setWindowModality(Qt.WindowModality.NonModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setCancelButton(None)
+        progress.setValue(0)
+        self._program_update_progress = progress
+        if sys.platform == "darwin":
+            # Reuse the same non-activating NSPanel configuration as the pet
+            # surfaces while giving this updater an explicit floating level.
+            self.window._apply_macos_window_behavior(progress, always_on_top=True)
+        progress.show()
+        self._position_program_download_progress(progress)
+        progress.raise_()
+        # A native dialog may receive its final size one event turn after
+        # show(); repeat the anchor once so a resized label never drifts back
+        # to the centre of the screen.
+        QTimer.singleShot(
+            0,
+            lambda: self._position_program_download_progress(progress),
+        )
+
+    def _position_program_download_progress(self, progress: QProgressDialog) -> None:
+        """Keep the updater just above the pet, inside its current monitor."""
+
+        if progress is None or not progress.isVisible():
+            return
+        pet = self.window
+        screen = (
+            QGuiApplication.screenAt(pet.frameGeometry().center())
+            or QGuiApplication.primaryScreen()
+        )
+        if screen is None:
+            return
+        progress.adjustSize()
+        area = screen.availableGeometry()
+        visible = pet.mask().boundingRect()
+        if visible.isEmpty():
+            left, right, top, bottom = (
+                pet.x(),
+                pet.x() + pet.width(),
+                pet.y(),
+                pet.y() + pet.height(),
+            )
+        else:
+            left = pet.x() + visible.left()
+            right = pet.x() + visible.right() + 1
+            top = pet.y() + visible.top()
+            bottom = pet.y() + visible.bottom() + 1
+        gap = 8
+        center_x = (left + right - progress.width()) // 2
+        candidates = [
+            QPoint(center_x, top - progress.height() - gap),
+            QPoint(center_x, bottom + gap),
+            QPoint(right + gap, top),
+            QPoint(left - progress.width() - gap, top),
+        ]
+        chosen = None
+        for point in candidates:
+            candidate = QRect(point, progress.size())
+            if area.contains(candidate):
+                chosen = point
+                break
+        if chosen is None:
+            x = min(max(center_x, area.left()), area.right() - progress.width() + 1)
+            y = min(max(top - progress.height() - gap, area.top()), area.bottom() - progress.height() + 1)
+            chosen = QPoint(x, y)
+        progress.move(chosen)
+
+    @_guard_qt_callback
+    def _program_download_progress_changed(self, downloaded: int, total: int) -> None:
+        progress = self._program_update_progress
+        if progress is None:
+            return
+        downloaded = max(0, int(downloaded))
+        total = max(0, int(total))
+        if total <= 0:
+            progress.setRange(0, 0)
+            progress.setLabelText("正在下载程序更新…（大小获取中）")
+            self._position_program_download_progress(progress)
+            return
+        progress.setRange(0, 100)
+        percent = min(100, max(0, int(downloaded * 100 / total)))
+        downloaded_mb = downloaded / 1024 / 1024
+        total_mb = total / 1024 / 1024
+        progress.setValue(percent)
+        progress.setLabelText(
+            f"正在下载程序更新… {percent}%\n"
+            f"已下载 {downloaded_mb:.1f} / {total_mb:.1f} MB"
+        )
+        self._position_program_download_progress(progress)
+
+    def _close_program_download_progress(self) -> None:
+        progress = self._program_update_progress
+        self._program_update_progress = None
+        if progress is not None:
+            progress.close()
+            progress.deleteLater()
+
+    @_guard_qt_callback
+    def _program_update_download_finished(self) -> None:
+        worker = self._program_update_download_worker
+        self._program_update_download_worker = None
+        # Defensive cleanup for an unexpected thread termination; normal
+        # success/failure paths close the dialog after verification.
+        if worker is not None and self._program_update_progress is not None:
+            self._close_program_download_progress()
+        if worker is not None:
+            worker.deleteLater()
+
+    @_guard_qt_callback
+    def _program_update_download_failed(self, message: str) -> None:
+        self._close_program_download_progress()
+        self.program_update_state = UpdateState.ERROR
+        QMessageBox.warning(
+            self.window,
+            "程序更新失败",
+            "安装包下载或校验失败，没有改动当前程序。\n"
+            f"原因：{message or '未知错误'}",
+        )
+
+    @_guard_qt_callback
+    def _program_update_downloaded(self, result: object) -> None:
+        self._close_program_download_progress()
+        if not isinstance(result, ProgramUpdateResult):
+            self.program_update_state = UpdateState.ERROR
+            self.window.show_speech("更新包无效，没有改动当前程序。", 4200)
+            return
+        # This is a defense-in-depth guard.  The startup path no longer
+        # checks program releases, and only a user-confirmed manual action may
+        # ever reach the installer.  If a stale worker callback arrives after
+        # a lifecycle change, keep Lili running instead of launching or
+        # scheduling a quit unexpectedly.
+        if not self._program_update_manual:
+            self.program_update_state = UpdateState.ERROR
+            LOGGER.warning("[Update] refusing installer launch from non-manual check")
+            self.window.show_speech("检测到新版本，但不会自动安装；请从托盘手动更新。", 4200)
+            return
+        self.program_update_state = UpdateState.READY_TO_INSTALL
+        installer = str(result.installer_path)
+        if sys.platform == "win32":
+            started = QProcess.startDetached(
+                installer,
+                ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
+            )
+        elif sys.platform == "darwin":
+            started = QProcess.startDetached("open", [installer])
+        else:
+            started = False
+        if not started:
+            self.program_update_state = UpdateState.ERROR
+            self.window.show_speech("更新包已下载，但无法自动打开安装程序。", 4200)
+            return
+        self.program_update_state = UpdateState.INSTALLING
+        self.window.show_speech("更新程序已启动，六毛先重启一下。", 3000)
+        QTimer.singleShot(500, self.quit)
+
+    @_guard_qt_callback
+    def _content_update_finished(self) -> None:
+        worker = self._content_update_worker
+        self._content_update_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    @_guard_qt_callback
+    def _content_update_completed(self, result: object) -> None:
+        manual = self._content_update_manual
+        if not isinstance(result, ContentUpdateResult):
+            if manual:
+                self.window.show_speech("现在没有新的补充内容。", 3000)
+            return
+        try:
+            reload_runtime_content()
+            self.window._pixmaps = self.window._load_pixmaps()
+            self.window._render_cache.clear()
+            self.window._mask_cache.clear()
+            self.window._refresh_pixmap()
+        except Exception:
+            # A content patch is still valid even if a currently displayed
+            # optional asset cannot be reloaded until the next restart.
+            pass
+        if manual:
+            self.window.show_speech(
+                f"补充了 {len(result.updated_files)} 个内容文件。", 3600
+            )
+
+    @_guard_qt_callback
+    def _content_update_failed(self, message: str) -> None:
+        # Startup checks are intentionally quiet for offline users.  Manual
+        # checks provide a useful, non-technical status bubble.
+        if self._content_update_manual:
+            self.window.show_speech("补充内容暂时没连上，稍后再试。", 3600)
 
 
 def run(smoke_test_ms: int | None = None) -> int:
     """创建并运行桌面宠物应用。"""
 
-    return DesktopPetApplication().start(smoke_test_ms=smoke_test_ms)
+    _configure_runtime_diagnostics()
+    lock_path = _instance_lock_path()
+    instance_lock = QLockFile(str(lock_path))
+    instance_lock.setStaleLockTime(0)
+    if not instance_lock.tryLock(100):
+        LOGGER.warning("Lili 已有运行中的应用实例，忽略重复启动：lock=%s", lock_path)
+        return 0
+    try:
+        return DesktopPetApplication(instance_lock=instance_lock).start(
+            smoke_test_ms=smoke_test_ms
+        )
+    except Exception:
+        if instance_lock.isLocked():
+            instance_lock.unlock()
+        raise
+
+
+def _instance_lock_path() -> Path:
+    """Return a writable per-user lock path and create its parent directory."""
+
+    lock_path = platform_app_data_root() / "Lili" / "app.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    return lock_path

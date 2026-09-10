@@ -81,7 +81,7 @@ def test_wellness_channels_are_optional_and_independent() -> None:
     assert model.take_due(True, False, 45, 60) is None
 
 
-def test_each_hour_unlocks_one_of_twelve_outfits_and_final_is_wild_king(tmp_path) -> None:
+def test_each_hour_unlocks_one_of_twelve_outfits_and_final_is_singer_king(tmp_path) -> None:
     clock = Clock()
     model = WorkTimerModel(
         tmp_path / "timer.json",
@@ -98,4 +98,4 @@ def test_each_hour_unlocks_one_of_twelve_outfits_and_final_is_wild_king(tmp_path
     assert model.unlocked_outfit_count() == 12
     assert len(OUTFITS) == 12
     assert OUTFITS[-1].key == "hour-12"
-    assert OUTFITS[-1].name == "荒野国王"
+    assert OUTFITS[-1].name == "陈楚生歌王"

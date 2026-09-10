@@ -6,7 +6,16 @@
 
 from datetime import datetime, timedelta
 
-from onepic_desktop_pet.work_timer import WorkTimerModel, format_work_duration
+import pytest
+
+from onepic_desktop_pet import local_data
+from onepic_desktop_pet.work_timer import (
+    BEIJING_TIMEZONE,
+    SmoothDurationDisplay,
+    WorkTimerModel,
+    format_elapsed_clock,
+    format_work_duration,
+)
 
 
 class FakeClock:
@@ -29,6 +38,22 @@ def _timer(tmp_path, clock: FakeClock) -> WorkTimerModel:
     )
 
 
+def test_smooth_duration_display_never_catches_up_multiple_seconds_at_once() -> None:
+    clock = FakeClock()
+    display = SmoothDurationDisplay(lambda: clock.monotonic)
+
+    assert display.project(100, active=True, identity="account:day") == 100
+    clock.advance(3)
+    assert display.project(103, active=True, identity="account:day") == 101
+    assert display.project(103, active=True, identity="account:day") == 101
+    clock.advance(1)
+    assert display.project(104, active=True, identity="account:day") == 102
+
+    # Pausing and a new day must show the authoritative value immediately.
+    assert display.project(104, active=False, identity="account:day") == 104
+    assert display.project(2, active=True, identity="account:next-day") == 2
+
+
 def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)
@@ -45,7 +70,178 @@ def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> No
     reloaded = _timer(tmp_path, clock)
     assert reloaded.today_seconds() == 100
     assert reloaded.lifetime_seconds() == 100
+    assert reloaded.session_seconds() == 100
+    assert reloaded.has_active_session
     assert not reloaded.is_running
+
+
+def test_current_elapsed_excludes_previous_checkpoint_segments(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(3 * 60 * 60)
+    assert timer.checkpoint()
+    assert timer.session_seconds() == 3 * 60 * 60
+    assert timer.current_elapsed_seconds() == 0
+    clock.advance(90)
+    assert timer.current_elapsed_seconds() == 90
+    assert timer.session_seconds() == 3 * 60 * 60 + 90
+
+
+def test_effective_pause_end_at_seals_at_idle_threshold(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(17 * 60)
+    effective_end = clock.now - timedelta(minutes=7)
+    assert timer.pause("idle_10m", effective_end_at=effective_end)
+    assert timer.session_seconds() == 10 * 60
+    assert timer.today_seconds() == 10 * 60
+    assert timer.pause_reason == "idle_10m"
+
+
+def test_effective_pause_end_at_respects_checkpointed_episode(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(10 * 60)
+    assert timer.checkpoint(minimum_interval_seconds=1)
+    clock.advance(7 * 60)
+    effective_end = clock.now - timedelta(minutes=4)
+    assert timer.pause("idle_10m", effective_end_at=effective_end)
+    assert timer.session_seconds() == 13 * 60
+
+
+def test_pause_persistence_failure_keeps_old_active_identity(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    session_id = timer.focus_session_id
+    clock.advance(60)
+
+    def fail_save() -> None:
+        raise OSError("disk unavailable")
+
+    timer._save = fail_save  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        timer.pause("manual")
+
+    assert timer.is_running
+    assert timer.focus_session_id == session_id
+    assert timer.has_active_session
+
+
+def test_start_persistence_failure_does_not_publish_new_session(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    timer.pause()
+    old_session_id = timer.focus_session_id
+
+    def fail_save() -> None:
+        raise OSError("disk unavailable")
+
+    timer._save = fail_save  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        timer.start()
+
+    assert not timer.is_running
+    assert timer.focus_session_id == old_session_id
+    assert timer.has_active_session
+
+
+def test_checkpoint_keeps_the_real_current_segment_start_for_reports(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    started_at = timer.current_segment_started_at()
+    clock.advance(65)
+    assert timer.checkpoint()
+
+    # Checkpoints reset only the monotonic display slice.  The report must
+    # continue to draw the segment from its wall-clock start instead of
+    # producing ``now–now``.
+    assert timer.current_segment_started_at() == started_at
+    clock.advance(35)
+    assert timer.current_segment_started_at() == started_at
+
+
+def test_running_work_timer_recovers_last_checkpoint_after_restart(tmp_path) -> None:
+    """A crash/restart requires a safe seal and never auto-resumes."""
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    clock.advance(65)
+    assert timer.checkpoint()
+    clock.advance(3600)
+
+    reloaded = _timer(tmp_path, clock)
+    assert not reloaded.is_running
+    assert reloaded.recovery_pending
+    assert reloaded.recovered_active_session
+    assert reloaded.session_seconds() == 65
+    pending = reloaded.pending_recovery_seal()
+    assert pending is not None
+    reloaded.mark_analytics_recorded(pending[0])
+    assert reloaded.complete_recovery_seal()
+    assert not reloaded.recovery_pending
+    assert reloaded.start()
+    clock.advance(30)
+    assert reloaded.session_seconds() == 30
+    reloaded.pause()
+
+
+def test_analytics_cursor_survives_restart_without_replaying_session_total(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    clock.advance(120)
+    timer.mark_analytics_recorded(timer.session_seconds())
+    assert timer.analytics_recorded_session_seconds() == 120
+    timer.pause()
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.has_active_session
+    assert reloaded.analytics_recorded_session_seconds() == 120
+    assert reloaded.focus_session_id
+
+
+def test_paused_timer_with_unrecorded_cursor_exposes_exact_recovery_interval(
+    tmp_path,
+) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    session_id = timer.focus_session_id
+    started_at = timer.current_segment_started_at()
+    clock.advance(120)
+    assert timer.pause()
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.recovery_pending
+    assert reloaded.pending_recovery_seal() == (120, session_id, started_at)
+
+    # The canonical store owner advances this cursor only after its WAL/store
+    # write succeeds.  Once persisted, explicit work may safely resume.
+    reloaded.mark_analytics_recorded(120)
+    assert reloaded.complete_recovery_seal()
+    assert not reloaded.recovery_pending
+
+
+def test_legacy_active_timer_without_cursor_is_treated_as_already_recorded(tmp_path) -> None:
+    path = tmp_path / "work_timer.json"
+    path.write_text(
+        '{"date":"2026-08-10","accumulated_seconds":120,"lifetime_seconds":120,'
+        '"running":false,"session_active":true,"session_accumulated_seconds":120}',
+        encoding="utf-8",
+    )
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.analytics_recorded_session_seconds() == 120
 
 
 def test_work_timer_does_not_double_start_or_count_offline_time(tmp_path) -> None:
@@ -60,7 +256,52 @@ def test_work_timer_does_not_double_start_or_count_offline_time(tmp_path) -> Non
 
     reloaded = _timer(tmp_path, clock)
     assert reloaded.today_seconds() == 90
+    assert reloaded.session_seconds() == 90
+    assert reloaded.has_active_session
+    assert reloaded.start()
+    clock.advance(30)
+    assert reloaded.session_seconds() == 30
+    reloaded.finish()
     assert reloaded.session_seconds() == 0
+    assert not reloaded.has_active_session
+
+
+def test_pause_reason_and_uninterrupted_episode_are_persisted(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+
+    assert timer.start()
+    clock.advance(120)
+    assert timer.episode_seconds() == 120
+    assert timer.pause("idle_10m")
+    assert timer.state == "paused_idle"
+    assert timer.pause_reason == "idle_10m"
+    assert timer.episode_seconds() == 120
+
+    reloaded = _timer(tmp_path, clock)
+    assert reloaded.has_active_session
+    assert not reloaded.is_running
+    assert reloaded.state == "paused_idle"
+    assert reloaded.pause_reason == "idle_10m"
+    assert reloaded.start()  # explicit user resume only
+    assert reloaded.episode_seconds() == 0
+    clock.advance(30)
+    assert reloaded.episode_seconds() == 30
+
+
+def test_lock_sleep_and_video_have_distinct_pause_states(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    for reason, expected in (
+        ("lock", "paused_lock"),
+        ("sleep", "paused_sleep"),
+        ("fullscreen_video", "paused_video"),
+    ):
+        assert timer.start()
+        assert timer.pause(reason)
+        assert timer.state == expected
+        assert timer.pause_reason == reason
+        assert timer.finish() >= 0
 
 
 def test_new_date_resets_today_total(tmp_path) -> None:
@@ -74,6 +315,203 @@ def test_new_date_resets_today_total(tmp_path) -> None:
     clock.now += timedelta(days=1)
     assert timer.today_seconds() == 0
     assert "0分钟" in timer.status_text()
+
+
+def test_running_session_crosses_beijing_midnight_without_identity_split(tmp_path) -> None:
+    clock = FakeClock()
+    clock.now = datetime(2026, 8, 10, 23, 50)
+    timer = _timer(tmp_path, clock)
+    first_session_id = ""
+    timer.set_day_rollover_handler(
+        lambda *_args: (_ for _ in ()).throw(AssertionError("midnight must not seal"))
+    )
+
+    assert timer.start()
+    first_session_id = timer.focus_session_id
+    clock.advance(5 * 60)
+    assert timer.checkpoint()
+    clock.advance(15 * 60)
+
+    # Midnight clips only the daily projection; the logical session remains
+    # one identity and retains the complete observed duration.
+    assert timer.today_seconds() == 10 * 60
+    assert timer.lifetime_seconds() == 20 * 60
+    assert timer.session_seconds() == 20 * 60
+    assert timer.focus_session_id == first_session_id
+    assert timer.current_segment_started_at() == datetime(
+        2026, 8, 10, 23, 50, tzinfo=BEIJING_TIMEZONE
+    )
+
+
+def test_midnight_does_not_depend_on_a_focus_seal_callback(tmp_path) -> None:
+    """Calendar boundaries never invoke a raw-fact handoff callback."""
+
+    clock = FakeClock()
+    clock.now = datetime(2026, 8, 10, 23, 50)
+    timer = _timer(tmp_path, clock)
+    timer.set_day_rollover_handler(
+        lambda *_args: (_ for _ in ()).throw(AssertionError("midnight must not seal"))
+    )
+    assert timer.start()
+    clock.advance(5 * 60)
+    assert timer.checkpoint()
+    clock.advance(15 * 60)
+
+    # The old compatibility callback is never consulted.
+    assert timer.today_seconds() == 10 * 60
+    assert timer._date_key == "2026-08-11"  # type: ignore[attr-defined]
+    assert timer.lifetime_seconds() == 20 * 60
+    assert timer.session_seconds() == 20 * 60
+
+
+def test_pause_after_midnight_uses_effective_cutoff_without_splitting_session(tmp_path) -> None:
+    clock = FakeClock()
+    clock.now = datetime(2026, 8, 10, 23, 50)
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    session_id = timer.focus_session_id
+    clock.advance(20 * 60)  # 00:10
+
+    # A delayed power/idle event can be delivered after midnight, but the
+    # effective end is still the actual old-day boundary.
+    effective_end = datetime(2026, 8, 10, 23, 58, tzinfo=BEIJING_TIMEZONE)
+    assert timer.pause("sleep", effective_end_at=effective_end)
+    assert timer.session_seconds() == 8 * 60
+    assert timer.focus_session_id == session_id
+    assert timer.pause_reason == "sleep"
+
+
+def test_resume_after_pause_creates_new_logical_session_id(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    first_session_id = timer.focus_session_id
+    clock.advance(60)
+    assert timer.pause()
+    assert timer.start()
+    assert timer.focus_session_id != first_session_id
+    assert timer.session_seconds() == 0
+
+
+def test_session_identity_survives_week_month_and_year_boundaries(tmp_path) -> None:
+    boundaries = (
+        datetime(2026, 8, 9, 23, 50),   # Sunday -> Monday
+        datetime(2026, 1, 31, 23, 50),  # January -> February
+        datetime(2025, 12, 31, 23, 50), # year boundary
+    )
+    for index, started_at in enumerate(boundaries):
+        clock = FakeClock()
+        clock.now = started_at
+        timer = WorkTimerModel(
+            path=tmp_path / f"work_timer_{index}.json",
+            now_provider=lambda clock=clock: clock.now,
+            monotonic_provider=lambda clock=clock: clock.monotonic,
+        )
+        assert timer.start()
+        session_id = timer.focus_session_id
+        clock.advance(20 * 60)
+
+        assert timer.session_seconds() == 20 * 60
+        assert timer.focus_session_id == session_id
+        assert timer.current_segment_started_at() == started_at.replace(
+            tzinfo=BEIJING_TIMEZONE
+        )
+        assert timer.pause()
+
+
+def test_remote_focus_totals_merge_without_double_counting_live_seconds(tmp_path) -> None:
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.start()
+    clock.advance(50)
+
+    assert timer.merge_remote_state(
+        today_seconds=600,
+        lifetime_seconds=3600,
+        date_key="2026-08-10",
+    )
+    assert timer.today_seconds() == 600
+    assert timer.lifetime_seconds() == 3600
+
+    clock.advance(20)
+    assert timer.today_seconds() == 620
+    assert timer.lifetime_seconds() == 3620
+    assert not timer.merge_remote_state(
+        today_seconds=600,
+        lifetime_seconds=3600,
+        date_key="2026-08-10",
+    )
+
+
+def test_remote_lifetime_unlocks_survive_a_server_date_boundary(tmp_path) -> None:
+    """A UTC/Beijing date mismatch must not hide cross-device outfit unlocks."""
+
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    assert timer.merge_remote_state(
+        today_seconds=900,
+        lifetime_seconds=12 * 3600,
+        date_key="2026-08-09",
+    )
+    # The stale daily bucket is intentionally ignored, while lifetime remains
+    # available for the outfit unlock calculation.
+    assert timer.today_seconds() == 0
+    assert timer.lifetime_seconds() == 12 * 3600
+
+
+def test_work_timer_switches_to_an_isolated_account_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    clock = FakeClock()
+    timer = WorkTimerModel(
+        now_provider=lambda: clock.now,
+        monotonic_provider=lambda: clock.monotonic,
+    )
+
+    assert timer.switch_account("account-a")
+    assert timer.start()
+    clock.advance(90)
+    assert timer.pause()
+    assert timer.today_seconds() == 90
+
+    assert timer.switch_account("account-b")
+    assert timer.today_seconds() == 0
+    assert timer.lifetime_seconds() == 0
+
+    assert timer.switch_account("account-a")
+    assert timer.today_seconds() == 90
+    assert timer.lifetime_seconds() == 90
+
+
+def test_macos_legacy_account_timer_is_adopted_without_deleting_source(
+    tmp_path, monkeypatch
+) -> None:
+    native_root = tmp_path / "Library" / "Application Support"
+    legacy_root = tmp_path / ".desktop_pet"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(local_data, "platform_app_data_root", lambda: native_root)
+    monkeypatch.setattr(local_data, "legacy_private_app_data_root", lambda: legacy_root)
+    clock = FakeClock()
+    legacy_path = legacy_root / "Lili" / "accounts" / "account-a" / "work_timer.json"
+    seeded = WorkTimerModel(
+        path=legacy_path,
+        now_provider=lambda: clock.now,
+        monotonic_provider=lambda: clock.monotonic,
+    )
+    assert seeded.start()
+    clock.advance(75)
+    assert seeded.pause()
+
+    timer = WorkTimerModel(
+        now_provider=lambda: clock.now,
+        monotonic_provider=lambda: clock.monotonic,
+    )
+    assert timer.switch_account("account-a")
+
+    native_path = native_root / "Lili" / "accounts" / "account-a" / "work_timer.json"
+    assert timer.path == native_path
+    assert timer.today_seconds() == 75
+    assert timer.is_paused
+    assert legacy_path.is_file()
 
 
 def test_reminders_fire_once_at_focus_break_and_long_work_thresholds(tmp_path) -> None:
@@ -97,8 +535,21 @@ def test_reminders_fire_once_at_focus_break_and_long_work_thresholds(tmp_path) -
     assert timer.take_due_reminder() == "long_break"
 
 
+def test_reminder_can_use_reconciled_continuous_seconds(tmp_path) -> None:
+    """A corrected shared snapshot can suppress a stale timer threshold."""
+
+    clock = FakeClock()
+    timer = _timer(tmp_path, clock)
+    timer.start()
+    timer._episode_accumulated_seconds = 2 * 3600  # type: ignore[attr-defined]
+    assert timer.take_due_reminder(30 * 60) == "focus"
+
+
 def test_duration_formatting_is_compact_and_readable() -> None:
     assert format_work_duration(0) == "0分钟"
     assert format_work_duration(30) == "不足1分钟"
     assert format_work_duration(25 * 60) == "25分钟"
     assert format_work_duration(65 * 60) == "1小时5分钟"
+    assert format_elapsed_clock(0) == "00:00"
+    assert format_elapsed_clock(25 * 60 + 7) == "25:07"
+    assert format_elapsed_clock(65 * 60 + 2) == "1:05:02"

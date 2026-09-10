@@ -9,17 +9,21 @@
 - 根据关键词、当前时间、工作时长和宠物状态生成不依赖网络的回复；
 - 识别离线下无法可靠完成的复杂问题，并让界面显示手动重连和设置入口。
 
-聊天内容和连接状态只保存在当前进程内存中，不写入磁盘。API 令牌仍由
-CredentialStore 放入系统安全凭据库；本模块不会主动打开任何设置窗口。
+聊天路由不直接管理聊天记录文件；窗口层会按用户操作保存有限的本地会话。
+能流式返回的 transport 直接转发增量；只返回完整文本的兼容 Provider 也会
+拆成短片段，再由 ChatDialog 低频批量渲染，避免等待整段文字才更新界面。
+API 令牌仍由 CredentialStore 放入系统安全凭据库；本模块不会主动打开任何设置窗口。
 """
 
 from __future__ import annotations
 
 import os
 import random
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from typing import Callable, Iterable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -30,10 +34,50 @@ from .ai import (
     CredentialStore,
     PROVIDER_PRESETS,
     check_provider_connection,
+    user_message_for_ai_error,
 )
 from .behavior import PetState
 from .companion import CompanionModel
 from .config import PetSettings
+from .chat_intent import (
+    EMOTIONAL_CHAT,
+    FACTUAL_QUESTION,
+    MEMORY_RECALL,
+    TIMER_COMMAND,
+    classify_offline_message,
+)
+from .liumao_worldview import story_response, worldview_response
+from .song_knowledge import offline_song_reply, song_prompt_context
+from .structured_actions import ActionResult, LocalActionExecutor, extract_action
+from .todo_nlp import parse_explicit_todo_request
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _guard_qt_callback(method):
+    """Prevent a stale Codex signal from terminating the Qt process.
+
+    Chat threads can finish while a user closes the chat window or while the
+    Codex CLI is being upgraded.  PySide invokes those slots through a native
+    queued connection; an exception escaping that boundary is otherwise
+    reported as an unhandled exception and may terminate the packaged app.
+    """
+
+    @wraps(method)
+    def guarded(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception(
+                "[Qt] chat callback failed; continuing: %s",
+                method.__qualname__,
+            )
+            return None
+
+    return guarded
 
 
 class AgentConnectionState(str, Enum):
@@ -108,9 +152,12 @@ class AgentDetectionThread(QThread):
                     provider,
                     self.credentials,
                     self.settings.ai_base_url if provider == self.settings.ai_provider else "",
+                    codex_path=getattr(self.settings, "codex_executable_path", "")
+                    if provider == "codex" else "",
                 )
             except AIConnectionError as exc:
-                detail = str(exc)
+                LOGGER.debug("AI 检测失败 kind=%s error_type=%s", getattr(exc, "kind", "unknown"), type(exc).__name__)
+                detail = user_message_for_ai_error(exc)
                 state = self._failure_state(detail)
             except Exception:
                 detail = "后台检测遇到意外问题，稍后会自动重试。"
@@ -124,6 +171,24 @@ class AgentDetectionThread(QThread):
             self.provider_checked.emit(provider, state.value, detail)
 
 
+class AgentWarmupThread(QThread):
+    """Warm one already-authenticated Codex runtime without blocking Qt."""
+
+    completed = Signal(bool, str)
+
+    def __init__(self, service: AIChatService, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.service = service
+
+    def run(self) -> None:
+        try:
+            ok = bool(self.service.warm_codex())
+            self.completed.emit(ok, str(getattr(self.service, "last_error_message", "") or ""))
+        except Exception as exc:
+            LOGGER.info("Codex warm-up skipped error_type=%s", type(exc).__name__)
+            self.completed.emit(False, "Codex 启动失败，当前使用离线陪伴。")
+
+
 class AgentManager(QObject):
     """后台检测、缓存并低频刷新所有 Agent 的状态。"""
 
@@ -131,17 +196,25 @@ class AgentManager(QObject):
     detection_finished = Signal()
 
     RECONNECT_INTERVAL_MS = 5 * 60_000
+    APP_SERVER_RECOVERY_DELAY_MS = 60_000
 
     def __init__(
         self,
         settings: PetSettings,
         credentials: CredentialStore,
         parent: QObject | None = None,
+        *,
+        ai_service: AIChatService | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.credentials = credentials
+        self.ai_service = ai_service
         self._thread: AgentDetectionThread | None = None
+        self._warmup_thread: AgentWarmupThread | None = None
+        self._app_server_recovery_timer = QTimer(self)
+        self._app_server_recovery_timer.setSingleShot(True)
+        self._app_server_recovery_timer.timeout.connect(self._recover_codex_app_server)
         self._statuses: dict[str, AgentStatus] = {
             provider: AgentStatus(
                 provider,
@@ -228,6 +301,7 @@ class AgentManager(QObject):
 
         label = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["offline"]).label
         self._set_status(provider, AgentConnectionState.CONNECTED, f"{label} 已连接。")
+        self._schedule_app_server_recovery(provider)
 
     def mark_runtime_error(self, provider: str, detail: str) -> None:
         """AI 调用失败后缓存 error；只影响后续路由，不弹设置页。"""
@@ -237,6 +311,7 @@ class AgentManager(QObject):
             AgentConnectionState.ERROR,
             detail or "AI 暂时不可用，已自动切回离线陪伴。",
         )
+        self._schedule_app_server_recovery(provider)
 
     def mark_disconnected(self, provider: str, detail: str) -> None:
         """保存明确的缺失或未登录状态，不把中性检测文案误报为已连接。"""
@@ -254,22 +329,108 @@ class AgentManager(QObject):
         self._statuses[provider] = status
         self.status_changed.emit(provider, state.value, detail)
 
+    @_guard_qt_callback
     def _detection_result(self, provider: str, state: str, detail: str) -> None:
         self._set_status(provider, AgentConnectionState(state), detail)
 
+    @_guard_qt_callback
     def _detection_thread_finished(self) -> None:
         thread = self._thread
         self._thread = None
         if thread is not None:
             thread.deleteLater()
         self.detection_finished.emit()
+        if (
+            self.ai_service is not None
+            and self.settings.ai_provider == "codex"
+            and self.status("codex").state is AgentConnectionState.CONNECTED
+            and not self.warming
+        ):
+            self._start_codex_warmup()
+
+    @property
+    def warming(self) -> bool:
+        return self._warmup_thread is not None and self._warmup_thread.isRunning()
+
+    def _start_codex_warmup(self) -> bool:
+        """Start one background App Server probe without rechecking the CLI."""
+
+        if (
+            self.ai_service is None
+            or self.settings.ai_provider != "codex"
+            or self.warming
+            or self.checking
+        ):
+            return False
+        self._dispose_finished_warmup_thread()
+        self._warmup_thread = AgentWarmupThread(self.ai_service, self)
+        # AgentWarmupThread carries the actual result on ``completed``.
+        # QThread.finished has no arguments and would therefore call
+        # _warmup_finished() with its default ``ok=True`` even when the
+        # warm-up failed. That false-positive made the UI claim “已连接”
+        # until the first real turn exposed the broken App Server.
+        self._warmup_thread.completed.connect(self._warmup_finished)
+        self._warmup_thread.start()
+        return True
+
+    def _schedule_app_server_recovery(self, provider: str) -> None:
+        """Retry a real-turn App Server circuit breaker after its cooldown."""
+
+        if provider != "codex" or self.ai_service is None:
+            return
+        if not bool(getattr(self.ai_service, "app_server_cooldown_active", False)):
+            return
+        if not self._app_server_recovery_timer.isActive():
+            self._app_server_recovery_timer.start(self.APP_SERVER_RECOVERY_DELAY_MS)
+
+    @_guard_qt_callback
+    def _recover_codex_app_server(self) -> None:
+        """Re-probe the persistent runtime without blocking the chat UI."""
+
+        if self.settings.ai_provider != "codex" or self.ai_service is None:
+            return
+        if self.checking or self.warming:
+            self._app_server_recovery_timer.start(1000)
+            return
+        self._start_codex_warmup()
+
+    @_guard_qt_callback
+    def _warmup_finished(self, ok: bool = True, detail: str = "") -> None:
+        if not ok and self.settings.ai_provider == "codex":
+            # Detection only proved that the CLI/login command works.  Keep
+            # the provider routable so stream_reply can use HTTPS exec, but
+            # expose the App Server failure instead of claiming a clean READY.
+            detail = detail or "Codex App Server 暂时不可用，将尝试兼容连接。"
+            self._set_status(
+                "codex",
+                AgentConnectionState.CONNECTED,
+                f"Codex 已登录，但高速会话不可用：{detail}",
+            )
+            if not self._app_server_recovery_timer.isActive():
+                self._app_server_recovery_timer.start(self.APP_SERVER_RECOVERY_DELAY_MS)
+        elif ok and self.settings.ai_provider == "codex":
+            self._set_status("codex", AgentConnectionState.CONNECTED, "Codex 已连接。")
+
+    def _dispose_finished_warmup_thread(self) -> None:
+        """Release a completed warm-up thread without racing its teardown."""
+
+        thread = self._warmup_thread
+        if thread is None or thread.isRunning():
+            return
+        self._warmup_thread = None
+        thread.deleteLater()
 
     def shutdown(self) -> None:
         """退出时停止自动重连，并请求检测线程尽快结束。"""
 
         self._reconnect_timer.stop()
+        self._app_server_recovery_timer.stop()
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
+        if self._warmup_thread is not None and self._warmup_thread.isRunning():
+            self._warmup_thread.requestInterruption()
+            self._warmup_thread.wait(1500)
+        self._dispose_finished_warmup_thread()
 
 
 class OfflineDialogueManager:
@@ -303,17 +464,59 @@ class OfflineDialogueManager:
         focus_stars: Callable[[], int] | None = None,
         now: Callable[[], datetime] | None = None,
         random_source: random.Random | None = None,
+        local_context: Callable[[], str] | None = None,
+        lyrics_path: Callable[[], str] | None = None,
     ) -> None:
         self.companion = companion
         self.work_status = work_status
         self.focus_stars = focus_stars or (lambda: 0)
         self.now = now or datetime.now
         self.random = random_source or random.Random()
+        self.local_context = local_context or (lambda: "")
+        self.lyrics_path = lyrics_path or (lambda: "")
 
-    def reply(self, message: str) -> ManagedChatReply:
+    def reply(
+        self,
+        message: str,
+        history: Iterable[tuple[str, str]] = (),
+    ) -> ManagedChatReply:
         """优先处理本地上下文，再回退到现有陪伴关键词库。"""
 
         text = " ".join(message.split())[:1200]
+        if any(marker in text for marker in ("今天干了多久", "今天工作多久", "今天还有什么没做", "今天有哪些任务", "今天收工")):
+            try:
+                context = self.local_context()
+            except Exception:
+                context = ""
+            if context:
+                return ManagedChatReply(context, PetState.CURIOUS, "offline")
+        try:
+            song_reply = offline_song_reply(text, history, self.lyrics_path())
+        except Exception:
+            song_reply = None
+        if song_reply:
+            return ManagedChatReply(song_reply, PetState.CURIOUS, "offline")
+        message_type = classify_offline_message(text)
+        if message_type == FACTUAL_QUESTION:
+            return ManagedChatReply(
+                "在线 AI 这会儿没连上，这个问题六毛不想乱答。等连上以后我再跟你认真说。",
+                PetState.CURIOUS,
+                "offline",
+                True,
+            )
+        if message_type == MEMORY_RECALL:
+            return ManagedChatReply(
+                "我现在是离线陪伴，暂时调不出完整记忆；等在线 AI 连上，我再认真跟你聊。",
+                PetState.CURIOUS,
+                "offline",
+                True,
+            )
+        if message_type == TIMER_COMMAND:
+            return ManagedChatReply(
+                "工作计时请用桌面上的工作控制按钮操作，六毛不会把这句话当成聊天任务。",
+                PetState.CURIOUS,
+                "offline",
+            )
         if self._is_complex(text):
             return ManagedChatReply(
                 "现在是离线模式，等 AI 恢复后再帮你处理。你也可以先告诉我最着急的那一小步，六毛会继续陪你。",
@@ -321,6 +524,12 @@ class OfflineDialogueManager:
                 "offline",
                 True,
             )
+        worldview = worldview_response(text, self.random, history)
+        if worldview is not None:
+            return ManagedChatReply(worldview.text, worldview.state, "offline")
+        story = story_response(text, self.random, history)
+        if story is not None:
+            return ManagedChatReply(story.text, story.state, "offline")
         if any(marker in text for marker in ("几点", "现在时间", "当前时间", "星期几", "几号")):
             current = self.now()
             return ManagedChatReply(
@@ -346,6 +555,25 @@ class OfflineDialogueManager:
         reply = self.companion.reply_to(text)
         return ManagedChatReply(reply.text, reply.state, "offline")
 
+    @staticmethod
+    def should_handle_locally(message: str) -> bool:
+        """Return whether the offline fallback has a concise local match.
+
+        This helper is retained for callers that explicitly request local
+        handling.  ``ChatManager`` deliberately does not use it to bypass an
+        available online model.
+        """
+
+        text = " ".join(str(message or "").split())[:80]
+        if not text:
+            return True
+        markers = (
+            "爱你", "很爱你", "喜欢你", "想你", "抱抱", "亲亲",
+            "谢谢", "感谢", "你好", "嗨", "早上好", "早安",
+            "晚安", "再见", "拜拜", "有没有人告诉你", "有没有人告诉我",
+        )
+        return any(marker in text for marker in markers)
+
     def _is_complex(self, text: str) -> bool:
         """保守识别需要外部知识、长推理或代码执行的请求。"""
 
@@ -354,9 +582,19 @@ class OfflineDialogueManager:
         return len(text) > 220 and any(mark in text for mark in ("？", "?", "怎么", "为什么"))
 
 
+def _emit_reply_chunks(text: str, emit: Callable[[str], None], *, chunk_size: int = 4) -> None:
+    """将仅支持完整返回的 Provider 转成统一的增量事件。"""
+
+    size = max(1, int(chunk_size))
+    for index in range(0, len(text), size):
+        emit(text[index : index + size])
+
+
 class AIReplyThread(QThread):
     """在后台执行一次可能较慢的 AI 请求。"""
 
+    stream_started = Signal()
+    delta = Signal(str)
     succeeded = Signal(str)
     failed = Signal(str)
 
@@ -368,6 +606,7 @@ class AIReplyThread(QThread):
         history: list[tuple[str, str]],
         base_url: str,
         model: str,
+        local_context: str = "",
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -377,18 +616,37 @@ class AIReplyThread(QThread):
         self.history = history
         self.base_url = base_url
         self.model = model
+        self.local_context = local_context
 
     def run(self) -> None:
         try:
-            answer = self.service.reply(
-                self.provider,
-                self.message,
-                self.history,
-                self.base_url,
-                self.model,
-            )
+            stream_reply = getattr(self.service, "stream_reply", None)
+            if self.provider == "codex" and callable(stream_reply):
+                self.stream_started.emit()
+                answer = stream_reply(
+                    self.provider,
+                    self.message,
+                    self.history,
+                    self.base_url,
+                    self.model,
+                    self.local_context,
+                    self.delta.emit,
+                )
+            else:
+                self.stream_started.emit()
+                answer = self.service.reply(
+                    self.provider,
+                    self.message,
+                    self.history,
+                    self.base_url,
+                    self.model,
+                    self.local_context,
+                )
+                if answer:
+                    _emit_reply_chunks(answer, self.delta.emit)
         except AIConnectionError as exc:
-            self.failed.emit(str(exc))
+            LOGGER.debug("AI 请求失败 kind=%s error_type=%s", getattr(exc, "kind", "unknown"), type(exc).__name__)
+            self.failed.emit(user_message_for_ai_error(exc))
         except Exception:
             self.failed.emit("AI 连接遇到意外问题，已自动切回离线陪伴。")
         else:
@@ -399,6 +657,9 @@ class ChatManager(QObject):
     """统一决定走缓存已连接的 AI，还是立即返回本地离线回复。"""
 
     reply_ready = Signal(object)
+    reply_started = Signal()
+    reply_delta = Signal(str)
+    action_executed = Signal(object)
     busy_changed = Signal(bool)
     notice = Signal(str)
 
@@ -409,33 +670,102 @@ class ChatManager(QObject):
         agents: AgentManager,
         offline: OfflineDialogueManager,
         parent: QObject | None = None,
+        *,
+        local_context_provider: Callable[[], str] | None = None,
+        action_executor: LocalActionExecutor | None = None,
+        todo_now_provider: Callable[[], datetime] | None = None,
+        local_command_handler: Callable[[str], ManagedChatReply | None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.service = service
         self.agents = agents
         self.offline = offline
+        self.local_context_provider = local_context_provider or (lambda: "")
+        self.action_executor = action_executor
+        self.todo_now_provider = todo_now_provider
+        self.local_command_handler = local_command_handler
         self._thread: AIReplyThread | None = None
         self._pending_message = ""
+        self._pending_history: list[tuple[str, str]] = []
         self._pending_provider = "offline"
+        self._pending_local_context = ""
+        self._interrupt_requested = False
 
     @property
     def busy(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
 
     def submit(self, message: str, history: list[tuple[str, str]]) -> bool:
-        """使用缓存状态路由消息；这里不会执行完整连接检测。"""
+        """Submit natural language to AI when available.
+
+        Short messages are not treated as deterministic commands.  They may
+        depend on context, may be ambiguous, and should be understood by the
+        same language layer as longer messages.  Local worldview/story rules
+        remain available inside ``OfflineDialogueManager`` as the fallback.
+        """
 
         if self.busy:
             self.notice.emit("上一句话还在路上，稍等我一下。")
             return False
+        if self.local_command_handler is not None:
+            try:
+                local_reply = self.local_command_handler(message)
+            except Exception as exc:
+                LOGGER.warning("本地聊天动作失败：%s", type(exc).__name__)
+                local_reply = None
+            if local_reply is not None:
+                self.reply_ready.emit(local_reply)
+                return True
+        # Explicit date/time plans should not wait for a model.  This is both
+        # faster and more reliable: the same local action executor used by an
+        # AI JSON action writes the task and reminder before we acknowledge it.
+        # Ambiguous language returns None and continues through the normal AI
+        # conversation path.
+        if self.action_executor is not None:
+            try:
+                fast_action = parse_explicit_todo_request(
+                    message,
+                    now=self.todo_now_provider,
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                LOGGER.debug("待办快速解析跳过：%s", exc)
+                fast_action = None
+            if fast_action is not None:
+                result = self._execute_local_action(fast_action, user_text=message)
+                if result is not None:
+                    self.reply_ready.emit(
+                        ManagedChatReply(
+                            result.reply_hint,
+                            PetState.CURIOUS,
+                            "local-action",
+                        )
+                    )
+                    return True
+        # Do not intercept online chat with keyword, worldview, story, or
+        # short-social shortcuts.  The model receives the recent conversation,
+        # current work state, and only the small knowledge snippets selected by
+        # the AI context builder.
         provider = self.settings.ai_provider
         status = self.agents.status(provider)
         if provider == "offline" or status.state != AgentConnectionState.CONNECTED:
-            self.reply_ready.emit(self.offline.reply(message))
+            self.reply_ready.emit(self.offline.reply(message, history))
             return True
         self._pending_message = message
+        self._pending_history = list(history)
         self._pending_provider = provider
+        try:
+            base_context = str(self.local_context_provider() or "")[:5000]
+            song_context = song_prompt_context(
+                message,
+                history,
+                str(getattr(self.settings, "local_lyrics_path", "") or ""),
+            )
+            self._pending_local_context = "\n\n".join(
+                part for part in (base_context, song_context) if part
+            )[:7000]
+        except Exception:
+            self._pending_local_context = ""
         self._thread = AIReplyThread(
             self.service,
             provider,
@@ -443,10 +773,13 @@ class ChatManager(QObject):
             history,
             self.settings.ai_base_url,
             self.settings.ai_model,
+            self._pending_local_context,
             self,
         )
         self._thread.succeeded.connect(self._ai_succeeded)
         self._thread.failed.connect(self._ai_failed)
+        self._thread.stream_started.connect(self.reply_started.emit)
+        self._thread.delta.connect(self.reply_delta.emit)
         self._thread.finished.connect(self._thread_finished)
         self.busy_changed.emit(True)
         self._thread.start()
@@ -457,15 +790,130 @@ class ChatManager(QObject):
 
         return self.agents.reconnect_selected()
 
+    def interrupt(self) -> bool:
+        """中断当前 Codex turn；主动停止不应被记为连接故障。"""
+
+        if not self.busy or self._pending_provider != "codex":
+            return False
+        interrupter = getattr(self.service, "interrupt", None)
+        if not callable(interrupter):
+            return False
+        if not interrupter():
+            return False
+        self._interrupt_requested = True
+        return True
+
+    def reset_conversation(self) -> bool:
+        """Forget the persistent AI thread so the next message starts cleanly."""
+
+        if self.busy:
+            self.notice.emit("上一句话还在路上，等它结束后再开始新对话。")
+            return False
+        resetter = getattr(self.service, "reset_conversation", None)
+        if callable(resetter):
+            try:
+                resetter()
+            except Exception as exc:
+                LOGGER.warning("重置 AI 对话上下文失败：%s", exc)
+                self.notice.emit("AI 连接已保留，新的聊天会在下次连接时重新开始。")
+        return True
+
+    @_guard_qt_callback
     def _ai_succeeded(self, answer: str) -> None:
         self.agents.mark_runtime_success(self._pending_provider)
+        action = extract_action(answer)
+        if action is not None and self.action_executor is not None:
+            result = self._execute_local_action(action, user_text=self._pending_message)
+            if result is not None:
+                # Structured-only responses are replaced with a safe local
+                # confirmation; a normal conversational answer remains intact.
+                if result.data.get("permission_denied"):
+                    # A model suggestion without explicit user authorization
+                    # is not a user-visible Todo operation.  Keep the normal
+                    # conversational answer and do not expose the gate.
+                    result = None
+                elif not result.ok:
+                    answer = result.reply_hint
+                elif answer.lstrip().startswith("{") or "```" in answer:
+                    answer = result.reply_hint or "已按本地记录处理。"
+                elif result.reply_hint:
+                    answer = f"{answer.rstrip()}\n{result.reply_hint}"
         state = PetState.SHY if any(word in answer for word in ("抱抱", "爱", "陪你")) else PetState.CURIOUS
         self.reply_ready.emit(ManagedChatReply(answer, state, "ai"))
 
-    def _ai_failed(self, error: str) -> None:
-        self.agents.mark_runtime_error(self._pending_provider, error)
-        self.reply_ready.emit(self.offline.reply(self._pending_message))
+    def _execute_local_action(
+        self,
+        action: dict[str, object],
+        *,
+        user_text: str | None = None,
+    ) -> ActionResult | None:
+        """Run one local action and emit the refresh signal exactly once."""
 
+        if self.action_executor is None:
+            return None
+        try:
+            try:
+                result = self.action_executor.execute(action, user_text=user_text)
+            except TypeError as exc:
+                # Keep compatibility with small test/integration executors
+                # that predate the write-side user_text argument.
+                if "user_text" not in str(exc):
+                    raise
+                result = self.action_executor.execute(action)
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            LOGGER.warning("本地待办动作执行失败：%s", exc)
+            result = ActionResult(
+                str(action.get("action") or "unknown"),
+                "本地待办没有保存成功，我没有假装记住；请再试一次。",
+                {"saved": False, "error": str(exc)},
+                False,
+            )
+        if result is None:
+            result = ActionResult(
+                str(action.get("action") or "unknown"),
+                "这个本地动作没有执行成功，我没有假装记住；请再试一次。",
+                {"saved": False},
+                False,
+            )
+        self.action_executed.emit(result)
+        return result
+
+    @_guard_qt_callback
+    def _ai_failed(self, error: str) -> None:
+        if self._interrupt_requested:
+            self._interrupt_requested = False
+            self.reply_ready.emit(
+                ManagedChatReply("我先停在这里。", PetState.CURIOUS, "interrupted")
+            )
+            return
+        # ``error`` has already crossed the AIReplyThread boundary through
+        # user_message_for_ai_error().  Keep that classified diagnosis visible
+        # instead of replacing a factual question with a generic companion
+        # template.  A failed online request must never look like an answer.
+        diagnosis = user_message_for_ai_error(error)
+        self.agents.mark_runtime_error(self._pending_provider, diagnosis)
+        offline_reply = self.offline.reply(self._pending_message, self._pending_history)
+        message_type = classify_offline_message(self._pending_message)
+        if message_type in {FACTUAL_QUESTION, MEMORY_RECALL} or offline_reply.show_recovery_actions:
+            text = diagnosis
+        else:
+            text = f"{diagnosis}\n{offline_reply.text}"
+        LOGGER.info(
+            "AI chat failed provider=%s diagnosis=%s fallback_mode=%s",
+            self._pending_provider,
+            diagnosis,
+            offline_reply.mode,
+        )
+        self.reply_ready.emit(
+            ManagedChatReply(
+                text,
+                PetState.CURIOUS,
+                "offline",
+                True,
+            )
+        )
+
+    @_guard_qt_callback
     def _thread_finished(self) -> None:
         thread = self._thread
         self._thread = None
@@ -477,8 +925,12 @@ class ChatManager(QObject):
         """退出时停止重连，并让正在运行的请求自然结束。"""
 
         self.agents.shutdown()
+        closer = getattr(self.service, "close", None)
+        if callable(closer):
+            closer()
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
+            self._thread.wait(1500)
 
 
 def should_start_startup_detection() -> bool:

@@ -221,6 +221,31 @@ def test_daily_action_library_is_transparent_consistent_and_uncropped() -> None:
             assert bbox[2] <= 990 and bbox[3] <= 990, path.name
 
 
+def test_night_limited_sprite_is_transparent_and_normalized() -> None:
+    """夜间限定素材必须是完整透明画布，不能带生成图的背景方块。"""
+
+    path = PROJECT_ROOT / "assets" / "pet" / "night-limited" / "00-night-study-clean.png"
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        bbox = alpha.getbbox()
+        assert rgba.size == (1024, 1024)
+        assert rgba.mode == "RGBA"
+        assert alpha.getextrema()[0] == 0
+        assert bbox is not None
+        assert bbox[0] >= 34 and bbox[1] >= 34
+        assert bbox[2] <= 990 and bbox[3] <= 990
+        # The source PNG had an opaque generated checkerboard behind the
+        # scene.  These points were background and must remain transparent.
+        assert alpha.getpixel((64, 79)) == 0
+        assert alpha.getpixel((500, 100)) == 0
+        assert sum(
+            1
+            for red, green, blue, value in rgba.getdata()
+            if value >= 250 and red >= 245 and green >= 245 and blue >= 245
+        ) < 10_000
+
+
 def test_hourly_outfit_library_is_transparent_consistent_and_uncropped() -> None:
     """1–12 小时娃衣必须完整、高清、透明且不贴边。"""
 
@@ -237,3 +262,29 @@ def test_hourly_outfit_library_is_transparent_consistent_and_uncropped() -> None
             assert bbox is not None, path.name
             assert bbox[0] >= 34 and bbox[1] >= 34, path.name
             assert bbox[2] <= 990 and bbox[3] <= 990, path.name
+
+
+def test_three_day_login_outfit_is_complete_transparent_and_uncropped() -> None:
+    """登录奖励素材必须是完整 PNG，不能被截断成半套娃衣。"""
+
+    path = PROJECT_ROOT / "assets" / "pet" / "login-rewards" / "3-day-login.png"
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        assert rgba.size == (1254, 1254)
+        assert alpha.getextrema()[0] == 0
+        bbox = alpha.getbbox()
+        assert bbox is not None
+        assert bbox[0] >= 34 and bbox[1] >= 20
+        assert bbox[2] <= 1220 and bbox[3] <= 1234
+
+
+def test_three_day_login_outfit_does_not_keep_faint_edge_noise() -> None:
+    """登录奖励轮廓不能带近乎透明的噪点，否则小尺寸缩放会断线。"""
+
+    path = PROJECT_ROOT / "assets" / "pet" / "login-rewards" / "3-day-login.png"
+    with Image.open(path) as image:
+        alpha = image.convert("RGBA").getchannel("A")
+        positive = [value for value in alpha.getdata() if value]
+        assert positive
+        assert min(positive) >= 8

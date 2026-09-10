@@ -1,0 +1,26 @@
+{
+  "relations": [
+    {
+      "subject": "陈楚生",
+      "relation": "六毛的父亲（角色设定）",
+      "object": "我爹",
+      "scope": "fictional_worldview"
+    },
+    {
+      "subject": "陈楚生",
+      "relation": "2007快乐男声与再就业男团的老朋友",
+      "object": ["苏醒", "王栎鑫", "张远", "王铮亮", "陆虎"]
+    },
+    {
+      "subject": "0713",
+      "relation": "来源",
+      "object": "2007快乐男声全国13强语境"
+    },
+    {
+      "subject": "再就业男团",
+      "relation": "通常指",
+      "object": ["陈楚生", "苏醒", "王栎鑫", "张远", "王铮亮", "陆虎"]
+    }
+  ],
+  "clarification": "0713与再就业男团有关联，但不能严格视为同一个概念。"
+}

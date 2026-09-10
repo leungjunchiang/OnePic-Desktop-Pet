@@ -1,0 +1,27 @@
+name: configure-supabase-account-security
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "release/v*"
+    paths:
+      - "scripts/configure_supabase_auth.ps1"
+      - "config/social_backend.json"
+      - ".github/workflows/configure-supabase-account-security.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || 'zkgctfntrioffpifiggk' }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Supabase Auth account security
+        shell: pwsh
+        run: ./scripts/configure_supabase_auth.ps1 -SkipSmtp

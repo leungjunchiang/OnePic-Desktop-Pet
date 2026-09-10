@@ -12,17 +12,25 @@
 - 支持左键拖动、单击调戏、双击快捷口袋、无互动分级休息和连续尺寸滑块；
 - 支持给六毛喂食或饮品，并用独立半透明文字气泡反馈状态；
 - 支持 Agent 状态缓存、异步 AI、无缝离线降级以及工作、爱意、鼓励和安慰动作；
-- 在内存中保留最近三十轮完整聊天，并把更早内容滚动压缩为长期摘要；
+- 在内存中保留最近三十轮完整聊天，并把更早内容滚动压缩为长期摘要；聊天记录由用户控制保存在本机；
 - 将连接与陪伴设置收口到唯一入口，只有显式 ``user_action`` 来源才允许创建设置窗口；
-- 异步读取 Windows 系统媒体 Session 或调用 macOS Apple Events，提供真实的本机播放控制；
-- 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁及健康提醒；
+- 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
+- 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
+- 工作 FocusSession 允许跨日/跨周，暂停、完成、关闭和异常恢复均先把旧区间 durable seal 再切换身份；
+- 今日时长读取账号级 sealed/live 区间并集，同时把本机暂停与另一台设备工作明确区分；
+- 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
+- Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
+- 通过可复用的局部透明窗口播放本地红色烟花 Burst，不进入角色帧、不新增网络路径；
 - 优先从用户私有素材目录显示自拍成片气泡，按当前屏幕 DPI 保持清晰度，并贴近人物真实轮廓定位；
 - 标准角色确认后加载本地宠物供现场验收；走路确认仍作为打包门禁；
 - 维护亲密度、精力、无聊度与饱食度的会话内状态；
 - 使用 QTimer 驱动状态切换及水平移动，并限制窗口不脱离当前屏幕。
+- Qt 定时器、平台探测和异步同步回调均设置故障边界，单次失败只记录日志，不终止桌宠进程；
+- 宠物图层使用透明顶层窗口；工作状态、串门和提示卡片使用可读的实色背景，避免平台默认背景造成黑色或透明内容区。
+- 桌面待办浮层独立于工作报告窗口，两个窗口可以同时显示且互不改变可见状态。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -35,6 +43,7 @@ Agent 快速定位：
 本模块启动后只在后台低频检测 Agent；每条聊天不重复完整检测，普通动画、牢骚和报时均不访问网络。
 API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 app.py 在退出时完成。
 `user_assets/` 默认不进入 Git；只有用户主动放入的自拍图片才会在本机显示。
+右键菜单和附属窗口使用宠物所在显示器的 Qt 全局逻辑坐标，不混用物理像素。
 """
 
 from __future__ import annotations
@@ -44,19 +53,35 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
+import uuid
 from collections import OrderedDict, deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QRect,
+    QRectF,
+    QSize,
+    QTime,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
-    QAction,
     QCloseEvent,
     QContextMenuEvent,
+    QCursor,
     QDesktopServices,
     QFont,
+    QGuiApplication,
     QHideEvent,
     QMouseEvent,
     QMoveEvent,
@@ -67,7 +92,22 @@ from PySide6.QtGui import (
     QShowEvent,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QInputDialog,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QTimeEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 try:
     from PySide6.QtTextToSpeech import QTextToSpeech
@@ -80,10 +120,31 @@ except ImportError:
     QAudioOutput = QMediaPlayer = None
 
 from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
-from .accessories import OUTFITS, draw_activity_overlay, unlocked_outfits
-from .activity import active_application_category
-from .behavior import BehaviorModel, PetMood, PetState, StateDecision
-from .chat import AISettingsDialog, ChatDialog
+from .alarm_ui import AlarmCard, AlarmCenterDialog, AwayRecoveryCard
+from .accessories import (
+    ALL_OUTFITS,
+    LOGIN_REWARD_OUTFIT,
+    OUTFITS,
+    SPECIAL_LIMITED_ACTIVITY_SPRITES,
+    draw_activity_overlay,
+    unlocked_outfits,
+)
+from .activity import (
+    active_application_category,
+    active_application_name,
+    active_fullscreen_game,
+    active_fullscreen_presentation,
+    active_fullscreen_video,
+    active_window_is_fullscreen,
+)
+from .behavior import (
+    BehaviorModel,
+    CompanionBehaviorController,
+    PetMood,
+    PetState,
+    StateDecision,
+)
+from .chat import AISettingsDialog, ChatDialog, ChatHistoryDialog
 from .chat_manager import (
     AgentManager,
     ChatManager,
@@ -91,24 +152,76 @@ from .chat_manager import (
     OfflineDialogueManager,
     should_start_startup_detection,
 )
-from .chat_memory import ConversationMemory
+from .chat_memory import (
+    ChatHistoryStore,
+    ConversationMemory,
+)
 from .companion import (
     ACTION_BY_KEY,
     APP_DISPLAY_NAME,
-    COMPANION_ACTIONS,
-    FOOD_OPTIONS,
     CompanionModel,
     CompanionReply,
+    FOOD_OPTIONS,
 )
-from .config import PetSettings, save_settings
-from .controls import QuickControlPanel, SizeControlDialog, WorkControlBubble
+from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
+from .controls import (
+    CoffeeScenePrompt,
+    QuickControlPanel,
+    RoundedSurfaceLabel,
+    SizeControlDialog,
+    WorkControlBubble,
+    WorkDurationBubble,
+    VisitStatusBubble,
+)
+from .economy import EconomyLedger
+from .economy_ui import EconomyDialog
+from .food_scene_ui import FoodSceneDialog
+from .focus_activity import (
+    AUTO_PAUSE_DISPLAY_OFF,
+    AUTO_PAUSE_IDLE,
+    AUTO_PAUSE_LOCK,
+    AUTO_PAUSE_SLEEP,
+    FocusActivityGuard,
+    MacOSFocusActivityBridge,
+    WindowsFocusActivityBridge,
+)
+from .input_activity import system_idle_seconds, system_session_state
+from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
 from .emotion_effects import draw_emotion_effect, emotion_effect_name
+from .local_burst_effect import EffectExclusionRegion, LocalBurstEffectWindow
+from .state_effects import (
+    LocalEffectKind,
+    LocalEffectManager,
+    normalize_effect_kind,
+    resolve_work_effect,
+)
 from .daily_report import render_daily_report
 from .diary import DailyCompanionStats, album_directory
+from .focus_analytics import (
+    AccountFocusStore,
+    BEIJING_TIMEZONE,
+    FOCUS_SEGMENT_UPLOAD_BATCH_SIZE,
+    FocusAnalyticsStore,
+    FocusQualityTracker,
+)
+from .focus_display import (
+    CrossDeviceDisplayDataError,
+    get_cross_device_today_display_seconds,
+    live_projection_rows,
+)
+from .focus_history_recovery import FocusHistoryRecovery
+from .focus_segments import (
+    FOCUS_SEGMENT_CHECKPOINT_SECONDS,
+    FocusSegment,
+    deterministic_focus_segment_id,
+)
+from .focus_session import FocusSessionManager
+from .work_report import WorkReportDialog, build_work_report
 from .growth import (
     ACTION_GROUPS,
     ACTION_SPRITES,
     COMPLETE_ACTIONS,
+    FOOD_LIMITED_ACTIVITIES,
     FOCUS_ACTIONS,
     RANDOM_ACTIONS,
     REST_ACTIONS,
@@ -118,21 +231,266 @@ from .growth import (
     time_of_day_activity,
 )
 from .local_content import find_audio_variants, load_local_lines
+from .login_rewards import (
+    LOGIN_REWARD_KEY,
+    LoginRewardStore,
+    login_reward_granted,
+    login_streak_days,
+)
+from .liumao_worldview import family_music_mode
+from .music import ARTIST_MUSIC_SERVICE_LABELS, open_chen_artist_page as launch_chen_artist_page
 from .resources import resource_path
-from .social import SocialClient
-from .social_ui import BuddyVisitWindow, SocialHubDialog, SocialSyncThread
+from .quiet_mode import detect_quiet_mode
+from .qt_lifecycle import request_stop_all, running_threads
+from .lifecycle_log import lifecycle_log
+from .performance import EventLoopLagTracker, PerformanceMonitor
+from .social import SocialClient, _session_user_id, presence_device_id
+from .social_ui import (
+    BuddyVisitWindow,
+    IncomingVisitNotice,
+    SocialEventThread,
+    SocialHeartbeatWorker,
+    SocialHubDialog,
+    SocialProfileThread,
+    SocialSyncThread,
+    SocialVisitResponseThread,
+)
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
 from .music_playback import SongPlaybackResult
+from .native_window_policy import apply_native_window_policy
 from .wellness import WellnessReminderModel
-from .work_timer import WorkTimerModel, format_work_duration
+from .work_timer import (
+    SmoothDurationDisplay,
+    WorkTimerModel,
+    format_elapsed_clock,
+    format_work_duration,
+)
 from .workflow import WorkflowError, character_is_approved, load_workflow
+from .time_memory import TimeMemory
+from .today_note import TimeMemoryWindow, TodayNoteWindow
+from .todo_center import TodoCenterWindow
+
+
+from .compact_todo import CompactTodoPanel, compact_todo_candidates
+from .menu_model import UnifiedMenuModel, populate_qmenu
+from .night_limited import night_limited_activity
+from . import __version__
+
+
+_TAUNT_FOLLOWUP_MESSAGES = (
+    "工位有人，工作没人。",
+    "不急，DDL会替你急。",
+    "任务还在，你倒先下线了。",
+    "今日研究方法：观察任务自然消失。",
+    "样本没跑，你先跑了。",
+    "论文没动，鼠标倒挺活跃。",
+    "Codex都醒了，你还没开工？",
+    "任务：0%，精神内耗：100%。",
+    "就这？",
+    "离开工只差一个开始按钮。",
+    "恭喜，被搭子当场抓获。",
+    "有人已经发现你没在干活了。",
+    "还欠20分钟，别装作没看见。",
+)
+
+
+def clamp_global_popup_position(global_pos: QPoint, popup_size: QSize, available: QRect) -> QPoint:
+    """Clamp a Qt logical global popup point to one monitor, including negatives."""
+
+    width = max(1, int(popup_size.width()))
+    height = max(1, int(popup_size.height()))
+    right = available.right() - width + 1
+    bottom = available.bottom() - height + 1
+    x = min(max(global_pos.x(), available.left()), max(available.left(), right))
+    y = min(max(global_pos.y(), available.top()), max(available.top(), bottom))
+    return QPoint(x, y)
+
+
+def context_menu_position_for_pet(
+    event_global: QPoint,
+    pet_center: QPoint,
+    pet_screen_geometry: QRect | None,
+    *,
+    macos: bool = False,
+) -> QPoint:
+    """Keep a macOS context menu on the screen that owns the pet.
+
+    On macOS with mixed-DPI external displays, a context-menu event can
+    occasionally report a global point in the other display's coordinate
+    space.  Using that point to choose the popup screen makes the native menu
+    appear to jump between displays.  If the event point is outside the pet's
+    actual screen, use the pet's global center as a stable same-screen anchor.
+    Other platforms retain the precise event position.
+    """
+
+    point = QPoint(event_global)
+    if macos and pet_screen_geometry is not None and not pet_screen_geometry.contains(point):
+        return QPoint(pet_center)
+    return point
 
 
 LOGGER = logging.getLogger(__name__)
+
+# Passive social reads are deliberately slower than the liveness heartbeat.
+# Keep these gates local to the desktop client: FocusSession writes, sync
+# cadence, and all time/statistics calculations remain unchanged.
+SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
+# The existing worker still needs a lightweight cadence to preserve the
+# independent presence/personal-state paths. Dashboard reads inside it are
+# admitted by the 90-second client coordinator above, not by this timer.
+SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
+SOCIAL_REACTION_REFRESH_SECONDS = 60.0
+SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
+
+
+def _guard_qt_callback(method):
+    """Keep a transient native/API failure from stopping Qt's event loop.
+
+    Timers and queued signal callbacks are invoked by C++ and an exception
+    escaping one of them can terminate a packaged Windows process without a
+    visible error.  The application-level ``QApplication.notify`` guard
+    covers widget events; this decorator covers the callbacks that are
+    invoked directly by ``QTimer.timeout``/worker signals, especially the
+    platform probes used while an external debugger or updater is active.
+    """
+
+    @wraps(method)
+    def guarded(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            LOGGER.exception("[Qt] callback failed; continuing: %s", method.__qualname__)
+            return None
+
+    return guarded
 SETTINGS_SOURCE_USER_ACTION = "user_action"
 
 
 DEFAULT_WALK_MOTION_FACTORS = (0.45, 0.7, 1.2, 1.65, 0.45, 0.7, 1.2, 1.65)
+
+
+# Keep menus readable when the pet is over a dark wallpaper.  This is scoped
+# to QMenu instances only; it does not alter the transparent pet silhouette or
+# the native AppKit menu used by macOS Dock/status-item rendering.
+UNIFIED_MENU_STYLE = """
+QMenu {
+    background: #f8fbfd;
+    color: #203847;
+    border: 1px solid #b9d1dc;
+    padding: 4px;
+}
+QMenu::item {
+    background: transparent;
+    padding: 6px 26px 6px 10px;
+}
+QMenu::item:selected {
+    background: #d9eeeb;
+    color: #203847;
+}
+QMenu::item:disabled { color: #8fa0a8; }
+QMenu::separator {
+    height: 1px;
+    background: #d6e1e6;
+    margin: 4px 8px;
+}
+"""
+
+
+class IdleRecoveryDialog(QWidget):
+    """Show one non-modal correction hint for an automatically classified gap.
+
+    The class name remains for compatibility with older callers, but this is
+    no longer a decision dialog.  The default classification is recorded
+    before it is shown; the only action offered is a lightweight correction.
+    It never raises, activates, flashes, or steals focus from the user's app.
+    """
+
+    decision_requested = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setMinimumWidth(330)
+        self.setWindowFlags(
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 11, 14, 10)
+        layout.setSpacing(6)
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setStyleSheet("font-size: 13px; color: #27313d;")
+        layout.addWidget(self.summary_label)
+        self.detail_label = QLabel(
+            "已自动记为休息；如果刚才仍在工作，可以改成专注。"
+        )
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setStyleSheet("color: #667784; font-size: 11px;")
+        layout.addWidget(self.detail_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.focus_button = QPushButton("改成专注")
+        self.focus_button.setAutoDefault(False)
+        self.focus_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.focus_button.clicked.connect(lambda: self._request_decision("focus"))
+        buttons.addWidget(self.focus_button)
+        layout.addLayout(buttons)
+        self.setStyleSheet(
+            "QWidget { background: #ffffff; border: 1px solid #b9d1dc; "
+            "border-radius: 10px; } QPushButton { background: #d9eeeb; color: #245965; "
+            "border: 0; border-radius: 8px; padding: 5px 12px; }"
+        )
+
+    def set_away_seconds(self, seconds: int) -> None:
+        """Update the post-grace-period absence shown by the hint."""
+
+        seconds = max(1, int(seconds))
+        minutes, remainder = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            duration = f"{hours} 小时 {minutes} 分钟"
+        elif minutes:
+            duration = f"{minutes} 分 {remainder:02d} 秒"
+        else:
+            duration = f"{remainder} 秒"
+        self.summary_label.setText(f"刚才离开 {duration}，我先算休息啦")
+
+    def show_hint(self, anchor: QWidget) -> None:
+        """Show beside the pet without activating the native window."""
+
+        self.adjustSize()
+        screen = anchor.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            bounds = screen.availableGeometry()
+            point = anchor.mapToGlobal(QPoint(anchor.width() + 8, max(8, anchor.height() // 3)))
+            x = point.x()
+            y = point.y()
+            if x + self.width() > bounds.right():
+                x = max(bounds.left(), anchor.mapToGlobal(QPoint(-self.width() - 8, 8)).x())
+            if y + self.height() > bounds.bottom():
+                y = max(bounds.top(), bounds.bottom() - self.height() - 8)
+            self.move(x, y)
+        self.show()
+        QTimer.singleShot(6500, self.hide)
+
+    def _request_decision(self, decision: str) -> None:
+        """Hide first, then notify the owner so the window cannot duplicate."""
+
+        self.hide()
+        self.decision_requested.emit(decision)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Closing the window dismisses this episode without re-prompting."""
+
+        event.ignore()
+        self.hide()
+        self.decision_requested.emit("dismiss")
 
 
 class PetWindow(QWidget):
@@ -142,6 +500,21 @@ class PetWindow(QWidget):
     pause_changed = Signal(bool)
     work_timer_changed = Signal(bool)
     always_on_top_changed = Signal(bool)
+    pet_name_changed = Signal(str)
+    owner_nickname_changed = Signal(str)
+
+    def _pet_name(self) -> str:
+        """Return the immutable character identity used by every local UI."""
+
+        return PET_NAME
+
+    def _owner_nickname(self) -> str:
+        return clean_owner_nickname(getattr(self.settings, "owner_nickname", ""))
+
+    def _walk_allowed(self) -> bool:
+        """返回当前是否允许六毛自主横向跑动。"""
+
+        return bool(getattr(self.settings, "allow_autonomous_walk", False)) and not self.paused
 
     def __init__(
         self,
@@ -149,20 +522,96 @@ class PetWindow(QWidget):
         work_timer: WorkTimerModel | None = None,
     ) -> None:
         super().__init__()
+        lifecycle_log("pet_window.construct.begin", self)
+        self.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "pet_window.destroy", class_name="PetWindow"
+            )
+        )
         self.settings = settings
+        self._menu_external_callbacks: dict[str, Callable[[bool], object]] = {}
         self.behavior = BehaviorModel(settings)
+        self.companion_behavior = CompanionBehaviorController()
         self.mood = PetMood()
         self.companion = CompanionModel(self.mood)
-        self.work_timer = work_timer or WorkTimerModel()
+        self.work_timer = work_timer or WorkTimerModel(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self.focus_session = FocusSessionManager(self.work_timer, self)
+        self._focus_projection_revision = 0
+        self._focus_projection_cache: dict[str, object] | None = None
         self._rewarded_focus_blocks = self.work_timer.today_seconds() // 600
         self.daily_stats = DailyCompanionStats(
             persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        self.time_memory = TimeMemory(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self.economy = EconomyLedger(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        self._today_note_window: TodayNoteWindow | None = None
+        self._compact_todo_panel: CompactTodoPanel | None = None
+        self._restore_compact_todos_after_show = False
+        self._compact_todos_manually_hidden = False
+        self._time_memory_window: TimeMemoryWindow | None = None
+        self._todo_center_window: TodoCenterWindow | None = None
+        self._economy_dialog: EconomyDialog | None = None
+        self._food_scene_dialog: FoodSceneDialog | None = None
+        self._work_report_dialog: WorkReportDialog | None = None
+        self._alarm_center_dialog: AlarmCenterDialog | None = None
+        self._alarm_card: AlarmCard | None = None
+        # Keep a closing card alive until its queued QMediaPlayer stop has
+        # completed.  Deleting it immediately can destroy the native media
+        # backend while it is still processing a button/close event.
+        self._retired_alarm_cards: list[AlarmCard] = []
+        self._away_recovery_card: AwayRecoveryCard | None = None
+        # One durable account ledger feeds the pet, report and social
+        # projections. AccountFocusStore is the existing analytics store
+        # with a transient live-device projection, not a parallel history DB.
+        self.focus_analytics = AccountFocusStore(
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        )
+        # Calendar boundaries are projection boundaries only.  The active
+        # FocusSession is allowed to cross midnight and is sealed only by a
+        # real pause/finish/shutdown transition.
+        self.focus_session.set_period_seconds_provider(self._shared_focus_period_seconds)
+        self._focus_quality_tracker = FocusQualityTracker()
+        self._active_focus_account_id = ""
+        # Read-only account-wide display projection.  This is deliberately
+        # separate from ``_shared_focus_period_seconds`` so reports, weekly
+        # statistics, sync payloads and rewards retain their existing source.
+        self._cross_device_today_display_seconds: int | None = None
+        self._cross_device_today_display_account_id = ""
+        self._cross_device_today_display_date = ""
+        self._cross_device_today_display_session_id = ""
+        self._cross_device_today_display_live_seconds = 0
+        # Keep the last validated server interval payload in memory only.
+        # Lifecycle/status refreshes often carry no new segment response;
+        # re-projecting from local rows alone would otherwise downgrade a
+        # valid account-wide display back to this device's total.
+        self._cross_device_today_display_remote_rows: list[object] | None = None
+        # Per-device live intervals are a display-only projection.  They are
+        # refreshed by the small live-projection RPC and never enter
+        # FocusAnalyticsStore or the FocusSession fact sync.
+        self._cross_device_today_display_live_rows: list[object] | None = None
+        self._smooth_work_duration_display = SmoothDurationDisplay()
+        # session_seconds() is cumulative across pauses/resumes.  This cursor
+        # ensures each WORKING second is credited to wages and statistics once.
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
+        self._last_focus_quality = None
         self.wellness = WellnessReminderModel()
         self.state = PetState.IDLE
         self.direction = -1
         self._movement_x = float(self.x())
         self._last_movement_at = time.monotonic()
+        self._performance = PerformanceMonitor()
+        self._event_loop_lag = EventLoopLagTracker(self._performance)
+        self._last_perf_summary_at = time.monotonic()
+        self._last_focus_analytics_ui_refresh = 0.0
+        self._last_focus_snapshot_status = ""
         self.paused = False
         self.dragging = False
         self._press_pending = False
@@ -178,32 +627,180 @@ class PetWindow(QWidget):
         self._frame_index = 0
         self._animation_direction = 1
         self._animation_finished: Callable[[], None] | None = None
+        # Social food is a temporary shared visual moment.  Keep its expiry
+        # separate from the local inventory scene so accepting a buddy's
+        # drink/cake never pauses or rewrites the local focus session.
+        self._social_food_activity_until = 0.0
+        # The taunt is server-authoritative and survives local animation or
+        # focus transitions.  It is cleared only when the taunt RPC says the
+        # target's start+20 minute punishment window has ended.
+        self._taunt_active = False
+        self._taunt_id = ""
+        self._taunt_sender_nickname = ""
+        self._taunt_sender_names: list[str] = []
+        self._taunt_message = ""
+        self._taunt_messages: list[str] = []
+        self._taunt_chatter_last_message = ""
+        self._taunt_remaining_work_seconds = 1200
+        self._taunt_countdown_last_tick = time.monotonic()
+        self._encouragement_active = False
+        self._encouragement_id = ""
+        self._encouragement_sender_nickname = ""
+        self._encouragement_message = ""
         self._turn_paused = False
         self._last_user_interaction = time.monotonic()
+        self._auto_paused_for_idle = False
+        self._idle_pause_started_at: datetime | None = None
+        self._pending_idle_seconds = 0
+        self._idle_prompt_pending = False
+        self._idle_recovery_resolved = False
+        self._idle_above_threshold_samples = 0
+        self._idle_context: IdleEvidence | None = None
+        self._idle_hint_classification: IdleClassification | None = None
+        self._idle_hint_record: dict[str, object] | None = None
+        self._idle_recovery_dialog: IdleRecoveryDialog | None = None
+        self._last_session_probe = {
+            "locked": False,
+            "sleeping": False,
+            "display_state": "unknown",
+        }
+        self._last_auto_pause_reason: str | None = None
+        self._focus_activity_guard = FocusActivityGuard(
+            idle_provider=lambda: system_idle_seconds(),
+            session_provider=lambda: system_session_state(),
+        )
+        bridge_type = (
+            MacOSFocusActivityBridge
+            if sys.platform == "darwin"
+            else WindowsFocusActivityBridge
+        )
+        self._focus_activity_bridge = bridge_type(self._on_native_focus_activity_event)
+        self._fullscreen_video_started_at: float | None = None
+        self._pause_notice_shown = False
+        self._away_recovery_reason: str | None = None
+        self._away_recovery_started_at: float | None = None
+        self._away_recovery_prompt_shown = False
+        self._fullscreen_hidden = False
+        self._manually_hidden = False
+        self._fullscreen_restore_visible: dict[QWidget, bool] = {}
+        self._process_started_at = datetime.now().astimezone()
         self._sleep_after_sit = False
+        self._room_quick_status = ""
+        self._room_quick_status_expires_at: datetime | None = None
         self._screen_change_connected = False
         self._connected_screen: QScreen | None = None
+        self._applying_pet_window_policy = False
+        # Native macOS panel configuration is cached per Qt widget/native
+        # handle.  Speech bubbles and quick controls are separate top-level
+        # windows, so they need the same non-activating guard as the pet, but
+        # repeatedly re-applying it would recreate the original focus bug.
+        self._macos_native_window_configs: dict[int, tuple[int, bool]] = {}
+        self._duration_layout_reflowing = False
         self._pixmaps = self._load_pixmaps()
         self._selfie_photo = self._load_selfie_photo()
         self._render_cache: OrderedDict[tuple[object, ...], QPixmap] = OrderedDict()
         self._mask_cache: OrderedDict[tuple[object, ...], QRegion] = OrderedDict()
+        self._last_applied_mask_key: tuple[object, ...] | None = None
         self.credentials = CredentialStore()
-        self.ai_service = AIChatService(self.credentials)
+        self.ai_service = AIChatService(
+            self.credentials,
+            codex_path=getattr(self.settings, "codex_executable_path", ""),
+        )
         self.social_client = SocialClient(
             persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
         self._social_dialog: SocialHubDialog | None = None
+        self._close_retry_scheduled = False
         self._social_thread: SocialSyncThread | None = None
+        self._social_request_generation = 0
+        self._last_applied_social_generation = 0
+        # Presence must not wait behind the dashboard/statistics request chain.
+        # Keep the worker parented for Qt ownership, while closeEvent also
+        # explicitly stops and waits for its cooperative condition loop.
+        self._social_heartbeat_thread = SocialHeartbeatWorker(self.social_client)
+        self._social_personal_sync_due = True
+        self._last_social_personal_sync_at = 0.0
+        self._last_social_leaderboard_at = 0.0
+        self._last_social_reaction_state_at = 0.0
+        self._social_presence_context_signature: tuple[str, str, str, str] | None = None
+        self._social_event_threads: list[SocialEventThread] = []
+        self._social_profile_threads: list[SocialProfileThread] = []
+        self._owner_nickname_sync_key: tuple[str, str] | None = None
+        self._owner_nickname_sync_inflight = False
+        # A fresh computer must first read the account profile before its
+        # empty local setting is allowed to sync back to the server.  Keep the
+        # cursor account-scoped so switching accounts cannot leak a nickname.
+        self._owner_nickname_remote_loaded_for = ""
+        # Economy events are an append-only local ledger.  A complete,
+        # idempotent replay is used when an account becomes available so a
+        # transient offline period cannot leave the leaderboard behind the
+        # local supply-station balance forever.
+        self._economy_sync_lock = threading.Lock()
+        self._economy_sync_inflight = False
+        self._economy_sync_pending = False
+        self._economy_sync_user_id = ""
+        self._personal_outfit_sync_pending = False
+        self._personal_outfit_sync_user_id = ""
+        self._personal_outfit_fence_key = ""
+        self._personal_outfit_fence_until = 0.0
+        self._login_reward_account_id = self._current_social_user_id()
+        self._login_reward_store = LoginRewardStore(
+            self._login_reward_account_id,
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+        )
+        # The selected outfit remains a compatibility hint only while no
+        # account is known.  Once signed in, the account-scoped entitlement or
+        # the login RPC must prove ownership.
+        self._login_reward_unlocked = self._login_reward_store.is_unlocked(
+            LOGIN_REWARD_KEY
+        ) or (
+            not self._login_reward_account_id
+            and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        )
         self._buddy_visit_window = BuddyVisitWindow()
+        self.visit_status_bubble = VisitStatusBubble()
         self._seen_visit_ids: set[str] = set()
+        # A notification that the user has accepted, rejected, or explicitly
+        # deferred must not be recreated from the same dashboard snapshot.
+        # The server remains the source of truth; this is only a short-lived
+        # UI fence for the current account/process.
+        self._handled_visit_ids: set[str] = set()
         self._shown_active_visit_ids: set[str] = set()
+        self._seen_buddy_request_ids: set[str] = set()
+        self._muted_buddy_ids: set[str] = set()
+        self._incoming_visit_notice: IncomingVisitNotice | None = None
+        self._incoming_visit_queue: list[dict] = []
+        self._incoming_visit_response_threads: list[SocialVisitResponseThread] = []
         self._chat_dialog: ChatDialog | None = None
-        self._chat_memory = ConversationMemory(max_recent_rounds=30)
-        self.agent_manager = AgentManager(self.settings, self.credentials, self)
+        self._chat_streaming_active = False
+        # A failed request can finish and re-enable the send button before a
+        # second queued click is delivered.  Keep one short-lived submission
+        # fence at the UI boundary so one user action cannot duplicate a chat
+        # turn or its local history entry.  Intentional repeats remain allowed
+        # after the fence expires.
+        self._last_chat_submission = ""
+        self._last_chat_submission_at = 0.0
+        self._chat_submission_active = False
+        self._chat_memory = ConversationMemory(
+            max_recent_rounds=30,
+            account_scoped=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+        )
+        self._chat_history = ChatHistoryStore(
+            account_scoped=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+        )
+        self._chat_history_dialog: ChatHistoryDialog | None = None
+        self.agent_manager = AgentManager(
+            self.settings,
+            self.credentials,
+            self,
+            ai_service=self.ai_service,
+        )
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
-            self.work_timer.status_text,
-            lambda: self.work_timer.today_seconds() // 3600,
+            self._shared_work_status_text,
+            lambda: self._shared_today_focus_seconds() // 3600,
+            local_context=self.time_memory.summary.context,
+            lyrics_path=lambda: self.settings.local_lyrics_path,
         )
         self.chat_manager = ChatManager(
             self.settings,
@@ -211,7 +808,14 @@ class PetWindow(QWidget):
             self.agent_manager,
             self.offline_dialogue_manager,
             self,
+            local_context_provider=self.time_memory.summary.context,
+            action_executor=self.time_memory.actions,
+            todo_now_provider=self.time_memory.now,
+            local_command_handler=self._handle_chat_local_command,
         )
+        # All account-aware local stores now exist, so a restored Supabase
+        # session can safely select its namespace during startup.
+        self._switch_focus_account(self._current_social_user_id())
         self.music_provider_manager = MusicProviderManager(self.settings)
         self.music_controller = MusicController(
             self.settings,
@@ -220,19 +824,24 @@ class PetWindow(QWidget):
         )
         self.agent_manager.status_changed.connect(self._agent_status_changed)
         self.chat_manager.reply_ready.connect(self._managed_chat_reply)
+        self.chat_manager.reply_started.connect(self._chat_reply_started)
+        self.chat_manager.reply_delta.connect(self._chat_reply_delta)
+        self.chat_manager.action_executed.connect(self._chat_action_executed)
         self.chat_manager.busy_changed.connect(self._chat_busy_changed)
         self.chat_manager.notice.connect(self._chat_notice)
         self.music_controller.result_ready.connect(self._music_control_result)
+        self.focus_session.changed.connect(self._focus_snapshot_changed)
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
+        self._night_limited_activity = ""
         self._activity_transition_from = QPixmap()
         self._activity_transition_step = 0
         self._activity_transition_steps = 8
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
-        self._last_growth_hour = stage_for_seconds(self.work_timer.today_seconds()).hour
+        self._last_growth_hour = stage_for_seconds(self._shared_today_focus_seconds()).hour
         self._long_press_triggered = False
         self._speech_engine = QTextToSpeech(self) if QTextToSpeech is not None else None
         self._babuda_variant_index = 0
@@ -243,12 +852,31 @@ class PetWindow(QWidget):
         if self._audio_output is not None and self._media_player is not None:
             self._audio_output.setVolume(0.9)
             self._media_player.setAudioOutput(self._audio_output)
+            self._media_player.playbackStateChanged.connect(
+                lambda state: lifecycle_log(
+                    "media.player.state_changed",
+                    self._media_player,
+                    owner="PetWindow",
+                    signal="playbackStateChanged",
+                    state=str(state),
+                )
+            )
+            self._media_player.errorOccurred.connect(
+                lambda error: lifecycle_log(
+                    "media.player.error",
+                    self._media_player,
+                    owner="PetWindow",
+                    error=str(error),
+                )
+            )
 
-        self.setWindowFlags(self._pet_window_flags())
+        self.ensure_pet_window_policy(event="Construct")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setWindowTitle(APP_DISPLAY_NAME)
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} · {self._pet_name()}")
         self.setMouseTracking(True)
 
         source = self._pixmaps[PetState.IDLE][0]
@@ -256,6 +884,9 @@ class PetWindow(QWidget):
         self.setFixedSize(width + 12, settings.display_height + 14)
         self.label = QLabel(self)
         self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.label.setAutoFillBackground(False)
+        self.label.setStyleSheet("background: transparent;")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setGeometry(6, 0, width, settings.display_height + 8)
 
@@ -265,10 +896,17 @@ class PetWindow(QWidget):
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
             True,
         )
+        self.photo_bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.photo_bubble.setAutoFillBackground(False)
         self.photo_bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.photo_bubble.setStyleSheet("background: transparent;")
 
-        self.speech_bubble = QLabel()
+        self.speech_bubble = RoundedSurfaceLabel(
+            None,
+            fill="#eff5f8",
+            border="#4b6070",
+            radius=15,
+        )
         self.speech_bubble.setWindowFlags(self._ambient_window_flags())
         self.speech_bubble.setAttribute(
             Qt.WidgetAttribute.WA_ShowWithoutActivating,
@@ -287,22 +925,68 @@ class PetWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
         self.speech_bubble.setStyleSheet(
-            "QLabel { background: rgba(239, 245, 248, 175); "
-            "color: #27313d; border: 1px solid rgba(75, 96, 112, 120); border-radius: 15px; "
+            "QLabel { background: transparent; "
+            "color: #27313d; border: none; border-radius: 15px; "
             "padding: 10px 13px; font-size: 14px; }"
         )
+        self.speech_bubble.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
         self.work_controls = WorkControlBubble()
+        self.coffee_scene_prompt = CoffeeScenePrompt()
+        self.work_duration_bubble = WorkDurationBubble()
+        # One reusable local overlay.  It is intentionally not a child of the
+        # character frame and is created once to avoid repeated QObject/native
+        # window churn on rapid menu clicks.
+        self._local_burst_effect = LocalBurstEffectWindow()
+        self._local_effect_manager = LocalEffectManager(
+            on_start=self._start_managed_local_effect,
+            on_switch=self._switch_managed_local_effect,
+            on_sustain=self._sustain_managed_local_effect,
+            on_release=self._release_managed_local_effect,
+            on_stop=self._stop_managed_local_effect,
+            on_color_mist_world_frame=self._update_color_mist_world_local_effect,
+            on_color_mist_world_resume=self._resume_managed_local_effect,
+            duration_profile=getattr(self.settings, "state_effect_duration", "standard"),
+        )
+        self._local_burst_effect.progressed.connect(self._local_effect_tick)
+        self._local_burst_effect.finished.connect(self._local_effect_finished)
+        self._qt_application = QApplication.instance()
+        if self._qt_application is not None:
+            self._qt_application.installEventFilter(self)
+            if sys.platform == "win32":
+                self._qt_application.installNativeEventFilter(self._focus_activity_bridge)
+            self._qt_application.applicationStateChanged.connect(
+                self._on_application_state_changed
+            )
+            self._qt_application.screenAdded.connect(self._on_screen_topology_changed)
+            self._qt_application.screenRemoved.connect(self._on_screen_topology_changed)
+        self.work_controls.start_requested.connect(self._start_work_from_control)
         self.work_controls.pause_requested.connect(self.pause_work_timer)
+        self.work_controls.resume_requested.connect(self._resume_work_from_control)
         self.work_controls.finish_requested.connect(self.finish_work_timer)
-        self.quick_panel = QuickControlPanel()
+        self.coffee_scene_prompt.continue_requested.connect(self._continue_after_coffee_scene)
+        self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
+        self.quick_panel = QuickControlPanel(self._pet_name())
+        self.quick_panel.set_window_behavior_callback(self._apply_macos_window_behavior)
+        self.quick_panel.layout_changed.connect(self._position_quick_panel)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
+        self.quick_panel.work_report_requested.connect(self.show_work_report)
+        self.quick_panel.chen_artist_requested.connect(self.open_chen_artist_page)
+        self.quick_panel.artist_music_service_requested.connect(self.set_artist_music_service)
+        self.quick_panel.todo_requested.connect(self.show_todo_center)
+        self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
-        self.quick_panel.music_requested.connect(self.play_random_song)
+        self.quick_panel.food_requested.connect(self._quick_food_action)
+        self.quick_panel.supply_requested.connect(self.show_food_scene_dialog)
         self.quick_panel.size_requested.connect(self.open_size_control)
-        self.quick_panel.settings_requested.connect(self.open_settings)
-
+        self.quick_panel.rename_requested.connect(self.rename_pet)
+        self.quick_panel.content_update_requested.connect(
+            lambda: self._invoke_menu_external("content_update")
+        )
+        self.quick_panel.program_update_requested.connect(
+            lambda: self._invoke_menu_external("program_update")
+        )
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
         self.movement_timer.timeout.connect(self._movement_tick)
@@ -339,6 +1023,10 @@ class PetWindow(QWidget):
         self.speech_timer.setSingleShot(True)
         self.speech_timer.timeout.connect(self.speech_bubble.hide)
 
+        self.taunt_chatter_timer = QTimer(self)
+        self.taunt_chatter_timer.setSingleShot(True)
+        self.taunt_chatter_timer.timeout.connect(self._taunt_chatter_tick)
+
         self.effect_timer = QTimer(self)
         self.effect_timer.setInterval(90)
         self.effect_timer.timeout.connect(self._effect_tick)
@@ -349,14 +1037,40 @@ class PetWindow(QWidget):
         self.bob_timer.start()
 
         self.work_clock_timer = QTimer(self)
-        self.work_clock_timer.setInterval(1000)
+        self.work_clock_timer.setInterval(250)
+        # The label is derived from the monotonic clock, so a delayed callback
+        # must never be treated as one elapsed second. PreciseTimer reduces
+        # normal Windows timer coalescing; the monotonic snapshot still keeps
+        # the accumulated value correct when the GUI thread is busy.
+        self.work_clock_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.work_clock_timer.timeout.connect(self._work_timer_tick)
         self.work_clock_timer.start()
+
+        # Keep the one-second clock strictly presentation-only.  Persistence,
+        # reminders and reward bookkeeping are maintenance work and must not
+        # be able to stretch the clock callback or make the whole GUI appear
+        # sticky.  Alarm polling has its own small timer so a due alarm does
+        # not wait for the slower maintenance cadence.
+        self.alarm_poll_timer = QTimer(self)
+        self.alarm_poll_timer.setSingleShot(True)
+        self.alarm_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.alarm_poll_timer.timeout.connect(self._alarm_poll_tick)
+        self._arm_alarm_poll_timer()
+
+        self.work_maintenance_timer = QTimer(self)
+        self.work_maintenance_timer.setInterval(5000)
+        self.work_maintenance_timer.timeout.connect(self._work_maintenance_tick)
+        self.work_maintenance_timer.start()
 
         self.ambient_timer = QTimer(self)
         self.ambient_timer.setSingleShot(True)
         self.ambient_timer.timeout.connect(self._ambient_tick)
         self._schedule_ambient()
+
+        self.night_limited_timer = QTimer(self)
+        self.night_limited_timer.setInterval(15_000)
+        self.night_limited_timer.timeout.connect(self._night_limited_tick)
+        self.night_limited_timer.start()
 
         self.song_timer = QTimer(self)
         self.song_timer.setSingleShot(True)
@@ -370,6 +1084,10 @@ class PetWindow(QWidget):
         self.activity_timer = QTimer(self)
         self.activity_timer.setSingleShot(True)
         self.activity_timer.timeout.connect(self._activity_timeout)
+
+        self.food_scene_timer = QTimer(self)
+        self.food_scene_timer.setSingleShot(True)
+        self.food_scene_timer.timeout.connect(self._food_scene_timeout)
 
         self.activity_transition_timer = QTimer(self)
         self.activity_transition_timer.setInterval(35)
@@ -392,20 +1110,63 @@ class PetWindow(QWidget):
         self.topmost_timer = QTimer(self)
         self.topmost_timer.setInterval(4000)
         self.topmost_timer.timeout.connect(self._ensure_on_top)
-        self.topmost_timer.start()
+        # Topmost is restored at lifecycle boundaries below. A timer would
+        # turn a window-layer repair into continuous z-order traffic and, on
+        # macOS, can make AppKit reconsider the active application.
 
+        self._last_social_heartbeat_at = 0.0
+        self._social_heartbeat_due = True
         self.social_timer = QTimer(self)
-        self.social_timer.setInterval(30_000)
+        # Keep incoming visits and food interactions responsive without
+        # requiring the study-room window to be opened or manually refreshed.
+        # Heartbeats are still throttled independently below, so this is a
+        # lightweight dashboard poll rather than a heartbeat on this timer.
+        self.social_timer.setInterval(SOCIAL_SYNC_TICK_INTERVAL_MS)
         self.social_timer.timeout.connect(self._social_tick)
         self.social_timer.start()
+        self.social_sync_timer = QTimer(self)
+        self.social_sync_timer.setSingleShot(True)
+        self.social_sync_timer.timeout.connect(self._social_tick)
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
 
+        # A real video/PPT fullscreen window must own the whole display.  Poll
+        # the coarse, privacy-preserving geometry signal separately from the
+        # work-idle policy so the pet and its accessories disappear quickly,
+        # then return with exactly the visibility state they had before.
+        self.fullscreen_poll_timer = QTimer(self)
+        self.fullscreen_poll_timer.setInterval(1000)
+        self.fullscreen_poll_timer.timeout.connect(self._sync_fullscreen_visibility)
+        self.fullscreen_poll_timer.start()
+
+        # Keep a low-frequency, cross-platform system probe.  It is the one
+        # place that may auto-pause: 10 minutes of aggregate keyboard+mouse
+        # silence, a verified lock/sleep boundary, or a known player/browser
+        # video in real fullscreen. None of those paths ever auto-resume.
+        self.input_idle_timer = QTimer(self)
+        self.input_idle_timer.setInterval(5_000)
+        self.input_idle_timer.timeout.connect(self._check_input_idle)
+        self.input_idle_timer.start()
+        self.idle_recovery_timer = QTimer(self)
+        self.idle_recovery_timer.setSingleShot(True)
+        self.idle_recovery_timer.timeout.connect(self._ask_idle_recovery)
+
+        # This probe does no network or database work.  It only measures how
+        # late the GUI event loop receives a lightweight timer callback and
+        # records unusually large stalls for later diagnosis.
+        self.event_loop_lag_timer = QTimer(self)
+        self.event_loop_lag_timer.setInterval(250)
+        self.event_loop_lag_timer.timeout.connect(self._event_loop_lag_tick)
+        self.event_loop_lag_timer.start()
+
         self._sync_hourly_outfit(announce=False)
         self.set_state(PetState.IDLE)
+        self._night_limited_tick()
         self._schedule(self.behavior.initial_idle())
         if should_start_startup_detection():
             QTimer.singleShot(0, self.agent_manager.start_background_check)
+        self._log_timer_inventory()
+        lifecycle_log("pet_window.construct.complete", self)
 
     def _pet_window_flags(self) -> Qt.WindowType:
         """返回不占任务栏、不接收键盘焦点的宠物窗口标志。"""
@@ -418,6 +1179,54 @@ class PetWindow(QWidget):
         if self.settings.always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         return flags
+
+    def ensure_pet_window_policy(self, *, event: str = "PolicyCheck") -> bool:
+        """在生命周期节点恢复六毛唯一的 Qt 窗口 flags policy。
+
+        任何功能都不能自行重建六毛本体 flags。若 Qt/native 生命周期
+        意外丢失了 flags，这里只按当前设置恢复完整组合，并保留位置与
+        可见状态；native 层级的补强由随后同一生命周期节点的校验负责。
+        """
+
+        if getattr(self, "_applying_pet_window_policy", False):
+            return False
+        desired = self._pet_window_flags()
+        try:
+            current = self.windowFlags()
+            changed = int(current) != int(desired)
+            if changed:
+                position = QPoint(self.pos())
+                was_visible = bool(self.isVisible())
+                self._applying_pet_window_policy = True
+                try:
+                    self.setWindowFlags(desired)
+                    self.move(position)
+                    if was_visible:
+                        self.show()
+                finally:
+                    self._applying_pet_window_policy = False
+                lifecycle_log(
+                    "pet-window.qt-policy",
+                    self,
+                    section="pet-window",
+                    platform=(
+                        "macOS"
+                        if sys.platform == "darwin"
+                        else "Windows"
+                        if os.name == "nt"
+                        else sys.platform
+                    ),
+                    event=str(event),
+                    qt_stays_on_top=bool(
+                        desired & Qt.WindowType.WindowStaysOnTopHint
+                    ),
+                    action="restore_qt_flags",
+                )
+            if self.isVisible():
+                self._ensure_on_top(event=event)
+            return changed
+        except (RuntimeError, TypeError, ValueError):
+            return False
 
     def _ambient_window_flags(self) -> Qt.WindowType:
         """让自动气泡跟随宠物模式，并保证显示时不激活当前应用。"""
@@ -463,7 +1272,6 @@ class PetWindow(QWidget):
         )
         if len(motion_factors) != len(animations["walk"]):
             raise ValueError("走路位移曲线必须与走路动画帧数一致")
-        self._walk_motion_factors = tuple(float(value) for value in motion_factors)
         mapping = {
             PetState.IDLE: animations["idle"],
             PetState.WALK: animations["walk"],
@@ -480,19 +1288,56 @@ class PetWindow(QWidget):
             PetState.DRAG: animations["drag"],
         }
         pixmaps: dict[PetState, list[QPixmap]] = {}
+        loaded_walk_factors: list[float] = []
+        unavailable_states: list[PetState] = []
         for state, relative_paths in mapping.items():
             state_frames = []
-            for relative in relative_paths:
+            for frame_index, relative in enumerate(relative_paths):
                 path = manifest_path.parent / relative
                 if not path.is_file():
-                    raise FileNotFoundError(f"缺少宠物素材：{path}")
+                    LOGGER.error("pet asset frame is missing; continuing with remaining frames: %s", path)
+                    lifecycle_log(
+                        "pet.asset.frame_missing",
+                        self,
+                        state=state.value,
+                        frame=str(relative)[:180],
+                    )
+                    continue
                 pixmap = QPixmap(str(path))
                 if pixmap.isNull():
-                    raise ValueError(f"无法加载宠物素材：{path}")
+                    LOGGER.error("pet asset frame cannot be decoded; continuing: %s", path)
+                    lifecycle_log(
+                        "pet.asset.frame_invalid",
+                        self,
+                        state=state.value,
+                        frame=str(relative)[:180],
+                    )
+                    continue
                 state_frames.append(pixmap)
+                if state is PetState.WALK:
+                    loaded_walk_factors.append(float(motion_factors[frame_index]))
             if not state_frames:
-                raise ValueError(f"状态 {state.value} 没有可用素材帧")
+                unavailable_states.append(state)
+                continue
             pixmaps[state] = state_frames
+        fallback_frames = pixmaps.get(PetState.IDLE)
+        if not fallback_frames:
+            fallback_frames = next(iter(pixmaps.values()), None)
+        if not fallback_frames:
+            raise ValueError("宠物素材清单中没有任何可加载帧")
+        for state in unavailable_states:
+            pixmaps[state] = list(fallback_frames)
+            lifecycle_log(
+                "pet.asset.state_fallback",
+                self,
+                state=state.value,
+                fallback=PetState.IDLE.value if PetState.IDLE in pixmaps else "first_available",
+            )
+        self._walk_motion_factors = (
+            tuple(loaded_walk_factors)
+            if loaded_walk_factors and PetState.WALK not in unavailable_states
+            else tuple(1.0 for _ in pixmaps[PetState.WALK])
+        )
         return pixmaps
 
     def _load_selfie_photo(self) -> QPixmap:
@@ -514,7 +1359,7 @@ class PetWindow(QWidget):
         return QPixmap()
 
     def place_at_start(self) -> None:
-        """按已保存位置或主屏幕右下角放置窗口。"""
+        """Restore a saved global position, or use the primary-screen default."""
 
         screen = QApplication.primaryScreen()
         if screen is None:
@@ -527,6 +1372,26 @@ class PetWindow(QWidget):
             x = self.settings.start_x
             y = self.settings.start_y
         self.move(self._constrained_position(QPoint(x, y)))
+
+    def _effect_timer_needed(self) -> bool:
+        """Return whether the existing timer has semantic emotion work."""
+
+        # The old persistent Aura no longer participates in the character
+        # frame pipeline.  LocalBurstEffectWindow owns its one short-lived
+        # 30 FPS timer and is completely idle while hidden.
+        return emotion_effect_name(self.state) is not None
+
+    def _configure_effect_timer(self) -> None:
+        """Run semantic symbols promptly; burst animation has its own timer."""
+
+        if not self._effect_timer_needed():
+            self.effect_timer.stop()
+            return
+        interval = 90
+        if self.effect_timer.interval() != interval:
+            self.effect_timer.setInterval(interval)
+        if not self.effect_timer.isActive():
+            self.effect_timer.start()
 
     def set_state(self, state: PetState) -> None:
         """切换行为状态、重置帧序号并刷新当前图片。"""
@@ -550,10 +1415,7 @@ class PetWindow(QWidget):
         else:
             self.label.move(6, 0)
         self._effect_phase = 0
-        if emotion_effect_name(display_state) is None:
-            self.effect_timer.stop()
-        else:
-            self.effect_timer.start()
+        self._configure_effect_timer()
         self._refresh_pixmap()
 
     def _frame_interval(self, state: PetState, frame_index: int) -> int:
@@ -591,6 +1453,7 @@ class PetWindow(QWidget):
             pixmap = pixmap.transformed(QTransform().scale(-1, 1))
         return display_state, pixmap
 
+    @_guard_qt_callback
     def _refresh_pixmap(self) -> None:
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
 
@@ -618,25 +1481,72 @@ class PetWindow(QWidget):
             )
             scaled.setDevicePixelRatio(ratio)
             self._remember_cache_item(self._render_cache, cache_key, scaled)
-        composed = draw_emotion_effect(
-            scaled,
-            display_state,
-            self._effect_phase,
-        )
         activity = self._ambient_activity
+        food_scene = self.economy.active_food_scene() or {}
+        scene_activity = {
+            "coffee": "work-study",
+            "expensive_coffee": "deep-focus",
+            "milk_tea": "milk-tea",
+            "cake": "feast",
+            "tea": "tea",
+        }.get(str(food_scene.get("item_key") or ""))
+        food_scene_active = False
+        if scene_activity and not bool(food_scene.get("expired")):
+            # Tea is intentionally a short companion animation; its stored
+            # scene remains a diary event but does not pin the sprite forever.
+            if str(food_scene.get("item_key") or "") != "tea" or activity == "tea":
+                activity = scene_activity
+                food_scene_active = True
+        # A social food interaction is not stored in the local food-scene
+        # ledger: it belongs to both users and must not affect inventory or
+        # focus accounting.  It still needs the same rendering precedence so
+        # a permanent hourly outfit cannot hide the food-only sprite.
+        if (
+            activity in FOOD_LIMITED_ACTIVITIES
+            and time.monotonic() < self._social_food_activity_until
+        ):
+            food_scene_active = True
+        # A punishment outfit is deliberately stronger than ordinary ambient
+        # or food animations: the server state, bubble, and sprite must end
+        # together instead of one local timer restoring the old outfit early.
+        if self._taunt_active:
+            activity = "taunt"
+            food_scene_active = False
+        elif self._encouragement_active:
+            # A persistent encouragement uses the normal work-cheer sprite,
+            # but keeps it pinned until the receiver pauses or the hour ends.
+            activity = "work-cheer"
+            food_scene_active = False
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
-        composed = draw_activity_overlay(
-            composed,
+        # Resolve the actual character/activity sprite before semantic
+        # emotion effects. The local Burst is a separate overlay window, so
+        # it cannot be erased by activity sprites or tint the character frame.
+        base_frame = draw_activity_overlay(
+            scaled,
             activity,
             self.settings.equipped_outfit,
             self._effect_phase,
+            food_scene=food_scene_active,
         )
+        mask_source = draw_emotion_effect(base_frame, display_state, self._effect_phase)
+        # Persistent Aura compositing is intentionally disabled.  The only
+        # new visual effect is LocalBurstEffectWindow, which remains outside
+        # this character pixmap and therefore cannot tint or mask the pet.
+        composed = mask_source
         visible = self._blend_activity_transition(composed)
         self.label.setPixmap(visible)
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
-        overlay_key = hash((activity, self.settings.equipped_outfit, self._effect_phase % 2))
-        self._refresh_window_mask(display_state, visible, direction_key, effect_key ^ overlay_key)
+        # The computer indicator changes colour, not geometry. A Burst never
+        # invalidates the native QRegion because it is outside this window.
+        overlay_key = hash((activity, self.settings.equipped_outfit, food_scene_active))
+        self._refresh_window_mask(
+            display_state,
+            visible,
+            direction_key,
+            effect_key ^ overlay_key,
+            mask_source=mask_source,
+        )
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
         """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
@@ -663,6 +1573,7 @@ class PetWindow(QWidget):
         painter.end()
         return result
 
+    @_guard_qt_callback
     def _activity_transition_tick(self) -> None:
         """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
 
@@ -676,7 +1587,8 @@ class PetWindow(QWidget):
     def _change_ambient_activity(self, activity: str) -> None:
         """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
 
-        next_activity = activity if activity in ACTION_SPRITES else "none"
+        valid_activities = set(ACTION_SPRITES) | set(SPECIAL_LIMITED_ACTIVITY_SPRITES)
+        next_activity = activity if activity in valid_activities else "none"
         if next_activity == self._ambient_activity:
             self._refresh_pixmap()
             return
@@ -695,6 +1607,8 @@ class PetWindow(QWidget):
         pixmap: QPixmap,
         direction_key: int,
         effect_key: int,
+        *,
+        mask_source: QPixmap | None = None,
     ) -> None:
         """按当前人物轮廓设置窗口遮罩，使透明留白不拦截桌面点击。"""
 
@@ -705,10 +1619,18 @@ class PetWindow(QWidget):
             effect_key,
             self.label.width(),
             self.label.height(),
+            self.label.x(),
+            self.label.y(),
         )
+        # Detached Burst pixels deliberately never change the native input
+        # silhouette. Avoid calling the relatively costly native setMask()
+        # again while that silhouette key is unchanged.
+        if cache_key == self._last_applied_mask_key and cache_key in self._mask_cache:
+            return
         region = self._mask_cache.get(cache_key)
         if region is None:
-            logical = pixmap.scaled(
+            mask_pixmap = mask_source if mask_source is not None else pixmap
+            logical = mask_pixmap.scaled(
                 self.label.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
@@ -718,16 +1640,20 @@ class PetWindow(QWidget):
             region = QRegion(logical.mask()).translated(offset_x, offset_y)
             self._remember_cache_item(self._mask_cache, cache_key, region)
         self.setMask(region.translated(self.label.x(), self.label.y()))
+        self._last_applied_mask_key = cache_key
 
+    @_guard_qt_callback
     def _effect_tick(self) -> None:
-        """推进表情符号的轻微漂浮动画并刷新合成帧。"""
+        """推进短暂表情符号；局部 Burst 使用自己的 bounded timer。"""
 
-        if emotion_effect_name(self.state) is None:
+        if not self._effect_timer_needed():
             self.effect_timer.stop()
             return
+        self._configure_effect_timer()
         self._effect_phase = (self._effect_phase + 1) % 12
         self._refresh_pixmap()
 
+    @_guard_qt_callback
     def _animation_tick(self) -> None:
         """推进循环或单次连续帧，并在反向过渡结束后执行回调。"""
 
@@ -774,86 +1700,169 @@ class PetWindow(QWidget):
             / self.settings.movement_interval_ms
         )
 
+    def event(self, event: QEvent) -> bool:
+        """在 Qt 可能重建 native handle 时立即重检唯一窗口 policy。"""
+
+        event_type = event.type()
+        if event_type == QEvent.Type.WinIdChange:
+            self.ensure_pet_window_policy(event="WinIdChange")
+            QTimer.singleShot(
+                0,
+                lambda: self._ensure_on_top(event="WinIdChange"),
+            )
+        elif event_type == QEvent.Type.WindowStateChange:
+            # Restore/show transitions can replace or reorder a native window
+            # without changing the Python QWidget instance.
+            QTimer.singleShot(
+                0,
+                lambda: self.ensure_pet_window_policy(event="WindowStateChange"),
+            )
+        return super().event(event)
+
     def showEvent(self, event: QShowEvent) -> None:
         """窗口首次显示时连接跨屏信号并按当前 DPI 绘制。"""
 
+        lifecycle_log("pet_window.show_event.begin", self)
+        self.ensure_pet_window_policy(event="Show")
         super().showEvent(event)
+        if not self._focus_activity_bridge.active:
+            self._focus_activity_bridge.start(self)
         handle = self.windowHandle()
         if handle is not None and not self._screen_change_connected:
             handle.screenChanged.connect(self._on_screen_changed)
             self._screen_change_connected = True
         self._on_screen_changed(handle.screen() if handle else None)
-        QTimer.singleShot(0, self._ensure_on_top)
+        self._update_work_duration_bubble()
+        if self._compact_todo_panel is not None:
+            if self._restore_compact_todos_after_show:
+                self._show_nonactivating(
+                    self._compact_todo_panel,
+                    always_on_top=bool(
+                        self.settings.always_on_top
+                        or getattr(self.settings, "today_note_always_on_top", False)
+                    ),
+                )
+        self._position_accessories()
+        QTimer.singleShot(0, lambda: self._ensure_on_top(event="Show"))
+        lifecycle_log("pet_window.show_event.end", self)
 
-    def _ensure_on_top(self) -> None:
-        """恢复原生窗口层级，但绝不激活窗口或夺走当前输入焦点。"""
+    @_guard_qt_callback
+    def _ensure_on_top(self, *, event: str = "PolicyCheck") -> None:
+        """在生命周期节点校验 native 层级，但绝不激活或抢输入焦点。"""
 
         if not self.isVisible():
             return
-        if os.name == "nt":
-            try:
-                import ctypes
+        self._apply_native_window_policy_for_widget(self, event=event)
+        # Detached passive surfaces are separate native windows. Recheck them
+        # in the same lifecycle pass, but never poll or call activateWindow().
+        for accessory in self._fullscreen_surfaces():
+            if accessory is self or not accessory.isVisible():
+                continue
+            self._apply_native_window_policy_for_widget(accessory, event=event)
 
-                user32 = ctypes.windll.user32
-                hwnd = int(self.winId())
-                get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-                set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-                extended = int(get_style(hwnd, -20))
-                extended |= 0x00000080 | 0x08000000  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-                set_style(hwnd, -20, extended)
-                insert_after = -1 if self.settings.always_on_top else -2
-                user32.SetWindowPos(
-                    hwnd,
-                    insert_after,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0x0001 | 0x0002 | 0x0010 | 0x0040,
-                )
-                return
-            except (AttributeError, OSError, ValueError):
-                pass
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior()
-        # 其他平台由 WindowStaysOnTopHint 负责。这里不能调用 raise_()，
-        # 否则 macOS/部分 Linux 桌面会在用户打字时切换当前应用。
+    def _apply_native_window_policy_for_widget(
+        self,
+        widget: QWidget,
+        *,
+        event: str,
+    ) -> None:
+        """应用 native policy 并写入一条本地 pet-window 诊断记录。"""
 
-    def _apply_macos_window_behavior(self) -> None:
-        """以 NSWindow 浮动层级跨空间显示；保留人物窗口鼠标互动且不激活。"""
-
-        if QApplication.platformName().casefold() in {"offscreen", "minimal"}:
-            return
         try:
-            import ctypes
-
-            objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.A.dylib")
-            objc.sel_registerName.restype = ctypes.c_void_p
-            objc.sel_registerName.argtypes = [ctypes.c_char_p]
-            objc.objc_msgSend.restype = ctypes.c_void_p
-            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            view = ctypes.c_void_p(int(self.winId()))
-            window = objc.objc_msgSend(view, objc.sel_registerName(b"window"))
-            if not window:
-                return
-            send_integer = objc.objc_msgSend
-            send_integer.restype = None
-            send_integer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_longlong]
-            level = 3 if self.settings.always_on_top else 0  # NSFloatingWindowLevel / normal
-            send_integer(window, objc.sel_registerName(b"setLevel:"), level)
-            behavior = (1 << 0) | (1 << 8) if self.settings.always_on_top else 0
-            send_integer(
-                window,
-                objc.sel_registerName(b"setCollectionBehavior:"),
-                behavior,
+            qt_stays_on_top = bool(
+                widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
             )
-            send_bool = objc.objc_msgSend
-            send_bool.restype = None
-            send_bool.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
-            send_bool(window, objc.sel_registerName(b"setHidesOnDeactivate:"), False)
-            send_bool(window, objc.sel_registerName(b"setIgnoresMouseEvents:"), False)
-        except (AttributeError, OSError, TypeError, ValueError):
+            result = apply_native_window_policy(
+                widget,
+                topmost=bool(self.settings.always_on_top),
+                qt_stays_on_top=qt_stays_on_top,
+            )
+            lifecycle_log(
+                "pet-window.native-policy",
+                widget,
+                section="pet-window",
+                platform=(
+                    "macOS"
+                    if sys.platform == "darwin"
+                    else "Windows"
+                    if os.name == "nt"
+                    else sys.platform
+                ),
+                policy_event=str(event),
+                native_id=result.get("native_id"),
+                qt_stays_on_top=qt_stays_on_top,
+                native_level=result.get("native_level"),
+                hwnd_topmost=result.get("native_topmost"),
+                action=result.get("action"),
+                available=result.get("available"),
+                error=result.get("error", ""),
+            )
+        except (RuntimeError, TypeError, ValueError, OverflowError):
+            LOGGER.exception("native pet window policy check failed")
+
+    @staticmethod
+    def _raise_accessory(widget: QWidget) -> None:
+        """Raise a pet accessory only where it is known to be non-activating.
+
+        On macOS, an order change for a no-focus accessory can still make the
+        owning application frontmost.  The native panel is ordered by its
+        level when shown, so animation and refresh paths must not call
+        ``raise_`` there.
+        """
+
+        if sys.platform != "darwin":
+            widget.raise_()
+
+    def _show_nonactivating(self, widget: QWidget, *, always_on_top: bool | None = None) -> None:
+        """Configure a pet surface before showing it on macOS.
+
+        Applying the NSPanel style after ``show()`` is too late on some Qt
+        builds: AppKit briefly activates Lili, and repeated speech/status
+        updates can then steal ChatGPT's text focus.  Creating/configuring the
+        native handle first makes every passive surface display-only.
+        """
+
+        # A focus/session refresh can request a passive surface after the
+        # fullscreen poll has already hidden it (the duration bubble is
+        # refreshed every timer tick).  Do not let that refresh punch through
+        # a video or presentation fullscreen window.
+        if (
+            getattr(self, "_manually_hidden", False)
+            or getattr(self, "_fullscreen_hidden", False)
+        ) and widget in self._fullscreen_surfaces():
+            widget.hide()
             return
+
+        if sys.platform == "darwin":
+            # Configure the freshly created NSWindow before it is ordered;
+            # the bridge is non-activating and does not bring the app front.
+            self._apply_macos_window_behavior(
+                widget,
+                always_on_top=always_on_top,
+                event="Show",
+            )
+        widget.show()
+        if sys.platform != "darwin":
+            # Windows creates/recreates the HWND during show; check it after
+            # the handle exists without activating the window.
+            self._apply_native_window_policy_for_widget(widget, event="Show")
+
+    def _apply_macos_window_behavior(
+        self,
+        widget: QWidget | None = None,
+        *,
+        always_on_top: bool | None = None,
+        event: str = "PolicyCheck",
+    ) -> None:
+        """用安全的 PyObjC bridge 设置非激活浮动层级。"""
+
+        target = widget or self
+        topmost = (
+            bool(self.settings.always_on_top)
+            if always_on_top is None
+            else bool(always_on_top)
+        )
+        self._apply_native_window_policy_for_widget(target, event=event)
 
     def set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
         """在 QQ 宠物式置顶与普通桌面模式间切换，显示时不抢焦点。"""
@@ -866,13 +1875,35 @@ class PetWindow(QWidget):
             (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
         )
         self.settings.always_on_top = enabled
-        self.setWindowFlags(self._pet_window_flags())
+        self.ensure_pet_window_policy(event="SetAlwaysOnTop")
         self.move(position)
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(
+                self,
+                always_on_top=enabled,
+                event="SetAlwaysOnTop",
+            )
         for bubble, visible, bubble_position in bubble_states:
             bubble.setWindowFlags(self._ambient_window_flags())
             bubble.move(bubble_position)
             if visible:
-                bubble.show()
+                self._show_nonactivating(bubble, always_on_top=enabled)
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.set_companion_topmost(enabled)
+            if self._compact_todo_panel.isVisible():
+                self._position_compact_todos()
+                if sys.platform == "darwin":
+                    self._apply_macos_window_behavior(
+                        self._compact_todo_panel,
+                        always_on_top=enabled or bool(
+                            getattr(self.settings, "today_note_always_on_top", False)
+                        ),
+                    )
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(
+                self.work_duration_bubble,
+                always_on_top=enabled,
+            )
         if was_visible:
             self.show()
             target_position = QPoint(position)
@@ -881,7 +1912,7 @@ class PetWindow(QWidget):
                 # macOS may round a frameless window by one pixel while recreating
                 # its native handle. Restore the user-visible position afterwards.
                 self.move(target_position)
-                self._ensure_on_top()
+                self._ensure_on_top(event="SetAlwaysOnTop")
 
             QTimer.singleShot(0, restore_position_after_show)
         if persist:
@@ -895,36 +1926,255 @@ class PetWindow(QWidget):
         self.always_on_top_changed.emit(enabled)
 
     def moveEvent(self, event: QMoveEvent) -> None:
-        """人物移动时让仍在显示的文字气泡跟随可见轮廓。"""
+        """人物移动时让所有附属窗口跟随固定的宠物窗口位置。"""
 
         super().moveEvent(event)
-        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
-            self._position_speech_bubble()
+        self._position_accessories()
+        self._position_local_burst_effect()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
 
+        lifecycle_log("pet_window.hide_event.begin", self)
         self.photo_bubble.hide()
         self.speech_bubble.hide()
         self.work_controls.hide()
+        self.coffee_scene_prompt.hide()
+        self.work_duration_bubble.hide()
+        self.visit_status_bubble.hide()
         self.quick_panel.hide()
+        if hasattr(self, "_local_burst_effect"):
+            self._local_burst_effect.stop()
+        if hasattr(self, "_local_effect_manager"):
+            self._local_effect_manager.force_stop()
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
+            self._compact_todo_panel.hide()
         super().hideEvent(event)
+        lifecycle_log("pet_window.hide_event.end", self)
+
+    def hide_pet(self) -> None:
+        """Hide the pet and every detached accessory until explicitly shown."""
+
+        lifecycle_log("pet_window.hide.request", self, source="explicit")
+        self._manually_hidden = True
+        # These are top-level windows, not children of PetWindow. Hide them
+        # explicitly so a later focus/session refresh cannot leave the live
+        # duration badge behind on the desktop.
+        for widget in self._fullscreen_surfaces():
+            if widget is not self:
+                widget.hide()
+        self.hide()
+
+    def show_pet(self) -> None:
+        """Explicitly show the pet again, respecting an active full-screen app."""
+
+        lifecycle_log("pet_window.show.request", self, source="explicit")
+        self._manually_hidden = False
+        # Use the same platform-aware policy as the polling timer.  On macOS
+        # a normal maximised Word/browser window can be screen-sized without
+        # being a media/game takeover, so the raw geometry helper is too broad
+        # here and could leave the pet hidden after an explicit Show action.
+        self._sync_fullscreen_visibility()
+        if self._fullscreen_hidden:
+            lifecycle_log("pet_window.show.blocked_fullscreen", self)
+            return
+        self.show()
+        lifecycle_log("pet_window.show.call", self, source="explicit")
+
+    def _fullscreen_surfaces(self) -> list[QWidget]:
+        """Return the pet and every passive surface that can cover fullscreen."""
+
+        surfaces: list[QWidget] = [
+            self,
+            self.quick_panel,
+            self.work_controls,
+            self.coffee_scene_prompt,
+            self.work_duration_bubble,
+            self.speech_bubble,
+            self.photo_bubble,
+            self.visit_status_bubble,
+        ]
+        if getattr(self, "_local_burst_effect", None) is not None:
+            surfaces.append(self._local_burst_effect)
+        for optional in (
+            self._compact_todo_panel,
+            self._alarm_card,
+            self._idle_recovery_dialog,
+            self._away_recovery_card,
+        ):
+            if optional is not None:
+                surfaces.append(optional)
+        return list(dict.fromkeys(surfaces))
+
+    @_guard_qt_callback
+    def _sync_fullscreen_visibility(self) -> None:
+        """Temporarily yield only to fullscreen media or games.
+
+        macOS exposes many ordinary maximised windows as screen-sized Quartz
+        windows.  Treating the geometry alone as a fullscreen takeover makes
+        the desktop pet disappear behind Word, browsers, terminals, and
+        other everyday apps.  On macOS we therefore require both the native
+        fullscreen geometry and a known media/game process.  Other platforms
+        keep the existing conservative geometry fallback for compatibility.
+        """
+
+        # A screen-sized Word, browser or terminal window is still an ordinary
+        # desktop window. Use the same process-aware media/game policy on every
+        # desktop platform; only a known video player/browser video fullscreen
+        # or a known game fullscreen may temporarily cover the pet.
+        fullscreen = bool(
+            active_fullscreen_video()
+            or active_fullscreen_game()
+            or active_fullscreen_presentation()
+        )
+        if fullscreen:
+            if not self._fullscreen_hidden:
+                self._fullscreen_restore_visible = {
+                    widget: bool(widget.isVisible())
+                    and widget is not getattr(self, "_local_burst_effect", None)
+                    for widget in self._fullscreen_surfaces()
+                }
+                self._fullscreen_hidden = True
+            # Re-hide on every poll as a defensive measure. Some passive
+            # widgets (especially WorkDurationBubble) update their own
+            # visibility from a live FocusSession snapshot after the first
+            # fullscreen transition.
+            for widget in self._fullscreen_surfaces():
+                if widget.isVisible():
+                    widget.hide()
+            return
+
+        if not self._fullscreen_hidden:
+            return
+        restore = self._fullscreen_restore_visible
+        self._fullscreen_restore_visible = {}
+        self._fullscreen_hidden = False
+        for widget, was_visible in restore.items():
+            if was_visible and not self._manually_hidden:
+                self._show_nonactivating(widget)
+        self._position_accessories()
+        # A Todo may have changed while media/game fullscreen was covering
+        # the desktop. Re-evaluate the unread projection after restoring.
+        self._refresh_todo_surfaces()
+        if (
+            self.work_timer.has_active_session
+            and self.work_timer.pause_reason == "fullscreen_video"
+        ):
+            self._show_away_recovery_prompt("fullscreen_video")
+
+    def _thread_shutdown_roots(self) -> tuple[QObject | None, ...]:
+        """Return every top-level object that can own a Qt worker thread."""
+
+        return (
+            self,
+            self._social_dialog,
+            self._chat_dialog,
+            self._chat_history_dialog,
+        )
+
+    @_guard_qt_callback
+    def _retry_close_after_threads_stop(self) -> None:
+        self._close_retry_scheduled = False
+        lifecycle_log("pet_window.close.retry", self)
+        self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
+        lifecycle_log("pet_window.close_event.begin", self)
+        # Pause/seal first, then ask workers to stop. Do not hide the pet,
+        # bubbles, status item, or Dock integration until every Qt worker has
+        # actually drained; an ignored close event must leave a coherent,
+        # visible application instead of a headless process.
         self.shutdown_work_timer()
+        thread_roots = self._thread_shutdown_roots()
+        request_stop_all(*thread_roots)
+        heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
+        if heartbeat_thread is not None and heartbeat_thread.isRunning():
+            final_user_id = self._current_social_user_id()
+            heartbeat_thread.stop(
+                {
+                    "user_id": final_user_id,
+                    "working": False,
+                    "session_active": False,
+                    "session_id": None,
+                    "session_started_at": None,
+                }
+                if final_user_id
+                else None
+            )
+        running = running_threads(*thread_roots)
+        if running:
+            names = ", ".join(type(thread).__name__ for thread in running)
+            LOGGER.warning(
+                "[Lifecycle] delaying PetWindow close until QThreads stop: %s",
+                names,
+            )
+            event.ignore()
+            if not self._close_retry_scheduled:
+                self._close_retry_scheduled = True
+                QTimer.singleShot(250, self._retry_close_after_threads_stop)
+            lifecycle_log("pet_window.close_event.ignored_threads_running", self)
+            return
+
+        if self._qt_application is not None:
+            self._qt_application.removeEventFilter(self)
+            if sys.platform == "win32":
+                self._qt_application.removeNativeEventFilter(self._focus_activity_bridge)
+        self._focus_activity_bridge.stop()
+        self.fullscreen_poll_timer.stop()
         self.chat_manager.shutdown()
+        if self._chat_history_dialog is not None:
+            self._chat_history_dialog.close()
         self.music_controller.shutdown()
         self.photo_bubble.close()
         self.speech_bubble.close()
+        self.coffee_scene_prompt.close()
+        self.work_duration_bubble.close()
+        self.visit_status_bubble.close()
         self._buddy_visit_window.close()
-        if self._social_thread is not None and self._social_thread.isRunning():
-            self._social_thread.wait(2500)
+        if self._today_note_window is not None:
+            self._today_note_window.close()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.close()
+        if self._time_memory_window is not None:
+            self._time_memory_window.close()
+        if self._todo_center_window is not None:
+            self._todo_center_window.close()
+        if self._alarm_center_dialog is not None:
+            self._alarm_center_dialog.close()
+        if self._alarm_card is not None:
+            self._close_alarm_card()
+        if self._away_recovery_card is not None:
+            self._close_away_recovery_card()
+        if getattr(self, "_local_burst_effect", None) is not None:
+            self._local_burst_effect.stop()
+            self._local_burst_effect.close()
+        if self._economy_dialog is not None:
+            self._economy_dialog.close()
+        if self._work_report_dialog is not None:
+            self._work_report_dialog.close()
+        if self._social_dialog is not None:
+            self._social_dialog.close()
+        if self._chat_dialog is not None:
+            self._chat_dialog.close()
+        # ``request_stop_all`` above already requested this worker to stop.
+        # Never synchronously wait on a network QThread from closeEvent: a
+        # slow socket must not turn closing the pet into another GUI freeze.
         if self._media_player is not None:
+            lifecycle_log(
+                "media.player.stop",
+                self._media_player,
+                owner="PetWindow",
+                reason="pet_window.close_event",
+            )
             self._media_player.stop()
-        super().closeEvent(event)
 
+        super().closeEvent(event)
+        lifecycle_log("pet_window.close_event.end", self)
+
+    @_guard_qt_callback
     def _on_screen_changed(self, screen: QScreen | None) -> None:
         """切换目标屏幕后重连 DPI 信号并延迟刷新素材。"""
 
@@ -940,12 +2190,44 @@ class PetWindow(QWidget):
             screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
+        QTimer.singleShot(0, self._position_accessories)
+        self.ensure_pet_window_policy(event="ScreenChange")
+        QTimer.singleShot(
+            0,
+            lambda: self._ensure_on_top(event="ScreenChange"),
+        )
 
+    @_guard_qt_callback
+    def _on_screen_topology_changed(self, _screen: QScreen | None = None) -> None:
+        """外接屏增删后重新校验 native 层级，不主动移动或激活窗口。"""
+
+        if not self.isVisible():
+            return
+        self.ensure_pet_window_policy(event="ScreenTopologyChange")
+        QTimer.singleShot(
+            0,
+            lambda: self._ensure_on_top(event="ScreenTopologyChange"),
+        )
+
+    @_guard_qt_callback
+    def _on_application_state_changed(self, state: Qt.ApplicationState) -> None:
+        """应用重新激活时恢复层级，但不把六毛变成前台焦点窗口。"""
+
+        if state != Qt.ApplicationState.ApplicationActive or not self.isVisible():
+            return
+        self.ensure_pet_window_policy(event="ApplicationActivate")
+        QTimer.singleShot(
+            0,
+            lambda: self._ensure_on_top(event="ApplicationActivate"),
+        )
+
+    @_guard_qt_callback
     def _on_dpi_changed(self, _dpi: float) -> None:
         """显示器缩放发生变化时刷新当前帧。"""
 
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
+        QTimer.singleShot(0, self._position_accessories)
 
     def _schedule(self, decision: StateDecision) -> None:
         """应用状态决策并安排下一次状态切换。"""
@@ -954,6 +2236,7 @@ class PetWindow(QWidget):
         if not self.dragging:
             self.state_timer.start(decision.duration_ms)
 
+    @_guard_qt_callback
     def _state_timeout(self) -> None:
         """处理自主状态到期，并按无互动时长逐级进入坐下与睡眠。"""
 
@@ -991,7 +2274,7 @@ class PetWindow(QWidget):
             return
         decision = self.behavior.next_autonomous_state(
             self.state,
-            allow_walk=not self.paused,
+            allow_walk=self._walk_allowed(),
         )
         if decision.state is PetState.SLEEP:
             self._schedule_sleep_via_sit()
@@ -1005,15 +2288,386 @@ class PetWindow(QWidget):
         return StateDecision(state, max(500, duration_ms))
 
     def _inactive_ms(self) -> int:
-        """返回距离最近一次鼠标或菜单互动的毫秒数。"""
+        """返回用户无输入时长，工作中优先采用系统键鼠事件时钟。
 
-        return max(0, round((time.monotonic() - self._last_user_interaction) * 1000))
+        The local cursor/menu clock only sees interactions with 六毛 itself.
+        During a focus session, that would make the pet sit or sleep even
+        while the user is typing in another app. The native system probe
+        aggregates keyboard and mouse input across applications; when it is
+        unavailable it returns zero, which is the safe choice for a running
+        work session rather than inferring that the user stopped working.
+        """
+
+        local_ms = max(0, round((time.monotonic() - self._last_user_interaction) * 1000))
+        if not self.work_timer.is_running:
+            return local_ms
+        try:
+            system_seconds = max(0.0, float(system_idle_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            system_seconds = 0.0
+        if system_seconds <= 0:
+            return 0
+        return min(local_ms, round(system_seconds * 1000))
 
     def _record_user_interaction(self) -> None:
         """重置无互动计时，并取消尚未开始的自动入睡意图。"""
 
         self._last_user_interaction = time.monotonic()
         self._sleep_after_sit = False
+
+    def _reset_idle_episode(self) -> None:
+        """Forget the current idle episode and close its one-shot hint."""
+
+        self._auto_paused_for_idle = False
+        self._idle_prompt_pending = False
+        self._idle_recovery_resolved = False
+        self._idle_above_threshold_samples = 0
+        self._pending_idle_seconds = 0
+        self._idle_pause_started_at = None
+        self._idle_context = None
+        self._idle_hint_classification = None
+        self._idle_hint_record = None
+        if hasattr(self, "idle_recovery_timer"):
+            self.idle_recovery_timer.stop()
+        if self._idle_recovery_dialog is not None:
+            self._idle_recovery_dialog.hide()
+        self._away_recovery_reason = None
+        self._away_recovery_started_at = None
+        self._away_recovery_prompt_shown = False
+        self._close_away_recovery_card()
+
+    def activity_diagnostics(self) -> dict[str, object]:
+        """Return the last local activity probe for developer diagnostics."""
+
+        diagnostics = self._focus_activity_guard.diagnostics()
+        diagnostics.update(
+            {
+                "auto_pause_on_idle": bool(
+                    getattr(self.settings, "auto_pause_on_idle", True)
+                ),
+                "idle_pause_seconds": max(
+                    600,
+                    int(getattr(self.settings, "idle_pause_seconds", 600)),
+                ),
+                "input_idle_timer_active": bool(
+                    getattr(self, "input_idle_timer", None)
+                    and self.input_idle_timer.isActive()
+                ),
+                "focus_running": bool(self.work_timer.is_running),
+                "last_auto_pause_reason": self._last_auto_pause_reason,
+            }
+        )
+        return diagnostics
+
+    @_guard_qt_callback
+    def _on_native_focus_activity_event(
+        self,
+        kind: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Apply lock/power/display events through the canonical pause path."""
+
+        normalized = str(kind or "").strip().casefold()
+        decision = self._focus_activity_guard.handle_event(
+            normalized,
+            working=self.work_timer.is_running,
+            at=occurred_at,
+        )
+        if normalized in {"resume", "unlock", "display_on", "display_dimmed"}:
+            # A resume/unlock is evidence that the user is back, never a
+            # command to restart work.  Poll once to reconcile a native event
+            # that may have arrived while Qt was suspended.
+            if normalized == "resume":
+                self._check_input_idle()
+            return
+        if decision is None:
+            return
+        self._focus_quality_tracker.note_away()
+        self._last_auto_pause_reason = decision.reason
+        LOGGER.info(
+            "[focus-activity] auto pause reason=%s effective_end_at=%s source=%s",
+            decision.reason,
+            decision.effective_at.isoformat(),
+            decision.source,
+        )
+        self.pause_work_timer(
+            reason=decision.reason,
+            effective_end_at=decision.effective_at,
+        )
+
+    def _close_away_recovery_card(self) -> None:
+        """Close the transient return-to-work card without changing focus."""
+
+        card = self._away_recovery_card
+        self._away_recovery_card = None
+        if card is not None:
+            lifecycle_log("away_recovery.close.entry", card, source="PetWindow")
+            self._fullscreen_restore_visible.pop(card, None)
+            card.close_from_app()
+            card.deleteLater()
+
+    def _show_away_recovery_prompt(self, reason: str) -> None:
+        """Offer an explicit resume action after an automatic away pause."""
+
+        reason = str(reason or "").strip().casefold()
+        if reason not in {"idle_10m", "fullscreen_video"}:
+            return
+        if not bool(getattr(self.settings, "show_away_recovery_prompt", True)):
+            return
+        if not self.work_timer.has_active_session:
+            return
+        if self.work_timer.pause_reason != reason:
+            return
+        if self._away_recovery_prompt_shown:
+            return
+        self._away_recovery_prompt_shown = True
+        started = self._away_recovery_started_at or time.monotonic()
+        away_seconds = max(1, round(time.monotonic() - started))
+        self._close_away_recovery_card()
+        card = AwayRecoveryCard(reason, away_seconds)
+        card.continue_requested.connect(self._continue_from_away_recovery)
+        card.dismiss_requested.connect(self._dismiss_away_recovery)
+        self._away_recovery_card = card
+        card.center_on_current_screen()
+        lifecycle_log("away_recovery.show.request", card, reason=reason)
+        self._show_nonactivating(card, always_on_top=True)
+
+    def _continue_from_away_recovery(self) -> None:
+        """Resume the shared focus session only after an explicit click."""
+
+        self._close_away_recovery_card()
+        self.start_work_timer()
+
+    def _dismiss_away_recovery(self) -> None:
+        """Keep the session paused when the user closes the return card."""
+
+        self._close_away_recovery_card()
+
+    def _idle_history_path(self) -> Path:
+        """Return the local, non-synced idle classification history path."""
+
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path.home() / ".desktop_pet"
+        return root / "Lili" / "idle-classification-history.json"
+
+    def _write_idle_history(self, record: dict[str, object]) -> None:
+        """Atomically retain a small, user-local review history."""
+
+        path = self._idle_history_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            history: list[dict[str, object]] = []
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    history = [item for item in raw if isinstance(item, dict)][-199:]
+            history.append(record)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(history[-200:], ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            LOGGER.debug("无法保存离开分类记录: %s", exc)
+
+    def _capture_idle_context(self) -> IdleEvidence:
+        """Capture only coarse foreground/session evidence at the threshold."""
+
+        app_name = active_application_name()
+        category = active_application_category()
+        session = system_session_state()
+        media_playing = False
+        player = getattr(self, "_media_player", None)
+        if player is not None:
+            try:
+                state = player.playbackState()
+                media_playing = "PlayingState" in str(state)
+            except Exception:
+                media_playing = False
+        return IdleEvidence(
+            app_name=app_name,
+            app_category=category,
+            locked=bool(session.get("locked")),
+            sleeping=bool(session.get("sleeping")),
+            fullscreen=bool(active_window_is_fullscreen()),
+            media_playing=media_playing,
+            user_rule=str(
+                getattr(self.settings, "idle_classification_rules", {}).get(
+                    app_name.casefold().strip() or category,
+                    "",
+                )
+            ),
+        )
+
+    def _classify_idle_episode(self, seconds: int) -> IdleClassification:
+        evidence = self._idle_context or self._capture_idle_context()
+        classification = classify_idle(evidence)
+        record: dict[str, object] = {
+            "id": str(time.time_ns()),
+            "created_at": datetime.now().astimezone().isoformat(),
+            "away_seconds": max(0, int(seconds)),
+            "decision": classification.decision,
+            "confidence": classification.confidence,
+            "reason": classification.reason,
+            "app_key": classification.app_key,
+            "corrected_to": None,
+        }
+        self._idle_hint_classification = classification
+        self._idle_hint_record = record
+        self._write_idle_history(record)
+        return classification
+
+    def _update_idle_history_correction(self, decision: str) -> None:
+        record = self._idle_hint_record
+        if not record:
+            return
+        record["corrected_to"] = decision
+        record["corrected_at"] = datetime.now().astimezone().isoformat()
+        self._write_idle_history(record)
+
+    def _save_idle_app_rule(self, app_key: str, decision: str) -> None:
+        if not app_key or decision not in {"rest", "focus"}:
+            return
+        rules = dict(getattr(self.settings, "idle_classification_rules", {}) or {})
+        rules[app_key] = decision
+        self.settings.idle_classification_rules = rules
+        save_settings(self.settings)
+
+    def _complete_idle_episode(self, decision: str) -> None:
+        """Commit one classification; no prompt is needed afterwards."""
+
+        if self._idle_recovery_resolved:
+            return
+        seconds = max(1, int(self._pending_idle_seconds))
+        if decision == "focus":
+            self.focus_analytics.record_session(
+                seconds,
+                started_at=self._idle_pause_started_at or datetime.now().astimezone(),
+                completed=False,
+                away_count=1,
+                task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            )
+            self._invalidate_focus_projection("idle_episode_recovered")
+        self._idle_recovery_resolved = True
+        self._pending_idle_seconds = 0
+        self._idle_pause_started_at = None
+
+    @_guard_qt_callback
+    def _check_input_idle(self) -> None:
+        """Apply the only automatic pause rules; never resume from input."""
+
+        decision = self._focus_activity_guard.poll(
+            working=self.work_timer.is_running,
+            auto_pause_on_idle=bool(
+                getattr(self.settings, "auto_pause_on_idle", True)
+            ),
+            idle_threshold_seconds=max(
+                600,
+                int(getattr(self.settings, "idle_pause_seconds", 600)),
+            ),
+        )
+        self._last_session_probe = self._focus_activity_guard.last_session
+
+        if self.work_timer.is_running:
+            if decision is not None:
+                self._focus_quality_tracker.note_away()
+                self._last_auto_pause_reason = decision.reason
+                LOGGER.info(
+                    "[focus-activity] auto pause reason=%s effective_end_at=%s source=%s",
+                    decision.reason,
+                    decision.effective_at.isoformat(),
+                    decision.source,
+                )
+                self.pause_work_timer(
+                    reason=decision.reason,
+                    effective_end_at=decision.effective_at,
+                )
+                return
+
+            # A real player/browser video or known game fullscreen counts, and
+            # it must remain fullscreen for a few seconds to avoid a false
+            # transition while switching apps. Ordinary maximised windows are
+            # excluded by the native fullscreen detector.
+            fullscreen_video = active_fullscreen_video()
+            fullscreen_game = active_fullscreen_game()
+            if bool(getattr(self.settings, "auto_pause_on_fullscreen_video", True)) and (
+                fullscreen_video or fullscreen_game
+            ):
+                if self._fullscreen_video_started_at is None:
+                    self._fullscreen_video_started_at = time.monotonic()
+                elif time.monotonic() - self._fullscreen_video_started_at >= 4.0:
+                    self._focus_quality_tracker.note_away()
+                    self.pause_work_timer(reason="fullscreen_video")
+                    self._fullscreen_video_started_at = None
+                    return
+            else:
+                self._fullscreen_video_started_at = None
+
+            return
+
+        # Input only proves that the user is back.  It is never a resume
+        # command.  Show one non-modal hint for an idle pause; the state stays
+        # paused until the user presses the explicit Continue action.
+        if (
+            self.work_timer.has_active_session
+            and self.work_timer.pause_reason == "idle_10m"
+            and self._focus_activity_guard.last_snapshot.available
+            and (self._focus_activity_guard.last_snapshot.idle_seconds or 0) < max(
+                600,
+                int(getattr(self.settings, "idle_pause_seconds", 600)),
+            )
+            and not self._pause_notice_shown
+        ):
+            self._pause_notice_shown = True
+            self._show_away_recovery_prompt("idle_10m")
+            if not bool(getattr(self.settings, "show_away_recovery_prompt", True)):
+                self.show_speech(
+                    "回来啦，刚才十分钟没动，我帮你停表了。点‘继续工作’再开。",
+                    6200,
+                )
+
+    @_guard_qt_callback
+    def _ask_idle_recovery(self) -> None:
+        """Automatically classify once; show a single hint only if uncertain."""
+
+        self._idle_prompt_pending = False
+        if not self._auto_paused_for_idle or self._idle_recovery_resolved:
+            return
+        seconds = max(1, int(self._pending_idle_seconds))
+        classification = self._classify_idle_episode(seconds)
+        if classification.confidence >= 0.75:
+            self._complete_idle_episode(classification.decision)
+            return
+        # Low confidence defaults to rest, but leaves one reversible hint.
+        self._complete_idle_episode("rest")
+        if self._idle_recovery_dialog is None:
+            self._idle_recovery_dialog = IdleRecoveryDialog(self)
+            self._idle_recovery_dialog.decision_requested.connect(self._resolve_idle_recovery)
+        self._idle_recovery_dialog.set_away_seconds(seconds)
+        self._idle_recovery_dialog.show_hint(self)
+
+    def _resolve_idle_recovery(self, decision: str) -> None:
+        """Apply the only supported correction from the one-shot hint."""
+
+        if decision != "focus" or self._idle_hint_record is None:
+            return
+        seconds = max(1, int(self._idle_hint_record.get("away_seconds", 0)))
+        self.focus_analytics.record_session(
+            seconds,
+            started_at=datetime.now().astimezone() - timedelta(seconds=seconds),
+            completed=False,
+            away_count=1,
+            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+        )
+        self._invalidate_focus_projection("idle_episode_reclassified")
+        classification = self._idle_hint_classification
+        if classification is not None:
+            self._save_idle_app_rule(classification.app_key, "focus")
+        self._update_idle_history_correction("focus")
+        if self._idle_recovery_dialog is not None:
+            self._idle_recovery_dialog.hide()
+        self._idle_hint_record = None
 
     def _schedule_sleep_via_sit(self) -> None:
         """先完整坐下，再从坐姿播放入睡序列。"""
@@ -1063,9 +2717,22 @@ class PetWindow(QWidget):
             return position
         area = screen.availableGeometry()
         x = min(max(position.x(), area.left()), area.right() - self.width() + 1)
-        y = min(max(position.y(), area.top()), area.bottom() - self.height() + 1)
+        bottom = area.bottom() - self.height() + 1
+        if self._duration_space_reserved():
+            bottom -= self.work_duration_bubble.height() + 5
+        y = min(max(position.y(), area.top()), max(area.top(), bottom))
         return QPoint(x, y)
 
+    def _duration_space_reserved(self) -> bool:
+        """Whether the pet should keep a stable slot for the live timer."""
+
+        return bool(
+            getattr(self.settings, "show_work_duration", True)
+            and hasattr(self, "work_duration_bubble")
+            and self.work_duration_bubble.isVisible()
+        )
+
+    @_guard_qt_callback
     def _movement_tick(self) -> None:
         """按实际经过时间亚像素累计移动，并在屏幕边缘转向。"""
 
@@ -1110,17 +2777,22 @@ class PetWindow(QWidget):
             self.turn_timer.start(self.settings.turn_pause_ms)
         self.move(round(self._movement_x), self.y())
 
+    @_guard_qt_callback
     def _finish_turn(self) -> None:
         """结束屏幕边缘的短暂停顿，并从第一帧恢复行走。"""
 
         self._turn_paused = False
         self._movement_x = float(self.x())
         self._last_movement_at = time.monotonic()
+        # A manually requested walk animation should still finish its turn;
+        # the setting only controls whether autonomous state selection can
+        # enter WALK in the first place.
         if self.state is PetState.WALK and not self.paused and not self.dragging:
             self.animation_timer.start(
                 self._frame_interval(PetState.WALK, self._frame_index)
             )
 
+    @_guard_qt_callback
     def _bob_tick(self) -> None:
         """通过标签轻微上下移动营造呼吸和行走起伏。"""
 
@@ -1160,7 +2832,33 @@ class PetWindow(QWidget):
                 self._schedule(decision)
         elif not paused and not self.dragging and not self.state_timer.isActive():
             self._schedule(self.behavior.initial_idle())
-        self.show_speech("六毛先在这里安静待着。" if paused else "六毛恢复跑动啦。", 2800)
+        if paused:
+            message = "六毛先在这里安静待着。"
+        elif getattr(self.settings, "allow_autonomous_walk", False):
+            message = "六毛恢复跑动啦。"
+        else:
+            message = "自动跑动还没开启；去设置里打开后，我就能在桌面上跑啦。"
+        self.show_speech(message, 3200)
+
+    def set_allow_autonomous_walk(self, enabled: bool, *, persist: bool = True) -> None:
+        """切换自主跑动总开关；不影响眨眼、坐下和互动动画。"""
+
+        enabled = bool(enabled)
+        self.settings.allow_autonomous_walk = enabled
+        if not enabled and self.state is PetState.WALK:
+            self.state_timer.stop()
+            decision = self.behavior.next_autonomous_state(PetState.IDLE, allow_walk=False)
+            self._schedule_sleep_via_sit() if decision.state is PetState.SLEEP else self._schedule(decision)
+        elif enabled and not self.paused and not self.dragging and not self.state_timer.isActive():
+            self._schedule(self.behavior.initial_idle())
+        if persist:
+            save_settings(self.settings)
+        self.show_speech(
+            "已开启自动跑动；六毛之后会在桌面上来回移动。"
+            if enabled
+            else "已关闭自动跑动；六毛会安静待在原地，但其他动画仍然正常。",
+            3600,
+        )
 
     def set_display_height(self, display_height: int) -> None:
         """应用右键菜单尺寸预设，保持窗口底部中心位置并立即重绘。"""
@@ -1183,7 +2881,7 @@ class PetWindow(QWidget):
         )
         self.move(self._constrained_position(target))
         self._refresh_pixmap()
-        self._position_speech_bubble()
+        self._position_accessories()
 
     def return_to_primary_screen(self) -> None:
         """将宠物重新放到主屏幕右下角。"""
@@ -1192,7 +2890,10 @@ class PetWindow(QWidget):
         if screen is None:
             return
         area = screen.availableGeometry()
-        self.move(area.right() - self.width() - 24, area.bottom() - self.height() - 12)
+        self.move(self._constrained_position(QPoint(
+            area.right() - self.width() - 24,
+            area.bottom() - self.height() - 12,
+        )))
 
     def _position_speech_bubble(self) -> None:
         """把对话气泡放在人物上方，空间不足时自动移到侧面。"""
@@ -1230,9 +2931,63 @@ class PetWindow(QWidget):
 
         self.speech_bubble.setText(text)
         self.speech_bubble.adjustSize()
-        self.speech_bubble.show()
+        self._show_nonactivating(self.speech_bubble)
         self._position_speech_bubble()
         self.speech_timer.start(max(1200, duration_ms))
+
+    def _schedule_taunt_chatter(self) -> None:
+        """在惩罚持续期间隔几分钟再说一句随机嘲讽。"""
+
+        if not self._taunt_active:
+            self.taunt_chatter_timer.stop()
+            return
+        # Keep the cadence playful rather than machine-like: one line every
+        # 2.5–3.5 minutes, while the server remains the authority on when the
+        # punishment ends.
+        self.taunt_chatter_timer.start(random.randint(150_000, 210_000))
+
+    def _update_taunt_countdown(self) -> None:
+        """Keep the visible redemption countdown moving once per second."""
+
+        now = time.monotonic()
+        elapsed = max(0, int(now - self._taunt_countdown_last_tick))
+        self._taunt_countdown_last_tick = now
+        if not self._taunt_active or elapsed <= 0 or not self.work_timer.is_running:
+            return
+        previous = self._taunt_remaining_work_seconds
+        self._taunt_remaining_work_seconds = max(0, previous - elapsed)
+        if self._taunt_remaining_work_seconds == previous:
+            return
+        self.visit_status_bubble.set_taunter(
+            self._taunt_sender_nickname,
+            remaining_seconds=self._taunt_remaining_work_seconds,
+        )
+        self._position_visit_status_bubble()
+
+    @_guard_qt_callback
+    def _taunt_chatter_tick(self) -> None:
+        """Show a follow-up taunt and schedule the next one if still active."""
+
+        if not self._taunt_active:
+            self.taunt_chatter_timer.stop()
+            return
+        # Include the messages returned for each active taunt when the
+        # backend provides them, while retaining the local catalogue for
+        # mixed-version relays.  A single chatter timer keeps the cadence
+        # visible without creating one timer per sender.
+        message_pool = list(dict.fromkeys((*self._taunt_messages, *_TAUNT_FOLLOWUP_MESSAGES)))
+        candidates = [
+            message
+            for message in message_pool
+            if message not in {self._taunt_chatter_last_message, self._taunt_message}
+        ]
+        if not candidates:
+            candidates = message_pool
+        message = random.choice(candidates)
+        self._taunt_chatter_last_message = message
+        sender = self._taunt_sender_nickname or "搭子"
+        self.show_speech(f"{sender}：{message}", 5200)
+        self._schedule_taunt_chatter()
 
     def feed_pet(self, food_key: str) -> CompanionReply:
         """喂给 Lili 一种菜单食物，并播放对应表情与文字反馈。"""
@@ -1240,13 +2995,14 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         reply = self.companion.feed(food_key)
         if food_key in {"coffee", "tea"}:
-            self._set_temporary_activity("tea", 28_000)
+            food_activity = {"coffee": "work-study", "tea": "tea"}[food_key]
+            self._set_temporary_activity(food_activity, 28_000)
             self._play_action_sequence(
                 (PetState.SIT, PetState.HAPPY, PetState.SIT),
                 3000,
             )
         else:
-            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "milk-tea"}.get(food_key)
+            food_activity = {"apple": "bunny-carrot", "cookie": "feast", "milk": "bunny-carrot"}.get(food_key)
             if food_activity:
                 self._set_temporary_activity(food_activity, 28_000)
             self._show_emotion(reply.state, 2200)
@@ -1255,6 +3011,419 @@ class PetWindow(QWidget):
             5200,
         )
         return reply
+
+
+    def _todo_choices_for_food(self) -> list[dict[str, object]]:
+        """Expose the existing Todo store to food scenes without duplicating Todo data."""
+        result: list[dict[str, object]] = []
+        try:
+            today = self.time_memory.todos.today()
+        except Exception:
+            today = []
+        items = getattr(today, "items", today)
+        if callable(items):
+            items = items()
+        if isinstance(items, dict):
+            items = list(items.values())
+        for task in items or []:
+            title = str(getattr(task, "title", "") or "").strip()
+            if not title:
+                continue
+            result.append({
+                "id": str(getattr(task, "id", "") or ""),
+                "title": title,
+                "completed": bool(getattr(task, "completed", False)),
+            })
+        return result
+
+    def show_food_scene_dialog(self) -> None:
+        """Open/reuse the taskbar-capable 六毛补给站 window."""
+        self._record_user_interaction()
+        if self._food_scene_dialog is None:
+            self._food_scene_dialog = FoodSceneDialog(
+                self.economy,
+                self._todo_choices_for_food(),
+                witness_choices=self._achievement_witness_choices,
+                achievement_submitter=self._submit_achievement_witness,
+                buddy_choices=self._achievement_witness_choices,
+                cake_share_submitter=self._submit_cake_share,
+            )
+            self._food_scene_dialog.scene_requested.connect(self._start_food_scene)
+        else:
+            self._food_scene_dialog.todo_choices = self._todo_choices_for_food()
+        self._food_scene_dialog.refresh()
+        if self._food_scene_dialog.isMinimized():
+            self._food_scene_dialog.showNormal()
+        self._food_scene_dialog.show()
+        self._food_scene_dialog.raise_()
+        self._food_scene_dialog.activateWindow()
+
+    def _achievement_witness_choices(self) -> list[dict[str, object]]:
+        """Return the currently synced accepted buddies for manual selection."""
+
+        dialog = self._social_dialog
+        data = (getattr(dialog, "data", {}) or {}) if dialog is not None else {}
+        if not data and getattr(self.social_client, "signed_in", False):
+            try:
+                data = self.social_client.dashboard(allow_cache=True) or {}
+            except Exception:
+                data = {}
+        return [
+            dict(item) for item in (data.get("buddies") or [])
+            if isinstance(item, dict) and not bool(item.get("is_self"))
+        ]
+
+    def _submit_achievement_witness(self, name: str, note: str, witness_ids: list[str]) -> dict[str, object]:
+        """Submit a manually addressed achievement claim to the shared RPC."""
+
+        if not getattr(self.social_client, "signed_in", False):
+            raise ValueError("请先登录搭子自习室，再邀请搭子见证成果。")
+        if len({str(value).strip() for value in witness_ids if str(value).strip()}) != 2:
+            raise ValueError("请选择两名不同的搭子。")
+        result = self.social_client.rpc(
+            "lili_submit_achievement",
+            {
+                "p_kind": "其他成果",
+                "p_name": str(name).strip()[:90],
+                "p_amount": 200,
+                "p_note": str(note).strip()[:160],
+                "p_witness_ids": [str(value).strip() for value in witness_ids],
+            },
+        )
+        if isinstance(result, dict):
+            return result
+        return {"status": "pending"}
+
+    def _submit_cake_share(self, message: str, buddy_ids: list[str]) -> dict[str, object]:
+        """Create one server-authoritative group cake event for 1–3 buddies."""
+
+        if not self.social_client.signed_in:
+            raise ValueError("请先登录搭子自习室，再邀请搭子分享蛋糕。")
+        ids = []
+        for value in buddy_ids:
+            clean = str(value or "").strip()
+            if clean and clean not in ids:
+                ids.append(clean)
+        if not 1 <= len(ids) <= 3:
+            raise ValueError("小蛋糕需要邀请 1～3 位好友。")
+        status = self.economy.cake_share_status()
+        if not status.get("can_start"):
+            raise ValueError("今天已经发起过蛋糕分享，或仓库里暂时没有小蛋糕。")
+        result = self.social_client.rpc(
+            "lili_create_cake_share",
+            {
+                "p_recipient_ids": ids,
+                "p_message": str(message or "").strip()[:160] or "今天值得庆祝一下。",
+            },
+        )
+        if not isinstance(result, dict):
+            raise ValueError("服务器没有返回蛋糕分享结果。")
+        share_id = str(result.get("share_id") or result.get("id") or uuid.uuid4().hex)
+        consumed = self.economy.consume_cake_for_share(
+            ids,
+            message=str(message or "").strip()[:160],
+            operation_key=share_id,
+        )
+        if consumed is None:
+            raise ValueError("蛋糕分享已送达，但本机库存状态没有完成扣除，请重新同步钱袋。")
+        self._sync_economy_events([dict(consumed.get("event") or {})])
+        # The host joins the same celebration immediately.  This is a social
+        # pose only: it must not create a second local food scene or pause
+        # focus, even when the host is currently working.
+        self._set_social_food_activity("cake", 0)
+        self.show_speech(f"🍰 已请 {len(ids)} 位搭子吃蛋糕。\n{str(message or '').strip()[:100] or '今天值得庆祝一下。'}", 6200)
+        return result
+
+    def _start_food_scene(
+        self,
+        item_key: str,
+        duration_minutes: int,
+        todo_id: str,
+        todo_title: str,
+        *,
+        consume_inventory: bool = True,
+        source: str = "food_scene",
+    ) -> bool:
+        """Turn a food item into a real focus/rest/companion scene."""
+        item_key = str(item_key or "").strip()
+        if item_key == "cake" and consume_inventory:
+            self.show_food_scene_dialog()
+            return False
+        snapshot = self.focus_session.snapshot()
+        status = str(getattr(snapshot, "status", "") or "")
+        start_error = self.economy.food_scene_start_error(
+            item_key, consume_inventory=consume_inventory,
+        )
+        if start_error == "inventory":
+            spec = self.economy.catalog().get(item_key) or {}
+            name = str(spec.get("name") or item_key)
+            self.show_speech(
+                f"仓库里没有「{name}」。补给站已经按最新库存刷新，请先购买或等待补给。",
+                5200,
+            )
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        if start_error == "active_scene":
+            current = self.economy.active_food_scene() or {}
+            current_name = str(current.get("name") or "上一段补给场景")
+            self.show_speech(
+                f"六毛正在{current_name}场景里，先等这一段结束再用新的补给。",
+                5200,
+            )
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        if start_error == "invalid_item":
+            self.show_speech("这个补给暂时不能使用。", 4200)
+            return False
+        resume_after_rest = item_key == "milk_tea" and status == "focus"
+        if resume_after_rest:
+            self.pause_work_timer(reason="food")
+        coffee_scene_started_work_timer = bool(
+            item_key in {"coffee", "expensive_coffee"}
+            and not self.work_timer.is_running
+        )
+        scene_metadata: dict[str, object] | None = None
+        if item_key == "milk_tea":
+            scene_metadata = {"resume_work": resume_after_rest}
+        elif item_key in {"coffee", "expensive_coffee"}:
+            scene_metadata = {
+                "coffee_scene_started_work_timer": coffee_scene_started_work_timer,
+            }
+            if item_key == "expensive_coffee":
+                # If coffee starts a new work episode, a previously paused
+                # episode must not be inherited. When the user is already
+                # working, count the threshold from the moment it is used.
+                scene_metadata["work_episode_seconds_at_start"] = (
+                    self.work_timer.episode_seconds()
+                    if self.work_timer.is_running
+                    else 0
+                )
+        result = self.economy.start_food_scene(
+            item_key,
+            duration_minutes=int(duration_minutes) if int(duration_minutes or 0) > 0 else None,
+            todo_id=todo_id,
+            todo_title=todo_title,
+            consume_inventory=consume_inventory,
+            source=source,
+            scene_metadata=scene_metadata,
+        )
+        if result is None:
+            if resume_after_rest:
+                self.start_work_timer()
+            self.show_speech("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
+            if self._food_scene_dialog is not None:
+                self._food_scene_dialog.refresh()
+                self._food_scene_dialog.show()
+                self._food_scene_dialog.raise_()
+            return False
+        scene = dict(result.get("scene") or {})
+        self._sync_economy_events([dict(result.get("event") or {})])
+        if item_key in {"coffee", "expensive_coffee"}:
+            if todo_title:
+                self._set_focus_task(todo_title, 0)
+            self.start_work_timer()
+            activity = "deep-focus" if item_key == "expensive_coffee" else "work-study"
+            minutes = int(scene.get("duration_minutes") or (150 if item_key == "expensive_coffee" else 30))
+            self._set_temporary_activity(activity, minutes * 60 * 1000)
+            self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
+            label = "☕ 喝贵的 · 深度工作中" if item_key == "expensive_coffee" else "☕ 咖啡开工"
+            detail = f"\n{todo_title[:80]}" if todo_title else "\n无任务开工"
+            self.show_speech(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
+        elif item_key == "milk_tea":
+            minutes = int(scene.get("duration_minutes") or 10)
+            self._set_temporary_activity("milk-tea", minutes * 60 * 1000)
+            self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
+            self.show_speech(f"🧋 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
+        elif item_key == "cake":
+            self._set_temporary_activity("feast", 20_000)
+            self.food_scene_timer.start(20_000)
+            title = todo_title or "今天完成的一件事"
+            self.show_speech(f"🍰 今天庆祝过\n{title[:100]}", 6200)
+        else:
+            self._set_temporary_activity("tea", 60_000)
+            self.show_speech("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
+        self._refresh_pixmap()
+        return True
+
+    @_guard_qt_callback
+    def _food_scene_timeout(self) -> None:
+        scene = self.economy.active_food_scene()
+        if not scene:
+            return
+        item_key = str(scene.get("item_key") or "")
+        if item_key in {"coffee", "expensive_coffee"}:
+            metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+            # This flag is intentionally read from the persisted scene for
+            # auditing and future receipts. It does not grant the timeout
+            # permission to finish a shared Work Session.
+            _started_by_coffee = bool(metadata.get("coffee_scene_started_work_timer"))
+            if not self.economy.finish_food_scene("timer"):
+                return
+            self.food_scene_timer.stop()
+            if self.work_timer.is_running:
+                message = "咖啡喝完啦，半小时到了。\n要继续工作，还是结束这一轮？"
+            elif self.work_timer.has_active_session:
+                message = "咖啡喝完啦，半小时到了。\n当前工作还暂停着，要继续还是结束这一轮？"
+            else:
+                message = "咖啡喝完啦，半小时到了。\n要开始工作，还是结束这一轮？"
+            self._show_coffee_scene_prompt(message)
+            return
+        finished = self.economy.finish_food_scene("timer")
+        if not finished:
+            return
+        if item_key == "milk_tea":
+            # Ending a break is not permission to restart the work timer.
+            # The user must explicitly press “继续工作”.
+            self.show_speech("奶茶喝完了。\n工作还暂停着，要继续时点‘继续工作’。", 5200)
+        elif item_key == "cake":
+            self.show_speech("庆祝结束，今天这件事已经被六毛记下来了。", 4200)
+
+    def _show_coffee_scene_prompt(self, message: str) -> None:
+        """Ask what to do next without changing the user's work decision."""
+
+        self.coffee_scene_prompt.set_message(message)
+        self._position_coffee_scene_prompt()
+        self._show_nonactivating(self.coffee_scene_prompt)
+        self._raise_accessory(self.coffee_scene_prompt)
+
+    def _continue_after_coffee_scene(self) -> None:
+        self.coffee_scene_prompt.hide()
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+        else:
+            self.show_speech("好，继续工作。", 3200)
+
+    def _finish_after_coffee_scene(self) -> None:
+        self.coffee_scene_prompt.hide()
+        if self.work_timer.has_active_session:
+            self.finish_work_timer()
+
+    def _send_food_interaction(self, buddy: dict, kind: str) -> None:
+        """Send a food scene invitation; gifts are charged locally and never create income."""
+        if not self.social_client.signed_in:
+            self.show_speech("先登录搭子自习室，才能给搭子送吃的。", 4200)
+            return
+        target = str(buddy.get("user_id") or buddy.get("id") or "").strip()
+        if not target:
+            self.show_speech("没找到这位搭子的账号。", 4200)
+            return
+        item_key = {
+            "food_coffee": "coffee",
+            "food_milk_tea": "milk_tea",
+            "food_tea": "tea",
+            "food_cake": "cake",
+        }.get(str(kind))
+        if not item_key:
+            return
+        if item_key == "cake":
+            self.show_speech("小蛋糕不能单独请一位搭子；请打开补给站，邀请 1～3 位好友一起分享。", 5200)
+            return
+        catalog = self.economy.catalog().get(item_key) or {}
+        price = int(catalog.get("price") or 0)
+        if self.economy.balance < price:
+            self.show_speech("哥们，钱袋有点瘪。", 4200)
+            return
+        recipient_label = str(
+            buddy.get("private_note_name")
+            or buddy.get("owner_nickname")
+            or buddy.get("nickname")
+            or "搭子"
+        )[:80]
+        duration = {"coffee": 30, "milk_tea": 10, "tea": 0, "cake": 0}.get(item_key, 0)
+        operation_key = uuid.uuid4().hex
+        payload = {
+            "item_key": item_key,
+            "duration_minutes": duration,
+            "operation_key": operation_key,
+            "message": {
+                "coffee": "要不要一起干 30 分钟？",
+                "milk_tea": "一起歇会儿？",
+                "tea": "过来坐会儿？",
+                "cake": "这件事值得庆祝一下。",
+            }.get(item_key, ""),
+        }
+        try:
+            self.social_client.rpc(
+                "lili_send_food_interaction",
+                {"p_target": target, "p_kind": str(kind), "p_payload": payload},
+            )
+        except Exception as exc:
+            self.show_speech(f"没送出去：{str(exc)[:120]}", 5200)
+            return
+        event = self.economy.record_food_gift_sent(
+            target,
+            recipient_label,
+            item_key,
+            operation_key=operation_key,
+        )
+        if event is None:
+            self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
+            return
+        self._sync_economy_events([event.as_dict()])
+        # A drink invitation is a shared visual moment, not a local break:
+        # the sender changes into the same limited food pose immediately and
+        # keeps any active focus timer running.
+        self._set_social_food_activity(item_key, duration)
+        text = {
+            "coffee": f"☕ 已邀请 {recipient_label} 一起开工 30 分钟。",
+            "milk_tea": f"🧋 已邀请 {recipient_label} 一起歇会儿。",
+            "tea": f"🍵 已给 {recipient_label} 敬茶。",
+            "cake": f"🍰 已请 {recipient_label} 庆祝一下。",
+        }.get(item_key, "互动已经送出。")
+        self.show_speech(text, 5200)
+
+    def _set_social_food_activity(self, item_key: str, duration_minutes: int = 0) -> None:
+        """Show a food-interaction pose without pausing or starting focus."""
+
+        item_key = str(item_key or "")
+        activity = {
+            "coffee": "work-study",
+            "milk_tea": "milk-tea",
+            "tea": "tea",
+            "cake": "feast",
+        }.get(item_key)
+        if not activity:
+            return
+        if item_key == "cake" and not duration_minutes:
+            duration_ms = 20_000
+        else:
+            default_minutes = {"coffee": 30, "milk_tea": 10, "tea": 1}
+            minutes = max(1, int(duration_minutes or default_minutes.get(item_key, 1)))
+            duration_ms = minutes * 60 * 1000
+        self._social_food_activity_until = time.monotonic() + duration_ms / 1000
+        self._set_temporary_activity(activity, duration_ms)
+        self._refresh_pixmap()
+
+    def _handle_food_interaction_accepted(self, event: dict) -> None:
+        kind = str(event.get("kind") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        item_key = {
+            "food_coffee": "coffee",
+            "food_milk_tea": "milk_tea",
+            "food_tea": "tea",
+            "food_cake": "cake",
+            "food_cake_share": "cake",
+        }.get(kind)
+        if not item_key:
+            return
+        duration = int(payload.get("duration_minutes") or 0)
+        # Accepted social food is always a shared visual moment.  Do not
+        # start a local inventory scene here: that would pause focus for some
+        # items and could make an incoming cake look like local inventory.
+        self._set_social_food_activity(item_key, duration)
+        labels = {
+            "coffee": "☕ 一起喝咖啡",
+            "milk_tea": "🧋 一起喝奶茶",
+            "tea": "🍵 一起喝茶",
+            "cake": "🍰 一起吃蛋糕",
+        }
+        self.show_speech(f"{labels[item_key]}，六毛继续陪你专注。", 4800)
 
     def talk_to_pet(self, message: str) -> CompanionReply:
         """在本地处理一条对话，并显示 Lili 的回复。"""
@@ -1311,7 +3480,38 @@ class PetWindow(QWidget):
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
 
         self._record_user_interaction()
-        started = self.work_timer.start()
+        self._reset_idle_episode()
+        self._focus_activity_guard.reset_for_new_session()
+        self._last_auto_pause_reason = None
+        self._pause_notice_shown = False
+        self._fullscreen_video_started_at = None
+        # A real pause ends one logical FocusSession.  Reset the per-session
+        # analytics cursor before the explicit resume creates the next stable
+        # session id.  A restart recovery is handled before this path is
+        # allowed to create another identity.
+        if (
+            not self.work_timer.has_active_session
+            or not self.work_timer.is_running
+        ):
+            self._recorded_focus_session_seconds = 0
+        if getattr(self.work_timer, "recovery_pending", False):
+            self._recover_persisted_focus_session()
+            if getattr(self.work_timer, "recovery_pending", False):
+                LOGGER.error("focus start blocked: restart recovery seal is pending")
+                return CompanionReply(
+                    "上次专注还在安全封存，六毛先不重新开一轮；请稍后再点继续工作。",
+                    PetState.CURIOUS,
+                )
+        self._focus_quality_tracker.start(active_application_category())
+        # The paper window selects a real Todo; keep the existing focus
+        # analytics task for compatibility, but attribute new seconds to the
+        # same local task record as soon as the session starts.
+        started = self.focus_session.start()
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
+        self.focus_analytics.begin_focus_session()
+        self._invalidate_focus_projection("focus_started")
         if started:
             self.set_paused(True)
         self._change_ambient_activity("computer")
@@ -1320,22 +3520,161 @@ class PetWindow(QWidget):
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(self.work_timer.is_running)
+        self._sync_state_effect()
+        # A focus start is visible to other accounts through the heartbeat,
+        # not through the 30-second dashboard poll. Flush this transition on
+        # the next Qt turn so the independent heartbeat worker can publish it
+        # immediately; passive/background reads remain throttled elsewhere.
+        self._schedule_social_tick(immediate=True)
         self._refresh_pixmap()
+        if self.work_controls.isVisible():
+            self._show_work_controls()
         return reply
 
-    def pause_work_timer(self) -> CompanionReply:
-        """暂停工作计时并显示当天累计与休息建议。"""
+    def _handle_chat_local_command(self, message: str) -> ManagedChatReply | None:
+        """Route explicit work controls through the existing shared session."""
 
-        self._record_user_interaction()
-        session_seconds = self.work_timer.session_seconds()
-        was_running = self.work_timer.pause()
+        text = " ".join(str(message or "").replace("六毛", "", 1).split())
+        text = text.strip(" ，,。.!！")
+        reply: CompanionReply | None = None
+        if text in {"开始工作", "开工", "开始计时"}:
+            reply = self.start_work_timer()
+        elif text in {"暂停", "暂停工作", "暂停计时"}:
+            reply = self.pause_work_timer()
+        elif text in {"继续", "继续工作", "恢复计时"}:
+            reply = self.resume_work()
+        elif text in {"结束工作", "结束计时", "收工"}:
+            reply = self.finish_work_timer()
+        if reply is None:
+            return None
+        return ManagedChatReply(reply.text, reply.state, "local-action")
+
+    def pause_work_timer(
+        self,
+        reason: str = "",
+        *,
+        effective_end_at: datetime | None = None,
+    ) -> CompanionReply:
+        """Pause the shared timer through one path, preserving the reason."""
+
+        reason = str(reason or "manual").strip().casefold()
+        automatic_reason = reason in {
+            "idle",
+            AUTO_PAUSE_IDLE,
+            AUTO_PAUSE_LOCK,
+            AUTO_PAUSE_DISPLAY_OFF,
+            AUTO_PAUSE_SLEEP,
+            "fullscreen_video",
+            "video",
+        }
+        if not automatic_reason:
+            self._record_user_interaction()
+            self._reset_idle_episode()
+        segment_started_at = self.work_timer.current_segment_started_at()
+        session_id = self.work_timer.focus_session_id
+        was_running = self.work_timer.is_running
+        # Seal the raw fact while the timer still owns the old active
+        # identity. If storage is temporarily unavailable, the timer still
+        # pauses and persists the same identity/cutoff as a recovery checkpoint
+        # before any new session is allowed. For delayed idle and power
+        # callbacks, use the effective cutoff rather than discovery time.
+        session_seconds = (
+            self.work_timer.session_seconds_at(effective_end_at)
+            if was_running and effective_end_at is not None
+            else self.work_timer.session_seconds()
+        )
+        seal_error: Exception | None = None
         if was_running:
-            self.daily_stats.record_focus(session_seconds)
+            try:
+                self._record_focus_segment(
+                    session_seconds,
+                    completed=False,
+                    session_id=session_id,
+                    started_at=segment_started_at,
+                )
+            except Exception as exc:
+                # A local storage failure must never make the Pause button
+                # leave the monotonic timer running. WorkTimerModel persists
+                # the exact accumulated seconds and wall-clock checkpoint in
+                # the transition below; its recovery cursor then blocks a new
+                # session until this raw interval is durably sealed. We do not
+                # manufacture a segment from daily/profile aggregate totals.
+                seal_error = exc
+                LOGGER.exception(
+                    "focus segment seal failed; pausing with exact recovery checkpoint"
+                )
+        was_running = self.focus_session.pause(
+            reason,
+            effective_end_at=effective_end_at,
+        )
+        if was_running and reason in {"idle_10m", "fullscreen_video"}:
+            self._away_recovery_reason = reason
+            self._away_recovery_started_at = time.monotonic()
+            self._away_recovery_prompt_shown = False
+            self._close_away_recovery_card()
+        if was_running:
+            try:
+                self.focus_analytics.pause_focus_session(at=effective_end_at)
+            except Exception:
+                # This live-quality projection is secondary to the timer and
+                # raw FocusSegment. Keep the user's explicit Pause effective
+                # even when its small analytics-state save is unavailable.
+                LOGGER.exception(
+                    "focus analytics pause projection failed after timer pause"
+                )
+            self._refresh_cross_device_today_display(
+                snapshot=self.focus_session.snapshot(include_projection=False),
+                source="focus_paused",
+            )
+            self._invalidate_focus_projection("focus_paused")
+            # Publish one more snapshot after the durable segment and paused
+            # state are both committed so the study room/report see one fact.
+            self.focus_session.refresh()
+            self._pause_notice_shown = False
+            if automatic_reason and reason in {
+                "idle",
+                "idle_10m",
+                "lock",
+                "display_off",
+                "sleep",
+                "fullscreen_video",
+                "video",
+            }:
+                self._pause_notice_shown = reason != "idle_10m"
+            if seal_error is not None:
+                lifecycle_log(
+                    "focus.segment.seal_deferred",
+                    self,
+                    session_id=str(session_id or ""),
+                    seconds=max(0, int(session_seconds)),
+                    reason=reason,
+                    error=type(seal_error).__name__,
+                )
         self._award_focus_rewards()
         self.work_activity_timer.stop()
-        self._set_temporary_activity("tea", 25_000)
-        duration = format_work_duration(self.work_timer.today_seconds())
-        if was_running:
+        self._set_temporary_activity("thermos", 25_000)
+        duration = format_work_duration(self._shared_today_focus_seconds())
+        if was_running and reason in {"sleep", "lock", "display_off"}:
+            system_event = {
+                "lock": "电脑已锁屏",
+                "sleep": "电脑进入睡眠",
+                "display_off": "屏幕已关闭",
+            }[reason]
+            reply = CompanionReply(
+                f"{system_event}，六毛已暂停这轮计时；回来后点继续工作就好。",
+                PetState.SLEEPY,
+            )
+        elif was_running and reason in {"idle", "idle_10m"}:
+            reply = CompanionReply(
+                "十分钟没有键鼠操作，六毛先帮你停表了；回来后点继续工作。",
+                PetState.CURIOUS,
+            )
+        elif was_running and reason in {"fullscreen_video", "video"}:
+            reply = CompanionReply(
+                "检测到视频或游戏全屏，六毛先帮你停表了；结束后点继续工作。",
+                PetState.CURIOUS,
+            )
+        elif was_running:
             reply = self.companion.work_paused(duration)
         else:
             reply = CompanionReply(
@@ -1343,31 +3682,773 @@ class PetWindow(QWidget):
                 PetState.CURIOUS,
             )
         self._show_emotion(reply.state, 3200)
-        self.show_speech(reply.text, 5600)
+        quality_text = (
+            f"\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）"
+            if self._last_focus_quality else ""
+        )
+        self.show_speech(reply.text + quality_text, 5600)
         self.work_timer_changed.emit(False)
+        self._sync_state_effect()
+        self._schedule_social_tick()
+        # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
         self.work_controls.hide()
         self._refresh_pixmap()
+        if was_running and automatic_reason and reason in {
+            "idle",
+            "idle_10m",
+            "lock",
+            "display_off",
+            "sleep",
+            "fullscreen_video",
+            "video",
+        }:
+            # A food-led work scene is an active commitment, not a second
+            # timer.  Once the system has auto-paused, close that scene so its
+            # visual state cannot claim that coffee work is still active.
+            scene = self.economy.active_food_scene()
+            if scene and str(scene.get("item_key") or "") in {"coffee", "expensive_coffee"}:
+                self.economy.finish_food_scene(f"work_paused:{reason}")
+                self.food_scene_timer.stop()
         return reply
 
     def finish_work_timer(self) -> CompanionReply:
         """完成本次工作、保留今日累计并播放庆祝动作。"""
 
         self._record_user_interaction()
+        self._reset_idle_episode()
+        self._pause_notice_shown = False
+        self._fullscreen_video_started_at = None
+        room_id = self.focus_session.room_id
         session_seconds = self.work_timer.session_seconds()
-        total = self.work_timer.finish()
+        session_id = self.work_timer.focus_session_id
+        segment_started_at = self.work_timer.current_segment_started_at()
+        # Commit the final analytics segment while the timer still owns its
+        # stable session ID.  The timer is reset immediately afterwards.
+        self._record_focus_segment(
+            session_seconds,
+            completed=True,
+            session_id=session_id,
+            started_at=segment_started_at,
+        )
+        self.focus_session.finish()
+        self.focus_analytics.finish_focus_session(completed=True)
+        self._refresh_cross_device_today_display(
+            snapshot=self.focus_session.snapshot(include_projection=False),
+            source="focus_finished",
+        )
+        self._invalidate_focus_projection("focus_finished")
+        # The timer is reset by ``finish``; read the just-committed analytics
+        # projection so the completion message uses the same day total as the
+        # study room and work report.
+        total = self._shared_today_focus_seconds()
         self._award_focus_rewards()
-        self.daily_stats.record_focus(session_seconds, completed=True)
         self.set_paused(False)
+        self._recorded_focus_session_seconds = 0
         reply = self.companion.work_finished(format_work_duration(total))
         self._show_emotion(reply.state, 3400)
-        self.show_speech(reply.text, 6200)
+        quality_text = (
+            f"\n本轮质量：{self._last_focus_quality.label}（{self._last_focus_quality.score}分）"
+            if self._last_focus_quality else ""
+        )
+        self.show_speech(
+            reply.text + quality_text,
+            6200,
+        )
+        self._request_local_effect_event(LocalEffectKind.GOLD)
         self.work_timer_changed.emit(False)
+        self._sync_state_effect()
+        self._schedule_social_tick()
         self.work_controls.hide()
         self.work_activity_timer.stop()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
         self._show_new_outfit_unlock()
-        self._generate_daily_report(show_dialog=False)
+        if room_id:
+            self._record_social_room_event(room_id, "focus_finish")
+        food_scene = self.economy.active_food_scene()
+        if food_scene and str(food_scene.get("scene_type") or "") in {"focus", "deep_focus"}:
+            self.economy.finish_food_scene("work_finished")
+            self.food_scene_timer.stop()
+        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
+            self._work_report_dialog.refresh(force=True)
         return reply
+
+    # Public state-machine commands.  The older *_work_timer names remain as
+    # compatibility entry points for menus and plugins, while all callers
+    # still share the same timer/session implementation above.
+    def pause_work(self, reason: str = "manual") -> CompanionReply:
+        return self.pause_work_timer(reason=reason)
+
+    def resume_work(self, source: str = "user") -> CompanionReply:
+        del source
+        return self.start_work_timer()
+
+    def finish_work(self, source: str = "user") -> CompanionReply:
+        del source
+        return self.finish_work_timer()
+
+    def show_today_note(self, *, passive: bool = False) -> None:
+        """Open the configured surface without stealing focus when passive."""
+
+        if str(getattr(self.settings, "today_note_mode", "compact")) == "compact":
+            self.show_compact_todos()
+        else:
+            self.show_sticky_note(passive=passive)
+
+    def show_sticky_note(self, *, passive: bool = False) -> None:
+        """Open the independent free-form 便利贴 window in detailed mode."""
+
+        if not passive:
+            self._record_user_interaction()
+        if self._compact_todo_panel is not None:
+            self._restore_compact_todos_after_show = False
+            self._compact_todo_panel.hide()
+        if self._today_note_window is None:
+            self._today_note_window = TodayNoteWindow(
+                self.time_memory,
+                None,
+                owner=self,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            if getattr(self.settings, "today_note_always_on_top", False):
+                self._today_note_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self._today_note_window.start_requested.connect(self._start_todo_from_note)
+            self._today_note_window.select_requested.connect(self._select_todo_from_note)
+            self._today_note_window.complete_requested.connect(self._complete_todo_from_note)
+            self._today_note_window.task_checked.connect(self._set_todo_completion_from_note)
+            self._today_note_window.checkout_requested.connect(self.checkout_today)
+            self._today_note_window.rest_requested.connect(self.rest_today)
+            self._today_note_window.memory_requested.connect(self.show_time_memory)
+        self._today_note_window.set_mode("detailed", persist=False)
+        self._today_note_window.refresh()
+        self._today_note_window.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            bool(passive),
+        )
+        if passive:
+            self._today_note_window.show()
+            self._position_sticky_note()
+            return
+        if self._today_note_window.isMinimized():
+            self._today_note_window.showNormal()
+        else:
+            self._today_note_window.show()
+        self._today_note_window.raise_()
+        self._today_note_window.activateWindow()
+        self._position_sticky_note()
+
+    def show_compact_todos(self, *, manual: bool = False) -> None:
+        """Show the frameless Todo strip directly below the pet."""
+
+        if manual:
+            self._compact_todos_manually_hidden = False
+            if str(getattr(self.settings, "today_note_mode", "compact")) == "hidden":
+                self.settings.today_note_mode = "compact"
+                save_settings(self.settings)
+        self._record_user_interaction()
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+        self._restore_compact_todos_after_show = True
+        candidates = compact_todo_candidates(self.time_memory, include_read=True)
+        lifecycle_log(
+            "todo.show.request",
+            self,
+            manual=manual,
+            account_id=getattr(self.time_memory, "_account_id", ""),
+            ordinary_count=sum(
+                1 for item in candidates if getattr(item, "source_type", "") == "todo"
+            ),
+            important_date_count=sum(
+                1
+                for item in candidates
+                if getattr(item, "source_type", "") in {"countdown", "anniversary"}
+            ),
+            display_item_count=len(candidates),
+        )
+        panel = self._ensure_compact_todo_panel()
+        # ``read`` is only an acknowledgement in the detailed Todo view, not
+        # completion.  Keep every unfinished task on the desktop strip for
+        # both automatic startup/refresh and the manual “显示待办” command.
+        # Only the checkbox (complete) or explicit deletion removes it.
+        has_visible_tasks = panel.refresh(include_read=True)
+        if not has_visible_tasks:
+            # An empty compact strip is not a useful accessory.  Keep the
+            # widget instance so a later Todo write can reuse it, but do not
+            # show it (or its ⋯/＋ action rail).
+            self._restore_compact_todos_after_show = False
+            panel.hide()
+            lifecycle_log(
+                "todo.show.result",
+                panel,
+                manual=manual,
+                display_item_count=len(panel.visible_task_ids),
+                visible=False,
+            )
+            return
+        self._show_nonactivating(
+            panel,
+            always_on_top=bool(
+                self.settings.always_on_top
+                or getattr(self.settings, "today_note_always_on_top", False)
+            ),
+        )
+        self._position_compact_todos()
+        # The pet and the compact panel are separate native windows.  Raise
+        # the panel after positioning so a transient pet repaint cannot cover
+        # the label or the trailing menu button.  The panel itself never
+        # accepts focus, so this does not steal keyboard input.
+        self._raise_accessory(panel)
+        lifecycle_log(
+            "todo.show.result",
+            panel,
+            manual=manual,
+            display_item_count=len(panel.visible_task_ids),
+            visible=bool(panel.isVisible()),
+        )
+
+    @staticmethod
+    def _qt_object_is_alive(widget: object | None) -> bool:
+        """Check a PySide wrapper without re-entering or creating a native handle."""
+
+        if widget is None:
+            return False
+        try:
+            getattr(widget, "objectName")()
+        except (AttributeError, RuntimeError):
+            return False
+        return True
+
+    def _compact_todo_panel_destroyed(self, panel: CompactTodoPanel) -> None:
+        """Drop a wrapper after Qt destroys the detached Todo window."""
+
+        if self._compact_todo_panel is panel:
+            self._compact_todo_panel = None
+            self._restore_compact_todos_after_show = False
+            lifecycle_log("todo.panel.destroy", class_name="CompactTodoPanel")
+
+    def _ensure_compact_todo_panel(self) -> CompactTodoPanel:
+        """Reuse one live Todo companion, recreating it only after destruction."""
+
+        panel = self._compact_todo_panel
+        if not self._qt_object_is_alive(panel):
+            self._compact_todo_panel = None
+            panel = CompactTodoPanel(
+                self.time_memory,
+                settings=self.settings,
+                save_settings_callback=save_settings,
+            )
+            self._compact_todo_panel = panel
+            panel.destroyed.connect(
+                lambda _obj=None, expected=panel: self._compact_todo_panel_destroyed(expected)
+            )
+            panel.task_selected.connect(self._select_todo_from_note)
+            panel.task_checked.connect(self._set_todo_completion_from_panel)
+            panel.task_changed.connect(self._refresh_todo_surfaces)
+            panel.set_companion_topmost(
+                bool(
+                    self.settings.always_on_top
+                    or getattr(self.settings, "today_note_always_on_top", False)
+                )
+            )
+            lifecycle_log("todo.panel.create", panel, owner="PetWindow")
+        return panel
+
+    def _reflow_compact_todos_after_outfit(self, was_visible: bool) -> None:
+        """Re-anchor a visible Todo panel after the pet mask/sprite changes."""
+
+        if not was_visible:
+            return
+        try:
+            panel = self._ensure_compact_todo_panel()
+            if not panel.refresh(include_read=True):
+                return
+            self._show_nonactivating(
+                panel,
+                always_on_top=bool(
+                    self.settings.always_on_top
+                    or getattr(self.settings, "today_note_always_on_top", False)
+                ),
+            )
+            self._position_compact_todos()
+            self._raise_accessory(panel)
+            # setMask()/native z-order updates can be deferred on Windows;
+            # repeat only the cheap position/raise pass on the next turn.
+            QTimer.singleShot(0, lambda expected=panel: self._finish_todo_reflow(expected))
+        except RuntimeError:
+            # A detached Qt window may be destroyed between the validity
+            # check and the queued native operation.  The next manual show
+            # will create a fresh panel through _ensure_compact_todo_panel().
+            self._compact_todo_panel = None
+
+    def _finish_todo_reflow(self, panel: CompactTodoPanel) -> None:
+        if self._compact_todo_panel is not panel or not self._qt_object_is_alive(panel):
+            return
+        try:
+            if panel.isVisible():
+                self._position_compact_todos()
+                self._raise_accessory(panel)
+        except RuntimeError:
+            if self._compact_todo_panel is panel:
+                self._compact_todo_panel = None
+
+    def _position_compact_todos(self) -> None:
+        """Keep the Todo strip close to the pet, preferring its left side.
+
+        The compact Todo panel is a pet accessory rather than an independent
+        dashboard.  It therefore uses the visible pet mask as its anchor and
+        chooses a side in a deterministic order: left, right, then below.  A
+        final clamp keeps the companion inside the active monitor's work area.
+        """
+
+        panel = self._compact_todo_panel
+        if panel is None:
+            return
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            left = self.x()
+            right = self.x() + self.width()
+            top = self.y()
+            bottom = self.y() + self.height()
+        else:
+            left = self.x() + visible_bounds.left()
+            right = self.x() + visible_bounds.right() + 1
+            top = self.y() + visible_bounds.top()
+            bottom = self.y() + visible_bounds.bottom() + 1
+
+        # A mask can end a few pixels before the visible anti-aliased sprite
+        # edge on Windows/DPI-scaled displays.  Reserve that edge explicitly;
+        # otherwise the pet can visually sit on top of the panel's final
+        # characters and its ⋯ button even when the Qt rectangles do not
+        # mathematically intersect.
+        pet_safety = 6
+        left -= pet_safety
+        right += pet_safety
+        top -= pet_safety
+        bottom += pet_safety
+        gap_x = 8
+        gap_y = 6
+        panel_width = panel.width()
+        panel_height = panel.height()
+        center_y = (top + bottom - panel_height) // 2
+        left_x = left - panel_width - gap_x
+        right_x = right + gap_x
+        can_place_left = left_x >= available.left()
+        can_place_right = right_x + panel_width <= available.right() + 1
+
+        pet_rect = QRect(left, top, max(1, right - left), max(1, bottom - top))
+        candidates = []
+        if can_place_left:
+            candidates.append((left_x, center_y))
+        if can_place_right:
+            candidates.append((right_x, center_y))
+        # Both sides can be unavailable near a monitor edge.  Use a below or
+        # above placement only then, but still reject any rectangle touching
+        # the pet.  This is a real non-overlap guarantee, not just a visual
+        # offset guess.
+        candidates.extend(
+            [
+                ((left + right - panel_width) // 2, bottom + gap_y),
+                ((left + right - panel_width) // 2, top - panel_height - gap_y),
+            ]
+        )
+        x = y = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+            if not available.contains(candidate):
+                continue
+            if candidate.intersects(pet_rect):
+                continue
+            x, y = candidate_x, candidate_y
+            break
+        if x is None or y is None:
+            # Extremely small work areas can make both horizontal placements
+            # unavailable. First preserve a valid horizontal gap while
+            # clamping only the vertical coordinate; this matters on macOS
+            # Intel where the centered candidate can be just outside the
+            # available vertical work area even though the side still fits.
+            # Prefer a clamped below/above placement only after that, before
+            # the final monitor clamp; this keeps the panel out of the
+            # character even when the monitor starts at a non-zero
+            # virtual-screen x.
+            for side_x in (left_x, right_x):
+                candidate_x = max(
+                    available.left(),
+                    min(side_x, available.right() - panel_width + 1),
+                )
+                candidate_y = max(
+                    available.top(),
+                    min(center_y, available.bottom() - panel_height + 1),
+                )
+                candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+                if not candidate.intersects(pet_rect):
+                    x, y = candidate_x, candidate_y
+                    break
+        if x is None or y is None:
+            # Extremely small work areas can make both horizontal placements
+            # unavailable. Prefer a clamped below/above placement before the
+            # final monitor clamp; this keeps the panel out of the character
+            # even when the monitor starts at a non-zero virtual-screen x.
+            for fallback_x, fallback_y in (
+                ((left + right - panel_width) // 2, bottom + gap_y),
+                ((left + right - panel_width) // 2, top - panel_height - gap_y),
+            ):
+                candidate_x = max(
+                    available.left(),
+                    min(fallback_x, available.right() - panel_width + 1),
+                )
+                candidate_y = max(
+                    available.top(),
+                    min(fallback_y, available.bottom() - panel_height + 1),
+                )
+                candidate = QRect(candidate_x, candidate_y, panel_width, panel_height)
+                if not candidate.intersects(pet_rect):
+                    x, y = candidate_x, candidate_y
+                    break
+            if x is None or y is None:
+                # No non-overlapping rectangle exists in an unusually small
+                # work area; clamp to the monitor as the final usable option.
+                x = max(available.left(), min(left_x, available.right() - panel_width + 1))
+                y = max(available.top(), min(center_y, available.bottom() - panel_height + 1))
+        x = max(available.left(), min(x, available.right() - panel_width + 1))
+        y = max(available.top(), min(y, available.bottom() - panel_height + 1))
+        panel.move(x, y)
+        self._raise_accessory(panel)
+        LOGGER.debug(
+            "[TodoLayout] host=(x=%s,y=%s,w=%s,h=%s) panel=(x=%s,y=%s,w=%s,h=%s) "
+            "available=(x=%s,y=%s,w=%s,h=%s) pet_bounds=(left=%s,top=%s,right=%s,bottom=%s)",
+            self.x(), self.y(), self.width(), self.height(),
+            panel.x(), panel.y(), panel.width(), panel.height(),
+            available.x(), available.y(), available.width(), available.height(),
+            left, top, right, bottom,
+        )
+
+    def _position_sticky_note(self) -> None:
+        """Place the detailed 便利贴 beside the pet, with screen-edge fallback."""
+
+        note = self._today_note_window
+        if note is None or not note.isVisible():
+            return
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        visible_bounds = self.mask().boundingRect()
+        if visible_bounds.isEmpty():
+            left = self.x()
+            right = self.x() + self.width()
+            top = self.y()
+        else:
+            left = self.x() + visible_bounds.left()
+            right = self.x() + visible_bounds.right() + 1
+            top = self.y() + visible_bounds.top()
+        gap = 10
+        x = right + gap
+        if x + note.width() > available.right() + 1:
+            x = left - note.width() - gap
+        x = max(available.left(), min(x, available.right() - note.width() + 1))
+        y = max(available.top(), min(top, available.bottom() - note.height() + 1))
+        note.move(x, y)
+
+    def _position_visit_status_bubble(self) -> None:
+        """Place the visit label in the lower red-zone beside work duration.
+
+        The compact todo panel occupies the pet's upper-left area.  Putting
+        the visit label at "bottom - height" made it float over those todo
+        rows, especially when the pet was dragged to the lower-right corner.
+        Keep it on the same baseline as the work-duration bubble, immediately
+        to that bubble's left, so both status labels share one reserved row.
+        """
+
+        bubble = self.visit_status_bubble
+        if not bubble.isVisible():
+            return
+        bubble.adjustSize()
+        area = self._screen_geometry()
+        bounds = self.mask().boundingRect()
+        left = self.x() + (bounds.left() if not bounds.isEmpty() else 0)
+        right = self.x() + (bounds.right() + 1 if not bounds.isEmpty() else self.width())
+        bottom = self.y() + (bounds.bottom() + 1 if not bounds.isEmpty() else self.height())
+        gap = 7
+        duration_bubble = getattr(self, "work_duration_bubble", None)
+        if duration_bubble is not None and duration_bubble.isVisible():
+            duration_bubble.adjustSize()
+            x = duration_bubble.x() - bubble.width() - gap
+            y = duration_bubble.y()
+        else:
+            x = left - bubble.width() - gap
+            y = bottom + gap
+        if area is not None:
+            if x < area.left():
+                x = max(area.left(), right + gap)
+            x = min(max(x, area.left()), area.right() - bubble.width() + 1)
+            y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
+        bubble.move(x, y)
+
+    @_guard_qt_callback
+    def _position_accessories(self) -> None:
+        """Reflow every pet accessory from the pet as its single anchor."""
+
+        if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
+            self._position_speech_bubble()
+        if hasattr(self, "quick_panel") and self.quick_panel.isVisible():
+            self._position_quick_panel()
+        if hasattr(self, "work_controls") and self.work_controls.isVisible():
+            self._position_work_controls()
+        if hasattr(self, "coffee_scene_prompt") and self.coffee_scene_prompt.isVisible():
+            self._position_coffee_scene_prompt()
+        if hasattr(self, "work_duration_bubble") and self.work_duration_bubble.isVisible():
+            self._position_work_duration_bubble()
+        if hasattr(self, "visit_status_bubble") and self.visit_status_bubble.isVisible():
+            self._position_visit_status_bubble()
+        if self._compact_todo_panel is not None and self._compact_todo_panel.isVisible():
+            self._position_compact_todos()
+        self._position_sticky_note()
+        self._position_local_burst_effect()
+
+    def hide_today_note(self) -> None:
+        self._restore_compact_todos_after_show = False
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.hide()
+
+    def hide_compact_todos(self) -> None:
+        self._restore_compact_todos_after_show = False
+        self._compact_todos_manually_hidden = True
+        if self._compact_todo_panel is not None:
+            # Hiding the accessory is a window-layer action.  Do not switch
+            # the panel back to an unread-only projection: an unfinished item
+            # must be available when the accessory is shown again.
+            self._compact_todo_panel.refresh(include_read=True)
+            self._compact_todo_panel.hide()
+
+    def add_compact_todo(self) -> None:
+        self.show_compact_todos(manual=True)
+        if self._compact_todo_panel is not None:
+            self._compact_todo_panel.add_task()
+            # ``add_task`` refreshes before emitting its change signal.  The
+            # window therefore needs one explicit show pass after the modal
+            # input closes so a previously empty strip reappears immediately.
+            if self._compact_todo_panel.visible_task_ids:
+                self.show_compact_todos()
+
+    def hide_sticky_note(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.hide()
+
+    def _refresh_todo_surfaces(self) -> None:
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+        compact_mode = str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
+        display_mode = str(getattr(self.settings, "today_note_display_mode", "always"))
+        panel = self._compact_todo_panel
+        if panel is not None and not self._qt_object_is_alive(panel):
+            # ``destroyed`` is queued for detached native windows.  Clear a
+            # stale Python wrapper before an automatic Todo refresh tries to
+            # call isVisible()/refresh() on the deleted C++ object.
+            self._compact_todo_panel = None
+            panel = None
+        if panel is None:
+            # A Todo can be created from the center window before the compact
+            # accessory has ever been instantiated.  In compact mode, create
+            # it lazily as soon as there is something eligible to display.
+            if (
+                compact_mode
+                and display_mode != "hidden"
+                and compact_todo_candidates(self.time_memory)
+            ):
+                self.show_compact_todos()
+        else:
+            try:
+                was_visible = panel.isVisible()
+                has_visible_tasks = panel.refresh()
+            except RuntimeError:
+                # Keep the refresh path recoverable.  The next manual show or
+                # Todo write will create one replacement panel via ensure().
+                if self._compact_todo_panel is panel:
+                    self._compact_todo_panel = None
+                return
+            if has_visible_tasks:
+                # Pending Todos are authoritative: if any unfinished item
+                # remains, a hidden compact panel must recover automatically.
+                # Manual hiding is only effective while there are no pending
+                # items; this prevents the panel from silently disappearing
+                # while the user still has work to do.
+                if (
+                    compact_mode
+                    and display_mode != "hidden"
+                    and not panel.isVisible()
+                ):
+                    self.show_compact_todos()
+                elif was_visible:
+                    # A longer/shorter task changes the panel width, so its
+                    # pet-relative position must be recalculated in the same
+                    # UI turn rather than waiting for the next pet movement.
+                    self._position_compact_todos()
+            elif was_visible:
+                # Once every Todo is completed or removed, the compact panel
+                # and its action rail should disappear together.
+                self._compact_todo_panel.hide()
+
+        if self._todo_center_window is not None:
+            self._todo_center_window.refresh()
+
+    @_guard_qt_callback
+    def _chat_action_executed(self, result: object) -> None:
+        """Refresh every Todo surface after a real chat-side local write."""
+
+        action = str(getattr(result, "action", "") or "")
+        if action in {
+            "create_todo", "update_todo", "complete_todo", "delete_todo",
+            "create_countdown", "update_countdown", "delete_countdown",
+            "complete_countdown", "create_anniversary", "update_anniversary",
+            "delete_anniversary", "move_pending_to_today",
+        }:
+            self._refresh_todo_surfaces()
+            # Respect an intentionally hidden panel.  If compact mode is the
+            # configured surface, create it lazily so a successful chat action
+            # becomes visible without requiring a manual refresh.
+            if (
+                self._compact_todo_panel is None
+                and str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
+                and str(getattr(self.settings, "today_note_display_mode", "always")) != "hidden"
+            ):
+                self.show_compact_todos()
+
+    def _select_todo_from_note(self, task_id: str) -> None:
+        item = self.time_memory.todos.get(task_id)
+        if item is None:
+            return
+        self.time_memory.select_task(item.id)
+        self.focus_analytics.set_current_task(item.title)
+
+    def _start_todo_from_note(self, task_id: str) -> None:
+        self._select_todo_from_note(task_id)
+        if not self.work_timer.is_running:
+            self.start_work_timer()
+
+    def _complete_todo_from_note(self, task_id: str) -> None:
+        task = self.time_memory.get_todo_view_item(task_id, include_read=True)
+        was_open = task is not None and not bool(getattr(task, "completed", False))
+        if not self.time_memory.complete_todo_view_item(
+            task_id, True, include_read=True
+        ):
+            return
+        if was_open and task is not None:
+            self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+        self.show_speech("这项做完了，给你记上。", 4200)
+
+    def _set_todo_completion_from_note(self, task_id: str, completed: bool) -> None:
+        task = self.time_memory.get_todo_view_item(task_id, include_read=True)
+        if task is None:
+            return
+        if completed:
+            was_open = not bool(getattr(task, "completed", False))
+            self.time_memory.complete_todo_view_item(task_id, True, include_read=True)
+            if was_open:
+                self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
+            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+            self.show_speech("这项做完了，给你记上。", 4200)
+        else:
+            self.time_memory.complete_todo_view_item(task_id, False, include_read=True)
+            self.time_memory.summary.refresh_tasks()
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def _set_todo_completion_from_panel(self, task_id: str, completed: bool) -> None:
+        """Reflect a compact checkbox in the real local Todo store."""
+
+        task = self.time_memory.get_todo_view_item(task_id, include_read=True)
+        if task is None:
+            return
+        if completed:
+            was_open = not bool(getattr(task, "completed", False))
+            self.time_memory.complete_todo_view_item(task_id, True, include_read=True)
+            if was_open:
+                self._record_economy_performance(str(getattr(task, "title", "完成待办")), str(task_id))
+            self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 25_000)
+            self.show_speech("这项做完了，给你记上。", 4200)
+        else:
+            self.time_memory.complete_todo_view_item(task_id, False, include_read=True)
+            self.time_memory.summary.refresh_tasks()
+        self._refresh_todo_surfaces()
+
+    def checkout_today(self) -> None:
+        """Persist a real end-of-day record without requiring network access."""
+
+        if self.work_timer.is_running:
+            self.pause_work_timer(reason="checkout")
+        summary = self.time_memory.finish_today()
+        self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 30_000)
+        self.show_speech(
+            f"今天收工：专注{summary['focus']}，完成{summary['completed_tasks']}/{summary['total_tasks']}项。",
+            6200,
+        )
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def rest_today(self) -> None:
+        self.time_memory.records.set_rest_day(True)
+        self._set_temporary_activity("daydream", 20_000)
+        self.show_speech("行，那今天不算旷工。", 4200)
+        if self._today_note_window is not None:
+            self._today_note_window.refresh()
+
+    def show_todo_center(self) -> None:
+        """Open the full TodoCenter while keeping CompactTodo as the light view."""
+
+        self._record_user_interaction()
+        if self._todo_center_window is None:
+            self._todo_center_window = TodoCenterWindow(self.time_memory)
+            self._todo_center_window.changed.connect(self._refresh_todo_surfaces)
+        self._todo_center_window.refresh()
+        if self._todo_center_window.isMinimized():
+            self._todo_center_window.showNormal()
+        else:
+            self._todo_center_window.show()
+        self._todo_center_window.raise_()
+        self._todo_center_window.activateWindow()
+
+    def show_alarm_center(self) -> None:
+        """Open the local alarm editor without creating a second reminder system."""
+
+        self._record_user_interaction()
+        todos = list(self.time_memory.todos.items)
+        if self._alarm_center_dialog is None:
+            self._alarm_center_dialog = AlarmCenterDialog(
+                self.time_memory.alarms,
+                todos,
+                parent=None,
+                sound_library=self.time_memory.alarm_sounds,
+            )
+            self._alarm_center_dialog.changed.connect(self._alarm_center_changed)
+        else:
+            self._alarm_center_dialog.todos = todos
+            self._alarm_center_dialog.refresh()
+        if self._alarm_center_dialog.isMinimized():
+            self._alarm_center_dialog.showNormal()
+        else:
+            self._alarm_center_dialog.show()
+        self._alarm_center_dialog.raise_()
+        self._alarm_center_dialog.activateWindow()
+
+    def show_time_memory(self) -> None:
+        if self._time_memory_window is None:
+            self._time_memory_window = TimeMemoryWindow(self.time_memory)
+        self._time_memory_window.refresh()
+        if self._time_memory_window.isMinimized():
+            self._time_memory_window.showNormal()
+        else:
+            self._time_memory_window.show()
+        self._time_memory_window.raise_()
+        self._time_memory_window.activateWindow()
 
     def show_work_time(self) -> None:
         """显示今日累计工作时长和当前计时状态。"""
@@ -1375,17 +4456,34 @@ class PetWindow(QWidget):
         self._record_user_interaction()
         state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
         self._show_emotion(state, 2600)
+        snapshot = self.focus_session.snapshot()
+        today_seconds = int(snapshot.today_seconds)
         text = (
-            f"{self.work_timer.status_text()}\n"
-            f"{growth_progress_text(self.work_timer.today_seconds())}\n"
-            f"六毛心情：{positive_mood(self.work_timer.today_seconds(), self.work_timer.session_seconds())}"
+            f"{self._shared_work_status_text()}\n"
+            f"{growth_progress_text(today_seconds)}\n"
+            f"六毛心情：{positive_mood(today_seconds, snapshot.session_seconds)}"
         )
         self.show_speech(text, 6800)
+
+    def show_economy(self) -> None:
+        """Open the local wallet and month-end salary slip."""
+
+        self._record_user_interaction()
+        if self._economy_dialog is None:
+            self._economy_dialog = EconomyDialog(self.economy, None)
+            self._economy_dialog.changed.connect(self._on_economy_changed)
+        self._economy_dialog.refresh()
+        if self._economy_dialog.isMinimized():
+            self._economy_dialog.showNormal()
+        else:
+            self._economy_dialog.show()
+        self._economy_dialog.raise_()
+        self._economy_dialog.activateWindow()
 
     def show_daily_growth(self) -> None:
         """显示今天 0–8 小时成长节点和下一个可见奖励。"""
 
-        seconds = self.work_timer.today_seconds()
+        seconds = self._shared_today_focus_seconds()
         stage = stage_for_seconds(seconds)
         self._set_temporary_activity(stage.activity, 35_000)
         self.show_speech(
@@ -1401,15 +4499,25 @@ class PetWindow(QWidget):
         if self.work_timer.is_running:
             self.work_activity_timer.start(delay_ms or random.randint(150_000, 300_000))
 
+    @_guard_qt_callback
     def _work_activity_tick(self) -> None:
         """在专注动作间轮换，让用户工作时六毛也持续工作。"""
 
+        # A shared drink or cake takes precedence over the normal focus
+        # animation rotation until its visual moment expires.
+        if time.monotonic() < self._social_food_activity_until:
+            self._schedule_work_activity()
+            return
+        if night_limited_activity(datetime.now()) is not None:
+            self._night_limited_tick()
+            self._schedule_work_activity()
+            return
         if not self.work_timer.is_running:
             return
-        session = self.work_timer.session_seconds()
+        # Keep automatic work rotation strictly in the work set. The former
+        # 45-minute branch randomly selected sleep/daydream even while the
+        # user was actively typing, which looked like an unsolicited pause.
         choices = FOCUS_ACTIONS
-        if session >= 45 * 60 and random.random() < 0.35:
-            choices = ("thermos", "tea", "sleep")
         self._change_ambient_activity(random.choice(choices))
         self._manual_activity_until = time.monotonic() + 120
         self._schedule_work_activity()
@@ -1421,21 +4529,128 @@ class PetWindow(QWidget):
         self._manual_activity_until = time.monotonic() + duration_ms / 1000
         self.activity_timer.start(max(1500, duration_ms))
 
+    @_guard_qt_callback
     def _activity_timeout(self) -> None:
         """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
 
+        self._social_food_activity_until = 0.0
+        if night_limited_activity(datetime.now()) is not None:
+            self._night_limited_tick()
+            return
         self._change_ambient_activity(
             random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
         )
 
-    def _work_timer_tick(self) -> None:
-        """定期保存工作进度，并显示一次到期的鼓励或休息提醒。"""
+    @_guard_qt_callback
+    def _event_loop_lag_tick(self) -> None:
+        """Record GUI event-loop stalls without triggering a refresh."""
 
+        self._event_loop_lag.tick(
+            active_window=type(self).__name__,
+            active_page=(
+                type(self._social_dialog).__name__
+                if self._social_dialog is not None and self._social_dialog.isVisible()
+                else "pet"
+            ),
+        )
+        now = time.monotonic()
+        if now - self._last_perf_summary_at >= 60.0:
+            self._performance.log_summary(source="pet_window")
+            self._last_perf_summary_at = now
+
+    def _log_timer_inventory(self) -> None:
+        """Write one cheap inventory of the timers owned by the pet window."""
+
+        timers = []
+        for name, value in vars(self).items():
+            if not isinstance(value, QTimer):
+                continue
+            try:
+                timers.append({
+                    "name": name,
+                    "interval_ms": int(value.interval()),
+                    "single_shot": bool(value.isSingleShot()),
+                    "active": bool(value.isActive()),
+                })
+            except RuntimeError:
+                continue
+        lifecycle_log("perf.timer_inventory", self, count=len(timers), timers=timers)
+
+    def _work_timer_tick(self) -> None:
+        """Measure the one-second UI tick, keeping the actual work isolated."""
+
+        with self._performance.measure("focus.tick"):
+            self._work_timer_tick_impl()
+
+    def _work_timer_tick_impl(self) -> None:
+        """只刷新当前专注的轻量显示，不做持久化、统计或网络工作。"""
+
+        # Calendar projections and raw-history aggregation belong to the
+        # background social/report paths, never to the GUI clock refresh.  A
+        # live clock tick is not a state-transition event: start/pause/finish
+        # still emit the normal FocusSession signal, while this callback only
+        # updates the small live labels.
+        snapshot = self.focus_session.snapshot(include_projection=False)
+        self._update_work_duration_bubble(snapshot)
+        now = time.monotonic()
+        last_secondary_refresh = float(
+            getattr(self, "_last_work_clock_secondary_refresh_at", 0.0) or 0.0
+        )
+        if now - last_secondary_refresh < 1.0:
+            return
+        self._last_work_clock_secondary_refresh_at = now
+        self._refresh_shortcut_state(snapshot)
+        if self._social_dialog is not None and self._social_dialog.isVisible():
+            self._social_dialog.set_focus_snapshot(snapshot)
+        self._update_taunt_countdown()
+        if self.work_controls.isVisible():
+            self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
+            self.work_controls.set_session_duration(
+                "本轮 " + format_work_duration(snapshot.session_seconds)
+                if snapshot.status in {"focus", "rest"} else "本轮未开始"
+            )
+
+    @_guard_qt_callback
+    def _alarm_poll_tick(self) -> None:
+        """Poll the local alarm queue without entering the work clock tick."""
+
+        try:
+            with self._performance.measure("alarm.poll"):
+                quiet = self._quiet_mode_for_work_tick()
+                self._check_local_alarms(quiet)
+        finally:
+            # Re-arm against wall-clock boundaries instead of repeatedly
+            # adding 1000 ms to an arbitrary startup phase.  This lets a
+            # minute alarm be claimed at the beginning of its configured
+            # second, subject only to normal OS/Qt scheduling jitter.
+            self._arm_alarm_poll_timer()
+
+    def _arm_alarm_poll_timer(self) -> None:
+        now = datetime.now().astimezone()
+        delay_ms = max(1, 1000 - int(now.microsecond / 1000))
+        self.alarm_poll_timer.start(delay_ms)
+
+    @_guard_qt_callback
+    def _work_maintenance_tick(self) -> None:
+        """Run low-frequency local maintenance outside the display tick."""
+
+        with self._performance.measure("focus.maintenance"):
+            self._work_maintenance_tick_impl()
+
+    def _work_maintenance_tick_impl(self) -> None:
+        """Persist progress and process non-visual focus side effects."""
+
+        quiet = self._quiet_mode_for_work_tick()
+        self._check_local_reminders(quiet)
         self.work_timer.checkpoint()
+        self._seal_running_focus_checkpoint_if_due()
         self._award_focus_rewards()
+        self._check_expensive_coffee_reward()
         self._sync_hourly_outfit(announce=True)
         self._show_new_outfit_unlock()
-        wellness_kind = self.wellness.take_due(
+        food_scene = self.economy.active_food_scene() or {}
+        deep_food_scene = bool(food_scene.get("deep_focus"))
+        wellness_kind = None if quiet.blocked or deep_food_scene else self.wellness.take_due(
             self.settings.water_reminder_enabled,
             self.settings.stand_reminder_enabled,
             self.settings.water_interval_minutes,
@@ -1447,68 +4662,1183 @@ class PetWindow(QWidget):
         elif wellness_kind == "stand":
             self._set_temporary_activity("football", 35_000)
             self.show_speech("站起来走两步、松松肩膀吧。身体也在陪你完成今天。", 6500)
-        reminder_kind = self.work_timer.take_due_reminder()
+        if quiet.blocked or deep_food_scene:
+            return
+        snapshot = self.focus_session.snapshot(include_projection=False)
+        canonical_continuous = min(
+            max(0, int(getattr(snapshot, "current_continuous_seconds", 0) or 0)),
+            max(0, int(getattr(snapshot, "today_seconds", 0) or 0)),
+        )
+        reminder_kind = self.work_timer.take_due_reminder(canonical_continuous)
         if reminder_kind is None:
             return
-        duration = format_work_duration(self.work_timer.session_seconds())
+        duration = format_work_duration(canonical_continuous)
         reply = self.companion.work_reminder(reminder_kind, duration)
         self._show_emotion(reply.state, 3600)
         self.show_speech(reply.text, 7200)
 
+    def _check_expensive_coffee_reward(self) -> None:
+        """Reward one ordinary coffee after two real continuous work hours."""
+
+        if not self.work_timer.is_running:
+            return
+        scene = self.economy.active_food_scene() or {}
+        if str(scene.get("item_key") or "") != "expensive_coffee":
+            return
+        metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+        try:
+            baseline = max(0, int(metadata.get("work_episode_seconds_at_start", 0) or 0))
+        except (TypeError, ValueError):
+            baseline = 0
+        episode_seconds = self.work_timer.episode_seconds()
+        if episode_seconds < baseline:
+            # An explicit pause/resume starts a new uninterrupted episode.
+            # Reset the coffee baseline instead of allowing the old episode's
+            # seconds to make the two-hour reward arrive too early.
+            baseline = episode_seconds
+            self.economy.update_active_food_scene_metadata(
+                {"work_episode_seconds_at_start": baseline}
+            )
+        if episode_seconds - baseline < 2 * 60 * 60:
+            return
+        event = self.economy.grant_expensive_coffee_focus_reward(str(scene.get("id") or ""))
+        if event is None:
+            return
+        self._sync_economy_events([event.as_dict()])
+        self.show_speech("☕ 这场深度工作超过 2 小时了。普通咖啡 ×1，六毛给你留着。", 6500)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
+
+    def _quiet_mode_for_work_tick(self):
+        """Reuse the foreground-process probe during one short timer window."""
+
+        now = time.monotonic()
+        checked_at = float(getattr(self, "_quiet_mode_checked_at", 0.0) or 0.0)
+        cached = getattr(self, "_quiet_mode_snapshot", None)
+        if cached is None or now - checked_at >= 2.0:
+            cached = detect_quiet_mode()
+            self._quiet_mode_snapshot = cached
+            self._quiet_mode_checked_at = now
+        return cached
+
+    def _check_local_reminders(self, quiet=None) -> None:
+        """Run the local reminder queue once per existing one-second timer."""
+
+        quiet = quiet or self._quiet_mode_for_work_tick()
+        if quiet.blocked or bool((self.economy.active_food_scene() or {}).get("deep_focus")):
+            return
+        for reminder in self.time_memory.reminders.due()[:3]:
+            self.time_memory.reminders.mark_notified(reminder.id)
+            self._set_temporary_activity("curious", 12_000)
+            self.show_speech(f"提醒：{reminder.title}", 5600)
+
+    def _check_local_alarms(self, quiet=None) -> None:
+        """Present due alarms as a focused, one-time foreground card."""
+
+        # A card can be temporarily hidden/minimized while still waiting for
+        # the user's action.  Treat the object itself as the lock, otherwise
+        # the one-second timer can create a second card during that window.
+        if self._alarm_card is not None:
+            lifecycle_log("alarm.scheduler.card_already_owned", self._alarm_card)
+            return
+
+        quiet = quiet or self._quiet_mode_for_work_tick()
+        deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
+        claimed = self.time_memory.alarms.claim_due(
+            allow_during_dnd=not (quiet.blocked or deep_food_scene),
+        )
+        # ``claim_due`` is the only entry point that may create a card.  Do
+        # not resurrect ``active`` rows as a fallback: old builds persisted
+        # that transient bit and could replay an already-fired 10:00 alarm
+        # after a 15:00 restart.
+        if claimed:
+            self._show_alarm_card(claimed[0])
+
+    def _show_alarm_card(self, alarm) -> None:
+        """Show one alarm window; queued alarms remain persisted/local."""
+
+        if self._alarm_card is not None:
+            # There is exactly one owner for the foreground card.  Do not
+            # close and replace it from a timer callback; that race was able
+            # to leave two native QDialogs alive during a restart/retry.
+            lifecycle_log("alarm.popup.create_ignored_existing", self._alarm_card)
+            return
+        lifecycle_log(
+            "alarm.popup.owner_create",
+            self,
+            alarm_id=str(getattr(alarm, "id", "")),
+        )
+        self._alarm_card = AlarmCard(
+            alarm,
+            sound_library=self.time_memory.alarm_sounds,
+        )
+        card = self._alarm_card
+        card.audio_cleanup_finished.connect(
+            lambda card=card: self._finish_retired_alarm_card(card),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        # Handle actions after the QPushButton mouse/click event returns.  A
+        # synchronous close/delete path can re-enter a native QDialog while
+        # Qt is still dispatching the button event, especially with a custom
+        # QMediaPlayer active in the alarm card.
+        self._alarm_card.start_requested.connect(
+            self._start_alarm_work,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._alarm_card.snooze_requested.connect(
+            self._snooze_alarm,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._alarm_card.dismiss_requested.connect(
+            self._dismiss_alarm,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        # Center only once.  After the user drags or minimizes the native
+        # window, accessory reflows must never move it back to the pet.
+        self._alarm_card.center_on_current_screen()
+        self._alarm_card.show_alarm_foreground()
+        lifecycle_log("alarm.popup.owner_show", self._alarm_card)
+
+    def _close_alarm_card(self) -> None:
+        card = self._alarm_card
+        self._alarm_card = None
+        if card is not None:
+            lifecycle_log("alarm.popup.close.entry", card, source="PetWindow")
+            if card not in self._retired_alarm_cards:
+                self._retired_alarm_cards.append(card)
+            card.close_from_app()
+            if card.audio_cleanup_ready:
+                self._finish_retired_alarm_card(card)
+
+    def _finish_retired_alarm_card(self, card: AlarmCard) -> None:
+        """Delete a closed alarm card only after its media stop is queued."""
+
+        # A native close (Alt+F4/window manager) can finish the audio timer
+        # before its queued dismiss signal reaches this window.  In that
+        # short interval the card is still the active owner and must remain
+        # alive; _close_alarm_card will retire it when the signal is handled.
+        if card is self._alarm_card:
+            return
+        if card not in self._retired_alarm_cards:
+            return
+        self._retired_alarm_cards.remove(card)
+        lifecycle_log("alarm.popup.delete_later", card, source="PetWindow")
+        card.deleteLater()
+
+    def _alarm_center_changed(self) -> None:
+        """Close a visible card when its alarm is edited or disabled."""
+
+        card = self._alarm_card
+        if card is None:
+            return
+        alarm = self.time_memory.alarms.get(card.alarm.id)
+        if alarm is None or not alarm.enabled or not alarm.active:
+            self._close_alarm_card()
+
+    def _alarm_action_is_current(self, alarm_id: str) -> bool:
+        """Reject a queued card action after its schedule was replaced."""
+
+        card = self._alarm_card
+        alarm = self.time_memory.alarms.get(alarm_id)
+        if card is None or alarm is None or card.alarm.id != alarm.id:
+            return alarm is not None
+        if card.schedule_generation != alarm.schedule_generation:
+            lifecycle_log(
+                "alarm.action.stale_generation",
+                card,
+                alarm_id=alarm_id,
+                card_generation=card.schedule_generation,
+                current_generation=alarm.schedule_generation,
+            )
+            self._close_alarm_card()
+            return False
+        return True
+
+    def _start_alarm_work(self, alarm_id: str) -> None:
+        self._handle_alarm_action("start", alarm_id)
+
+    def _snooze_alarm(self, alarm_id: str, minutes: int) -> None:
+        self._handle_alarm_action("snooze", alarm_id, minutes=int(minutes))
+
+    def _dismiss_alarm(self, alarm_id: str) -> None:
+        self._handle_alarm_action("dismiss", alarm_id)
+
+    def _handle_alarm_action(
+        self,
+        action: str,
+        alarm_id: str,
+        *,
+        minutes: int = 0,
+    ) -> None:
+        """Handle every card button through one non-blocking action path."""
+
+        lifecycle_log(
+            "alarm.action.enter",
+            self,
+            action=action,
+            alarm_id=alarm_id,
+            minutes=int(minutes),
+        )
+        if not self._alarm_action_is_current(alarm_id):
+            return
+        alarm = self.time_memory.alarms.get(alarm_id)
+        if alarm is None:
+            self._close_alarm_card()
+            lifecycle_log("alarm.action.return", self, action=action, alarm_id=alarm_id)
+            return
+
+        # The manager has no scheduler thread to join: this is the single
+        # in-memory state transition for the alarm.  Keep explicit phase
+        # markers around the tiny JSON persistence call so a future backend
+        # regression cannot again be mistaken for a multimedia deadlock.
+        lifecycle_log("alarm.cancel_timer.begin", self, action=action, alarm_id=alarm_id)
+        try:
+            if action == "snooze":
+                lifecycle_log("alarm.reschedule.begin", self, action=action, alarm_id=alarm_id, minutes=int(minutes))
+                self.time_memory.alarms.snooze(alarm_id, minutes)
+                lifecycle_log("alarm.reschedule.end", self, action=action, alarm_id=alarm_id)
+            else:
+                self.time_memory.alarms.dismiss(alarm_id)
+        except KeyError:
+            pass
+        lifecycle_log("alarm.cancel_timer.end", self, action=action, alarm_id=alarm_id)
+        lifecycle_log("alarm.save_state.begin", self, action=action, alarm_id=alarm_id)
+        # AlarmManager persists synchronously as one small atomic JSON write;
+        # this marker remains around the manager transition for diagnostics.
+        lifecycle_log("alarm.save_state.end", self, action=action, alarm_id=alarm_id)
+        self._close_alarm_card()
+        if action == "start" and alarm.linked_todo_id:
+            self.time_memory.select_task(alarm.linked_todo_id)
+        if action == "start":
+            self.start_work_timer()
+        lifecycle_log("alarm.action.return", self, action=action, alarm_id=alarm_id)
+
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
 
-        stage = stage_for_seconds(self.work_timer.today_seconds())
+        stage = stage_for_seconds(self._shared_today_focus_seconds())
         if stage.hour <= self._last_growth_hour:
             return
         self._last_growth_hour = stage.hour
         self._set_temporary_activity(stage.activity, 60_000)
         self.show_speech(f"今日成长：{stage.title}\n解锁：{stage.reward}\n{stage.message}", 8200)
-        if stage.hour >= 8:
-            self._generate_daily_report(show_dialog=True)
 
     def _sync_hourly_outfit(self, *, announce: bool) -> None:
-        """按终身累计专注时长自动换上最新解锁娃衣。"""
+        """同步小时娃衣解锁，不覆盖用户主动选择的当前装备。
+
+        工作时长只决定哪些套装可用；装备本身是用户偏好，必须一直保留。
+        这样累计到 10 小时会解锁荒野相关套装，但不会把用户正在穿的
+        一小时兔兔装、经典外观或其他已解锁套装强行替换掉。
+        """
 
         count = self.work_timer.unlocked_outfit_count()
         latest = OUTFITS[count - 1] if count else None
-        desired = latest.key if latest is not None else ""
         newly_unlocked = self.work_timer.take_new_outfit_unlock()
-        if self.settings.equipped_outfit != desired:
-            self.settings.equipped_outfit = desired
-            save_settings(self.settings)
-            self._render_cache.clear()
-            self._mask_cache.clear()
-            if hasattr(self, "label"):
-                self._refresh_pixmap()
         if not announce or newly_unlocked is None or latest is None:
             return
         self._change_ambient_activity("none")
         self.show_speech(
-            f"累计专注 {newly_unlocked} 小时，自动换上「{latest.name}」！\n{latest.message}",
+            f"累计专注 {newly_unlocked} 小时，已解锁「{latest.name}」！\n"
+            f"你可以在“百变六毛”里选择，当前装备保持不变。",
             8200,
         )
 
     def _award_focus_rewards(self) -> None:
         """把今日专注时间换成正向的默契奖励，不制造饥饿惩罚。"""
 
-        completed_blocks = self.work_timer.today_seconds() // 600
+        completed_blocks = self._shared_today_focus_seconds() // 600
         new_blocks = max(0, completed_blocks - self._rewarded_focus_blocks)
         if new_blocks:
             self.mood.receive_focus_reward(new_blocks)
             self._rewarded_focus_blocks = completed_blocks
 
+    def _record_economy_focus(self, seconds: int, started_at: datetime) -> None:
+        """Credit a real focus segment locally and sync only its safe ledger rows."""
+
+        result = self.economy.record_focus(seconds, started_at=started_at)
+        events = list(result.get("events") or [])
+        self._sync_economy_events(events)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
+
+    def _record_focus_segment(
+        self,
+        session_seconds: int,
+        *,
+        completed: bool,
+        session_id: str | None = None,
+        started_at: datetime | None = None,
+        update_daily_stats: bool = True,
+    ) -> int:
+        """Credit only newly completed WORKING seconds in this session.
+
+        ``WorkTimerModel.session_seconds()`` remains cumulative across a
+        pause/resume cycle.  All wage, daily-stat, and focus-quality sinks
+        must receive the delta since the previous pause/finish checkpoint,
+        otherwise a resumed session would be counted more than once.
+        """
+
+        total = max(0, int(session_seconds))
+        recorded_before = max(0, int(self._recorded_focus_session_seconds or 0))
+        seconds = max(0, total - recorded_before)
+        if seconds <= 0:
+            if completed:
+                # The actual WORKING seconds may already have been credited
+                # at an earlier pause, but finishing the Session still needs
+                # to be represented once in the local daily card.
+                self.daily_stats.record_focus(0, completed=True)
+            return 0
+        # ``started_at`` is captured before pausing the timer.  It survives
+        # timer checkpoints and prevents a resumed/checkpointed segment from
+        # being reconstructed as ``now - now`` or from inheriting a stale
+        # cumulative session start.
+        if started_at is None:
+            started_at = datetime.now(BEIJING_TIMEZONE) - timedelta(seconds=seconds)
+        elif started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=BEIJING_TIMEZONE)
+        else:
+            started_at = started_at.astimezone(BEIJING_TIMEZONE)
+        # Periodic durability checkpoints retain one logical session ID.
+        # Move the next sealed interval past the already-recorded prefix so
+        # interval union covers the whole session without overlap or gaps.
+        started_at += timedelta(seconds=recorded_before)
+        stable_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "").strip()
+        stable_session_id = str(session_id or self.work_timer.focus_session_id or "").strip()
+        end_at = started_at + timedelta(seconds=seconds)
+        stable_segment_id = (
+            deterministic_focus_segment_id(
+                stable_device_id,
+                stable_session_id,
+                started_at,
+                end_at,
+            )
+            if stable_session_id
+            else None
+        )
+        self._last_focus_quality = self.focus_analytics.record_session(
+            seconds,
+            started_at=started_at,
+            completed=completed,
+            application_switches=self._focus_quality_tracker.application_switches,
+            away_count=self._focus_quality_tracker.away_count,
+            task=str((self.focus_analytics.current_task() or {}).get("title", "")),
+            session_id=stable_session_id,
+            # Device identity is part of the stable fact key. Two computers
+            # on one account must never upsert one another's segments even
+            # if a legacy timer happens to reuse a session identifier.
+            record_id=stable_segment_id,
+        )
+        # The sealed FocusSegment/WAL is the canonical fact. Persist its
+        # timer-side cursor immediately, before touching reward/history UI
+        # projections. A failure in one of those secondary stores must never
+        # leave the real timer running after the user pressed Pause.
+        self.work_timer.mark_analytics_recorded(total)
+        self._recorded_focus_session_seconds = total
+        operations = [
+            (
+                "time_memory",
+                lambda: self.time_memory.record_focus(
+                    seconds,
+                    completed_session=completed,
+                    started_at=started_at,
+                ),
+            ),
+            ("economy", lambda: self._record_economy_focus(seconds, started_at)),
+            (
+                "task_progress",
+                lambda: self.focus_analytics.update_current_task_progress(seconds),
+            ),
+        ]
+        if update_daily_stats:
+            operations.append(
+                (
+                    "daily_stats",
+                    lambda: self.daily_stats.record_focus(seconds, completed=completed),
+                )
+            )
+        for label, operation in operations:
+            try:
+                operation()
+            except Exception:
+                LOGGER.exception(
+                    "secondary focus projection failed after canonical segment seal: %s",
+                    label,
+                )
+                lifecycle_log(
+                    "focus.segment.secondary_projection_failed",
+                    self,
+                    projection=label,
+                    segment_id=str(stable_segment_id or ""),
+                )
+        self._invalidate_focus_projection("focus_segment_recorded")
+        # A newly sealed fact is immediately eligible for the lightweight
+        # delta sync.  The existing single-shot social timer coalesces this
+        # with a nearby heartbeat; no canonical end_at is updated while the
+        # session is live.
+        self._schedule_social_tick()
+        lifecycle_log(
+            "focus.segment.sealed",
+            self,
+            segment_id=str(stable_segment_id or ""),
+            session_id=stable_session_id,
+            device_id=stable_device_id,
+            start_at=started_at.isoformat(),
+            end_at=end_at.isoformat(),
+            seconds=seconds,
+            completed=bool(completed),
+            sync_requested=True,
+        )
+        return seconds
+
+    def _seal_running_focus_checkpoint_if_due(self) -> int:
+        """Persist one bounded raw chunk during a long uninterrupted focus."""
+
+        if not self.work_timer.is_running:
+            return 0
+        total = max(0, int(self.work_timer.session_seconds()))
+        recorded = max(0, int(self._recorded_focus_session_seconds or 0))
+        if total - recorded < FOCUS_SEGMENT_CHECKPOINT_SECONDS:
+            return 0
+        return self._record_focus_segment(
+            total,
+            completed=False,
+            session_id=self.work_timer.focus_session_id,
+            started_at=self.work_timer.current_segment_started_at(),
+        )
+
+    def _invalidate_focus_projection(self, reason: str = "") -> None:
+        """Invalidate the closed-session projection after a lifecycle event."""
+
+        self._focus_projection_revision = int(getattr(self, "_focus_projection_revision", 0)) + 1
+        self._focus_projection_cache = None
+        if reason:
+            lifecycle_log("focus.projection.invalidate", self, reason=reason)
+
+    def _clear_cross_device_today_display(self) -> None:
+        """Drop the account-scoped live display projection on account changes."""
+
+        self._cross_device_today_display_seconds = None
+        self._cross_device_today_display_account_id = ""
+        self._cross_device_today_display_date = ""
+        self._cross_device_today_display_session_id = ""
+        self._cross_device_today_display_live_seconds = 0
+        self._cross_device_today_display_remote_rows = None
+        self._cross_device_today_display_live_rows = None
+        setter = getattr(self.focus_analytics, "set_live_projection_segments", None)
+        if callable(setter):
+            setter([])
+        dialog = getattr(self, "_social_dialog", None)
+        if dialog is not None:
+            dialog.set_cross_device_today_display_seconds(None, account_id="")
+
+    def _set_local_live_focus_projection(self, snapshot: object | None = None) -> None:
+        """Keep the current local segment in the shared read-only projection."""
+
+        setter = getattr(self.focus_analytics, "set_live_projection_segments", None)
+        getter = getattr(self.focus_analytics, "live_projection_segments", None)
+        if not callable(setter) or not callable(getter):
+            return
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
+        local_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
+        rows = [
+            item
+            for item in getter()
+            if str(getattr(item, "segment_id", "") or "") != "display-live-local"
+            and (
+                not local_device_id
+                or str(getattr(item, "device_id", "") or "") != local_device_id
+            )
+        ]
+        status = str(getattr(current, "status", "") or "")
+        started_at = self.work_timer.current_segment_started_at() if status == "focus" else None
+        if started_at is not None and self.work_timer.is_running:
+            rows.append(
+                FocusSegment(
+                    segment_id="display-live-local",
+                    session_id=str(getattr(self.work_timer, "focus_session_id", "") or "display-live-local"),
+                    start_at=started_at,
+                    end_at=None,
+                    device_id=str(getattr(self.focus_analytics, "_device_id", "") or ""),
+                )
+            )
+        setter(rows, renew_ttl=False)
+
+    @staticmethod
+    def _merge_cross_device_display_rows(
+        previous: list[object] | None,
+        incoming: list[object],
+    ) -> list[object]:
+        """Append a sealed delta to the in-memory display snapshot.
+
+        ``lili_sync_focus_segments_delta_v2`` returns only rows after the
+        cursor.  The durable AccountFocusStore is normally enough to rebuild
+        the display, but keeping this small process-local snapshot additive is
+        important during a rolling sync: an empty/partial delta must never be
+        interpreted as permission to discard already validated account rows.
+        There are no deletes in the sealed FocusSegment protocol, so a stable
+        segment id is the correct merge key.
+        """
+
+        merged = list(previous or [])
+        indexes: dict[str, int] = {}
+
+        def row_key(row: object) -> str:
+            if isinstance(row, dict):
+                return str(row.get("segment_id") or row.get("record_id") or "").strip()
+            return str(
+                getattr(row, "segment_id", "")
+                or getattr(row, "record_id", "")
+                or ""
+            ).strip()
+
+        for index, row in enumerate(merged):
+            key = row_key(row)
+            if key:
+                indexes[key] = index
+        for row in incoming:
+            key = row_key(row)
+            if key and key in indexes:
+                merged[indexes[key]] = row
+            else:
+                if key:
+                    indexes[key] = len(merged)
+                merged.append(row)
+        return merged
+
+    def _refresh_cross_device_today_display(
+        self,
+        data: dict[str, object] | None = None,
+        *,
+        snapshot: object | None = None,
+        source: str = "",
+    ) -> bool:
+        """Refresh only the two live today-duration display surfaces.
+
+        Closed rows come from the normal focus-segment sync and active rows
+        come from the small per-device live projection.  This helper performs
+        no network request and never writes the ledger.
+        A malformed/foreign payload never replaces the last validated display
+        projection and leaves first-time callers on the established local
+        value.  The cache is process-local and is never persisted.
+        """
+
+        account_id = self._current_social_user_id()
+        if not account_id:
+            self._clear_cross_device_today_display()
+            return False
+        active_scope = str(getattr(self, "_active_focus_account_id", "") or "")
+        if active_scope and active_scope != account_id:
+            self._clear_cross_device_today_display()
+            return False
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
+        self._set_local_live_focus_projection(current)
+        old_today = self._shared_today_focus_seconds()
+        moment = self.focus_analytics.current_time()
+        display_date = moment.date().isoformat()
+        local_rows = [segment.to_dict() for segment in self.focus_analytics.focus_segments()]
+        has_remote_payload = isinstance(data, dict) and "_focus_segments" in data
+        remote_rows: list[object] | None = None
+        if has_remote_payload:
+            # Validate the server response as a display input, then retain
+            # local pending facts too.  Duplicate rows are harmless because
+            # the projection is an interval union.
+            candidate = data.get("_focus_segments")
+            is_full_snapshot = False
+            if isinstance(candidate, dict):
+                is_full_snapshot = bool(candidate.get("full_sync"))
+                candidate = candidate.get("segments")
+            if not isinstance(candidate, list):
+                lifecycle_log(
+                    "focus.display.fallback",
+                    self,
+                    user_id=account_id,
+                    source=source,
+                    reason="malformed_focus_segments_payload",
+                    old_today_seconds=old_today,
+                    preserved_cross_device_seconds=self._cross_device_today_display_seconds,
+                )
+                return False
+            # A delta page is additive.  Replacing the retained snapshot with
+            # an empty page was the source of the observed "7h -> 6h"
+            # regression when the next 30-second sync had no new rows.
+            remote_rows = (
+                list(candidate)
+                if is_full_snapshot or self._cross_device_today_display_remote_rows is None
+                else self._merge_cross_device_display_rows(
+                    self._cross_device_today_display_remote_rows,
+                    list(candidate),
+                )
+            )
+        elif self._cross_device_today_display_remote_rows is not None:
+            # A local lifecycle event or an ordinary dashboard response does
+            # not authorize replacing a valid account-wide snapshot with local
+            # rows.  Reuse the last validated remote facts and add any newly
+            # committed local facts; interval union keeps duplicates harmless.
+            remote_rows = list(self._cross_device_today_display_remote_rows)
+        has_live_payload = isinstance(data, dict) and "_focus_live_projection" in data
+        live_rows: list[object] | None = None
+        if has_live_payload:
+            try:
+                live_rows = live_projection_rows(
+                    account_id,
+                    data.get("_focus_live_projection"),
+                    now=moment,
+                )
+            except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
+                lifecycle_log(
+                    "focus.display.fallback",
+                    self,
+                    user_id=account_id,
+                    source=source,
+                    reason=str(exc)[:180],
+                    old_today_seconds=old_today,
+                    preserved_cross_device_seconds=self._cross_device_today_display_seconds,
+                )
+                return False
+            self.focus_analytics.set_live_projection_segments(live_rows or [])
+            self._set_local_live_focus_projection(current)
+        elif self._cross_device_today_display_live_rows is not None:
+            live_rows = list(self._cross_device_today_display_live_rows)
+        if live_rows is not None:
+            # The local WorkTimer is authoritative for this device. A server
+            # live row can remain cached for a few seconds after Pause while
+            # the sealed segment waits for strict ACK; never let that stale
+            # echo keep the local paused bubble counting. Other devices remain
+            # untouched and continue to advance through interval union.
+            local_device_id = str(
+                getattr(self.focus_analytics, "_device_id", "") or ""
+            )
+            if local_device_id:
+                live_rows = [
+                    row
+                    for row in live_rows
+                    if str(
+                        row.get("device_id", "")
+                        if isinstance(row, dict)
+                        else getattr(row, "device_id", "")
+                    )
+                    != local_device_id
+                ]
+        # The account store owns both merged sealed facts and the validated
+        # live-device projection. The old display lists remain only for
+        # compatibility with lifecycle retention and are not a second source.
+        rows_list = list(remote_rows or []) if remote_rows is not None else []
+        rows_list.extend(
+            segment.to_dict()
+            for segment in self.focus_analytics._projection_segments()
+            if not any(
+                str(existing.get("segment_id") or existing.get("record_id") or "")
+                == str(getattr(segment, "segment_id", "") or "")
+                for existing in rows_list
+                if isinstance(existing, dict)
+            )
+        )
+        rows: object = rows_list
+
+        active_row: dict[str, object] | None = None
+        status = str(getattr(current, "status", "") or "")
+        started_at = self.work_timer.current_segment_started_at() if status == "focus" else None
+        if status == "focus" and started_at:
+            active_row = {
+                "user_id": account_id,
+                "segment_id": "display-live-local",
+                "session_id": str(getattr(self.work_timer, "focus_session_id", "") or "display-live-local"),
+                "start_at": started_at,
+                "end_at": None,
+                "device_id": str(getattr(self.focus_analytics, "_device_id", "") or ""),
+            }
+        try:
+            union_seconds = get_cross_device_today_display_seconds(
+                account_id,
+                moment,
+                rows,
+                active_session=active_row,
+            )
+        except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
+            lifecycle_log(
+                "focus.display.fallback",
+                self,
+                user_id=account_id,
+                source=source,
+                reason=str(exc)[:180],
+                old_today_seconds=old_today,
+                preserved_cross_device_seconds=self._cross_device_today_display_seconds,
+            )
+            return False
+
+        candidate_seconds = max(0, min(24 * 60 * 60, int(union_seconds)))
+        # The dashboard may already have a validated account-wide effective
+        # floor even when this refresh carries no segment rows. Keep the
+        # display projection monotonic with that read-only value; it is not
+        # copied into the raw ledger or any upload payload.
+        remote_effective_reader = getattr(
+            self.focus_analytics,
+            "remote_effective_projection",
+            None,
+        )
+        remote_effective = (
+            remote_effective_reader(moment)
+            if callable(remote_effective_reader)
+            else None
+        )
+        if isinstance(remote_effective, dict):
+            candidate_seconds = max(
+                candidate_seconds,
+                max(0, int(remote_effective.get("today_seconds", 0) or 0)),
+            )
+        previous_seconds = self._cross_device_today_display_seconds
+        preserve_lower_candidate = (
+            not has_remote_payload
+            and not has_live_payload
+            and previous_seconds is not None
+            and account_id == self._cross_device_today_display_account_id
+            and display_date == self._cross_device_today_display_date
+            and candidate_seconds < previous_seconds
+        )
+        if preserve_lower_candidate:
+            # A pause/finish signal can arrive before the just-closed local
+            # segment is committed.  Keep the last validated account-wide
+            # value for this Beijing day until the normal post-write refresh.
+            lifecycle_log(
+                "focus.display.retain",
+                self,
+                user_id=account_id,
+                source=source,
+                candidate_seconds=candidate_seconds,
+                preserved_cross_device_seconds=previous_seconds,
+                display_date=display_date,
+                reason="local_transition_before_segment_commit",
+            )
+            candidate_seconds = previous_seconds
+
+        if has_remote_payload:
+            # Commit only after the pure projection validated successfully;
+            # malformed or foreign rows can never poison the retained input.
+            self._cross_device_today_display_remote_rows = list(remote_rows or [])
+        if has_live_payload:
+            # Commit only after the projection has passed validation and the
+            # union calculation above succeeded.  A missing/old RPC can never
+            # erase a previously validated live display snapshot.
+            self._cross_device_today_display_live_rows = list(live_rows or [])
+        self._cross_device_today_display_seconds = candidate_seconds
+        self._cross_device_today_display_account_id = account_id
+        self._cross_device_today_display_date = display_date
+        self._cross_device_today_display_session_id = (
+            str(getattr(self.work_timer, "focus_session_id", "") or "")
+            if status == "focus"
+            else ""
+        )
+        try:
+            self._cross_device_today_display_live_seconds = max(
+                0, int(getattr(current, "current_continuous_seconds", 0) or 0)
+            )
+        except (TypeError, ValueError, OverflowError):
+            self._cross_device_today_display_live_seconds = 0
+        lifecycle_log(
+            "focus.display.shadow_audit",
+            self,
+            user_id=account_id,
+            source=source,
+            old_today_seconds=old_today,
+            cross_device_union_seconds=self._cross_device_today_display_seconds,
+        )
+        if self._social_dialog is not None:
+            self._social_dialog.set_cross_device_today_display_seconds(
+                self._cross_device_today_display_seconds,
+                account_id=account_id,
+            )
+        return True
+
+    def _cross_device_today_display_value(self, snapshot: object | None = None) -> int | None:
+        """Return the account union, advancing every cached live device."""
+
+        account_id = self._current_social_user_id()
+        if (
+            not account_id
+            or (
+                str(getattr(self, "_active_focus_account_id", "") or "")
+                and str(getattr(self, "_active_focus_account_id", "") or "") != account_id
+            )
+            or account_id != self._cross_device_today_display_account_id
+            or self._cross_device_today_display_seconds is None
+        ):
+            return None
+        current = snapshot
+        if self._cross_device_today_display_live_rows is not None:
+            # Re-run only the read-only display projection while any device is
+            # live.  This keeps a remote computer's interval advancing between
+            # 30-second network polls without changing FocusSession or doing a
+            # second database write.  The interval list is bounded by the
+            # account's closed facts and normally contains only a few devices.
+            try:
+                moment = self.focus_analytics.current_time()
+                rows = list(self._cross_device_today_display_remote_rows or [])
+                rows.extend(segment.to_dict() for segment in self.focus_analytics.focus_segments())
+                local_device_id = str(
+                    getattr(self.focus_analytics, "_device_id", "") or ""
+                )
+                rows.extend(
+                    row
+                    for row in self._cross_device_today_display_live_rows
+                    if not local_device_id
+                    or str(
+                        row.get("device_id", "")
+                        if isinstance(row, dict)
+                        else getattr(row, "device_id", "")
+                    )
+                    != local_device_id
+                )
+                status = str(getattr(current, "status", "") or "") if current is not None else ""
+                started_at = getattr(current, "session_started_at", None) if current is not None else None
+                active_row = None
+                if status == "focus" and started_at:
+                    active_row = {
+                        "user_id": account_id,
+                        "segment_id": "display-live-local",
+                        "session_id": str(getattr(self.work_timer, "focus_session_id", "") or "display-live-local"),
+                        "start_at": started_at,
+                        "end_at": None,
+                        "device_id": str(getattr(self.focus_analytics, "_device_id", "") or ""),
+                    }
+                display_seconds = max(
+                    0,
+                    int(
+                        get_cross_device_today_display_seconds(
+                            account_id,
+                            moment,
+                            rows,
+                            active_session=active_row,
+                        )
+                    ),
+                )
+                remote_effective_reader = getattr(
+                    self.focus_analytics,
+                    "remote_effective_projection",
+                    None,
+                )
+                remote_effective = (
+                    remote_effective_reader(moment)
+                    if callable(remote_effective_reader)
+                    else None
+                )
+                if isinstance(remote_effective, dict):
+                    display_seconds = max(
+                        display_seconds,
+                        max(0, int(remote_effective.get("today_seconds", 0) or 0)),
+                    )
+                return min(24 * 60 * 60, display_seconds)
+            except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError):
+                # Keep the last validated cached value if a local transition
+                # races this display-only recalculation.
+                pass
+        value = max(0, int(self._cross_device_today_display_seconds))
+        if current is not None and str(getattr(current, "status", "") or "") == "focus":
+            current_session = str(getattr(self.work_timer, "focus_session_id", "") or "")
+            if current_session and current_session == self._cross_device_today_display_session_id:
+                try:
+                    live_now = max(0, int(getattr(current, "current_continuous_seconds", 0) or 0))
+                    value += max(0, live_now - self._cross_device_today_display_live_seconds)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        remote_effective_reader = getattr(
+            self.focus_analytics,
+            "remote_effective_projection",
+            None,
+        )
+        remote_effective = (
+            remote_effective_reader(self.focus_analytics.current_time())
+            if callable(remote_effective_reader)
+            else None
+        )
+        if isinstance(remote_effective, dict):
+            value = max(
+                value,
+                max(0, int(remote_effective.get("today_seconds", 0) or 0)),
+            )
+        return min(24 * 60 * 60, value)
+
+    def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
+        """Return day/week totals from the single account interval ledger."""
+
+        moment = moment or self.focus_analytics.current_time()
+        self._set_local_live_focus_projection()
+        # The server effective projection is a read-only account floor.  It
+        # must participate in the cache key: a dashboard response can arrive
+        # after the local raw projection was cached, and otherwise the main
+        # timer bubble would keep showing the old lower value until a local
+        # focus transition invalidated the cache.
+        remote_projection_reader = getattr(
+            self.focus_analytics,
+            "remote_effective_projection",
+            None,
+        )
+        remote_projection = (
+            remote_projection_reader(moment)
+            if callable(remote_projection_reader)
+            else None
+        )
+        remote_projection_key = (
+            str(remote_projection.get("today_seconds") or ""),
+            str(remote_projection.get("week_seconds") or ""),
+        ) if isinstance(remote_projection, dict) else None
+        cache_key = (
+            str(getattr(self, "_active_focus_account_id", "")),
+            moment.date().isoformat(),
+            bool(self.work_timer.has_active_session),
+            bool(self.work_timer.is_running),
+            str(self.work_timer.focus_session_id if self.work_timer.has_active_session else ""),
+            str(self.work_timer.current_segment_started_at() or "") if self.work_timer.is_running else "",
+            max(0, int(getattr(self, "_recorded_focus_session_seconds", 0) or 0)),
+            int(getattr(self, "_focus_projection_revision", 0)),
+            remote_projection_key,
+        )
+        cached = self._focus_projection_cache
+        if not isinstance(cached, dict) or cached.get("key") != cache_key:
+            day_projection = self.focus_analytics.period_summary("day", moment)
+            week_projection = self.focus_analytics.period_summary("week", moment)
+            raw_day_seconds = max(0, int(day_projection.get("total_seconds", 0) or 0))
+            raw_week_seconds = max(0, int(week_projection.get("total_seconds", 0) or 0))
+            effective_day_seconds = raw_day_seconds
+            effective_week_seconds = raw_week_seconds
+            if isinstance(remote_projection, dict):
+                effective_day_seconds = max(
+                    effective_day_seconds,
+                    max(0, int(remote_projection.get("today_seconds", 0) or 0)),
+                )
+                effective_week_seconds = max(
+                    effective_week_seconds,
+                    max(0, int(remote_projection.get("week_seconds", 0) or 0)),
+                )
+            cached = {
+                "key": cache_key,
+                "base_day": effective_day_seconds,
+                "base_week": effective_week_seconds,
+                "has_account_projection": bool(
+                    day_projection.get("raw_period_evidence")
+                    or day_projection.get("raw_source_active")
+                ),
+                "has_legacy_local_evidence": bool(
+                    day_projection.get("local_record_count")
+                    or week_projection.get("local_record_count")
+                ),
+                "base_local_elapsed": 0,
+            }
+            if self.work_timer.is_running:
+                current_elapsed = max(0, int(self.work_timer.current_elapsed_seconds() or 0))
+                recorded_session = max(
+                    0,
+                    int(
+                        getattr(
+                            self,
+                            "_recorded_focus_session_seconds",
+                            self.work_timer.analytics_recorded_session_seconds(),
+                        )
+                        or 0
+                    ),
+                )
+                if cached["has_account_projection"]:
+                    # The real account ledger already includes the transient
+                    # local live row.  Anchor the cheap per-tick delta at the
+                    # value used to build this cache, so the UI advances
+                    # locally without rescanning or making a request.
+                    cached["base_local_elapsed"] = current_elapsed
+                elif cached["has_legacy_local_evidence"]:
+                    # Compatibility for pre-ledger lifecycle snapshots: the
+                    # mocked/stale summary is the sealed base and the current
+                    # session's unrecorded tail is appended exactly once.
+                    cached["base_local_elapsed"] = recorded_session
+                else:
+                    # A stale scalar/cache must not resurrect hours from an
+                    # old device when this local session has no ledger facts.
+                    cached["base_day"] = 0
+                    cached["base_week"] = 0
+                    cached["base_local_elapsed"] = 0
+            self._focus_projection_cache = cached
+        local_delta = 0
+        if self.work_timer.is_running:
+            elapsed_reader = (
+                self.work_timer.current_elapsed_seconds
+                if cached.get("has_account_projection")
+                else self.work_timer.session_seconds
+            )
+            local_delta = max(
+                0,
+                int(elapsed_reader() or 0)
+                - int(cached.get("base_local_elapsed", 0) or 0),
+            )
+        today_seconds = max(0, int(cached.get("base_day", 0) or 0)) + local_delta
+        week_seconds = max(0, int(cached.get("base_week", 0) or 0)) + local_delta
+        # The live display projection can advance remote devices between
+        # network polls. Use it when available; it is still local arithmetic
+        # over already-fetched rows and never invokes Supabase.
+        live_display = self._cross_device_today_display_value()
+        if live_display is not None:
+            today_seconds = max(today_seconds, int(live_display))
+        return {
+            "today_seconds": min(
+                24 * 60 * 60,
+                today_seconds,
+            ),
+            "week_seconds": min(
+                7 * 24 * 60 * 60,
+                week_seconds,
+            ),
+        }
+
+    def _shared_today_focus_seconds(self) -> int:
+        """Backward-compatible day-only accessor for legacy callers."""
+
+        return self._shared_focus_period_seconds()["today_seconds"]
+
+    def _remote_focus_device_is_working(self) -> bool:
+        """Return whether a fresh account projection contains another device.
+
+        This is a local read of the already-fetched, two-minute-TTL projection.
+        It deliberately performs no dashboard/RPC refresh, so a one-second UI
+        repaint cannot increase Supabase traffic.
+        """
+
+        account_id = self._current_social_user_id()
+        if not account_id:
+            return False
+        active_scope = str(getattr(self, "_active_focus_account_id", "") or "")
+        if active_scope and active_scope != account_id:
+            return False
+        local_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
+        try:
+            live_segments = self.focus_analytics.live_projection_segments()
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return any(
+            isinstance(segment, FocusSegment)
+            and segment.end_at is None
+            and str(segment.device_id or "")
+            and str(segment.device_id or "") != local_device_id
+            and str(segment.segment_id or "").startswith("display-live-device:")
+            for segment in live_segments
+        )
+
+    def _shared_work_status_suffix(self) -> str:
+        """Describe local controls separately from account-wide live work."""
+
+        remote_working = self._remote_focus_device_is_working()
+        if self.work_timer.is_running:
+            return " · 本机与另一台设备正在工作" if remote_working else " · 正在计时"
+        if remote_working:
+            return " · 本机已暂停，另一台设备正在工作"
+        return " · 已暂停"
+
+    def _shared_work_status_text(self) -> str:
+        """Return the user-facing work status with the canonical day total."""
+
+        return (
+            f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}"
+            f"{self._shared_work_status_suffix()}"
+        )
+
+    def _record_economy_performance(self, title: str, task_id: str) -> None:
+        events = []
+        event = self.economy.record_performance(
+            f"任务绩效：{title[:90]}",
+            source_key=f"todo:{task_id}:{datetime.now().date().isoformat()}",
+        )
+        if event is not None:
+            events.append(event.as_dict())
+        task = self.time_memory.get_todo_view_item(task_id)
+        if bool(getattr(task, "important", False)):
+            cake = self.economy.record_important_todo_completion(task_id, title)
+            if cake is not None:
+                events.append(cake.as_dict())
+        self._sync_economy_events(events)
+        if self._food_scene_dialog is not None:
+            self._food_scene_dialog.refresh()
+
+    def _on_economy_changed(self) -> None:
+        """同步钱袋新增/消费事件；服务端按 source_key 幂等去重。"""
+        self._sync_economy_events(
+            [event.as_dict() for event in self.economy.events]
+        )
+
+    def _sync_economy_events(self, events: list[dict]) -> None:
+        if not events or not getattr(self.social_client, "signed_in", False):
+            return
+        recorder = getattr(self.social_client, "record_economy_event", None)
+        if not callable(recorder):
+            return
+        normalized = [
+            dict(event)
+            for event in events
+            if isinstance(event, dict) and int(event.get("amount") or 0) != 0
+        ]
+        if not normalized:
+            return
+        with self._economy_sync_lock:
+            if self._economy_sync_inflight:
+                self._economy_sync_pending = True
+                return
+            self._economy_sync_inflight = True
+
+        def sync() -> None:
+            try:
+                for event in normalized:
+                    try:
+                        recorder(
+                            event_id=str(event.get("event_id") or ""),
+                            category=str(event.get("category") or "other"),
+                            amount=int(event.get("amount") or 0),
+                            label=str(event.get("label") or "")[:120],
+                            source_key=str(event.get("source_key") or "")[:160],
+                            occurred_on=str(event.get("occurred_on") or "")[:10],
+                        )
+                    except Exception:
+                        LOGGER.info("economy event sync deferred", exc_info=True)
+            finally:
+                with self._economy_sync_lock:
+                    rerun = self._economy_sync_pending
+                    self._economy_sync_pending = False
+                    self._economy_sync_inflight = False
+                if rerun and getattr(self.social_client, "signed_in", False):
+                    self._sync_economy_events(
+                        [event.as_dict() for event in self.economy.events]
+                    )
+
+        threading.Thread(target=sync, name="lili-economy-sync", daemon=True).start()
+
     def shutdown_work_timer(self) -> None:
         """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
 
+        self._reset_idle_episode()
         if hasattr(self, "work_timer"):
             if self.work_timer.is_running:
-                self.daily_stats.record_focus(self.work_timer.session_seconds())
-            self.work_timer.pause()
-            if self.work_timer.today_seconds() > 0 and hasattr(self, "label"):
-                self._generate_daily_report(show_dialog=False)
+                session_seconds = self.work_timer.session_seconds()
+                session_id = self.work_timer.focus_session_id
+                segment_started_at = self.work_timer.current_segment_started_at()
+                # Persist the same final running segment in the local time-memory
+                # store before the shared timer is paused.  Without this, a
+                # normal app close could update the legacy daily card while
+                # losing the Todo attribution and daily check-in record.
+                self._record_focus_segment(
+                    session_seconds,
+                    completed=False,
+                    session_id=session_id,
+                    started_at=segment_started_at,
+                )
+                paused = self.focus_session.pause(reason="shutdown")
+                if paused:
+                    # A normal process exit is the same canonical handoff as
+                    # a manual pause. Clear the local live projection now and
+                    # queue the just-sealed segment through the existing
+                    # strict-ACK delta path before worker teardown begins.
+                    self.focus_analytics.pause_focus_session()
+                    snapshot = self.focus_session.snapshot(include_projection=False)
+                    self._set_local_live_focus_projection(snapshot)
+                    self._invalidate_focus_projection("focus_shutdown")
+                    self.focus_session.refresh()
+                    self.work_timer_changed.emit(False)
+                    self._sync_state_effect()
+                    self._schedule_social_tick()
 
-    def _generate_daily_report(self, *, show_dialog: bool) -> Path | None:
+    def _generate_daily_report(self, *, show_dialog: bool, mark_generated: bool = False) -> Path | None:
         """生成只保存在本机的工作日报；可选展示预览窗口。"""
 
         if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1" and not show_dialog:
@@ -1516,7 +5846,7 @@ class PetWindow(QWidget):
         photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
         try:
             path = render_daily_report(
-                self.work_timer.today_seconds(),
+                self._shared_today_focus_seconds(),
                 self.daily_stats.snapshot(),
                 photo,
             )
@@ -1526,24 +5856,219 @@ class PetWindow(QWidget):
             return None
         if show_dialog:
             self._show_daily_report_dialog(path)
+        if mark_generated:
+            self.daily_stats.mark_report_generated()
         return path
 
+    def _maybe_generate_scheduled_daily_report(self, now: datetime) -> bool:
+        """Generate one local report after the configured daily cutoff."""
+
+        if not getattr(self.settings, "daily_report_enabled", True):
+            return False
+        try:
+            hour, minute = (int(part) for part in str(getattr(self.settings, "daily_report_time", "22:30")).split(":", 1))
+        except (TypeError, ValueError):
+            hour, minute = 22, 30
+        cutoff = hour * 60 + minute
+        if now.hour * 60 + now.minute < cutoff:
+            return False
+        if self.daily_stats.report_generated_for(now.date().isoformat()):
+            return False
+        return self._generate_daily_report(show_dialog=False, mark_generated=True) is not None
+
     def show_daily_report(self) -> None:
-        """由菜单生成并打开今天的六毛工作日报。"""
+        """兼容旧菜单入口；报告现在改为实时页签窗口，不保存图片。"""
+
+        self.show_work_report()
+
+    def _best_buddy_for_report(self) -> str:
+        """Read the latest local self-study leaderboard snapshot only."""
+
+        dialog = self._social_dialog
+        rows = getattr(dialog, "_leaderboard_rows", []) if dialog is not None else []
+        if not isinstance(rows, list):
+            return "暂无自习室排行榜数据"
+        own_id = self._current_social_user_id()
+        candidates: list[tuple[int, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            user_id = str(row.get("user_id") or row.get("id") or "")
+            if own_id and user_id == own_id:
+                continue
+            try:
+                seconds = max(0, int(row.get("week_seconds") or row.get("period_seconds") or 0))
+            except (TypeError, ValueError, OverflowError):
+                seconds = 0
+            name = social_pet_label(
+                row.get("owner_nickname") or row.get("nickname") or "搭子"
+            )
+            if seconds > 0:
+                candidates.append((seconds, name))
+        if not candidates:
+            return "暂无可用的本周排行榜数据"
+        seconds, name = max(candidates, key=lambda item: (item[0], item[1]))
+        return f"{name} · 本周 {format_work_duration(seconds)}"
+
+    def _work_report_snapshot(
+        self,
+        *,
+        period: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict[str, object]:
+        """Build a fresh report from the currently active account namespace."""
+
+        moment = datetime.now(BEIJING_TIMEZONE)
+        current_date = moment.date()
+        self._set_local_live_focus_projection()
+        day_projection = self.focus_analytics.period_summary("day", moment)
+        if (
+            int(day_projection.get("local_record_count", 0) or 0) > 0
+            and not self.work_timer.has_active_session
+        ):
+            # One-time repair for timer files that inherited a stale remote
+            # maximum.  Do this only when detailed local records exist; a new
+            # device without history must still be able to use the server
+            # fallback.
+            self.work_timer.reconcile_today_seconds(
+                int(day_projection.get("total_seconds", 0) or 0)
+            )
+        selected_range = None
+        if period and start and end:
+            try:
+                selected_start = date.fromisoformat(str(start)[:10])
+                selected_end = date.fromisoformat(str(end)[:10])
+                if selected_end > selected_start:
+                    selected_range = (str(period), selected_start, selected_end)
+            except (TypeError, ValueError):
+                selected_range = None
+        # Remote live rows are already in AccountFocusStore. Keep only the
+        # local row as an explicit compatibility overlay for older report
+        # renderers; interval union makes it idempotent.
+        extra_live_segments = [
+            item
+            for item in self.focus_analytics.live_projection_segments()
+            if isinstance(item, FocusSegment)
+            and str(item.segment_id or "") == "display-live-local"
+        ]
+        return build_work_report(
+            self.focus_analytics,
+            self.work_timer,
+            self.daily_stats,
+            best_buddy=self._best_buddy_for_report(),
+            # Do not overlay the old day/week compatibility counters here.
+            # WorkReport rebuilds every calendar page from the closed ledger
+            # plus all cached per-device live intervals below.  Passing the
+            # old local-only projection would overwrite that union again and
+            # is exactly how a remote active computer disappeared from this
+            # window while the pet/study-room display was correct.
+            focus_snapshot=self.focus_session.snapshot(include_projection=False),
+            focus_projection=None,
+            task_stats={
+                "day": self.time_memory.records.stats(start=current_date, end=current_date),
+                "week": self.time_memory.records.week_stats(current_date.isoformat()),
+                "month": self.time_memory.records.month_stats(current_date.isoformat()),
+            },
+            selected_range=selected_range,
+            extra_live_segments=extra_live_segments,
+            now=moment,
+            account_id=str(_session_user_id(self.social_client) or ""),
+            current_device_id=str(getattr(self.focus_analytics, "_device_id", "") or ""),
+        )
+
+    def show_work_report(self) -> None:
+        """Open the live day/week/month report without creating a local image."""
+
+        lifecycle_log("work_report.show.request", self)
+        self._record_user_interaction()
+        # Close the floating shortcut first. Showing both top-level windows
+        # in one mouse event can leave the report behind the dock on macOS.
+        self.quick_panel.hide()
+        if self._work_report_dialog is None:
+            self._work_report_dialog = WorkReportDialog(
+                self._work_report_snapshot,
+                pet_name=self._pet_name(),
+                parent=None,
+            )
+            lifecycle_log("work_report.create", self._work_report_dialog)
+            self._work_report_dialog.destroyed.connect(
+                lambda _obj=None: lifecycle_log(
+                    "work_report.destroy", class_name="WorkReportDialog"
+                )
+            )
+            self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
+        # An explicit open is a user request for current numbers; the dialog's
+        # 30-second timer throttles passive refreshes, not this action.
+        self._work_report_dialog.refresh(force=True)
+        self._work_report_dialog.showNormal()
+        self._work_report_dialog.raise_()
+        self._work_report_dialog.activateWindow()
+        lifecycle_log("work_report.show.complete", self._work_report_dialog)
+
+    def configure_daily_report(self) -> None:
+        """从“工作记录”直接设置日报开关和每天的生成时间。"""
 
         self._record_user_interaction()
-        self._generate_daily_report(show_dialog=True)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("设置工作报告总结时间")
+        dialog.setMinimumWidth(390)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel("日报会在当天设定时间后自动生成一次；不会再按累计 8 小时触发。")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        enabled = QCheckBox("每天自动生成工作日报")
+        enabled.setChecked(bool(getattr(self.settings, "daily_report_enabled", True)))
+        time_edit = QTimeEdit()
+        report_time = QTime.fromString(
+            str(getattr(self.settings, "daily_report_time", "22:30")),
+            "HH:mm",
+        )
+        time_edit.setTime(report_time if report_time.isValid() else QTime(22, 30))
+        time_edit.setDisplayFormat("HH:mm")
+        time_edit.setWrapping(True)
+        time_edit.setToolTip("鼠标滚轮选择小时和分钟")
+        enabled.toggled.connect(time_edit.setEnabled)
+        time_edit.setEnabled(enabled.isChecked())
+        form.addRow(enabled)
+        form.addRow("每天截止", time_edit)
+        layout.addLayout(form)
+        hint = QLabel("时间按本机时区计算。关闭后只保留手动生成日报。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#667784;font-size:11px;")
+        layout.addWidget(hint)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Ok,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.settings.daily_report_enabled = enabled.isChecked()
+        self.settings.daily_report_time = time_edit.time().toString("HH:mm")
+        save_settings(self.settings)
+        if self.settings.daily_report_enabled:
+            self.show_speech(
+                f"工作日报已设置为每天 {self.settings.daily_report_time} 自动生成。",
+                4200,
+            )
+        else:
+            self.show_speech("自动工作日报已关闭，仍可从工作记录手动生成。", 4200)
 
     def _show_daily_report_dialog(self, path: Path) -> None:
         """在应用内预览工作卡，并提供打开本机相册的按钮。"""
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("今天六毛陪你做了什么")
+        dialog.setWindowTitle(f"今天{self._pet_name()}陪你做了什么")
         layout = QVBoxLayout(dialog)
         preview = QLabel(dialog); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card = QPixmap(str(path)).scaled(430, 570, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         preview.setPixmap(card); layout.addWidget(preview)
-        open_button = QPushButton("打开六毛相册", dialog)
+        open_button = QPushButton(f"打开{self._pet_name()}相册", dialog)
         open_button.clicked.connect(self.open_daily_album)
         layout.addWidget(open_button)
         dialog.exec()
@@ -1551,7 +6076,7 @@ class PetWindow(QWidget):
     def open_daily_album(self) -> None:
         """打开本机六毛相册文件夹，不访问网络。"""
 
-        directory = album_directory(); directory.mkdir(parents=True, exist_ok=True)
+        directory = album_directory(self._active_focus_account_id); directory.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
 
     def prompt_dialogue(self) -> None:
@@ -1559,61 +6084,336 @@ class PetWindow(QWidget):
 
         self._record_user_interaction()
         if self._chat_dialog is None:
-            self._chat_dialog = ChatDialog(self)
-            self._chat_dialog.message_submitted.connect(self._submit_chat_message)
-            self._chat_dialog.settings_requested.connect(self.open_settings)
-            self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
-            self._chat_dialog.append_message(
-                "六毛",
-                "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
+            # Keep chat as an independent utility window so it has a normal
+            # taskbar/Dock entry and can be minimized without affecting pet.
+            self._chat_dialog = ChatDialog(None, self._pet_name())
+            # Opening the chat repeatedly must not add another signal
+            # connection.  A duplicate connection would submit one user
+            # message multiple times and make every retry look like a second
+            # pet or a second conversation.
+            self._chat_dialog.message_submitted.connect(
+                self._submit_chat_message,
+                Qt.ConnectionType.UniqueConnection,
             )
+            self._chat_dialog.stop_requested.connect(self._interrupt_chat)
+            self._chat_dialog.settings_requested.connect(self.open_settings)
+            self._chat_dialog.rename_requested.connect(self.rename_pet)
+            self._chat_dialog.reconnect_requested.connect(self._reconnect_ai)
+            self._chat_dialog.clear_display_requested.connect(self._clear_chat_display)
+            self._chat_dialog.new_conversation_requested.connect(self._start_new_conversation)
+            self._chat_dialog.history_requested.connect(self._show_chat_history)
+            if not self._chat_history.sessions():
+                self._chat_history.bootstrap(self._chat_memory.recent)
+            saved_messages = self._chat_history.current_messages()
+            if saved_messages:
+                self._chat_dialog.load_transcript(
+                    [
+                        ("你" if role == "user" else self._pet_name(), text)
+                        for role, text in saved_messages
+                    ]
+                )
+            else:
+                self._chat_dialog.append_message(
+                    self._pet_name(),
+                    "巴布达！没网也可以聊天；也能在设置里连接 Codex、Claude Code、DeepSeek 或 Kimi。",
+                )
         status = self.agent_manager.status(self.settings.ai_provider)
         self._chat_dialog.set_provider(
             self.settings.ai_provider,
             status.state.value,
             status.detail,
         )
-        self._chat_dialog.show()
+        if self._chat_dialog.isMinimized():
+            self._chat_dialog.showNormal()
+        else:
+            self._chat_dialog.show()
         self._chat_dialog.raise_()
         self._chat_dialog.activateWindow()
+
+    def rename_pet(self) -> None:
+        """Edit the owner's social nickname; the pet remains 六毛 forever."""
+
+        self._record_user_interaction()
+        name, accepted = QInputDialog.getText(
+            self,
+            "修改主人称呼",
+            "主人称呼\n用于自习室、串门和搭子互动时区分不同六毛。\n例如填写“小梁”，其他搭子将看到“小梁家的六毛”。",
+            text=self._owner_nickname(),
+        )
+        if not accepted:
+            return
+        name = clean_owner_nickname(name)
+        previous_name = self._owner_nickname()
+        self.settings.owner_nickname = name
+        self.settings.pet_name = PET_NAME
+        save_settings(self.settings)
+        if name != previous_name:
+            self.owner_nickname_changed.emit(name)
+            self._sync_owner_nickname(name)
+            if self._social_dialog is not None:
+                self._social_dialog.set_owner_nickname(name)
+        label = social_pet_label(name)
+        self.show_speech(f"好，社交场景里就叫{label}。我还是六毛。", 4200)
+
+    def _sync_owner_nickname(self, nickname: str) -> None:
+        """Persist the social-only nickname without blocking the desktop pet."""
+
+        if not self.social_client.signed_in:
+            return
+        user_id = _session_user_id(self.social_client)
+        if not user_id or self._owner_nickname_sync_inflight:
+            return
+        clean = clean_owner_nickname(nickname)
+        key = (user_id, clean)
+        if self._owner_nickname_sync_key == key:
+            return
+        updater = getattr(self.social_client, "update_owner_nickname", None)
+        if not callable(updater):
+            return
+        self._owner_nickname_sync_inflight = True
+        thread = SocialProfileThread(self.social_client, clean, self)
+        self._social_profile_threads.append(thread)
+        thread.completed.connect(lambda sync_key=key: self._owner_nickname_sync_succeeded(sync_key), Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(self._owner_nickname_sync_failed)
+        thread.finished.connect(
+            lambda: self._social_profile_thread_finished(thread)
+        )
+        thread.start()
+
+    def _maybe_sync_owner_nickname(self) -> None:
+        """Sync a locally configured owner nickname after every account login."""
+
+        if self.social_client.signed_in:
+            user_id = self._current_social_user_id()
+            # The first heartbeat on a new computer also carries the local
+            # defaults.  Wait for the server profile to arrive or it could
+            # overwrite a nickname such as “小梁” with an empty value before
+            # the dashboard has a chance to restore it.
+            if not user_id or self._owner_nickname_remote_loaded_for != user_id:
+                return
+            self._sync_owner_nickname(self._owner_nickname())
+
+    def _owner_nickname_sync_succeeded(self, key: tuple[str, str]) -> None:
+        self._owner_nickname_sync_inflight = False
+        self._owner_nickname_sync_key = key
+        self._schedule_social_tick()
+
+    def _owner_nickname_sync_failed(self, _message: str) -> None:
+        self._owner_nickname_sync_inflight = False
+        if self._social_dialog is not None:
+            self._social_dialog._set_status("主人称呼已保存在本机，但云端同步失败，请稍后重试。", error=True)
+
+    def _social_profile_thread_finished(self, thread: SocialProfileThread) -> None:
+        if thread in self._social_profile_threads:
+            self._social_profile_threads.remove(thread)
+        thread.deleteLater()
 
     def _submit_chat_message(self, message: str) -> None:
         """把消息交给 ChatManager；路由只读取缓存，不做同步检测。"""
 
         if self._chat_dialog is None:
             return
+        message = " ".join(str(message or "").split())
+        if not message:
+            return
+        now = time.monotonic()
+        if (
+            message == self._last_chat_submission
+            and (
+                self._chat_submission_active
+                or now - self._last_chat_submission_at < 1.5
+            )
+        ):
+            LOGGER.debug("suppressed duplicate chat submission")
+            return
         self._record_user_interaction()
         if self.chat_manager.busy:
-            self._chat_dialog.append_message("六毛", "上一句话还在路上，稍等我一下。")
+            self._chat_dialog.append_message(self._pet_name(), "上一句话还在路上，稍等我一下。")
             return
+        self._last_chat_submission = message
+        self._last_chat_submission_at = now
+        self._chat_submission_active = True
         self._chat_dialog.append_message("你", message)
         history_before = self._chat_memory.snapshot().as_history()
         self._chat_memory.add("user", message)
+        self._chat_history.append("user", message)
         self._chat_dialog.show_recovery_actions(False)
-        self.chat_manager.submit(message, history_before)
+        if not self.chat_manager.submit(message, history_before):
+            self._chat_submission_active = False
 
+    @_guard_qt_callback
     def _managed_chat_reply(self, reply: ManagedChatReply) -> None:
         """统一展示 AI 或离线回复；降级时不附加连接错误正文。"""
 
         self._chat_memory.add("assistant", reply.text)
+        self._chat_history.append("assistant", reply.text)
+        self._chat_submission_active = False
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("六毛", reply.text)
+            if self._chat_streaming_active:
+                self._chat_dialog.finish_streaming_message(reply.text)
+            else:
+                self._chat_dialog.append_message(self._pet_name(), reply.text)
             self._chat_dialog.show_recovery_actions(reply.show_recovery_actions)
+        self._chat_streaming_active = False
         self._show_emotion(reply.state, 3000)
         self.show_speech(reply.text, 6500)
 
+    @_guard_qt_callback
+    def _chat_reply_started(self) -> None:
+        """Open an assistant bubble before the first network token arrives."""
+
+        if self._chat_dialog is not None:
+            self._chat_dialog.begin_streaming_message(self._pet_name())
+        self._chat_streaming_active = True
+
+    @_guard_qt_callback
+    def _chat_reply_delta(self, delta: str) -> None:
+        """Render App Server agentMessage/delta without waiting for turn completion."""
+
+        if self._chat_dialog is None:
+            return
+        if not self._chat_streaming_active:
+            self._chat_reply_started()
+        self._chat_dialog.append_streaming_delta(delta)
+
+    @_guard_qt_callback
     def _chat_busy_changed(self, busy: bool) -> None:
         """只禁用聊天输入，宠物动画、计时和音乐继续运行。"""
 
         if self._chat_dialog is not None:
+            self._chat_dialog.set_interrupt_available(self.settings.ai_provider == "codex")
             self._chat_dialog.set_busy(busy)
+        if self._chat_history_dialog is not None:
+            self._chat_history_dialog.set_mutation_enabled(not busy)
 
+    def _interrupt_chat(self) -> None:
+        """Stop only the active Codex App Server turn."""
+
+        if self.chat_manager.interrupt():
+            return
+        self._chat_notice("这一句暂时还不能中断，我再等它一下。")
+
+    @_guard_qt_callback
     def _chat_notice(self, message: str) -> None:
         """显示非阻塞提示，不跳转设置页。"""
 
         if self._chat_dialog is not None:
-            self._chat_dialog.append_message("六毛", message)
+            self._chat_dialog.append_message(self._pet_name(), message)
 
+    def _clear_chat_display(self) -> None:
+        """只清除聊天窗口当前显示，不删除记录、待办或 AI 上下文。"""
+
+        if self.chat_manager.busy:
+            self._chat_notice("这一句还在生成中，等它结束后再清空显示。")
+            return
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+
+    def _start_new_conversation(self) -> None:
+        """确认后清掉当前上下文并启动新的本地会话，待办保持不变。"""
+
+        if self.chat_manager.busy:
+            self._chat_notice("上一句话还在路上，等它结束后再开始新对话。")
+            return
+        answer = QMessageBox.question(
+            self._chat_dialog or self,
+            "开始新对话",
+            "这会清除六毛当前的聊天上下文，并让下一句话创建新的 AI 对话。\n"
+            "已有聊天仍会保留在“聊天记录”里，待办和提醒不会被删除。\n\n继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if not self.chat_manager.reset_conversation():
+            return
+        self._chat_memory.clear()
+        self._chat_history.start_new_session()
+        self._chat_streaming_active = False
+        self._last_chat_submission = ""
+        self._last_chat_submission_at = 0.0
+        self._chat_submission_active = False
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+            self._chat_dialog.append_message(
+                self._pet_name(),
+                "好，新的聊天开始啦。之前的聊天记录还在，待办和提醒也都保留着。",
+            )
+
+    def _show_chat_history(self) -> None:
+        """打开本机聊天记录查看窗口，不启动 AI 或改变当前对话。"""
+
+        if self._chat_history_dialog is None:
+            self._chat_history_dialog = ChatHistoryDialog(
+                self._chat_history,
+                self._pet_name(),
+                None,
+            )
+            self._chat_history_dialog.clear_all_requested.connect(
+                self._clear_all_chat_history
+            )
+            self._chat_history_dialog.clear_display_requested.connect(
+                self._clear_chat_display
+            )
+            self._chat_history_dialog.new_conversation_requested.connect(
+                self._start_new_conversation
+            )
+            self._chat_history_dialog.session_deleted_requested.connect(
+                self._chat_history_session_deleted
+            )
+        self._chat_history_dialog.set_mutation_enabled(not self.chat_manager.busy)
+        self._chat_history_dialog.refresh()
+        self._chat_history_dialog.show()
+        self._chat_history_dialog.raise_()
+        self._chat_history_dialog.activateWindow()
+
+    def _chat_history_session_deleted(self, _session_id: str, was_current: bool) -> None:
+        """删除当前会话时同步清掉 AI 上下文，待办和提醒保持不变。"""
+
+        if not was_current:
+            return
+        if not self.chat_manager.reset_conversation():
+            return
+        self._chat_memory.clear()
+        self._chat_streaming_active = False
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+            self._chat_dialog.append_message(
+                self._pet_name(),
+                "这段聊天记录已删除，新的聊天会从零开始；待办和提醒没有改变。",
+            )
+
+    def _clear_all_chat_history(self) -> None:
+        """删除全部本地聊天记录，同时重置 AI 上下文但不碰待办。"""
+
+        if self.chat_manager.busy:
+            self._chat_notice("上一句话还在路上，等它结束后再删除聊天记录。")
+            return
+        answer = QMessageBox.question(
+            self._chat_history_dialog or self,
+            "删除全部聊天记录",
+            "确定删除本机保存的全部聊天记录并重置六毛的 AI 上下文吗？\n"
+            "待办、提醒和其他应用数据不会受到影响。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if not self.chat_manager.reset_conversation():
+            return
+        self._chat_history.clear_all()
+        self._chat_memory.clear()
+        self._chat_streaming_active = False
+        if self._chat_history_dialog is not None:
+            self._chat_history_dialog.refresh()
+        if self._chat_dialog is not None:
+            self._chat_dialog.clear_transcript()
+            self._chat_dialog.append_message(
+                self._pet_name(),
+                "聊天记录已经清空，新的聊天会从零开始；待办和提醒没有改变。",
+            )
+
+    @_guard_qt_callback
     def _agent_status_changed(self, provider: str, state: str, detail: str) -> None:
         """后台检测完成后刷新缓存状态文案，恢复后下一条自然走 AI。"""
 
@@ -1635,9 +6435,11 @@ class PetWindow(QWidget):
         """只允许明确用户动作打开设置；所有自动或未知来源均拒绝并记录。"""
 
         if source != SETTINGS_SOURCE_USER_ACTION:
+            lifecycle_log("settings.open.rejected", self, source=source)
             LOGGER.debug("拒绝非用户来源打开连接与陪伴设置：source=%r", source)
             return False
 
+        lifecycle_log("settings.open.request", self, source=source)
         dialog = AISettingsDialog(
             self.settings,
             self.credentials,
@@ -1645,16 +6447,67 @@ class PetWindow(QWidget):
             agent_manager=self.agent_manager,
             music_manager=self.music_provider_manager,
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        lifecycle_log("settings.create", dialog)
+        destroyed_signal = getattr(dialog, "destroyed", None)
+        if destroyed_signal is not None:
+            destroyed_signal.connect(
+                lambda _obj=None: lifecycle_log(
+                    "settings.destroy", class_name="AISettingsDialog"
+                )
+            )
+        update_signal = getattr(dialog, "program_update_requested", None)
+        if update_signal is not None:
+            update_signal.connect(
+                lambda: self._invoke_menu_external("program_update")
+            )
+        recovery_signal = getattr(dialog, "focus_history_recovery_requested", None)
+        if recovery_signal is not None:
+            recovery_signal.connect(
+                lambda: self._manual_focus_history_recovery(dialog)
+            )
+        lifecycle_log("settings.exec.begin", dialog)
+        dialog_result = dialog.exec()
+        lifecycle_log("settings.exec.end", dialog, result=str(dialog_result))
+        if dialog_result != QDialog.DialogCode.Accepted:
             return True
         previous_always_on_top = self.settings.always_on_top
+        previous_allow_autonomous_walk = bool(
+            getattr(self.settings, "allow_autonomous_walk", False)
+        )
+        previous_pet_name = self._pet_name()
+        previous_owner_nickname = self._owner_nickname()
         try:
             dialog.apply()
         except Exception as exc:
             self.show_speech(f"设置没有保存：{exc}", 6000)
             return True
+        if not bool(getattr(self.settings, "show_away_recovery_prompt", True)):
+            self._away_recovery_prompt_shown = True
+            self._close_away_recovery_card()
+        self.ai_service.codex_path = str(
+            getattr(self.settings, "codex_executable_path", "") or ""
+        ).strip()
+        current_pet_name = self._pet_name()
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} · {current_pet_name}")
+        if self._chat_dialog is not None:
+            self._chat_dialog.set_pet_name(current_pet_name)
+        self.quick_panel.set_pet_name(current_pet_name)
+        if current_pet_name != previous_pet_name:
+            self.pet_name_changed.emit(current_pet_name)
+        current_owner_nickname = self._owner_nickname()
+        if current_owner_nickname != previous_owner_nickname:
+            self.owner_nickname_changed.emit(current_owner_nickname)
+            self._sync_owner_nickname(current_owner_nickname)
+            if self._social_dialog is not None:
+                self._social_dialog.set_owner_nickname(current_owner_nickname)
         if self.settings.always_on_top != previous_always_on_top:
             self.set_always_on_top(self.settings.always_on_top, persist=False)
+        if bool(self.settings.allow_autonomous_walk) != previous_allow_autonomous_walk:
+            self.set_allow_autonomous_walk(
+                self.settings.allow_autonomous_walk,
+                persist=False,
+            )
+        self._sync_state_effect()
         save_settings(self.settings)
         self._schedule_ambient()
         self._schedule_song_inspiration()
@@ -1677,66 +6530,1861 @@ class PetWindow(QWidget):
     def open_social_hub(self) -> None:
         """打开联网搭子与私人自习室；离线功能不依赖此窗口。"""
 
+        lifecycle_log("study_room.show.request", self)
         self._record_user_interaction()
         if self._social_dialog is None:
-            self._social_dialog = SocialHubDialog(self.social_client, self.settings.equipped_outfit, self)
+            # Keep the study room as an independent top-level application
+            # window so Windows gives it a normal taskbar button.  The pet
+            # retains ownership through the Python reference and can restore
+            # the same instance on a later menu click.
+            self._social_dialog = SocialHubDialog(
+                self.social_client,
+                self.settings.equipped_outfit,
+                self._owner_nickname(),
+                None,
+            )
+            lifecycle_log("study_room.create", self._social_dialog)
+            self._social_dialog.destroyed.connect(
+                lambda _obj=None: lifecycle_log(
+                    "study_room.destroy", class_name="SocialHubDialog"
+                )
+            )
             self._social_dialog.active_visit.connect(self._show_buddy_visit)
+            self._social_dialog.account_state_changed.connect(self._social_account_state_changed)
+            self._social_dialog.login_streak_updated.connect(self._login_streak_updated)
+            self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
+            self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
+            self._social_dialog.buddy_request_received.connect(self._buddy_request_received)
+            self._social_dialog.room_event_received.connect(self._room_event_received)
+            self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
             self._social_dialog.finished.connect(self._social_dialog_finished)
-        self._social_dialog.show(); self._social_dialog.raise_(); self._social_dialog.activateWindow()
+            self._social_dialog.focus_start_requested.connect(self.start_work_timer)
+            self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
+            self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
+            self._social_dialog.work_report_requested.connect(self.show_work_report)
+            self._social_dialog.focus_task_requested.connect(self._set_focus_task)
+            self._social_dialog.tomorrow_review_requested.connect(self._set_tomorrow_review)
+            self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
+            self._social_dialog.room_changed.connect(self._social_room_changed)
+            self._social_dialog.quick_action_requested.connect(self._room_quick_action)
+            self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+            self._social_dialog.set_local_focus_week_seconds_provider(
+                lambda: self.focus_analytics.account_week_seconds()
+            )
+            self._social_dialog.set_cross_device_today_display_seconds(
+                self._cross_device_today_display_value(
+                    self.focus_session.snapshot(include_projection=False)
+                ),
+                account_id=self._current_social_user_id(),
+            )
+        # A second click on the menu must restore a minimized study-room
+        # window instead of leaving it hidden in the taskbar/Dock.
+        if self._social_dialog.isMinimized():
+            self._social_dialog.showNormal()
+        else:
+            self._social_dialog.show()
+        lifecycle_log("study_room.show.complete", self._social_dialog)
+        # Native window activation can be comparatively slow on Windows.
+        # Queue it after the show turn so the shortcut click returns and the
+        # study room can paint before the OS foreground negotiation runs.
+        QTimer.singleShot(0, self._activate_social_hub_window)
+
+    def _activate_social_hub_window(self) -> None:
+        dialog = self._social_dialog
+        if dialog is None or not dialog.isVisible():
+            return
+        dialog.raise_()
+        dialog.activateWindow()
+
+    @_guard_qt_callback
+    def _focus_snapshot_changed(self, snapshot: object) -> None:
+        self._refresh_shortcut_state(snapshot)
+        snapshot_status = str(getattr(snapshot, "status", "idle") or "idle")
+        status_changed = snapshot_status != self._last_focus_snapshot_status
+        if status_changed and snapshot_status == "focus" and self._current_social_user_id():
+            # Establish a new local-live anchor only when the session state
+            # starts/resumes. Pause/finish emits before its local segment is
+            # persisted, so those transitions are refreshed by the explicit
+            # post-write path in pause_work_timer/finish_work_timer.
+            self._refresh_cross_device_today_display(
+                snapshot=snapshot,
+                source="focus_state_changed",
+            )
+        self._update_work_duration_bubble(snapshot)
+        if self.work_controls.isVisible():
+            status = snapshot_status
+            seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
+            self.work_controls.set_session_status(status)
+            self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
+            self.work_controls.set_session_duration(
+                "本轮 " + format_work_duration(seconds)
+                if status in {"focus", "rest"} else "本轮未开始"
+            )
+        if self._social_dialog is not None:
+            self._social_dialog.set_cross_device_today_display_seconds(
+                self._cross_device_today_display_value(snapshot),
+                account_id=self._current_social_user_id(),
+            )
+            self._social_dialog.set_focus_snapshot(snapshot)
+            self._social_dialog.refresh_local_focus_week_seconds()
+            now = time.monotonic()
+            if status_changed or now - self._last_focus_analytics_ui_refresh >= 5.0:
+                self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+                self._last_focus_analytics_ui_refresh = now
+                self._last_focus_snapshot_status = snapshot_status
+        else:
+            self._last_focus_snapshot_status = snapshot_status
+
+    def _room_event_received(self, event: dict) -> None:
+        """Play a received room interaction on this desktop pet."""
+
+        actor_id = str(
+            event.get("actor_id")
+            or event.get("sender_id")
+            or event.get("user_id")
+            or ""
+        )
+        if actor_id and actor_id in self._muted_buddy_ids:
+            return
+        if detect_quiet_mode().blocked:
+            return
+        kind = str(event.get("kind") or "")
+        actor = social_pet_label(event.get("nickname"))
+        message = str(event.get("message") or "")
+        labels = {"poke": "戳了戳你", "cheer": "给你加油", "drink": "递给你一杯奶茶"}
+        if kind == "phrase":
+            text = f"{actor}：{message[:100]}"
+            activity = "happy"
+        else:
+            text = f"{actor}{labels.get(kind, '给你发来一条房间动态')}"
+            activity = {"poke": "surprised", "cheer": "pointing", "drink": "tea"}.get(kind, "happy")
+        self._set_temporary_activity(activity, 20_000)
+        self.show_speech(text, 5200)
+
+    def _buddy_request_received(self, request: dict) -> None:
+        """Give a fast desktop-pet notice for a new buddy request."""
+
+        if not isinstance(request, dict):
+            return
+        sender_id = str(request.get("sender_id") or request.get("requester_id") or "")
+        if sender_id and sender_id in self._muted_buddy_ids:
+            return
+        if detect_quiet_mode().blocked:
+            return
+        label = social_pet_label(request.get("owner_nickname") or request.get("nickname"))
+        self._set_temporary_activity("pointing", 20_000)
+        self.show_speech(f"收到{label}的搭子申请。打开‘互动’页即可处理。", 5600)
+
+    def _set_focus_task(self, title: str, minutes: int) -> None:
+        task = self.time_memory.todos.find(title)
+        if task is None and str(title).strip():
+            task = self.time_memory.todos.add(str(title).strip())
+        if task is not None:
+            self.time_memory.select_task(task.id)
+        due_at = None
+        if int(minutes) > 0:
+            due_at = (datetime.now().astimezone() + timedelta(minutes=int(minutes))).isoformat()
+        self.focus_analytics.set_current_task(title, due_at=due_at, target_seconds=max(0, int(minutes)) * 60)
+        if self._social_dialog is not None:
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+        self.show_speech(f"这轮只盯一件事：{title[:80]}", 4200)
+
+    def _set_tomorrow_review(self, title: str) -> None:
+        self.focus_analytics.set_tomorrow_task(title)
+        if title:
+            self.show_speech(f"明天第一件事记好了：{title[:80]}", 4200)
+        else:
+            self.show_speech("明天第一件事已清空。", 3200)
+
+    def _room_ritual_due(self, label: str) -> None:
+        if detect_quiet_mode().blocked:
+            return
+        self.show_speech(f"房间提醒：{label}！大家一起动起来。", 5000)
+
+    def _buddy_subscription_notice(self, message: str) -> None:
+        if detect_quiet_mode().blocked:
+            return
+        self.show_speech(message, 4200)
 
     def _social_dialog_finished(self) -> None:
-        if self._social_dialog is not None:
-            self._social_dialog.deleteLater(); self._social_dialog = None
-
-    def _social_tick(self) -> None:
-        """每 30 秒同步最小状态；失败时静默保留纯离线桌宠。"""
-
-        if not self.social_client.signed_in or (self._social_thread is not None and self._social_thread.isRunning()):
+        dialog = self._social_dialog
+        if dialog is None:
             return
-        started = None
-        if self.work_timer.is_running:
-            started = (datetime.now().astimezone() - timedelta(seconds=self.work_timer.session_seconds())).isoformat()
-        presence = {
-            "working": self.work_timer.is_running,
-            "today_seconds": self.work_timer.today_seconds(),
-            "session_started_at": started,
+        # SocialHubDialog owns short-lived network QThreads. A close event
+        # can arrive while dashboard/leaderboard/RPC work is still blocking in
+        # a bounded request; deleting the dialog here would make Qt destroy a
+        # live QThread and abort the whole process on Windows. Keep this
+        # top-level utility dialog alive (hidden and reusable) until the app
+        # itself shuts down, when PetWindow's normal thread-drain pass handles
+        # the workers in the correct order.
+        lifecycle_log("study_room.hide_after_close", dialog)
+        dialog.hide()
+
+    @_guard_qt_callback
+    def _social_tick(self) -> None:
+        """Measure dashboard preparation without affecting its async work."""
+
+        with self._performance.measure("social.tick_prepare"):
+            self._social_tick_impl()
+
+    def _build_social_personal_state(self) -> dict[str, object]:
+        """Build the compatibility sync payload outside the GUI thread.
+
+        The raw FocusSession projection remains the server/source-of-truth
+        path.  These fields are retained for older deployments and profile
+        reconciliation, but preparing them must never delay a button or the
+        one-second clock tick.
+        """
+
+        today = datetime.now(BEIJING_TIMEZONE).date()
+        week_start = today - timedelta(days=today.weekday())
+        analytics = self.focus_analytics.snapshot()
+        today_key = today.isoformat()
+        payload_builder = getattr(
+            self.focus_analytics,
+            "focus_segments_payload_with_diagnostics",
+            None,
+        )
+        if callable(payload_builder):
+            focus_segments, focus_segments_diagnostics = payload_builder(
+                FOCUS_SEGMENT_UPLOAD_BATCH_SIZE
+            )
+        else:
+            focus_segments = self.focus_analytics.focus_segments_payload()
+            focus_segments_diagnostics = {}
+        return {
+            "focus_date": today_key,
+            # Duration scalars are retained only for old wire signatures.
+            # Canonical FocusSegments and fresh presence are the only current
+            # duration inputs accepted by the server.
+            "today_seconds": 0,
+            "lifetime_seconds": self.work_timer.lifetime_seconds(),
+            "week_start": week_start.isoformat(),
+            "week_seconds": 0,
+            "today_interruptions": int(analytics.get("today_interruptions") or 0),
+            "longest_continuous_seconds": int(analytics.get("longest_continuous_seconds") or 0),
+            "focus_history": None,
+            # Raw closed intervals are the cross-device source of truth.
+            # Daily/profile totals remain compatibility fields only.
+            "focus_segments": focus_segments,
+            "focus_segments_sources": focus_segments_diagnostics.get(
+                "source_entries", []
+            ),
+            "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
+            "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
+            "focus_segment_integrity_manifest": (
+                self.focus_analytics.focus_segment_reconciliation_manifest()
+            ),
+            "focus_segment_integrity_manifest_kind": "reconciliation",
             "outfit_key": self.settings.equipped_outfit,
-            "room_id": None,
+            "outfit_set": self._personal_outfit_sync_pending,
         }
-        thread = SocialSyncThread(self.social_client, presence, self)
+
+    def _social_tick_impl(self) -> None:
+        """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
+
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1":
+            # Offscreen/demo windows intentionally have no authenticated
+            # social session. Avoid starting real background network workers
+            # in the same process as Qt widget lifecycle tests.
+            return
+        if not self.social_client.signed_in:
+            self._economy_sync_user_id = ""
+            return
+        heartbeat_thread = self._social_heartbeat_thread
+        # Do not create a background worker for anonymous/offline pet windows.
+        # Start it lazily on the first authenticated sync so tests and a
+        # logged-out desktop never retain a waiting thread between windows.
+        if heartbeat_thread is not None and not heartbeat_thread.isRunning():
+            heartbeat_thread.start()
+        dashboard_busy = (
+            self._social_thread is not None
+            and self._social_thread.isRunning()
+        )
+        # The authenticated account may live in the shared auth manager or in
+        # the active HTTP backend while a token refresh is copying it to the
+        # route client's ``session``.  Use the same resolver as the heartbeat
+        # and dashboard paths so an otherwise valid account never sends an
+        # anonymous/empty presence update.
+        user_id = _session_user_id(self.social_client)
+        if user_id and user_id != self._economy_sync_user_id:
+            self._economy_sync_user_id = user_id
+            self._social_personal_sync_due = True
+            # The server is authoritative when an account is opened on a new
+            # computer.  An explicit local outfit change is the only action
+            # allowed to write the durable outfit key back.  Keep a pending
+            # selection made before the first heartbeat (for example while a
+            # freshly signed-in user opens 百变六毛); discard it only when it
+            # is known to belong to a different account.
+            if (
+                self._personal_outfit_sync_pending
+                and self._personal_outfit_sync_user_id
+                and self._personal_outfit_sync_user_id != user_id
+            ):
+                self._personal_outfit_sync_pending = False
+                self._personal_outfit_sync_user_id = ""
+            self._sync_economy_events(
+                [event.as_dict() for event in self.economy.events]
+            )
+        self._maybe_sync_owner_nickname()
+        selected_room = self._social_dialog.current_room_id if self._social_dialog is not None else None
+        # A persisted local room ID is not an invitation to re-enter a room.
+        # Only the room explicitly selected in the study-room window is sent.
+        room_id = selected_room
+        if room_id != self.focus_session.room_id:
+            self.focus_session.set_room_id(room_id)
+        # Keep this GUI callback cheap.  Calendar aggregation, raw segment
+        # serialization and personal-state sync are performed by the worker.
+        snapshot = self.focus_session.snapshot(include_projection=False)
+        active_session = bool(snapshot.is_running and self.work_timer.has_active_session)
+        live_segment_started_at = (
+            self.work_timer.current_segment_started_at()
+            if active_session
+            else None
+        )
+        input_idle_seconds: int | None = None
+        if active_session:
+            # The heartbeat carries no accumulated duration.  It may only
+            # prove that the explicit local timer still has recent aggregate
+            # keyboard/mouse activity.  A missing native probe deliberately
+            # stays ``None`` so the server cannot mistake a login-only or
+            # broken-client loop for an active focus session.
+            try:
+                observed_idle_seconds = system_idle_seconds()
+                if observed_idle_seconds is not None:
+                    input_idle_seconds = max(0, min(86_400, int(observed_idle_seconds)))
+            except (TypeError, ValueError, OverflowError):
+                input_idle_seconds = None
+        presence = {
+            "user_id": user_id,
+            "working": bool(snapshot.is_running),
+            # Paused/resting sessions are durable history, not live presence.
+            # This invariant prevents the server from projecting paused time.
+            "session_active": active_session,
+            "session_id": self.work_timer.focus_session_id if active_session else None,
+            # Presence describes the currently running segment, not the
+            # whole paused/resumed FocusSession. This keeps live union from
+            # counting pause gaps; closed segments remain the only history
+            # facts.
+            "session_started_at": (
+                live_segment_started_at.isoformat()
+                if live_segment_started_at is not None
+                else None
+            ),
+            "input_idle_seconds": input_idle_seconds,
+            # The following are dashboard/personal-sync context only.  The
+            # heartbeat worker applies _heartbeat_payload before transport,
+            # so they can never become presence duration fields.
+            "outfit_key": self.settings.equipped_outfit,
+            "room_id": room_id,
+            "quick_status": self._active_room_quick_status(),
+            "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
+            if self._room_quick_status_expires_at is not None else None,
+        }
+        if not active_session and self.focus_analytics.has_pending_focus_handoff():
+            # Strict ACK-before-inactive fallback: keep the last remote live
+            # projection untouched until the sealed local fact is accepted by
+            # the existing delta RPC. This adds no polling or history pull.
+            presence["_defer_inactive_until_focus_ack"] = True
+        presence_context_signature = (
+            str(room_id or ""),
+            str(self.settings.equipped_outfit or "")[:60],
+            str(presence.get("quick_status") or "")[:40],
+            str(presence.get("quick_status_expires_at") or ""),
+        )
+        if presence_context_signature != self._social_presence_context_signature:
+            # Context is deliberately sent via a separate background RPC.
+            # It updates room association and presentation metadata without
+            # touching heartbeat liveness or any focus-duration field.
+            presence["_presence_context"] = {
+                "room_id": room_id,
+                "outfit_key": presence_context_signature[1],
+                "quick_status": presence_context_signature[2],
+                "quick_status_expires_at": presence.get("quick_status_expires_at"),
+            }
+            self._social_presence_context_signature = presence_context_signature
+        now_monotonic = time.monotonic()
+        # Taunt/encouragement state is not liveness.  It only needs a modest
+        # polling cadence, while the independent heartbeat keeps presence
+        # fresh.  Avoid making every dashboard request perform a
+        # second reaction-state RPC and rebuild the pet bubble.
+        if now_monotonic - self._last_social_reaction_state_at >= SOCIAL_REACTION_REFRESH_SECONDS:
+            presence["_include_reaction_state"] = True
+            self._last_social_reaction_state_at = now_monotonic
+        if (
+            not dashboard_busy
+            and (
+                self._social_personal_sync_due
+                or now_monotonic - self._last_social_personal_sync_at >= 60.0
+            )
+        ):
+            # SocialSyncThread invokes this factory in its worker thread. It
+            # is deliberately not called from the GUI timer path. If a
+            # dashboard poll is already running, leave the due flag intact so
+            # the next poll cannot lose a session boundary.
+            presence["_personal_state_factory"] = self._build_social_personal_state
+            self._social_personal_sync_due = False
+            self._last_social_personal_sync_at = now_monotonic
+
+        if heartbeat_thread is not None and heartbeat_thread.isRunning():
+            heartbeat_thread.update_presence(
+                presence,
+                immediate=bool(self._social_heartbeat_due),
+            )
+            self._social_heartbeat_due = False
+
+        # A slow dashboard/statistics request must never prevent a fresh
+        # working/paused state from reaching the independent heartbeat loop.
+        if dashboard_busy:
+            return
+
+        # Rankings are useful but not liveness-critical. Only refresh while
+        # the study-room window is actually visible; entering its ranking
+        # view can still fetch immediately through the shared client cache.
+        # This does not touch the FocusSession sync or Presence heartbeat.
+        if (
+            self._social_dialog is not None
+            and self._social_dialog.isVisible()
+            and now_monotonic - self._last_social_leaderboard_at >= SOCIAL_LEADERBOARD_REFRESH_SECONDS
+        ):
+            presence["_include_leaderboard"] = True
+            self._last_social_leaderboard_at = now_monotonic
+
+        self._social_request_generation += 1
+        request_generation = self._social_request_generation
+        thread = SocialSyncThread(
+            self.social_client,
+            presence,
+            self,
+            send_heartbeat=False,
+            request_generation=request_generation,
+        )
         self._social_thread = thread
         thread.completed.connect(self._social_dashboard_received)
-        thread.finished.connect(self._social_thread_finished)
+        thread.failed.connect(self._social_sync_failed)
+        # ``finished`` is delivered through the GUI event loop.  A new
+        # heartbeat can therefore replace ``self._social_thread`` before an
+        # older thread's queued callback runs.  Keep the originating thread
+        # in the callback so a stale callback can never delete a newer,
+        # still-running QThread.
+        thread.finished.connect(
+            lambda current=thread: self._social_thread_finished(current),
+            Qt.ConnectionType.QueuedConnection,
+        )
         thread.start()
 
+    @_guard_qt_callback
     def _social_dashboard_received(self, data: dict) -> None:
         """显示新串门提醒，并在双方本地打开双六毛画面。"""
 
-        for visit in data.get("visits") or []:
-            visit_id = str(visit.get("id", ""))
-            if visit_id and visit_id not in self._seen_visit_ids:
-                self._seen_visit_ids.add(visit_id)
-                self._set_temporary_activity("pointing", 20_000)
-                self.show_speech(f"{visit.get('nickname','搭子')} 的六毛来串门啦！\n打开“搭子自习室”可以接受。", 7600)
-        active = data.get("active_visits") or []
-        if active:
+        if not isinstance(data, dict):
+            return
+        generation = max(0, int(data.get("_request_generation") or 0))
+        if generation and generation < self._last_applied_social_generation:
+            lifecycle_log(
+                "social.dashboard.stale_response_ignored",
+                self,
+                request_generation=generation,
+                last_applied_generation=self._last_applied_social_generation,
+            )
+            return
+        if generation:
+            self._last_applied_social_generation = generation
+        if data.get("_presence_context_updated") is False:
+            # The first context RPC can race the heartbeat row creation. Keep
+            # the signature dirty so the next independent background cycle
+            # retries room/outfit metadata without changing liveness data.
+            self._social_presence_context_signature = None
+
+        self._muted_buddy_ids = {
+            str(item).strip()
+            for item in (data.get("muted_buddy_ids") or [])
+            if str(item).strip()
+        }
+        self._merge_remote_personal_state(data)
+        if self._personal_outfit_sync_pending and not data.get("_sync_offline"):
+            # A local wardrobe choice is a pending write.  Do not clear the
+            # fence merely because an online dashboard arrived: older
+            # deployments can echo the previous profile value for several
+            # cycles.  Release the fence only after the server returns the
+            # exact selected key, otherwise the next heartbeat would undo the
+            # user's choice.
+            personal_state = data.get("_personal_state")
+            personal_state = personal_state if isinstance(personal_state, dict) else {}
+            if "outfit_key" in personal_state:
+                remote_outfit = str(personal_state.get("outfit_key") or "")[:60]
+            else:
+                profile = data.get("me")
+                profile = profile if isinstance(profile, dict) else {}
+                remote_outfit = str(profile.get("outfit_key") or "")[:60]
+            if remote_outfit == self.settings.equipped_outfit:
+                self._personal_outfit_sync_pending = False
+                self._personal_outfit_sync_user_id = ""
+                self._personal_outfit_fence_key = remote_outfit
+                self._personal_outfit_fence_until = max(
+                    self._personal_outfit_fence_until,
+                    time.monotonic() + 60.0,
+                )
+
+        # The sync thread already fetched this dashboard.  Render that exact
+        # payload instead of issuing a second blocking request from the UI
+        # thread; this is what makes a peer's fresh focus state visible within
+        # the same heartbeat.
+        if self._social_dialog is not None:
+            with self._performance.measure("social.dashboard_apply"):
+                self._social_dialog.apply_dashboard(data)
+
+        taunt_active = self._apply_taunt_state(data.get("_taunt_state"))
+        encouragement_active = self._apply_encouragement_state(data.get("_encouragement_state"))
+
+        # A cached snapshot is useful for explaining the last known state,
+        # but it is not permission to reopen a visit window or emit a new
+        # interaction.  Only a server-confirmed payload may trigger social
+        # side effects.
+        if data.get("_sync_offline") or data.get("data_source") == "local_cache":
+            return
+
+        if detect_quiet_mode().blocked:
+            return
+        def sender_id(item: object) -> str:
+            if not isinstance(item, dict):
+                return ""
+            return str(
+                item.get("sender_id")
+                or item.get("requester_id")
+                or item.get("peer_id")
+                or item.get("user_id")
+                or ""
+            )
+
+        for request in data.get("requests") or []:
+            if sender_id(request) not in self._muted_buddy_ids:
+                self._enqueue_buddy_request_notice(request)
+        pending_visits = [item for item in (data.get("visits") or []) if isinstance(item, dict)]
+        pending_visit_ids = {self._incoming_visit_id(item) for item in pending_visits}
+        # If the response was handled on another device, or the ten-minute
+        # invitation expired while this window was open, close the old prompt
+        # as soon as the next authoritative dashboard arrives.
+        current_notice = self._incoming_visit_notice
+        if "visits" in data and current_notice is not None:
+            current_id = self._incoming_visit_id(current_notice._event_payload)
+            if current_id and current_id not in pending_visit_ids:
+                self._finish_incoming_visit_notice(current_notice._event_payload)
+        for visit in pending_visits:
+            visit_id = self._incoming_visit_id(visit) if isinstance(visit, dict) else ""
+            if (
+                sender_id(visit) not in self._muted_buddy_ids
+                and visit_id not in self._handled_visit_ids
+            ):
+                self._enqueue_incoming_visit_notice(visit)
+        active = self._active_visits_after_startup(
+            [
+                item for item in (data.get("active_visits") or [])
+                if sender_id(item) not in self._muted_buddy_ids
+            ]
+        )
+        if taunt_active or encouragement_active:
+            # The compact bubble is shared with normal串门状态.  A taunt is
+            # intentionally the higher-priority label while its punishment is
+            # active; both persistent reactions keep the historical two-pet
+            # visit window closed.
+            self._buddy_visit_window.hide_visit()
+        elif active:
             self._show_buddy_visit(active[0])
+        else:
+            self._hide_buddy_visit()
+
+    @staticmethod
+    def _taunt_text_list(value: object, *, limit: int = 6) -> list[str]:
+        """Normalize a server list (or an older JSON/string fallback)."""
+
+        candidate = value
+        if isinstance(candidate, str):
+            raw = candidate.strip()
+            if raw.startswith("["):
+                try:
+                    candidate = json.loads(raw)
+                except (TypeError, ValueError):
+                    candidate = [raw]
+            else:
+                candidate = [raw]
+        if not isinstance(candidate, (list, tuple)):
+            return []
+        result: list[str] = []
+        for item in candidate:
+            text = str(item or "").strip()
+            if text and text not in result:
+                result.append(text[:120])
+            if len(result) >= limit:
+                break
+        return result
+
+    @staticmethod
+    def _format_taunt_senders(names: list[str], support_count: int) -> str:
+        """Return the compact label shown beside today's work duration."""
+
+        clean = [str(name).strip()[:40] for name in names if str(name).strip()]
+        if not clean:
+            return "搭子"
+        if len(clean) == 1:
+            count = max(1, int(support_count or 1))
+            return f"{clean[0]}等{count}位搭子" if count > 1 else clean[0]
+        if len(clean) == 2:
+            return f"{clean[0]}和{clean[1]}"
+        return "、".join(clean[:-1]) + f"和{clean[-1]}"
+
+    def _apply_taunt_state(self, state: object) -> bool:
+        """Render the receiver's persistent taunt and return whether active."""
+
+        if not isinstance(state, dict) or "active" not in state:
+            # Older relays may omit the optional RPC.  Never clear a valid
+            # punishment merely because a compatibility response was sparse.
+            return self._taunt_active
+        active = bool(state.get("active"))
+        if active:
+            taunt_id = str(state.get("id") or state.get("taunt_id") or "")
+            is_new_taunt = not self._taunt_active or taunt_id != self._taunt_id
+            sender_names = self._taunt_text_list(
+                state.get("sender_display_names")
+                or state.get("sender_nicknames")
+                or state.get("taunter_nicknames")
+                or state.get("sender_names")
+            )
+            fallback_sender = str(
+                state.get("sender_display_name")
+                or state.get("private_note_name")
+                or state.get("sender_nickname")
+                or state.get("nickname")
+                or state.get("sender_name")
+                or "搭子"
+            ).strip()[:40]
+            if not sender_names and fallback_sender:
+                sender_names = [fallback_sender]
+            support_count = int(state.get("support_count") or len(sender_names) or 1)
+            sender = self._format_taunt_senders(sender_names, support_count)
+            raw_remaining = state.get("remaining_work_seconds")
+            if raw_remaining is not None:
+                try:
+                    self._taunt_remaining_work_seconds = max(0, int(raw_remaining))
+                except (TypeError, ValueError):
+                    pass
+            elif is_new_taunt:
+                self._taunt_remaining_work_seconds = 1200
+            self._taunt_countdown_last_tick = time.monotonic()
+            taunt_messages = self._taunt_text_list(
+                state.get("messages") or state.get("taunt_messages"),
+                limit=14,
+            )
+            self._taunt_active = True
+            self._taunt_id = taunt_id
+            self._taunt_sender_nickname = sender
+            self._taunt_sender_names = sender_names
+            self._taunt_message = str(state.get("message") or "怎么，今天准备靠意念完成？")[:120]
+            self._taunt_messages = taunt_messages
+            self._change_ambient_activity("taunt")
+            if sys.platform == "darwin":
+                self._apply_macos_window_behavior(self.visit_status_bubble)
+            # Keep this call compatible with older builds whose bubble only
+            # accepts the taunter nickname.  The server still carries the
+            # supporter count, while the compact bubble text remains stable.
+            self.visit_status_bubble.set_taunter(
+                sender,
+                support_count=support_count,
+                remaining_seconds=self._taunt_remaining_work_seconds,
+            )
+            if is_new_taunt:
+                self._taunt_chatter_last_message = self._taunt_message
+                self.show_speech(f"{sender}：{self._taunt_message}", 5200)
+                self._schedule_taunt_chatter()
+            elif not self.taunt_chatter_timer.isActive():
+                # Recover the periodic chatter after a sleep/resume or a
+                # transient timer reset without repeating the current line.
+                self._schedule_taunt_chatter()
+            self._position_visit_status_bubble()
+            self._raise_accessory(self.visit_status_bubble)
+            return True
+        if self._taunt_active:
+            self._taunt_active = False
+            self.taunt_chatter_timer.stop()
+            self._taunt_id = ""
+            self._taunt_sender_nickname = ""
+            self._taunt_sender_names = []
+            self._taunt_message = ""
+            self._taunt_messages = []
+            self._taunt_chatter_last_message = ""
+            self._taunt_remaining_work_seconds = 1200
+            self._taunt_countdown_last_tick = time.monotonic()
+            if self._ambient_activity == "taunt":
+                self._change_ambient_activity("none")
+            self.visit_status_bubble.hide()
+            if not detect_quiet_mode().blocked:
+                self.show_speech(random.choice((
+                    "行，20分钟到了，放你一马。",
+                    "这次算你还清了。",
+                    "嘲讽解除，勉强合格。",
+                    "赎身成功，下次别让我抓到。",
+                )), 5200)
+        return False
+
+    def _apply_encouragement_state(self, state: object) -> bool:
+        """Render the one-hour working encouragement from a buddy."""
+
+        if not isinstance(state, dict) or "active" not in state:
+            return self._encouragement_active
+        active = bool(state.get("active"))
+        if active:
+            encouragement_id = str(state.get("id") or state.get("encouragement_id") or "")
+            is_new_encouragement = not self._encouragement_active or encouragement_id != self._encouragement_id
+            sender = str(
+                state.get("sender_display_name")
+                or state.get("private_note_name")
+                or state.get("sender_nickname")
+                or state.get("nickname")
+                or "搭子"
+            ).strip()[:40]
+            self._encouragement_active = True
+            self._encouragement_id = encouragement_id
+            self._encouragement_sender_nickname = sender
+            self._encouragement_message = str(state.get("message") or "抓到一个真在干活的。")[:120]
+            # A redeemable taunt always wins. Keep the encouragement state in
+            # memory so it can appear after the debt is cleared, but never
+            # replace the taunt sprite, bubble, or ambient activity.
+            if self._taunt_active:
+                return False
+            self._change_ambient_activity("work-cheer")
+            self.visit_status_bubble.set_encourager(sender)
+            if is_new_encouragement:
+                self.show_speech(f"{sender}：{self._encouragement_message}", 5200)
+            self._position_visit_status_bubble()
+            self._raise_accessory(self.visit_status_bubble)
+            return True
+        if self._encouragement_active:
+            self._encouragement_active = False
+            self._encouragement_id = ""
+            self._encouragement_sender_nickname = ""
+            self._encouragement_message = ""
+            if self._ambient_activity == "work-cheer":
+                self._change_ambient_activity("computer" if self.work_timer.is_running else "none")
+            if not self._taunt_active:
+                self.visit_status_bubble.hide()
+        return False
+
+    @staticmethod
+    def _buddy_request_id(request: dict) -> str:
+        """Return a stable ID so one pending request cannot spam the pet."""
+
+        return str(
+            request.get("id")
+            or request.get("request_id")
+            or f"{request.get('sender_id') or request.get('user_id') or ''}:{request.get('created_at') or ''}"
+        ).strip()
+
+    def _enqueue_buddy_request_notice(self, request: object) -> None:
+        """Show a lightweight pet notification for a newly observed buddy request."""
+
+        if not isinstance(request, dict):
+            return
+        item = dict(request)
+        request_id = self._buddy_request_id(item)
+        if not request_id or request_id in self._seen_buddy_request_ids:
+            return
+        self._seen_buddy_request_ids.add(request_id)
+        nickname = social_pet_label(
+            item.get("owner_nickname")
+            or item.get("nickname")
+            or item.get("sender_nickname")
+            or "新搭子"
+        )
+        self._set_temporary_activity("pointing", 20_000)
+        self.show_speech(f"💌 {nickname} 发来搭子申请\n打开“互动”处理。", 7000)
+        if self._social_dialog is not None:
+            self._social_dialog._set_status(f"💌 {nickname} 发来搭子申请，请到“互动”处理。")
+
+    def _active_visits_after_startup(self, active: object) -> list[dict]:
+        """Ignore visits that were already active before this process started.
+
+        The server intentionally keeps accepted visits alive for a short
+        period so a heartbeat gap does not flicker.  That is useful during a
+        running session but should not resurrect a stale local companion
+        scene after the application is relaunched.
+        """
+
+        if not isinstance(active, list):
+            return []
+        fresh: list[dict] = []
+        for item in active:
+            if not isinstance(item, dict):
+                continue
+            started_text = (
+                item.get("responded_at")
+                or item.get("visit_started_at")
+                or item.get("created_at")
+            )
+            try:
+                started = datetime.fromisoformat(str(started_text).replace("Z", "+00:00"))
+                if started.tzinfo is None:
+                    started = started.astimezone()
+                if started >= self._process_started_at:
+                    fresh.append(dict(item))
+            except (TypeError, ValueError, OverflowError):
+                # Missing/invalid timestamps are treated as stale on startup;
+                # a later new event with a valid server timestamp can still
+                # open normally.
+                continue
+        return fresh
+
+    def _merge_remote_personal_state(self, data: dict) -> None:
+        """Merge same-account nickname, focus and outfit state from the server."""
+
+        if data.get("_sync_offline") or data.get("data_source") == "local_cache":
+            return
+        sync_metrics = data.get("_focus_sync_metrics")
+        record_sync_metrics = getattr(
+            self.focus_analytics, "record_focus_sync_metrics", None
+        )
+        if callable(record_sync_metrics):
+            record_sync_metrics(sync_metrics)
+        if isinstance(sync_metrics, dict) and any(
+            int(sync_metrics.get(key) or 0) > 0
+            for key in (
+                "delta_rpc_calls",
+                "integrity_rpc_calls",
+                "reconciliation_rpc_calls",
+            )
+        ):
+            lifecycle_log(
+                "focus.sync.metrics",
+                self,
+                delta_rpc_calls=max(0, int(sync_metrics.get("delta_rpc_calls") or 0)),
+                integrity_rpc_calls=max(
+                    0, int(sync_metrics.get("integrity_rpc_calls") or 0)
+                ),
+                reconciliation_rpc_calls=max(
+                    0, int(sync_metrics.get("reconciliation_rpc_calls") or 0)
+                ),
+                upload_rows=max(0, int(sync_metrics.get("upload_rows") or 0)),
+                returned_segment_rows=max(
+                    0, int(sync_metrics.get("returned_segment_rows") or 0)
+                ),
+                manifest_rows=max(0, int(sync_metrics.get("manifest_rows") or 0)),
+                request_bytes=max(0, int(sync_metrics.get("request_bytes") or 0)),
+                response_bytes=max(0, int(sync_metrics.get("response_bytes") or 0)),
+                manifest_bytes=max(0, int(sync_metrics.get("manifest_bytes") or 0)),
+                full_bootstrap_count=max(
+                    0, int(sync_metrics.get("full_bootstrap_count") or 0)
+                ),
+            )
+        profile = data.get("me") if isinstance(data, dict) else None
+        profile = profile if isinstance(profile, dict) else {}
+        user_id = self._current_social_user_id()
+        if user_id:
+            # NULL/empty owner_nickname is an intentional clear and must fall
+            # back to the account nickname only at render time.  Fall back to
+            # profile.nickname only for legacy payloads that omit the field.
+            remote_raw_nickname = (
+                profile.get("owner_nickname")
+                if "owner_nickname" in profile
+                else profile.get("nickname")
+            )
+            remote_nickname = clean_owner_nickname(remote_raw_nickname)
+            # An explicit rename is already being uploaded; do not let a
+            # stale in-flight dashboard response undo that local action.
+            if not self._owner_nickname_sync_inflight:
+                if remote_nickname != self._owner_nickname():
+                    self.settings.owner_nickname = remote_nickname
+                    self.settings.pet_name = PET_NAME
+                    save_settings(self.settings)
+                    self.owner_nickname_changed.emit(remote_nickname)
+                    if self._social_dialog is not None:
+                        self._social_dialog.set_owner_nickname(remote_nickname)
+                elif self._social_dialog is not None:
+                    self._social_dialog.set_owner_nickname(remote_nickname)
+            self._owner_nickname_remote_loaded_for = user_id
+        presence = data.get("me_presence") if isinstance(data, dict) else None
+        presence = presence if isinstance(presence, dict) else {}
+        # The personal-state RPC returns the server's merged values even when
+        # an older dashboard function omits the newer profile columns.  Prefer
+        # that response, then fall back to the dashboard/profile payload for
+        # compatibility with older relays.
+        personal_state = data.get("_personal_state") if isinstance(data, dict) else None
+        personal_state = personal_state if isinstance(personal_state, dict) else {}
+        remote_date = personal_state.get("focus_today_date")
+        if remote_date is None:
+            remote_date = profile.get("focus_today_date")
+        remote_today = personal_state.get("focus_today_seconds")
+        if remote_today is None:
+            remote_today = profile.get("focus_today_seconds")
+        if remote_today is None:
+            remote_today = presence.get("today_seconds")
+        remote_lifetime = personal_state.get("focus_lifetime_seconds")
+        if remote_lifetime is None:
+            remote_lifetime = profile.get("focus_lifetime_seconds")
+        if remote_date is not None or remote_today is not None or remote_lifetime is not None:
+            # Keep the timer's daily bucket strictly local.  The remote day
+            # value is retained in FocusAnalyticsStore as a cross-device
+            # fallback, but copying it into WorkTimer would make a stale
+            # server maximum indistinguishable from seconds actually worked
+            # on this computer.  Lifetime remains safe to merge because it is
+            # monotonic and is only used for account-wide outfit unlocks.
+            self.work_timer.merge_remote_state(
+                today_seconds=0,
+                lifetime_seconds=int(remote_lifetime or 0),
+                date_key=str(remote_date or datetime.now(BEIJING_TIMEZONE).date().isoformat()),
+            )
+
+        remote_week_start = personal_state.get("focus_week_start_date")
+        if remote_week_start is None:
+            remote_week_start = profile.get("focus_week_start_date")
+        remote_week_seconds = personal_state.get("focus_week_seconds")
+        if remote_week_seconds is None:
+            remote_week_seconds = profile.get("focus_week_seconds")
+        if remote_week_seconds is None:
+            remote_week_seconds = presence.get("week_seconds")
+        # ``lili_dashboard`` marks these fields as an effective projection.
+        # Cache that projection separately so this device can show the same
+        # account-wide value even before its delta cursor receives another
+        # device's sealed rows. Unmarked profile counters remain compatibility
+        # data and are not accepted here.
+        projection_source = str(
+            data.get("focus_totals_effective_source")
+            or profile.get("focus_totals_effective_source")
+            or data.get("focus_totals_source")
+            or profile.get("focus_totals_source")
+            or ""
+        ).strip()
+        effective_projection_changed = False
+        if projection_source in {
+            "canonical_interval_union",
+            "canonical_interval_union_legacy_floor",
+        }:
+            effective_today = profile.get("focus_today_seconds")
+            if effective_today is None:
+                effective_today = presence.get("today_seconds")
+            effective_week = profile.get("focus_week_seconds")
+            if effective_week is None:
+                effective_week = presence.get("week_seconds")
+            effective_projection_changed = bool(
+                self.focus_analytics.set_remote_effective_projection(
+                    focus_date=profile.get("focus_today_date") or remote_date,
+                    today_seconds=int(effective_today or 0),
+                    week_start=profile.get("focus_week_start_date") or remote_week_start,
+                    week_seconds=int(effective_week or 0),
+                )
+            )
+        analytics_changed = self.focus_analytics.merge_remote_state(
+            focus_date=str(remote_date or ""),
+            today_seconds=int(remote_today or 0),
+            lifetime_seconds=int(remote_lifetime or 0),
+            week_start=str(remote_week_start or ""),
+            week_seconds=int(remote_week_seconds or 0),
+        )
+        analytics_changed = bool(analytics_changed or effective_projection_changed)
+        history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        focus_segments_payload = data.get("_focus_segments")
+        merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)
+        merge_ok = False
+        merge_error = ""
+        segment_changed = False
+        merged_segment_count = 0
+        protocol_valid = bool(
+            isinstance(focus_segments_payload, dict)
+            and focus_segments_payload.get("_protocol_valid", True)
+        )
+        if isinstance(focus_segments_payload, dict) and not protocol_valid:
+            merge_error = str(
+                focus_segments_payload.get("_protocol_error")
+                or "focus_delta_protocol_invalid"
+            )[:120]
+        elif callable(merge_checked):
+            merge_ok, segment_changed, merged_segment_count = merge_checked(
+                focus_segments_payload
+            )
+        else:
+            merge_with_count = getattr(
+                self.focus_analytics, "merge_remote_segments_with_count", None
+            )
+            if callable(merge_with_count):
+                segment_changed, merged_segment_count = merge_with_count(focus_segments_payload)
+            else:
+                segment_changed = self.focus_analytics.merge_remote_segments(focus_segments_payload)
+                merged_segment_count = 0
+            merge_ok = True
+        if not merge_ok and focus_segments_payload is not None:
+            merge_error = merge_error or "payload_invalid_or_local_persist_failed"
+        uploaded_segments = (
+            focus_segments_payload.get("_uploaded_segments")
+            if isinstance(focus_segments_payload, dict)
+            else None
+        )
+        upload_ack_ok = bool(
+            isinstance(focus_segments_payload, dict)
+            and focus_segments_payload.get("_upload_ack_ok", not uploaded_segments)
+        )
+        transaction_ok = bool(merge_ok and upload_ack_ok)
+        # Capture this before the local ACK clears the handoff marker.  Only
+        # an actual sealed-fact handoff needs one follow-up inactive heartbeat;
+        # a normal empty/duplicate delta must not schedule another worker.
+        focus_handoff_pending_before_merge = bool(
+            self.focus_analytics.has_pending_focus_handoff()
+        )
+        if isinstance(uploaded_segments, list) and uploaded_segments and transaction_ok:
+            try:
+                self.focus_analytics.acknowledge_focus_segments_upload(uploaded_segments)
+            except Exception as exc:
+                # The upload already reached Supabase. A failed local ack is
+                # safe: the unchanged rows retry idempotently next cycle.
+                merge_error = merge_error or "upload_ack_persist_failed"
+                transaction_ok = False
+                LOGGER.warning("focus segment upload acknowledgement failed: %s", exc)
+        elif isinstance(uploaded_segments, list) and uploaded_segments and not transaction_ok:
+            # Keep the SHA batch dirty when the RPC returned but the local
+            # AccountFocusStore transaction did not validate/persist. The
+            # next delta retry is idempotent and prevents a local merge error
+            # from permanently hiding a sealed fact.
+            merge_error = merge_error or (
+                "upload_ack_missing_or_mismatch"
+                if merge_ok and not upload_ack_ok
+                else "upload_ack_deferred_merge_failed"
+            )
+        if transaction_ok and focus_handoff_pending_before_merge:
+            # The heartbeat worker skipped inactive presence while the
+            # handoff marker was pending. Send the normal inactive snapshot
+            # on the next coalesced tick after the local ACK is durable.
+            self._schedule_social_tick()
+        note_upload_result = getattr(
+            self.focus_analytics, "note_focus_segment_upload_result", None
+        )
+        if callable(note_upload_result):
+            upload_attempted_count = 0
+            if isinstance(sync_metrics, dict):
+                try:
+                    upload_attempted_count = max(
+                        0, int(sync_metrics.get("upload_rows") or 0)
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    upload_attempted_count = 0
+            if upload_attempted_count:
+                note_upload_result(
+                    attempted_count=upload_attempted_count,
+                    success=bool(transaction_ok),
+                )
+        # The delta cursor is transport state only.  Advance it after the
+        # complete raw-fact transaction has succeeded.  A malformed response,
+        # merge failure, or local cursor persistence failure remains retryable.
+        cursor_advanced = False
+        if (
+            transaction_ok
+            and isinstance(focus_segments_payload, dict)
+            and focus_segments_payload.get("_sync_mode") == "delta"
+            and isinstance(focus_segments_payload.get("segments"), list)
+            and focus_segments_payload.get("next_cursor")
+        ):
+            try:
+                cursor_advanced = bool(
+                    self.focus_analytics.set_focus_segments_sync_cursor(
+                        focus_segments_payload.get("next_cursor")
+                    )
+                )
+            except Exception as exc:
+                merge_error = "cursor_persist_failed"
+                LOGGER.warning("focus segment cursor persistence failed: %s", exc)
+        sync_diagnostics = (
+            focus_segments_payload.get("_sync_diagnostics")
+            if isinstance(focus_segments_payload, dict)
+            else None
+        )
+        if isinstance(sync_diagnostics, dict):
+            sync_diagnostics = dict(sync_diagnostics)
+            sync_diagnostics["merge_count"] = max(0, int(merged_segment_count or 0))
+            sync_diagnostics["cursor_after"] = str(
+                self.focus_analytics.focus_segments_sync_cursor() or ""
+            )
+            sync_diagnostics["sync_mode"] = str(sync_diagnostics.get("sync_mode") or "delta")
+            sync_diagnostics["device_id"] = str(sync_diagnostics.get("device_id") or "")
+            sync_diagnostics["duration_ms"] = float(sync_diagnostics.get("duration_ms") or 0)
+            sync_diagnostics["error"] = str(
+                merge_error or sync_diagnostics.get("error") or ""
+            )
+            lifecycle_log(
+                "focus.segment_sync.merge",
+                self,
+                cursor_before=str(sync_diagnostics.get("cursor_before") or ""),
+                upload_count=max(0, int(sync_diagnostics.get("upload_count") or 0)),
+                accepted_count=max(0, int(sync_diagnostics.get("accepted_count") or 0)),
+                returned_count=max(0, int(sync_diagnostics.get("returned_count") or 0)),
+                merge_count=max(0, int(merged_segment_count or 0)),
+                cursor_after=str(sync_diagnostics.get("cursor_after") or ""),
+                full_sync=bool(sync_diagnostics.get("full_sync")),
+                sync_mode=str(sync_diagnostics.get("sync_mode") or "delta"),
+                device_id=str(sync_diagnostics.get("device_id") or ""),
+                duration_ms=float(sync_diagnostics.get("duration_ms") or 0),
+                error=str(sync_diagnostics.get("error") or ""),
+                merge_ok=bool(merge_ok),
+                upload_ack_ok=bool(upload_ack_ok),
+                transaction_ok=bool(transaction_ok),
+                cursor_advanced=bool(cursor_advanced),
+                request_bytes=max(
+                    0, int(sync_diagnostics.get("request_bytes") or 0)
+                ),
+                response_bytes=max(
+                    0, int(sync_diagnostics.get("response_bytes") or 0)
+                ),
+            )
+        integrity_payload = data.get("_focus_segment_integrity") if isinstance(data, dict) else None
+        if integrity_payload is not None:
+            def audit_number(key: str, *, decimal: bool = False) -> int | float:
+                try:
+                    value = (
+                        integrity_payload.get(key) or 0
+                        if isinstance(integrity_payload, dict)
+                        else 0
+                    )
+                    return max(0.0, float(value)) if decimal else max(0, int(value))
+                except (TypeError, ValueError, OverflowError):
+                    return 0.0 if decimal else 0
+
+            audit_ok = False
+            requeued_count = 0
+            recovered_count = 0
+            audit_error = str(
+                integrity_payload.get("_error") or ""
+                if isinstance(integrity_payload, dict)
+                else "invalid_payload"
+            )
+            if isinstance(integrity_payload, dict) and not audit_error:
+                try:
+                    reconcile = getattr(
+                        self.focus_analytics,
+                        "apply_focus_segment_reconciliation_audit",
+                        None,
+                    )
+                    if callable(reconcile) and "missing_local_segments" in integrity_payload:
+                        audit_ok, requeued_count, recovered_count = reconcile(
+                            integrity_payload
+                        )
+                    else:
+                        audit_ok, requeued_count = self.focus_analytics.apply_focus_segment_integrity_audit(
+                            integrity_payload
+                        )
+                    if not audit_ok:
+                        audit_error = "payload_invalid_or_local_persist_failed"
+                except Exception as exc:
+                    audit_error = "audit_persist_failed"
+                    LOGGER.warning("focus segment integrity audit persistence failed: %s", exc)
+            lifecycle_log(
+                "focus.segment_integrity.audit",
+                self,
+                checked_count=audit_number("checked_count"),
+                present_count=audit_number("present_count"),
+                missing_count=audit_number("missing_count"),
+                requeued_count=max(0, int(requeued_count)),
+                recovered_count=max(0, int(recovered_count)),
+                server_total_count=audit_number("server_total_count"),
+                local_manifest_count=audit_number("checked_count"),
+                server_manifest_count=(
+                    len(integrity_payload.get("server_manifest") or [])
+                    if isinstance(integrity_payload, dict)
+                    and isinstance(integrity_payload.get("server_manifest"), list)
+                    else 0
+                ),
+                cloud_only_count=(
+                    len(integrity_payload.get("missing_local_segments") or [])
+                    if isinstance(integrity_payload, dict)
+                    and isinstance(integrity_payload.get("missing_local_segments"), list)
+                    else 0
+                ),
+                local_only_segment_ids=(
+                    [
+                        str(value)[:160]
+                        for value in (integrity_payload.get("missing_segment_ids") or [])[:100]
+                        if isinstance(value, str)
+                    ]
+                    if isinstance(integrity_payload, dict)
+                    else []
+                ),
+                cloud_only_segment_ids=(
+                    [
+                        str(item.get("segment_id") or "")[:160]
+                        for item in (integrity_payload.get("missing_local_segments") or [])[:100]
+                        if isinstance(item, dict) and item.get("segment_id")
+                    ]
+                    if isinstance(integrity_payload, dict)
+                    else []
+                ),
+                device_id=str(
+                    integrity_payload.get("_device_id") or ""
+                    if isinstance(integrity_payload, dict) else ""
+                ),
+                duration_ms=audit_number("_duration_ms", decimal=True),
+                error=audit_error,
+                success=bool(audit_ok),
+            )
+            if audit_ok and (requeued_count or recovered_count):
+                self._schedule_social_tick()
+        live_projection_payload = data.get("_focus_live_projection") if isinstance(data, dict) else None
+        live_projection_changed = False
+        if live_projection_payload is not None:
+            try:
+                live_segments = live_projection_rows(
+                    user_id,
+                    live_projection_payload,
+                    now=self.focus_analytics.current_time(),
+                )
+                live_projection_changed = bool(
+                    self.focus_analytics.set_live_projection_segments(live_segments)
+                )
+            except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
+                # A malformed live projection must never poison sealed facts;
+                # retain the last validated rows until the next heartbeat.
+                merge_error = merge_error or "live_projection_invalid"
+                LOGGER.warning("focus live projection ignored: %s", exc)
+        self._set_local_live_focus_projection()
+        # merge_remote_segments already reconciles derived caches and folds
+        # that result into its return value.  Avoid a second full-ledger scan
+        # on every dashboard response, which can starve the macOS event loop.
+        derived_changed = False
+        # Remote summary fields are compatibility/cache values and can change
+        # on every dashboard poll while an active session is ticking.  They
+        # must not invalidate the local raw-session projection every five
+        # seconds; raw history/segments or a derived reconciliation are the
+        # events that actually change the canonical projection.
+        if history_changed or segment_changed or derived_changed or live_projection_changed:
+            self._invalidate_focus_projection("remote_focus_reconciled")
+        local_day = self.focus_analytics.period_summary("day")
+        if (
+            bool(local_day.get("raw_period_evidence"))
+            and not self.work_timer.has_active_session
+        ):
+            self.work_timer.reconcile_today_seconds(
+                int(local_day.get("total_seconds", 0) or 0)
+            )
+        if (analytics_changed or history_changed or segment_changed or derived_changed or live_projection_changed) and self._social_dialog is not None:
+            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+
+        # The normal segment-sync response already contains the account's
+        # immutable intervals from every device.  Re-project only the two
+        # live display surfaces; all report/week/leaderboard paths stay on
+        # their existing projection functions.
+        self._refresh_cross_device_today_display(
+            data=data,
+            snapshot=self.focus_session.snapshot(include_projection=False),
+            source="remote_focus_segments",
+        )
+
+        if "outfit_key" not in profile and "outfit_key" not in personal_state:
+            return
+        remote_outfit_value = (
+            personal_state.get("outfit_key")
+            if "outfit_key" in personal_state
+            else profile.get("outfit_key")
+        )
+        remote_outfit = str(remote_outfit_value or "")[:60]
+        # A server profile that already contains the account-bound outfit is
+        # itself a durable ownership proof.  This repairs users whose login
+        # RPC result was missed by an older client.
+        if remote_outfit == LOGIN_REWARD_OUTFIT.key:
+            self._remember_login_reward_entitlement()
+        # Do not let a stale profile/dashboard response overwrite an explicit
+        # local selection while its durable sync is still in flight.  This is
+        # particularly important for the account-bound three-day login outfit
+        # on a second computer or an older relay that still returns the old
+        # profile value.
+        if self._personal_outfit_sync_pending:
+            return
+        if self._outfit_response_is_stale(remote_outfit):
+            return
+        allowed_outfits = {
+            item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        }
+        if self._login_reward_unlocked:
+            allowed_outfits.add(LOGIN_REWARD_OUTFIT.key)
+        if remote_outfit and remote_outfit not in allowed_outfits:
+            return
+        if remote_outfit == self.settings.equipped_outfit:
+            return
+        panel_was_visible = self._qt_object_is_alive(self._compact_todo_panel) and bool(
+            self._compact_todo_panel.isVisible()
+        )
+        self.settings.equipped_outfit = remote_outfit
+        save_settings(self.settings)
+        self.activity_transition_timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_step = self._activity_transition_steps
+        self._mask_cache.clear()
+        self._refresh_pixmap()
+        self._reflow_compact_todos_after_outfit(panel_was_visible)
+        if self._social_dialog is not None:
+            self._social_dialog.outfit_key = remote_outfit
+
+    @_guard_qt_callback
+    def _social_sync_failed(self, message: str) -> None:
+        """Keep the pet quiet while making an unavailable room understandable."""
+
+        if self._social_dialog is not None:
+            if self._social_dialog.current_room_id:
+                self._social_dialog._set_status(
+                    f"自习室暂时离线：{message}"
+                    "；六毛仍会本地计时，网络恢复后自动重试。"
+                )
+            elif self.focus_session.snapshot().is_running:
+                self._social_dialog._set_status(
+                    "本地专注已开始；你还没有加入自习室，搭子状态会在网络恢复后自动同步。"
+                )
+            else:
+                self._social_dialog._set_status(
+                    "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
+                )
+
+    def _social_account_state_changed(self, signed_in: bool) -> None:
+        """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
+
+        account_id = self._current_social_user_id() if signed_in else ""
+        self._switch_focus_account(account_id)
+        self._set_login_reward_account(account_id)
+        # A new account has its own presence metadata row.  Force one
+        # background context sync even when its room/outfit happens to match
+        # the account that was previously open in this process.
+        self._social_presence_context_signature = None
+        if self._social_dialog is not None:
+            # A room selected under another account is not an invitation for
+            # the new account to keep sending heartbeats into that room.
+            self._social_dialog.current_room_id = None
+            self._social_dialog._room_selection_explicit = False
+            self._social_dialog._room_refresh_pending = False
+
+        if not signed_in:
+            self._economy_sync_user_id = ""
+            self._social_presence_context_signature = None
+            self._personal_outfit_sync_pending = False
+            self._personal_outfit_sync_user_id = ""
+            self._personal_outfit_fence_key = ""
+            self._personal_outfit_fence_until = 0.0
+            return
+        if (
+            self._personal_outfit_sync_pending
+            and self._personal_outfit_sync_user_id
+            and self._personal_outfit_sync_user_id != account_id
+        ):
+            # A pending selection belongs to the account that made it.  Do
+            # not carry it across an explicit account switch.
+            self._personal_outfit_sync_pending = False
+            self._personal_outfit_sync_user_id = ""
+        self._economy_sync_user_id = ""
+        self._schedule_social_tick(immediate=True)
+
+    def _set_login_reward_account(self, account_id: str | None) -> None:
+        """Load the permanent login entitlement for the active account."""
+
+        clean = str(account_id or "").strip()
+        self._login_reward_account_id = clean
+        self._login_reward_store = LoginRewardStore(
+            clean,
+            persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+        )
+        self._login_reward_unlocked = self._login_reward_store.is_unlocked(
+            LOGIN_REWARD_KEY
+        ) or (
+            not clean
+            and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        )
+
+    def _remember_login_reward_entitlement(self) -> None:
+        """Cache an ownership proof returned by the account backend."""
+
+        account_id = self._current_social_user_id()
+        if not account_id:
+            return
+        if account_id != self._login_reward_account_id:
+            self._set_login_reward_account(account_id)
+        self._login_reward_store.grant(LOGIN_REWARD_KEY)
+        self._login_reward_unlocked = True
+
+    def _outfit_response_is_stale(self, remote_outfit: str) -> bool:
+        """Reject an older dashboard response after a local wardrobe choice."""
+
+        if time.monotonic() >= self._personal_outfit_fence_until:
+            return False
+        expected = self._personal_outfit_fence_key or self.settings.equipped_outfit
+        return str(remote_outfit or "") != str(expected or "")
+
+    def _login_streak_updated(self, result: dict) -> None:
+        """Reconcile a server login streak into a permanent wardrobe grant."""
+
+        if not isinstance(result, dict):
+            return
+        account_id = self._current_social_user_id()
+        if account_id != self._login_reward_account_id:
+            self._set_login_reward_account(account_id)
+        selected_reward = self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+        was_unlocked = self._login_reward_unlocked
+        days = login_streak_days(result)
+        payload_grants = login_reward_granted(result)
+        if payload_grants:
+            self._remember_login_reward_entitlement()
+        unlocked = self._login_reward_unlocked or payload_grants or (
+            not account_id and selected_reward
+        )
+        self._login_reward_unlocked = unlocked
+        newly_unlocked = bool(result.get("newly_unlocked")) or (
+            days >= 3 and not was_unlocked
+        )
+        if newly_unlocked and not was_unlocked:
+            self._set_temporary_activity("happy", 30_000)
+            self.show_speech(
+                "连续登录 3 天，已解锁「三日连登搭子」！\n"
+                "可以在“百变六毛”里穿上它。",
+                8200,
+            )
+        # A server profile may already contain the reward outfit when this
+        # result arrives. Re-render immediately so the account-bound outfit
+        # does not wait for the next passive social poll.
+        if unlocked and self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key:
+            self._refresh_pixmap()
+
+    def _current_social_user_id(self) -> str:
+        client = getattr(self, "social_client", None)
+        if client is None or not getattr(client, "signed_in", False):
+            return ""
+        return _session_user_id(client)
+
+    def _recover_persisted_focus_session(self) -> bool:
+        """Safely seal a saved running checkpoint before allowing new work.
+
+        ``WorkTimerModel`` never auto-resumes after a process restart.  It
+        leaves the last durable observed interval and its stable identity
+        available here.  The raw FocusSegment is written first; only after
+        that succeeds is the timer marked paused and eligible for explicit
+        user resume.
+        """
+
+        pending = getattr(self.work_timer, "pending_recovery_seal", None)
+        complete = getattr(self.work_timer, "complete_recovery_seal", None)
+        if not callable(pending) or not callable(complete):
+            return True
+        candidate = pending()
+        if candidate is None:
+            return True
+        total, session_id, started_at = candidate
+        recorded_before = self.work_timer.analytics_recorded_session_seconds()
+        self._recorded_focus_session_seconds = recorded_before
+        try:
+            if int(total) > recorded_before:
+                self._record_focus_segment(
+                    int(total),
+                    completed=False,
+                    session_id=str(session_id or ""),
+                    started_at=started_at,
+                )
+            if started_at is not None:
+                sealed_seconds = max(0, int(total) - int(recorded_before))
+                checkpoint_end = started_at + timedelta(seconds=sealed_seconds)
+                self.focus_analytics.pause_focus_session(at=checkpoint_end)
+            complete()
+            self._recorded_focus_session_seconds = 0
+            self._invalidate_focus_projection("focus_restart_safe_seal")
+            lifecycle_log(
+                "focus.session.restart_safe_seal",
+                self,
+                session_id=str(session_id or ""),
+                seconds=max(0, int(total)),
+            )
+            return True
+        except Exception:
+            LOGGER.exception("persisted FocusSession recovery seal failed")
+            lifecycle_log(
+                "focus.session.restart_safe_seal_failed",
+                self,
+                session_id=str(session_id or ""),
+                seconds=max(0, int(total)),
+            )
+            return False
+
+    def _run_focus_history_recovery(self, *, force: bool = False):
+        """Scan local exact intervals and enqueue recovered facts once."""
+
+        account_id = str(getattr(self, "_active_focus_account_id", "") or "").strip()
+        if not account_id:
+            return None
+        if not force and not bool(
+            getattr(self.settings, "auto_recover_focus_history", True)
+        ):
+            return None
+        device_id = str(getattr(self.focus_analytics, "_device_id", "") or "").strip()
+        scanner = FocusHistoryRecovery(
+            self.focus_analytics,
+            account_id=account_id,
+            device_id=device_id,
+            account_dir=self.focus_analytics.path.parent,
+        )
+        try:
+            report = scanner.run(force=force)
+        except Exception:
+            LOGGER.exception("focus history recovery scan failed")
+            lifecycle_log(
+                "focus.history_recovery.failed",
+                self,
+                account_id=account_id,
+                manual=bool(force),
+            )
+            return None
+        lifecycle_log(
+            "focus.history_recovery.complete",
+            self,
+            account_id=account_id,
+            manual=bool(force),
+            scanned=report.scanned,
+            recovered=report.recovered,
+            duplicates=report.duplicates,
+            skipped=report.skipped,
+            upload_pending=report.upload_pending,
+            skip_reasons=report.skip_reasons,
+        )
+        if report.recovered or report.upload_pending:
+            self._invalidate_focus_projection("focus_history_recovery")
+            self._schedule_social_tick(immediate=True)
+        return report
+
+    def _manual_focus_history_recovery(self, parent: QWidget | None = None) -> None:
+        report = self._run_focus_history_recovery(force=True)
+        if report is None:
+            QMessageBox.warning(parent or self, "历史专注恢复", "当前未登录，或本地扫描未能完成。")
+            return
+        reasons = "、".join(
+            f"{key} {value}条" for key, value in report.skip_reasons.items()
+        ) or "无"
+        QMessageBox.information(
+            parent or self,
+            "历史专注恢复",
+            f"已扫描 {report.scanned} 条，恢复 {report.recovered} 段，"
+            f"已存在/重复 {report.duplicates} 段，跳过 {report.skipped} 条。\n"
+            f"待上传 {report.upload_pending} 段；网络失败时会在下次同步继续。\n"
+            f"跳过原因：{reasons}",
+        )
+
+    def _switch_focus_account(self, account_id: str | None) -> None:
+        """在本地加载目标账号的计时与分析命名空间。"""
+
+        clean = str(account_id or "").strip()
+        if clean == self._active_focus_account_id:
+            self._recover_persisted_focus_session()
+            self._run_focus_history_recovery()
+            return
+        if self.work_timer.is_running:
+            # Account switching is a lifecycle handoff.  Do not let
+            # WorkTimerModel silently pause without first writing its raw
+            # FocusSegment through the shared owner pipeline.
+            self.pause_work_timer(reason="account_switch")
+        if hasattr(self, "_owner_nickname_remote_loaded_for"):
+            self._owner_nickname_remote_loaded_for = ""
+        self.focus_session.switch_account(clean or None)
+        self.focus_analytics.switch_account(clean or None)
+        device_id = presence_device_id(clean)
+        self.focus_analytics.set_device_id(device_id)
+        self.work_timer.set_device_id(device_id)
+        self._recover_persisted_focus_session()
+        self.daily_stats.switch_account(clean or None)
+        self.time_memory.switch_account(clean or None)
+        self._rebind_todo_surfaces_to_current_memory()
+        self.economy.switch_account(clean or None)
+        if hasattr(self, "_chat_memory"):
+            self._chat_memory.switch_account(clean or None)
+        if hasattr(self, "_chat_history"):
+            self._chat_history.switch_account(clean or None)
+        if hasattr(self, "offline_dialogue_manager"):
+            self.offline_dialogue_manager.local_context = self.time_memory.summary.context
+        if hasattr(self, "chat_manager"):
+            # TimeMemory rebuilds its coordinator objects when changing
+            # account; keep the chat fast-action path on the new namespace.
+            self.chat_manager.action_executor = self.time_memory.actions
+        self._active_focus_account_id = clean
+        self._run_focus_history_recovery()
+        self._clear_cross_device_today_display()
+        self._invalidate_focus_projection("account_switched")
+        self._recorded_focus_session_seconds = (
+            self.work_timer.analytics_recorded_session_seconds()
+        )
+        self._rewarded_focus_blocks = self._shared_today_focus_seconds() // 600
+        self._focus_quality_tracker.reset()
+        self._last_focus_quality = None
+        self._seen_buddy_request_ids.clear()
+        self._seen_visit_ids.clear()
+        self._handled_visit_ids.clear()
+        self._muted_buddy_ids.clear()
+
+    def _rebind_todo_surfaces_to_current_memory(self) -> None:
+        """Keep resident Todo windows on the same account namespace as the pet."""
+
+        panel = self._compact_todo_panel
+        if self._qt_object_is_alive(panel):
+            panel.memory = self.time_memory
+            panel.selected_task_id = str(self.time_memory.current_task_id or "")
+            lifecycle_log(
+                "todo.panel.rebind",
+                panel,
+                account_id=getattr(self.time_memory, "_account_id", ""),
+            )
+        if self._today_note_window is not None:
+            self._today_note_window.memory = self.time_memory
+            self._today_note_window.refresh()
+        if self._todo_center_window is not None:
+            self._todo_center_window.memory = self.time_memory
+            alarm_center = getattr(self._todo_center_window, "_alarm_center", None)
+            if alarm_center is not None:
+                alarm_center.alarms = self.time_memory.alarms
+                alarm_center.todos = list(self.time_memory.todos.items)
+                alarm_center.sound_library = self.time_memory.alarm_sounds
+            self._todo_center_window.refresh()
+        if self._time_memory_window is not None:
+            self._time_memory_window.memory = self.time_memory
+            self._time_memory_window.refresh()
+        # The application can create an empty hidden panel before a restored
+        # login session becomes available.  Rebinding the memory alone does
+        # not run the normal show/empty-state policy, so explicitly re-run the
+        # shared surface refresh after every account switch.  This also
+        # recreates the panel when no panel existed during anonymous startup.
+        self._refresh_todo_surfaces()
+
+    def _record_social_room_event(self, room_id: str, kind: str) -> None:
+        """Record a lifecycle event without blocking the desktop pet."""
+
+        if not self.social_client.signed_in:
+            return
+        thread = SocialEventThread(
+            self.social_client,
+            {"room_id": room_id, "kind": kind, "target_id": None, "message": ""},
+            self,
+        )
+        self._social_event_threads.append(thread)
+        thread.finished.connect(lambda: self._social_event_finished(thread), Qt.ConnectionType.QueuedConnection)
+        thread.start()
+
+    def _social_event_finished(self, thread: SocialEventThread) -> None:
+        if thread in self._social_event_threads:
+            self._social_event_threads.remove(thread)
+        thread.deleteLater()
+
+    def _social_room_changed(self, room_id: object) -> None:
+        """Bind room selection to the single local focus session."""
+
+        self.focus_session.set_room_id(str(room_id) if room_id else None)
+        if not room_id:
+            self._room_quick_status = ""
+            self._room_quick_status_expires_at = None
+        self._schedule_social_tick()
+
+    def _active_room_quick_status(self) -> str:
+        if self._room_quick_status_expires_at is not None and datetime.now().astimezone() >= self._room_quick_status_expires_at:
+            self._room_quick_status = ""
+            self._room_quick_status_expires_at = None
+        return self._room_quick_status
+
+    def _room_quick_action(self, action: str) -> None:
+        """Turn room action phrases into real local focus state changes."""
+
+        action = str(action).strip()
+        if action == "我也开工了":
+            self._room_quick_status = ""
+            self._room_quick_status_expires_at = None
+            self.start_work_timer()
+        elif action == "再卷 30 分钟":
+            self._room_quick_status = "再卷30分钟"
+            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=30)
+            if not self.work_timer.is_running:
+                self.start_work_timer()
+            elif self._social_dialog is not None:
+                self._social_dialog.set_room_quick_status(self._room_quick_status, self._room_quick_status_expires_at)
+        elif action == "去喝水":
+            self._room_quick_status = "去喝水"
+            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=10)
+            self.pause_work_timer()
+        else:
+            return
+        if self._social_dialog is not None:
+            self._social_dialog.set_room_quick_status(
+                self._active_room_quick_status(), self._room_quick_status_expires_at
+            )
+        self._schedule_social_tick()
+
+    def _schedule_social_tick(self, *, immediate: bool = False) -> None:
+        """Push work/room transitions promptly instead of waiting 30 seconds."""
+
+        if not self.social_client.signed_in:
+            return
+        timer = getattr(self, "social_sync_timer", None)
+        if timer is not None:
+            self._social_heartbeat_due = True
+            # Session start/pause/resume/finish must flush the raw facts on
+            # the next background sync, without putting that work in the
+            # transition callback itself.
+            self._social_personal_sync_due = True
+            timer.start(0 if immediate else 250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
-        visit_id = str(peer.get("id", ""))
+        if detect_quiet_mode().blocked:
+            return
+        if self._taunt_active:
+            return
+        # Active visits normally carry a database id.  Keep a deterministic
+        # fallback for older backend responses so a 30-second heartbeat does
+        # not repeatedly reopen a minimized visit window.
+        visit_id = str(
+            peer.get("id")
+            or peer.get("visit_id")
+            or f"{peer.get('user_id', '')}:{peer.get('visit_started_at', '')}:{peer.get('nickname', '')}"
+        )
         if visit_id and visit_id in self._shown_active_visit_ids:
             return
         if visit_id:
             self._shown_active_visit_ids.add(visit_id)
-        self._buddy_visit_window.show_peer(
-            peer,
-            self.settings.equipped_outfit,
-            self.work_timer.today_seconds(),
+        # A visit is a lightweight presence state. Keep the large historical
+        # two-pet window available for compatibility, but do not open it for
+        # ordinary room visits; the small label follows the pet instead.
+        self._buddy_visit_window.hide_visit()
+        nickname = str(
+            peer.get("private_note_name")
+            or peer.get("owner_nickname")
+            or peer.get("nickname")
+            or "搭子"
+        ).strip()
+        if sys.platform == "darwin":
+            self._apply_macos_window_behavior(self.visit_status_bubble)
+        self.visit_status_bubble.set_visitor(nickname)
+        self._position_visit_status_bubble()
+        self._raise_accessory(self.visit_status_bubble)
+
+    def _hide_buddy_visit(self) -> None:
+        """Hide the compact visit label after the server ends the visit."""
+
+        self.visit_status_bubble.hide()
+        self._buddy_visit_window.hide_visit()
+
+    @staticmethod
+    def _incoming_visit_id(event: dict) -> str:
+        return str(
+            event.get("id")
+            or event.get("visit_id")
+            or f"{event.get('sender_id') or event.get('user_id') or ''}:{event.get('created_at') or ''}:{event.get('kind') or ''}"
         )
 
-    def _social_thread_finished(self) -> None:
-        if self._social_thread is not None:
-            self._social_thread.deleteLater(); self._social_thread = None
+    def _enqueue_incoming_visit_notice(self, event: dict) -> None:
+        """Show each new pending interaction once and queue simultaneous ones."""
+
+        if not isinstance(event, dict):
+            return
+        event = dict(event)
+        event_id = self._incoming_visit_id(event)
+        if not event_id or event_id in self._seen_visit_ids:
+            return
+        self._seen_visit_ids.add(event_id)
+        self._set_temporary_activity("pointing", 20_000)
+        if self._incoming_visit_notice is not None:
+            if all(self._incoming_visit_id(item) != event_id for item in self._incoming_visit_queue):
+                self._incoming_visit_queue.append(event)
+            return
+        self._present_incoming_visit_notice(event)
+
+    def _present_incoming_visit_notice(self, event: dict) -> None:
+        notice = IncomingVisitNotice(event, self)
+        self._incoming_visit_notice = notice
+        notice.accept_requested.connect(self._accept_incoming_visit)
+        notice.reject_requested.connect(self._reject_incoming_visit)
+        notice.later_requested.connect(self._defer_incoming_visit)
+        notice.show()
+        notice.raise_()
+        notice.activateWindow()
+
+    def _finish_incoming_visit_notice(self, event: dict) -> None:
+        event_id = self._incoming_visit_id(event)
+        if event_id:
+            self._handled_visit_ids.add(event_id)
+        notice = self._incoming_visit_notice
+        if notice is None:
+            return
+        current_id = self._incoming_visit_id(notice._event_payload)
+        if event_id and current_id and current_id != event_id:
+            return
+        self._incoming_visit_notice = None
+        notice.hide()
+        notice.deleteLater()
+        self._incoming_visit_queue = [
+            item for item in self._incoming_visit_queue
+            if self._incoming_visit_id(item) != event_id
+        ]
+        if self._incoming_visit_queue:
+            self._present_incoming_visit_notice(self._incoming_visit_queue.pop(0))
+
+    def _defer_incoming_visit(self, event: dict) -> None:
+        self._finish_incoming_visit_notice(event)
+
+    def _accept_incoming_visit(self, event: dict) -> None:
+        self._respond_to_incoming_visit(event, True)
+
+    def _reject_incoming_visit(self, event: dict) -> None:
+        self._respond_to_incoming_visit(event, False)
+
+    def _respond_to_incoming_visit(self, event: dict, accept: bool) -> None:
+        notice = self._incoming_visit_notice
+        if notice is None:
+            return
+        notice.set_busy(True, "正在接受…" if accept else "正在拒绝…")
+        thread = SocialVisitResponseThread(self.social_client, event, accept, self)
+        self._incoming_visit_response_threads.append(thread)
+        thread.completed.connect(self._incoming_visit_response_completed)
+        thread.failed.connect(self._incoming_visit_response_failed)
+        thread.finished.connect(lambda current=thread: self._incoming_visit_response_finished(current), Qt.ConnectionType.QueuedConnection)
+        thread.start()
+
+    @_guard_qt_callback
+    def _incoming_visit_response_completed(self, event: dict, accepted: bool) -> None:
+        self._finish_incoming_visit_notice(event)
+        nickname = str(event.get("owner_nickname") or event.get("nickname") or "搭子")
+        if accepted:
+            kind = str(event.get("kind") or "visit")
+            if kind.startswith("food_"):
+                self._handle_food_interaction_accepted(event)
+            else:
+                self._show_buddy_visit(event)
+            self.show_speech(f"已接受 {nickname} 的互动。", 4200)
+        else:
+            self.show_speech(f"已拒绝 {nickname} 的互动。", 3200)
+        self._schedule_social_tick()
+
+    @_guard_qt_callback
+    def _incoming_visit_response_failed(self, event: dict, message: str) -> None:
+        notice = self._incoming_visit_notice
+        expired_or_already_handled = any(
+            marker in str(message)
+            for marker in ("已过期", "已处理", "无权处理", "不存在")
+        )
+        if expired_or_already_handled:
+            # A stale pending row should not pin a desktop notification
+            # forever after the server has already invalidated it.
+            self._finish_incoming_visit_notice(event)
+        elif notice is not None and self._incoming_visit_id(notice._event_payload) == self._incoming_visit_id(event):
+            notice.set_busy(False)
+        self.show_speech(f"处理互动失败：{message[:120]}", 5200)
+
+    @_guard_qt_callback
+    def _incoming_visit_response_finished(self, thread: SocialVisitResponseThread) -> None:
+        if thread in self._incoming_visit_response_threads:
+            self._incoming_visit_response_threads.remove(thread)
+        thread.deleteLater()
+
+    @_guard_qt_callback
+    def _social_thread_finished(self, thread: SocialSyncThread) -> None:
+        lifecycle_log("social_sync_thread.finished", thread)
+        if self._social_thread is thread:
+            self._social_thread = None
+        thread.deleteLater()
+        # A pause/finish can occur while the previous dashboard worker is in
+        # flight. In that case the due flag intentionally stays set; re-arm
+        # the coalesced timer so a sealed Mac/Windows segment is not stranded
+        # until unrelated future UI activity.
+        if self._social_personal_sync_due or self._social_heartbeat_due:
+            timer = getattr(self, "social_sync_timer", None)
+            if timer is not None and self.social_client.signed_in:
+                timer.start(250)
 
     def set_automatic_grumbling(self, enabled: bool) -> None:
         """启用或停用只在本机生成的间歇牢骚。"""
@@ -1746,6 +8394,337 @@ class PetWindow(QWidget):
         self._schedule_ambient()
         self.show_speech("偶尔发牢骚已开启。" if enabled else "偶尔发牢骚已关闭。", 3000)
 
+    def set_work_duration_display(self, enabled: bool) -> None:
+        """Persist whether the floating work-control bubble shows live duration."""
+
+        self.settings.show_work_duration = bool(enabled)
+        save_settings(self.settings)
+        self.work_controls.set_duration_visible(self.settings.show_work_duration)
+        self._update_work_duration_bubble()
+        self.show_speech(
+            "本轮工作时长显示已开启。" if enabled else "本轮工作时长显示已关闭。",
+            3000,
+        )
+
+    def _local_burst_anchor(self) -> QRect:
+        """Return the visible character body in global logical coordinates."""
+
+        return QRect(self.label.mapToGlobal(QPoint(0, 0)), self.label.size())
+
+    def _local_burst_exclusions(self) -> tuple[EffectExclusionRegion, ...]:
+        """Protect only visible accessory surfaces from local effects.
+
+        In particular, the work-duration bubble exposes its painted capsule;
+        its top-level widget/frame may contain transparent layout/native
+        padding and must never become an invisible rectangular effect hole.
+        """
+
+        exclusions: list[EffectExclusionRegion] = []
+        for widget in (
+            self.work_duration_bubble,
+            self.speech_bubble,
+            self.work_controls,
+            self.coffee_scene_prompt,
+            self.visit_status_bubble,
+        ):
+            try:
+                if widget.isVisible():
+                    if widget is self.work_duration_bubble:
+                        pill_rect = widget.visual_pill_global_rect()
+                        if not pill_rect.isEmpty():
+                            exclusions.append(
+                                EffectExclusionRegion.from_rect(
+                                    pill_rect,
+                                    radius=widget.visual_pill_radius(),
+                                )
+                            )
+                    else:
+                        rect = widget.frameGeometry()
+                        if not rect.isEmpty():
+                            exclusions.append(EffectExclusionRegion.from_rect(QRectF(rect)))
+            except RuntimeError:
+                continue
+        return tuple(exclusions)
+
+    def _position_local_burst_effect(self) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None or not effect.active:
+            return
+        effect.reposition(self._local_burst_anchor(), self._local_burst_exclusions())
+
+    def _raise_local_effect_accessories(self) -> None:
+        """Keep the pet and its readable bubbles above the local effect."""
+
+        self._raise_accessory(self)
+        for widget in (
+            self.work_duration_bubble,
+            self.speech_bubble,
+            self.work_controls,
+            self.visit_status_bubble,
+        ):
+            if widget.isVisible():
+                self._raise_accessory(widget)
+
+    def _start_managed_local_effect(self, kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None or self._fullscreen_hidden or self._manually_hidden:
+            return
+        try:
+            effect.begin_managed(
+                kind,
+                self._local_burst_anchor(),
+                self._local_burst_exclusions(),
+                always_on_top=bool(self.settings.always_on_top),
+                show_window=False,
+            )
+            self._show_nonactivating(
+                effect,
+                always_on_top=bool(self.settings.always_on_top),
+            )
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] managed effect start failed")
+            effect.stop()
+
+    def _switch_managed_local_effect(self, kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        try:
+            effect.switch_managed(kind)
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] managed effect switch failed")
+            effect.stop()
+
+    def _update_color_mist_world_local_effect(
+        self,
+        current: LocalEffectKind,
+        following: LocalEffectKind,
+        mix: float,
+        phase: float,
+    ) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        try:
+            effect.set_color_mist_world_frame(current, following, mix, phase=phase)
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] color mist world frame update failed")
+            effect.stop()
+
+    def _resume_managed_local_effect(self, kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        try:
+            effect.resume_managed(kind)
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] resume after color mist world failed")
+            effect.stop()
+
+    def _sustain_managed_local_effect(self, _kind: LocalEffectKind) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None:
+            effect.set_sustain()
+
+    def _release_managed_local_effect(self, _kind: LocalEffectKind, duration_ms: int) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None:
+            effect.release(duration_ms)
+
+    def _stop_managed_local_effect(self) -> None:
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None and effect.active:
+            effect.stop()
+
+    def _local_effect_tick(self, now: float) -> None:
+        """Advance policy from the existing local effect timer only."""
+
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.tick(now)
+
+    def _local_effect_finished(self) -> None:
+        manager = getattr(self, "_local_effect_manager", None)
+        effect = getattr(self, "_local_burst_effect", None)
+        if manager is not None and (effect is None or effect.managed):
+            manager.finished()
+        elif manager is not None and bool(getattr(self.settings, "state_effects_enabled", True)):
+            # A manual developer preview temporarily owns the same reusable
+            # window. Restore the current PetState projection after it ends,
+            # without changing that PetState itself.
+            self._sync_state_effect()
+
+    def _sync_state_effect(self) -> None:
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is None:
+            return
+        manager.set_duration_profile(
+            getattr(self.settings, "state_effect_duration", "standard")
+        )
+        manager.set_enabled(
+            bool(getattr(self.settings, "state_effects_enabled", True))
+        )
+        if bool(getattr(self.settings, "state_effects_enabled", True)):
+            manager.request_state(self._resolve_local_work_effect())
+
+    def _resolve_local_work_effect(self) -> LocalEffectKind:
+        """Return the explicit work lifecycle color, never a random PetState."""
+
+        if self.work_timer.is_running:
+            return resolve_work_effect(
+                "focus",
+                focus_blue_enabled=bool(
+                    getattr(self.settings, "focus_blue_effect_enabled", True)
+                ),
+            )
+        if self.work_timer.has_active_session:
+            if self.work_timer.pause_reason in {
+                "idle",
+                AUTO_PAUSE_IDLE,
+                AUTO_PAUSE_LOCK,
+                AUTO_PAUSE_DISPLAY_OFF,
+                AUTO_PAUSE_SLEEP,
+                "fullscreen_video",
+                "video",
+            }:
+                # The user is away or the display/session is unavailable;
+                # don't keep a sustained rest aura rendering off-screen.
+                return resolve_work_effect("none")
+            return resolve_work_effect("rest")
+        return resolve_work_effect("none")
+
+    def _request_local_effect_event(self, kind: LocalEffectKind | str) -> None:
+        """Dispatch a semantic event through the one reusable manager."""
+
+        if not bool(getattr(self.settings, "state_effects_enabled", True)):
+            return
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.request_event(normalize_effect_kind(kind))
+
+    def _start_color_mist_world(self) -> bool:
+        """Start the local double-right-click easter egg without touching app state."""
+
+        if not bool(getattr(self.settings, "color_mist_world_enabled", True)):
+            return False
+        if not bool(getattr(self.settings, "state_effects_enabled", True)):
+            return False
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            return bool(manager.start_color_mist_world())
+        return False
+
+    def _toggle_color_mist_world(self) -> bool:
+        """Use the hidden double-right-click gesture as an on/off toggle."""
+
+        if not bool(getattr(self.settings, "color_mist_world_enabled", True)):
+            return False
+        if not bool(getattr(self.settings, "state_effects_enabled", True)):
+            return False
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is None:
+            return False
+        return bool(manager.toggle_color_mist_world())
+
+    def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
+        self.settings.state_effects_enabled = bool(enabled)
+        self._sync_state_effect()
+        if persist:
+            save_settings(self.settings)
+
+    def set_state_effect_duration(self, value: str, *, persist: bool = True) -> None:
+        normalized = str(value or "standard").strip().casefold()
+        if normalized not in {"short", "standard", "long"}:
+            normalized = "standard"
+        self.settings.state_effect_duration = normalized
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.set_duration_profile(normalized)
+        if persist:
+            save_settings(self.settings)
+
+    def set_focus_blue_effect_enabled(
+        self, enabled: bool, *, persist: bool = True
+    ) -> None:
+        """Toggle only the normal focus-state blue effect."""
+
+        self.settings.focus_blue_effect_enabled = bool(enabled)
+        self._sync_state_effect()
+        if persist:
+            save_settings(self.settings)
+
+    def trigger_local_effect(self, kind: LocalEffectKind | str) -> None:
+        """Developer/manual one-shot effect; never changes PetState."""
+
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is None:
+            return
+        self._record_user_interaction()
+        try:
+            if self._fullscreen_hidden or self._manually_hidden:
+                return
+            manager = getattr(self, "_local_effect_manager", None)
+            if manager is not None:
+                manager.force_stop()
+            effect.trigger(
+                self._local_burst_anchor(),
+                self._local_burst_exclusions(),
+                kind=normalize_effect_kind(kind),
+                always_on_top=bool(self.settings.always_on_top),
+                show_window=False,
+                managed=False,
+            )
+            self._show_nonactivating(
+                effect,
+                always_on_top=bool(self.settings.always_on_top),
+            )
+            self._raise_local_effect_accessories()
+        except Exception:
+            LOGGER.exception("[LocalEffect] manual effect trigger failed")
+
+    def trigger_red_burst(self) -> None:
+        """Backward-compatible red test command."""
+
+        self.trigger_local_effect(LocalEffectKind.RED)
+
+    def trigger_gold_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.GOLD)
+
+    def trigger_blue_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.BLUE)
+
+    def trigger_purple_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.PURPLE)
+
+    def trigger_green_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.GREEN)
+
+    def trigger_cyan_effect(self) -> None:
+        self.trigger_local_effect(LocalEffectKind.CYAN)
+
+    def trigger_color_mist_world(self) -> None:
+        """Developer menu entry for the same reusable color-mist timeline."""
+
+        self._start_color_mist_world()
+
+    def stop_red_burst(self) -> None:
+        """Stop the reusable local effect window without changing pet state."""
+
+        effect = getattr(self, "_local_burst_effect", None)
+        if effect is not None:
+            effect.stop()
+
+    def stop_local_effect(self) -> None:
+        manager = getattr(self, "_local_effect_manager", None)
+        if manager is not None:
+            manager.force_stop()
+        else:
+            self.stop_red_burst()
+
     def set_hourly_announcement(self, enabled: bool) -> None:
         """启用或停用整点报时。"""
 
@@ -1754,8 +8733,13 @@ class PetWindow(QWidget):
         save_settings(self.settings)
         self.show_speech("整点报时已开启。" if enabled else "整点报时已关闭。", 3200)
 
+    @_guard_qt_callback
     def _app_awareness_tick(self) -> None:
         """只根据前台应用类别切换配饰动作，不读取标题或文档内容。"""
+
+        category = active_application_category()
+        if self.work_timer.is_running:
+            self._focus_quality_tracker.note_application_switch(category)
 
         if (
             not self.settings.app_awareness
@@ -1763,14 +8747,49 @@ class PetWindow(QWidget):
             or time.monotonic() < self._manual_activity_until
         ):
             return
-        category = active_application_category()
         if category == self._last_app_category:
             return
         self._last_app_category = category
-        mapping = {"music": "headphones", "office": "work-study", "coding": "deep-focus", "reading": "night-reading"}
+        mapping = {"music": "headphones", "office": "computer", "coding": "computer", "reading": "night-reading"}
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
+        """兼容旧调用：统一转到浏览器歌手主页，不再随机唤起播放器。"""
+
+        return self.open_chen_artist_page()
+
+    def open_music_collection(self) -> str:
+        """兼容旧调用：保留方法名，但行为与新入口完全一致。"""
+
+        return self.open_chen_artist_page()
+
+    def open_chen_artist_page(self) -> str:
+        """按手动选择或 MP3 默认关联，用系统浏览器打开陈楚生主页。"""
+
+        launch = launch_chen_artist_page(self.settings)
+        label = ARTIST_MUSIC_SERVICE_LABELS.get(launch.service, launch.service)
+        if launch.success:
+            suffix = "（自动识别）" if launch.used_auto_detection else ""
+            self.show_speech(f"已打开{label} · 陈楚生{suffix}", 3200)
+        else:
+            self.show_speech("暂时没能打开音乐网页，请确认系统浏览器可用。", 3600)
+        return "听陈楚生"
+
+    def set_artist_music_service(self, service: str) -> None:
+        """Persist the platform used by the browser-based artist shortcut."""
+
+        value = str(service or "auto").strip().casefold()
+        if value not in {"auto", "netease", "qq", "apple", "kugou", "qishui"}:
+            value = "auto"
+        self.settings.artist_music_service = value
+        save_settings(self.settings)
+        self.quick_panel.set_artist_music_service(value)
+        self.show_speech(
+            f"听陈楚生已设为{ARTIST_MUSIC_SERVICE_LABELS.get(value, '跟随系统默认')}。",
+            2600,
+        )
+
+    def _play_random_song_legacy(self) -> str:
         """从搜索结果中的陈楚生歌曲行随机选择，再执行播放与媒体校验。"""
 
         if self.music_controller.play_song("", "陈楚生", random_artist=True):
@@ -1780,7 +8799,7 @@ class PetWindow(QWidget):
         return "陈楚生随机歌曲"
 
     def control_music(self, action: str) -> bool:
-        """异步控制当前选择的播放器，不启动应用也不抢夺输入焦点。"""
+        """异步控制刚才真正开始播放的 Provider，不重新选择其他播放器。"""
 
         if self.music_controller.perform(action):
             self.show_speech("正在连接系统播放器…", 2200)
@@ -1789,13 +8808,49 @@ class PetWindow(QWidget):
         return False
 
     def _music_control_result(self, result: MusicControlResult | SongPlaybackResult) -> None:
-        """只展示系统控制层返回的真实结果和能力等级。"""
+        """只在用户操作完成后给出轻量反馈，不显示歌曲或 Now Playing 状态。"""
 
         is_status = isinstance(result, MusicControlResult) and result.action == "status"
-        if result.success and not is_status:
+        if isinstance(result, MusicControlResult):
+            track_artist = result.status.track.artist if result.status.track else ""
+            track_title = result.status.track.title if result.status.track else ""
+        else:
+            track_artist = result.current_artist
+            track_title = result.current_title
+        family_music = family_music_mode(track_artist, track_title)
+        if family_music:
+            # 听到爹的歌时让六毛先听歌，暂时减少普通主动打扰。
+            self._show_emotion(PetState.SIT, 2400)
+            self._set_temporary_activity("headphones", 120_000)
+            self._manual_activity_until = time.monotonic() + 120
+        if result.success and not is_status and not family_music:
             self._change_ambient_activity("headphones")
             self._manual_activity_until = time.monotonic() + 45
-        self.show_speech(result.message, 6200)
+        if isinstance(result, SongPlaybackResult):
+            save_settings(self.settings)
+        if result.success:
+            if isinstance(result, SongPlaybackResult):
+                feedback = result.message or "给你挑了一首歌♪"
+            else:
+                feedback = {
+                    "toggle": "播放状态已切换。",
+                    "previous": "已切换到上一首。",
+                    "next": "已切换到下一首。",
+                }.get(result.action, "音乐操作已完成。")
+        else:
+            # 失败时也只反馈本次操作，避免把播放器返回的歌曲名、媒体状态或
+            # Now Playing 文案重新带回六毛气泡。音乐面板是控制入口，不是状态面板。
+            if isinstance(result, SongPlaybackResult):
+                feedback = "随机播放暂时没有成功，请确认播放器可用。"
+            else:
+                feedback = {
+                    "toggle": "播放/暂停暂时无法执行。",
+                    "previous": "上一首暂时无法执行。",
+                    "next": "下一首暂时无法执行。",
+                    "play": "播放暂时无法执行。",
+                    "pause": "暂停暂时无法执行。",
+                }.get(result.action, "音乐操作暂时无法执行。")
+        self.show_speech(feedback, 3200 if result.success else 4200)
 
     def set_activity(self, activity: str) -> None:
         """手动选择修正版动作表中的任意完整动作。"""
@@ -1807,22 +8862,95 @@ class PetWindow(QWidget):
         """装备已解锁娃衣；空字符串恢复经典外观。"""
 
         allowed = {item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())}
+        if self._login_reward_unlocked:
+            allowed.add(LOGIN_REWARD_OUTFIT.key)
         if outfit_key and outfit_key not in allowed:
-            self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
+            if outfit_key == LOGIN_REWARD_OUTFIT.key:
+                self.show_speech("连续登录 3 天后，这套娃衣就会解锁。", 5200)
+            else:
+                self.show_speech("这套娃衣还在秘密王国里，再累计工作一小时就更近一点。", 5200)
             return
+        panel_was_visible = self._qt_object_is_alive(self._compact_todo_panel) and bool(
+            self._compact_todo_panel.isVisible()
+        )
         self.settings.equipped_outfit = outfit_key
         save_settings(self.settings)
-        self._mask_cache.clear(); self._refresh_pixmap()
-        label = next((item.name for item in OUTFITS if item.key == outfit_key), "经典六毛")
+        self._personal_outfit_sync_pending = True
+        self._personal_outfit_sync_user_id = self._current_social_user_id()
+        # Heartbeats can complete out of order. Keep a short fence even after
+        # the selected key is echoed once, so an older in-flight response
+        # cannot put the previous outfit back on the pet.
+        self._personal_outfit_fence_key = outfit_key
+        self._personal_outfit_fence_until = time.monotonic() + 60.0
+        if self._social_dialog is not None:
+            # The social window keeps a local member projection.  Update it in
+            # the same UI turn so it cannot repaint the previous outfit before
+            # the next heartbeat confirms the durable profile write.
+            self._social_dialog.outfit_key = outfit_key
+        # Cancel a half-finished action cross-fade so the newly selected outfit
+        # is visible immediately, even while a transient work action is ending.
+        self.activity_transition_timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_step = self._activity_transition_steps
+        self._mask_cache.clear()
+        self._refresh_pixmap()
+        self._reflow_compact_todos_after_outfit(panel_was_visible)
+        self.update()
+        label = next((item.name for item in ALL_OUTFITS if item.key == outfit_key), "经典六毛")
         self.show_speech(f"已换上：{label}。", 3200)
 
     def open_size_control(self) -> None:
         """打开连续尺寸滑块并实时应用，不改变不同动作之间的比例。"""
 
-        dialog = SizeControlDialog(self.settings.display_height, self)
+        dialog = SizeControlDialog(self.settings.display_height, self, self._pet_name())
         dialog.value_changed.connect(self.set_display_height)
         dialog.exec()
         save_settings(self.settings)
+
+    def _populate_outfit_menu(self, menu: QMenu, *, default_label: str) -> None:
+        """Populate an outfit submenu so pet and full menus share one selector."""
+
+        classic = menu.addAction(default_label)
+        classic.setCheckable(True)
+        classic.setChecked(not self.settings.equipped_outfit)
+        classic.triggered.connect(lambda: self.equip_outfit(""))
+        menu.addSeparator()
+        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        unlocked_keys = {item.key for item in unlocked}
+        if self._login_reward_unlocked:
+            unlocked_keys.add(LOGIN_REWARD_OUTFIT.key)
+        for outfit in ALL_OUTFITS:
+            action = menu.addAction(outfit.name)
+            available = outfit.key in unlocked_keys
+            action.setEnabled(available)
+            action.setCheckable(True)
+            action.setChecked(outfit.key == self.settings.equipped_outfit)
+            if outfit.key == LOGIN_REWARD_OUTFIT.key and not available:
+                action.setToolTip("连续登录 3 天后解锁")
+            if available:
+                action.triggered.connect(
+                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
+                )
+
+    def show_outfit_menu(self) -> None:
+        """Open the outfit selector from the shared menu without duplicating menus."""
+
+        menu = QMenu(self)
+        self._populate_outfit_menu(menu, default_label=f"经典{self._pet_name()}")
+        menu.exec(QCursor.pos())
+
+    def _populate_pet_companion_menu(self, menu: QMenu) -> None:
+        """Keep direct affection actions here; food is a separate scenario entry."""
+
+        for label, action_key in (
+            ("给我一个抱抱", "love"),
+            ("为我加油", "encourage"),
+            ("提醒我休息", "rest"),
+        ):
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, key=action_key: self.perform_companion_action(key)
+            )
 
     def _position_floating_panel(self, panel: QWidget) -> None:
         """把快捷面板放在宠物旁边并限制在当前屏幕可见区域。"""
@@ -1838,31 +8966,514 @@ class PetWindow(QWidget):
             y = min(max(y, area.top()), area.bottom() - panel.height() + 1)
         panel.move(x, y)
 
+    def _position_quick_panel(self) -> None:
+        """Place the icon dock at a fixed point above the pet's head.
+
+        Keep the dock horizontally centered on the pet. Side placement made
+        the shortcut icons cover unrelated desktop content, especially on
+        macOS at the lower-right screen edge. Only switch to below-the-head
+        placement when the top edge genuinely has no room; never choose a
+        left/right candidate based on another accessory's geometry.
+        """
+
+        panel = self.quick_panel
+        panel.adjustSize()
+        area = self._screen_geometry()
+        gap = 12
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        center_x = self.x() + (self.width() - panel.width()) // 2
+        upper_y = self.y() - panel.height() - gap
+        below_y = self.y() + self.height() + gap
+        candidates = (
+            QRect(center_x, upper_y, panel.width(), panel.height()),
+            QRect(center_x, below_y, panel.width(), panel.height()),
+        )
+        chosen = next(
+            (
+                candidate
+                for candidate in candidates
+                if (area is None or area.contains(candidate))
+                and not candidate.intersects(pet_rect)
+            ),
+            candidates[0],
+        )
+        if area is not None:
+            chosen = QRect(
+                min(max(chosen.x(), area.left()), area.right() - panel.width() + 1),
+                min(max(chosen.y(), area.top()), area.bottom() - panel.height() + 1),
+                panel.width(),
+                panel.height(),
+            )
+        panel.move(chosen.topLeft())
+        panel.position_report_button()
+
+    def _position_work_controls(self) -> None:
+        """Keep the right-click work controls above the pet with edge fallback."""
+
+        panel = self.work_controls
+        panel.adjustSize()
+        area = self._screen_geometry()
+        gap = 10
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        blocked = [pet_rect]
+        for accessory in (self._compact_todo_panel, self.speech_bubble, self.quick_panel):
+            if accessory is not None and accessory.isVisible():
+                blocked.append(accessory.geometry())
+        center_x = self.x() + (self.width() - panel.width()) // 2
+        candidates = [
+            (center_x, self.y() - panel.height() - gap),
+            (center_x, self.y() + self.height() + gap),
+            (self.x() - panel.width() - gap, self.y() + self.height() - panel.height()),
+            (self.x() + self.width() + gap, self.y() + self.height() - panel.height()),
+        ]
+        chosen = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if any(candidate.intersects(item) for item in blocked):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            candidate_x, candidate_y = candidates[0]
+            if area is not None:
+                candidate_x = min(max(candidate_x, area.left()), area.right() - panel.width() + 1)
+                candidate_y = min(max(candidate_y, area.top()), area.bottom() - panel.height() + 1)
+            chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+        panel.move(chosen.topLeft())
+
+    def _position_coffee_scene_prompt(self) -> None:
+        """Place the coffee completion prompt near the pet without stealing focus."""
+
+        panel = self.coffee_scene_prompt
+        panel.adjustSize()
+        area = self._screen_geometry()
+        gap = 10
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        blocked = [pet_rect]
+        for accessory in (self._compact_todo_panel, self.speech_bubble, self.quick_panel, self.work_controls):
+            if accessory is not None and accessory.isVisible():
+                blocked.append(accessory.geometry())
+        center_x = self.x() + (self.width() - panel.width()) // 2
+        candidates = [
+            (center_x, self.y() - panel.height() - gap),
+            (center_x, self.y() + self.height() + gap),
+            (self.x() - panel.width() - gap, self.y() + self.height() - panel.height()),
+            (self.x() + self.width() + gap, self.y() + self.height() - panel.height()),
+        ]
+        chosen = None
+        for candidate_x, candidate_y in candidates:
+            candidate = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+            if area is not None and not area.contains(candidate):
+                continue
+            if any(candidate.intersects(item) for item in blocked):
+                continue
+            chosen = candidate
+            break
+        if chosen is None:
+            candidate_x, candidate_y = candidates[0]
+            if area is not None:
+                candidate_x = min(max(candidate_x, area.left()), area.right() - panel.width() + 1)
+                candidate_y = min(max(candidate_y, area.top()), area.bottom() - panel.height() + 1)
+            chosen = QRect(candidate_x, candidate_y, panel.width(), panel.height())
+        panel.move(chosen.topLeft())
+
+    def _position_work_duration_bubble(self) -> None:
+        """Keep the live duration label directly below the pet.
+
+        The pet is moved upward once when necessary to reserve this space.
+        This removes the edge-dependent candidate search that caused the Mac
+        label to jump above and below the character while the character was
+        dragged to the lower-right corner.
+        """
+
+        bubble = self.work_duration_bubble
+        bubble.adjustSize()
+        area = self._screen_geometry()
+        gap = 5
+        if area is not None and not self._duration_layout_reflowing:
+            target = self._constrained_position(QPoint(self.x(), self.y()))
+            if target.y() != self.y():
+                self._duration_layout_reflowing = True
+                try:
+                    self.move(target)
+                finally:
+                    self._duration_layout_reflowing = False
+                area = self._screen_geometry()
+        center_x = self.x() + (self.width() - bubble.width()) // 2
+        x = center_x
+        y = self.y() + self.height() + gap
+        if area is not None:
+            x = min(max(x, area.left()), area.right() - bubble.width() + 1)
+            y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
+        bubble.move(x, y)
+
+    def _update_work_duration_bubble(self, snapshot=None) -> None:
+        """Render the shared focus snapshot without creating a second timer."""
+
+        if not hasattr(self, "work_duration_bubble"):
+            return
+        current = snapshot or self.focus_session.snapshot()
+        display_seconds = self._cross_device_today_display_value(current)
+        if display_seconds is None:
+            display_seconds = int(getattr(current, "today_seconds", 0) or 0)
+        status = str(getattr(current, "status", "idle"))
+        account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
+        display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
+        display_seconds = self._smooth_work_duration_display.project(
+            display_seconds,
+            active=status == "focus",
+            identity=f"{account_id}:{display_day}",
+        )
+        show_duration = bool(getattr(self.settings, "show_work_duration", True))
+        was_visible = self.work_duration_bubble.isVisible()
+        geometry_changed = self.work_duration_bubble.set_session(
+            status,
+            display_seconds,
+            show_duration,
+        )
+        if getattr(self, "_manually_hidden", False) or getattr(self, "_fullscreen_hidden", False):
+            # set_session() intentionally owns the normal visible/hidden
+            # state, so enforce fullscreen's temporary override afterwards.
+            self.work_duration_bubble.hide()
+        visible = self.work_duration_bubble.isVisible()
+        pet_anchor = (self.x(), self.y(), self.width(), self.height())
+        previous_anchor = getattr(self, "_duration_bubble_pet_anchor", None)
+        needs_position = visible and (
+            not was_visible
+            or geometry_changed
+            or previous_anchor != pet_anchor
+        )
+        if needs_position:
+            self._position_work_duration_bubble()
+        if visible and (not was_visible or geometry_changed):
+            if sys.platform == "darwin":
+                # Configure the native panel only when it is shown or its
+                # geometry/state changes, never on every one-second tick.
+                self._apply_macos_window_behavior(
+                    self.work_duration_bubble,
+                    always_on_top=bool(self.settings.always_on_top),
+                )
+            self._raise_accessory(self.work_duration_bubble)
+        self._duration_bubble_pet_anchor = pet_anchor if visible else None
+        # A changing clock label can cross a width boundary (mm:ss ->
+        # h:mm:ss, or add the paused suffix).  Refresh the local effect's
+        # visible-pill path only when visibility/geometry actually changed;
+        # never query bubble geometry from every plume paint call.
+        if (visible != was_visible or geometry_changed) and getattr(
+            getattr(self, "_local_burst_effect", None), "active", False
+        ):
+            self._position_local_burst_effect()
+
     def show_quick_panel(self) -> None:
         """双击切换快捷口袋；再次双击立即收起。"""
 
         if self.quick_panel.isVisible():
             self.quick_panel.hide()
             return
-        self._position_floating_panel(self.quick_panel)
-        self.quick_panel.show(); self.quick_panel.raise_()
+        # The double-click is an explicit request for the head shortcut dock;
+        # dismiss the transient speech/working popups so they do not cover
+        # the pet's body or compete with the dock.
+        self.speech_bubble.hide()
+        self.work_controls.hide()
+        self._refresh_shortcut_state()
+        self.quick_panel.set_food_inventory({
+            key: self.economy.inventory_count(key)
+            for key in ("coffee", "expensive_coffee", "milk_tea", "cake", "tea")
+        })
+        # Windows keeps the shortcut dock's full two-row native geometry
+        # before it becomes visible.  This avoids a compositor frame where a
+        # newly revealed secondary row and the old one-row window bounds are
+        # temporarily combined in the wrong order.
+        self.quick_panel.prepare_for_show()
+        self._position_quick_panel()
+        self._show_nonactivating(self.quick_panel)
+        self._raise_accessory(self.quick_panel)
+        # A newly positioned top-level panel can receive a synthetic
+        # enterEvent on headless/offscreen runners when it opens beneath the
+        # pointer. Re-arm the normal eight-second auto-hide after showing so
+        # the explicit open action remains deterministic across platforms.
+        self.quick_panel.hide_timer.start(8000)
 
     def show_work_controls(self) -> None:
-        """在计时运行时显示暂停和结束两个操作气泡。"""
+        """在六毛上方显示当前状态唯一有效的工作操作。"""
 
-        if not self.work_timer.is_running:
-            self.start_work_timer()
-            return
-        self._position_floating_panel(self.work_controls)
-        self.work_controls.show(); self.work_controls.raise_()
+        self._show_work_controls()
+
+    def _show_work_controls(self) -> None:
+        """Show the work dock above the pet using the shared focus state."""
+
+        # The right-click work dock and the double-click shortcut dock are
+        # mutually exclusive.  In particular, hide the detached report
+        # button owned by the shortcut dock before placing this control bar.
+        self.quick_panel.hide()
+        snapshot = self.focus_session.snapshot(include_projection=False)
+        self._update_work_duration_bubble(snapshot)
+        self.work_controls.set_session_status(snapshot.status)
+        self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
+        duration = format_work_duration(snapshot.session_seconds)
+        self.work_controls.set_session_duration(
+            "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
+        )
+        self._position_work_controls()
+        self._show_nonactivating(self.work_controls)
+        self._raise_accessory(self.work_controls)
+
+    def _start_work_from_control(self) -> None:
+        """Start from the IDLE right-click control, then collapse it."""
+
+        self.start_work_timer()
+        self.work_controls.hide()
+
+    def _resume_work_from_control(self) -> None:
+        """Resume from the PAUSED right-click control, then collapse it."""
+
+        self.start_work_timer()
+        self.work_controls.hide()
 
     def _quick_work_action(self) -> None:
-        """快捷面板的工作入口：未运行时开始，运行时展示控制。"""
+        """快捷入口直接切换开始、暂停和继续，不再弹出第三层控制。"""
 
-        if self.work_timer.is_running:
-            self.show_work_controls()
+        # The report shortcut is a detached top-level window above the work
+        # button. Collapse the whole shortcut dock before changing focus
+        # state so macOS cannot leave that secondary button behind while the
+        # primary start/pause shortcut disappears.
+        self.quick_panel.hide()
+        if self.focus_session.snapshot(include_projection=False).status == "focus":
+            self.pause_work_timer()
         else:
             self.start_work_timer()
+
+    def _quick_food_action(self, item_key: str) -> None:
+        """Use one food directly from the lightweight shortcut pocket."""
+
+        item_key = str(item_key or "").strip()
+        if item_key not in {"coffee", "expensive_coffee", "milk_tea", "cake", "tea"}:
+            return
+        if item_key == "cake":
+            self.show_food_scene_dialog()
+            return
+        self._start_food_scene(
+            item_key,
+            10 if item_key == "milk_tea" else 0,
+            "",
+            "",
+            source="quick_food",
+        )
+
+    def _refresh_shortcut_state(self, snapshot=None) -> None:
+        """Keep the quick panel's work label aligned with the shared session."""
+
+        snapshot = snapshot or self.focus_session.snapshot(include_projection=False)
+        labels = {
+            "idle": "开始工作",
+            "focus": "暂停工作",
+            "rest": "继续工作",
+        }
+        self.quick_panel.set_work_action_label(
+            labels.get(str(getattr(snapshot, "status", "idle") or "idle"), "开始工作")
+        )
+        self.quick_panel.set_artist_music_service(
+            getattr(self.settings, "artist_music_service", "auto")
+        )
+
+    def set_menu_external_callbacks(
+        self, callbacks: dict[str, Callable[[bool], object]]
+    ) -> None:
+        """Add application-level commands used by tray/status projections."""
+
+        self._menu_external_callbacks = dict(callbacks)
+
+    def _invoke_menu_external(self, command: str) -> None:
+        """Run an application-owned command from the quick settings menu."""
+
+        callback = self._menu_external_callbacks.get(command)
+        if callback is not None:
+            callback(False)
+            return
+        self.show_speech("这个设置要等应用服务准备好后再执行。", 2600)
+
+    def _menu_state(self) -> dict[str, object]:
+        snapshot = self.focus_session.snapshot(include_projection=False)
+        labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
+        work_status_text = ""
+        if snapshot.status in {"focus", "rest"}:
+            display_seconds = self._cross_device_today_display_value(snapshot)
+            if display_seconds is None:
+                display_seconds = int(snapshot.today_seconds)
+            work_status_text = (
+                f"⏱ 今日已工作 {format_elapsed_clock(display_seconds)}"
+                f"{self._shared_work_status_suffix()}"
+            )
+        unlocked_keys = {
+            item.key for item in unlocked_outfits(self.work_timer.unlocked_outfit_count())
+        }
+        if self._login_reward_unlocked:
+            unlocked_keys.add(LOGIN_REWARD_OUTFIT.key)
+        outfit_options: list[dict[str, object]] = [
+            {
+                "title": f"经典{self._pet_name()}",
+                "command": "outfit_classic",
+                "enabled": True,
+                "checkable": True,
+                "checked": not bool(self.settings.equipped_outfit),
+            },
+            {"separator": True},
+        ]
+        outfit_options.extend(
+            {
+                "title": outfit.name,
+                "command": f"outfit_{outfit.key}",
+                "enabled": outfit.key in unlocked_keys,
+                "checkable": True,
+                "checked": outfit.key == self.settings.equipped_outfit,
+            }
+            for outfit in ALL_OUTFITS
+        )
+        return {
+            "work_action_label": labels.get(snapshot.status, "开始工作"),
+            "work_status": snapshot.status,
+            "work_status_text": work_status_text,
+            "visible": self.isVisible(),
+            "always_on_top": bool(self.settings.always_on_top),
+            "show_work_duration": bool(self.settings.show_work_duration),
+            "state_effects_enabled": bool(
+                getattr(self.settings, "state_effects_enabled", True)
+            ),
+            "focus_blue_effect_enabled": bool(
+                getattr(self.settings, "focus_blue_effect_enabled", True)
+            ),
+            "state_effect_kind": getattr(
+                getattr(self, "_local_burst_effect", None),
+                "current_kind",
+                LocalEffectKind.NONE,
+            ).value,
+            "color_mist_world_enabled": bool(
+                getattr(self.settings, "color_mist_world_enabled", True)
+            ),
+            "color_mist_world_active": bool(
+                getattr(
+                    getattr(self, "_local_effect_manager", None),
+                    "color_mist_world_active",
+                    False,
+                )
+            ),
+            "red_burst_active": bool(
+                getattr(getattr(self, "_local_burst_effect", None), "active", False)
+            ),
+            "artist_music_service": getattr(self.settings, "artist_music_service", "auto"),
+            "program_version": __version__,
+            "content_version": "内置内容",
+            "outfit_options": outfit_options,
+        }
+
+    def _menu_callbacks(self) -> dict[str, Callable[[bool], object]]:
+        """Return commands shared by the pet, tray, and status-item menus."""
+
+        callbacks: dict[str, Callable[[bool], object]] = {
+            "chat": lambda _checked=False: self.prompt_dialogue(),
+            "work": lambda _checked=False: self._quick_work_action(),
+            "work_pause": lambda _checked=False: self.pause_work_timer(),
+            "work_resume": lambda _checked=False: self.start_work_timer(),
+            "work_finish": lambda _checked=False: self.finish_work_timer(),
+            "social": lambda _checked=False: self.open_social_hub(),
+            "quick_panel": lambda _checked=False: self.show_quick_panel(),
+            "music_toggle": lambda _checked=False: self.control_music("toggle"),
+            "music_previous": lambda _checked=False: self.control_music("previous"),
+            "music_next": lambda _checked=False: self.control_music("next"),
+            "chen_artist": lambda _checked=False: self.open_chen_artist_page(),
+            "artist_music_auto": lambda _checked=False: self.set_artist_music_service("auto"),
+            "artist_music_netease": lambda _checked=False: self.set_artist_music_service("netease"),
+            "artist_music_qq": lambda _checked=False: self.set_artist_music_service("qq"),
+            "artist_music_apple": lambda _checked=False: self.set_artist_music_service("apple"),
+            "artist_music_kugou": lambda _checked=False: self.set_artist_music_service("kugou"),
+            "artist_music_qishui": lambda _checked=False: self.set_artist_music_service("qishui"),
+            "outfit": lambda _checked=False: self.show_outfit_menu(),
+            "rename": lambda _checked=False: self.rename_pet(),
+            "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),
+            "show_work_duration": lambda checked=False: self.set_work_duration_display(checked),
+            "red_burst": lambda _checked=False: self.trigger_red_burst(),
+            "red_burst_stop": lambda _checked=False: self.stop_local_effect(),
+            "state_effect_red": lambda _checked=False: self.trigger_red_burst(),
+            "state_effect_gold": lambda _checked=False: self.trigger_gold_effect(),
+            "state_effect_blue": lambda _checked=False: self.trigger_blue_effect(),
+            "state_effect_purple": lambda _checked=False: self.trigger_purple_effect(),
+            "state_effect_green": lambda _checked=False: self.trigger_green_effect(),
+            "state_effect_cyan": lambda _checked=False: self.trigger_cyan_effect(),
+            "state_effect_color_mist_world": lambda _checked=False: self.trigger_color_mist_world(),
+            "state_effect_stop": lambda _checked=False: self.stop_local_effect(),
+            "state_effects_toggle": lambda checked=False: self.set_state_effects_enabled(checked),
+            "focus_blue_effect_toggle": lambda checked=False: self.set_focus_blue_effect_enabled(checked),
+            "size": lambda _checked=False: self.open_size_control(),
+            "show_todos": lambda _checked=False: self.show_compact_todos(manual=True),
+            "hide_todos": lambda _checked=False: self.hide_compact_todos(),
+            "add_todo": lambda _checked=False: self.add_compact_todo(),
+            "time_memory": lambda _checked=False: self.show_time_memory(),
+            "show_work_time": lambda _checked=False: self.show_work_time(),
+            "economy": lambda _checked=False: self.show_economy(),
+            "alarms": lambda _checked=False: self.show_alarm_center(),
+            "show_growth": lambda _checked=False: self.show_daily_growth(),
+            "show_report": lambda _checked=False: self.show_daily_report(),
+            "configure_daily_report": lambda _checked=False: self.configure_daily_report(),
+            "open_album": lambda _checked=False: self.open_daily_album(),
+            "topmost_on": lambda _checked=False: self.set_always_on_top(True),
+            "topmost_off": lambda _checked=False: self.set_always_on_top(False),
+            "visibility": lambda _checked=False: self.show_pet()
+            if not self.isVisible()
+            else self.hide_pet(),
+            "quit": lambda _checked=False: self.quit_requested.emit(),
+        }
+        callbacks["outfit_classic"] = lambda _checked=False: self.equip_outfit("")
+        callbacks.update(
+            {
+                f"outfit_{outfit.key}": (
+                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
+                )
+                for outfit in ALL_OUTFITS
+            }
+        )
+        callbacks.update(self._menu_external_callbacks)
+        return callbacks
+
+    def unified_menu_model(self) -> UnifiedMenuModel:
+        """Expose the same model to the pet, tray, and macOS status item."""
+
+        return UnifiedMenuModel(
+            pet_name=self._pet_name(),
+            state_provider=self._menu_state,
+            callbacks=self._menu_callbacks(),
+        )
+
+    def build_unified_menu(self, parent=None, context: str = "pet") -> QMenu:
+        """Render the unified menu for the requested platform entrance."""
+
+        # Tray/status menus must not inherit the pet window's active/enabled
+        # state. A standalone menu remains usable while another app has focus
+        # or while the pet itself is hidden.
+        menu = QMenu(parent) if parent is not None else QMenu()
+        lifecycle_log("menu.create", menu, context=context)
+        menu.destroyed.connect(
+            lambda _obj=None, value=context: lifecycle_log(
+                "menu.destroy", class_name="QMenu", context=value
+            )
+        )
+        menu.setStyleSheet(UNIFIED_MENU_STYLE)
+        self.refresh_unified_menu(menu, context)
+        return menu
+
+    def refresh_unified_menu(self, menu: QMenu, context: str = "pet") -> None:
+        """Refresh an existing menu without replacing its native owner.
+
+        Replacing a QSystemTrayIcon menu from ``aboutToShow`` can leave the
+        platform status-item bridge holding the old action tree. Updating the
+        existing standalone menu keeps the status item stable while dynamic
+        work/visibility state is refreshed.
+        """
+
+        menu.setStyleSheet(UNIFIED_MENU_STYLE)
+        menu.clear()
+        populate_qmenu(menu, self.unified_menu_model(), context)
 
     def _schedule_ambient(self) -> None:
         """用随机间隔安排六毛主动出现，保持存在感但避免频繁打扰。"""
@@ -1873,24 +9484,117 @@ class PetWindow(QWidget):
         if self.settings.automatic_grumbling:
             self.ambient_timer.start(random.randint(8 * 60_000, 18 * 60_000))
 
+    @_guard_qt_callback
+    def _night_limited_tick(self) -> None:
+        """在本地 00:30–06:30 显示当天限定造型，06:30 到点恢复普通状态。"""
+
+        selected = night_limited_activity(datetime.now())
+        if selected is None:
+            previous = self._night_limited_activity
+            self._night_limited_activity = ""
+            if previous and self._ambient_activity == previous:
+                self.activity_timer.stop()
+                self._manual_activity_until = 0.0
+                self._change_ambient_activity(
+                    random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+                )
+            return
+        self._night_limited_activity = selected
+        if time.monotonic() < self._manual_activity_until:
+            return
+        self.activity_timer.stop()
+        self._change_ambient_activity(selected)
+
+    def _automatic_work_companion_tick(self) -> bool:
+        """偶尔在工作中主动给出拥抱或加油，不再要求用户点菜单。"""
+
+        if not self.work_timer.is_running or random.random() >= 0.42:
+            return False
+        action_key = random.choice(("love", "encourage"))
+        reply = self.companion.perform_action(action_key)
+        option = ACTION_BY_KEY[action_key]
+        self._play_action_sequence(option.sequence or (reply.state,), option.duration_ms)
+        self.show_speech(reply.text, max(5200, option.duration_ms + 1800))
+        return True
+
+    @_guard_qt_callback
     def _ambient_tick(self) -> None:
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
         try:
+            if night_limited_activity(datetime.now()) is not None:
+                self._night_limited_tick()
+                return
             busy = self.chat_manager.busy
             if self.isVisible() and not self.dragging and not busy:
-                idle_seconds = time.monotonic() - self._last_user_interaction
-                if self.work_timer.is_running and self.work_timer.session_seconds() >= 2 * 3600:
+                if self._automatic_work_companion_tick():
+                    self.daily_stats.record_event("work_companion")
+                    return
+                # Use the same cross-application input clock as the work
+                # safety net. A user typing in another app must not look
+                # idle merely because the pet itself was not clicked.
+                idle_seconds = self._inactive_ms() / 1000.0
+                # All duration-based ambient decisions use the same
+                # reconciled snapshot as the bottom work bubble.  Reading
+                # WorkTimer.session_seconds() directly here could resurrect a
+                # stale checkpoint and produce a reminder longer than today's
+                # actual total (for example, 2:05 above a 1:48 day total).
+                focus_snapshot = self.focus_session.snapshot()
+                today_seconds = max(0, int(focus_snapshot.today_seconds))
+                session_seconds = min(
+                    max(0, int(focus_snapshot.session_seconds)),
+                    today_seconds,
+                )
+                continuous_seconds = min(
+                    max(0, int(getattr(focus_snapshot, "current_continuous_seconds", 0) or 0)),
+                    today_seconds,
+                )
+                if self.work_timer.is_running and continuous_seconds >= 2 * 3600:
                     activity, text = "thermos", "连续工作两小时啦。六毛把水杯端来了：先休息一下？"
                 elif idle_seconds >= 30 * 60:
                     activity, text = "pointing", "你很久没动啦，六毛偷偷探头看看你还在不在。"
-                elif self.work_timer.today_seconds() >= 3 * 3600 and random.random() < 0.06:
+                elif today_seconds >= 3 * 3600 and random.random() < 0.06:
                     activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
                 elif random.random() < 0.55:
-                    activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                    decision = self.companion_behavior.decide(
+                        now_hour=datetime.now().hour,
+                        working=self.work_timer.is_running,
+                        session_seconds=session_seconds,
+                        today_seconds=today_seconds,
+                        idle_seconds=int(idle_seconds),
+                        music_playing=self._manual_activity_until > time.monotonic(),
+                    )
+                    activity = decision.activity
+                    if activity == "idle":
+                        activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                    elif activity == "night-reading":
+                        text = "我陪你读一会儿，慢慢来。"
+                    elif activity == "sleepy":
+                        text = "六毛有点累啦，记得给自己留一点休息时间。"
+                    elif activity == "sit":
+                        text = "我坐在这里陪你，把这一小段完成就好。"
+                    elif activity == "headphones":
+                        text = "音乐响起来啦，和你一起专注。"
+                    else:
+                        text = self.companion.ambient_grumble(self.work_timer.is_running).text
                 else:
                     activity = random.choice(RANDOM_ACTIONS)
                     text = self.companion.ambient_grumble(self.work_timer.is_running).text
+                # Automatic companion animations must not announce a rest
+                # state while the shared work timer is still running. A
+                # deliberate pause/food scene remains unaffected because it
+                # does not pass through this ambient path.
+                if self.work_timer.is_running and activity in {
+                    "sleep",
+                    "sleepy",
+                    "daydream",
+                    "coconut",
+                    "sunbath",
+                    "movie",
+                    "pointing",
+                }:
+                    activity = "office"
+                    text = "六毛继续陪你专注，等你一起完成这一小段。"
                 self.daily_stats.record_event(activity)
                 if activity == "sleep":
                     self.daily_stats.record_sleep()
@@ -1909,6 +9613,7 @@ class PetWindow(QWidget):
             base = self.settings.lyric_interval_minutes * 60_000
             self.song_timer.start(max(60_000, round(base * random.uniform(0.85, 1.15))))
 
+    @_guard_qt_callback
     def _song_inspiration_tick(self) -> None:
         """显示本机歌词短行；未选择文件时显示原创歌名意象短句。"""
 
@@ -1926,10 +9631,12 @@ class PetWindow(QWidget):
         finally:
             self._schedule_song_inspiration()
 
+    @_guard_qt_callback
     def _hourly_tick(self) -> None:
-        """周期检查整点报时，关闭时不产生任何气泡。"""
+        """周期检查整点报时，工作报告改为用户按需打开。"""
 
-        self._maybe_announce_hour(datetime.now())
+        now = datetime.now()
+        self._maybe_announce_hour(now)
 
     def _maybe_announce_hour(self, now: datetime) -> bool:
         """在每个整点窗口内只播报一次，返回是否实际播报。"""
@@ -1955,7 +9662,7 @@ class PetWindow(QWidget):
             remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
             next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
         self.show_speech(
-            f"{self.companion.status_text(self.work_timer.today_seconds() // 600)}\n{next_text}",
+            f"{self.companion.status_text(self._shared_today_focus_seconds() // 600)}\n{next_text}",
             6200,
         )
 
@@ -1977,7 +9684,7 @@ class PetWindow(QWidget):
             not self._late_wakeup_shown
             and self.settings.lyric_inspiration_enabled
             and 10 <= now.hour < 13
-            and self.work_timer.today_seconds() == 0
+            and self._shared_today_focus_seconds() == 0
         ):
             self._late_wakeup_shown = True
             reply = self.companion.song_inspiration(late_wakeup=True)
@@ -2005,8 +9712,6 @@ class PetWindow(QWidget):
 
         x = (point.x() - self.label.x()) / max(1, self.label.width())
         y = (point.y() - self.label.y()) / max(1, self.label.height())
-        if self.work_timer.is_running and 0.52 <= y <= 0.88 and 0.18 <= x <= 0.84:
-            return "work_device"
         if y < 0.24:
             return "head"
         if y < 0.46:
@@ -2021,9 +9726,9 @@ class PetWindow(QWidget):
         zone = self._interaction_zone(point)
         self._record_user_interaction()
         self.daily_stats.record_touch()
-        if zone == "work_device" or (zone == "head" and self.work_timer.is_running):
-            self.show_work_controls()
-            return
+        # Work controls are available from explicit work/menu actions only;
+        # a normal left click on the pet must never create a floating button bar.
+        self.work_controls.hide()
         if zone == "camera":
             self.trigger_selfie()
             return
@@ -2042,6 +9747,8 @@ class PetWindow(QWidget):
         while self._poke_times and now - self._poke_times[0] > 2.5:
             self._poke_times.popleft()
         repeated = len(self._poke_times) >= 5
+        if len(self._poke_times) >= 3:
+            self._request_local_effect_event(LocalEffectKind.RED)
         self.mood.receive_poke(repeated)
         self._show_emotion(
             PetState.ANNOYED if repeated else PetState.SHY,
@@ -2053,7 +9760,7 @@ class PetWindow(QWidget):
         )
 
     def play_babuda_voice(self) -> None:
-        """双击右键时轮换播放用户本地音频；缺少文件则用系统语音轻微变调。"""
+        """兼容旧的本地巴布达语音入口；不再绑定右键双击。"""
 
         if not self.settings.voice_enabled:
             self.show_speech("巴布达！", 2600)
@@ -2063,9 +9770,21 @@ class PetWindow(QWidget):
         self._babuda_variant_index += 1
         if variants and self._media_player is not None:
             path = variants[index % len(variants)]
+            lifecycle_log(
+                "media.player.stop",
+                self._media_player,
+                owner="PetWindow",
+                reason="play_babuda_voice.replace_source",
+            )
             self._media_player.stop()
             self._media_player.setPlaybackRate((0.96, 1.0, 1.05)[index % 3])
             self._media_player.setSource(QUrl.fromLocalFile(str(path.resolve())))
+            lifecycle_log(
+                "media.player.play",
+                self._media_player,
+                owner="PetWindow",
+                source_kind="babuda_voice",
+            )
             self._media_player.play()
         elif self._speech_engine is not None:
             self._speech_engine.setRate((-0.08, 0.0, 0.08)[index % 3])
@@ -2074,6 +9793,7 @@ class PetWindow(QWidget):
         self._show_emotion(random.choice((PetState.HAPPY, PetState.SHY, PetState.SURPRISED)), 1500)
         self.show_speech(random.choice(("巴布达！", "巴——布达。", "巴布达？六毛在呢。")), 2800)
 
+    @_guard_qt_callback
     def _trigger_long_press(self) -> None:
         """长按六毛让他原地睡觉，释放鼠标时不再触发普通点击。"""
 
@@ -2117,6 +9837,7 @@ class PetWindow(QWidget):
             self._show_emotion(state, 1600)
             self.show_speech("摸摸收到。六毛的红毛都开心得翘起来啦。", 3400)
 
+    @_guard_qt_callback
     def _trigger_hover_curiosity(self) -> None:
         """鼠标在宠物附近稳定停留时显示好奇注视。"""
 
@@ -2159,7 +9880,15 @@ class PetWindow(QWidget):
             x = character_right + gap
         y = self.y() + max(0, (self.height() - self.photo_bubble.height()) // 2)
         self.photo_bubble.move(x, y)
-        self.photo_bubble.show()
+        self._show_nonactivating(self.photo_bubble)
+        # Some Qt/macOS backends apply a native frame offset when a detached
+        # translucent window is first shown.  Correct against the actual
+        # top-level coordinate so the visible photo edge remains exactly
+        # ``gap`` pixels from the character mask (and does not drift by the
+        # platform's invisible frame margin).
+        actual_x = self.photo_bubble.x()
+        if actual_x != x:
+            self.photo_bubble.move(x + (x - actual_x), y)
         self.photo_timer.start(3800)
 
     def _scaled_selfie_photo(self, ratio: float) -> QPixmap:
@@ -2177,6 +9906,7 @@ class PetWindow(QWidget):
         photo.setDevicePixelRatio(ratio)
         return photo
 
+    @_guard_qt_callback
     def _finish_interaction(self) -> None:
         """结束互动并恢复自主待机。"""
 
@@ -2185,180 +9915,129 @@ class PetWindow(QWidget):
                 self._show_photo_bubble()
             self._schedule(self.behavior.initial_idle())
 
+    def _toggle_walk_from_menu(self) -> None:
+        """让右键菜单同时覆盖首次开启和日常暂停两种跑动操作。"""
+
+        if not getattr(self.settings, "allow_autonomous_walk", False):
+            self.set_allow_autonomous_walk(True)
+            return
+        self.set_paused(not self.paused)
+
     def _build_context_menu(self) -> QMenu:
-        """按五个稳定分组构建右键菜单，避免功能平铺和入口层级混乱。"""
+        """Build the same complete app menu used by the tray and status item."""
 
         menu = QMenu(self)
-        chat_group = menu.addMenu("聊天与陪伴")
-        action_group = menu.addMenu("动作与外观")
-        music_group = menu.addMenu("音乐与娱乐")
-        focus_group = menu.addMenu("专注与自习")
-        system_group = menu.addMenu("系统与显示")
-
-        dialogue_action = QAction("和六毛聊聊…", self)
-        dialogue_action.triggered.connect(self.prompt_dialogue)
-        chat_group.addAction(dialogue_action)
-        social_action = QAction("六毛搭子自习室…", self)
-        social_action.triggered.connect(self.open_social_hub)
-        chat_group.addAction(social_action)
-        action_menu = chat_group.addMenu("陪伴动作")
-        for option in COMPANION_ACTIONS:
-            action = QAction(option.label, self)
-            action.triggered.connect(
-                lambda _checked=False, key=option.key: self.perform_companion_action(
-                    key
-                )
+        lifecycle_log("menu.create", menu, context="context")
+        menu.destroyed.connect(
+            lambda _obj=None: lifecycle_log(
+                "menu.destroy", class_name="QMenu", context="context"
             )
-            action_menu.addAction(action)
-        food_menu = chat_group.addMenu("喂食、饮品与状态")
-        for food in FOOD_OPTIONS:
-            food_action = QAction(food.label, self)
-            food_action.triggered.connect(
-                lambda _checked=False, key=food.key: self.feed_pet(key)
-            )
-            food_menu.addAction(food_action)
-        food_menu.addSeparator()
-        mood_action = QAction("查看六毛心情与能量", self)
-        mood_action.triggered.connect(self.show_companion_status)
-        food_menu.addAction(mood_action)
-
-        pause_action = QAction("恢复跑动" if self.paused else "暂停跑动", self)
-        pause_action.triggered.connect(lambda: self.set_paused(not self.paused))
-        action_group.addAction(pause_action)
-        picture_actions = action_group.addMenu("完整图片动作")
-        for group_name, entries in ACTION_GROUPS:
-            group_menu = picture_actions.addMenu(group_name)
-            for label, key in entries:
-                action = QAction(label, self)
-                action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
-                group_menu.addAction(action)
-        selfie_action = QAction("自拍一下", self)
-        selfie_action.triggered.connect(self.trigger_selfie)
-        action_group.addAction(selfie_action)
-        outfit_menu = action_group.addMenu("工作时长娃衣")
-        classic = QAction("经典六毛", self)
-        classic.setCheckable(True)
-        classic.setChecked(not self.settings.equipped_outfit)
-        classic.triggered.connect(lambda: self.equip_outfit(""))
-        outfit_menu.addAction(classic)
-        unlocked = unlocked_outfits(self.work_timer.unlocked_outfit_count())
-        for hour, outfit in enumerate(OUTFITS, start=1):
-            available = outfit in unlocked
-            label = (
-                f"{hour} 小时 · {outfit.name}"
-                if available
-                else f"🔒 {hour} 小时 · {outfit.name}"
-            )
-            action = QAction(label, self)
-            action.setCheckable(available)
-            action.setChecked(outfit.key == self.settings.equipped_outfit)
-            action.setEnabled(available)
-            if available:
-                action.triggered.connect(
-                    lambda _checked=False, key=outfit.key: self.equip_outfit(key)
-                )
-            outfit_menu.addAction(action)
-
-        music_control_menu = music_group.addMenu("控制正在运行的播放器")
-        for label, command in (
-            ("播放 / 暂停", "toggle"),
-            ("上一首", "previous"),
-            ("下一首", "next"),
-            ("查看正在播放", "status"),
-        ):
-            control_action = QAction(label, self)
-            control_action.triggered.connect(
-                lambda _checked=False, value=command: self.control_music(value)
-            )
-            music_control_menu.addAction(control_action)
-        music_search_action = QAction("搜索一首陈楚生", self)
-        music_search_action.triggered.connect(self.play_random_song)
-        music_group.addAction(music_search_action)
-        music_move = music_group.addMenu("音乐动作")
-        for label, key in (("戴耳机", "headphones"), ("弹吉他", "guitar"), ("打鼓", "drums")):
-            action = QAction(label, self)
-            action.triggered.connect(lambda _checked=False, value=key: self.set_activity(value))
-            music_move.addAction(action)
-
-        work_menu = focus_group.addMenu(
-            f"工作计时：{format_work_duration(self.work_timer.today_seconds())}"
         )
-        start_work_action = QAction("开始/继续工作", self)
-        start_work_action.setEnabled(not self.work_timer.is_running)
-        start_work_action.triggered.connect(self.start_work_timer)
-        work_menu.addAction(start_work_action)
-        if self.work_timer.is_running:
-            controls_action = QAction("摸头或点电脑进行暂停/结束", self)
-            controls_action.triggered.connect(self.show_work_controls)
-            work_menu.addAction(controls_action)
-        show_work_action = QAction("查看今日累计", self)
-        show_work_action.triggered.connect(self.show_work_time)
-        work_menu.addAction(show_work_action)
-        growth_action = QAction("查看今日 0–8 小时成长线", self)
-        growth_action.triggered.connect(self.show_daily_growth)
-        work_menu.addAction(growth_action)
-        report_action = QAction("今天六毛陪你做了什么", self)
-        report_action.triggered.connect(self.show_daily_report)
-        work_menu.addAction(report_action)
-        album_action = QAction("打开六毛相册", self)
-        album_action.triggered.connect(self.open_daily_album)
-        work_menu.addAction(album_action)
-        focus_social = QAction("打开搭子自习室…", self)
-        focus_social.triggered.connect(self.open_social_hub)
-        focus_group.addAction(focus_social)
-
-        ai_action = QAction("AI 与陪伴设置…", self)
-        ai_action.triggered.connect(
-            lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION)
-        )
-        system_group.addAction(ai_action)
-        grumble_action = QAction("偶尔发牢骚", self)
-        grumble_action.setCheckable(True)
-        grumble_action.setChecked(self.settings.automatic_grumbling)
-        grumble_action.toggled.connect(self.set_automatic_grumbling)
-        system_group.addAction(grumble_action)
-        hourly_action = QAction("整点报时", self)
-        hourly_action.setCheckable(True)
-        hourly_action.setChecked(self.settings.hourly_announcement)
-        hourly_action.toggled.connect(self.set_hourly_announcement)
-        system_group.addAction(hourly_action)
-        topmost_action = QAction("始终置顶（关闭即桌面模式）", self)
-        topmost_action.setCheckable(True)
-        topmost_action.setChecked(self.settings.always_on_top)
-        topmost_action.toggled.connect(self.set_always_on_top)
-        system_group.addAction(topmost_action)
-        size_action = QAction("连续调节宠物大小…", self)
-        size_action.triggered.connect(self.open_size_control)
-        system_group.addAction(size_action)
-        system_group.addSeparator()
-        return_action = QAction("回到主屏幕", self)
-        return_action.triggered.connect(self.return_to_primary_screen)
-        system_group.addAction(return_action)
-        hide_action = QAction("隐藏", self)
-        hide_action.triggered.connect(self.hide)
-        system_group.addAction(hide_action)
-        system_group.addSeparator()
-        quit_action = QAction("退出", self)
-        quit_action.triggered.connect(self.quit_requested.emit)
-        system_group.addAction(quit_action)
+        menu.setStyleSheet(UNIFIED_MENU_STYLE)
+        populate_qmenu(menu, self.unified_menu_model(), "pet")
         return menu
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """稍候显示单次右键菜单，为双击右键的巴布达语音留出判定时间。"""
+        """稍候显示六毛本体菜单，为双击右键彩雾世界留出判定时间。"""
 
         self._record_user_interaction()
         if time.monotonic() < self._suppress_context_until:
             event.accept()
             return
-        self._pending_context_global = event.globalPos()
-        self.context_menu_timer.start(QApplication.doubleClickInterval() + 60)
+        global_position = getattr(event, "globalPosition", None)
+        self._pending_context_global = (
+            global_position().toPoint()
+            if callable(global_position)
+            else event.globalPos()
+        )
+        self.context_menu_timer.start(QApplication.doubleClickInterval())
         event.accept()
 
+    @_guard_qt_callback
     def _show_deferred_context_menu(self) -> None:
-        """确认不是双击后，在原鼠标位置打开普通右键菜单。"""
+        """确认不是双击后，打开六毛本体菜单。"""
 
         if time.monotonic() >= self._suppress_context_until:
-            self._build_context_menu().exec(self._pending_context_global)
+            self.work_controls.hide()
+            menu = self._build_context_menu()
+            lifecycle_log("menu.show.request", menu, context="context")
+            if sys.platform != "darwin" and bool(getattr(self.settings, "always_on_top", False)):
+                # Keep the popup above the desktop-mode pet without changing
+                # the ownership or flags of the real pet window.
+                menu.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            menu.ensurePolished()
+            pet_center = self.frameGeometry().center()
+            screen = (
+                QGuiApplication.screenAt(pet_center)
+                or self.screen()
+                or QGuiApplication.primaryScreen()
+            )
+            point = context_menu_position_for_pet(
+                self._pending_context_global,
+                pet_center,
+                screen.geometry() if screen is not None else None,
+                macos=sys.platform == "darwin",
+            )
+            if screen is not None:
+                point = clamp_global_popup_position(
+                    point,
+                    menu.sizeHint(),
+                    screen.availableGeometry(),
+                )
+                LOGGER.debug(
+                    "context menu popup: point=%s screen=%s available=%s",
+                    point,
+                    screen.name(),
+                    screen.availableGeometry(),
+                )
+            menu.exec(point)
+            lifecycle_log("menu.close.complete", menu, context="context")
+
+    def eventFilter(self, watched, event) -> bool:
+        """收起工作条并记录 Lili 窗口焦点变化，绝不主动重新激活。"""
+
+        if event.type() in {
+            QEvent.Type.WindowActivate,
+            QEvent.Type.WindowDeactivate,
+            QEvent.Type.FocusIn,
+            QEvent.Type.FocusOut,
+        }:
+            surfaces = (
+                self,
+                self.quick_panel,
+                self.work_controls,
+                self.coffee_scene_prompt,
+                self.work_duration_bubble,
+                self.speech_bubble,
+                self.photo_bubble,
+            )
+            if watched in surfaces:
+                LOGGER.debug(
+                    "LILI_FOCUS_EVENT type=%s object=%s active_window=%s focus_window=%s",
+                    event.type().name,
+                    type(watched).__name__,
+                    type(QApplication.activeWindow()).__name__
+                    if QApplication.activeWindow() is not None
+                    else "None",
+                    type(QApplication.focusWidget()).__name__
+                    if QApplication.focusWidget() is not None
+                    else "None",
+                )
+
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and self.work_controls.isVisible()
+        ):
+            watched_is_widget = isinstance(watched, QWidget)
+            belongs_to_pet = watched is self or (
+                watched_is_widget and self.isAncestorOf(watched)
+            )
+            belongs_to_controls = watched is self.work_controls or (
+                watched_is_widget and self.work_controls.isAncestorOf(watched)
+            )
+            if not belongs_to_pet and not belongs_to_controls:
+                self.work_controls.hide()
+        return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """记录左键按下；只有移动超过系统阈值后才真正进入拖拽。"""
@@ -2432,7 +10111,7 @@ class PetWindow(QWidget):
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """双击左键打开快捷口袋；双击右键播放一声不同语气的巴布达。"""
+        """双击左键打开快捷口袋；双击右键进入彩雾世界。"""
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
@@ -2445,7 +10124,11 @@ class PetWindow(QWidget):
             self.context_menu_timer.stop()
             self._suppress_context_until = time.monotonic() + 0.8
             self._record_user_interaction()
-            self.play_babuda_voice()
+            was_active = bool(self._local_effect_manager.color_mist_world_active)
+            if self._toggle_color_mist_world():
+                self.show_speech("彩雾世界开始了！", 1500)
+            elif was_active:
+                self.show_speech("彩雾世界结束了。", 1500)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)

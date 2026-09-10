@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 
 from .growth import ACTION_SPRITES
 from .resources import resource_path
@@ -34,8 +35,18 @@ OUTFITS = (
     Outfit("hour-09", "舞台歌手", "九小时达成。把今天的坚持唱给自己听。"),
     Outfit("hour-10", "驯鹿搭子", "十小时达成。很晚了，六毛来接你回家。"),
     Outfit("hour-11", "荒野勇士", "十一小时达成。勇敢不是硬撑，也包括好好休息。"),
-    Outfit("hour-12", "荒野国王", "十二小时达成。为小小大人加冠：你是自己荒野里的国王。"),
+    Outfit("hour-12", "陈楚生歌王", "十二小时达成。六毛给我爹戴上歌王桂冠，陪你把今天唱到收尾。"),
 )
+
+# This reward is deliberately kept outside ``OUTFITS``. The hourly outfit
+# count is persisted in the local work timer and must remain exactly twelve;
+# login rewards have a different, account-bound unlock rule.
+LOGIN_REWARD_OUTFIT = Outfit(
+    "login-3-day",
+    "三日连登搭子",
+    "连续登录 3 天达成。六毛换上这套新衣，记得每天回来看看。",
+)
+ALL_OUTFITS = OUTFITS + (LOGIN_REWARD_OUTFIT,)
 
 
 SPECIAL_ACTIVITY_SPRITES = {
@@ -43,10 +54,23 @@ SPECIAL_ACTIVITY_SPRITES = {
     for key, filename in ACTION_SPRITES.items()
 }
 
+SPECIAL_LIMITED_ACTIVITY_SPRITES = {
+    "night-study-limited": "assets/pet/night-limited/00-night-study-clean.png",
+    # Server-authoritative punishment state.  This is intentionally a
+    # complete sprite rather than an overlay so the outfit and expression
+    # switch together on every platform.
+    "taunt": "assets/pet/special/taunt-pet.jpg",
+}
+
 SPECIAL_OUTFIT_SPRITES = {
     f"hour-{hour:02d}": f"assets/pet/hourly-outfits/{hour:02d}-hour.png"
     for hour in range(1, 13)
 }
+SPECIAL_OUTFIT_SPRITES[LOGIN_REWARD_OUTFIT.key] = (
+    "assets/pet/login-rewards/3-day-login.png"
+)
+
+_FULL_SPRITE_CACHE: dict[str, QPixmap] = {}
 
 
 def unlocked_outfits(count: int) -> tuple[Outfit, ...]:
@@ -60,14 +84,28 @@ def draw_activity_overlay(
     activity: str = "none",
     outfit: str = "",
     phase: int = 0,
+    *,
+    food_scene: bool = False,
 ) -> QPixmap:
-    """返回叠加活动物件和娃衣配饰后的新像素图。"""
+    """返回活动/食物场景和永久娃衣合成后的新像素图。"""
 
-    if activity in SPECIAL_ACTIVITY_SPRITES:
+    # A limited night scene is intentionally temporary and takes precedence.
+    if activity in SPECIAL_LIMITED_ACTIVITY_SPRITES:
+        return _full_sprite(source, SPECIAL_LIMITED_ACTIVITY_SPRITES[activity])
+    # Food scenes are temporary life moments, not wardrobe items. They must
+    # be visible even when a permanent hourly outfit is equipped.
+    if food_scene and activity in SPECIAL_ACTIVITY_SPRITES:
         return _full_sprite(source, SPECIAL_ACTIVITY_SPRITES[activity])
+
+    # A manually selected outfit remains visible during ordinary transient
+    # actions (thermos, guitar, work-study, etc.).
     if outfit in SPECIAL_OUTFIT_SPRITES:
         source = _full_sprite(source, SPECIAL_OUTFIT_SPRITES[outfit])
         outfit = ""
+        if activity in SPECIAL_ACTIVITY_SPRITES:
+            activity = "none"
+    elif activity in SPECIAL_ACTIVITY_SPRITES:
+        return _full_sprite(source, SPECIAL_ACTIVITY_SPRITES[activity])
 
     result = QPixmap(source)
     painter = QPainter(result)
@@ -133,7 +171,13 @@ def draw_activity_overlay(
 def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
     """把完整透明动作素材按源画布等比居中，保持桌宠窗口大小恒定。"""
 
-    sprite = QPixmap(str(resource_path(relative_path)))
+    sprite = _FULL_SPRITE_CACHE.get(relative_path)
+    if sprite is None:
+        sprite = QPixmap(str(resource_path(relative_path)))
+        if relative_path.endswith("taunt-pet.jpg") and not sprite.isNull():
+            sprite = QPixmap.fromImage(_remove_taunt_background(sprite.toImage()))
+        if not sprite.isNull():
+            _FULL_SPRITE_CACHE[relative_path] = QPixmap(sprite)
     if sprite.isNull():
         return QPixmap(source)
     result = QPixmap(source.size())
@@ -155,6 +199,70 @@ def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
     )
     painter.end()
     return result
+
+
+def _remove_taunt_background(image: QImage) -> QImage:
+    """Turn the supplied grey matte into alpha without touching the artwork.
+
+    The user-provided reference is a JPEG, so it has no alpha channel.  A
+    border flood-fill removes only pixels close to the corner's flat grey
+    colour; the white outline remains protected behind that matte.
+    """
+
+    image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    width, height = image.width(), image.height()
+    if width <= 2 or height <= 2:
+        return image
+    corners = [
+        image.pixelColor(0, 0),
+        image.pixelColor(width - 1, 0),
+        image.pixelColor(0, height - 1),
+        image.pixelColor(width - 1, height - 1),
+    ]
+    key = QColor(
+        sum(color.red() for color in corners) // len(corners),
+        sum(color.green() for color in corners) // len(corners),
+        sum(color.blue() for color in corners) // len(corners),
+    )
+    key_luminance = (key.red() + key.green() + key.blue()) // 3
+
+    def close_to_key(color: QColor) -> bool:
+        # The supplied JPEG has a light-grey matte and a thick white sticker
+        # outline.  The old RGB-only threshold treated that white outline as
+        # matte (the channels are equally close to the grey corner colour), so
+        # flood-fill ate holes in the silhouette.  Restrict the fill to the
+        # matte's luminance band; bright near-white outline pixels remain
+        # connected artwork and are preserved.
+        luminance = (color.red() + color.green() + color.blue()) // 3
+        if luminance > key_luminance + 18:
+            return False
+        return max(
+            abs(color.red() - key.red()),
+            abs(color.green() - key.green()),
+            abs(color.blue() - key.blue()),
+        ) <= 30
+
+    queue = deque()
+    seen: set[tuple[int, int]] = set()
+    for x in range(width):
+        queue.extend(((x, 0), (x, height - 1)))
+    for y in range(height):
+        queue.extend(((0, y), (width - 1, y)))
+    while queue:
+        x, y = queue.popleft()
+        if (x, y) in seen or not close_to_key(image.pixelColor(x, y)):
+            continue
+        seen.add((x, y))
+        image.setPixelColor(x, y, QColor(0, 0, 0, 0))
+        if x:
+            queue.append((x - 1, y))
+        if x + 1 < width:
+            queue.append((x + 1, y))
+        if y:
+            queue.append((x, y - 1))
+        if y + 1 < height:
+            queue.append((x, y + 1))
+    return image
 
 
 def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:
@@ -188,3 +296,4 @@ def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:
         points = [QPointF(w*.30,h*.15), QPointF(w*.36,h*.025), QPointF(w*.45,h*.12), QPointF(w*.52,h*.015), QPointF(w*.61,h*.12), QPointF(w*.69,h*.025), QPointF(w*.74,h*.15)]
         painter.drawPolygon(points)
         painter.setBrush(QColor("#ef5b5b")); painter.drawEllipse(QRectF(w*.49,h*.08,w*.055,w*.055))
+
