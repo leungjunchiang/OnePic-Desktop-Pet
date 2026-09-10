@@ -377,6 +377,23 @@ class SignedInClient:
         }
 
 
+def test_login_uses_authenticated_email_and_switches_account_before_refresh(monkeypatch) -> None:
+    class IdentityClient(SignedInClient):
+        account_email = "leungjunchiang@gmail.com"
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(IdentityClient())
+    dialog.login_email.setText("leungjunchiang@qq.com")
+    changed = QSignalSpy(dialog.account_state_changed)
+    monkeypatch.setattr(dialog, "refresh", lambda: None)
+
+    dialog._login_completed({})
+
+    assert dialog._account_email == "leungjunchiang@gmail.com"
+    assert changed.count() == 1
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 class ProfileClient(SignedInClient):
     def __init__(self) -> None:
         self.owner_nickname = ""

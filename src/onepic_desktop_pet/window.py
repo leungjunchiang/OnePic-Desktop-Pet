@@ -5320,6 +5320,25 @@ class PetWindow(QWidget):
             return False
 
         candidate_seconds = max(0, min(24 * 60 * 60, int(union_seconds)))
+        # The dashboard may already have a validated account-wide effective
+        # floor even when this refresh carries no segment rows. Keep the
+        # display projection monotonic with that read-only value; it is not
+        # copied into the raw ledger or any upload payload.
+        remote_effective_reader = getattr(
+            self.focus_analytics,
+            "remote_effective_projection",
+            None,
+        )
+        remote_effective = (
+            remote_effective_reader(moment)
+            if callable(remote_effective_reader)
+            else None
+        )
+        if isinstance(remote_effective, dict):
+            candidate_seconds = max(
+                candidate_seconds,
+                max(0, int(remote_effective.get("today_seconds", 0) or 0)),
+            )
         previous_seconds = self._cross_device_today_display_seconds
         preserve_lower_candidate = (
             not has_remote_payload
@@ -5434,20 +5453,33 @@ class PetWindow(QWidget):
                         "end_at": None,
                         "device_id": str(getattr(self.focus_analytics, "_device_id", "") or ""),
                     }
-                return min(
-                    24 * 60 * 60,
-                    max(
-                        0,
-                        int(
-                            get_cross_device_today_display_seconds(
-                                account_id,
-                                moment,
-                                rows,
-                                active_session=active_row,
-                            )
-                        ),
+                display_seconds = max(
+                    0,
+                    int(
+                        get_cross_device_today_display_seconds(
+                            account_id,
+                            moment,
+                            rows,
+                            active_session=active_row,
+                        )
                     ),
                 )
+                remote_effective_reader = getattr(
+                    self.focus_analytics,
+                    "remote_effective_projection",
+                    None,
+                )
+                remote_effective = (
+                    remote_effective_reader(moment)
+                    if callable(remote_effective_reader)
+                    else None
+                )
+                if isinstance(remote_effective, dict):
+                    display_seconds = max(
+                        display_seconds,
+                        max(0, int(remote_effective.get("today_seconds", 0) or 0)),
+                    )
+                return min(24 * 60 * 60, display_seconds)
             except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError):
                 # Keep the last validated cached value if a local transition
                 # races this display-only recalculation.
@@ -5461,6 +5493,21 @@ class PetWindow(QWidget):
                     value += max(0, live_now - self._cross_device_today_display_live_seconds)
                 except (TypeError, ValueError, OverflowError):
                     pass
+        remote_effective_reader = getattr(
+            self.focus_analytics,
+            "remote_effective_projection",
+            None,
+        )
+        remote_effective = (
+            remote_effective_reader(self.focus_analytics.current_time())
+            if callable(remote_effective_reader)
+            else None
+        )
+        if isinstance(remote_effective, dict):
+            value = max(
+                value,
+                max(0, int(remote_effective.get("today_seconds", 0) or 0)),
+            )
         return min(24 * 60 * 60, value)
 
     def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
@@ -5468,6 +5515,25 @@ class PetWindow(QWidget):
 
         moment = moment or self.focus_analytics.current_time()
         self._set_local_live_focus_projection()
+        # The server effective projection is a read-only account floor.  It
+        # must participate in the cache key: a dashboard response can arrive
+        # after the local raw projection was cached, and otherwise the main
+        # timer bubble would keep showing the old lower value until a local
+        # focus transition invalidated the cache.
+        remote_projection_reader = getattr(
+            self.focus_analytics,
+            "remote_effective_projection",
+            None,
+        )
+        remote_projection = (
+            remote_projection_reader(moment)
+            if callable(remote_projection_reader)
+            else None
+        )
+        remote_projection_key = (
+            str(remote_projection.get("today_seconds") or ""),
+            str(remote_projection.get("week_seconds") or ""),
+        ) if isinstance(remote_projection, dict) else None
         cache_key = (
             str(getattr(self, "_active_focus_account_id", "")),
             moment.date().isoformat(),
@@ -5477,15 +5543,29 @@ class PetWindow(QWidget):
             str(self.work_timer.current_segment_started_at() or "") if self.work_timer.is_running else "",
             max(0, int(getattr(self, "_recorded_focus_session_seconds", 0) or 0)),
             int(getattr(self, "_focus_projection_revision", 0)),
+            remote_projection_key,
         )
         cached = self._focus_projection_cache
         if not isinstance(cached, dict) or cached.get("key") != cache_key:
             day_projection = self.focus_analytics.period_summary("day", moment)
             week_projection = self.focus_analytics.period_summary("week", moment)
+            raw_day_seconds = max(0, int(day_projection.get("total_seconds", 0) or 0))
+            raw_week_seconds = max(0, int(week_projection.get("total_seconds", 0) or 0))
+            effective_day_seconds = raw_day_seconds
+            effective_week_seconds = raw_week_seconds
+            if isinstance(remote_projection, dict):
+                effective_day_seconds = max(
+                    effective_day_seconds,
+                    max(0, int(remote_projection.get("today_seconds", 0) or 0)),
+                )
+                effective_week_seconds = max(
+                    effective_week_seconds,
+                    max(0, int(remote_projection.get("week_seconds", 0) or 0)),
+                )
             cached = {
                 "key": cache_key,
-                "base_day": max(0, int(day_projection.get("total_seconds", 0) or 0)),
-                "base_week": max(0, int(week_projection.get("total_seconds", 0) or 0)),
+                "base_day": effective_day_seconds,
+                "base_week": effective_week_seconds,
                 "has_account_projection": bool(
                     day_projection.get("raw_period_evidence")
                     or day_projection.get("raw_source_active")
@@ -7315,6 +7395,37 @@ class PetWindow(QWidget):
             remote_week_seconds = profile.get("focus_week_seconds")
         if remote_week_seconds is None:
             remote_week_seconds = presence.get("week_seconds")
+        # ``lili_dashboard`` marks these fields as an effective projection.
+        # Cache that projection separately so this device can show the same
+        # account-wide value even before its delta cursor receives another
+        # device's sealed rows. Unmarked profile counters remain compatibility
+        # data and are not accepted here.
+        projection_source = str(
+            data.get("focus_totals_effective_source")
+            or profile.get("focus_totals_effective_source")
+            or data.get("focus_totals_source")
+            or profile.get("focus_totals_source")
+            or ""
+        ).strip()
+        effective_projection_changed = False
+        if projection_source in {
+            "canonical_interval_union",
+            "canonical_interval_union_legacy_floor",
+        }:
+            effective_today = profile.get("focus_today_seconds")
+            if effective_today is None:
+                effective_today = presence.get("today_seconds")
+            effective_week = profile.get("focus_week_seconds")
+            if effective_week is None:
+                effective_week = presence.get("week_seconds")
+            effective_projection_changed = bool(
+                self.focus_analytics.set_remote_effective_projection(
+                    focus_date=profile.get("focus_today_date") or remote_date,
+                    today_seconds=int(effective_today or 0),
+                    week_start=profile.get("focus_week_start_date") or remote_week_start,
+                    week_seconds=int(effective_week or 0),
+                )
+            )
         analytics_changed = self.focus_analytics.merge_remote_state(
             focus_date=str(remote_date or ""),
             today_seconds=int(remote_today or 0),
@@ -7322,6 +7433,7 @@ class PetWindow(QWidget):
             week_start=str(remote_week_start or ""),
             week_seconds=int(remote_week_seconds or 0),
         )
+        analytics_changed = bool(analytics_changed or effective_projection_changed)
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
         focus_segments_payload = data.get("_focus_segments")
         merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)

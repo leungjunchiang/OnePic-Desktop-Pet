@@ -42,6 +42,7 @@ from .social import (
     _private_notes_from_dashboard,
     _dashboard_payload_has_core_shape,
     _merge_dashboard_overlay,
+    normalize_email,
     presence_device_id,
     social_user_message,
 )
@@ -4822,7 +4823,20 @@ class SocialHubDialog(QDialog):
 
     def _login_completed(self, result: object = None) -> None:
         self._end_action()
-        self._account_email = self.login_email.text().strip()
+        requested_email = normalize_email(self.login_email.text())
+        actual_email = normalize_email(
+            str(getattr(self.client, "account_email", "") or "")
+        )
+        # The authenticated session is authoritative.  Keeping the text typed
+        # into the form here can make the UI claim that QQ is active while the
+        # persisted Keychain session is actually another account; that also
+        # makes the next local-ledger namespace and heartbeat look unrelated.
+        self._account_email = actual_email or requested_email
+        # Switch the window's account-scoped local stores before starting the
+        # first dashboard read.  Previously refresh() ran first and the signal
+        # was emitted afterwards, leaving a small race where a freshly logged
+        # in account could display or prepare the previous account's totals.
+        self.account_state_changed.emit(True)
         self._update_account_state()
         self.tabs.setCurrentIndex(0)
         self.refresh()
@@ -4836,8 +4850,8 @@ class SocialHubDialog(QDialog):
                 % login_streak_days(payload)
             )
         else:
-            self._set_status("登录成功，邮箱确认已完成。")
-        self.account_state_changed.emit(True)
+            account_hint = f"（当前账号：{self._account_email}）" if self._account_email else ""
+            self._set_status(f"登录成功，邮箱确认已完成。{account_hint}")
 
     def _login_failed(self, error: object) -> None:
         self._end_action()

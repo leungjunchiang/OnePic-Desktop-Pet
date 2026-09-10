@@ -190,6 +190,37 @@ def test_derived_account_snapshot_is_not_focus_evidence(tmp_path) -> None:
     assert month["total_seconds"] == 0
 
 
+def test_server_effective_projection_aligns_display_without_becoming_raw_evidence(tmp_path) -> None:
+    """A newer cross-device total updates displays, not the raw fact ledger."""
+
+    now = datetime(2026, 8, 23, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = AccountFocusStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=False,
+    )
+    store.record_session(
+        2 * 3600 + 19 * 60,
+        started_at=now - timedelta(hours=3),
+        record_id="device-a:session:13940",
+    )
+
+    assert store.period_summary("day", now)["total_seconds"] == 2 * 3600 + 19 * 60
+    assert store.set_remote_effective_projection(
+        focus_date="2026-08-23",
+        today_seconds=2 * 3600 + 30 * 60,
+        week_start="2026-08-17",
+        week_seconds=2 * 3600 + 30 * 60,
+    )
+
+    # Raw reports remain based on sealed local facts only.
+    assert store.period_summary("day", now)["total_seconds"] == 2 * 3600 + 19 * 60
+    # Account-facing summaries use the explicit server projection floor.
+    assert store.summary(now).today_seconds == 2 * 3600 + 30 * 60
+    assert store.account_today_seconds(now) == 2 * 3600 + 30 * 60
+    assert store.account_week_seconds(now) == 2 * 3600 + 30 * 60
+
+
 def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) -> None:
     now = datetime(2026, 8, 13, 18, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)

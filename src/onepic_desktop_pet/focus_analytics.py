@@ -173,7 +173,7 @@ class FocusAnalyticsStore:
         self.path = path or focus_analytics_path()
         if path is None:
             # The old macOS/Linux path lived below ~/.desktop_pet.  Adopt only
-            # this account's exact structured ledger and WAL; runtime log text
+        # this account's exact structured ledger and WAL; runtime log text
             # and aggregate counters are never converted into FocusSegments.
             adopt_legacy_account_file(
                 "focus_recovery.jsonl",
@@ -200,6 +200,10 @@ class FocusAnalyticsStore:
         # they are intentionally never serialized or uploaded as facts.
         self._live_projection_segments: list[FocusSegment] = []
         self._live_projection_expires_at: float | None = None
+        # The dashboard's effective day/week projection is a read-only
+        # cross-device display floor. It is separate from ``records`` and
+        # never becomes uploadable focus evidence.
+        self._remote_effective_projection: dict[str, Any] | None = None
         self._focus_integrity_next_attempt_monotonic = 0.0
         self._focus_upload_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
@@ -286,6 +290,7 @@ class FocusAnalyticsStore:
             "current_interruptions": 0,
             "current_continuous_seconds": 0,
         }
+        self._remote_effective_projection = None
         self._load()
         if self._legacy_focus_store_adopted:
             for raw in self._state.get("records", []):
@@ -371,6 +376,72 @@ class FocusAnalyticsStore:
         if changed:
             self._save()
         return changed
+
+    def set_remote_effective_projection(
+        self,
+        *,
+        focus_date: str | None,
+        today_seconds: int,
+        week_start: str | None,
+        week_seconds: int,
+    ) -> bool:
+        """Cache server effective totals for display, never as raw facts.
+
+        The caller must obtain these values from a dashboard response marked
+        as an effective projection. They never enter ``records``, daily raw
+        aggregation, upload payloads, or legacy backfill.
+        """
+
+        current = self.current_time()
+        current_date = current.date().isoformat()
+        current_week = (
+            current.date() - timedelta(days=current.date().weekday())
+        ).isoformat()
+        date_value = str(focus_date or current_date).strip()[:10]
+        week_value = str(week_start or current_week).strip()[:10]
+        if date_value != current_date or week_value != current_week:
+            return False
+        try:
+            today_value = max(
+                0, min(MAX_ANALYTICS_DAY_SECONDS, int(today_seconds or 0))
+            )
+            week_value_seconds = max(
+                0, min(7 * 24 * 60 * 60, int(week_seconds or 0))
+            )
+        except (TypeError, ValueError, OverflowError):
+            return False
+        projection = {
+            "focus_date": date_value,
+            "today_seconds": today_value,
+            "week_start": week_value,
+            "week_seconds": week_value_seconds,
+        }
+        if projection == self._remote_effective_projection:
+            return False
+        self._remote_effective_projection = projection
+        return True
+
+    def remote_effective_projection(
+        self, at: datetime | None = None
+    ) -> dict[str, int] | None:
+        """Return the current account-wide display projection, if available."""
+
+        projection = self._remote_effective_projection
+        if not isinstance(projection, dict):
+            return None
+        moment = _as_beijing(at or self._now())
+        current_week = (
+            moment.date() - timedelta(days=moment.date().weekday())
+        ).isoformat()
+        if (
+            str(projection.get("focus_date") or "") != moment.date().isoformat()
+            or str(projection.get("week_start") or "") != current_week
+        ):
+            return None
+        return {
+            "today_seconds": max(0, int(projection.get("today_seconds") or 0)),
+            "week_seconds": max(0, int(projection.get("week_seconds") or 0)),
+        }
 
     def merge_remote_history(self, payload: Any) -> bool:
         """Ignore derived daily totals; raw intervals are the only facts."""
@@ -1453,6 +1524,13 @@ class FocusAnalyticsStore:
             today_seconds = max(0, int(day_projection.get("total_seconds", 0) or 0))
         if has_raw_facts or bool(week_projection.get("local_evidence")):
             weekly_total = max(0, int(week_projection.get("total_seconds", 0) or 0))
+        # ``period_summary`` remains raw-only. This separate display floor
+        # aligns local UI surfaces with a server projection without creating
+        # uploadable evidence or adding another copy of the same interval.
+        remote_projection = self.remote_effective_projection(moment)
+        if remote_projection is not None:
+            today_seconds = max(today_seconds, remote_projection["today_seconds"])
+            weekly_total = max(weekly_total, remote_projection["week_seconds"])
         streak_reference = today if (today_seconds or 0) > 0 else today - timedelta(days=1)
         streak = 0
         while (day_seconds(streak_reference - timedelta(days=streak)) or 0) > 0:
@@ -2688,14 +2766,18 @@ class AccountFocusProjection:
     def today_seconds(self, at: datetime | None = None) -> int:
         moment = _as_beijing(at or self.store.current_time())
         start = datetime.combine(moment.date(), time.min, tzinfo=BEIJING_TIMEZONE)
-        return self.seconds_for_range(start, moment, at=moment)
+        local_seconds = self.seconds_for_range(start, moment, at=moment)
+        remote = self.store.remote_effective_projection(moment)
+        return max(local_seconds, int(remote["today_seconds"])) if remote else local_seconds
 
     def week_seconds(self, at: datetime | None = None) -> int:
         moment = _as_beijing(at or self.store.current_time())
         start = moment.date() - timedelta(days=moment.date().weekday())
         start_at = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
         end_at = start_at + timedelta(days=7)
-        return self.seconds_for_range(start_at, end_at, at=moment)
+        local_seconds = self.seconds_for_range(start_at, end_at, at=moment)
+        remote = self.store.remote_effective_projection(moment)
+        return max(local_seconds, int(remote["week_seconds"])) if remote else local_seconds
 
 
 class AccountFocusStore(FocusAnalyticsStore):

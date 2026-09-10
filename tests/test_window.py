@@ -125,6 +125,38 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
+    """The display bubble keeps the server effective total without raw rows."""
+
+    app, window = _create_window()
+    account_id = "account-1"
+    moment = window.focus_analytics.current_time()
+    week_start = moment.date() - timedelta(days=moment.date().weekday())
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    window._active_focus_account_id = account_id
+    window.focus_analytics.set_remote_effective_projection(
+        focus_date=moment.date().isoformat(),
+        today_seconds=2 * 3600 + 30 * 60,
+        week_start=week_start.isoformat(),
+        week_seconds=2 * 3600 + 30 * 60,
+    )
+
+    snapshot = SimpleNamespace(
+        status="rest",
+        session_started_at=None,
+        current_continuous_seconds=0,
+    )
+    assert window._refresh_cross_device_today_display(
+        {}, snapshot=snapshot, source="server-effective-floor"
+    )
+    assert window._cross_device_today_display_seconds == 2 * 3600 + 30 * 60
+    assert window._cross_device_today_display_value(snapshot) == 2 * 3600 + 30 * 60
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_empty_focus_delta_does_not_rearm_social_tick(monkeypatch) -> None:
     """空的成功增量不能把后台同步重新排成高频循环。"""
 
@@ -2782,6 +2814,40 @@ def test_shared_focus_totals_include_checkpointed_current_session(monkeypatch) -
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_shared_focus_totals_refresh_when_server_effective_projection_arrives(monkeypatch) -> None:
+    """A newer account total invalidates the local display cache immediately."""
+
+    app, window = _create_window()
+    moment = window.focus_analytics.current_time()
+    week_start = moment.date() - timedelta(days=moment.date().weekday())
+
+    def period_summary(_period, _moment=None):
+        return {
+            "total_seconds": 2 * 3600 + 19 * 60,
+            "local_record_count": 1,
+            "raw_period_evidence": True,
+        }
+
+    monkeypatch.setattr(window.focus_analytics, "period_summary", period_summary)
+    # PetWindow construction may prime the provider cache with an empty
+    # demo-ledger value. Start this test from the same state as a real local
+    # ledger after its first projection refresh.
+    window._focus_projection_cache = None
+    first = window._shared_focus_period_seconds(moment)
+    assert first == {"today_seconds": 2 * 3600 + 19 * 60, "week_seconds": 2 * 3600 + 19 * 60}
+
+    assert window.focus_analytics.set_remote_effective_projection(
+        focus_date=moment.date().isoformat(),
+        today_seconds=2 * 3600 + 30 * 60,
+        week_start=week_start.isoformat(),
+        week_seconds=2 * 3600 + 30 * 60,
+    )
+    second = window._shared_focus_period_seconds(moment)
+    assert second == {"today_seconds": 2 * 3600 + 30 * 60, "week_seconds": 2 * 3600 + 30 * 60}
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_paused_pet_labels_fresh_remote_device_work_without_network(monkeypatch) -> None:
     """A remote live interval advances the union but does not change local controls."""
 
@@ -3299,6 +3365,25 @@ def test_double_right_click_triggers_color_mist_world_without_new_window() -> No
     app.processEvents()
 
 
+def test_focus_start_requests_immediate_social_flush(monkeypatch) -> None:
+    """开始专注后应在下一个 Qt 轮次发送在线状态。"""
+
+    app, window = _create_window()
+    scheduled: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        window,
+        "_schedule_social_tick",
+        lambda **kwargs: scheduled.append(dict(kwargs)),
+    )
+
+    window.start_work_timer()
+
+    assert scheduled == [{"immediate": True}]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_pause_survives_secondary_projection_failure(monkeypatch) -> None:
     """A non-canonical local card failure cannot leave the timer running."""
 
@@ -3502,26 +3587,6 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     assert window._activity_transition_from.isNull()
     assert window._ambient_activity == "guitar"
     assert window.size() == original_size
-    window.close()
-    window.deleteLater()
-    app.processEvents()
-
-
-
-def test_focus_start_requests_immediate_social_flush(monkeypatch) -> None:
-    """开始专注后应在下一个 Qt 轮次发送在线状态。"""
-
-    app, window = _create_window()
-    scheduled: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        window,
-        "_schedule_social_tick",
-        lambda **kwargs: scheduled.append(dict(kwargs)),
-    )
-
-    window.start_work_timer()
-
-    assert scheduled == [{"immediate": True}]
     window.close()
     window.deleteLater()
     app.processEvents()
