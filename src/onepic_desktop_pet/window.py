@@ -3509,7 +3509,11 @@ class PetWindow(QWidget):
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(self.work_timer.is_running)
         self._sync_state_effect()
-        self._schedule_social_tick()
+        # A focus start is visible to other accounts through the heartbeat,
+        # not through the 30-second dashboard poll. Flush this transition on
+        # the next Qt turn so the independent heartbeat worker can publish it
+        # immediately; passive/background reads remain throttled elsewhere.
+        self._schedule_social_tick(immediate=True)
         self._refresh_pixmap()
         if self.work_controls.isVisible():
             self._show_work_controls()
@@ -7709,7 +7713,7 @@ class PetWindow(QWidget):
             self._personal_outfit_sync_pending = False
             self._personal_outfit_sync_user_id = ""
         self._economy_sync_user_id = ""
-        self._schedule_social_tick()
+        self._schedule_social_tick(immediate=True)
 
     def _set_login_reward_account(self, account_id: str | None) -> None:
         """Load the permanent login entitlement for the active account."""
@@ -7980,7 +7984,7 @@ class PetWindow(QWidget):
             )
         self._schedule_social_tick()
 
-    def _schedule_social_tick(self) -> None:
+    def _schedule_social_tick(self, *, immediate: bool = False) -> None:
         """Push work/room transitions promptly instead of waiting 30 seconds."""
 
         if not self.social_client.signed_in:
@@ -7992,7 +7996,7 @@ class PetWindow(QWidget):
             # the next background sync, without putting that work in the
             # transition callback itself.
             self._social_personal_sync_due = True
-            timer.start(250)
+            timer.start(0 if immediate else 250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
         if detect_quiet_mode().blocked:

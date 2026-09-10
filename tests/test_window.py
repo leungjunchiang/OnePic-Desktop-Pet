@@ -3292,6 +3292,8 @@ def test_double_right_click_triggers_color_mist_world_without_new_window() -> No
     assert not window.context_menu_timer.isActive()
     window.mouseDoubleClickEvent(event)
     assert window._local_effect_manager.color_mist_world_active is False
+    window.mouseDoubleClickEvent(event)
+    assert window._local_effect_manager.color_mist_world_active is True
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -3500,6 +3502,26 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     assert window._activity_transition_from.isNull()
     assert window._ambient_activity == "guitar"
     assert window.size() == original_size
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+
+def test_focus_start_requests_immediate_social_flush(monkeypatch) -> None:
+    """开始专注后应在下一个 Qt 轮次发送在线状态。"""
+
+    app, window = _create_window()
+    scheduled: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        window,
+        "_schedule_social_tick",
+        lambda **kwargs: scheduled.append(dict(kwargs)),
+    )
+
+    window.start_work_timer()
+
+    assert scheduled == [{"immediate": True}]
     window.close()
     window.deleteLater()
     app.processEvents()

@@ -209,6 +209,8 @@ def test_color_mist_world_toggle_stops_and_clears_all_background_state() -> None
     manager.tick()
     assert manager.current_kind is LocalEffectKind.NONE
     assert manager.phase is EffectPhase.OFF
+    assert manager.toggle_color_mist_world() is True
+    assert manager.color_mist_world_active is True
 
 
 def test_color_mist_world_expiry_restores_the_latest_background_state_not_the_entry_snapshot() -> None:

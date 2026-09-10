@@ -446,6 +446,23 @@ class LocalEffectManager:
             self._candidate_since = 0.0
             self._event_until = 0.0
         self.requested_kind = desired
+        if desired is LocalEffectKind.NONE and not restore_background:
+            # An explicit toggle-off is a hard reset, not a semantic state
+            # transition. Leaving the reusable window in RELEASING allowed
+            # its old timer callback to race with the next double-click and
+            # made a quick re-entry appear to do nothing on macOS/Windows.
+            previous = self.current_kind
+            self.current_kind = LocalEffectKind.NONE
+            self.current_source = EffectSource.STATE
+            self.phase = EffectPhase.OFF
+            self.entered_at = 0.0
+            self.min_hold_until = 0.0
+            self.release_after = 0.0
+            self._candidate_kind = LocalEffectKind.NONE
+            self._candidate_since = 0.0
+            if previous is not LocalEffectKind.NONE:
+                self._on_stop()
+            return
         if desired is LocalEffectKind.NONE:
             self._begin_release(now)
         else:
