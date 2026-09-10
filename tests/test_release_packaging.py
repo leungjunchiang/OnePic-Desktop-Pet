@@ -51,7 +51,11 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'x64|x86_64) release_arch="x64"' in macos_build
     assert "macos-latest" in workflow
     assert "macos-15-intel" in workflow
-    assert 'release_tag="${GITHUB_REF_NAME#release/}"' in workflow
+    # The workflow also supports manually dispatched build branches whose
+    # names carry a suffix, so it must extract a strict X.Y.Z version instead
+    # of preserving the entire ref name as package metadata.
+    assert 'release_tag="$(printf \'%s\' "$GITHUB_REF_NAME" | sed -E' in workflow
+    assert r"([0-9]+\.[0-9]+\.[0-9]+)" in workflow
     assert 'gh release view "$release_tag"' in workflow
     assert 'gh release delete "$release_tag"' in workflow
     assert "--cleanup-tag" in workflow
