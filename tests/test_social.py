@@ -52,6 +52,7 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
             "quick_status": "再卷30分钟",
             "quick_status_expires_at": None,
             "session_active": True,
+            "input_idle_seconds": 17,
             "work_state": "working",
             "pause_reason": None,
             "personal_state": {"today_seconds": 120},
@@ -63,6 +64,7 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
         "session_active": True,
         "session_id": "session-1",
         "session_started_at": "2026-08-21T08:00:00+08:00",
+        "input_idle_seconds": 17,
     }
 
 
@@ -702,12 +704,12 @@ def test_http_backend_uses_direct_supabase_paths():
         sequence=7,
     )
     paths = [call[1] for call in backend.calls]
-    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/rpc/lili_buddy_requests", "/rest/v1/rpc/lili_upsert_focus_presence"]
+    assert paths == ["/auth/v1/token?grant_type=password", "/auth/v1/health", "/rest/v1/rpc/lili_dashboard", "/rest/v1/rpc/lili_room_dashboard", "/rest/v1/rpc/lili_room_room_rituals", "/rest/v1/rpc/lili_buddy_requests", "/rest/v1/rpc/lili_upsert_focus_presence_v2"]
     heartbeat_call = backend.calls[-1]
     heartbeat_body = heartbeat_call[2]
     assert set(heartbeat_body) == {
         "p_working", "p_session_active", "p_session_id",
-        "p_session_started_at", "p_device_id", "p_sequence",
+        "p_session_started_at", "p_device_id", "p_sequence", "p_input_idle_seconds",
     }
     assert "p_today_seconds" not in heartbeat_body
     assert "p_week_seconds" not in heartbeat_body
@@ -1068,7 +1070,7 @@ def test_heartbeat_refreshes_transport_session_from_auth_manager():
 
     assert backend.session is session
     assert backend.calls
-    assert backend.calls[0][1] == "/rest/v1/rpc/lili_upsert_focus_presence"
+    assert backend.calls[0][1] == "/rest/v1/rpc/lili_upsert_focus_presence_v2"
 
 
 def test_never_seen_peer_totals_are_zeroed_without_touching_seen_peers():
@@ -1462,15 +1464,37 @@ def test_presence_freshness_is_server_authoritative_in_all_relays():
     assert "new.last_seen := now()" in migration
     assert "create trigger lili_presence_server_timestamp" in migration
     for source in (cloudbase, edge, worker):
-        assert "/rest/v1/rpc/lili_upsert_focus_presence" in source
+        assert "/rest/v1/rpc/lili_upsert_focus_presence_v2" in source
         assert "p_session_started_at" in source
         assert "p_session_id" in source
         assert "p_sequence" in source
+        assert "p_input_idle_seconds" in source
         assert "p_today_seconds" not in source
         assert "p_week_seconds" not in source
         assert "p_device_claim" not in source
     assert "String(body.last_seen || now)" not in cloudbase + edge + worker
     assert "String(body.last_seen || now())" not in cloudbase + edge + worker
+
+
+def test_live_focus_requires_recent_activity_proof_and_can_quarantine_bad_session():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260910133000_lili_focus_activity_proof_guard.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "lili_focus_session_quarantines" in normalized
+    assert "rename to lili_upsert_focus_presence_core" in normalized
+    assert "create or replace function public.lili_upsert_focus_presence_v2" in normalized
+    assert "p_input_idle_seconds integer" in normalized
+    assert "p_input_idle_seconds between 0 and 600" in normalized
+    assert "client_update_required" in normalized
+    assert "session_quarantined" in normalized
+    assert "from public.lili_focus_session_quarantines q" in normalized
+    assert "range_agg" in normalized
 
 
 def test_presence_context_is_separate_from_liveness_contract():

@@ -41,6 +41,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_focus_weekly_leaderboard",
   "lili_update_presence_context",
   "lili_upsert_focus_presence",
+  "lili_upsert_focus_presence_v2",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -313,7 +314,8 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
   // One authenticated RPC updates the complete live-state tuple.  This keeps
   // heartbeat independent from dashboard/statistics requests and prevents a
   // partially written presence row.
-  return await supabaseFetch(request, env, "/rest/v1/rpc/lili_upsert_focus_presence", {
+  const inputIdleSeconds = Number(body.input_idle_seconds);
+  return await supabaseFetch(request, env, "/rest/v1/rpc/lili_upsert_focus_presence_v2", {
     body: {
       p_working: Boolean(body.working),
       p_session_active: Boolean(body.session_active),
@@ -321,6 +323,11 @@ async function presence(request: Request, env: Env, body: Record<string, unknown
       p_session_started_at: body.session_started_at || null,
       p_device_id: String(body.device_id || "").trim().slice(0, 120),
       p_sequence: Math.max(0, Number(body.sequence) || 0),
+      p_input_idle_seconds: (
+        Number.isFinite(inputIdleSeconds)
+        && inputIdleSeconds >= 0
+        && inputIdleSeconds <= 86_400
+      ) ? Math.trunc(inputIdleSeconds) : null,
     },
     auth: true,
     method: "POST",

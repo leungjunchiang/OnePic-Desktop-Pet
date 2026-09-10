@@ -6713,6 +6713,19 @@ class PetWindow(QWidget):
             if active_session
             else None
         )
+        input_idle_seconds: int | None = None
+        if active_session:
+            # The heartbeat carries no accumulated duration.  It may only
+            # prove that the explicit local timer still has recent aggregate
+            # keyboard/mouse activity.  A missing native probe deliberately
+            # stays ``None`` so the server cannot mistake a login-only or
+            # broken-client loop for an active focus session.
+            try:
+                observed_idle_seconds = system_idle_seconds()
+                if observed_idle_seconds is not None:
+                    input_idle_seconds = max(0, min(86_400, int(observed_idle_seconds)))
+            except (TypeError, ValueError, OverflowError):
+                input_idle_seconds = None
         presence = {
             "user_id": user_id,
             "working": bool(snapshot.is_running),
@@ -6729,6 +6742,7 @@ class PetWindow(QWidget):
                 if live_segment_started_at is not None
                 else None
             ),
+            "input_idle_seconds": input_idle_seconds,
             # The following are dashboard/personal-sync context only.  The
             # heartbeat worker applies _heartbeat_payload before transport,
             # so they can never become presence duration fields.

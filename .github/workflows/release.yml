@@ -198,5 +198,5 @@ jobs:
           gh release create "$release_tag" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Lili $release_tag - 专注时间防回退与彩雾修复" \
-            --notes "修复旧版 daily aggregate 与部分 raw segment 并存时，周专注时间从较大历史值回退到 raw-only 值的问题。迁移时一次性冻结可信 legacy daily floor；每个北京时间自然日按 max(sealed segment + fresh live presence 的 interval union, frozen legacy floor) 计算，不相加、不重复计算，也不伪造历史 segment。修复发布流水线迁移顺序，确保后续自动部署不会恢复 raw-only 函数；个人日/周累计和历史同步改为单调更新，暂停或重启后的较小本地值不能覆盖服务器较大值。彩雾世界双击关闭后清理其他彩雾状态；macOS 透明浮层禁止系统投影，彩雾世界不再绘制地面环和入口冲击环。"
+            --title "Lili $release_tag - 专注状态真实性修复" \
+            --notes "修复已登录但未实际专注的旧客户端持续上报，导致好友卡片和本周/今日统计被一段未封存 live 会话无限拉长的问题。新版只在显式运行的本地计时器同时提供最近 10 分钟键鼠活动证明时，才允许服务器投影 live 专注；不记录按键、鼠标位置或任何活动内容。旧客户端仍显示在线，但会自动降为休息，不再累加 live 时长。已确认失真的 session 可由服务器隔离，即使旧客户端之后上传封存段也不参与任何日/周统计。后台读取缓存仍为 90 秒，未增加额外轮询或 egress。"

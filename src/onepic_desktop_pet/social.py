@@ -75,6 +75,10 @@ HEARTBEAT_FIELDS = frozenset(
         "working",
         "session_active",
         "session_started_at",
+        # This is a coarse, transient liveness proof (seconds since the last
+        # keyboard/mouse event), never an activity log or a duration field.
+        # The server accepts a running tuple only while this proof is fresh.
+        "input_idle_seconds",
         "last_seen_at",
         "device_id",
         "sequence",
@@ -600,6 +604,18 @@ def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
         payload["working"] = True
         payload["session_active"] = True
         payload["session_id"] = session_id[:160]
+        if "input_idle_seconds" in payload:
+            try:
+                idle_seconds = int(payload.get("input_idle_seconds"))
+            except (TypeError, ValueError, OverflowError):
+                idle_seconds = -1
+            # Keep the wire value bounded.  The database applies the stricter
+            # focus gate (recent input only); this protects relays from
+            # malformed values without ever treating a missing probe as
+            # recent activity.
+            payload["input_idle_seconds"] = (
+                idle_seconds if 0 <= idle_seconds <= 86_400 else None
+            )
     if "sequence" in payload:
         try:
             payload["sequence"] = max(0, int(payload["sequence"] or 0))
@@ -618,6 +634,7 @@ def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
         "p_session_started_at": body.get("session_started_at"),
         "p_device_id": str(body.get("device_id") or "")[:120],
         "p_sequence": max(0, int(body.get("sequence") or 0)),
+        "p_input_idle_seconds": body.get("input_idle_seconds"),
     }
 
 
@@ -1469,7 +1486,7 @@ class SocialBackend(Protocol):
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
-    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None: ...
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
@@ -2018,7 +2035,7 @@ class HttpSocialBackend:
         else:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
-    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None:
         # ``AuthSessionManager`` is the source of truth.  During login and
         # token refresh it can already hold a valid session while this
         # transport's compatibility attribute is still empty.  Returning at
@@ -2053,6 +2070,7 @@ class HttpSocialBackend:
                 "session_started_at": session_started_at,
                 "device_id": str(device_id or stable_device_id),
                 "sequence": max(0, int(sequence or 0)),
+                "input_idle_seconds": input_idle_seconds,
             }
         )
         body["device_id"] = stable_device_id
@@ -2062,7 +2080,7 @@ class HttpSocialBackend:
             try:
                 result = self._raw(
                     "POST",
-                    "/rest/v1/rpc/lili_upsert_focus_presence",
+                    "/rest/v1/rpc/lili_upsert_focus_presence_v2",
                     _atomic_presence_body(body),
                     authenticated=True,
                 )
@@ -2070,7 +2088,7 @@ class HttpSocialBackend:
                     body["sequence"] = _next_presence_sequence(requested_user_id)
                     result = self._raw(
                         "POST",
-                        "/rest/v1/rpc/lili_upsert_focus_presence",
+                        "/rest/v1/rpc/lili_upsert_focus_presence_v2",
                         _atomic_presence_body(body),
                         authenticated=True,
                     )
@@ -2854,9 +2872,9 @@ class LegacyDirectSocialClient:
             body["owner_nickname"] = clean_owner_nickname(owner_nickname) or None
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
-    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0) -> None:
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None:
         if self._http_backend is not None:
-            return self._http_backend.heartbeat(user_id=user_id, working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence)
+            return self._http_backend.heartbeat(user_id=user_id, working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence, input_idle_seconds=input_idle_seconds)
         if not self.session:
             return
         session_user_id = str(self.session.user_id)
@@ -2874,15 +2892,16 @@ class LegacyDirectSocialClient:
                 "session_started_at": session_started_at,
                 "device_id": stable_device_id,
                 "sequence": max(0, int(sequence or 0)),
+                "input_idle_seconds": input_idle_seconds,
             }
         )
         if not body.get("sequence"):
             body["sequence"] = _next_presence_sequence(self.session.user_id)
         try:
-            result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
+            result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence_v2", _atomic_presence_body(body), authenticated=True)
             if _reconcile_presence_rpc_response(self.session.user_id, stable_device_id, result):
                 body["sequence"] = _next_presence_sequence(self.session.user_id)
-                result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence", _atomic_presence_body(body), authenticated=True)
+                result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence_v2", _atomic_presence_body(body), authenticated=True)
                 _reconcile_presence_rpc_response(self.session.user_id, stable_device_id, result)
         except SocialError as exc:
             if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":

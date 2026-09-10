@@ -10,7 +10,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_set_room_schedule", "lili_set_room_challenge", "lili_set_buddy_subscription",
   "lili_room_room_rituals",
   "lili_buddy_private_notes", "lili_set_buddy_private_note",
-  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_sync_focus_segments_delta", "lili_sync_focus_segments_delta_v2", "lili_focus_segment_integrity_v1", "lili_focus_live_projection", "lili_focus_weekly_leaderboard", "lili_update_presence_context", "lili_upsert_focus_presence",
+  "lili_sync_personal_state", "lili_sync_focus_history", "lili_sync_focus_segments", "lili_sync_focus_segments_delta", "lili_sync_focus_segments_delta_v2", "lili_focus_segment_integrity_v1", "lili_focus_live_projection", "lili_focus_weekly_leaderboard", "lili_update_presence_context", "lili_upsert_focus_presence", "lili_upsert_focus_presence_v2",
 ]);
 
 const ROUTE_TO_RPC = new Map([
@@ -129,7 +129,8 @@ async function handleDashboard(env, event, roomId = "") {
 }
 async function handlePresence(env, event, body) {
   bearer(event);
-  return supabaseFetch(env, event, "/rest/v1/rpc/lili_upsert_focus_presence", {
+  const inputIdleSeconds = Number(body.input_idle_seconds);
+  return supabaseFetch(env, event, "/rest/v1/rpc/lili_upsert_focus_presence_v2", {
     body: {
       p_working: Boolean(body.working),
       p_session_active: Boolean(body.session_active),
@@ -137,6 +138,7 @@ async function handlePresence(env, event, body) {
       p_session_started_at: body.session_started_at || null,
       p_device_id: String(body.device_id || "").trim().slice(0, 120),
       p_sequence: Math.max(0, Number(body.sequence) || 0),
+      p_input_idle_seconds: Number.isFinite(inputIdleSeconds) && inputIdleSeconds >= 0 && inputIdleSeconds <= 86400 ? Math.trunc(inputIdleSeconds) : null,
     },
   });
 }
