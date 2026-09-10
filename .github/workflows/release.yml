@@ -6,6 +6,8 @@ on:
     tags:
       - "v*"
     branches:
+      - "v0.23.241"
+    branches:
       - "release/v*"
 
 # A release branch is updated as one logical publication.  If several
@@ -135,7 +137,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/v0.23.241' || startsWith(github.ref, 'refs/heads/release/')
     needs:
       - windows-build
       - macos-build
@@ -154,13 +156,14 @@ jobs:
             --root . \
             --version "$release_tag" \
             --min-app-version "0.22.55" \
-            --ref "$GITHUB_REF_NAME" \
+            --ref "$RELEASE_TAG" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json
       - name: Ensure release tag exists
         if: startsWith(github.ref, 'refs/heads/release/')
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v0.23.241
         shell: bash
         run: |
           release_tag="${GITHUB_REF_NAME#release/}"
