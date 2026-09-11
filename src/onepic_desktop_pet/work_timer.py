@@ -95,14 +95,13 @@ def format_elapsed_clock(seconds: int) -> str:
 
 
 class SmoothDurationDisplay:
-    """Keep a live duration label advancing by at most one second at a time.
+    """Project a live duration from a monotonic local clock.
 
-    The authoritative timer remains monotonic and may legitimately advance by
-    several seconds when Qt or the operating system delays a paint callback.
-    This class only controls presentation: while focus is running it never
-    renders more than one new second per real second.  Pausing, switching
-    accounts/days, or correcting a value downward snaps to the authoritative
-    value so stale display state cannot leak into another projection.
+    The desktop label is a stopwatch while focus is active.  A dashboard or
+    server projection is only a calibration source: it may move the label
+    forward, but an old cache must never pause or rewind the local clock.
+    Keeping the monotonic anchor here also means a delayed Qt callback catches
+    up to the real elapsed time in one repaint instead of slowly chasing it.
     """
 
     def __init__(
@@ -128,21 +127,18 @@ class SmoothDurationDisplay:
         active: bool,
         identity: str,
     ) -> int:
-        """Adopt a freshly server-confirmed display baseline immediately.
-
-        ``project()`` intentionally rate-limits catch-up so a delayed paint
-        callback cannot make a local clock jump several seconds at once.  A
-        remote account projection is different: it is a new authoritative
-        baseline shared by every device, and delaying its adoption makes the
-        pet disagree with the study-room total for the whole catch-up period.
-        """
-
+        """Calibrate from a server baseline without stopping an active clock."""
         value = max(0, int(authoritative_seconds or 0))
-        self._identity = str(identity or "")
-        self._value = value
-        self._active = bool(active)
-        self._last_step_at = self._monotonic()
-        return value
+        now = self._monotonic()
+        clean_identity = str(identity or "")
+        if (
+            self._value is None
+            or clean_identity != self._identity
+            or not active
+            or not self._active
+        ):
+            return self._adopt(value, active=active, identity=clean_identity, now=now)
+        return self._project_active(value, now)
 
     def project(
         self,
@@ -154,29 +150,49 @@ class SmoothDurationDisplay:
         authoritative = max(0, int(authoritative_seconds or 0))
         now = self._monotonic()
         clean_identity = str(identity or "")
-        must_snap = (
+        if (
             self._value is None
             or clean_identity != self._identity
             or not active
             or not self._active
-            or authoritative < int(self._value or 0)
             or now < self._last_step_at
-        )
-        if must_snap:
-            self._identity = clean_identity
-            self._value = authoritative
-            self._active = bool(active)
-            self._last_step_at = now
-            return authoritative
+        ):
+            return self._adopt(
+                authoritative,
+                active=active,
+                identity=clean_identity,
+                now=now,
+            )
+        return self._project_active(authoritative, now)
 
-        self._active = True
-        if authoritative > self._value and now - self._last_step_at >= 1.0:
-            self._value += 1
-            # Reset to the actual callback time.  If the GUI thread was
-            # delayed for three seconds, queued refreshes cannot rapidly emit
-            # the remaining two values inside the next second.
+    def _adopt(self, value: int, *, active: bool, identity: str, now: float) -> int:
+        """Start a new account/day/state anchor."""
+
+        self._identity = identity
+        self._value = max(0, int(value))
+        self._active = bool(active)
+        self._last_step_at = now
+        return self._value
+
+    def _project_active(self, authoritative: int, now: float) -> int:
+        """Advance by real monotonic time, then apply forward calibration."""
+
+        assert self._value is not None
+        elapsed = max(0, int(now - self._last_step_at))
+        local_value = int(self._value) + elapsed
+        if authoritative > local_value:
+            # A second device or a repaired legacy total may legitimately be
+            # ahead. Adopt it immediately and restart the local anchor there.
+            self._value = authoritative
             self._last_step_at = now
-        return min(authoritative, self._value)
+        else:
+            # Keep the fractional remainder so 250 ms GUI ticks do not lose
+            # time, while an 8-second delayed callback catches up by 8.
+            self._value = local_value
+            if elapsed:
+                self._last_step_at += elapsed
+        self._active = True
+        return int(self._value)
 
 
 class WorkTimerModel:

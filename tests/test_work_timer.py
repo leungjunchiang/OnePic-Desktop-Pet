@@ -38,16 +38,23 @@ def _timer(tmp_path, clock: FakeClock) -> WorkTimerModel:
     )
 
 
-def test_smooth_duration_display_never_catches_up_multiple_seconds_at_once() -> None:
+def test_smooth_duration_display_advances_when_authoritative_value_is_stale() -> None:
     clock = FakeClock()
     display = SmoothDurationDisplay(lambda: clock.monotonic)
 
     assert display.project(100, active=True, identity="account:day") == 100
     clock.advance(3)
-    assert display.project(103, active=True, identity="account:day") == 101
-    assert display.project(103, active=True, identity="account:day") == 101
+    # The network projection may remain frozen, but the desktop stopwatch must
+    # still reflect all elapsed monotonic time.
+    assert display.project(100, active=True, identity="account:day") == 103
+    assert display.project(100, active=True, identity="account:day") == 103
     clock.advance(1)
-    assert display.project(104, active=True, identity="account:day") == 102
+    assert display.project(100, active=True, identity="account:day") == 104
+
+    # A delayed GUI callback catches up in one repaint instead of slowly
+    # chasing the elapsed time.
+    clock.advance(8)
+    assert display.project(100, active=True, identity="account:day") == 112
 
     # Pausing and a new day must show the authoritative value immediately.
     assert display.project(104, active=False, identity="account:day") == 104
@@ -65,9 +72,20 @@ def test_smooth_duration_display_can_adopt_a_server_baseline_immediately() -> No
     # more. The pet must agree with the server immediately, not chase it one
     # second per paint callback.
     assert display.synchronize(confirmed, active=True, identity="account:day") == confirmed
-    assert display.project(confirmed + 1, active=True, identity="account:day") == confirmed
-    clock.advance(1)
     assert display.project(confirmed + 1, active=True, identity="account:day") == confirmed + 1
+    clock.advance(1)
+    assert display.project(confirmed + 1, active=True, identity="account:day") == confirmed + 2
+
+
+def test_smooth_duration_display_ignores_older_server_values_while_active() -> None:
+    clock = FakeClock()
+    display = SmoothDurationDisplay(lambda: clock.monotonic)
+
+    assert display.project(3600, active=True, identity="account:day") == 3600
+    clock.advance(5)
+    assert display.synchronize(3590, active=True, identity="account:day") == 3605
+    clock.advance(2)
+    assert display.project(3590, active=True, identity="account:day") == 3607
 
 
 def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> None:
