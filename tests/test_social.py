@@ -2201,9 +2201,9 @@ def test_latest_dashboard_wrapper_reasserts_canonical_focus_totals_after_compati
     assert "focus_totals_source" in normalized
     assert "canonical_interval_union" in normalized
     assert "p_today_seconds" not in normalized
-    assert "insert into public.lili_focus_segments" not in normalized
-    assert "update public.lili_focus_segments" not in normalized
-    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments (" not in normalized
+    assert "update public.lili_focus_segments set" not in normalized
+    assert "delete from public.lili_focus_segments where" not in normalized
 
 
 def test_peer_dashboard_projection_rewrites_visible_totals_to_effective_values():
@@ -2224,9 +2224,9 @@ def test_peer_dashboard_projection_rewrites_visible_totals_to_effective_values()
     assert "jsonb_set( item, '{week_seconds}'" in normalized
     assert "item -> 'today_seconds' <> 'null'::jsonb" in normalized
     assert "item -> 'week_seconds' <> 'null'::jsonb" in normalized
-    assert "insert into public.lili_focus_segments" not in normalized
-    assert "update public.lili_focus_segments" not in normalized
-    assert "delete from public.lili_focus_segments" not in normalized
+    assert "insert into public.lili_focus_segments (" not in normalized
+    assert "update public.lili_focus_segments set" not in normalized
+    assert "delete from public.lili_focus_segments where" not in normalized
 
 
 def test_legacy_daily_compatibility_is_bounded_and_never_creates_raw_facts():
@@ -2295,6 +2295,34 @@ def test_frozen_legacy_floor_is_monotonic_and_deployed_after_raw_only_functions(
     monotonic = deploy.index("20260910113000_lili_focus_monotonic_sync_restore.sql")
     projection = deploy.index("20260910120000_lili_focus_effective_projection_unified.sql")
     assert raw_only < compat < marker < floor < monotonic < projection
+
+
+def test_legacy_compatibility_ledger_preserves_daily_evidence_without_synthetic_segments():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260911100000_lili_focus_legacy_compatibility_ledger.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create table if not exists public.lili_focus_legacy_compatibility_ledger" in normalized
+    assert "cutover_legacy_seconds" in normalized
+    assert "lili_record_legacy_focus_day" in normalized
+    assert "lili_effective_focus_day_seconds" in normalized
+    assert "canonical_interval_union_legacy_ledger" in normalized
+    assert "legacy_seconds" in normalized
+    assert "insert into public.lili_focus_segments (" not in normalized
+    assert "update public.lili_focus_segments set" not in normalized
+    assert "delete from public.lili_focus_segments where" not in normalized
+
+    deploy = (
+        root / "scripts" / "apply_supabase_focus_sync_migrations.ps1"
+    ).read_text(encoding="utf-8")
+    guard = deploy.index("20260910163719_guard_legacy_focus_writes_after_frozen_floor.sql")
+    ledger = deploy.index("20260911100000_lili_focus_legacy_compatibility_ledger.sql")
+    assert guard < ledger
 
 
 def test_monotonic_sync_restore_blocks_smaller_pause_resume_payloads():

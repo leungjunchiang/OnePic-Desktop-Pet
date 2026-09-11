@@ -1,9 +1,12 @@
-"""Upgrade-time recovery of verifiable historical focus intervals.
+"""Recovery of verifiable historical focus intervals.
 
 The scanner never interprets daily or lifetime counters as work.  It accepts
 only closed intervals with a stable local identity, then hands them to
 ``AccountFocusStore.commit_focus_segment`` so ordinary work and recovery share
-the same WAL, pending upload, server upsert and ACK lifecycle.
+the same WAL, pending upload, server upsert and ACK lifecycle.  Completed
+scans are rechecked when an exact local history source changes, so a legacy
+client that writes its interval after the first upgrade scan cannot strand the
+fact permanently.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from .focus_segments import (
 from .local_data import platform_app_data_root, read_json, write_json_atomic
 
 
-FOCUS_HISTORY_RECOVERY_VERSION = 1
+FOCUS_HISTORY_RECOVERY_VERSION = 2
 MAX_RECOVERY_LOG_RUNS = 20
 
 
@@ -69,7 +72,12 @@ class FocusHistoryRecovery:
         state = read_json(self.state_path, {})
         if not isinstance(state, dict):
             state = {}
-        if not force and int(state.get("completed_version", 0) or 0) >= FOCUS_HISTORY_RECOVERY_VERSION:
+        source_signatures = self._source_signatures()
+        if (
+            not force
+            and int(state.get("completed_version", 0) or 0) >= FOCUS_HISTORY_RECOVERY_VERSION
+            and state.get("source_signatures") == source_signatures
+        ):
             report = self._report(
                 automatic=True,
                 scanned=0,
@@ -157,10 +165,41 @@ class FocusHistoryRecovery:
                 "last_report": asdict(report),
                 "runs": [*runs[-(MAX_RECOVERY_LOG_RUNS - 1):], asdict(report)],
                 "pending_after_scan": pending,
+                "source_signatures": self._source_signatures(),
             }
         )
         write_json_atomic(self.state_path, state)
         return report
+
+    def _source_paths(self) -> list[Path]:
+        """Return exact local-history files that the scanner can interpret."""
+
+        paths = [
+            self.account_dir / "work_sessions.json",
+            self.account_dir / "focus_recovery.jsonl",
+        ]
+        try:
+            paths.extend(sorted(self.diagnostics_dir.glob("lifecycle.log*"))[-4:])
+        except (OSError, ValueError):
+            pass
+        return list(dict.fromkeys(paths))
+
+    def _source_signatures(self) -> dict[str, dict[str, int]]:
+        """Return cheap change markers without reading private history content."""
+
+        signatures: dict[str, dict[str, int]] = {}
+        for path in self._source_paths():
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if not path.is_file():
+                continue
+            signatures[str(path)] = {
+                "size": max(0, int(stat.st_size)),
+                "mtime_ns": max(0, int(stat.st_mtime_ns)),
+            }
+        return signatures
 
     def _report(
         self,

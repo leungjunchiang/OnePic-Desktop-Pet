@@ -17,7 +17,9 @@
 - 自动评分并依次尝试本机音乐 Provider，成功后把基础控制锁定到实际播放的平台；
 - 支持电脑图层、摸头工作气泡、今日/终身计时、每小时娃衣解锁、夜间限定造型及健康提醒；
 - 工作 FocusSession 允许跨日/跨周，暂停、完成、关闭和异常恢复均先把旧区间 durable seal 再切换身份；
+- 历史精确区间回收会在本地来源变化后低频复查，避免旧客户端晚到的 sealed fact 永久留在本机；
 - 今日时长读取账号级 sealed/live 区间并集，同时把本机暂停与另一台设备工作明确区分；
+- 另一台设备的 live projection RPC 暂时不可用时，使用服务器已确认的 me_presence 做只读兜底，避免等待下一个 sealed checkpoint 才显示当前工作；
 - 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
 - Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
@@ -341,6 +343,7 @@ SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
 SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
 SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
+FOCUS_HISTORY_RECOVERY_CHECK_SECONDS = 15 * 60.0
 
 
 def _guard_qt_callback(method):
@@ -720,6 +723,7 @@ class PetWindow(QWidget):
         self._social_heartbeat_thread = SocialHeartbeatWorker(self.social_client)
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
+        self._last_focus_history_recovery_check_at = 0.0
         self._last_social_leaderboard_at = 0.0
         self._last_social_reaction_state_at = 0.0
         self._social_presence_context_signature: tuple[str, str, str, str] | None = None
@@ -4644,6 +4648,14 @@ class PetWindow(QWidget):
         self._check_local_reminders(quiet)
         self.work_timer.checkpoint()
         self._seal_running_focus_checkpoint_if_due()
+        now_monotonic = time.monotonic()
+        if (
+            self.social_client.signed_in
+            and now_monotonic - self._last_focus_history_recovery_check_at
+            >= FOCUS_HISTORY_RECOVERY_CHECK_SECONDS
+        ):
+            self._last_focus_history_recovery_check_at = now_monotonic
+            self._run_focus_history_recovery()
         self._award_focus_rewards()
         self._check_expensive_coffee_reward()
         self._sync_hourly_outfit(announce=True)
@@ -5205,6 +5217,49 @@ class PetWindow(QWidget):
                 merged.append(row)
         return merged
 
+    @staticmethod
+    def _account_presence_live_fallback(
+        account_id: str,
+        data: dict[str, object] | None,
+        *,
+        now: datetime,
+    ) -> list[FocusSegment]:
+        """Build one display-only live row from fresh account presence."""
+
+        if not isinstance(data, dict):
+            return []
+        presence = data.get("me_presence")
+        if not isinstance(presence, dict):
+            return []
+        if not bool(presence.get("working")) or not bool(
+            presence.get("session_active", presence.get("working"))
+        ):
+            return []
+        started_at = presence.get("session_started_at")
+        session_id = str(presence.get("session_id") or "").strip()
+        if not started_at or not session_id:
+            return []
+        device_id = str(presence.get("device_id") or "account-presence").strip()
+        if not device_id:
+            device_id = "account-presence"
+        try:
+            return live_projection_rows(
+                account_id,
+                {
+                    "devices": [
+                        {
+                            "device_id": device_id,
+                            "session_id": session_id,
+                            "start_at": started_at,
+                            "live": True,
+                        }
+                    ]
+                },
+                now=now,
+            )
+        except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError):
+            return []
+
     def _refresh_cross_device_today_display(
         self,
         data: dict[str, object] | None = None,
@@ -5276,6 +5331,11 @@ class PetWindow(QWidget):
             # committed local facts; interval union keeps duplicates harmless.
             remote_rows = list(self._cross_device_today_display_remote_rows)
         has_live_payload = isinstance(data, dict) and "_focus_live_projection" in data
+        presence_fallback_rows = self._account_presence_live_fallback(
+            account_id,
+            data,
+            now=moment,
+        )
         live_rows: list[object] | None = None
         if has_live_payload:
             try:
@@ -5285,20 +5345,50 @@ class PetWindow(QWidget):
                     now=moment,
                 )
             except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
+                live_rows = list(presence_fallback_rows)
+                if not live_rows:
+                    lifecycle_log(
+                        "focus.display.fallback",
+                        self,
+                        user_id=account_id,
+                        source=source,
+                        reason=str(exc)[:180],
+                        old_today_seconds=old_today,
+                        preserved_cross_device_seconds=self._cross_device_today_display_seconds,
+                    )
+                    return False
                 lifecycle_log(
-                    "focus.display.fallback",
+                    "focus.display.live_presence_fallback",
                     self,
                     user_id=account_id,
                     source=source,
-                    reason=str(exc)[:180],
-                    old_today_seconds=old_today,
-                    preserved_cross_device_seconds=self._cross_device_today_display_seconds,
+                    reason="malformed_live_projection",
                 )
-                return False
-            self.focus_analytics.set_live_projection_segments(live_rows or [])
-            self._set_local_live_focus_projection(current)
+            if presence_fallback_rows:
+                known_live_devices = {
+                    str(getattr(row, "device_id", "") or "")
+                    for row in live_rows
+                }
+                live_rows.extend(
+                    row
+                    for row in presence_fallback_rows
+                    if str(getattr(row, "device_id", "") or "")
+                    not in known_live_devices
+                )
+        elif presence_fallback_rows:
+            live_rows = list(presence_fallback_rows)
+            lifecycle_log(
+                "focus.display.live_presence_fallback",
+                self,
+                user_id=account_id,
+                source=source,
+                reason="live_projection_missing",
+            )
         elif self._cross_device_today_display_live_rows is not None:
             live_rows = list(self._cross_device_today_display_live_rows)
+        if live_rows is not None:
+            self.focus_analytics.set_live_projection_segments(live_rows or [])
+            self._set_local_live_focus_projection(current)
         if live_rows is not None:
             # The local WorkTimer is authoritative for this device. A server
             # live row can remain cached for a few seconds after Pause while
@@ -7457,6 +7547,7 @@ class PetWindow(QWidget):
         if projection_source in {
             "canonical_interval_union",
             "canonical_interval_union_legacy_floor",
+            "canonical_interval_union_legacy_ledger",
         }:
             effective_today = profile.get("focus_today_seconds")
             if effective_today is None:

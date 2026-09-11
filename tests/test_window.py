@@ -157,6 +157,43 @@ def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_cross_device_display_uses_account_presence_when_live_rpc_is_missing(monkeypatch) -> None:
+    """当前 sealed checkpoint 之后的工作也必须在另一台设备可见。"""
+
+    app, window = _create_window()
+    moment = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
+    account_id = "account-1"
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
+    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [])
+    window._active_focus_account_id = account_id
+    snapshot = SimpleNamespace(
+        status="rest",
+        session_started_at=None,
+        current_continuous_seconds=0,
+    )
+
+    payload = {
+        "me_presence": {
+            "working": True,
+            "session_active": True,
+            "device_id": "device-b",
+            "session_id": "remote-session",
+            "session_started_at": "2026-08-31T14:56:00+08:00",
+        }
+    }
+    assert window._refresh_cross_device_today_display(
+        payload,
+        snapshot=snapshot,
+        source="missing-live-rpc",
+    )
+    assert window._cross_device_today_display_seconds == 4 * 60
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_empty_focus_delta_does_not_rearm_social_tick(monkeypatch) -> None:
     """空的成功增量不能把后台同步重新排成高频循环。"""
 

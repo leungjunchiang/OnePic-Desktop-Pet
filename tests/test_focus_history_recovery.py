@@ -159,6 +159,57 @@ def test_automatic_scan_runs_once_but_pending_upload_survives_restart(tmp_path):
     assert len(reloaded.focus_segments_payload()) == 1
 
 
+def test_automatic_scan_rechecks_when_exact_history_source_changes(tmp_path):
+    now = datetime(2026, 9, 10, 12, 0, tzinfo=BEIJING)
+    account_dir = tmp_path / "account-a"
+    account_dir.mkdir()
+    first_start = now - timedelta(minutes=30)
+    first_end = now - timedelta(minutes=20)
+    second_start = now - timedelta(minutes=15)
+    second_end = now - timedelta(minutes=5)
+    history_path = account_dir / "work_sessions.json"
+    history_path.write_text(
+        json.dumps([{
+            "id": "offline-a",
+            "started_at": first_start.isoformat(),
+            "ended_at": first_end.isoformat(),
+            "seconds": 10 * 60,
+        }]),
+        encoding="utf-8",
+    )
+    store = AccountFocusStore(
+        path=account_dir / "focus_analytics.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+
+    first = _scanner(tmp_path, store, now).run()
+    assert first.recovered == 1
+
+    history_path.write_text(
+        json.dumps([
+            {
+                "id": "offline-a",
+                "started_at": first_start.isoformat(),
+                "ended_at": first_end.isoformat(),
+                "seconds": 10 * 60,
+            },
+            {
+                "id": "offline-b",
+                "started_at": second_start.isoformat(),
+                "ended_at": second_end.isoformat(),
+                "seconds": 10 * 60,
+            },
+        ]),
+        encoding="utf-8",
+    )
+    second = _scanner(tmp_path, store, now).run()
+    assert not second.already_checked
+    assert second.recovered == 1
+    assert len(store.focus_segments()) == 2
+
+
 def test_deterministic_segment_identity_changes_only_with_interval_identity():
     start = datetime(2026, 9, 10, 9, 0, tzinfo=BEIJING)
     end = start + timedelta(minutes=15)

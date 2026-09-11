@@ -1077,6 +1077,29 @@ def test_server_daily_history_does_not_create_focus_time_on_new_computer(tmp_pat
     assert summary.difference_vs_yesterday_seconds == 0
 
 
+def test_explicit_legacy_evidence_contributes_to_calendar_totals_not_timeline(tmp_path) -> None:
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    changed = store.merge_remote_history({
+        "days": [{
+            "focus_date": "2026-08-21",
+            "seconds": 2009,
+            "legacy_seconds": 2009,
+            "canonical_seconds": 0,
+            "time_source": "legacy_compatibility_ledger",
+        }]
+    })
+
+    assert changed
+    report = store.period_summary("day", now - timedelta(days=1))
+    assert report["total_seconds"] == 2009
+    assert report["daily"][0]["legacy_seconds"] == 2009
+    assert report["daily"][0]["time_source"] == "legacy_compatibility"
+    assert report["focus_intervals"] == []
+    assert store.summary(now).yesterday_seconds == 2009
+    assert store.summary(now).weekly_total_seconds == 2009
+
+
 def test_full_week_derived_cache_is_ignored_without_raw_session(tmp_path) -> None:
     path = tmp_path / "focus.json"
     path.write_text(

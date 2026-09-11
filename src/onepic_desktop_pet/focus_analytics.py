@@ -6,8 +6,9 @@ mouse coordinates never enter this file.  The module is intentionally
 transport-free so the desktop pet remains useful when the social backend is
 offline.  Period summaries are calculated on demand from the account-scoped
 history; no report images or extra server-side report rows are created.  Raw
-focus intervals are the canonical source once present; daily/profile counters
-are compatibility projections and never override a raw interval result.
+focus intervals are the canonical source for a timeline; legacy daily
+counters are explicit compatibility evidence for calendar totals and never
+become synthetic intervals or override a canonical timeline.
 Successful sealed-fact uploads are remembered only as compact local digests,
 so unchanged rows and facts downloaded from other devices are not re-uploaded.
 """
@@ -200,7 +201,14 @@ class FocusAnalyticsStore:
         self._focus_segment_source_by_id: dict[str, str] = {}
         self._recovery_journal = FocusRecoveryJournal(self.path.parent, now_provider=self._now)
         self._durability_conflicts: tuple[str, ...] = ()
-        self._state: dict[str, Any] = {"days": {}, "records": [], "reviews": {}, "current_task": None, "account_state": {}}
+        self._state: dict[str, Any] = {
+            "days": {},
+            "legacy_daily": {},
+            "records": [],
+            "reviews": {},
+            "current_task": None,
+            "account_state": {},
+        }
         # ``records`` are the durable account ledger.  These live intervals
         # are a read-only projection supplied by the per-device presence RPC;
         # they are intentionally never serialized or uploaded as facts.
@@ -247,6 +255,7 @@ class FocusAnalyticsStore:
         if (
             self._rebuild_days_from_records()
             or self._trim_days()
+            or self._trim_legacy_daily()
             or projection_changed
             or upload_state_changed
             or journal_changed
@@ -283,6 +292,7 @@ class FocusAnalyticsStore:
         self._device_id = ""
         self._state = {
             "days": {},
+            "legacy_daily": {},
             "records": [],
             "reviews": {},
             "current_task": None,
@@ -321,6 +331,7 @@ class FocusAnalyticsStore:
         if (
             self._rebuild_days_from_records()
             or self._trim_days()
+            or self._trim_legacy_daily()
             or projection_changed
             or journal_changed
             or upload_state_changed
@@ -450,12 +461,67 @@ class FocusAnalyticsStore:
         }
 
     def merge_remote_history(self, payload: Any) -> bool:
-        """Ignore derived daily totals; raw intervals are the only facts."""
+        """Merge explicit server legacy evidence without creating intervals.
 
-        # A daily row is a cache, not a FocusSession.  Importing it here would
-        # allow a stale full-week value to reappear on a device that has no
-        # corresponding work interval.
-        return False
+        ``seconds`` alone is intentionally not imported.  Only the new RPC's
+        explicit ``legacy_seconds`` field is accepted, so an old effective
+        projection cannot silently become a second local source of truth.
+        """
+
+        rows = payload.get("days") if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            return False
+        ledger = self._state.setdefault("legacy_daily", {})
+        if not isinstance(ledger, dict):
+            ledger = {}
+            self._state["legacy_daily"] = ledger
+        changed = False
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            focus_date = str(item.get("focus_date") or item.get("date") or "")[:10]
+            try:
+                parsed = date.fromisoformat(focus_date)
+                legacy_seconds = max(
+                    0,
+                    min(
+                        MAX_ANALYTICS_DAY_SECONDS,
+                        int(item.get("legacy_seconds", item.get("legacy_daily_seconds", 0)) or 0),
+                    ),
+                )
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if parsed > self.current_time().date() or legacy_seconds <= 0:
+                continue
+            key = parsed.isoformat()
+            previous = ledger.get(key)
+            previous_seconds = 0
+            if isinstance(previous, dict):
+                try:
+                    previous_seconds = max(0, int(previous.get("seconds", 0) or 0))
+                except (TypeError, ValueError, OverflowError):
+                    previous_seconds = 0
+            if legacy_seconds < previous_seconds:
+                continue
+            try:
+                canonical_seconds = max(0, int(item.get("canonical_seconds", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                canonical_seconds = 0
+            entry = {
+                "seconds": legacy_seconds,
+                "source": str(
+                    item.get("time_source")
+                    or item.get("legacy_source")
+                    or "server_legacy_compatibility"
+                )[:80],
+                "canonical_seconds": canonical_seconds,
+            }
+            if entry != previous:
+                ledger[key] = entry
+                changed = True
+        if changed:
+            self._save()
+        return changed
 
     def focus_segments_payload(self, limit: int = 500) -> list[dict[str, Any]]:
         """Serialize only closed local facts not acknowledged by the server."""
@@ -1516,16 +1582,13 @@ class FocusAnalyticsStore:
 
         def day_seconds(day: date) -> int | None:
             raw = days.get(day.isoformat(), {})
+            legacy_seconds = self._legacy_day_seconds(day)
             if isinstance(raw, dict) and bool(raw.get("seconds_untrusted")):
-                # Keep legacy cumulative checkpoints unavailable for
-                # day-to-day comparisons even when other raw facts exist.
-                return None
-            if has_raw_facts:
-                return self._raw_day_seconds(day, moment)
-            # No raw FocusSession means no focus time.  Legacy daily rows are
-            # intentionally not evidence and therefore cannot resurrect old
-            # values after a fresh day/week starts.
-            return 0
+                # A quarantined local checkpoint cannot contribute, but a
+                # server-confirmed legacy daily evidence row still can.
+                return legacy_seconds or None
+            canonical_seconds = self._raw_day_seconds(day, moment) if has_raw_facts else 0
+            return max(canonical_seconds, legacy_seconds)
 
         weekly_total = sum(
             seconds or 0
@@ -1543,9 +1606,9 @@ class FocusAnalyticsStore:
             today_seconds = max(0, int(day_projection.get("total_seconds", 0) or 0))
         if has_raw_facts or bool(week_projection.get("local_evidence")):
             weekly_total = max(0, int(week_projection.get("total_seconds", 0) or 0))
-        # ``period_summary`` remains raw-only. This separate display floor
-        # aligns local UI surfaces with a server projection without creating
-        # uploadable evidence or adding another copy of the same interval.
+        # This separate display floor aligns local UI surfaces with a server
+        # projection without creating uploadable evidence or adding another
+        # copy of the same interval.
         remote_projection = self.remote_effective_projection(moment)
         if remote_projection is not None:
             today_seconds = max(today_seconds, remote_projection["today_seconds"])
@@ -1620,32 +1683,32 @@ class FocusAnalyticsStore:
         result: list[dict[str, Any]] = []
         stored = self._state.get("days", {})
         has_raw_facts = bool(self.focus_segments())
-        if not has_raw_facts:
-            # Derived daily rows are not FocusSession facts and must not be
-            # uploaded back to the server as if they were real work.
-            return result
         for offset in range(count - 1, -1, -1):
             focus_date = today - timedelta(days=offset)
             key = focus_date.isoformat()
-            if key not in stored:
+            legacy_seconds = self._legacy_day_seconds(focus_date)
+            if key not in stored and legacy_seconds <= 0:
                 # A new device must not send synthetic zeros for days it has
                 # never observed; that would erase valid remote history.
                 continue
             raw = stored.get(key, {})
-            if not isinstance(raw, dict) or bool(raw.get("seconds_untrusted")):
+            if not isinstance(raw, dict):
+                raw = {}
+            if bool(raw.get("seconds_untrusted")) and legacy_seconds <= 0:
                 continue
             try:
-                seconds = (
-                    self._raw_day_seconds(focus_date)
-                    if has_raw_facts
-                    else max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
-                )
+                canonical_seconds = self._raw_day_seconds(focus_date) if has_raw_facts else 0
+                seconds = max(canonical_seconds, legacy_seconds)
             except (TypeError, ValueError, OverflowError):
                 continue
             # Include trustworthy zero days as well.  The exact reconciliation
             # RPC needs those rows to clear a previously inflated daily value;
             # omitting them would leave the old server maximum permanently.
-            result.append({"focus_date": focus_date.isoformat(), "seconds": seconds})
+            result.append({
+                "focus_date": focus_date.isoformat(),
+                "seconds": seconds,
+                "legacy_seconds": legacy_seconds,
+            })
         return result
 
     def focus_segments(self) -> list[FocusSegment]:
@@ -1747,6 +1810,18 @@ class FocusAnalyticsStore:
                 ).total_seconds
             ),
         )
+
+    def _legacy_day_seconds(self, focus_date: date) -> int:
+        """Return explicit legacy aggregate evidence for one Beijing day."""
+
+        ledger = self._state.get("legacy_daily", {})
+        raw = ledger.get(focus_date.isoformat(), {}) if isinstance(ledger, dict) else {}
+        if not isinstance(raw, dict):
+            return 0
+        try:
+            return max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
+        except (TypeError, ValueError, OverflowError):
+            return 0
 
     def focus_aggregate(
         self,
@@ -2207,8 +2282,9 @@ class FocusAnalyticsStore:
         This is deliberately a read-only, on-demand projection.  The current
         live timer is supplied by the caller because it is not yet a closed
         analytics record.  Every closed total is recomputed from the same
-        clipped raw interval union; daily/profile counters are never a
-        fallback.
+        clipped raw interval union plus explicit legacy daily evidence.  The
+        latter affects calendar totals only; detailed intervals and session
+        metrics remain canonical raw projections.
         """
 
         moment = _as_beijing(at or self._now())
@@ -2252,6 +2328,11 @@ class FocusAnalyticsStore:
         )
         has_raw_facts = bool(raw_segments)
         interval_evidence = raw_period_evidence
+        period_has_legacy = any(
+            self._legacy_day_seconds(start + timedelta(days=offset)) > 0
+            for offset in range((period_end - start).days + 1)
+            if start + timedelta(days=offset) <= today
+        )
 
         stored = self._state.get("days", {})
         if not isinstance(stored, dict):
@@ -2269,6 +2350,7 @@ class FocusAnalyticsStore:
             raw = raw if isinstance(raw, dict) else {}
             is_future = cursor > today
             untrusted = bool(raw.get("seconds_untrusted"))
+            legacy_seconds = self._legacy_day_seconds(cursor)
             rounds = 0
             longest = 0
             day_interruptions = 0
@@ -2278,25 +2360,22 @@ class FocusAnalyticsStore:
                 longest = 0
                 day_interruptions = 0
             elif untrusted:
-                seconds = None
-                rounds = None
+                # A local raw checkpoint may be quarantined while the server
+                # still has a valid legacy daily aggregate from another
+                # device. Preserve that calendar evidence without reviving
+                # the untrusted local interval history.
+                seconds = legacy_seconds or None
+                rounds = None if seconds is None else 0
                 longest = 0
                 day_interruptions = 0
                 untrusted_days.append(date_key)
             else:
-                # Once raw facts exist, use the exact overlap projection so a
-                # segment crossing midnight is split correctly.  Without raw
-                # facts, the authoritative answer is zero regardless of an
-                # old derived day row.
-                # ``daily_focus_projection`` is an incremental cache for
-                # lightweight surfaces, never a competing report source.
-                # Historical and standard report rows must come from the
-                # same clipped union as the headline and hourly buckets.
-                seconds = (
+                canonical_seconds = (
                     max(0, int(aggregate.daily.get(date_key, 0) or 0))
                     if has_raw_facts
                     else 0
                 )
+                seconds = max(canonical_seconds, legacy_seconds)
             if not is_future and not untrusted and has_raw_facts:
                 try:
                     rounds = max(0, int(raw.get("rounds", 0) or 0))
@@ -2315,19 +2394,40 @@ class FocusAnalyticsStore:
                 "weekday": weekday,
                 "display_label": f"{cursor.month}/{cursor.day} {weekday}",
                 "seconds": seconds,
+                "canonical_seconds": (
+                    max(0, int(aggregate.daily.get(date_key, 0) or 0))
+                    if not is_future and has_raw_facts
+                    else 0
+                ),
+                "legacy_seconds": legacy_seconds if not is_future else 0,
+                "time_source": (
+                    "legacy_compatibility"
+                    if not is_future and legacy_seconds > max(
+                        0,
+                        int(aggregate.daily.get(date_key, 0) or 0) if has_raw_facts else 0,
+                    )
+                    else "canonical_interval_union"
+                    if not is_future and (has_raw_facts or legacy_seconds > 0)
+                    else "none"
+                ),
                 "rounds": rounds,
-                "trusted": has_raw_facts and not untrusted and not is_future,
+                "trusted": (has_raw_facts or legacy_seconds > 0) and not untrusted and not is_future,
                 "is_today": cursor == today,
                 "is_future": is_future,
-                "status": "future" if is_future else "untrusted" if untrusted else "observed",
+                "status": (
+                    "future" if is_future
+                    else "untrusted" if untrusted and not legacy_seconds
+                    else "legacy_compatibility" if legacy_seconds > 0 and not has_raw_facts
+                    else "observed"
+                ),
             })
             cursor += timedelta(days=1)
 
-        # All report totals now come from the same unioned interval set.
-        # ``days`` and ``account_state`` are compatibility caches only; with
-        # no raw FocusSession, the authoritative answer is zero.
-        local_period_evidence = raw_period_evidence
-        total_seconds = aggregate.total_seconds if has_raw_facts else 0
+        # Calendar totals use the maximum of canonical interval union and the
+        # explicit legacy daily evidence for each day.  The interval list,
+        # hourly buckets, and session metrics remain canonical-only.
+        local_period_evidence = raw_period_evidence or period_has_legacy
+        total_seconds = sum(int(item.get("seconds") or 0) for item in daily)
 
         trusted_days = {
             str(item.get("date") or "")
@@ -2515,6 +2615,11 @@ class FocusAnalyticsStore:
             "data_quality": {
                 "trusted": not bool(untrusted_days or aggregate.errors),
                 "untrusted_days": list(untrusted_days),
+                "legacy_compatibility_days": [
+                    str(item.get("date"))
+                    for item in daily
+                    if item.get("time_source") == "legacy_compatibility"
+                ],
                 "consistency_errors": list(aggregate.errors),
                 "message": (
                     "本周期包含旧版异常计时记录；异常日期已从报告指标中剔除，避免把重复检查点当成真实工作时间。"
@@ -2534,6 +2639,7 @@ class FocusAnalyticsStore:
             "raw_segment_count": len(raw_segments),
             "raw_period_evidence": raw_period_evidence,
             "raw_source_active": has_raw_facts,
+            "legacy_compatibility_active": period_has_legacy,
         }
 
     def _best_window(self, today: date, *, start: date | None = None) -> str:
@@ -2737,6 +2843,21 @@ class FocusAnalyticsStore:
         self._state["days"] = trimmed
         return changed
 
+    def _trim_legacy_daily(self) -> bool:
+        ledger = self._state.setdefault("legacy_daily", {})
+        if not isinstance(ledger, dict):
+            self._state["legacy_daily"] = {}
+            return True
+        cutoff = _as_beijing(self._now()).date() - timedelta(days=400)
+        trimmed = {
+            key: value
+            for key, value in ledger.items()
+            if str(key)[:10] >= cutoff.isoformat()
+        }
+        changed = len(trimmed) != len(ledger)
+        self._state["legacy_daily"] = trimmed
+        return changed
+
     def _load(self) -> None:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -2784,17 +2905,13 @@ class AccountFocusProjection:
 
     def today_seconds(self, at: datetime | None = None) -> int:
         moment = _as_beijing(at or self.store.current_time())
-        start = datetime.combine(moment.date(), time.min, tzinfo=BEIJING_TIMEZONE)
-        local_seconds = self.seconds_for_range(start, moment, at=moment)
+        local_seconds = int(self.store.period_summary("day", moment).get("total_seconds", 0) or 0)
         remote = self.store.remote_effective_projection(moment)
         return max(local_seconds, int(remote["today_seconds"])) if remote else local_seconds
 
     def week_seconds(self, at: datetime | None = None) -> int:
         moment = _as_beijing(at or self.store.current_time())
-        start = moment.date() - timedelta(days=moment.date().weekday())
-        start_at = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
-        end_at = start_at + timedelta(days=7)
-        local_seconds = self.seconds_for_range(start_at, end_at, at=moment)
+        local_seconds = int(self.store.period_summary("week", moment).get("total_seconds", 0) or 0)
         remote = self.store.remote_effective_projection(moment)
         return max(local_seconds, int(remote["week_seconds"])) if remote else local_seconds
 

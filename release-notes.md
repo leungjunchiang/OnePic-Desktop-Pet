@@ -1,3 +1,11 @@
+## v0.23.243 — Legacy Time Compatibility Ledger
+
+- 将旧客户端的按日累计时间迁入独立的 Legacy Time Compatibility Ledger；历史时间不再因为升级被丢弃，`hjy` 这类只有旧日累计凭证的账号可以恢复原有累计时长。
+- 旧累计值只作为 `legacy_seconds` 参与日/周/月/年/总计及排行榜，不会被伪造成 FocusSegment；详细时间轴、小时分布和会话质量指标仍只使用可验证的 sealed interval。
+- 引入 `cutover_at` 与 `cutover_legacy_seconds`，旧客户端升级后继续上报时只增加 cutover 之后可解释的 canonical 区间，避免重复计算；跨设备新旧客户端可以继续共存。
+- 统一个人卡片、好友卡片、房间、排行榜和兼容 RPC 的 effective totals，并返回 canonical/legacy provenance；Presence 仍独立于历史工作时长。
+- 客户端本地报表同步保存明确的 `legacy_daily` 证据，换电脑后可以显示兼容累计，但不会把兼容累计写回本地 FocusSegment 时间轴。
+
 ## v0.23.242 — FocusSegment 统一事实层与升级恢复
 
 - 将可验证的专注区间统一经过本地 durable WAL、pending queue、Supabase upsert、ACK 确认这条链路；正常暂停、15 分钟 checkpoint、退出/异常恢复和历史回补不再各自维护一套上传逻辑。
