@@ -201,9 +201,9 @@ def test_windows_alarm_audio_always_closes_native_alias_after_stop_request() -> 
     assert finished == [True]
 
 
-def test_windows_audio_factory_prefers_qt_worker_over_mci(monkeypatch) -> None:
-    class FakeQtWorkerAudio:
-        backend_kind = "qt-worker"
+def test_windows_audio_factory_prefers_isolated_process_over_mci(monkeypatch) -> None:
+    class FakeProcessAudio:
+        backend_kind = "process"
         available = True
 
         def __init__(self, *_args, **_kwargs) -> None:
@@ -213,7 +213,7 @@ def test_windows_audio_factory_prefers_qt_worker_over_mci(monkeypatch) -> None:
         def __init__(self, *_args, **_kwargs) -> None:
             raise AssertionError("MCI must remain a fallback")
 
-    monkeypatch.setattr(alarm_ui, "_WindowsQtAlarmAudio", FakeQtWorkerAudio)
+    monkeypatch.setattr(alarm_ui, "_WindowsProcessAlarmAudio", FakeProcessAudio)
     monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", UnexpectedMciAudio)
 
     backend = alarm_ui._create_windows_alarm_audio(
@@ -223,29 +223,48 @@ def test_windows_audio_factory_prefers_qt_worker_over_mci(monkeypatch) -> None:
         on_error=lambda _error: None,
     )
 
-    assert isinstance(backend, FakeQtWorkerAudio)
-    assert backend.backend_kind == "qt-worker"
+    assert isinstance(backend, FakeProcessAudio)
+    assert backend.backend_kind == "process"
 
 
-def test_windows_qt_audio_lifetime_guard_survives_async_stop(monkeypatch) -> None:
-    """A stopped worker stays alive until its QThread has really finished."""
+def test_windows_process_audio_lifetime_guard_survives_async_stop(monkeypatch) -> None:
+    """A stopped helper stays retained until its watcher observes exit."""
 
     _app()
     monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
-    backend = alarm_ui._WindowsQtAlarmAudio(
+    backend = alarm_ui._WindowsProcessAlarmAudio(
         "alarm.wav",
         volume=60,
         on_finished=lambda: None,
         on_error=lambda _error: None,
     )
 
-    assert any(item is backend for item in alarm_ui._WindowsQtAlarmAudio._instances)
+    assert any(item is backend for item in alarm_ui._WindowsProcessAlarmAudio._instances)
 
-    # The production signal calls this only after QThread.finished.  Calling
-    # it directly here verifies the guard is removable and does not leave a
-    # strong-reference leak after teardown.
+    # Calling it directly verifies the guard is removable and does not leave
+    # a strong-reference leak after helper teardown.
     backend._release_instance()
-    assert not any(item is backend for item in alarm_ui._WindowsQtAlarmAudio._instances)
+    assert not any(item is backend for item in alarm_ui._WindowsProcessAlarmAudio._instances)
+
+
+def test_windows_process_audio_uses_hidden_audio_helper_command(monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
+    backend = alarm_ui._WindowsProcessAlarmAudio(
+        r"C:\Music\focus track.mp3",
+        volume=60,
+        on_finished=lambda: None,
+        on_error=lambda _error: None,
+    )
+
+    command = backend._command()
+
+    assert command[-3:] == [
+        "--audio-helper",
+        r"C:\Music\focus track.mp3",
+        "60",
+    ]
+    backend._release_instance()
 
 
 def test_windows_custom_audio_preview_uses_async_backend_not_qt_player(tmp_path, monkeypatch) -> None:
@@ -296,7 +315,7 @@ def test_windows_custom_audio_preview_uses_async_backend_not_qt_player(tmp_path,
 def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
     tmp_path, monkeypatch
 ) -> None:
-    """MCI error 277 must still produce sound without a GUI-thread stop call."""
+    """A decode failure must fail safe without a GUI-thread media call."""
 
     _app()
     source = tmp_path / "preview-tone.mp3"
@@ -304,6 +323,7 @@ def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
     library = AlarmSoundLibrary(tmp_path)
     sound = library.import_file(source, display_name="MP3试听音频")
     backend_instances: list[object] = []
+    beeps: list[bool] = []
 
     class FakeWindowsPreviewAudio:
         def __init__(self, *_args, **kwargs) -> None:
@@ -355,6 +375,7 @@ def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
     )
     monkeypatch.setattr(alarm_ui, "QAudioOutput", FakeAudioOutput)
     monkeypatch.setattr(alarm_ui, "QMediaPlayer", FakeMediaPlayer)
+    monkeypatch.setattr(alarm_ui.QApplication, "beep", lambda: beeps.append(True))
     selector = AlarmSoundSelector(library, sound.sound_id)
 
     selector.preview()
@@ -362,18 +383,16 @@ def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
     backend_instances[0].on_error(277)
     _app().processEvents()
 
-    assert selector._preview_fallback_active is True
-    assert selector._preview_fallback_player.play_count == 1
-    selector._preview_stop_timer.timeout.emit()
+    assert beeps == [True]
     assert selector._preview_fallback_active is False
-    assert selector._preview_fallback_output.volume == 0.0
+    assert not selector._preview_stop_timer.isActive()
     selector.close()
 
 
-def test_windows_alarm_audio_falls_back_to_qt_when_mci_cannot_decode(
+def test_windows_alarm_audio_falls_back_to_system_when_mci_cannot_decode(
     tmp_path, monkeypatch
 ) -> None:
-    """An MCI 277 failure must keep the selected custom track audible."""
+    """An MCI failure must not re-enter GUI-thread Qt Multimedia."""
 
     _app()
     source = tmp_path / "alarm-tone.mp3"
@@ -451,10 +470,9 @@ def test_windows_alarm_audio_falls_back_to_qt_when_mci_cannot_decode(
     _app().processEvents()
 
     assert calls == ["start", "stop"]
-    assert card._custom_audio is True
-    assert card._using_system_sound is False
-    assert card._qt_fallback_active is True
-    assert card._qt_fallback_player.play_count == 1
+    assert card._custom_audio is False
+    assert card._using_system_sound is True
+    assert card._qt_fallback_active is False
 
     card.close_from_app()
     _app().processEvents()

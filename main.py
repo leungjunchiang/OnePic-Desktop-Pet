@@ -36,6 +36,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="在指定毫秒后自动退出，仅用于启动验证",
     )
+    parser.add_argument(
+        "--audio-helper",
+        nargs=2,
+        metavar=("PATH", "VOLUME"),
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -43,6 +50,14 @@ def main() -> int:
     """启动应用并返回 Qt 事件循环退出码。"""
 
     args = parse_args()
+    if args.audio_helper is not None:
+        from onepic_desktop_pet.audio_helper import run_audio_helper
+
+        try:
+            volume = int(args.audio_helper[1])
+        except ValueError:
+            return 2
+        return run_audio_helper(args.audio_helper[0], volume)
     return run(smoke_test_ms=args.smoke_test_ms)
 
 

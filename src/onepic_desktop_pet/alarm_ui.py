@@ -8,26 +8,24 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import subprocess
 import threading
 import weakref
 from ctypes import wintypes
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from PySide6.QtCore import (
     QDateTime,
     QEvent,
-    QMetaObject,
-    QObject,
     QTime,
-    QThread,
     QUrl,
     Qt,
     QTimer,
     Signal,
-    Slot,
 )
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -123,16 +121,19 @@ class AlarmSoundSelector(QWidget):
         row.addWidget(self.preview_button)
         row.addWidget(self.stop_button)
         row.addWidget(self.delete_button)
-        # Windows custom audio is played by a QMediaPlayer that lives in its
-        # own Qt event-loop thread.  The GUI never calls QMediaPlayer.stop().
-        # MCI and the GUI-thread Qt player remain last-resort fallbacks for
-        # machines where the worker multimedia backend cannot be created.
+        # Windows custom audio is played by a separate helper process.  The
+        # GUI never enters QMediaPlayer's native decode/stop path, because a
+        # Windows Media Foundation driver can block or stutter independently
+        # of Python and Qt's event loop.  MCI and the GUI-thread Qt player
+        # remain last-resort fallbacks for machines where the helper cannot
+        # be created or decode the selected file.
         use_qt_preview = sys.platform != "win32"
         self._preview_output = QAudioOutput(self) if use_qt_preview and QAudioOutput is not None else None
         self._preview_player = QMediaPlayer(self) if use_qt_preview and QMediaPlayer is not None else None
-        use_windows_qt_fallback = (
-            sys.platform == "win32" and QAudioOutput is not None and QMediaPlayer is not None
-        )
+        # Never construct a GUI-thread Windows QMediaPlayer.  If the isolated
+        # helper cannot decode a file, the safe result is a system beep rather
+        # than another native multimedia call on the main event loop.
+        use_windows_qt_fallback = False
         self._preview_fallback_output = (
             QAudioOutput(self) if use_windows_qt_fallback else None
         )
@@ -312,8 +313,7 @@ class AlarmSoundSelector(QWidget):
                 on_error=_on_backend_error,
             )
             if backend is None:
-                if not self._play_qt_preview(str(path), sound_id, fallback=True):
-                    QApplication.beep()
+                QApplication.beep()
                 return
             self._windows_preview_audio = backend
             lifecycle_log(
@@ -346,7 +346,7 @@ class AlarmSoundSelector(QWidget):
             sound_id=sound_id,
             error=error,
         )
-        if getattr(backend, "backend_kind", "") == "qt-worker":
+        if getattr(backend, "backend_kind", "") == "process":
             mci_backend = _WindowsAlarmAudio(
                 path,
                 volume=70,
@@ -366,8 +366,8 @@ class AlarmSoundSelector(QWidget):
                 self._windows_preview_audio = mci_backend
                 mci_backend.start()
                 return
-        if not self._play_qt_preview(path, sound_id, fallback=True):
-            QApplication.beep()
+        self._preview_stop_timer.stop()
+        QApplication.beep()
 
     def stop_preview(self) -> None:
         self._preview_generation += 1
@@ -400,120 +400,18 @@ class AlarmSoundSelector(QWidget):
         super().closeEvent(event)
 
 
-class _WindowsQtAlarmAudioWorker(QObject):
-    """Own Windows Qt Multimedia objects inside a dedicated event loop."""
+class _WindowsProcessAlarmAudio:
+    """Play Windows custom audio in an isolated Qt helper process.
 
-    error = Signal(str)
-    finished = Signal()
+    Qt Multimedia is a good Windows decoder for MP3/M4A/AAC, but a native
+    Media Foundation backend can occasionally stall inside ``setSource`` or
+    ``stop``.  Keeping it in a child process makes those stalls unable to
+    freeze the pet's GUI or its network timers.  Stopping is implemented by
+    terminating only that helper; the GUI never waits for it.
+    """
 
-    def __init__(self, path: str, volume: int) -> None:
-        super().__init__()
-        self.path = str(path)
-        self.volume = max(0, min(100, int(volume or 0)))
-        self._player = None
-        self._output = None
-        self._stopping = False
-        self._finished = False
-
-    @Slot()
-    def initialize(self) -> None:
-        if self._stopping:
-            self._finish()
-            return
-        if QAudioOutput is None or QMediaPlayer is None:
-            self._fail("Qt Multimedia Windows backend unavailable")
-            return
-        try:
-            output = QAudioOutput()
-            output.setVolume(self.volume / 100)
-            player = QMediaPlayer()
-            player.setAudioOutput(output)
-            try:
-                player.setLoops(-1)
-            except (AttributeError, TypeError):
-                # Older Qt Multimedia builds use the explicit EndOfMedia
-                # handler below instead of exposing the loops property.
-                pass
-            player.mediaStatusChanged.connect(self._media_status_changed)
-            player.errorOccurred.connect(self._media_error)
-            self._output = output
-            self._player = player
-            player.setSource(QUrl.fromLocalFile(self.path))
-            # Starting from a queued callback ensures the worker event loop
-            # has begun dispatching before native Media Foundation work starts.
-            QTimer.singleShot(0, self._start_playback)
-        except Exception as exc:  # pragma: no cover - native backend only
-            self._fail(str(exc))
-
-    @Slot()
-    def _start_playback(self) -> None:
-        if self._stopping or self._player is None:
-            return
-        try:
-            self._player.play()
-        except Exception as exc:  # pragma: no cover - native backend only
-            self._fail(str(exc))
-
-    def _media_status_changed(self, status) -> None:
-        if self._stopping or self._player is None:
-            return
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            try:
-                # Explicit looping also works on Qt builds without the
-                # optional QMediaPlayer::loops property.
-                self._player.setPosition(0)
-                self._player.play()
-            except Exception as exc:  # pragma: no cover - native backend only
-                self._fail(str(exc))
-
-    def _media_error(self, *args: object) -> None:
-        if self._stopping:
-            return
-        detail = " ".join(str(item) for item in args).strip()
-        self._fail(detail or "Qt Multimedia playback error")
-
-    def _fail(self, message: str) -> None:
-        if self._finished:
-            return
-        self.error.emit(str(message))
-        self._finish()
-
-    @Slot()
-    def stop(self) -> None:
-        self._stopping = True
-        self._finish()
-
-    def _finish(self) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        player = self._player
-        output = self._output
-        self._player = None
-        self._output = None
-        if player is not None:
-            try:
-                player.stop()
-            except Exception:
-                pass
-            player.deleteLater()
-        if output is not None:
-            output.deleteLater()
-        self.finished.emit()
-
-
-class _WindowsQtAlarmAudio(QObject):
-    """Non-blocking Windows alarm playback backed by Qt Multimedia."""
-
-    backend_kind = "qt-worker"
-    # Keep a strong reference until the native QThread has emitted
-    # ``finished``.  The selector/card intentionally drops its active backend
-    # reference as soon as stop is requested, but QThread teardown is
-    # asynchronous.  A WeakSet allowed the wrapper (and its parented QThread)
-    # to be destroyed while the worker was still running, which can make Qt
-    # abort the whole process with ``QThread: Destroyed while thread is still
-    # running`` during a custom-sound preview.
-    _instances: set["_WindowsQtAlarmAudio"] = set()
+    backend_kind = "process"
+    _instances: set["_WindowsProcessAlarmAudio"] = set()
     _instances_lock = threading.Lock()
 
     def __init__(
@@ -524,23 +422,15 @@ class _WindowsQtAlarmAudio(QObject):
         on_finished,
         on_error,
     ) -> None:
-        super().__init__()
         self.path = str(path)
         self.volume = max(0, min(100, int(volume or 0)))
         self._on_finished = on_finished
         self._on_error = on_error
         self._start_requested = False
         self._stop_requested = False
-        self._thread = QThread(self)
-        self._worker = _WindowsQtAlarmAudioWorker(self.path, self.volume)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.initialize)
-        self._error_reported = False
-        self._worker.error.connect(self._relay_error, Qt.ConnectionType.QueuedConnection)
-        self._worker.finished.connect(self._relay_finished, Qt.ConnectionType.QueuedConnection)
-        self._worker.finished.connect(self._thread.quit, Qt.ConnectionType.QueuedConnection)
-        self._worker.finished.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._release_instance)
+        self._process = None
+        self._done = False
+        self._lock = threading.Lock()
         with self._instances_lock:
             self._instances.add(self)
 
@@ -548,55 +438,104 @@ class _WindowsQtAlarmAudio(QObject):
     def available(self) -> bool:
         return sys.platform == "win32" and QAudioOutput is not None and QMediaPlayer is not None
 
+    def _command(self) -> list[str]:
+        if getattr(sys, "frozen", False):
+            command = [sys.executable]
+        else:
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve().parents[2] / "main.py"),
+            ]
+        return [*command, "--audio-helper", self.path, str(self.volume)]
+
     def start(self) -> None:
-        if self._start_requested:
-            return
-        if self._stop_requested:
-            # A stop may arrive before QThread.start() gets a chance to run.
-            # There will be no ``QThread.finished`` signal in that case.
-            self._release_instance()
+        if self._start_requested or self._stop_requested:
             return
         if not self.available:
-            self._on_error("Qt Multimedia Windows backend unavailable")
+            self._notify_error("Qt Multimedia Windows helper unavailable")
+            self._release_instance()
             return
         self._start_requested = True
-        self._thread.start()
+        try:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            self._process = subprocess.Popen(
+                self._command(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except Exception as exc:
+            self._notify_error(f"无法启动音频助手: {exc}")
+            self._release_instance()
+            return
+        threading.Thread(
+            target=self._watch_process,
+            name="LiliAlarmAudioProcessWatch",
+            daemon=True,
+        ).start()
 
-    @Slot(str)
-    def _relay_error(self, message: str) -> None:
-        self._error_reported = True
-        self._on_error(str(message))
-
-    @Slot()
-    def _relay_finished(self) -> None:
-        # A failed worker is being replaced by the MCI fallback; its normal
-        # stop callback must not mark the replacement as already drained.
-        if not self._error_reported:
-            self._on_finished()
+    def _watch_process(self) -> None:
+        process = self._process
+        if process is None:
+            self._notify_finished()
+            self._release_instance()
+            return
+        try:
+            return_code = process.wait()
+        except Exception as exc:
+            self._notify_error(f"音频助手异常退出: {exc}")
+            self._release_instance()
+            return
+        with self._lock:
+            stopped = self._stop_requested
+        if stopped or return_code == 0:
+            self._notify_finished()
+        else:
+            self._notify_error(f"音频助手退出码 {return_code}")
+        self._release_instance()
 
     def request_stop(self) -> None:
-        """Queue stop on the worker thread without blocking the GUI."""
+        """Terminate only the helper process; never wait on the GUI thread."""
 
-        if self._stop_requested:
-            return
-        self._stop_requested = True
-        if self._thread.isRunning():
-            QMetaObject.invokeMethod(
-                self._worker,
-                "stop",
-                Qt.ConnectionType.QueuedConnection,
-            )
-        elif not self._start_requested and not self._error_reported:
-            self._worker._stopping = True
-            self._on_finished()
+        with self._lock:
+            if self._stop_requested:
+                return
+            self._stop_requested = True
+            process = self._process
+        if process is None:
+            self._notify_finished()
             self._release_instance()
+            return
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except Exception:
+            pass
 
-    @Slot()
     def _release_instance(self) -> None:
-        """Release the lifetime guard only after native thread teardown."""
-
         with self._instances_lock:
             self._instances.discard(self)
+
+    def _notify_finished(self) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self._done = True
+        try:
+            self._on_finished()
+        except Exception:
+            pass
+
+    def _notify_error(self, message: str) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self._done = True
+        try:
+            self._on_error(str(message))
+        except Exception:
+            pass
 
     @classmethod
     def request_stop_all(cls) -> None:
@@ -612,7 +551,7 @@ class _WindowsAlarmAudio:
     Qt 6.11.2's Windows multimedia backend can block inside
     ``QMediaPlayer.stop()`` while the GUI thread is dispatching a button
     click.  The alarm card therefore uses this small, process-local backend
-    The normal Windows path uses ``_WindowsQtAlarmAudio``.  MCI commands run
+    The normal Windows path uses ``_WindowsProcessAlarmAudio``.  MCI commands run
     on daemon threads here and the GUI never waits for either the command or
     the thread.
     """
@@ -780,16 +719,17 @@ def _create_windows_alarm_audio(
     on_finished,
     on_error,
 ):
-    """Prefer Qt Multimedia in a worker thread, then fall back to MCI."""
+    """Prefer isolated Qt Multimedia, then fall back to MCI."""
 
-    qt_backend = _WindowsQtAlarmAudio(
+    process_backend = _WindowsProcessAlarmAudio(
         path,
         volume=volume,
         on_finished=on_finished,
         on_error=on_error,
     )
-    if qt_backend.available:
-        return qt_backend
+    if process_backend.available:
+        return process_backend
+    process_backend._release_instance()
     mci_backend = _WindowsAlarmAudio(
         path,
         volume=volume,
@@ -1192,8 +1132,12 @@ class AlarmCard(QDialog):
         self._sound_stop_timer.timeout.connect(self._stop_sound)
 
     def _ensure_qt_fallback(self) -> bool:
-        """Create the Windows Qt player used only after MCI cannot decode."""
+        """Create a non-Windows Qt fallback player when it is safe to do so."""
 
+        if sys.platform == "win32":
+            # Windows multimedia is isolated in ``_WindowsProcessAlarmAudio``;
+            # never reintroduce a GUI-thread native decoder as a fallback.
+            return False
         if self._qt_fallback_player is not None and self._qt_fallback_output is not None:
             return True
         if QAudioOutput is None or QMediaPlayer is None:
@@ -1442,11 +1386,9 @@ class AlarmCard(QDialog):
             self._media_drained = True
             self._emit_audio_cleanup_finished()
             return
-        if getattr(backend, "backend_kind", "") == "qt-worker" and self._custom_audio:
+        if getattr(backend, "backend_kind", "") == "process" and self._custom_audio:
             if self._start_mci_fallback():
                 return
-        if self._custom_audio and self._play_qt_fallback(self._custom_audio_path):
-            return
         self._fallback_to_system()
 
     def _fallback_to_system(self) -> None:
@@ -1547,7 +1489,7 @@ class AlarmCard(QDialog):
             self._windows_audio.request_stop()
             # Defensive process-wide cleanup also covers a card whose audio
             # wrapper was retired while its native worker is still draining.
-            _WindowsQtAlarmAudio.request_stop_all()
+            _WindowsProcessAlarmAudio.request_stop_all()
             _WindowsAlarmAudio.request_stop_all()
             # ``_media_stop_completed`` means that the stop request has been
             # dispatched, not that native teardown has returned.  The latter
