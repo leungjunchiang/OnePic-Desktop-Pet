@@ -201,8 +201,34 @@ def test_windows_alarm_audio_always_closes_native_alias_after_stop_request() -> 
     assert finished == [True]
 
 
-def test_windows_custom_audio_preview_uses_async_mci_not_qt_player(tmp_path, monkeypatch) -> None:
-    """The selector stops native MCI asynchronously on the Windows timeout."""
+def test_windows_audio_factory_prefers_qt_worker_over_mci(monkeypatch) -> None:
+    class FakeQtWorkerAudio:
+        backend_kind = "qt-worker"
+        available = True
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.started = False
+
+    class UnexpectedMciAudio:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise AssertionError("MCI must remain a fallback")
+
+    monkeypatch.setattr(alarm_ui, "_WindowsQtAlarmAudio", FakeQtWorkerAudio)
+    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", UnexpectedMciAudio)
+
+    backend = alarm_ui._create_windows_alarm_audio(
+        "alarm.mp3",
+        volume=60,
+        on_finished=lambda: None,
+        on_error=lambda _error: None,
+    )
+
+    assert isinstance(backend, FakeQtWorkerAudio)
+    assert backend.backend_kind == "qt-worker"
+
+
+def test_windows_custom_audio_preview_uses_async_backend_not_qt_player(tmp_path, monkeypatch) -> None:
+    """The selector stops a Windows backend asynchronously on timeout."""
 
     _app()
     source = tmp_path / "preview-tone.wav"
@@ -226,7 +252,11 @@ def test_windows_custom_audio_preview_uses_async_mci_not_qt_player(tmp_path, mon
             calls.append("stop")
 
     monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
-    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", FakeWindowsPreviewAudio)
+    monkeypatch.setattr(
+        alarm_ui,
+        "_create_windows_alarm_audio",
+        lambda *args, **kwargs: FakeWindowsPreviewAudio(*args, **kwargs),
+    )
     selector = AlarmSoundSelector(library, sound.sound_id)
 
     assert selector._preview_player is None
@@ -297,7 +327,11 @@ def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
             raise AssertionError("Windows preview fallback must never call stop() inline")
 
     monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
-    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", FakeWindowsPreviewAudio)
+    monkeypatch.setattr(
+        alarm_ui,
+        "_create_windows_alarm_audio",
+        lambda *args, **kwargs: FakeWindowsPreviewAudio(*args, **kwargs),
+    )
     monkeypatch.setattr(alarm_ui, "QAudioOutput", FakeAudioOutput)
     monkeypatch.setattr(alarm_ui, "QMediaPlayer", FakeMediaPlayer)
     selector = AlarmSoundSelector(library, sound.sound_id)
@@ -371,7 +405,11 @@ def test_windows_alarm_audio_falls_back_to_qt_when_mci_cannot_decode(
             self.play_count += 1
 
     monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
-    monkeypatch.setattr(alarm_ui, "_WindowsAlarmAudio", FakeWindowsAlarmAudio)
+    monkeypatch.setattr(
+        alarm_ui,
+        "_create_windows_alarm_audio",
+        lambda *args, **kwargs: FakeWindowsAlarmAudio(*args, **kwargs),
+    )
     monkeypatch.setattr(alarm_ui, "QAudioOutput", FakeAudioOutput)
     monkeypatch.setattr(alarm_ui, "QMediaPlayer", FakeMediaPlayer)
     card = AlarmCard(

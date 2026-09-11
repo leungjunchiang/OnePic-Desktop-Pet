@@ -16,7 +16,19 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from PySide6.QtCore import QDateTime, QEvent, QTime, QUrl, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QDateTime,
+    QEvent,
+    QMetaObject,
+    QObject,
+    QTime,
+    QThread,
+    QUrl,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -111,12 +123,10 @@ class AlarmSoundSelector(QWidget):
         row.addWidget(self.preview_button)
         row.addWidget(self.stop_button)
         row.addWidget(self.delete_button)
-        # Qt 6.11's Windows multimedia backend can block the GUI thread in
-        # QMediaPlayer.stop().  AlarmCard already uses the asynchronous MCI
-        # backend below; the selector uses the same safe route first.  Some
-        # Windows installations cannot decode MP3 through MCI (error 277),
-        # so keep a Qt player as a *failure-only* fallback.  It is never
-        # stopped synchronously; the timeout merely mutes it.
+        # Windows custom audio is played by a QMediaPlayer that lives in its
+        # own Qt event-loop thread.  The GUI never calls QMediaPlayer.stop().
+        # MCI and the GUI-thread Qt player remain last-resort fallbacks for
+        # machines where the worker multimedia backend cannot be created.
         use_qt_preview = sys.platform != "win32"
         self._preview_output = QAudioOutput(self) if use_qt_preview and QAudioOutput is not None else None
         self._preview_player = QMediaPlayer(self) if use_qt_preview and QMediaPlayer is not None else None
@@ -277,9 +287,9 @@ class AlarmSoundSelector(QWidget):
         if sys.platform == "win32":
             generation = self._preview_generation
 
-            def _on_mci_error(error: object) -> None:
+            def _on_backend_error(error: object) -> None:
                 lifecycle_log(
-                    "media.preview.mci.error",
+                    "media.preview.backend.error",
                     class_name="WindowsAlarmAudio",
                     sound_id=sound_id,
                     error=str(error),
@@ -291,24 +301,25 @@ class AlarmSoundSelector(QWidget):
                     str(error),
                 )
 
-            backend = _WindowsAlarmAudio(
+            backend = _create_windows_alarm_audio(
                 str(path),
                 volume=70,
                 on_finished=lambda: lifecycle_log(
-                    "media.preview.mci.stop_complete",
+                    "media.preview.backend.stop_complete",
                     class_name="WindowsAlarmAudio",
                     sound_id=sound_id,
                 ),
-                on_error=_on_mci_error,
+                on_error=_on_backend_error,
             )
-            if not backend.available:
+            if backend is None:
                 if not self._play_qt_preview(str(path), sound_id, fallback=True):
                     QApplication.beep()
                 return
             self._windows_preview_audio = backend
             lifecycle_log(
-                "media.preview.mci.play",
+                "media.preview.backend.play",
                 class_name="WindowsAlarmAudio",
+                backend=getattr(backend, "backend_kind", "unknown"),
                 sound_id=sound_id,
             )
             backend.start()
@@ -326,14 +337,35 @@ class AlarmSoundSelector(QWidget):
     ) -> None:
         if generation != self._preview_generation:
             return
+        backend = self._windows_preview_audio
         self._windows_preview_audio = None
         lifecycle_log(
-            "media.preview.mci.fallback",
+            "media.preview.backend.fallback",
             self,
             owner="AlarmSoundSelector",
             sound_id=sound_id,
             error=error,
         )
+        if getattr(backend, "backend_kind", "") == "qt-worker":
+            mci_backend = _WindowsAlarmAudio(
+                path,
+                volume=70,
+                on_finished=lambda: lifecycle_log(
+                    "media.preview.mci.stop_complete",
+                    class_name="WindowsAlarmAudio",
+                    sound_id=sound_id,
+                ),
+                on_error=lambda value: self._preview_mci_error.emit(
+                    generation,
+                    sound_id,
+                    path,
+                    str(value),
+                ),
+            )
+            if mci_backend.available:
+                self._windows_preview_audio = mci_backend
+                mci_backend.start()
+                return
         if not self._play_qt_preview(path, sound_id, fallback=True):
             QApplication.beep()
 
@@ -344,12 +376,12 @@ class AlarmSoundSelector(QWidget):
         self._windows_preview_audio = None
         if backend is not None:
             lifecycle_log(
-                "media.preview.mci.stop_request",
+                "media.preview.backend.stop_request",
                 class_name="WindowsAlarmAudio",
+                backend=getattr(backend, "backend_kind", "unknown"),
             )
-            # request_stop only starts a daemon worker.  It never waits for
-            # WinMM, so a button click, dialog close, or automatic timeout
-            # cannot block the Qt event loop.
+            # Both Windows backends queue their stop on a worker.  The GUI
+            # never waits for Qt Multimedia or WinMM native teardown.
             backend.request_stop()
         if self._preview_fallback_active:
             self._mute_qt_fallback_preview()
@@ -368,16 +400,203 @@ class AlarmSoundSelector(QWidget):
         super().closeEvent(event)
 
 
+class _WindowsQtAlarmAudioWorker(QObject):
+    """Own Windows Qt Multimedia objects inside a dedicated event loop."""
+
+    error = Signal(str)
+    finished = Signal()
+
+    def __init__(self, path: str, volume: int) -> None:
+        super().__init__()
+        self.path = str(path)
+        self.volume = max(0, min(100, int(volume or 0)))
+        self._player = None
+        self._output = None
+        self._stopping = False
+        self._finished = False
+
+    @Slot()
+    def initialize(self) -> None:
+        if self._stopping:
+            self._finish()
+            return
+        if QAudioOutput is None or QMediaPlayer is None:
+            self._fail("Qt Multimedia Windows backend unavailable")
+            return
+        try:
+            output = QAudioOutput()
+            output.setVolume(self.volume / 100)
+            player = QMediaPlayer()
+            player.setAudioOutput(output)
+            try:
+                player.setLoops(-1)
+            except (AttributeError, TypeError):
+                # Older Qt Multimedia builds use the explicit EndOfMedia
+                # handler below instead of exposing the loops property.
+                pass
+            player.mediaStatusChanged.connect(self._media_status_changed)
+            player.errorOccurred.connect(self._media_error)
+            self._output = output
+            self._player = player
+            player.setSource(QUrl.fromLocalFile(self.path))
+            # Starting from a queued callback ensures the worker event loop
+            # has begun dispatching before native Media Foundation work starts.
+            QTimer.singleShot(0, self._start_playback)
+        except Exception as exc:  # pragma: no cover - native backend only
+            self._fail(str(exc))
+
+    @Slot()
+    def _start_playback(self) -> None:
+        if self._stopping or self._player is None:
+            return
+        try:
+            self._player.play()
+        except Exception as exc:  # pragma: no cover - native backend only
+            self._fail(str(exc))
+
+    def _media_status_changed(self, status) -> None:
+        if self._stopping or self._player is None:
+            return
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            try:
+                # Explicit looping also works on Qt builds without the
+                # optional QMediaPlayer::loops property.
+                self._player.setPosition(0)
+                self._player.play()
+            except Exception as exc:  # pragma: no cover - native backend only
+                self._fail(str(exc))
+
+    def _media_error(self, *args: object) -> None:
+        if self._stopping:
+            return
+        detail = " ".join(str(item) for item in args).strip()
+        self._fail(detail or "Qt Multimedia playback error")
+
+    def _fail(self, message: str) -> None:
+        if self._finished:
+            return
+        self.error.emit(str(message))
+        self._finish()
+
+    @Slot()
+    def stop(self) -> None:
+        self._stopping = True
+        self._finish()
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        player = self._player
+        output = self._output
+        self._player = None
+        self._output = None
+        if player is not None:
+            try:
+                player.stop()
+            except Exception:
+                pass
+            player.deleteLater()
+        if output is not None:
+            output.deleteLater()
+        self.finished.emit()
+
+
+class _WindowsQtAlarmAudio(QObject):
+    """Non-blocking Windows alarm playback backed by Qt Multimedia."""
+
+    backend_kind = "qt-worker"
+    _instances: weakref.WeakSet["_WindowsQtAlarmAudio"] = weakref.WeakSet()
+    _instances_lock = threading.Lock()
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        volume: int,
+        on_finished,
+        on_error,
+    ) -> None:
+        super().__init__()
+        self.path = str(path)
+        self.volume = max(0, min(100, int(volume or 0)))
+        self._on_finished = on_finished
+        self._on_error = on_error
+        self._start_requested = False
+        self._stop_requested = False
+        self._thread = QThread(self)
+        self._worker = _WindowsQtAlarmAudioWorker(self.path, self.volume)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.initialize)
+        self._error_reported = False
+        self._worker.error.connect(self._relay_error, Qt.ConnectionType.QueuedConnection)
+        self._worker.finished.connect(self._relay_finished, Qt.ConnectionType.QueuedConnection)
+        self._worker.finished.connect(self._thread.quit, Qt.ConnectionType.QueuedConnection)
+        self._worker.finished.connect(self._worker.deleteLater)
+        with self._instances_lock:
+            self._instances.add(self)
+
+    @property
+    def available(self) -> bool:
+        return sys.platform == "win32" and QAudioOutput is not None and QMediaPlayer is not None
+
+    def start(self) -> None:
+        if self._start_requested or self._stop_requested:
+            return
+        if not self.available:
+            self._on_error("Qt Multimedia Windows backend unavailable")
+            return
+        self._start_requested = True
+        self._thread.start()
+
+    @Slot(str)
+    def _relay_error(self, message: str) -> None:
+        self._error_reported = True
+        self._on_error(str(message))
+
+    @Slot()
+    def _relay_finished(self) -> None:
+        # A failed worker is being replaced by the MCI fallback; its normal
+        # stop callback must not mark the replacement as already drained.
+        if not self._error_reported:
+            self._on_finished()
+
+    def request_stop(self) -> None:
+        """Queue stop on the worker thread without blocking the GUI."""
+
+        if self._stop_requested:
+            return
+        self._stop_requested = True
+        if self._thread.isRunning():
+            QMetaObject.invokeMethod(
+                self._worker,
+                "stop",
+                Qt.ConnectionType.QueuedConnection,
+            )
+        elif not self._error_reported:
+            self._worker._stopping = True
+            self._on_finished()
+
+    @classmethod
+    def request_stop_all(cls) -> None:
+        with cls._instances_lock:
+            instances = tuple(cls._instances)
+        for instance in instances:
+            instance.request_stop()
+
+
 class _WindowsAlarmAudio:
-    """Play one alarm file through Windows MCI, outside Qt Multimedia.
+    """Last-resort playback through Windows MCI, outside Qt Multimedia.
 
     Qt 6.11.2's Windows multimedia backend can block inside
     ``QMediaPlayer.stop()`` while the GUI thread is dispatching a button
     click.  The alarm card therefore uses this small, process-local backend
-    for custom sounds on Windows.  MCI commands run on daemon threads and
-    the GUI never waits for either the command or the thread.
+    The normal Windows path uses ``_WindowsQtAlarmAudio``.  MCI commands run
+    on daemon threads here and the GUI never waits for either the command or
+    the thread.
     """
 
+    backend_kind = "mci"
     _instances: weakref.WeakSet["_WindowsAlarmAudio"] = weakref.WeakSet()
     _instances_lock = threading.Lock()
 
@@ -531,6 +750,32 @@ class _WindowsAlarmAudio:
             self._on_error(str(error))
         except Exception:
             return
+
+
+def _create_windows_alarm_audio(
+    path: str,
+    *,
+    volume: int,
+    on_finished,
+    on_error,
+):
+    """Prefer Qt Multimedia in a worker thread, then fall back to MCI."""
+
+    qt_backend = _WindowsQtAlarmAudio(
+        path,
+        volume=volume,
+        on_finished=on_finished,
+        on_error=on_error,
+    )
+    if qt_backend.available:
+        return qt_backend
+    mci_backend = _WindowsAlarmAudio(
+        path,
+        volume=volume,
+        on_finished=on_finished,
+        on_error=on_error,
+    )
+    return mci_backend if mci_backend.available else None
 
 
 class AlarmCard(QDialog):
@@ -902,13 +1147,13 @@ class AlarmCard(QDialog):
             if self._media_player is not None:
                 self._media_player.setSource(QUrl.fromLocalFile(str(path)))
             else:
-                self._windows_audio = _WindowsAlarmAudio(
+                self._windows_audio = _create_windows_alarm_audio(
                     str(path),
                     volume=int(alarm.volume or 0),
                     on_finished=self._windows_audio_finished.emit,
                     on_error=self._windows_audio_error.emit,
                 )
-                if not self._windows_audio.available:
+                if self._windows_audio is None:
                     self._windows_audio = None
                     if not self._configure_qt_fallback(str(path)):
                         self._custom_audio = False
@@ -1049,7 +1294,7 @@ class AlarmCard(QDialog):
                 "media.alarm.backend_start",
                 class_name="WindowsAlarmAudio",
                 alarm_id=str(self.alarm.id),
-                backend="winmm-mci",
+                backend=getattr(self._windows_audio, "backend_kind", "unknown"),
             )
             self._windows_audio.start()
             return
@@ -1125,23 +1370,45 @@ class AlarmCard(QDialog):
         self._fallback_to_system()
 
     def _on_windows_audio_finished(self) -> None:
-        """Receive the daemon stop completion on Qt's GUI thread."""
+        """Receive worker/native stop completion on Qt's GUI thread."""
 
         self._media_stop_pending = False
         self._media_stop_completed = True
         self._media_drained = True
         lifecycle_log(
-            "media.alarm.mci.stop_complete",
+            "media.alarm.backend.stop_complete",
             class_name="WindowsAlarmAudio",
             alarm_id=str(self.alarm.id),
         )
         self._emit_audio_cleanup_finished()
 
-    def _on_windows_audio_error(self, error: str) -> None:
+    def _start_mci_fallback(self) -> bool:
+        """Use MCI only after the worker-based Qt backend fails."""
+
+        backend = _WindowsAlarmAudio(
+            str(self._custom_audio_path or ""),
+            volume=int(self.alarm.volume or 0),
+            on_finished=self._windows_audio_finished.emit,
+            on_error=self._windows_audio_error.emit,
+        )
+        if not backend.available:
+            return False
+        self._windows_audio = backend
         lifecycle_log(
-            "media.alarm.mci.error_received",
+            "media.alarm.backend_fallback",
             class_name="WindowsAlarmAudio",
             alarm_id=str(self.alarm.id),
+            backend="mci",
+        )
+        backend.start()
+        return True
+
+    def _on_windows_audio_error(self, error: str) -> None:
+        lifecycle_log(
+            "media.alarm.backend.error_received",
+            class_name="WindowsAlarmAudio",
+            alarm_id=str(self.alarm.id),
+            backend=getattr(self._windows_audio, "backend_kind", "unknown"),
             error=str(error),
         )
         backend = self._windows_audio
@@ -1149,8 +1416,14 @@ class AlarmCard(QDialog):
         if backend is not None:
             backend.request_stop()
         if self._audio_closing:
-            self._on_windows_audio_finished()
+            self._media_stop_pending = False
+            self._media_stop_completed = True
+            self._media_drained = True
+            self._emit_audio_cleanup_finished()
             return
+        if getattr(backend, "backend_kind", "") == "qt-worker" and self._custom_audio:
+            if self._start_mci_fallback():
+                return
         if self._custom_audio and self._play_qt_fallback(self._custom_audio_path):
             return
         self._fallback_to_system()
@@ -1247,20 +1520,21 @@ class AlarmCard(QDialog):
                 "media.alarm.stop.defer",
                 class_name="WindowsAlarmAudio",
                 alarm_id=str(self.alarm.id),
-                reason="async_winmm_stop",
+                backend=getattr(self._windows_audio, "backend_kind", "unknown"),
+                reason="async_worker_stop",
             )
             self._windows_audio.request_stop()
-            # Defensive process-wide cleanup also covers a card whose Qt
-            # wrapper was retired while its native MCI alias remained open.
+            # Defensive process-wide cleanup also covers a card whose audio
+            # wrapper was retired while its native worker is still draining.
+            _WindowsQtAlarmAudio.request_stop_all()
             _WindowsAlarmAudio.request_stop_all()
             # ``_media_stop_completed`` means that the stop request has been
-            # dispatched, not that the daemon MCI call has returned.  The
-            # latter is represented by ``_media_drained`` and the queued
-            # cleanup signal below.
+            # dispatched, not that native teardown has returned.  The latter
+            # is represented by ``_media_drained`` and the queued cleanup
+            # signal below.
             self._media_stop_completed = True
-            # The daemon worker will signal the final completion.  The
-            # native Windows audio API is no longer part of the Qt GUI call
-            # stack, and the button path never waits for it.
+            # The worker will signal final completion.  Native audio teardown
+            # is no longer part of the Qt GUI call stack.
             return
         if self._media_player is None or self._media_stop_completed:
             self._media_stop_completed = True

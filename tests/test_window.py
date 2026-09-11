@@ -125,6 +125,33 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_start_work_freezes_target_frame_until_transition_finishes() -> None:
+    """工作开始时目标帧不能在交叉淡化期间偷偷换帧。"""
+
+    app, window = _create_window()
+    window.start_work_timer()
+
+    assert window.activity_transition_timer.isActive()
+    assert not window._activity_transition_target.isNull()
+    target_key = window._activity_transition_target.cacheKey()
+
+    for _ in range(3):
+        window._activity_transition_tick()
+
+    assert window._activity_transition_target.cacheKey() == target_key
+    for _ in range(window._activity_transition_steps):
+        window._activity_transition_tick()
+
+    assert window._activity_transition_target.isNull()
+    assert window._ambient_activity == "computer"
+    if len(window._pixmaps[PetState.SIT]) > 1:
+        assert window.animation_timer.isActive()
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     """The display bubble keeps the server effective total without raw rows."""
 

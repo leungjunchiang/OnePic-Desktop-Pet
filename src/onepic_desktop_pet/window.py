@@ -840,8 +840,10 @@ class PetWindow(QWidget):
         self._ambient_activity = "none"
         self._night_limited_activity = ""
         self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
         self._activity_transition_step = 0
-        self._activity_transition_steps = 8
+        self._activity_transition_steps = 10
+        self._resume_animation_after_activity_transition = False
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
@@ -1094,7 +1096,8 @@ class PetWindow(QWidget):
         self.food_scene_timer.timeout.connect(self._food_scene_timeout)
 
         self.activity_transition_timer = QTimer(self)
-        self.activity_transition_timer.setInterval(35)
+        self.activity_transition_timer.setInterval(20)
+        self.activity_transition_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.activity_transition_timer.timeout.connect(self._activity_transition_tick)
 
         self.work_activity_timer = QTimer(self)
@@ -1461,6 +1464,8 @@ class PetWindow(QWidget):
     def _refresh_pixmap(self) -> None:
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
 
+        render_started = time.perf_counter()
+
         display_state, pixmap = self._current_source()
         ratio = max(1.0, self.devicePixelRatioF())
         direction_key = self.direction if display_state is PetState.WALK else 0
@@ -1551,11 +1556,27 @@ class PetWindow(QWidget):
             effect_key ^ overlay_key,
             mask_source=mask_source,
         )
+        elapsed_ms = (time.perf_counter() - render_started) * 1000.0
+        performance = getattr(self, "_performance", None)
+        if performance is not None:
+            performance.record("pet.refresh_pixmap", elapsed_ms)
+        if elapsed_ms >= 25.0:
+            lifecycle_log(
+                "perf.pet_refresh_slow",
+                self,
+                elapsed_ms=round(elapsed_ms, 1),
+                state=display_state.value,
+                activity=activity,
+                transition_active=self.activity_transition_timer.isActive(),
+            )
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
         """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
 
         previous = self._activity_transition_from
+        frozen_target = self._activity_transition_target
+        if not frozen_target.isNull():
+            target = frozen_target
         if previous.isNull() or self._activity_transition_step >= self._activity_transition_steps:
             return target
         if previous.size() != target.size():
@@ -1579,13 +1600,21 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _activity_transition_tick(self) -> None:
-        """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
+        """推进约 200 毫秒的动作交叉淡化；目标帧在过渡期间保持冻结。"""
 
         self._activity_transition_step += 1
         if self._activity_transition_step >= self._activity_transition_steps:
             self.activity_transition_timer.stop()
             self._activity_transition_from = QPixmap()
+            self._activity_transition_target = QPixmap()
             self._mask_cache.clear()
+            if self._resume_animation_after_activity_transition:
+                self._resume_animation_after_activity_transition = False
+                frames = self._pixmaps[self.state]
+                if len(frames) > 1 and not self.dragging:
+                    self.animation_timer.start(
+                        self._frame_interval(self.state, self._frame_index)
+                    )
         self._refresh_pixmap()
 
     def _change_ambient_activity(self, activity: str) -> None:
@@ -1597,13 +1626,27 @@ class PetWindow(QWidget):
             self._refresh_pixmap()
             return
         current = self.label.pixmap() if hasattr(self, "label") else QPixmap()
-        self._activity_transition_from = QPixmap(current) if not current.isNull() else QPixmap()
-        self._activity_transition_step = 0
         self._ambient_activity = next_activity
         self._mask_cache.clear()
-        if not self._activity_transition_from.isNull():
+        if not current.isNull():
+            # Render the new activity once without a transition, then freeze
+            # that exact target.  Later animation frames must not move the
+            # destination while the cross-fade is still in progress.
+            self._activity_transition_from = QPixmap()
+            self._activity_transition_target = QPixmap()
+            self._activity_transition_step = self._activity_transition_steps
+            self._refresh_pixmap()
+            target = self.label.pixmap()
+            self._activity_transition_from = QPixmap(current)
+            self._activity_transition_target = QPixmap(target)
+            self._activity_transition_step = 0
             self.activity_transition_timer.start()
-        self._refresh_pixmap()
+            self._refresh_pixmap()
+        else:
+            self._activity_transition_from = QPixmap()
+            self._activity_transition_target = QPixmap()
+            self._activity_transition_step = self._activity_transition_steps
+            self._refresh_pixmap()
 
     def _refresh_window_mask(
         self,
@@ -3480,6 +3523,30 @@ class PetWindow(QWidget):
         if sequence_id == self._action_sequence_id and not self.dragging:
             self.set_state(state)
 
+    def _begin_work_visual_transition(
+        self,
+        state: PetState,
+        duration_ms: int = 3600,
+    ) -> None:
+        """Enter the work pose through one frozen-target visual transition."""
+
+        self.state_timer.stop()
+        self.interaction_timer.stop()
+        self._resume_animation_after_activity_transition = True
+        self.set_state(state)
+        # set_state starts the normal animation immediately; defer it until
+        # the fixed work target has finished fading in.
+        self.animation_timer.stop()
+        self._change_ambient_activity("computer")
+        if not self.activity_transition_timer.isActive():
+            self._resume_animation_after_activity_transition = False
+            frames = self._pixmaps[self.state]
+            if len(frames) > 1 and not self.dragging:
+                self.animation_timer.start(
+                    self._frame_interval(self.state, self._frame_index)
+                )
+        self.interaction_timer.start(max(500, int(duration_ms)))
+
     def start_work_timer(self) -> CompanionReply:
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
 
@@ -3518,10 +3585,9 @@ class PetWindow(QWidget):
         self._invalidate_focus_projection("focus_started")
         if started:
             self.set_paused(True)
-        self._change_ambient_activity("computer")
         self._schedule_work_activity(25_000)
         reply = self.companion.work_started(resumed=not started)
-        self._show_emotion(reply.state, 3600)
+        self._begin_work_visual_transition(reply.state, 3600)
         self.show_speech(reply.text, 5600)
         self.work_timer_changed.emit(self.work_timer.is_running)
         self._sync_state_effect()
@@ -7901,7 +7967,9 @@ class PetWindow(QWidget):
         save_settings(self.settings)
         self.activity_transition_timer.stop()
         self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
         self._activity_transition_step = self._activity_transition_steps
+        self._resume_animation_after_activity_transition = False
         self._mask_cache.clear()
         self._refresh_pixmap()
         self._reflow_compact_todos_after_outfit(panel_was_visible)
@@ -8982,7 +9050,9 @@ class PetWindow(QWidget):
         # is visible immediately, even while a transient work action is ending.
         self.activity_transition_timer.stop()
         self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
         self._activity_transition_step = self._activity_transition_steps
+        self._resume_animation_after_activity_transition = False
         self._mask_cache.clear()
         self._refresh_pixmap()
         self._reflow_compact_todos_after_outfit(panel_was_visible)
