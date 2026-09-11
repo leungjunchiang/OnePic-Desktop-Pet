@@ -506,7 +506,14 @@ class _WindowsQtAlarmAudio(QObject):
     """Non-blocking Windows alarm playback backed by Qt Multimedia."""
 
     backend_kind = "qt-worker"
-    _instances: weakref.WeakSet["_WindowsQtAlarmAudio"] = weakref.WeakSet()
+    # Keep a strong reference until the native QThread has emitted
+    # ``finished``.  The selector/card intentionally drops its active backend
+    # reference as soon as stop is requested, but QThread teardown is
+    # asynchronous.  A WeakSet allowed the wrapper (and its parented QThread)
+    # to be destroyed while the worker was still running, which can make Qt
+    # abort the whole process with ``QThread: Destroyed while thread is still
+    # running`` during a custom-sound preview.
+    _instances: set["_WindowsQtAlarmAudio"] = set()
     _instances_lock = threading.Lock()
 
     def __init__(
@@ -533,6 +540,7 @@ class _WindowsQtAlarmAudio(QObject):
         self._worker.finished.connect(self._relay_finished, Qt.ConnectionType.QueuedConnection)
         self._worker.finished.connect(self._thread.quit, Qt.ConnectionType.QueuedConnection)
         self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._release_instance)
         with self._instances_lock:
             self._instances.add(self)
 
@@ -541,7 +549,12 @@ class _WindowsQtAlarmAudio(QObject):
         return sys.platform == "win32" and QAudioOutput is not None and QMediaPlayer is not None
 
     def start(self) -> None:
-        if self._start_requested or self._stop_requested:
+        if self._start_requested:
+            return
+        if self._stop_requested:
+            # A stop may arrive before QThread.start() gets a chance to run.
+            # There will be no ``QThread.finished`` signal in that case.
+            self._release_instance()
             return
         if not self.available:
             self._on_error("Qt Multimedia Windows backend unavailable")
@@ -573,9 +586,17 @@ class _WindowsQtAlarmAudio(QObject):
                 "stop",
                 Qt.ConnectionType.QueuedConnection,
             )
-        elif not self._error_reported:
+        elif not self._start_requested and not self._error_reported:
             self._worker._stopping = True
             self._on_finished()
+            self._release_instance()
+
+    @Slot()
+    def _release_instance(self) -> None:
+        """Release the lifetime guard only after native thread teardown."""
+
+        with self._instances_lock:
+            self._instances.discard(self)
 
     @classmethod
     def request_stop_all(cls) -> None:

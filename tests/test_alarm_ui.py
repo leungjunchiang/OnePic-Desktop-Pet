@@ -227,6 +227,27 @@ def test_windows_audio_factory_prefers_qt_worker_over_mci(monkeypatch) -> None:
     assert backend.backend_kind == "qt-worker"
 
 
+def test_windows_qt_audio_lifetime_guard_survives_async_stop(monkeypatch) -> None:
+    """A stopped worker stays alive until its QThread has really finished."""
+
+    _app()
+    monkeypatch.setattr(alarm_ui.sys, "platform", "win32")
+    backend = alarm_ui._WindowsQtAlarmAudio(
+        "alarm.wav",
+        volume=60,
+        on_finished=lambda: None,
+        on_error=lambda _error: None,
+    )
+
+    assert any(item is backend for item in alarm_ui._WindowsQtAlarmAudio._instances)
+
+    # The production signal calls this only after QThread.finished.  Calling
+    # it directly here verifies the guard is removable and does not leave a
+    # strong-reference leak after teardown.
+    backend._release_instance()
+    assert not any(item is backend for item in alarm_ui._WindowsQtAlarmAudio._instances)
+
+
 def test_windows_custom_audio_preview_uses_async_backend_not_qt_player(tmp_path, monkeypatch) -> None:
     """The selector stops a Windows backend asynchronously on timeout."""
 
