@@ -254,6 +254,7 @@ from .social_ui import (
     SocialHeartbeatWorker,
     SocialHubDialog,
     SocialProfileThread,
+    SocialReconnectThread,
     SocialSyncThread,
     SocialVisitResponseThread,
 )
@@ -721,6 +722,9 @@ class PetWindow(QWidget):
         # Keep the worker parented for Qt ownership, while closeEvent also
         # explicitly stops and waits for its cooperative condition loop.
         self._social_heartbeat_thread = SocialHeartbeatWorker(self.social_client)
+        self._social_reconnect_thread: SocialReconnectThread | None = None
+        self._last_social_reconnect_attempt_at = 0.0
+        self._last_social_watchdog_log_at = 0.0
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
         self._last_focus_history_recovery_check_at = 0.0
@@ -6884,6 +6888,57 @@ class PetWindow(QWidget):
         with self._performance.measure("social.tick_prepare"):
             self._social_tick_impl()
 
+    def _start_social_reconnect(self) -> None:
+        """Start one non-blocking recovery attempt for a locally saved session."""
+
+        current = self._social_reconnect_thread
+        if current is not None and current.isRunning():
+            return
+        now = time.monotonic()
+        if now - self._last_social_reconnect_attempt_at < 20.0:
+            return
+        self._last_social_reconnect_attempt_at = now
+        thread = SocialReconnectThread(self.social_client, self)
+        self._social_reconnect_thread = thread
+        thread.completed.connect(self._social_reconnect_succeeded)
+        thread.failed.connect(self._social_reconnect_failed)
+        thread.finished.connect(
+            lambda current=thread: self._social_reconnect_finished(current),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        lifecycle_log("social.auth.reconnect_started", self)
+        thread.start()
+
+    @_guard_qt_callback
+    def _social_reconnect_succeeded(self, result: object) -> None:
+        lifecycle_log(
+            "social.auth.reconnected",
+            self,
+            user_id=str((result or {}).get("user_id") or "") if isinstance(result, dict) else "",
+        )
+        self._social_heartbeat_due = True
+        self._social_personal_sync_due = True
+        timer = getattr(self, "social_sync_timer", None)
+        if timer is not None:
+            timer.start(0)
+        if self._social_dialog is not None:
+            self._social_dialog._set_status("自习室登录状态已自动恢复，正在同步在线状态和今日专注时间。")
+
+    @_guard_qt_callback
+    def _social_reconnect_failed(self, error: object) -> None:
+        message = str(error or "登录状态暂时无法恢复")[:180]
+        lifecycle_log("social.auth.reconnect_failed", self, error=message)
+        if self._social_dialog is not None:
+            self._social_dialog._set_status(
+                "自习室连接正在自动恢复；本地专注不受影响。"
+            )
+
+    @_guard_qt_callback
+    def _social_reconnect_finished(self, thread: SocialReconnectThread) -> None:
+        if self._social_reconnect_thread is thread:
+            self._social_reconnect_thread = None
+        thread.deleteLater()
+
     def _build_social_personal_state(self) -> dict[str, object]:
         """Build the compatibility sync payload outside the GUI thread.
 
@@ -6947,6 +7002,13 @@ class PetWindow(QWidget):
             return
         if not self.social_client.signed_in:
             self._economy_sync_user_id = ""
+            # A stale refresh error must not permanently stop the social
+            # scheduler.  The UI may still show the account as logged in and
+            # the keyring may still contain a valid rotating refresh token;
+            # recover that session off the GUI thread and let the normal tick
+            # resume heartbeat + Dashboard + FocusSegment sync together.
+            if bool(getattr(self.social_client, "has_local_session", False)):
+                self._start_social_reconnect()
             return
         heartbeat_thread = self._social_heartbeat_thread
         # Do not create a background worker for anonymous/offline pet windows.
@@ -7089,6 +7151,32 @@ class PetWindow(QWidget):
                 immediate=bool(self._social_heartbeat_due),
             )
             self._social_heartbeat_due = False
+
+            # A worker that is alive but has not received a successful server
+            # ACK is not healthy. Wake it with the latest state instead of
+            # waiting for a stale pending payload to age out.
+            heartbeat_diag = heartbeat_thread.diagnostics()
+            now_for_watchdog = time.monotonic()
+            last_attempt = float(heartbeat_diag.get("last_attempt_monotonic") or 0.0)
+            last_success = float(heartbeat_diag.get("last_success_monotonic") or 0.0)
+            if (
+                last_attempt
+                and now_for_watchdog - max(last_success, last_attempt) >= 60.0
+            ) or (
+                last_success
+                and now_for_watchdog - last_success >= 60.0
+            ):
+                heartbeat_thread.update_presence(presence, immediate=True)
+                heartbeat_thread.force_retry()
+                if now_for_watchdog - self._last_social_watchdog_log_at >= 60.0:
+                    self._last_social_watchdog_log_at = now_for_watchdog
+                    lifecycle_log(
+                        "social.heartbeat.watchdog_retry",
+                        self,
+                        last_success_at=heartbeat_diag.get("last_success_at", ""),
+                        last_failure_at=heartbeat_diag.get("last_failure_at", ""),
+                        last_error=heartbeat_diag.get("last_error", ""),
+                    )
 
         # A slow dashboard/statistics request must never prevent a fresh
         # working/paused state from reaching the independent heartbeat loop.

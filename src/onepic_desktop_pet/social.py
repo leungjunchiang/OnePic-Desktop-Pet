@@ -52,6 +52,10 @@ CONNECTION_STATES = {
 # freshness window; allowing one extra minute here covers a missed poll and
 # the time needed for the next retry without claiming that the peer is live.
 PRESENCE_GRACE_SECONDS = 180
+# A transport outage is not evidence that every buddy left the room.  Keep
+# the last confirmed projection visible as an explicitly uncertain snapshot
+# while the client reconnects, even when the outage lasts longer than the
+# normal short cache grace window.
 # These collections are read-only social overlays.  They do not carry
 # liveness or focus facts, so a five-minute account-scoped cache is safe for
 # passive dashboard polling while explicit UI actions can force a refresh.
@@ -686,6 +690,34 @@ class ConnectionStateStore:
         self.last_success_at = ""
         self.last_failure_at = ""
         self.server_timestamp = ""
+        self._links: dict[str, dict[str, Any]] = {
+            name: {
+                "ok": False,
+                "last_success_at": "",
+                "last_failure_at": "",
+                "last_error": "",
+            }
+            for name in ("auth", "heartbeat", "dashboard", "segment")
+        }
+
+    def mark_link(self, name: str, *, ok: bool, error: str = "") -> None:
+        """Record component-level sync health without storing credentials."""
+
+        key = str(name or "").strip().casefold()
+        if key not in self._links:
+            return
+        entry = self._links[key]
+        now = datetime.now().astimezone().isoformat()
+        entry["ok"] = bool(ok)
+        if ok:
+            entry["last_success_at"] = now
+            entry["last_error"] = ""
+        else:
+            entry["last_failure_at"] = now
+            entry["last_error"] = str(error or "")[:300]
+
+    def link_payload(self) -> dict[str, dict[str, Any]]:
+        return {name: dict(value) for name, value in self._links.items()}
 
     def set(self, state: str, *, data_source: str, realtime_state: str = "not_started", server_timestamp: str = "") -> None:
         self.state = state if state in CONNECTION_STATES else "OFFLINE"
@@ -707,6 +739,7 @@ class ConnectionStateStore:
             "last_success_at": self.last_success_at,
             "last_failure_at": self.last_failure_at,
             "server_timestamp": self.server_timestamp,
+            "links": self.link_payload(),
         }
 
 
@@ -1145,6 +1178,8 @@ class _AuthState:
     last_error: SocialError | None = None
     storage_error: str = ""
     generation: int = 0
+    last_success_at: str = ""
+    last_failure_at: str = ""
 
 
 class AuthSessionManager:
@@ -1202,6 +1237,11 @@ class AuthSessionManager:
                 "token_generation": session.generation if session else self._state.generation,
                 "storage": self.storage_label,
                 "storage_error": self._state.storage_error,
+                "last_success_at": self._state.last_success_at,
+                "last_failure_at": self._state.last_failure_at,
+                "last_error_kind": getattr(self._state.last_error, "kind", "") if self._state.last_error else "",
+                "last_error": str(self._state.last_error or "")[:300],
+                "reconnectable": bool(session and session.refresh_token),
             }
 
     @property
@@ -1320,6 +1360,7 @@ class AuthSessionManager:
             # ``signed_in`` would remain false even though Auth accepted the
             # new credentials.
             self._state.last_error = None
+            self._state.last_success_at = datetime.now().astimezone().isoformat()
             return session
 
     def clear(self) -> None:
@@ -1477,6 +1518,7 @@ class AuthSessionManager:
                 )
             with self._state.condition:
                 self._state.last_error = exc
+                self._state.last_failure_at = datetime.now().astimezone().isoformat()
             raise exc
         except (OSError, RuntimeError) as exc:
             retryable = SocialError(
@@ -1486,6 +1528,7 @@ class AuthSessionManager:
             )
             with self._state.condition:
                 self._state.last_error = retryable
+                self._state.last_failure_at = datetime.now().astimezone().isoformat()
             raise retryable from exc
         finally:
             with self._state.condition:
@@ -1504,9 +1547,13 @@ class SocialBackend(Protocol):
     @property
     def signed_in(self) -> bool: ...
 
+    @property
+    def has_local_session(self) -> bool: ...
+
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult: ...
     def resend_confirmation(self, email: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
+    def reconnect(self) -> dict[str, Any]: ...
     def record_login_streak(self) -> dict[str, Any]: ...
     def sign_out(self) -> None: ...
     def change_password(self, current_password: str, new_password: str) -> None: ...
@@ -1561,6 +1608,11 @@ class HttpSocialBackend:
     @property
     def signed_in(self) -> bool:
         return (self.session is not None or self.auth_manager.current() is not None) and not self.auth_manager.requires_relogin
+
+    @property
+    def has_local_session(self) -> bool:
+        session = self.auth_manager.current() or self.session
+        return bool(session and session.refresh_token)
 
     @property
     def account_email(self) -> str:
@@ -1781,6 +1833,28 @@ class HttpSocialBackend:
         data = self._raw("POST", path, {"email": normalize_email(email), "password": password}, timeout=_auth_request_timeout())
         if not self._accept_auth(data):
             raise SocialError("登录没有成功，请检查邮箱确认或密码。")
+
+    def reconnect(self) -> dict[str, Any]:
+        """Force one refresh using the locally stored rotating refresh token.
+
+        A transient refresh failure must not be confused with an explicit
+        user sign-out.  The caller can safely retry this method while the
+        local session remains present; a successful refresh clears the stale
+        relogin marker in ``AuthSessionManager``.
+        """
+
+        if not self.has_local_session:
+            raise SocialError("本机没有可恢复的登录会话。", kind="auth")
+        self._ensure_fresh(force=True)
+        session = self.auth_manager.current() or self.session
+        if session is None:
+            raise SocialError("登录状态暂时无法恢复。", kind="auth_refresh", retryable=True)
+        self.session = session
+        return {
+            "user_id": session.user_id,
+            "account_email": session.email,
+            "generation": session.generation,
+        }
 
     def record_login_streak(self) -> dict[str, Any]:
         """Record one idempotent Beijing-calendar login for the signed-in account."""
@@ -2489,7 +2563,7 @@ class LegacyDirectSocialClient:
         if presence_grace:
             self._mark_remote_presence_uncertain(data, age_seconds)
         else:
-            self._mark_remote_presence_stale(data)
+            self._mark_remote_presence_stale(data, age_seconds)
         data["_sync_offline"] = True
         data["_connection_state"] = "DEGRADED" if presence_grace else "OFFLINE"
         data["_presence_grace_active"] = presence_grace
@@ -2515,8 +2589,8 @@ class LegacyDirectSocialClient:
         return data
 
     @staticmethod
-    def _mark_remote_presence_stale(data: dict[str, Any]) -> None:
-        """Never render cached remote presence as current online activity."""
+    def _mark_remote_presence_stale(data: dict[str, Any], age_seconds: int = 0) -> None:
+        """Keep last-known presence while marking the transport as uncertain."""
 
         def mark(items: Any) -> None:
             if not isinstance(items, list):
@@ -2524,13 +2598,10 @@ class LegacyDirectSocialClient:
             for item in items:
                 if not isinstance(item, dict) or item.get("is_self"):
                     continue
-                item["online"] = False
-                item["working"] = False
-                item["status"] = "offline"
-                item["session_seconds"] = 0
-                item["today_seconds"] = None
-                item["stale_presence"] = True
-                item["presence_uncertain"] = False
+                item.pop("stale_presence", None)
+                item["presence_uncertain"] = True
+                item["presence_age_seconds"] = max(0, int(age_seconds or 0))
+                item["transport_stale"] = True
 
         mark(data.get("buddies"))
         mark(data.get("room_people"))
@@ -2540,10 +2611,10 @@ class LegacyDirectSocialClient:
             mark(room.get("room_people"))
             summary = room.get("room_summary")
             if isinstance(summary, dict):
-                summary["focus_count"] = 0
+                summary["presence_uncertain"] = True
         summary = data.get("room_summary")
         if isinstance(summary, dict):
-            summary["focus_count"] = 0
+            summary["presence_uncertain"] = True
 
     @staticmethod
     def _mark_remote_presence_uncertain(data: dict[str, Any], age_seconds: int) -> None:
@@ -3033,6 +3104,40 @@ class DashboardCacheClientBase:
     def signed_in(self) -> bool:
         return bool(self._http_backend is not None and self._http_backend.signed_in)
 
+    @property
+    def has_local_session(self) -> bool:
+        backend = getattr(self, "_http_backend", None)
+        if backend is None:
+            manager = getattr(self, "_manager", None)
+            backend = getattr(manager, "direct", None)
+        return bool(backend is not None and getattr(backend, "has_local_session", False))
+
+    def mark_sync_link(self, name: str, *, ok: bool, error: str = "") -> None:
+        self.connection.mark_link(name, ok=ok, error=error)
+
+    def sync_health(self) -> dict[str, Any]:
+        """Return component-level health for the in-app network diagnostic."""
+
+        backend = getattr(self, "_http_backend", None)
+        if backend is None:
+            manager = getattr(self, "_manager", None)
+            backend = getattr(manager, "direct", None)
+        auth_manager = getattr(backend, "auth_manager", None)
+        auth = dict(auth_manager.diagnostics()) if isinstance(auth_manager, AuthSessionManager) else {}
+        links = self.connection.link_payload()
+        links["auth"] = {
+            "ok": bool(self.signed_in),
+            "last_success_at": str(auth.get("last_success_at") or ""),
+            "last_failure_at": str(auth.get("last_failure_at") or ""),
+            "last_error": str(auth.get("last_error") or "")[:300],
+            "reconnectable": bool(auth.get("reconnectable")),
+        }
+        return {
+            "links": links,
+            "has_local_session": bool(self.has_local_session),
+            "reconnecting": bool(self.has_local_session and not self.signed_in),
+        }
+
     def _require_backend(self) -> SocialBackend:
         if self._http_backend is None:
             raise SocialError("自习室服务尚未配置。", kind="config")
@@ -3121,18 +3226,30 @@ class DashboardCacheClientBase:
         self._save_dashboard_cache()
 
     @staticmethod
-    def _mark_remote_presence_stale(data: dict[str, Any]) -> None:
+    def _mark_remote_presence_stale(data: dict[str, Any], age_seconds: int = 0) -> None:
+        """Keep last-known presence, but make transport uncertainty explicit.
+
+        A failed Dashboard read only proves that *this client* cannot reach
+        the service. It does not prove that every buddy went offline. The old
+        implementation manufactured an offline event after 180 seconds,
+        which hid valid cached work time and made one broken sync loop look
+        like a room-wide presence outage.
+        """
+
         def mark(items: Any) -> None:
             if not isinstance(items, list): return
             for item in items:
                 if not isinstance(item, dict) or item.get("is_self"): continue
-                item.update({"online": False, "working": False, "status": "offline", "session_seconds": 0, "today_seconds": None, "stale_presence": True, "presence_uncertain": False})
+                item.pop("stale_presence", None)
+                item["presence_uncertain"] = True
+                item["presence_age_seconds"] = max(0, int(age_seconds or 0))
+                item["transport_stale"] = True
         mark(data.get("buddies")); mark(data.get("room_people")); mark(data.get("active_visits"))
         room = data.get("current_room")
         if isinstance(room, dict):
             mark(room.get("room_people"))
-            if isinstance(room.get("room_summary"), dict): room["room_summary"]["focus_count"] = 0
-        if isinstance(data.get("room_summary"), dict): data["room_summary"]["focus_count"] = 0
+            if isinstance(room.get("room_summary"), dict): room["room_summary"]["presence_uncertain"] = True
+        if isinstance(data.get("room_summary"), dict): data["room_summary"]["presence_uncertain"] = True
 
     @staticmethod
     def _mark_remote_presence_uncertain(data: dict[str, Any], age_seconds: int) -> None:
@@ -3190,7 +3307,7 @@ class DashboardCacheClientBase:
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
         if presence_grace: self._mark_remote_presence_uncertain(data, age_seconds)
-        else: self._mark_remote_presence_stale(data)
+        else: self._mark_remote_presence_stale(data, age_seconds)
         data.update({"_sync_offline": True, "_connection_state": "DEGRADED" if presence_grace else "OFFLINE", "_presence_grace_active": presence_grace, "_presence_uncertainty_seconds": age_seconds if presence_grace else 0, "is_stale": True, "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int(age_seconds / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
         self.connection.set(
             "DEGRADED" if presence_grace else "OFFLINE",
@@ -3210,7 +3327,7 @@ class DashboardCacheClientBase:
             state = "AUTH_ERROR" if _is_auth_error(exc) else str((cached or {}).get("_connection_state") or "OFFLINE")
             realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
-            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "sync_health": self.sync_health(), "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
         if not self.signed_in:
             self.connection.set("DEGRADED", data_source="local_live", realtime_state="not_authenticated")
             return {"connection_state": "DEGRADED", "data_source": "local_live", "realtime_state": "not_authenticated", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
@@ -3223,7 +3340,7 @@ class DashboardCacheClientBase:
             state = "AUTH_ERROR" if _is_auth_error(exc) else str((cached or {}).get("_connection_state") or "OFFLINE")
             realtime_state = "polling_degraded" if state == "DEGRADED" else "unavailable"
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
-            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "sync_health": self.sync_health(), "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
 
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
         return self._require_backend().sign_up(email, password, nickname)
@@ -3233,6 +3350,11 @@ class DashboardCacheClientBase:
 
     def sign_in(self, email: str, password: str) -> None:
         self._require_backend().sign_in(normalize_email(email), password)
+
+    def reconnect(self) -> dict[str, Any]:
+        result = self._require_backend().reconnect()
+        self.connection.mark_link("auth", ok=True)
+        return dict(result or {})
 
     def record_login_streak(self) -> dict[str, Any]:
         return dict(self._require_backend().record_login_streak() or {})
@@ -3266,6 +3388,7 @@ class DashboardCacheClientBase:
             self._last_error = ""; self._remember_dashboard(room_id, result); return result
         except SocialError as exc:
             self._last_error = str(exc)
+            self.connection.mark_link("dashboard", ok=False, error=str(exc))
             state = "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE"
             self.connection.set(state, data_source="local_cache", realtime_state="unavailable")
             if not allow_cache: raise
@@ -3299,10 +3422,10 @@ class BackendRouteManager:
     DIRECT_SUPABASE = "DIRECT_SUPABASE"
     CLOUDBASE_PROXY = "CLOUDBASE_PROXY"
     NETWORK_KINDS = {"dns", "timeout", "refused", "tls", "network", "server"}
-    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation", "change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
+    AUTH_METHODS = {"sign_in", "sign_up", "resend_confirmation", "reconnect", "change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
     SECURITY_METHODS = {"change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
     DIRECT_ONLY_METHODS = {"record_login_streak"}
-    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "record_login_streak", "sign_up", "sign_in", "resend_confirmation", "change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
+    BUSINESS_METHODS = {"dashboard", "rpc", "update_profile", "update_owner_nickname", "heartbeat", "send_interaction", "record_room_event", "record_economy_event", "economy_leaderboard", "focus_leaderboard", "set_room_goal", "set_room_schedule", "set_room_challenge", "set_buddy_subscription", "leave_room", "record_login_streak", "sign_up", "sign_in", "resend_confirmation", "reconnect", "change_password", "request_password_reset", "verify_password_reset_otp", "set_password_after_reset", "delete_account"}
     DIRECT_RECOVERY_INTERVAL_SECONDS = 60.0
 
     def __init__(self, direct: HttpSocialBackend, proxy: HttpSocialBackend | None, *, persist_state: bool = True) -> None:
@@ -3378,6 +3501,34 @@ class BackendRouteManager:
         manager = getattr(self.direct, "auth_manager", None)
         fallback_session = self.proxy.session if self.proxy is not None else None
         return bool((manager.current() if isinstance(manager, AuthSessionManager) else (self.direct.session or fallback_session)) and not (manager.requires_relogin if isinstance(manager, AuthSessionManager) else False))
+
+    @property
+    def has_local_session(self) -> bool:
+        manager = getattr(self.direct, "auth_manager", None)
+        if isinstance(manager, AuthSessionManager):
+            session = manager.current()
+            return bool(session and session.refresh_token)
+        return bool(getattr(self.direct, "session", None) or (self.proxy and self.proxy.session))
+
+    def sync_health(self) -> dict[str, Any]:
+        manager = getattr(self.direct, "auth_manager", None)
+        auth = dict(manager.diagnostics()) if isinstance(manager, AuthSessionManager) else {}
+        # Link timestamps belong to the client connection store, not the
+        # route selector.  The production client overlays its store below;
+        # this fallback keeps tests and older adapters useful.
+        return {
+            "links": {
+                "auth": {
+                    "ok": bool(self.signed_in),
+                    "last_success_at": str(auth.get("last_success_at") or ""),
+                    "last_failure_at": str(auth.get("last_failure_at") or ""),
+                    "last_error": str(auth.get("last_error") or "")[:300],
+                    "reconnectable": bool(auth.get("reconnectable")),
+                }
+            },
+            "has_local_session": bool(self.has_local_session),
+            "reconnecting": bool(self.has_local_session and not self.signed_in),
+        }
 
     @property
     def active(self) -> HttpSocialBackend:
@@ -3682,6 +3833,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return self._manager.signed_in
 
     @property
+    def has_local_session(self) -> bool:
+        return bool(getattr(self._manager, "has_local_session", False))
+
+    @property
     def session(self) -> SocialSession | None:
         """Expose the active Supabase session to local profile sync helpers.
 
@@ -3720,9 +3875,18 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         try:
             health = self.health()
             checks["edge_function"] = {"ok": True, "backend": health.get("backend", "supabase"), "transport": "https-rest"}
+            # The button is also an explicit recovery opportunity.  A local
+            # refresh token is safe to retry in the background and avoids
+            # forcing the user to log out and back in after a transient Auth
+            # refresh error.
+            if not self.signed_in and self.has_local_session:
+                try:
+                    self.reconnect()
+                except SocialError as exc:
+                    checks["authentication"] = {"ok": False, "error": str(exc)}
             if not self.signed_in:
-                self.connection.set("DEGRADED", data_source="local_live", realtime_state="not_authenticated")
-                return {"connection_state": "DEGRADED", "data_source": "local_live", "realtime_state": "not_authenticated", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": None}
+                self.connection.set("RECONNECTING" if self.has_local_session else "DEGRADED", data_source="local_live", realtime_state="reconnecting" if self.has_local_session else "not_authenticated")
+                return {"connection_state": "RECONNECTING" if self.has_local_session else "DEGRADED", "data_source": "local_live", "realtime_state": "reconnecting" if self.has_local_session else "not_authenticated", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "sync_health": self.sync_health(), "dashboard": None}
         except SocialError as exc:
             cached = self.cached_dashboard(room_id)
             _mark_cached_dashboard_error(cached, exc)
@@ -3737,9 +3901,16 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             # background health thread, not on the GUI thread.
             snapshot = self.dashboard(room_id, allow_cache=False)
             checks["room_snapshot"] = {"ok": True}
-            checks["presence"] = {"ok": True}
+            checks["presence"] = {"ok": bool(self.connection.link_payload().get("heartbeat", {}).get("ok")), "last_success_at": self.connection.link_payload().get("heartbeat", {}).get("last_success_at", "")}
             checks["realtime"] = {"ok": True, "mode": "desktop low-frequency polling"}
-            return {"connection_state": "ONLINE", "data_source": "server", "realtime_state": "polling", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": snapshot, "room_state": snapshot.get("room_state") if isinstance(snapshot, dict) else None}
+            sync_health = self.sync_health()
+            checks.update({
+                "auth": dict(sync_health.get("links", {}).get("auth", {})),
+                "heartbeat": dict(sync_health.get("links", {}).get("heartbeat", {})),
+                "dashboard": dict(sync_health.get("links", {}).get("dashboard", {})),
+                "segment": dict(sync_health.get("links", {}).get("segment", {})),
+            })
+            return {"connection_state": "ONLINE", "data_source": "server", "realtime_state": "polling", "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "sync_health": sync_health, "dashboard": snapshot, "room_state": snapshot.get("room_state") if isinstance(snapshot, dict) else None}
         except SocialError as exc:
             cached = self.cached_dashboard(room_id)
             _mark_cached_dashboard_error(cached, exc)
@@ -3747,7 +3918,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             realtime_state = "polling_degraded" if cached is not None else "unavailable"
             checks["room_snapshot"] = {"ok": False, "error": str(exc)}
             self.connection.set(state, data_source="local_cache" if cached else "none", realtime_state=realtime_state)
-            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
+            return {"connection_state": state, "data_source": "local_cache" if cached else "none", "realtime_state": realtime_state, "backend": self.backend_name, "service": self.backend_endpoint, "checks": checks, "sync_health": self.sync_health(), "dashboard": cached, "room_state": (cached or {}).get("room_state"), "error": str(exc)}
 
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
         return self._manager.request("sign_up", email, password, nickname)
@@ -3760,6 +3931,11 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         # usable session before Supabase has accepted the replacement.  The
         # successful auth response atomically replaces the stored session.
         self._manager.request("sign_in", normalize_email(email), password)
+
+    def reconnect(self) -> dict[str, Any]:
+        result = self._manager.request("reconnect")
+        self.connection.mark_link("auth", ok=True)
+        return dict(result or {})
 
     def record_login_streak(self) -> dict[str, Any]:
         return dict(self._manager.request("record_login_streak") or {})
@@ -3845,6 +4021,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
             )
         except SocialError as exc:
             self._last_error = str(exc)
+            self.connection.mark_link("dashboard", ok=False, error=str(exc))
             state = "AUTH_ERROR" if _is_auth_error(exc) else "OFFLINE"
             self.connection.set(state, data_source="local_cache", realtime_state="unavailable")
             if allow_cache:
@@ -3934,6 +4111,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
         result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
         self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
+        self.connection.mark_link("dashboard", ok=True)
         self._last_error = ""
         self._remember_dashboard(room_id, result)
         return result

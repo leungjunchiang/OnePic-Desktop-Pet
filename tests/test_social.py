@@ -2673,7 +2673,7 @@ def test_cached_dashboard_uses_saved_private_note_when_snapshot_omits_field():
     assert cached["buddies"][0]["private_note_name"] == "论文搭子"
 
 
-def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
+def test_old_cached_dashboard_preserves_last_known_presence_as_uncertain():
     direct = FakeTransport("direct")
     proxy = FakeTransport("proxy")
     proxy.session = direct.session
@@ -2699,10 +2699,13 @@ def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
     assert cached["is_stale"] is True
     assert client.connection_state == "OFFLINE"
     peer = cached["buddies"][0]
-    assert peer["online"] is False
-    assert peer["working"] is False
-    assert peer["stale_presence"] is True
-    assert peer["presence_uncertain"] is False
+    assert peer["online"] is True
+    assert peer["working"] is True
+    assert peer["status"] == "focus"
+    assert "stale_presence" not in peer
+    assert peer["presence_uncertain"] is True
+    assert peer["transport_stale"] is True
+    assert peer["presence_age_seconds"] >= PRESENCE_GRACE_SECONDS
 
 
 def test_dashboard_cache_rejects_unscoped_or_other_account_snapshots():
@@ -2783,6 +2786,43 @@ def test_successful_password_login_clears_stale_relogin_marker():
     assert recovered is not None
     assert manager.requires_relogin is False
     assert manager.current().access_token == "fresh-access"
+
+
+def test_refresh_can_recover_after_a_stale_relogin_marker_without_password_login():
+    manager = AuthSessionManager(
+        service_name="LiliSocialTest",
+        account_name="automatic-reconnect",
+        persist_tokens=False,
+    )
+    manager.adopt(SocialSession("old-access", "old-refresh", "user-1", time.time() - 1, 1))
+
+    with pytest.raises(SocialError):
+        manager.get_valid_session(
+            lambda _current: (_ for _ in ()).throw(
+                SocialError(
+                    "temporary auth refresh failure",
+                    kind="auth_refresh",
+                    error_code="invalid_refresh_token",
+                )
+            ),
+            requested_by="test",
+        )
+    assert manager.requires_relogin is True
+
+    recovered = manager.get_valid_session(
+        lambda _current: {
+            "access_token": "recovered-access",
+            "refresh_token": "recovered-refresh",
+            "expires_in": 3600,
+            "user": {"id": "user-1"},
+        },
+        requested_by="automatic-reconnect",
+        force_refresh=True,
+    )
+
+    assert recovered is not None
+    assert recovered.access_token == "recovered-access"
+    assert manager.requires_relogin is False
 
 def test_presence_transitions_are_not_persisted_as_room_history():
     root = Path(__file__).resolve().parents[1]

@@ -698,6 +698,11 @@ class SocialHeartbeatWorker:
         self._shutdown_payload: dict[str, Any] | None = None
         self._send_now = False
         self._thread: threading.Thread | None = None
+        self._last_attempt_monotonic = 0.0
+        self._last_success_monotonic = 0.0
+        self._last_success_at = ""
+        self._last_failure_at = ""
+        self._last_error = ""
 
     def start(self) -> None:
         with self._condition:
@@ -735,6 +740,26 @@ class SocialHeartbeatWorker:
             self._pending = dict(payload)
             self._send_now = self._send_now or bool(immediate)
             self._condition.notify()
+
+    def force_retry(self) -> None:
+        """Wake the worker immediately for the heartbeat watchdog."""
+
+        with self._condition:
+            if self._stopped:
+                return
+            self._send_now = True
+            self._condition.notify()
+
+    def diagnostics(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "last_attempt_monotonic": self._last_attempt_monotonic,
+                "last_success_monotonic": self._last_success_monotonic,
+                "last_success_at": self._last_success_at,
+                "last_failure_at": self._last_failure_at,
+                "last_error": self._last_error,
+                "running": self.isRunning(),
+            }
 
     def stop(self, final_presence: dict[str, Any] | None = None) -> None:
         with self._condition:
@@ -800,8 +825,20 @@ class SocialHeartbeatWorker:
                 # can therefore never reuse or reorder a presence version.
                 payload["sequence"] = _next_presence_sequence(user_id)
             heartbeat_started = time.monotonic()
+            with self._condition:
+                self._last_attempt_monotonic = heartbeat_started
             try:
                 self.client.heartbeat(**payload)
+                with self._condition:
+                    self._last_success_monotonic = time.monotonic()
+                    self._last_success_at = datetime.now().astimezone().isoformat()
+                    self._last_error = ""
+                mark_link = getattr(self.client, "mark_sync_link", None)
+                if callable(mark_link):
+                    try:
+                        mark_link("heartbeat", ok=True)
+                    except Exception:
+                        LOGGER.debug("heartbeat health marker failed", exc_info=True)
                 LOGGER.debug("social heartbeat sent independently")
                 lifecycle_log(
                     "social.heartbeat.sent",
@@ -816,6 +853,15 @@ class SocialHeartbeatWorker:
                 # next payload retries naturally, while dashboard polling can
                 # continue to use its own fallback route.
                 LOGGER.warning("independent social heartbeat failed: %s", exc)
+                with self._condition:
+                    self._last_failure_at = datetime.now().astimezone().isoformat()
+                    self._last_error = str(exc)[:300]
+                mark_link = getattr(self.client, "mark_sync_link", None)
+                if callable(mark_link):
+                    try:
+                        mark_link("heartbeat", ok=False, error=str(exc))
+                    except Exception:
+                        LOGGER.debug("heartbeat health marker failed", exc_info=True)
                 lifecycle_log(
                     "social.heartbeat.failed",
                     user_id=user_id,
@@ -830,6 +876,15 @@ class SocialHeartbeatWorker:
                 # liveness loop. Keep the next latest payload eligible for a
                 # retry and leave the diagnostic traceback in the log.
                 LOGGER.exception("independent social heartbeat crashed")
+                with self._condition:
+                    self._last_failure_at = datetime.now().astimezone().isoformat()
+                    self._last_error = "heartbeat worker crashed"
+                mark_link = getattr(self.client, "mark_sync_link", None)
+                if callable(mark_link):
+                    try:
+                        mark_link("heartbeat", ok=False, error=self._last_error)
+                    except Exception:
+                        LOGGER.debug("heartbeat health marker failed", exc_info=True)
                 lifecycle_log(
                     "social.heartbeat.crashed",
                     user_id=user_id,
@@ -841,6 +896,28 @@ class SocialHeartbeatWorker:
             if shutdown_send:
                 return
             next_due = time.monotonic() + self.interval_seconds
+
+
+class SocialReconnectThread(QThread):
+    """Recover a locally stored Supabase session without blocking the GUI."""
+
+    completed = Signal(object)
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+
+    def run(self) -> None:
+        try:
+            reconnect = getattr(self.client, "reconnect", None)
+            if not callable(reconnect):
+                raise SocialError("当前客户端不支持后台恢复登录状态。", kind="config")
+            self.completed.emit(dict(reconnect() or {}))
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception as exc:
+            self.failed.emit(SocialError(str(exc), kind="network", retryable=True))
 
 
 class SocialSyncThread(QThread):
@@ -1042,6 +1119,12 @@ class SocialSyncThread(QThread):
                         )
                     except (SocialError, AttributeError, TypeError) as exc:
                         focus_segments_sync_error = str(exc)[:240]
+                        mark_link = getattr(self.client, "mark_sync_link", None)
+                        if callable(mark_link):
+                            try:
+                                mark_link("segment", ok=False, error=focus_segments_sync_error)
+                            except Exception:
+                                LOGGER.debug("segment health marker failed", exc_info=True)
                         focus_segments_sync_duration_ms = round(
                             (time.monotonic() - focus_segments_sync_started)
                             * 1000,
@@ -1061,6 +1144,12 @@ class SocialSyncThread(QThread):
                         )
                     except Exception as exc:
                         focus_segments_sync_error = str(exc)[:240]
+                        mark_link = getattr(self.client, "mark_sync_link", None)
+                        if callable(mark_link):
+                            try:
+                                mark_link("segment", ok=False, error=focus_segments_sync_error)
+                            except Exception:
+                                LOGGER.debug("segment health marker failed", exc_info=True)
                         focus_segments_sync_duration_ms = round(
                             (time.monotonic() - focus_segments_sync_started)
                             * 1000,
@@ -1111,6 +1200,16 @@ class SocialSyncThread(QThread):
                                 )
                             )
                         upload_ack_ok = protocol_ok
+                        mark_link = getattr(self.client, "mark_sync_link", None)
+                        if callable(mark_link):
+                            try:
+                                mark_link(
+                                    "segment",
+                                    ok=bool(upload_ack_ok),
+                                    error="" if upload_ack_ok else str(protocol_error or "segment ACK invalid"),
+                                )
+                            except Exception:
+                                LOGGER.debug("segment health marker failed", exc_info=True)
                         if not protocol_ok:
                             LOGGER.warning(
                                 "focus segment delta response rejected: %s",
@@ -3410,7 +3509,7 @@ class SocialHubDialog(QDialog):
         network_row.addWidget(network_check)
         welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。右键搭子卡片可设置消息免打扰或删除搭子。")
+        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示服务器最近确认在线；黄色表示本机同步异常、仅保留最后确认状态；灰色表示服务器明确判定离线。右键搭子卡片可设置消息免打扰或删除搭子。")
         buddy_tools = QHBoxLayout()
         add_buddy = QPushButton("用搭子码添加")
         add_buddy.clicked.connect(self._add_buddy)
@@ -3644,6 +3743,37 @@ class SocialHubDialog(QDialog):
             return f"当前自习室后端：{backend} · {endpoint}"
         return f"当前自习室后端：{backend} · 未配置独立中转服务"
 
+    @staticmethod
+    def _sync_health_text(payload: dict[str, Any]) -> str:
+        """Render the four independent authenticated sync paths compactly."""
+
+        health = payload.get("sync_health") if isinstance(payload, dict) else None
+        links = health.get("links") if isinstance(health, dict) else None
+        if not isinstance(links, dict):
+            checks = payload.get("checks") if isinstance(payload, dict) else None
+            links = checks if isinstance(checks, dict) else {}
+        labels = (
+            ("auth", "认证"),
+            ("heartbeat", "心跳"),
+            ("dashboard", "首页"),
+            ("segment", "专注区间"),
+        )
+        parts: list[str] = []
+        for key, label in labels:
+            item = links.get(key) if isinstance(links.get(key), dict) else {}
+            stamp = str(item.get("last_success_at") or "")
+            if stamp:
+                try:
+                    parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                    stamp = parsed.astimezone().strftime("%m-%d %H:%M:%S")
+                except (TypeError, ValueError, OverflowError):
+                    stamp = stamp[:19].replace("T", " ")
+            else:
+                stamp = "未成功"
+            icon = "✓" if bool(item.get("ok")) else "!"
+            parts.append(f"{label}{icon} {stamp}")
+        return "链路状态：" + " · ".join(parts)
+
     def _check_network(self) -> None:
         if self._closed:
             return
@@ -3670,7 +3800,10 @@ class SocialHubDialog(QDialog):
         self._end_action()
         backend = str(data.get("backend") or getattr(self.client, "backend_name", "social"))
         service = str(data.get("service") or getattr(self.client, "backend_endpoint", "服务可达"))
-        self.network_hint.setText(f"当前自习室后端：{backend} · {service}")
+        self.network_hint.setText(
+            f"当前自习室后端：{backend} · {service}\n"
+            f"{self._sync_health_text(data)}"
+        )
         state = str(data.get("connection_state") or "")
         room_state = str(data.get("room_state") or "")
         snapshot = data.get("dashboard")
