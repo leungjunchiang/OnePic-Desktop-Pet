@@ -717,6 +717,50 @@ def test_remote_daily_snapshot_never_mutates_local_timer_bucket(monkeypatch) -> 
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_server_ahead_canonical_projection_requests_bounded_reconciliation(monkeypatch) -> None:
+    """A paused device repairs a cursor gap instead of keeping a stale cache."""
+
+    app, window = _create_window()
+    moment = window.focus_analytics.current_time()
+    week_start = moment.date() - timedelta(days=moment.date().weekday())
+    requested: list[bool] = []
+
+    original_builder = window.focus_analytics.focus_segment_reconciliation_manifest
+
+    def capture_builder(*, force: bool = False):
+        requested.append(bool(force))
+        return original_builder(force=force)
+
+    monkeypatch.setattr(
+        window.focus_analytics,
+        "focus_segment_reconciliation_manifest",
+        capture_builder,
+    )
+    monkeypatch.setattr(
+        window,
+        "_current_social_user_id",
+        lambda: "account-1",
+    )
+    window._active_focus_account_id = "account-1"
+    window._merge_remote_personal_state(
+        {
+            "data_source": "server",
+            "focus_totals_effective_source": "canonical_interval_union",
+            "me": {
+                "focus_today_date": moment.date().isoformat(),
+                "focus_today_seconds": 180,
+                "focus_week_start_date": week_start.isoformat(),
+                "focus_week_seconds": 180,
+            },
+        }
+    )
+
+    assert window._focus_reconciliation_requested is True
+    window._build_social_personal_state()
+    assert requested == [True]
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_pending_outfit_selection_is_not_replaced_by_stale_dashboard(monkeypatch) -> None:
     """A delayed profile response must not undo a newly selected login outfit."""
 
@@ -3101,6 +3145,12 @@ def test_pause_message_uses_same_visible_today_total_as_pet_bubble(monkeypatch) 
         "_cross_device_today_display_value",
         lambda _snapshot=None: canonical_display,
     )
+    social_ticks: list[bool] = []
+    monkeypatch.setattr(
+        window,
+        "_schedule_social_tick",
+        lambda *, immediate=False: social_ticks.append(bool(immediate)),
+    )
 
     window.start_work_timer()
     reply = window.pause_work_timer()
@@ -3108,6 +3158,7 @@ def test_pause_message_uses_same_visible_today_total_as_pet_bubble(monkeypatch) 
     assert window._visible_today_focus_seconds() == canonical_display
     assert "7小时21分钟" in reply.text
     assert "7小时23分钟" not in reply.text
+    assert social_ticks[-1] is True
     window.close(); window.deleteLater(); app.processEvents()
 
 

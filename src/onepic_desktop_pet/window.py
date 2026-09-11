@@ -59,7 +59,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Callable
@@ -215,6 +215,7 @@ from .focus_history_recovery import FocusHistoryRecovery
 from .focus_segments import (
     FOCUS_SEGMENT_CHECKPOINT_SECONDS,
     FocusSegment,
+    aggregate_focus_time,
     deterministic_focus_segment_id,
 )
 from .focus_session import FocusSessionManager
@@ -735,6 +736,11 @@ class PetWindow(QWidget):
         self._last_social_watchdog_log_at = 0.0
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
+        # A reconciliation request is a bounded id-only audit. It is set for
+        # sealed-session boundaries, account switches, and a server effective
+        # total that is ahead of this device's sealed union. The request is
+        # cleared only after the integrity RPC has been validated locally.
+        self._focus_reconciliation_requested = False
         self._social_personal_sync_not_before = (
             time.monotonic() + SOCIAL_STARTUP_FOCUS_SYNC_DELAY_SECONDS
             if self.social_client.signed_in
@@ -3784,7 +3790,8 @@ class PetWindow(QWidget):
         self.show_speech(reply.text + quality_text, 5600)
         self.work_timer_changed.emit(False)
         self._sync_state_effect()
-        self._schedule_social_tick()
+        self._request_focus_reconciliation("focus_paused")
+        self._schedule_social_tick(immediate=True)
         # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
         self.work_controls.hide()
         self._refresh_pixmap()
@@ -3856,7 +3863,8 @@ class PetWindow(QWidget):
         self._request_local_effect_event(LocalEffectKind.GOLD)
         self.work_timer_changed.emit(False)
         self._sync_state_effect()
-        self._schedule_social_tick()
+        self._request_focus_reconciliation("focus_finished")
+        self._schedule_social_tick(immediate=True)
         self.work_controls.hide()
         self.work_activity_timer.stop()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
@@ -7125,6 +7133,40 @@ class PetWindow(QWidget):
             self._social_reconnect_thread = None
         thread.deleteLater()
 
+    def _request_focus_reconciliation(self, reason: str) -> None:
+        """Queue one bounded FocusSegment convergence audit.
+
+        This only schedules an id-manifest RPC. It never turns an account
+        aggregate into a fabricated interval. The normal social worker will
+        upload any locally requeued rows and merge any cloud-only rows after
+        the audit reply has been validated.
+        """
+
+        was_requested = bool(self._focus_reconciliation_requested)
+        self._focus_reconciliation_requested = True
+        self._social_personal_sync_due = True
+        self._social_personal_sync_not_before = 0.0
+        if not was_requested:
+            lifecycle_log(
+                "focus.segment_reconciliation.requested",
+                self,
+                reason=str(reason or "unknown")[:80],
+            )
+
+    def _local_sealed_today_seconds(self, moment: datetime | None = None) -> int:
+        """Return today's local sealed interval union, excluding live rows."""
+
+        current = moment or self._focus_display_now()
+        start = datetime.combine(current.date(), datetime_time.min, tzinfo=BEIJING_TIMEZONE)
+        end = start + timedelta(days=1)
+        aggregate = aggregate_focus_time(
+            self.focus_analytics.focus_segments(),
+            start,
+            end,
+            now=current,
+        )
+        return max(0, int(aggregate.total_seconds))
+
     def _build_social_personal_state(self) -> dict[str, object]:
         """Build the compatibility sync payload outside the GUI thread.
 
@@ -7150,6 +7192,24 @@ class PetWindow(QWidget):
         else:
             focus_segments = self.focus_analytics.focus_segments_payload()
             focus_segments_diagnostics = {}
+        reconciliation_builder = getattr(
+            self.focus_analytics,
+            "focus_segment_reconciliation_manifest",
+            None,
+        )
+        reconciliation_manifest: list[str] = []
+        if callable(reconciliation_builder):
+            try:
+                reconciliation_manifest = list(
+                    reconciliation_builder(
+                        force=bool(self._focus_reconciliation_requested)
+                    )
+                    or []
+                )
+            except TypeError:
+                # Keep compatibility with a third-party/test store that still
+                # exposes the pre-v0.23.254 method signature.
+                reconciliation_manifest = list(reconciliation_builder() or [])
         return {
             "focus_date": today_key,
             # Duration scalars are retained only for old wire signatures.
@@ -7170,9 +7230,7 @@ class PetWindow(QWidget):
             ),
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
-            "focus_segment_integrity_manifest": (
-                self.focus_analytics.focus_segment_reconciliation_manifest()
-            ),
+            "focus_segment_integrity_manifest": reconciliation_manifest,
             "focus_segment_integrity_manifest_kind": "reconciliation",
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
@@ -7896,6 +7954,7 @@ class PetWindow(QWidget):
             or ""
         ).strip()
         effective_projection_changed = False
+        effective_today: int | None = None
         if projection_source in {
             "canonical_interval_union",
             "canonical_interval_union_legacy_floor",
@@ -7904,14 +7963,32 @@ class PetWindow(QWidget):
             effective_today = profile.get("focus_today_seconds")
             if effective_today is None:
                 effective_today = presence.get("today_seconds")
+            if effective_today is None:
+                effective_today = personal_state.get("focus_today_seconds")
+            if effective_today is None:
+                effective_today = data.get("focus_today_seconds")
             effective_week = profile.get("focus_week_seconds")
             if effective_week is None:
                 effective_week = presence.get("week_seconds")
+            if effective_week is None:
+                effective_week = personal_state.get("focus_week_seconds")
+            if effective_week is None:
+                effective_week = data.get("focus_week_seconds")
             effective_projection_changed = bool(
                 self.focus_analytics.set_remote_effective_projection(
-                    focus_date=profile.get("focus_today_date") or remote_date,
+                    focus_date=(
+                        profile.get("focus_today_date")
+                        or personal_state.get("focus_today_date")
+                        or data.get("focus_today_date")
+                        or remote_date
+                    ),
                     today_seconds=int(effective_today or 0),
-                    week_start=profile.get("focus_week_start_date") or remote_week_start,
+                    week_start=(
+                        profile.get("focus_week_start_date")
+                        or personal_state.get("focus_week_start_date")
+                        or data.get("focus_week_start_date")
+                        or remote_week_start
+                    ),
                     week_seconds=int(effective_week or 0),
                 )
             )
@@ -7955,6 +8032,28 @@ class PetWindow(QWidget):
             merge_ok = True
         if not merge_ok and focus_segments_payload is not None:
             merge_error = merge_error or "payload_invalid_or_local_persist_failed"
+        # Once this computer is paused, a server effective canonical total
+        # ahead of its sealed union is evidence of a cursor/cache gap. Queue a
+        # bounded reconciliation on the next worker turn. Live seconds remain
+        # display-only and therefore never trigger a fabricated local fact.
+        if (
+            projection_source == "canonical_interval_union"
+            and effective_today is not None
+            and not self.work_timer.has_active_session
+        ):
+            try:
+                server_today = max(0, int(effective_today or 0))
+                local_sealed_today = self._local_sealed_today_seconds()
+            except (TypeError, ValueError, OverflowError):
+                server_today = local_sealed_today = 0
+            if server_today > local_sealed_today:
+                self._request_focus_reconciliation("server_total_ahead")
+                lifecycle_log(
+                    "focus.segment_reconciliation.server_ahead",
+                    self,
+                    server_today=server_today,
+                    local_sealed_today=local_sealed_today,
+                )
         uploaded_segments = (
             focus_segments_payload.get("_uploaded_segments")
             if isinstance(focus_segments_payload, dict)
@@ -8163,8 +8262,13 @@ class PetWindow(QWidget):
                 error=audit_error,
                 success=bool(audit_ok),
             )
-            if audit_ok and (requeued_count or recovered_count):
-                self._schedule_social_tick()
+            if audit_ok:
+                # The validated reply closes the current bounded request. If
+                # local rows were requeued, the immediate follow-up uploads
+                # them; cloud-only rows are already merged durably.
+                self._focus_reconciliation_requested = False
+                if requeued_count or recovered_count:
+                    self._schedule_social_tick(immediate=True)
         live_projection_payload = data.get("_focus_live_projection") if isinstance(data, dict) else None
         live_projection_changed = False
         if live_projection_payload is not None:
@@ -8316,6 +8420,7 @@ class PetWindow(QWidget):
             self._personal_outfit_sync_pending = False
             self._personal_outfit_sync_user_id = ""
         self._economy_sync_user_id = ""
+        self._request_focus_reconciliation("account_switch")
         self._schedule_social_tick(immediate=True)
 
     def _set_login_reward_account(self, account_id: str | None) -> None:

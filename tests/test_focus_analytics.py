@@ -818,6 +818,41 @@ def test_reconciliation_audit_recovers_cloud_only_rows_and_queues_local_gaps(tmp
     assert (success, requeued, recovered) == (True, 1, 0)
     assert [row["segment_id"] for row in store.focus_segments_payload()] == ["remote-b"]
 
+
+def test_forced_reconciliation_bypasses_daily_success_gate_with_short_cooldown(tmp_path) -> None:
+    """A sealed boundary can repair a cursor gap before tomorrow's audit."""
+
+    now = datetime(2026, 9, 7, 21, 30, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    store.record_session(60, started_at=now - timedelta(minutes=2), record_id="local-a")
+    assert store.acknowledge_focus_segments_upload(store.focus_segments_payload())
+
+    manifest = store.focus_segment_reconciliation_manifest()
+    assert manifest == ["local-a"]
+    assert store.apply_focus_segment_reconciliation_audit({
+        "_requested_segment_ids": manifest,
+        "checked_count": 1,
+        "present_count": 1,
+        "missing_count": 0,
+        "missing_segment_ids": [],
+        "server_total_count": 1,
+        "server_manifest": [{
+            "segment_id": "local-a",
+            "updated_at": "2026-09-07T13:29:00+00:00",
+        }],
+        "missing_local_segments": [],
+    }) == (True, 0, 0)
+
+    # The ordinary path is still quiet for the rest of the daily window, but
+    # a pause/finish request is allowed to perform one bounded repair pass.
+    assert store.focus_segment_reconciliation_manifest() == []
+    assert store.focus_segment_reconciliation_manifest(force=True) == ["local-a"]
+
 def test_legacy_acknowledgements_trigger_one_bounded_recovery_backfill(tmp_path) -> None:
     now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     path = tmp_path / "focus.json"

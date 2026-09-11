@@ -58,12 +58,20 @@ FOCUS_SEGMENT_UPLOAD_ACK_VERSION = 3
 # A compact integrity manifest is checked at most once per day.  It contains
 # only stable ids for locally-owned sealed facts that this device previously
 # persisted as server-acknowledged; it never downloads or uploads history.
-FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION = 1
+# Bump this when the bounded reconciliation contract changes so an upgraded
+# client performs one repair pass instead of inheriting an old cursor gap.
+FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION = 2
 FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL = timedelta(hours=24)
 # A failed audit is retried on the next daily window, not on every passive
 # dashboard tick.  Missing facts are still repaired through the normal
 # targeted segment-id backfill once an audit succeeds.
 FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 24 * 60 * 60
+# A pause/finish or a server-ahead projection can request a bounded
+# reconciliation outside the daily audit window. Keep those requests
+# independent from the ordinary audit throttle so one stale cursor can be
+# repaired promptly without turning every passive dashboard tick into a full
+# history scan.
+FOCUS_SEGMENT_RECONCILIATION_RETRY_SECONDS = 60.0
 # A malformed/partial acknowledgement must remain retryable, but retrying a
 # bounded batch on every 30-second social tick can create an egress storm when
 # a relay is unhealthy.  The normal delta read continues during this cooldown;
@@ -219,6 +227,7 @@ class FocusAnalyticsStore:
         # never becomes uploadable focus evidence.
         self._remote_effective_projection: dict[str, Any] | None = None
         self._focus_integrity_next_attempt_monotonic = 0.0
+        self._focus_reconciliation_next_attempt_monotonic = 0.0
         self._focus_upload_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
         self._focus_sync_metrics: dict[str, int] = {}
@@ -324,6 +333,7 @@ class FocusAnalyticsStore:
         # for the anonymous store constructed during application startup.
         upload_state_changed = self._ensure_focus_segment_upload_state()
         self._focus_integrity_next_attempt_monotonic = 0.0
+        self._focus_reconciliation_next_attempt_monotonic = 0.0
         self._focus_upload_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
         self._focus_sync_metrics = {}
@@ -858,15 +868,27 @@ class FocusAnalyticsStore:
             )
         return manifest
 
-    def focus_segment_reconciliation_manifest(self, limit: int = 500) -> list[str]:
+    def focus_segment_reconciliation_manifest(
+        self,
+        limit: int = 500,
+        *,
+        force: bool = False,
+    ) -> list[str]:
         """Return all local sealed ids for a low-frequency convergence audit.
 
         Unlike the legacy acknowledgement audit, this deliberately includes
         downloaded facts from other devices.  It is an id-only manifest and is
-        rate-limited; it never downloads the history by itself.
+        rate-limited; it never downloads the history by itself. ``force`` is
+        reserved for a sealed-session boundary or a server-ahead display
+        projection. It bypasses the daily-success gate, but still has its own
+        short cooldown so repeated UI events cannot create an egress storm.
         """
 
-        if monotonic() < self._focus_integrity_next_attempt_monotonic:
+        force = bool(force)
+        if force:
+            if monotonic() < self._focus_reconciliation_next_attempt_monotonic:
+                return []
+        elif monotonic() < self._focus_integrity_next_attempt_monotonic:
             return []
         state = self._state.get("account_state")
         if not isinstance(state, dict):
@@ -877,7 +899,8 @@ class FocusAnalyticsStore:
         current = self.current_time()
         audit_version = int(state.get("focus_segment_integrity_audit_version") or 0)
         if (
-            audit_version == FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION
+            not force
+            and audit_version == FOCUS_SEGMENT_INTEGRITY_AUDIT_VERSION
             and last_success is not None
             and current - last_success < FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL
         ):
@@ -891,9 +914,14 @@ class FocusAnalyticsStore:
             }
         )[:max_rows]
         if manifest:
-            self._focus_integrity_next_attempt_monotonic = (
-                monotonic() + FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS
-            )
+            if force:
+                self._focus_reconciliation_next_attempt_monotonic = (
+                    monotonic() + FOCUS_SEGMENT_RECONCILIATION_RETRY_SECONDS
+                )
+            else:
+                self._focus_integrity_next_attempt_monotonic = (
+                    monotonic() + FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS
+                )
         return manifest
 
     def apply_focus_segment_reconciliation_audit(
