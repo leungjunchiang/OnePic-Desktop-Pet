@@ -344,6 +344,14 @@ SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
 SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
 SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
+# Let the first dashboard heartbeat make the account visible before the
+# immutable FocusSegment reconciliation competes with the GUI during cold
+# startup. Local seals, account switches and reconnects still flush eagerly.
+SOCIAL_STARTUP_FOCUS_SYNC_DELAY_SECONDS = 8.0
+# The dashboard already carries the server's effective totals and fresh
+# presence. Repeating the full sealed-segment delta/audit every minute when
+# nothing changed only creates avoidable latency.
+SOCIAL_PERSONAL_SYNC_INTERVAL_SECONDS = 300.0
 FOCUS_HISTORY_RECOVERY_CHECK_SECONDS = 15 * 60.0
 
 
@@ -727,6 +735,12 @@ class PetWindow(QWidget):
         self._last_social_watchdog_log_at = 0.0
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
+        self._social_personal_sync_not_before = (
+            time.monotonic() + SOCIAL_STARTUP_FOCUS_SYNC_DELAY_SECONDS
+            if self.social_client.signed_in
+            else 0.0
+        )
+        self._startup_focus_sync_deferred_logged = False
         self._last_focus_history_recovery_check_at = 0.0
         self._last_social_leaderboard_at = 0.0
         self._last_social_reaction_state_at = 0.0
@@ -6985,6 +6999,7 @@ class PetWindow(QWidget):
         )
         self._social_heartbeat_due = True
         self._social_personal_sync_due = True
+        self._social_personal_sync_not_before = 0.0
         timer = getattr(self, "social_sync_timer", None)
         if timer is not None:
             timer.start(0)
@@ -7201,16 +7216,28 @@ class PetWindow(QWidget):
             not dashboard_busy
             and (
                 self._social_personal_sync_due
-                or now_monotonic - self._last_social_personal_sync_at >= 60.0
+                or now_monotonic - self._last_social_personal_sync_at
+                >= SOCIAL_PERSONAL_SYNC_INTERVAL_SECONDS
             )
         ):
-            # SocialSyncThread invokes this factory in its worker thread. It
-            # is deliberately not called from the GUI timer path. If a
-            # dashboard poll is already running, leave the due flag intact so
-            # the next poll cannot lose a session boundary.
-            presence["_personal_state_factory"] = self._build_social_personal_state
-            self._social_personal_sync_due = False
-            self._last_social_personal_sync_at = now_monotonic
+            not_before = float(
+                getattr(self, "_social_personal_sync_not_before", 0.0) or 0.0
+            )
+            if now_monotonic >= not_before:
+                # SocialSyncThread invokes this factory in its worker thread.
+                # It is deliberately not called from the GUI timer path. If a
+                # dashboard poll is already running, leave the due flag intact
+                # so the next poll cannot lose a session boundary.
+                presence["_personal_state_factory"] = self._build_social_personal_state
+                self._social_personal_sync_due = False
+                self._last_social_personal_sync_at = now_monotonic
+            elif not self._startup_focus_sync_deferred_logged:
+                self._startup_focus_sync_deferred_logged = True
+                lifecycle_log(
+                    "focus.sync.startup_deferred",
+                    self,
+                    delay_ms=max(0, round((not_before - now_monotonic) * 1000)),
+                )
 
         if heartbeat_thread is not None and heartbeat_thread.isRunning():
             heartbeat_thread.update_presence(
@@ -8532,6 +8559,9 @@ class PetWindow(QWidget):
             # the next background sync, without putting that work in the
             # transition callback itself.
             self._social_personal_sync_due = True
+            # A real local transition takes priority over the cold-start
+            # grace period so a newly sealed segment is uploaded promptly.
+            self._social_personal_sync_not_before = 0.0
             timer.start(0 if immediate else 250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
@@ -8698,7 +8728,16 @@ class PetWindow(QWidget):
         if self._social_personal_sync_due or self._social_heartbeat_due:
             timer = getattr(self, "social_sync_timer", None)
             if timer is not None and self.social_client.signed_in:
-                timer.start(250)
+                delay_ms = 250
+                not_before = float(
+                    getattr(self, "_social_personal_sync_not_before", 0.0) or 0.0
+                )
+                if self._social_personal_sync_due and not_before:
+                    delay_ms = max(
+                        delay_ms,
+                        int(max(0.0, not_before - time.monotonic()) * 1000),
+                    )
+                timer.start(delay_ms)
 
     def set_automatic_grumbling(self, enabled: bool) -> None:
         """启用或停用只在本机生成的间歇牢骚。"""
