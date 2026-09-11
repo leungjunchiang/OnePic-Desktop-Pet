@@ -1358,6 +1358,50 @@ def test_direct_presence_heartbeat_uses_atomic_presence_rpc():
     assert backend.headers is None
 
 
+def test_direct_presence_heartbeat_falls_back_to_online_rest_compatibility_rpc(monkeypatch, tmp_path):
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+    monkeypatch.setattr(
+        social_module,
+        "account_local_data_path",
+        lambda filename, account_id: tmp_path / f"{account_id}-{filename}",
+    )
+
+    class Recording(HttpSocialBackend):
+        def __init__(self):
+            super().__init__(
+                "https://supabase.example.test",
+                client_key="sb_publishable_test",
+                persist_tokens=False,
+                transport="direct",
+            )
+            self.session = SocialSession("a", "r", "fallback-user", 9_999_999_999)
+            self.calls = []
+
+        def _raw(self, method, path, body=None, **kwargs):
+            self.calls.append((method, path, body))
+            if path.endswith("lili_upsert_focus_presence_v2"):
+                raise SocialError(
+                    "function lili_upsert_focus_presence_v2 does not exist",
+                    kind="http",
+                    status=404,
+                    error_code="PGRST202",
+                )
+            return {"accepted": True, "sequence": body["p_sequence"]}
+
+    backend = Recording()
+    backend.heartbeat(working=True, session_active=True, session_id="session-1")
+
+    assert [call[1] for call in backend.calls] == [
+        "/rest/v1/rpc/lili_upsert_focus_presence_v2",
+        "/rest/v1/rpc/lili_upsert_focus_presence",
+    ]
+    fallback = backend.calls[-1][2]
+    assert fallback["p_working"] is False
+    assert fallback["p_session_active"] is False
+    assert "p_input_idle_seconds" not in fallback
+    social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
+
+
 def test_presence_heartbeat_sends_stable_account_device_lease(monkeypatch, tmp_path):
     social_module._PRESENCE_DEVICE_STATE_CACHE.clear()
     monkeypatch.setattr(
@@ -1495,6 +1539,26 @@ def test_live_focus_requires_recent_activity_proof_and_can_quarantine_bad_sessio
     assert "session_quarantined" in normalized
     assert "from public.lili_focus_session_quarantines q" in normalized
     assert "range_agg" in normalized
+
+
+def test_dashboard_presence_and_time_repair_uses_fresh_devices_and_effective_totals():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root
+        / "supabase"
+        / "migrations"
+        / "20260911120000_lili_dashboard_presence_and_time_repair.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "create or replace function public.lili_dashboard_presence_for_user" in normalized
+    assert "public.lili_focus_device_presence" in normalized
+    assert "d.last_seen > now() - interval '2 minutes'" in normalized
+    assert "create or replace function public.lili_repair_dashboard_people" in normalized
+    assert "public.lili_effective_focus_today_seconds(user_id)" in normalized
+    assert "public.lili_effective_focus_week_seconds(user_id)" in normalized
+    assert "fresh_device_or_account_presence" in normalized
+    assert "public.lili_dashboard_multidevice_base_20260830()" in normalized
 
 
 def test_presence_context_is_separate_from_liveness_contract():

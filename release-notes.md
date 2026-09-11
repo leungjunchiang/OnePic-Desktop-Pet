@@ -1,3 +1,10 @@
+## v0.23.244 — 在线休息状态与好友今日时长修复
+
+- 只要好友客户端的登录心跳在服务器两分钟租约内，好友卡片就显示“在线/休息”；只有经过活动证明的实时专注才显示“专注”，不会再把在线但未专注的账号显示成离线。
+- Dashboard 最终投影同时读取多设备心跳和账号兼容心跳，修复设备表新鲜但账号级 presence 卡片仍为离线的问题。
+- 好友与当前自习室成员的今日/本周时长统一读取 effective focus totals，修复 profile 旧的 `show_exact_time=false` 标量把有效工作时长显示成“已隐藏”的问题；仅对原本已被关系/可见性过滤的成员返回。
+- 保留 Legacy Time Compatibility Ledger、canonical Segment 和 Presence 三者分离；不把聚合秒数伪造成时间轴区间。
+
 ## v0.23.243 — Legacy Time Compatibility Ledger
 
 - 将旧客户端的按日累计时间迁入独立的 Legacy Time Compatibility Ledger；历史时间不再因为升级被丢弃，`hjy` 这类只有旧日累计凭证的账号可以恢复原有累计时长。

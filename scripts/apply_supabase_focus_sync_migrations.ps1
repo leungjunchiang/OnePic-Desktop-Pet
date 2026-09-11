@@ -37,7 +37,8 @@ $migrationPaths = @(
     "supabase/migrations/20260910133000_lili_focus_activity_proof_guard.sql",
     "supabase/migrations/20260910150000_lili_dashboard_effective_buddy_totals.sql",
     "supabase/migrations/20260910163719_guard_legacy_focus_writes_after_frozen_floor.sql",
-    "supabase/migrations/20260911100000_lili_focus_legacy_compatibility_ledger.sql"
+    "supabase/migrations/20260911100000_lili_focus_legacy_compatibility_ledger.sql",
+    "supabase/migrations/20260911120000_lili_dashboard_presence_and_time_repair.sql"
 )
 
 $scriptPath = Join-Path $PSScriptRoot "apply_supabase_focus_history.ps1"

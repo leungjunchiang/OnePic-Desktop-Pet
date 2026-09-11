@@ -638,6 +638,39 @@ def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _legacy_presence_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Build the six-argument compatibility heartbeat.
+
+    This fallback is deliberately liveness-only.  If a partially deployed
+    Supabase project does not yet expose the v2 activity-proof RPC, the old
+    RPC can still refresh the account as online/rest without granting live
+    focus to a client that did not provide the proof.
+    """
+
+    return {
+        "p_working": False,
+        "p_session_active": False,
+        "p_session_id": None,
+        "p_session_started_at": None,
+        "p_device_id": str(body.get("device_id") or "")[:120],
+        "p_sequence": max(0, int(body.get("sequence") or 0)),
+    }
+
+
+def _missing_presence_v2_endpoint(error: BaseException) -> bool:
+    """Recognize a rollout gap without hiding auth or network failures."""
+
+    status = getattr(error, "status", None)
+    code = str(getattr(error, "error_code", "") or "").casefold()
+    message = str(error or "").casefold()
+    return (
+        status == 404
+        or code in {"pgrst202", "42883", "42804"}
+        or "lili_upsert_focus_presence_v2" in message
+        or ("function" in message and "does not exist" in message)
+    )
+
+
 class ConnectionStateStore:
     """Single source of truth for the study-room transport state.
 
@@ -2094,9 +2127,23 @@ class HttpSocialBackend:
                     )
                     _reconcile_presence_rpc_response(requested_user_id, stable_device_id, result)
             except SocialError as exc:
-                if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
-                    _mark_presence_device_claim_pending(requested_user_id, stable_device_id)
-                raise
+                if _missing_presence_v2_endpoint(exc):
+                    LOGGER.warning(
+                        "presence v2 unavailable; falling back to online/rest compatibility heartbeat status=%s code=%s",
+                        exc.status,
+                        exc.error_code,
+                    )
+                    result = self._raw(
+                        "POST",
+                        "/rest/v1/rpc/lili_upsert_focus_presence",
+                        _legacy_presence_body(body),
+                        authenticated=True,
+                    )
+                    _reconcile_presence_rpc_response(requested_user_id, stable_device_id, result)
+                else:
+                    if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":
+                        _mark_presence_device_claim_pending(requested_user_id, stable_device_id)
+                    raise
         else:
             try:
                 result = self._raw("POST", "/presence/heartbeat", body, authenticated=True)
