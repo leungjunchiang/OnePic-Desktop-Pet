@@ -54,6 +54,22 @@ def test_smooth_duration_display_never_catches_up_multiple_seconds_at_once() -> 
     assert display.project(2, active=True, identity="account:next-day") == 2
 
 
+def test_smooth_duration_display_can_adopt_a_server_baseline_immediately() -> None:
+    clock = FakeClock()
+    display = SmoothDurationDisplay(lambda: clock.monotonic)
+
+    first = 4 * 3600 + 10 * 60 + 16
+    confirmed = 4 * 3600 + 11 * 60 + 56
+    assert display.project(first, active=True, identity="account:day") == first
+    # A dashboard response may advance the account total by a full minute or
+    # more. The pet must agree with the server immediately, not chase it one
+    # second per paint callback.
+    assert display.synchronize(confirmed, active=True, identity="account:day") == confirmed
+    assert display.project(confirmed + 1, active=True, identity="account:day") == confirmed
+    clock.advance(1)
+    assert display.project(confirmed + 1, active=True, identity="account:day") == confirmed + 1
+
+
 def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> None:
     clock = FakeClock()
     timer = _timer(tmp_path, clock)

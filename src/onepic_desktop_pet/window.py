@@ -5213,6 +5213,53 @@ class PetWindow(QWidget):
         if dialog is not None:
             dialog.set_cross_device_today_display_seconds(None, account_id="")
 
+    def _focus_display_now(self) -> datetime:
+        """Return a Beijing-time ``now`` aligned to the Supabase clock.
+
+        Focus interval timestamps are exchanged with Supabase, while each
+        desktop may have a slightly different system clock. Once a response
+        has supplied a server timestamp, use the connection's measured offset
+        for live interval clipping and local display projection. Before the
+        first response, retain the local analytics clock as a safe fallback.
+        """
+
+        fallback = self.focus_analytics.current_time()
+        client = getattr(self, "social_client", None)
+        connection = getattr(client, "connection", None)
+        server_timestamp = str(
+            getattr(connection, "server_timestamp", "") or ""
+        ).strip()
+        server_now = getattr(client, "server_now", None)
+        if server_timestamp and callable(server_now):
+            try:
+                current = server_now()
+                if isinstance(current, datetime):
+                    if current.tzinfo is None:
+                        current = current.replace(tzinfo=timezone.utc)
+                    return current.astimezone(BEIJING_TIMEZONE)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                pass
+        if fallback.tzinfo is None:
+            fallback = fallback.replace(tzinfo=BEIJING_TIMEZONE)
+        return fallback.astimezone(BEIJING_TIMEZONE)
+
+    def _work_duration_display_identity(self) -> str:
+        """Return the account/day identity used by the detached clock bubble."""
+
+        account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
+        return f"{account_id}:{self._focus_display_now().date().isoformat()}"
+
+    def _synchronize_work_duration_display(self, seconds: int, *, status: str) -> None:
+        """Snap the pet clock to a validated account-wide server baseline."""
+
+        synchronizer = getattr(self._smooth_work_duration_display, "synchronize", None)
+        if callable(synchronizer):
+            synchronizer(
+                seconds,
+                active=status == "focus",
+                identity=self._work_duration_display_identity(),
+            )
+
     def _set_local_live_focus_projection(self, snapshot: object | None = None) -> None:
         """Keep the current local segment in the shared read-only projection."""
 
@@ -5358,7 +5405,10 @@ class PetWindow(QWidget):
         current = snapshot or self.focus_session.snapshot(include_projection=False)
         self._set_local_live_focus_projection(current)
         old_today = self._shared_today_focus_seconds()
-        moment = self.focus_analytics.current_time()
+        # Use the server clock once a dashboard response has established an
+        # offset. Otherwise two machines with a skewed local clock project the
+        # same open interval to different durations.
+        moment = self._focus_display_now()
         display_date = moment.date().isoformat()
         local_rows = [segment.to_dict() for segment in self.focus_analytics.focus_segments()]
         has_remote_payload = isinstance(data, dict) and "_focus_segments" in data
@@ -5594,6 +5644,23 @@ class PetWindow(QWidget):
             )
         except (TypeError, ValueError, OverflowError):
             self._cross_device_today_display_live_seconds = 0
+        # A server response is a new shared baseline. Do not let the
+        # presentation smoother spend the next several minutes catching up
+        # to it one second at a time.
+        server_payload = bool(
+            isinstance(data, dict)
+            and not data.get("_sync_offline")
+            and data.get("data_source") != "local_cache"
+        )
+        if server_payload and (
+            has_remote_payload
+            or has_live_payload
+            or isinstance(remote_effective, dict)
+        ):
+            self._synchronize_work_duration_display(
+                candidate_seconds,
+                status=status,
+            )
         lifecycle_log(
             "focus.display.shadow_audit",
             self,
@@ -5631,7 +5698,7 @@ class PetWindow(QWidget):
             # second database write.  The interval list is bounded by the
             # account's closed facts and normally contains only a few devices.
             try:
-                moment = self.focus_analytics.current_time()
+                moment = self._focus_display_now()
                 rows = list(self._cross_device_today_display_remote_rows or [])
                 rows.extend(segment.to_dict() for segment in self.focus_analytics.focus_segments())
                 local_device_id = str(
@@ -5706,7 +5773,7 @@ class PetWindow(QWidget):
             None,
         )
         remote_effective = (
-            remote_effective_reader(self.focus_analytics.current_time())
+            remote_effective_reader(self._focus_display_now())
             if callable(remote_effective_reader)
             else None
         )
@@ -5720,7 +5787,7 @@ class PetWindow(QWidget):
     def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
         """Return day/week totals from the single account interval ledger."""
 
-        moment = moment or self.focus_analytics.current_time()
+        moment = moment or self._focus_display_now()
         self._set_local_live_focus_projection()
         # The server effective projection is a read-only account floor.  It
         # must participate in the cache key: a dashboard response can arrive
@@ -7974,7 +8041,7 @@ class PetWindow(QWidget):
                 live_segments = live_projection_rows(
                     user_id,
                     live_projection_payload,
-                    now=self.focus_analytics.current_time(),
+                    now=self._focus_display_now(),
                 )
                 live_projection_changed = bool(
                     self.focus_analytics.set_live_projection_segments(live_segments)

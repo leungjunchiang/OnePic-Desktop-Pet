@@ -184,6 +184,48 @@ def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_cross_device_display_uses_server_clock_for_live_intervals(monkeypatch) -> None:
+    """A local clock skew must not change the shared open-interval length."""
+
+    app, window = _create_window()
+    account_id = "account-1"
+    server_now = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    monkeypatch.setattr(
+        window.focus_analytics,
+        "current_time",
+        lambda: server_now - timedelta(minutes=4),
+    )
+    window._active_focus_account_id = account_id
+    window.social_client.connection.server_timestamp = server_now.isoformat()
+    monkeypatch.setattr(window.social_client, "server_now", lambda: server_now)
+    snapshot = SimpleNamespace(
+        status="rest",
+        session_started_at=None,
+        current_continuous_seconds=0,
+    )
+    payload = {
+        "data_source": "server",
+        "me_presence": {
+            "working": True,
+            "session_active": True,
+            "device_id": "device-b",
+            "session_id": "remote-session",
+            "session_started_at": "2026-08-31T14:56:00+08:00",
+        },
+    }
+    assert window._refresh_cross_device_today_display(
+        payload,
+        snapshot=snapshot,
+        source="server-clock",
+    )
+    assert window._cross_device_today_display_seconds == 4 * 60
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_cross_device_display_uses_account_presence_when_live_rpc_is_missing(monkeypatch) -> None:
     """当前 sealed checkpoint 之后的工作也必须在另一台设备可见。"""
 

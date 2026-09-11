@@ -121,6 +121,29 @@ class SmoothDurationDisplay:
         self._active = False
         self._last_step_at = self._monotonic()
 
+    def synchronize(
+        self,
+        authoritative_seconds: int,
+        *,
+        active: bool,
+        identity: str,
+    ) -> int:
+        """Adopt a freshly server-confirmed display baseline immediately.
+
+        ``project()`` intentionally rate-limits catch-up so a delayed paint
+        callback cannot make a local clock jump several seconds at once.  A
+        remote account projection is different: it is a new authoritative
+        baseline shared by every device, and delaying its adoption makes the
+        pet disagree with the study-room total for the whole catch-up period.
+        """
+
+        value = max(0, int(authoritative_seconds or 0))
+        self._identity = str(identity or "")
+        self._value = value
+        self._active = bool(active)
+        self._last_step_at = self._monotonic()
+        return value
+
     def project(
         self,
         authoritative_seconds: int,
