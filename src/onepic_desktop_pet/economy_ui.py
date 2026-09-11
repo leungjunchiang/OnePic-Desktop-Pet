@@ -92,7 +92,9 @@ class EconomyDialog(QDialog):
     def _build_overview(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        overview, grid = self._card("钱袋总览", "余额是现在能花的钱；本月创收是本月合法收入累计，消费不会降低创收。")
+        overview, layout = self._card("钱袋总览", "余额是现在能花的钱；本月创收是本月合法收入累计，消费不会降低创收。")
+        grid = QGridLayout()
+        layout.addLayout(grid)
         self.balance = QLabel()
         self.income = QLabel()
         self.identity = QLabel()
@@ -170,7 +172,10 @@ class EconomyDialog(QDialog):
     def _build_shop(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        card, layout = self._card("荒野小卖部", "不卖皮肤、不卖娃衣；这里只卖让六毛今天过得更像生活的东西。")
+        card, layout = self._card(
+            "荒野小卖部",
+            "商品价格使用吉他拨片结算；右侧显示单价，商品名旁显示当前库存。",
+        )
         self.shop_group = QComboBox()
         self.shop_group.addItems(("吃点喝点", "添置家当"))
         self.shop_group.currentTextChanged.connect(self.refresh_shop)
@@ -281,6 +286,43 @@ class EconomyDialog(QDialog):
             layout.addWidget(button)
         return widget
 
+    @staticmethod
+    def _shop_row_widget(
+        spec: dict[str, object],
+        stock_text: str,
+        button: QPushButton,
+    ) -> QWidget:
+        """Render stock, price, and the purchase action as separate concepts."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(3)
+
+        title_row = QHBoxLayout()
+        title = QLabel(str(spec.get("name") or "商品"))
+        title.setStyleSheet("font-size:16px;font-weight:700;color:#29485a;")
+        title_row.addWidget(title, 1)
+        stock = QLabel(stock_text)
+        stock.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        stock.setStyleSheet("font-weight:650;color:#087f74;")
+        title_row.addWidget(stock)
+        layout.addLayout(title_row)
+
+        description = QLabel(str(spec.get("description") or ""))
+        description.setWordWrap(True)
+        description.setObjectName("muted")
+        layout.addWidget(description)
+
+        price_row = QHBoxLayout()
+        price = int(spec.get("price") or 0)
+        price_text = "单价：免费" if price == 0 else f"单价：{price} 吉他拨片"
+        price_label = QLabel(price_text)
+        price_label.setStyleSheet("color:#607b8a;")
+        price_row.addWidget(price_label, 1)
+        price_row.addWidget(button)
+        layout.addLayout(price_row)
+        return widget
+
     def refresh_shop(self) -> None:
         if not hasattr(self, "shop_list"):
             return
@@ -292,14 +334,18 @@ class EconomyDialog(QDialog):
             if spec["kind"] == "household" and key not in ACTIVE_HOUSEHOLD_KEYS:
                 continue
             owned = self.ledger.has_household(key)
-            button = QPushButton("已添置" if owned else f"购买 {spec['price']} 吉他拨片")
+            if spec["kind"] == "household":
+                stock_text = "状态：已添置" if owned else "状态：未添置"
+            else:
+                stock_text = f"库存 ×{self.ledger.inventory_count(key)}"
+            button = QPushButton("已添置" if owned else "购买")
             button.setEnabled(not owned)
             button.clicked.connect(lambda _checked=False, key=key: self._purchase(key))
-            text = f"{spec['name']}\n{spec['description']}"
+            widget = self._shop_row_widget(spec, stock_text, button)
             item = QListWidgetItem()
-            item.setSizeHint(self._row_widget(text, button).sizeHint())
+            item.setSizeHint(widget.sizeHint())
             self.shop_list.addItem(item)
-            self.shop_list.setItemWidget(item, self._row_widget(text, button))
+            self.shop_list.setItemWidget(item, widget)
 
     def refresh_inventory(self) -> None:
         if not hasattr(self, "inventory_list"):
