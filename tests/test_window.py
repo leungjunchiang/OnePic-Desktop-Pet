@@ -3089,6 +3089,28 @@ def test_paused_pet_labels_fresh_remote_device_work_without_network(monkeypatch)
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_pause_message_uses_same_visible_today_total_as_pet_bubble(monkeypatch) -> None:
+    """暂停文案不能再次回到较高的本地兼容累计值。"""
+
+    app, window = _create_window()
+    local_summary = 7 * 3600 + 23 * 60
+    canonical_display = 7 * 3600 + 21 * 60 + 51
+    monkeypatch.setattr(window, "_shared_today_focus_seconds", lambda: local_summary)
+    monkeypatch.setattr(
+        window,
+        "_cross_device_today_display_value",
+        lambda _snapshot=None: canonical_display,
+    )
+
+    window.start_work_timer()
+    reply = window.pause_work_timer()
+
+    assert window._visible_today_focus_seconds() == canonical_display
+    assert "7小时21分钟" in reply.text
+    assert "7小时23分钟" not in reply.text
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_remote_device_label_expires_with_local_projection_ttl(monkeypatch) -> None:
     app, window = _create_window()
     now = datetime.now(timezone(timedelta(hours=8)))

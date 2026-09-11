@@ -820,7 +820,7 @@ class PetWindow(QWidget):
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
             self._shared_work_status_text,
-            lambda: self._shared_today_focus_seconds() // 3600,
+            lambda: self._visible_today_focus_seconds() // 3600,
             local_context=self.time_memory.summary.context,
             lyrics_path=lambda: self.settings.local_lyrics_path,
         )
@@ -3741,7 +3741,14 @@ class PetWindow(QWidget):
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("thermos", 25_000)
-        duration = format_work_duration(self._shared_today_focus_seconds())
+        paused_snapshot = self.focus_session.snapshot(include_projection=False)
+        self._log_today_focus_sources(
+            source="focus_paused",
+            snapshot=paused_snapshot,
+        )
+        duration = format_work_duration(
+            self._visible_today_focus_seconds(paused_snapshot)
+        )
         if was_running and reason in {"sleep", "lock", "display_off"}:
             system_event = {
                 "lock": "电脑已锁屏",
@@ -3825,10 +3832,14 @@ class PetWindow(QWidget):
             source="focus_finished",
         )
         self._invalidate_focus_projection("focus_finished")
-        # The timer is reset by ``finish``; read the just-committed analytics
-        # projection so the completion message uses the same day total as the
-        # study room and work report.
-        total = self._shared_today_focus_seconds()
+        # The timer is reset by ``finish``; use the same visible account total
+        # as the desktop bubble and study room for the completion message.
+        finished_snapshot = self.focus_session.snapshot(include_projection=False)
+        self._log_today_focus_sources(
+            source="focus_finished",
+            snapshot=finished_snapshot,
+        )
+        total = self._visible_today_focus_seconds(finished_snapshot)
         self._award_focus_rewards()
         self.set_paused(False)
         self._recorded_focus_session_seconds = 0
@@ -4545,7 +4556,7 @@ class PetWindow(QWidget):
         state = PetState.SIT if self.work_timer.is_running else PetState.CURIOUS
         self._show_emotion(state, 2600)
         snapshot = self.focus_session.snapshot()
-        today_seconds = int(snapshot.today_seconds)
+        today_seconds = self._visible_today_focus_seconds(snapshot)
         text = (
             f"{self._shared_work_status_text()}\n"
             f"{growth_progress_text(today_seconds)}\n"
@@ -4571,7 +4582,7 @@ class PetWindow(QWidget):
     def show_daily_growth(self) -> None:
         """显示今天 0–8 小时成长节点和下一个可见奖励。"""
 
-        seconds = self._shared_today_focus_seconds()
+        seconds = self._visible_today_focus_seconds()
         stage = stage_for_seconds(seconds)
         self._set_temporary_activity(stage.activity, 35_000)
         self.show_speech(
@@ -5021,7 +5032,7 @@ class PetWindow(QWidget):
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
 
-        stage = stage_for_seconds(self._shared_today_focus_seconds())
+        stage = stage_for_seconds(self._visible_today_focus_seconds())
         if stage.hour <= self._last_growth_hour:
             return
         self._last_growth_hour = stage.hour
@@ -5940,6 +5951,90 @@ class PetWindow(QWidget):
 
         return self._shared_focus_period_seconds()["today_seconds"]
 
+    def _visible_today_focus_seconds(self, snapshot: object | None = None) -> int:
+        """Return the one account-wide total used by immediate UI copy.
+
+        ``_shared_today_focus_seconds`` is deliberately retained for internal
+        ledger/reward compatibility.  It can include a local compatibility
+        floor that is not the same value as the canonical cross-device display
+        union.  User-facing surfaces must not choose competing totals, so
+        prefer the already-validated display projection and only fall back to
+        the local summary when no account projection exists yet.
+        """
+
+        display_value = self._cross_device_today_display_value(snapshot)
+        if display_value is not None:
+            return max(0, int(display_value))
+        return max(0, int(self._shared_today_focus_seconds()))
+
+    def _log_today_focus_sources(
+        self,
+        *,
+        source: str,
+        snapshot: object | None = None,
+    ) -> None:
+        """Record the duration sources at a user-visible focus boundary.
+
+        This is intentionally read-only and best-effort.  It makes a future
+        discrepancy between the local summary, canonical display union, and
+        legacy/effective server floor diagnosable without changing the pause or
+        finish transition itself.
+        """
+
+        local_period_today: int | None = None
+        remote_effective_today: int | None = None
+        cross_device_union: int | None = None
+        sealed_count: int | None = None
+        live_count: int | None = None
+        moment = self._focus_display_now()
+        try:
+            summary = self.focus_analytics.period_summary("day", moment)
+            if isinstance(summary, dict):
+                local_period_today = max(
+                    0,
+                    int(summary.get("total_seconds", 0) or 0),
+                )
+        except Exception:
+            LOGGER.exception("focus duration source audit local summary failed")
+        try:
+            cross_device_union = self._cross_device_today_display_value(snapshot)
+            if cross_device_union is not None:
+                cross_device_union = max(0, int(cross_device_union))
+        except Exception:
+            LOGGER.exception("focus duration source audit display projection failed")
+        try:
+            remote_reader = getattr(
+                self.focus_analytics,
+                "remote_effective_projection",
+                None,
+            )
+            remote_projection = remote_reader(moment) if callable(remote_reader) else None
+            if isinstance(remote_projection, dict):
+                remote_effective_today = max(
+                    0,
+                    int(remote_projection.get("today_seconds", 0) or 0),
+                )
+        except Exception:
+            LOGGER.exception("focus duration source audit remote floor failed")
+        try:
+            sealed_count = len(list(self.focus_analytics.focus_segments()))
+        except Exception:
+            LOGGER.exception("focus duration source audit sealed rows failed")
+        try:
+            live_count = len(list(self.focus_analytics.live_projection_segments()))
+        except Exception:
+            LOGGER.exception("focus duration source audit live rows failed")
+        lifecycle_log(
+            "focus.display.today_sources",
+            self,
+            source=source,
+            local_period_today_seconds=local_period_today,
+            cross_device_union_seconds=cross_device_union,
+            remote_effective_today_seconds=remote_effective_today,
+            sealed_segment_count=sealed_count,
+            live_projection_count=live_count,
+        )
+
     def _remote_focus_device_is_working(self) -> bool:
         """Return whether a fresh account projection contains another device.
 
@@ -5982,7 +6077,7 @@ class PetWindow(QWidget):
         """Return the user-facing work status with the canonical day total."""
 
         return (
-            f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}"
+            f"今日工作 {format_work_duration(self._visible_today_focus_seconds())}"
             f"{self._shared_work_status_suffix()}"
         )
 
@@ -6096,7 +6191,7 @@ class PetWindow(QWidget):
         photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
         try:
             path = render_daily_report(
-                self._shared_today_focus_seconds(),
+                self._visible_today_focus_seconds(),
                 self.daily_stats.snapshot(),
                 photo,
             )
@@ -9479,9 +9574,7 @@ class PetWindow(QWidget):
         if not hasattr(self, "work_duration_bubble"):
             return
         current = snapshot or self.focus_session.snapshot()
-        display_seconds = self._cross_device_today_display_value(current)
-        if display_seconds is None:
-            display_seconds = int(getattr(current, "today_seconds", 0) or 0)
+        display_seconds = self._visible_today_focus_seconds(current)
         status = str(getattr(current, "status", "idle"))
         account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
         display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
@@ -9663,9 +9756,7 @@ class PetWindow(QWidget):
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
         work_status_text = ""
         if snapshot.status in {"focus", "rest"}:
-            display_seconds = self._cross_device_today_display_value(snapshot)
-            if display_seconds is None:
-                display_seconds = int(snapshot.today_seconds)
+            display_seconds = self._visible_today_focus_seconds(snapshot)
             work_status_text = (
                 f"⏱ 今日已工作 {format_elapsed_clock(display_seconds)}"
                 f"{self._shared_work_status_suffix()}"
@@ -10026,7 +10117,7 @@ class PetWindow(QWidget):
             remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
             next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
         self.show_speech(
-            f"{self.companion.status_text(self._shared_today_focus_seconds() // 600)}\n{next_text}",
+            f"{self.companion.status_text(self._visible_today_focus_seconds() // 600)}\n{next_text}",
             6200,
         )
 
