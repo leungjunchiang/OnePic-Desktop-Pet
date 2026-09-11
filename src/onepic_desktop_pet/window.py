@@ -4689,6 +4689,15 @@ class PetWindow(QWidget):
         self._last_work_clock_secondary_refresh_at = now
         self._refresh_shortcut_state(snapshot)
         if self._social_dialog is not None and self._social_dialog.isVisible():
+            # The study-room summary must use the same live account projection
+            # as the desktop pet bubble.  The cached cross-device baseline is
+            # intentionally refreshed at a slower network cadence, so passing
+            # only the snapshot here leaves the room UI frozen behind the
+            # local monotonic clock until the next social sync.
+            self._social_dialog.set_cross_device_today_display_seconds(
+                self._cross_device_today_display_value(snapshot),
+                account_id=self._current_social_user_id(),
+            )
             self._social_dialog.set_focus_snapshot(snapshot)
         self._update_taunt_countdown()
         if self.work_controls.isVisible():

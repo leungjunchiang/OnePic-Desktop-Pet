@@ -184,6 +184,53 @@ def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_work_clock_tick_pushes_live_cross_device_value_to_study_room(monkeypatch) -> None:
+    """The room summary must not keep rendering an old cross-device scalar."""
+
+    app, window = _create_window()
+
+    class StubDialog:
+        def __init__(self) -> None:
+            self.display_updates: list[tuple[int | None, str]] = []
+            self.snapshot = None
+
+        def isVisible(self) -> bool:
+            return True
+
+        def set_cross_device_today_display_seconds(
+            self, seconds: int | None, *, account_id: str = ""
+        ) -> None:
+            self.display_updates.append((seconds, account_id))
+
+        def set_focus_snapshot(self, snapshot) -> None:
+            self.snapshot = snapshot
+
+    dialog = StubDialog()
+    window._social_dialog = dialog
+    window._last_work_clock_secondary_refresh_at = 0.0
+    monkeypatch.setattr(window, "_update_work_duration_bubble", lambda snapshot: None)
+    monkeypatch.setattr(window, "_refresh_shortcut_state", lambda snapshot: None)
+    monkeypatch.setattr(window, "_update_taunt_countdown", lambda: None)
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
+    monkeypatch.setattr(
+        window,
+        "_cross_device_today_display_value",
+        lambda snapshot: 6 * 3600 + 39 * 60 + 13,
+    )
+    monkeypatch.setattr(window.work_controls, "isVisible", lambda: False)
+
+    window._work_timer_tick_impl()
+
+    assert dialog.display_updates == [(6 * 3600 + 39 * 60 + 13, "account-1")]
+    assert dialog.snapshot is not None
+
+    # Do not let PetWindow's shutdown lifecycle inspect the non-Qt test stub.
+    window._social_dialog = None
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_cross_device_display_uses_server_clock_for_live_intervals(monkeypatch) -> None:
     """A local clock skew must not change the shared open-interval length."""
 
