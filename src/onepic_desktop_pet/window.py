@@ -4708,6 +4708,15 @@ class PetWindow(QWidget):
         self._last_work_clock_secondary_refresh_at = now
         self._refresh_shortcut_state(snapshot)
         if self._social_dialog is not None and self._social_dialog.isVisible():
+            # The social hub keeps a scalar account-wide display value so its
+            # minute labels do not fall back to the last network snapshot.
+            # Refresh that value from the same local projection used by the
+            # desktop bubble before handing over the snapshot.  This is a
+            # local calculation and must not trigger a network request.
+            self._social_dialog.set_cross_device_today_display_seconds(
+                self._cross_device_today_display_value(snapshot),
+                account_id=self._current_social_user_id(),
+            )
             self._social_dialog.set_focus_snapshot(snapshot)
         self._update_taunt_countdown()
         if self.work_controls.isVisible():

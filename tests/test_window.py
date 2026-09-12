@@ -160,6 +160,49 @@ def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_work_clock_tick_pushes_live_account_total_to_social_hub(monkeypatch) -> None:
+    """自习室首页每次轻量刷新都应收到桌面六毛的实时账号总时长。"""
+
+    app, window = _create_window()
+
+    class ProbeDialog:
+        def __init__(self) -> None:
+            self.cross_device_values: list[tuple[int | None, str]] = []
+            self.snapshots: list[object] = []
+
+        def isVisible(self) -> bool:
+            return True
+
+        def set_cross_device_today_display_seconds(
+            self, seconds: int | None, *, account_id: str = ""
+        ) -> None:
+            self.cross_device_values.append((seconds, account_id))
+
+        def set_focus_snapshot(self, snapshot: object) -> None:
+            self.snapshots.append(snapshot)
+
+    dialog = ProbeDialog()
+    snapshot = SimpleNamespace(status="focus", session_seconds=123)
+    window._social_dialog = dialog
+    window._last_work_clock_secondary_refresh_at = -1_000_000.0
+    monkeypatch.setattr(window.focus_session, "snapshot", lambda **_kwargs: snapshot)
+    monkeypatch.setattr(window, "_update_work_duration_bubble", lambda _snapshot: None)
+    monkeypatch.setattr(window, "_refresh_shortcut_state", lambda _snapshot: None)
+    monkeypatch.setattr(window, "_update_taunt_countdown", lambda: None)
+    monkeypatch.setattr(window, "_cross_device_today_display_value", lambda _snapshot: 3_368)
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
+
+    window._work_timer_tick_impl()
+
+    assert dialog.cross_device_values == [(3_368, "account-1")]
+    assert dialog.snapshots == [snapshot]
+
+    window._social_dialog = None
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_empty_focus_delta_does_not_rearm_social_tick(monkeypatch) -> None:
     """空的成功增量不能把后台同步重新排成高频循环。"""
 
