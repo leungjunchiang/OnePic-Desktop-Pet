@@ -57,10 +57,11 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert 'release_tag="$(printf \'%s\' "$GITHUB_REF_NAME" | sed -E' in workflow
     assert r"([0-9]+\.[0-9]+\.[0-9]+)" in workflow
     assert 'gh release view "$release_tag"' in workflow
-    assert 'gh release delete "$release_tag"' in workflow
-    assert "--cleanup-tag" in workflow
+    assert 'gh release upload "$release_tag"' in workflow
+    assert "--clobber" in workflow
+    assert 'gh release edit "$release_tag"' in workflow
     assert 'gh release create "$release_tag"' in workflow
-    assert '--target "$GITHUB_SHA"' in workflow
+    assert "--verify-tag" in workflow
     assert "artifact_run_id" in publisher
     assert "run-id: ${{ inputs.artifact_run_id }}" in publisher
     assert 'gh release upload "${{ inputs.release_tag }}"' in publisher
