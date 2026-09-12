@@ -160,14 +160,15 @@ jobs:
       - name: Build content update manifest
         shell: bash
         run: |
-          release_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/.*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
-          if [[ ! "$release_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          release_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/.*(v[0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          release_version="${release_tag#v}"
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "无法从 ref 推导合法版本：$GITHUB_REF_NAME" >&2
             exit 1
           fi
           python tools/build_content_manifest.py \
             --root . \
-            --version "$release_tag" \
+            --version "$release_version" \
             --min-app-version "0.22.55" \
             --ref "$GITHUB_REF_NAME" \
             --repository "$GITHUB_REPOSITORY" \
@@ -178,8 +179,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          release_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/.*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
-          if [[ ! "$release_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          release_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/.*(v[0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "无法从 ref 推导合法版本：$GITHUB_REF_NAME" >&2
             exit 1
           fi
@@ -192,8 +193,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/.*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
-          if [[ ! "$release_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          release_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/.*(v[0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "无法从 ref 推导合法版本：$GITHUB_REF_NAME" >&2
             exit 1
           fi
