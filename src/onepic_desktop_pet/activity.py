@@ -1,6 +1,6 @@
 """检测当前前台应用并归类为音乐、办公、编程、阅读或普通场景。
 
-本模块只读取前台进程名称并立即转成粗粒度类别，不记录窗口标题、不保存历史，也不联网。
+本模块只读取前台进程名称、原生窗口几何和显示器元数据并立即转成粗粒度类别，不记录窗口标题、不保存历史，也不联网。
 Windows 使用系统 API，macOS 在可用时使用 Cocoa；平台能力缺失时安全返回 ``other``。
 """
 
@@ -112,6 +112,13 @@ WINDOWS_DESKTOP_SHELL_CLASSES = frozenset(
     }
 )
 
+# Keep display-mode detection separate from the older video/game fullscreen
+# predicates.  Window visibility may yield to an ordinary maximised app, but
+# focus auto-pause must continue to use only the latter predicates.
+DISPLAY_MODE_NORMAL = "normal"
+DISPLAY_MODE_MAXIMIZED = "maximized"
+DISPLAY_MODE_FULLSCREEN = "fullscreen"
+
 
 def _is_macos_desktop_shell(name: str) -> bool:
     """Return whether *name* is macOS's desktop/compositor, not a document app."""
@@ -143,6 +150,7 @@ def _windows_foreground_is_normal_window(
     *,
     allow_media_fullscreen: bool = False,
     allow_game_fullscreen: bool = False,
+    allow_presentation_fullscreen: bool = False,
 ) -> bool:
     """Return whether a full-monitor HWND is still a normal window.
 
@@ -161,8 +169,10 @@ def _windows_foreground_is_normal_window(
         style = int(get_style(hwnd, -16))
         # Some borderless/full-screen game engines retain the normal window
         # style while resizing to the monitor. Geometry is still required by
-        # active_window_is_fullscreen() below.
-        if style & (0x00C00000 | 0x00040000) and not allow_game_fullscreen:
+        # the display-mode detector below.
+        if style & (0x00C00000 | 0x00040000) and not (
+            allow_game_fullscreen or allow_presentation_fullscreen
+        ):
             return True
 
         # Some Chromium builds keep the maximised bit while switching to
@@ -170,10 +180,14 @@ def _windows_foreground_is_normal_window(
         # a useful conservative guard (and protects normal maximised apps
         # whose style query is unavailable).  A known player/browser is
         # allowed through only after the style check above has confirmed it is
-        # borderless; geometry is still checked by active_window_is_fullscreen().
+        # borderless; geometry is still checked by the display-mode detector.
         is_zoomed = getattr(user32, "IsZoomed", None)
         if is_zoomed is not None and bool(is_zoomed(hwnd)):
-            return not (allow_media_fullscreen or allow_game_fullscreen)
+            return not (
+                allow_media_fullscreen
+                or allow_game_fullscreen
+                or allow_presentation_fullscreen
+            )
         return False
 
     except (AttributeError, OSError, TypeError, ValueError):
@@ -268,135 +282,248 @@ def active_application_category() -> str:
     return classify_application(active_application_name())
 
 
-def active_window_is_fullscreen() -> bool:
-    """Return whether the foreground window fills its monitor.
+def _rect_close(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+    tolerance: int = 2,
+) -> bool:
+    return all(abs(a - b) <= tolerance for a, b in zip(left, right))
 
-    This intentionally compares window geometry only.  It does not inspect
-    a title, document, pixel content or input stream.  Unsupported platforms
-    safely report ``False``.
+
+def _windows_foreground_rectangles(user32, hwnd):
+    """Return foreground, monitor, and work-area rectangles without titles."""
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long),
+            ("top", ctypes.c_long),
+            ("right", ctypes.c_long),
+            ("bottom", ctypes.c_long),
+        ]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_ulong),
+            ("rcMonitor", RECT),
+            ("rcWork", RECT),
+            ("dwFlags", ctypes.c_ulong),
+        ]
+
+    window_rect = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
+        return None
+    monitor = user32.MonitorFromWindow(hwnd, 2)
+    if not monitor:
+        return None
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        return None
+
+    def values(rect: RECT) -> tuple[int, int, int, int]:
+        return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
+
+    return values(window_rect), values(info.rcMonitor), values(info.rcWork)
+
+
+def _windows_foreground_display_mode(
+    user32,
+    hwnd,
+    screen_bounds: tuple[int, int, int, int] | None = None,
+) -> str:
+    if _windows_foreground_is_desktop_shell(user32, hwnd):
+        return DISPLAY_MODE_NORMAL
+
+    foreground_name = active_application_name()
+    allow_media_fullscreen = _is_known_media_process(foreground_name)
+    allow_game_fullscreen = _is_known_game_process(foreground_name)
+    allow_presentation_fullscreen = _is_known_presentation_process(foreground_name)
+    is_zoomed = False
+    try:
+        is_zoomed_fn = getattr(user32, "IsZoomed", None)
+        is_zoomed = bool(is_zoomed_fn(hwnd)) if is_zoomed_fn is not None else False
+    except (AttributeError, OSError, TypeError, ValueError):
+        is_zoomed = False
+
+    rectangles = _windows_foreground_rectangles(user32, hwnd)
+    if rectangles is None:
+        return DISPLAY_MODE_MAXIMIZED if is_zoomed else DISPLAY_MODE_NORMAL
+    _window_bounds, monitor_bounds, _work_bounds = rectangles
+    if screen_bounds is not None and not _rect_close(screen_bounds, monitor_bounds):
+        # The foreground window belongs to another monitor; it must not hide
+        # a pet living on the current monitor.
+        return DISPLAY_MODE_NORMAL
+
+    normal_window = _windows_foreground_is_normal_window(
+        user32,
+        hwnd,
+        allow_media_fullscreen=allow_media_fullscreen,
+        allow_game_fullscreen=allow_game_fullscreen,
+        allow_presentation_fullscreen=allow_presentation_fullscreen,
+    )
+    if normal_window:
+        return DISPLAY_MODE_MAXIMIZED if is_zoomed else DISPLAY_MODE_NORMAL
+    if _rect_close(_window_bounds, monitor_bounds):
+        return DISPLAY_MODE_FULLSCREEN
+    return DISPLAY_MODE_MAXIMIZED if is_zoomed else DISPLAY_MODE_NORMAL
+
+
+def _macos_rect_values(rect) -> tuple[int, int, int, int]:
+    origin = rect.origin
+    size = rect.size
+    x = round(float(origin.x))
+    y = round(float(origin.y))
+    width = round(float(size.width))
+    height = round(float(size.height))
+    return x, y, x + width, y + height
+
+
+def _macos_screen_rectangles(screens) -> list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]:
+    """Return AppKit frame/visibleFrame in Quartz's top-left coordinates."""
+
+    frames = [_macos_rect_values(screen.frame()) for screen in screens]
+    desktop_bottom = max((bottom for _left, _top, _right, bottom in frames), default=0)
+    result = []
+    for screen, frame in zip(screens, frames):
+        left, top, right, bottom = frame
+        frame_q = (left, desktop_bottom - bottom, right, desktop_bottom - top)
+        visible = _macos_rect_values(screen.visibleFrame())
+        visible_q = (
+            visible[0],
+            desktop_bottom - visible[3],
+            visible[2],
+            desktop_bottom - visible[1],
+        )
+        result.append((frame_q, visible_q))
+    return result
+
+
+def _macos_window_display_mode(
+    screen_bounds: tuple[int, int, int, int] | None = None,
+) -> str:
+    try:
+        from AppKit import NSScreen, NSWorkspace
+        import Quartz  # type: ignore
+
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None or _is_macos_desktop_shell(str(app.localizedName() or "")):
+            return DISPLAY_MODE_NORMAL
+        pid = int(app.processIdentifier())
+        screens = list(NSScreen.screens() or [])
+        screen_rectangles = _macos_screen_rectangles(screens)
+        if not screen_rectangles:
+            return DISPLAY_MODE_NORMAL
+
+        requested_indices = list(range(len(screen_rectangles)))
+        if screen_bounds is not None:
+            requested_indices = [
+                index
+                for index, (frame, visible) in enumerate(screen_rectangles)
+                if _rect_close(screen_bounds, frame) or _rect_close(screen_bounds, visible)
+            ]
+            if not requested_indices:
+                requested_size = (
+                    screen_bounds[2] - screen_bounds[0],
+                    screen_bounds[3] - screen_bounds[1],
+                )
+                requested_indices = [
+                    index
+                    for index, (frame, visible) in enumerate(screen_rectangles)
+                    if requested_size
+                    in {
+                        (frame[2] - frame[0], frame[3] - frame[1]),
+                        (visible[2] - visible[0], visible[3] - visible[1]),
+                    }
+                ]
+            # If two displays have the same geometry and Qt/AppKit did not
+            # expose a common origin, fail closed instead of hiding the wrong
+            # monitor's pet.
+            if len(requested_indices) != 1:
+                return DISPLAY_MODE_NORMAL
+
+        info = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly,
+            Quartz.kCGNullWindowID,
+        ) or []
+        for native_window in info:
+            if int(native_window.get(Quartz.kCGWindowOwnerPID, -1)) != pid:
+                continue
+            bounds = native_window.get(Quartz.kCGWindowBounds) or {}
+            window_bounds = (
+                round(float(bounds.get("X", 0))),
+                round(float(bounds.get("Y", 0))),
+                round(float(bounds.get("X", 0)) + float(bounds.get("Width", 0))),
+                round(float(bounds.get("Y", 0)) + float(bounds.get("Height", 0))),
+            )
+            candidate_indices = requested_indices
+            if screen_bounds is None:
+                center = (
+                    (window_bounds[0] + window_bounds[2]) / 2,
+                    (window_bounds[1] + window_bounds[3]) / 2,
+                )
+                candidate_indices = [
+                    index
+                    for index, (frame, _visible) in enumerate(screen_rectangles)
+                    if frame[0] <= center[0] <= frame[2]
+                    and frame[1] <= center[1] <= frame[3]
+                ]
+            for index in candidate_indices:
+                frame, visible = screen_rectangles[index]
+                if _rect_close(window_bounds, frame):
+                    return DISPLAY_MODE_FULLSCREEN
+                if _rect_close(window_bounds, visible):
+                    return DISPLAY_MODE_MAXIMIZED
+        return DISPLAY_MODE_NORMAL
+    except Exception:
+        return DISPLAY_MODE_NORMAL
+
+
+def active_window_display_mode(
+    screen_bounds: tuple[int, int, int, int] | None = None,
+) -> str:
+    """Return ``normal``, ``maximized`` or ``fullscreen`` for the front window.
+
+    Only process/application identity, native window geometry and monitor
+    metadata are used.  ``screen_bounds`` is the pet's current monitor in
+    ``left, top, right, bottom`` form; passing it prevents a maximised window
+    on another display from suppressing this pet.
     """
 
-    # Qt's offscreen platform has no real frontmost window or display.  On
-    # macOS CI it can nevertheless expose a synthetic window whose bounds
-    # happen to match the synthetic screen, which would make the privacy
-    # guards incorrectly treat every test as fullscreen.  Fail closed here:
-    # real desktop builds never use the offscreen platform, and the input-idle
-    # policy remains the correct fallback when geometry is unavailable.
-    if os.environ.get("QT_QPA_PLATFORM", "").casefold() == "offscreen":
-        return False
-
+    # Qt's offscreen platform has no real frontmost window or display.  Fail
+    # closed so tests and headless diagnostics never suppress the pet.
+    if os.environ.get("QT_QPA_PLATFORM", "").casefold() in {
+        "offscreen",
+        "minimal",
+        "minimalegl",
+    }:
+        return DISPLAY_MODE_NORMAL
     if sys.platform == "darwin":
-        # Use only coarse native window geometry.  If Quartz/AppKit is not
-        # available, fail closed: browser/PDF fullscreen must not be treated
-        # as video and the 10-minute input-idle guard remains the fallback.
-        try:
-            from AppKit import NSScreen, NSWorkspace
-            import Quartz  # type: ignore
-
-            app = NSWorkspace.sharedWorkspace().frontmostApplication()
-            if app is None:
-                return False
-            # Finder owns a screen-sized desktop window.  It is the normal
-            # foreground shell after the user clicks the wallpaper, not a
-            # presentation/video fullscreen surface.  Exclude it before the
-            # geometry check so desktop-mode pets remain visible and still
-            # yield to genuine fullscreen content.
-            app_name = str(app.localizedName() or "")
-            if _is_macos_desktop_shell(app_name):
-                return False
-            pid = int(app.processIdentifier())
-            info = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly,
-                Quartz.kCGNullWindowID,
-            ) or []
-            screens = list(NSScreen.screens() or [])
-            screen_sizes: set[tuple[int, int]] = set()
-            for screen in screens:
-                frame = screen.frame()
-                logical_size = (
-                    round(float(frame.size.width)),
-                    round(float(frame.size.height)),
-                )
-                screen_sizes.add(logical_size)
-                # Quartz window bounds are normally reported in points, but
-                # a few macOS/video paths expose backing-pixel dimensions on
-                # Retina displays.  Accept both representations without
-                # inspecting window titles or pixels.
-                try:
-                    scale = float(screen.backingScaleFactor())
-                except (AttributeError, TypeError, ValueError):
-                    scale = 1.0
-                if scale > 1.0:
-                    screen_sizes.add(
-                        (
-                            round(logical_size[0] * scale),
-                            round(logical_size[1] * scale),
-                        )
-                    )
-            for window in info:
-                if int(window.get(Quartz.kCGWindowOwnerPID, -1)) != pid:
-                    continue
-                bounds = window.get(Quartz.kCGWindowBounds) or {}
-                width = round(float(bounds.get("Width", 0)))
-                height = round(float(bounds.get("Height", 0)))
-                # Quartz and AppKit use different global-origin conventions
-                # on some multi-monitor layouts.  Full-screen playback and
-                # PowerPoint still have an unambiguous display-sized frame,
-                # so compare dimensions first and avoid missing fullscreen
-                # merely because the monitor origin was transformed.
-                if (width, height) in screen_sizes:
-                    return True
-        except Exception:
-            return False
-        return False
+        return _macos_window_display_mode(screen_bounds)
     if os.name != "nt":
-        return False
+        return DISPLAY_MODE_NORMAL
     try:
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return False
-        # Clicking wallpaper makes Explorer's Progman/WorkerW window the
-        # foreground HWND. It fills the monitor, but it is not real fullscreen
-        # content and must not hide the desktop pet.
-        if _windows_foreground_is_desktop_shell(user32, hwnd):
-            return False
-        foreground_name = active_application_name()
-        allow_media_fullscreen = _is_known_media_process(foreground_name)
-        allow_game_fullscreen = _is_known_game_process(foreground_name)
-        if _windows_foreground_is_normal_window(
-            user32,
-            hwnd,
-            allow_media_fullscreen=allow_media_fullscreen,
-            allow_game_fullscreen=allow_game_fullscreen,
-        ):
-            return False
-
-        class RECT(ctypes.Structure):
-            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
-
-        window_rect = RECT()
-        if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
-            return False
-        monitor = user32.MonitorFromWindow(hwnd, 2)
-        if not monitor:
-            return False
-        info = MONITORINFO()
-        info.cbSize = ctypes.sizeof(MONITORINFO)
-        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-            return False
-        bounds = info.rcMonitor
-        return (
-            abs(window_rect.left - bounds.left) <= 2
-            and abs(window_rect.top - bounds.top) <= 2
-            and abs(window_rect.right - bounds.right) <= 2
-            and abs(window_rect.bottom - bounds.bottom) <= 2
-        )
+            return DISPLAY_MODE_NORMAL
+        return _windows_foreground_display_mode(user32, hwnd, screen_bounds)
     except (AttributeError, OSError, TypeError, ValueError):
-        return False
+        return DISPLAY_MODE_NORMAL
+
+
+def active_window_is_maximized_or_fullscreen(
+    screen_bounds: tuple[int, int, int, int] | None = None,
+) -> bool:
+    return active_window_display_mode(screen_bounds) in {
+        DISPLAY_MODE_MAXIMIZED,
+        DISPLAY_MODE_FULLSCREEN,
+    }
+
+
+def active_window_is_fullscreen() -> bool:
+    """Return whether the foreground window is a true borderless fullscreen surface."""
+
+    return active_window_display_mode() == DISPLAY_MODE_FULLSCREEN
 
 
 def active_fullscreen_video() -> bool:

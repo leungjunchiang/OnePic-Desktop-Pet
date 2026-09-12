@@ -53,6 +53,10 @@ def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:
         NSWindowStyleMaskNonactivatingPanel=128,
     )
     monkeypatch.setattr(native_window_policy.sys, "platform", "darwin")
+    # The window bridge is being tested with a fake native window; the test
+    # must not inherit the process-wide Qt offscreen backend selected by the
+    # widget tests.
+    monkeypatch.setattr(native_window_policy, "_is_headless_qt_backend", lambda: False)
     monkeypatch.setitem(sys.modules, "objc", fake_objc)
     monkeypatch.setitem(sys.modules, "AppKit", fake_appkit)
 
@@ -130,4 +134,44 @@ def test_windows_policy_restores_topmost_without_activation(monkeypatch) -> None
     assert result["native_id"] == 456
     assert result["native_topmost"] is True
     assert user32.calls[0][1] == -1
+    assert user32.calls[0][2][-1] & 0x0010  # SWP_NOACTIVATE
+
+
+def test_windows_policy_demotes_when_always_on_top_is_disabled(monkeypatch) -> None:
+    class FakeUser32:
+        def __init__(self) -> None:
+            self.style = 0x00000080 | 0x08000000 | 0x00000008
+            self.calls: list[tuple[int, int, tuple[int, ...]]] = []
+
+        def GetWindowLongPtrW(self, _hwnd, _index):
+            return self.style
+
+        def GetWindowLongW(self, _hwnd, _index):
+            return self.style
+
+        def SetWindowLongPtrW(self, _hwnd, _index, value):
+            self.style = int(value)
+            return self.style
+
+        def SetWindowLongW(self, _hwnd, _index, value):
+            self.style = int(value)
+            return self.style
+
+        def SetWindowPos(self, hwnd, insert_after, x, y, width, height, flags):
+            self.calls.append((int(hwnd), int(insert_after), (x, y, width, height, flags)))
+            self.style &= ~0x00000008
+            return 1
+
+    user32 = FakeUser32()
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+
+    result = native_window_policy.apply_windows_window_policy(
+        SimpleNamespace(winId=lambda: 789),
+        topmost=False,
+        qt_stays_on_top=False,
+    )
+
+    assert result["action"] == "restore_normal_level"
+    assert result["native_topmost"] is False
+    assert user32.calls[0][1] == -2
     assert user32.calls[0][2][-1] & 0x0010  # SWP_NOACTIVATE

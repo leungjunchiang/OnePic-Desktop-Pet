@@ -19,7 +19,7 @@
 - 工作 FocusSession 允许跨日/跨周，暂停、完成、关闭和异常恢复均先把旧区间 durable seal 再切换身份；
 - 今日时长读取账号级 sealed/live 区间并集，同时把本机暂停与另一台设备工作明确区分；
 - 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
-- Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
+- Windows 与 macOS 均在普通最大化或真正的视频/游戏/PPT 全屏时暂时隐藏桌宠，退出后按原可见状态恢复；最大化只影响视觉，不自动暂停专注；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -135,7 +135,10 @@ from .activity import (
     active_fullscreen_game,
     active_fullscreen_presentation,
     active_fullscreen_video,
+    active_window_display_mode,
     active_window_is_fullscreen,
+    DISPLAY_MODE_FULLSCREEN,
+    DISPLAY_MODE_MAXIMIZED,
 )
 from .behavior import (
     BehaviorModel,
@@ -341,6 +344,15 @@ SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
 SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
 SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
+
+# The visibility state is deliberately independent from FocusSession.  An
+# ordinary maximised application suppresses the pet visually, but must not
+# pause or mutate the focus timer.  RESTORING is kept explicit so a queued
+# repaint/show callback cannot re-enter the normal state halfway through the
+# two-stage native z-order repair.
+FULLSCREEN_VISIBILITY_NORMAL = "normal"
+FULLSCREEN_VISIBILITY_SUPPRESSED = "suppressed"
+FULLSCREEN_VISIBILITY_RESTORING = "restoring"
 
 
 def _guard_qt_callback(method):
@@ -683,6 +695,8 @@ class PetWindow(QWidget):
         self._fullscreen_hidden = False
         self._manually_hidden = False
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
+        self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+        self._fullscreen_suppression_mode = "normal"
         self._process_started_at = datetime.now().astimezone()
         self._sleep_after_sit = False
         self._room_quick_status = ""
@@ -1108,11 +1122,11 @@ class PetWindow(QWidget):
         self.app_timer.start()
 
         self.topmost_timer = QTimer(self)
-        self.topmost_timer.setInterval(4000)
-        self.topmost_timer.timeout.connect(self._ensure_on_top)
-        # Topmost is restored at lifecycle boundaries below. A timer would
-        # turn a window-layer repair into continuous z-order traffic and, on
-        # macOS, can make AppKit reconsider the active application.
+        self.topmost_timer.setInterval(3000)
+        self.topmost_timer.timeout.connect(self._topmost_watchdog_tick)
+        # This is intentionally low frequency and non-activating. It repairs
+        # a native layer that another window manager may have reordered, but
+        # it never calls raise_(), activateWindow(), or focus APIs.
 
         self._last_social_heartbeat_at = 0.0
         self._social_heartbeat_due = True
@@ -1135,7 +1149,7 @@ class PetWindow(QWidget):
         # work-idle policy so the pet and its accessories disappear quickly,
         # then return with exactly the visibility state they had before.
         self.fullscreen_poll_timer = QTimer(self)
-        self.fullscreen_poll_timer.setInterval(1000)
+        self.fullscreen_poll_timer.setInterval(200)
         self.fullscreen_poll_timer.timeout.connect(self._sync_fullscreen_visibility)
         self.fullscreen_poll_timer.start()
 
@@ -1713,6 +1727,7 @@ class PetWindow(QWidget):
         elif event_type == QEvent.Type.WindowStateChange:
             # Restore/show transitions can replace or reorder a native window
             # without changing the Python QWidget instance.
+            QTimer.singleShot(0, self._sync_fullscreen_visibility)
             QTimer.singleShot(
                 0,
                 lambda: self.ensure_pet_window_policy(event="WindowStateChange"),
@@ -1743,16 +1758,75 @@ class PetWindow(QWidget):
                     ),
                 )
         self._position_accessories()
+        self._sync_fullscreen_visibility()
+        self._update_topmost_watchdog()
         QTimer.singleShot(0, lambda: self._ensure_on_top(event="Show"))
         lifecycle_log("pet_window.show_event.end", self)
+
+    def _pet_monitor_bounds(self) -> tuple[int, int, int, int] | None:
+        """Return the pet monitor in native-style half-open coordinates."""
+
+        screen = self.screen()
+        if screen is None and self.windowHandle() is not None:
+            screen = self.windowHandle().screen()
+        if screen is None:
+            screen = QGuiApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            return None
+        geometry = screen.geometry()
+        return (
+            int(geometry.left()),
+            int(geometry.top()),
+            int(geometry.left() + geometry.width()),
+            int(geometry.top() + geometry.height()),
+        )
+
+    def _update_topmost_watchdog(self) -> None:
+        """Run the native z-order watchdog only while the pet is really shown."""
+
+        timer = getattr(self, "topmost_timer", None)
+        if timer is None:
+            return
+        app = QApplication.instance()
+        should_run = bool(
+            getattr(self.settings, "always_on_top", False)
+            and self.isVisible()
+            and not getattr(self, "_manually_hidden", False)
+            and not getattr(self, "_fullscreen_hidden", False)
+            and getattr(self, "_fullscreen_visibility_state", FULLSCREEN_VISIBILITY_NORMAL)
+            == FULLSCREEN_VISIBILITY_NORMAL
+            and app is not None
+            and not app.closingDown()
+        )
+        if should_run and not timer.isActive():
+            timer.start()
+        elif not should_run and timer.isActive():
+            timer.stop()
+
+    @_guard_qt_callback
+    def _topmost_watchdog_tick(self) -> None:
+        """Repair native z-order without ever activating or raising a window."""
+
+        self._update_topmost_watchdog()
+        if not self.topmost_timer.isActive():
+            return
+        self._sync_fullscreen_visibility()
+        if self._fullscreen_hidden or not self.isVisible():
+            self._update_topmost_watchdog()
+            return
+        self._ensure_on_top(event="TopmostWatchdog")
 
     @_guard_qt_callback
     def _ensure_on_top(self, *, event: str = "PolicyCheck") -> None:
         """在生命周期节点校验 native 层级，但绝不激活或抢输入焦点。"""
 
-        if not self.isVisible():
+        visible_surfaces = [
+            widget for widget in self._fullscreen_surfaces() if widget.isVisible()
+        ]
+        if not visible_surfaces:
             return
-        self._apply_native_window_policy_for_widget(self, event=event)
+        if self.isVisible():
+            self._apply_native_window_policy_for_widget(self, event=event)
         # Detached passive surfaces are separate native windows. Recheck them
         # in the same lifecycle pass, but never poll or call activateWindow().
         for accessory in self._fullscreen_surfaces():
@@ -1915,6 +1989,7 @@ class PetWindow(QWidget):
                 self._ensure_on_top(event="SetAlwaysOnTop")
 
             QTimer.singleShot(0, restore_position_after_show)
+        self._update_topmost_watchdog()
         if persist:
             save_settings(self.settings)
             self.show_speech(
@@ -1951,6 +2026,7 @@ class PetWindow(QWidget):
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
             self._compact_todo_panel.hide()
         super().hideEvent(event)
+        self._update_topmost_watchdog()
         lifecycle_log("pet_window.hide_event.end", self)
 
     def hide_pet(self) -> None:
@@ -1965,6 +2041,7 @@ class PetWindow(QWidget):
             if widget is not self:
                 widget.hide()
         self.hide()
+        self._update_topmost_watchdog()
 
     def show_pet(self) -> None:
         """Explicitly show the pet again, respecting an active full-screen app."""
@@ -1978,8 +2055,10 @@ class PetWindow(QWidget):
         self._sync_fullscreen_visibility()
         if self._fullscreen_hidden:
             lifecycle_log("pet_window.show.blocked_fullscreen", self)
+            self._update_topmost_watchdog()
             return
         self.show()
+        self._update_topmost_watchdog()
         lifecycle_log("pet_window.show.call", self, source="explicit")
 
     def _fullscreen_surfaces(self) -> list[QWidget]:
@@ -2009,59 +2088,84 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _sync_fullscreen_visibility(self) -> None:
-        """Temporarily yield only to fullscreen media or games.
+        """Synchronise NORMAL/SUPPRESSED/RESTORING pet visibility state.
 
-        macOS exposes many ordinary maximised windows as screen-sized Quartz
-        windows.  Treating the geometry alone as a fullscreen takeover makes
-        the desktop pet disappear behind Word, browsers, terminals, and
-        other everyday apps.  On macOS we therefore require both the native
-        fullscreen geometry and a known media/game process.  Other platforms
-        keep the existing conservative geometry fallback for compatibility.
+        The display-mode detector is intentionally separate from the focus
+        activity detector.  A normal maximised window suppresses the visual
+        pet and its detached surfaces, but it never pauses FocusSession.  The
+        saved visibility map is restored only after the foreground window has
+        returned to NORMAL and is followed by two non-activating native policy
+        repairs so a window-manager reorder cannot leave one accessory behind.
         """
 
-        # A screen-sized Word, browser or terminal window is still an ordinary
-        # desktop window. Use the same process-aware media/game policy on every
-        # desktop platform; only a known video player/browser video fullscreen
-        # or a known game fullscreen may temporarily cover the pet.
-        fullscreen = bool(
-            active_fullscreen_video()
-            or active_fullscreen_game()
-            or active_fullscreen_presentation()
-        )
-        if fullscreen:
+        mode = active_window_display_mode(self._pet_monitor_bounds())
+        suppressed = mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}
+        if suppressed:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
                     widget: bool(widget.isVisible())
                     and widget is not getattr(self, "_local_burst_effect", None)
                     for widget in self._fullscreen_surfaces()
                 }
-                self._fullscreen_hidden = True
-            # Re-hide on every poll as a defensive measure. Some passive
-            # widgets (especially WorkDurationBubble) update their own
-            # visibility from a live FocusSession snapshot after the first
-            # fullscreen transition.
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_SUPPRESSED
+            self._fullscreen_suppression_mode = str(mode)
+            self._fullscreen_hidden = True
+            # Re-hide on every poll as a defensive measure. Duration/status
+            # refreshes can otherwise show a detached surface again.
             for widget in self._fullscreen_surfaces():
                 if widget.isVisible():
                     widget.hide()
+            self._update_topmost_watchdog()
             return
 
-        if not self._fullscreen_hidden:
+        if self._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_RESTORING:
+            # The delayed second native repair owns this short interval. Do
+            # not replay the visibility map if another Qt callback arrives.
             return
-        restore = self._fullscreen_restore_visible
+        if not self._fullscreen_hidden:
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+            self._fullscreen_suppression_mode = "normal"
+            self._update_topmost_watchdog()
+            return
+
+        self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_RESTORING
+        restore = dict(self._fullscreen_restore_visible)
         self._fullscreen_restore_visible = {}
         self._fullscreen_hidden = False
-        for widget, was_visible in restore.items():
-            if was_visible and not self._manually_hidden:
-                self._show_nonactivating(widget)
+        if not self._manually_hidden:
+            for widget, was_visible in restore.items():
+                if was_visible:
+                    self._show_nonactivating(widget)
         self._position_accessories()
-        # A Todo may have changed while media/game fullscreen was covering
-        # the desktop. Re-evaluate the unread projection after restoring.
+        # A Todo may have changed while another app was covering the desktop.
         self._refresh_todo_surfaces()
         if (
             self.work_timer.has_active_session
             and self.work_timer.pause_reason == "fullscreen_video"
         ):
             self._show_away_recovery_prompt("fullscreen_video")
+
+        self._ensure_on_top(event="FullscreenExit")
+        QTimer.singleShot(150, self._finish_fullscreen_restore)
+
+    @_guard_qt_callback
+    def _finish_fullscreen_restore(self) -> None:
+        """Complete the delayed, non-activating z-order repair after restore."""
+
+        if self._manually_hidden or QApplication.closingDown():
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+            self._update_topmost_watchdog()
+            return
+        mode = active_window_display_mode(self._pet_monitor_bounds())
+        if mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}:
+            # The foreground app reclaimed the display during the repair.
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+            self._sync_fullscreen_visibility()
+            return
+        self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+        self._fullscreen_suppression_mode = "normal"
+        self._ensure_on_top(event="FullscreenExitSettled")
+        self._update_topmost_watchdog()
 
     def _thread_shutdown_roots(self) -> tuple[QObject | None, ...]:
         """Return every top-level object that can own a Qt worker thread."""
@@ -2124,6 +2228,7 @@ class PetWindow(QWidget):
                 self._qt_application.removeNativeEventFilter(self._focus_activity_bridge)
         self._focus_activity_bridge.stop()
         self.fullscreen_poll_timer.stop()
+        self.topmost_timer.stop()
         self.chat_manager.shutdown()
         if self._chat_history_dialog is not None:
             self._chat_history_dialog.close()
@@ -2192,6 +2297,7 @@ class PetWindow(QWidget):
         QTimer.singleShot(0, self._refresh_pixmap)
         QTimer.singleShot(0, self._position_accessories)
         self.ensure_pet_window_policy(event="ScreenChange")
+        self._sync_fullscreen_visibility()
         QTimer.singleShot(
             0,
             lambda: self._ensure_on_top(event="ScreenChange"),
@@ -2204,6 +2310,7 @@ class PetWindow(QWidget):
         if not self.isVisible():
             return
         self.ensure_pet_window_policy(event="ScreenTopologyChange")
+        self._sync_fullscreen_visibility()
         QTimer.singleShot(
             0,
             lambda: self._ensure_on_top(event="ScreenTopologyChange"),

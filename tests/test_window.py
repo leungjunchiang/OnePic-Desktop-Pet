@@ -34,6 +34,9 @@ from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
 from onepic_desktop_pet.emotion_effects import emotion_effect_name
 from onepic_desktop_pet.window import (
+    FULLSCREEN_VISIBILITY_NORMAL,
+    FULLSCREEN_VISIBILITY_RESTORING,
+    FULLSCREEN_VISIBILITY_SUPPRESSED,
     PetWindow,
     SOCIAL_DASHBOARD_INTERVAL_MS,
     SOCIAL_LEADERBOARD_REFRESH_SECONDS,
@@ -383,20 +386,93 @@ def test_encouragement_uses_private_display_name() -> None:
     app.processEvents()
 
 
-def test_macos_pet_does_not_poll_native_topmost_layer(monkeypatch) -> None:
-    """macOS must not re-apply the native level while another app is active."""
+def test_macos_pet_uses_a_low_frequency_nonactivating_topmost_watchdog(monkeypatch) -> None:
+    """macOS repairs the layer slowly without re-activating another app."""
 
     monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "darwin")
     app, window = _create_window()
+    assert window.topmost_timer.isActive()
+    assert window.topmost_timer.interval() == 3000
+    assert window.fullscreen_poll_timer.interval() == 200
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_pet_topmost_watchdog_stops_when_pet_is_hidden_or_desktop_mode() -> None:
+    app, window = _create_window()
+    assert window.topmost_timer.isActive()
+    window.hide_pet()
+    assert not window.topmost_timer.isActive()
+    window.show_pet()
+    window.set_always_on_top(False, persist=False)
     assert not window.topmost_timer.isActive()
     window.close()
     window.deleteLater()
     app.processEvents()
 
 
-def test_pet_topmost_repair_is_lifecycle_driven_not_timer_driven() -> None:
+def test_topmost_watchdog_repairs_without_raise_or_activation(monkeypatch) -> None:
+    """The periodic repair must never steal the user's foreground focus."""
+
     app, window = _create_window()
-    assert not window.topmost_timer.isActive()
+    policy_events = []
+    monkeypatch.setattr(
+        window,
+        "_ensure_on_top",
+        lambda **kwargs: policy_events.append(kwargs.get("event")),
+    )
+    monkeypatch.setattr(
+        window,
+        "raise_",
+        lambda: (_ for _ in ()).throw(AssertionError("raise_ must not be called")),
+    )
+    monkeypatch.setattr(
+        window,
+        "activateWindow",
+        lambda: (_ for _ in ()).throw(AssertionError("activateWindow must not be called")),
+    )
+
+    window._topmost_watchdog_tick()
+
+    assert policy_events == ["TopmostWatchdog"]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_fullscreen_restore_repairs_native_policy_immediately_and_after_delay(monkeypatch) -> None:
+    """Exit restore performs an immediate and a settled non-activating repair."""
+
+    app, window = _create_window()
+    events = []
+    scheduled = []
+    monkeypatch.setattr(
+        window,
+        "_ensure_on_top",
+        lambda **kwargs: events.append(kwargs.get("event")),
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((int(delay), callback)),
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "fullscreen",
+    )
+    window._sync_fullscreen_visibility()
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "normal",
+    )
+    window._sync_fullscreen_visibility()
+    delayed = [callback for delay, callback in scheduled if delay == 150]
+    assert events[-1] == "FullscreenExit"
+    assert delayed
+    delayed[-1]()
+    assert events[-1] == "FullscreenExitSettled"
+
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -1578,15 +1654,16 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     assert window.quick_panel.isVisible()
     assert window.work_duration_bubble.isVisible()
 
-    # macOS deliberately ignores generic screen-sized windows and only
-    # yields to a detected media/game fullscreen surface.  Patch both paths
-    # so this test exercises the same transition on every CI runner.
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    # Use the platform-independent display-mode seam so this exercises the
+    # same transition on every CI runner.
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "fullscreen",
+    )
     window._sync_fullscreen_visibility()
     app.processEvents()
     assert window._fullscreen_hidden
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_SUPPRESSED
     assert not window.isVisible()
     assert not window.quick_panel.isVisible()
     assert not window.work_duration_bubble.isVisible()
@@ -1597,15 +1674,19 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     app.processEvents()
     assert not window.work_duration_bubble.isVisible()
 
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "normal",
+    )
     window._sync_fullscreen_visibility()
     app.processEvents()
     assert not window._fullscreen_hidden
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_RESTORING
     assert window.isVisible()
     assert window.quick_panel.isVisible()
     assert window.work_duration_bubble.isVisible()
+    window._finish_fullscreen_restore()
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_NORMAL
 
     window.close()
     window.deleteLater()
@@ -1633,6 +1714,29 @@ def test_manual_hide_also_hides_duration_bubble_until_explicit_show() -> None:
     app.processEvents()
     assert window.isVisible()
     assert window.work_duration_bubble.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_manual_hide_wins_over_fullscreen_restore(monkeypatch) -> None:
+    """A temporary display suppression must not resurrect an explicit hide."""
+
+    app, window = _create_window()
+    window.hide_pet()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "maximized",
+    )
+    window._sync_fullscreen_visibility()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "normal",
+    )
+    window._sync_fullscreen_visibility()
+    window._finish_fullscreen_restore()
+
+    assert window._manually_hidden
+    assert not window.isVisible()
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_NORMAL
     window.close(); window.deleteLater(); app.processEvents()
 
 
@@ -2745,17 +2849,20 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     window.pause_work_timer(reason="fullscreen_video")
     assert window.work_timer.pause_reason == "fullscreen_video"
 
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "fullscreen",
+    )
     window._sync_fullscreen_visibility()
     assert window._fullscreen_hidden
 
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "normal",
+    )
     window._sync_fullscreen_visibility()
     app.processEvents()
+    window._finish_fullscreen_restore()
     card = window._away_recovery_card
     assert card is not None
     assert card.isVisible()
@@ -2764,14 +2871,28 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     window.close(); window.deleteLater(); app.processEvents()
 
 
-def test_normal_maximized_window_does_not_hide_pet(monkeypatch) -> None:
-    """A screen-sized Word/browser window is not a media/game takeover."""
+def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) -> None:
+    """Maximised apps yield visually but do not change FocusSession."""
 
     app, window = _create_window()
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    window.start_work_timer()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "maximized",
+    )
     window._sync_fullscreen_visibility()
+    assert window._fullscreen_hidden
+    assert not window.isVisible()
+    assert window.work_timer.is_running
+    assert window.work_timer.pause_reason is None
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds: "normal",
+    )
+    window._sync_fullscreen_visibility()
+    assert window.isVisible()
+    window._finish_fullscreen_restore()
     assert not window._fullscreen_hidden
     window.close(); window.deleteLater(); app.processEvents()
 
