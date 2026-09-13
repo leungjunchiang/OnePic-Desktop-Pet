@@ -95,14 +95,15 @@ def format_elapsed_clock(seconds: int) -> str:
 
 
 class SmoothDurationDisplay:
-    """Keep a live duration label advancing by at most one second at a time.
+    """Project an authoritative duration onto a monotonic live display.
 
-    The authoritative timer remains monotonic and may legitimately advance by
-    several seconds when Qt or the operating system delays a paint callback.
-    This class only controls presentation: while focus is running it never
-    renders more than one new second per real second.  Pausing, switching
-    accounts/days, or correcting a value downward snaps to the authoritative
-    value so stale display state cannot leak into another projection.
+    The authoritative value may be a cached account projection, so it can
+    remain unchanged while the local focus session is still running.  Anchor
+    the display to monotonic time instead of allowing a stale value to freeze
+    it.  A delayed GUI callback therefore catches up in one update, while a
+    newer authoritative value is applied immediately.  Running displays are
+    monotonic; pause/account/day transitions deliberately snap to the value
+    supplied by the owner.
     """
 
     def __init__(
@@ -113,13 +114,15 @@ class SmoothDurationDisplay:
         self._identity = ""
         self._value: int | None = None
         self._active = False
-        self._last_step_at = self._monotonic()
+        self._anchor_seconds = 0
+        self._anchor_monotonic = self._monotonic()
 
     def reset(self) -> None:
         self._identity = ""
         self._value = None
         self._active = False
-        self._last_step_at = self._monotonic()
+        self._anchor_seconds = 0
+        self._anchor_monotonic = self._monotonic()
 
     def project(
         self,
@@ -136,24 +139,31 @@ class SmoothDurationDisplay:
             or clean_identity != self._identity
             or not active
             or not self._active
-            or authoritative < int(self._value or 0)
-            or now < self._last_step_at
+            or now < self._anchor_monotonic
         )
         if must_snap:
             self._identity = clean_identity
             self._value = authoritative
             self._active = bool(active)
-            self._last_step_at = now
+            self._anchor_seconds = authoritative
+            self._anchor_monotonic = now
             return authoritative
 
         self._active = True
-        if authoritative > self._value and now - self._last_step_at >= 1.0:
-            self._value += 1
-            # Reset to the actual callback time.  If the GUI thread was
-            # delayed for three seconds, queued refreshes cannot rapidly emit
-            # the remaining two values inside the next second.
-            self._last_step_at = now
-        return min(authoritative, self._value)
+        local_projection = self._anchor_seconds + max(
+            0,
+            int(now - self._anchor_monotonic),
+        )
+        if authoritative > local_projection:
+            # A server/account projection may include another device's newly
+            # sealed work.  Calibrate immediately; making it chase at 1s/s
+            # would leave the display permanently behind a clock that is also
+            # advancing at 1s/s.
+            self._anchor_seconds = authoritative
+            self._anchor_monotonic = now
+            local_projection = authoritative
+        self._value = max(int(self._value or 0), local_projection)
+        return self._value
 
 
 class WorkTimerModel:

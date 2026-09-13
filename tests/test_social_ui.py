@@ -1309,6 +1309,27 @@ def test_cross_device_total_updates_focus_page_and_home_summary() -> None:
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
+def test_live_today_display_value_updates_both_surfaces_with_one_snapshot() -> None:
+    """A live desktop projection must update the room's two labels together."""
+
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.apply_dashboard(dialog.client.dashboard())
+    dialog.set_focus_snapshot(
+        {
+            "status": "focus",
+            "session_seconds": 90,
+            "today_seconds": 60,
+        },
+        today_display_seconds=2 * 3600 + 3 * 60 + 17,
+    )
+    app.processEvents()
+
+    assert "今日累计 2小时3分钟" in dialog.focus_today.text()
+    assert "我的今日专注 2小时3分钟" in dialog.study_summary.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_focus_weekly_total_does_not_become_yesterday_difference() -> None:
     """Live weekly reconciliation must not reuse the weekly value as a day delta."""
 

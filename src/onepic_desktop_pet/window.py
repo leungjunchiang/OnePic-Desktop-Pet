@@ -814,7 +814,7 @@ class PetWindow(QWidget):
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
             self._shared_work_status_text,
-            lambda: self._shared_today_focus_seconds() // 3600,
+            lambda: self._account_today_display_seconds() // 3600,
             local_context=self.time_memory.summary.context,
             lyrics_path=lambda: self.settings.local_lyrics_path,
         )
@@ -3955,7 +3955,7 @@ class PetWindow(QWidget):
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("thermos", 25_000)
-        duration = format_work_duration(self._shared_today_focus_seconds())
+        duration = format_work_duration(self._account_today_display_seconds())
         if was_running and reason in {"sleep", "lock", "display_off"}:
             system_event = {
                 "lock": "电脑已锁屏",
@@ -4041,8 +4041,8 @@ class PetWindow(QWidget):
         self._invalidate_focus_projection("focus_finished")
         # The timer is reset by ``finish``; read the just-committed analytics
         # projection so the completion message uses the same day total as the
-        # study room and work report.
-        total = self._shared_today_focus_seconds()
+        # study room, desktop bubble, and work report.
+        total = self._account_today_display_seconds()
         self._award_focus_rewards()
         self.set_paused(False)
         self._recorded_focus_session_seconds = 0
@@ -4785,7 +4785,7 @@ class PetWindow(QWidget):
     def show_daily_growth(self) -> None:
         """显示今天 0–8 小时成长节点和下一个可见奖励。"""
 
-        seconds = self._shared_today_focus_seconds()
+        seconds = self._account_today_display_seconds()
         stage = stage_for_seconds(seconds)
         self._set_temporary_activity(stage.activity, 35_000)
         self.show_speech(
@@ -4896,7 +4896,11 @@ class PetWindow(QWidget):
         # still emit the normal FocusSession signal, while this callback only
         # updates the small live labels.
         snapshot = self.focus_session.snapshot(include_projection=False)
-        self._update_work_duration_bubble(snapshot)
+        today_display_seconds = self._account_today_display_seconds(snapshot)
+        self._update_work_duration_bubble(
+            snapshot,
+            display_seconds=today_display_seconds,
+        )
         now = time.monotonic()
         last_secondary_refresh = float(
             getattr(self, "_last_work_clock_secondary_refresh_at", 0.0) or 0.0
@@ -4911,11 +4915,10 @@ class PetWindow(QWidget):
             # Refresh that value from the same local projection used by the
             # desktop bubble before handing over the snapshot.  This is a
             # local calculation and must not trigger a network request.
-            self._social_dialog.set_cross_device_today_display_seconds(
-                self._cross_device_today_display_value(snapshot),
-                account_id=self._current_social_user_id(),
+            self._social_dialog.set_focus_snapshot(
+                snapshot,
+                today_display_seconds=today_display_seconds,
             )
-            self._social_dialog.set_focus_snapshot(snapshot)
         self._update_taunt_countdown()
         if self.work_controls.isVisible():
             self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
@@ -5230,7 +5233,7 @@ class PetWindow(QWidget):
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
 
-        stage = stage_for_seconds(self._shared_today_focus_seconds())
+        stage = stage_for_seconds(self._account_today_display_seconds())
         if stage.hour <= self._last_growth_hour:
             return
         self._last_growth_hour = stage.hour
@@ -5999,6 +6002,31 @@ class PetWindow(QWidget):
             ),
         }
 
+    def _account_today_display_seconds(self, snapshot: object | None = None) -> int:
+        """Return the single live value used by every visible today-total UI.
+
+        The cross-device projection is the authoritative input when it has
+        been validated.  Before the first account projection arrives, the
+        lightweight FocusSession snapshot is the local fallback.  The
+        monotonic display projector then keeps that same value moving while
+        the network is quiet, so the desktop bubble and study room receive an
+        identical integer without another Supabase request.
+        """
+
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
+        authoritative = self._cross_device_today_display_value(current)
+        if authoritative is None:
+            authoritative = int(getattr(current, "today_seconds", 0) or 0)
+        authoritative = max(0, min(24 * 60 * 60, int(authoritative)))
+        status = str(getattr(current, "status", "idle") or "idle")
+        account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
+        display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
+        return self._smooth_work_duration_display.project(
+            authoritative,
+            active=status == "focus",
+            identity=f"{account_id}:{display_day}",
+        )
+
     def _shared_today_focus_seconds(self) -> int:
         """Backward-compatible day-only accessor for legacy callers."""
 
@@ -6046,7 +6074,7 @@ class PetWindow(QWidget):
         """Return the user-facing work status with the canonical day total."""
 
         return (
-            f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}"
+            f"今日工作 {format_work_duration(self._account_today_display_seconds())}"
             f"{self._shared_work_status_suffix()}"
         )
 
@@ -6160,7 +6188,7 @@ class PetWindow(QWidget):
         photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
         try:
             path = render_daily_report(
-                self._shared_today_focus_seconds(),
+                self._account_today_display_seconds(),
                 self.daily_stats.snapshot(),
                 photo,
             )
@@ -6881,15 +6909,20 @@ class PetWindow(QWidget):
             self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
             self._social_dialog.room_changed.connect(self._social_room_changed)
             self._social_dialog.quick_action_requested.connect(self._room_quick_action)
-            self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
+            initial_snapshot = self.focus_session.snapshot(include_projection=False)
+            initial_today_display_seconds = self._account_today_display_seconds(
+                initial_snapshot
+            )
+            self._social_dialog.set_focus_snapshot(
+                initial_snapshot,
+                today_display_seconds=initial_today_display_seconds,
+            )
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
             self._social_dialog.set_local_focus_week_seconds_provider(
                 lambda: self.focus_analytics.account_week_seconds()
             )
             self._social_dialog.set_cross_device_today_display_seconds(
-                self._cross_device_today_display_value(
-                    self.focus_session.snapshot(include_projection=False)
-                ),
+                initial_today_display_seconds,
                 account_id=self._current_social_user_id(),
             )
         # A second click on the menu must restore a minimized study-room
@@ -6925,7 +6958,11 @@ class PetWindow(QWidget):
                 snapshot=snapshot,
                 source="focus_state_changed",
             )
-        self._update_work_duration_bubble(snapshot)
+        today_display_seconds = self._account_today_display_seconds(snapshot)
+        self._update_work_duration_bubble(
+            snapshot,
+            display_seconds=today_display_seconds,
+        )
         if self.work_controls.isVisible():
             status = snapshot_status
             seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
@@ -6936,11 +6973,10 @@ class PetWindow(QWidget):
                 if status in {"focus", "rest"} else "本轮未开始"
             )
         if self._social_dialog is not None:
-            self._social_dialog.set_cross_device_today_display_seconds(
-                self._cross_device_today_display_value(snapshot),
-                account_id=self._current_social_user_id(),
+            self._social_dialog.set_focus_snapshot(
+                snapshot,
+                today_display_seconds=today_display_seconds,
             )
-            self._social_dialog.set_focus_snapshot(snapshot)
             self._social_dialog.refresh_local_focus_week_seconds()
             now = time.monotonic()
             if status_changed or now - self._last_focus_analytics_ui_refresh >= 5.0:
@@ -9423,23 +9459,20 @@ class PetWindow(QWidget):
             y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
         bubble.move(x, y)
 
-    def _update_work_duration_bubble(self, snapshot=None) -> None:
-        """Render the shared snapshot and let PetWindow own visibility."""
+    def _update_work_duration_bubble(
+        self,
+        snapshot=None,
+        *,
+        display_seconds: int | None = None,
+    ) -> None:
+        """Render the one account-wide display value and own visibility."""
 
         if not hasattr(self, "work_duration_bubble"):
             return
-        current = snapshot or self.focus_session.snapshot()
-        display_seconds = self._cross_device_today_display_value(current)
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
         if display_seconds is None:
-            display_seconds = int(getattr(current, "today_seconds", 0) or 0)
+            display_seconds = self._account_today_display_seconds(current)
         status = str(getattr(current, "status", "idle"))
-        account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
-        display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
-        display_seconds = self._smooth_work_duration_display.project(
-            display_seconds,
-            active=status == "focus",
-            identity=f"{account_id}:{display_day}",
-        )
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
         should_show = bool(
             show_duration
@@ -9615,9 +9648,7 @@ class PetWindow(QWidget):
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
         work_status_text = ""
         if snapshot.status in {"focus", "rest"}:
-            display_seconds = self._cross_device_today_display_value(snapshot)
-            if display_seconds is None:
-                display_seconds = int(snapshot.today_seconds)
+            display_seconds = self._account_today_display_seconds(snapshot)
             work_status_text = (
                 f"⏱ 今日已工作 {format_elapsed_clock(display_seconds)}"
                 f"{self._shared_work_status_suffix()}"
@@ -9989,7 +10020,7 @@ class PetWindow(QWidget):
             remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
             next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
         self.show_speech(
-            f"{self.companion.status_text(self._shared_today_focus_seconds() // 600)}\n{next_text}",
+            f"{self.companion.status_text(self._account_today_display_seconds() // 600)}\n{next_text}",
             6200,
         )
 

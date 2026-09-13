@@ -169,6 +169,7 @@ def test_work_clock_tick_pushes_live_account_total_to_social_hub(monkeypatch) ->
         def __init__(self) -> None:
             self.cross_device_values: list[tuple[int | None, str]] = []
             self.snapshots: list[object] = []
+            self.today_display_values: list[int | None] = []
 
         def isVisible(self) -> bool:
             return True
@@ -178,15 +179,25 @@ def test_work_clock_tick_pushes_live_account_total_to_social_hub(monkeypatch) ->
         ) -> None:
             self.cross_device_values.append((seconds, account_id))
 
-        def set_focus_snapshot(self, snapshot: object) -> None:
+        def set_focus_snapshot(
+            self,
+            snapshot: object,
+            *,
+            today_display_seconds: int | None = None,
+        ) -> None:
             self.snapshots.append(snapshot)
+            self.today_display_values.append(today_display_seconds)
 
     dialog = ProbeDialog()
     snapshot = SimpleNamespace(status="focus", session_seconds=123)
     window._social_dialog = dialog
     window._last_work_clock_secondary_refresh_at = -1_000_000.0
     monkeypatch.setattr(window.focus_session, "snapshot", lambda **_kwargs: snapshot)
-    monkeypatch.setattr(window, "_update_work_duration_bubble", lambda _snapshot: None)
+    monkeypatch.setattr(
+        window,
+        "_update_work_duration_bubble",
+        lambda _snapshot, **_kwargs: None,
+    )
     monkeypatch.setattr(window, "_refresh_shortcut_state", lambda _snapshot: None)
     monkeypatch.setattr(window, "_update_taunt_countdown", lambda: None)
     monkeypatch.setattr(window, "_cross_device_today_display_value", lambda _snapshot: 3_368)
@@ -194,7 +205,8 @@ def test_work_clock_tick_pushes_live_account_total_to_social_hub(monkeypatch) ->
 
     window._work_timer_tick_impl()
 
-    assert dialog.cross_device_values == [(3_368, "account-1")]
+    assert dialog.cross_device_values == []
+    assert dialog.today_display_values == [3_368]
     assert dialog.snapshots == [snapshot]
 
     window._social_dialog = None

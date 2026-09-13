@@ -219,13 +219,13 @@ jobs:
               --clobber
             gh release edit "$release_tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $release_tag - 动作过渡与窗口渲染性能修复" \
-              --notes "修复动作切换时 target 动画未冻结导致的透明重影和慢吞吞过渡：改为固定 source→target、20ms PreciseTimer、200ms 淡化，并在过渡期间暂停普通动画/表情刷新。完整娃衣/动作继续复用按资源、尺寸和 DPI 缓存的缩放结果；透明 silhouette mask 改为按完整素材稳定复用，减少重复 Smooth 缩放和 setMask。同步保留 login-3 专属动作、自习室今日时长同步、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - 计时显示一致性与动作渲染修复" \
+              --notes "修复今日工作时长因旧版 SmoothDurationDisplay 限制每秒最多追 1 秒而永久落后的问题：改为 monotonic anchor，网络暂时不刷新时本地仍每秒前进，GUI 卡顿后一次性补齐，服务器出现新账号总量时立即校准。桌面六毛、自习室首页/专注页、暂停/完成文案和日报统一使用同一份账号今日时长。同步保留固定 source→target 动作过渡、20ms PreciseTimer、完整娃衣缩放与透明轮廓缓存、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           else
             echo "Creating release $release_tag with verified artifacts."
             gh release create "$release_tag" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "Lili $release_tag - 动作过渡与窗口渲染性能修复" \
-              --notes "修复动作切换时 target 动画未冻结导致的透明重影和慢吞吞过渡：改为固定 source→target、20ms PreciseTimer、200ms 淡化，并在过渡期间暂停普通动画/表情刷新。完整娃衣/动作继续复用按资源、尺寸和 DPI 缓存的缩放结果；透明 silhouette mask 改为按完整素材稳定复用，减少重复 Smooth 缩放和 setMask。同步保留 login-3 专属动作、自习室今日时长同步、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - 计时显示一致性与动作渲染修复" \
+              --notes "修复今日工作时长因旧版 SmoothDurationDisplay 限制每秒最多追 1 秒而永久落后的问题：改为 monotonic anchor，网络暂时不刷新时本地仍每秒前进，GUI 卡顿后一次性补齐，服务器出现新账号总量时立即校准。桌面六毛、自习室首页/专注页、暂停/完成文案和日报统一使用同一份账号今日时长。同步保留固定 source→target 动作过渡、20ms PreciseTimer、完整娃衣缩放与透明轮廓缓存、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           fi

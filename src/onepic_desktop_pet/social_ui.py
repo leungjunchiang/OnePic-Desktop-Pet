@@ -2798,6 +2798,11 @@ class SocialHubDialog(QDialog):
         # controls and all other statistics.
         self._cross_device_today_display_seconds: int | None = None
         self._cross_device_today_display_account_id = ""
+        # The desktop sends this already-projected value on every live clock
+        # refresh.  Keeping it separate from the last network scalar prevents
+        # the homepage from replacing a fresh local monotonic value with an
+        # older dashboard snapshot.
+        self._today_display_seconds: int | None = None
         self._leaderboard_rows: list[Any] = []
         self._leaderboard_loaded = False
         self._leaderboard_error = False
@@ -3003,7 +3008,12 @@ class SocialHubDialog(QDialog):
         super().resizeEvent(event)
         QTimer.singleShot(0, self._apply_adaptive_tab_widths)
 
-    def set_focus_snapshot(self, snapshot: Any) -> None:
+    def set_focus_snapshot(
+        self,
+        snapshot: Any,
+        *,
+        today_display_seconds: int | None = None,
+    ) -> None:
         """Render the desktop timer state without creating a second timer."""
 
         self._focus_snapshot = snapshot
@@ -3017,10 +3027,20 @@ class SocialHubDialog(QDialog):
         else:
             session_seconds = getattr(snapshot, "session_seconds", 0)
             today_seconds = getattr(snapshot, "today_seconds", 0)
+        display_today_seconds = today_seconds
+        if today_display_seconds is not None:
+            try:
+                display_today_seconds = max(
+                    0,
+                    min(24 * 60 * 60, int(today_display_seconds)),
+                )
+            except (TypeError, ValueError, OverflowError):
+                display_today_seconds = today_seconds
+            self._today_display_seconds = display_today_seconds
         labels = {"focus": "专注中", "rest": "休息中", "idle": "尚未开始"}
         status_text = labels.get(str(status), "等待同步")
         clock_text = format_work_duration(int(session_seconds))
-        today_text = f"今日累计 {format_work_duration(int(today_seconds))}"
+        today_text = f"今日累计 {format_work_duration(int(display_today_seconds))}"
         if self.focus_status.text() != status_text:
             self.focus_status.setText(status_text)
         if self.focus_clock.text() != clock_text:
@@ -3054,13 +3074,17 @@ class SocialHubDialog(QDialog):
         self._cross_device_today_display_account_id = requested_account
         if seconds is None:
             self._cross_device_today_display_seconds = None
+            self._today_display_seconds = None
         else:
             try:
-                self._cross_device_today_display_seconds = max(
+                normalized = max(
                     0, min(24 * 60 * 60, int(seconds))
                 )
+                self._cross_device_today_display_seconds = normalized
+                self._today_display_seconds = normalized
             except (TypeError, ValueError, OverflowError):
                 self._cross_device_today_display_seconds = None
+                self._today_display_seconds = None
         self._refresh_own_focus_labels()
 
     def _refresh_multi_device_focus_hint(self) -> None:
@@ -3133,14 +3157,19 @@ class SocialHubDialog(QDialog):
             return
         display_seconds = local_seconds
         active_account = _session_user_id(self.client)
-        if (
+        projection_matches_account = (
+            not active_account
+            or not self._cross_device_today_display_account_id
+            or self._cross_device_today_display_account_id == active_account
+        )
+        if self._today_display_seconds is not None and projection_matches_account:
+            display_seconds = self._today_display_seconds
+        elif (
             self._cross_device_today_display_seconds is not None
-            and self._cross_device_today_display_account_id
-            and (
-                not active_account
-                or self._cross_device_today_display_account_id == active_account
-            )
+            and projection_matches_account
         ):
+            # Compatibility for callers that still set the network scalar
+            # separately from the live snapshot.
             display_seconds = self._cross_device_today_display_seconds
         if hasattr(self, "focus_today"):
             # The focus page and the home summary must show the same

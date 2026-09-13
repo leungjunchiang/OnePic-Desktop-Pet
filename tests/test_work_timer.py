@@ -38,19 +38,27 @@ def _timer(tmp_path, clock: FakeClock) -> WorkTimerModel:
     )
 
 
-def test_smooth_duration_display_never_catches_up_multiple_seconds_at_once() -> None:
+def test_smooth_duration_display_uses_monotonic_anchor_and_immediate_calibration() -> None:
     clock = FakeClock()
     display = SmoothDurationDisplay(lambda: clock.monotonic)
 
     assert display.project(100, active=True, identity="account:day") == 100
+    # A stale network projection must not freeze the local live clock.
     clock.advance(3)
-    assert display.project(103, active=True, identity="account:day") == 101
-    assert display.project(103, active=True, identity="account:day") == 101
-    clock.advance(1)
-    assert display.project(104, active=True, identity="account:day") == 102
+    assert display.project(100, active=True, identity="account:day") == 103
+    assert display.project(100, active=True, identity="account:day") == 103
+    for expected in range(104, 111):
+        clock.advance(1)
+        assert display.project(100, active=True, identity="account:day") == expected
+
+    # A server/account projection may suddenly include several minutes from
+    # another device. It must calibrate immediately rather than chase at 1s/s.
+    assert display.project(404, active=True, identity="account:day") == 404
+    clock.advance(3)
+    assert display.project(404, active=True, identity="account:day") == 407
 
     # Pausing and a new day must show the authoritative value immediately.
-    assert display.project(104, active=False, identity="account:day") == 104
+    assert display.project(405, active=False, identity="account:day") == 405
     assert display.project(2, active=True, identity="account:next-day") == 2
 
 
