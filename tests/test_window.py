@@ -32,7 +32,10 @@ from onepic_desktop_pet import __version__
 from onepic_desktop_pet.behavior import PetState, StateDecision
 from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
-from onepic_desktop_pet.emotion_effects import emotion_effect_name
+from onepic_desktop_pet.emotion_effects import (
+    EMOTION_HEADROOM_LOGICAL,
+    emotion_effect_name,
+)
 from onepic_desktop_pet.window import (
     FULLSCREEN_VISIBILITY_NORMAL,
     FULLSCREEN_VISIBILITY_RESTORING,
@@ -123,6 +126,51 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     )
     assert window._cross_device_today_display_seconds == 4 * 60 * 60
 
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_activity_transition_finishes_from_elapsed_time_after_gui_delay(monkeypatch) -> None:
+    """GUI 延迟不应把短动作过渡拉长成慢吞吞的逐帧追赶。"""
+
+    app, window = _create_window()
+    clock = [100.0]
+    monkeypatch.setattr("onepic_desktop_pet.window.time.monotonic", lambda: clock[0])
+
+    window._change_ambient_activity("guitar")
+    assert window.activity_transition_timer.isActive()
+    clock[0] += window._activity_transition_duration_seconds + 0.01
+    window._activity_transition_tick()
+
+    assert not window.activity_transition_timer.isActive()
+    assert window._activity_transition_target.isNull()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_login3_emotion_mask_includes_headroom_and_reuses_phase_independent_key() -> None:
+    """登录三日套装的表情层完整可见，浮动相位不反复重建轮廓。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "login-3-day"
+    window._ambient_activity = "computer"
+    window.set_state(PetState.SURPRISED)
+
+    assert window.label.height() == (
+        window.settings.display_height + 8 + EMOTION_HEADROOM_LOGICAL
+    )
+    assert window.height() == (
+        window.settings.display_height + 14 + EMOTION_HEADROOM_LOGICAL
+    )
+    assert any("exclamation" in key for key in window._mask_cache)
+    cache_size = len(window._mask_cache)
+
+    window._effect_phase = 7
+    window._refresh_pixmap()
+
+    assert len(window._mask_cache) == cache_size
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -2138,8 +2186,8 @@ def test_display_size_preset_updates_geometry_and_settings() -> None:
     window.set_display_height(280)
 
     assert window.settings.display_height == 280
-    assert window.height() == 294
-    assert window.label.height() == 288
+    assert window.height() == 318
+    assert window.label.height() == 312
     assert not window.mask().isEmpty()
     window.close()
     window.deleteLater()
@@ -2152,7 +2200,7 @@ def test_default_workmate_size_is_smaller_than_previous_standard() -> None:
     app, window = _create_window()
 
     assert window.settings.display_height == 160
-    assert window.height() == 174
+    assert window.height() == 198
     window.close()
     window.deleteLater()
     app.processEvents()

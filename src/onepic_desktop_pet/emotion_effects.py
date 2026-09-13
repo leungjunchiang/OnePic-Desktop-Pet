@@ -25,6 +25,12 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from .behavior import PetState
 
 
+# Reserve a small, logical-pixel safety area above the character canvas.  The
+# vector effects are painted by the window after the body frame has been
+# placed, so this value is shared by the layout and the effect geometry.
+EMOTION_HEADROOM_LOGICAL = 24
+
+
 _EFFECTS: dict[PetState, str] = {
     PetState.WAVE: "sparkle",
     PetState.HAPPY: "sparkle",
@@ -146,8 +152,16 @@ def draw_emotion_effect(
     pixmap: QPixmap,
     state: PetState,
     phase: int = 0,
+    *,
+    top_headroom: float = 0.0,
 ) -> QPixmap:
-    """在图片副本的头部右上方绘制当前状态的动态表情符号。"""
+    """在最终显示画布上绘制当前状态的动态表情符号。
+
+    ``top_headroom`` is the logical space already reserved above the body
+    frame. Keeping the anchor relative to the body area means a larger canvas
+    does not make the symbol drift unpredictably, while the reserved area
+    prevents the white outline of ``!``/``?`` from being clipped.
+    """
 
     effect = emotion_effect_name(state)
     if effect is None or pixmap.isNull():
@@ -156,9 +170,11 @@ def draw_emotion_effect(
     ratio = max(1.0, output.devicePixelRatio())
     width = output.width() / ratio
     height = output.height() / ratio
-    size = max(10.0, min(width, height) * 0.075)
+    headroom = max(0.0, min(float(top_headroom), max(0.0, height - 1.0)))
+    body_height = max(1.0, height - headroom)
+    size = max(10.0, min(width, body_height) * 0.075)
     float_y = math.sin((phase % 12) * math.pi / 6.0) * size * 0.12
-    center = QPointF(width * 0.72, height * 0.20 + float_y)
+    center = QPointF(width * 0.72, headroom + body_height * 0.06 + float_y)
 
     painter = QPainter(output)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)

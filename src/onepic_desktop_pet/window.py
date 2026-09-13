@@ -192,7 +192,11 @@ from .focus_activity import (
 )
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
-from .emotion_effects import draw_emotion_effect, emotion_effect_name
+from .emotion_effects import (
+    EMOTION_HEADROOM_LOGICAL,
+    draw_emotion_effect,
+    emotion_effect_name,
+)
 from .local_burst_effect import EffectExclusionRegion, LocalBurstEffectWindow
 from .state_effects import (
     LocalEffectKind,
@@ -856,12 +860,14 @@ class PetWindow(QWidget):
         self._activity_transition_target = QPixmap()
         self._activity_transition_step = 0
         self._activity_transition_steps = 10
-        self._activity_transition_generation = 0
+        self._activity_transition_started_at: float | None = None
+        self._activity_transition_duration_seconds = 0.2
         self._activity_transition_animation_was_active = False
         self._activity_transition_effect_was_active = False
         self._activity_transition_target_state = PetState.IDLE
         self._activity_transition_target_direction = 0
         self._activity_transition_target_silhouette_key: object | None = None
+        self._current_render_silhouette_key: object | None = None
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
@@ -905,14 +911,18 @@ class PetWindow(QWidget):
 
         source = self._pixmaps[PetState.IDLE][0]
         width = round(settings.display_height * source.width() / source.height())
-        self.setFixedSize(width + 12, settings.display_height + 14)
+        label_height = settings.display_height + 8 + EMOTION_HEADROOM_LOGICAL
+        self.setFixedSize(
+            width + 12,
+            settings.display_height + 14 + EMOTION_HEADROOM_LOGICAL,
+        )
         self.label = QLabel(self)
         self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.label.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.label.setAutoFillBackground(False)
         self.label.setStyleSheet("background: transparent;")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setGeometry(6, 0, width, settings.display_height + 8)
+        self.label.setGeometry(6, 0, width, label_height)
 
         self.photo_bubble = QLabel()
         self.photo_bubble.setWindowFlags(self._ambient_window_flags())
@@ -1531,16 +1541,34 @@ class PetWindow(QWidget):
         )
         scaled = self._render_cache.get(cache_key)
         if scaled is None:
-            target = QSize(
+            canvas_size = QSize(
                 max(1, round(self.label.width() * ratio)),
                 max(1, round(self.label.height() * ratio)),
             )
-            scaled = pixmap.scaled(
+            content_height = max(
+                1,
+                self.label.height() - EMOTION_HEADROOM_LOGICAL,
+            )
+            target = QSize(
+                max(1, round(self.label.width() * ratio)),
+                max(1, round(content_height * ratio)),
+            )
+            body = pixmap.scaled(
                 target,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
+            body.setDevicePixelRatio(ratio)
+            scaled = QPixmap(canvas_size)
+            scaled.fill(Qt.GlobalColor.transparent)
             scaled.setDevicePixelRatio(ratio)
+            body_x = (scaled.width() - body.width()) // 2
+            body_y = round(EMOTION_HEADROOM_LOGICAL * ratio) + (
+                target.height() - body.height()
+            ) // 2
+            painter = QPainter(scaled)
+            painter.drawPixmap(body_x, body_y, body)
+            painter.end()
             self._remember_cache_item(self._render_cache, cache_key, scaled)
         activity = self._ambient_activity
         food_scene = self.economy.active_food_scene() or {}
@@ -1604,7 +1632,12 @@ class PetWindow(QWidget):
             self._effect_phase,
             food_scene=food_scene_active,
         )
-        mask_source = draw_emotion_effect(base_frame, display_state, self._effect_phase)
+        mask_source = draw_emotion_effect(
+            base_frame,
+            display_state,
+            self._effect_phase,
+            top_headroom=EMOTION_HEADROOM_LOGICAL,
+        )
         # Persistent Aura compositing is intentionally disabled.  The only
         # new visual effect is LocalBurstEffectWindow, which remains outside
         # this character pixmap and therefore cannot tint or mask the pet.
@@ -1623,6 +1656,7 @@ class PetWindow(QWidget):
             mask_source=mask_source,
             silhouette_key=complete_path,
         )
+        self._current_render_silhouette_key = complete_path
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
         """Blend the frozen source and frozen target without changing either."""
@@ -1638,7 +1672,16 @@ class PetWindow(QWidget):
             )
             previous.setDevicePixelRatio(target.devicePixelRatio())
             self._activity_transition_from = previous
-        progress = self._activity_transition_step / self._activity_transition_steps
+        step_progress = self._activity_transition_step / self._activity_transition_steps
+        elapsed_progress = 0.0
+        if self._activity_transition_started_at is not None:
+            elapsed_progress = (
+                time.monotonic() - self._activity_transition_started_at
+            ) / max(0.001, self._activity_transition_duration_seconds)
+        # Timer cadence provides deterministic progress as a fallback;
+        # monotonic elapsed time prevents a delayed GUI event from stretching
+        # the visual transition indefinitely.
+        progress = min(1.0, max(step_progress, elapsed_progress))
         result = QPixmap(target.size())
         result.fill(Qt.GlobalColor.transparent)
         result.setDevicePixelRatio(target.devicePixelRatio())
@@ -1656,11 +1699,20 @@ class PetWindow(QWidget):
 
         self._activity_transition_step += 1
         self._refresh_pixmap()
-        if self._activity_transition_step < self._activity_transition_steps:
+        finished_by_time = (
+            self._activity_transition_started_at is not None
+            and time.monotonic() - self._activity_transition_started_at
+            >= self._activity_transition_duration_seconds
+        )
+        if (
+            self._activity_transition_step < self._activity_transition_steps
+            and not finished_by_time
+        ):
             return
         self.activity_transition_timer.stop()
         self._activity_transition_from = QPixmap()
         self._activity_transition_target = QPixmap()
+        self._activity_transition_started_at = None
         animation_was_active = self._activity_transition_animation_was_active
         effect_was_active = self._activity_transition_effect_was_active
         self._activity_transition_animation_was_active = False
@@ -1683,6 +1735,7 @@ class PetWindow(QWidget):
         self._activity_transition_from = QPixmap()
         self._activity_transition_target = QPixmap()
         self._activity_transition_step = self._activity_transition_steps
+        self._activity_transition_started_at = None
         animation_was_active = self._activity_transition_animation_was_active
         effect_was_active = self._activity_transition_effect_was_active
         self._activity_transition_animation_was_active = False
@@ -1735,18 +1788,18 @@ class PetWindow(QWidget):
             self._activity_transition_effect_was_active = False
             self._refresh_pixmap()
             return
-        self._activity_transition_generation += 1
         self._activity_transition_target_state = self.state
         self._activity_transition_target_direction = (
             self.direction if self.state is PetState.WALK else 0
         )
         self._activity_transition_target_silhouette_key = (
-            "activity-transition",
-            self._activity_transition_generation,
+            self._current_render_silhouette_key
+            or ("activity-transition", target.cacheKey())
         )
         self._activity_transition_target = QPixmap(target)
         self._activity_transition_from = QPixmap(current)
         self._activity_transition_step = 0
+        self._activity_transition_started_at = time.monotonic()
         self.activity_transition_timer.start()
         self._refresh_pixmap()
 
@@ -1776,6 +1829,7 @@ class PetWindow(QWidget):
         """按当前人物轮廓设置窗口遮罩，使透明留白不拦截桌面点击。"""
 
         source = mask_source if mask_source is not None else pixmap
+        emotion_key = emotion_effect_name(display_state) or ""
         if silhouette_key is not None:
             # Complete outfit/action sprites have a stable silhouette even
             # when the underlying PetState animation or emotion phase moves.
@@ -1783,6 +1837,7 @@ class PetWindow(QWidget):
             cache_key = (
                 "stable-silhouette",
                 silhouette_key,
+                emotion_key,
                 source.width(),
                 source.height(),
                 round(float(source.devicePixelRatio()), 3),
@@ -1806,11 +1861,17 @@ class PetWindow(QWidget):
             return
         region = self._mask_cache.get(cache_key)
         if region is None:
-            logical = source.scaled(
-                self.label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            if (
+                source.devicePixelRatio() == 1.0
+                and source.size() == self.label.size()
+            ):
+                logical = source
+            else:
+                logical = source.scaled(
+                    self.label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
             offset_x = (self.label.width() - logical.width()) // 2
             offset_y = (self.label.height() - logical.height()) // 2
             region = QRegion(logical.mask()).translated(offset_x, offset_y)
@@ -3172,8 +3233,12 @@ class PetWindow(QWidget):
         width = round(
             self.settings.display_height * source.width() / source.height()
         )
-        self.setFixedSize(width + 12, self.settings.display_height + 14)
-        self.label.setGeometry(6, 0, width, self.settings.display_height + 8)
+        label_height = self.settings.display_height + 8 + EMOTION_HEADROOM_LOGICAL
+        self.setFixedSize(
+            width + 12,
+            self.settings.display_height + 14 + EMOTION_HEADROOM_LOGICAL,
+        )
+        self.label.setGeometry(6, 0, width, label_height)
         self._render_cache.clear()
         self._cancel_activity_transition()
         self._mask_cache.clear()

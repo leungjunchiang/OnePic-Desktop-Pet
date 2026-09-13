@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication
 
 from onepic_desktop_pet.aura_effects import (
@@ -20,7 +20,10 @@ from onepic_desktop_pet.aura_effects import (
     resolve_auto_aura,
 )
 from onepic_desktop_pet.behavior import PetState
-from onepic_desktop_pet.emotion_effects import draw_emotion_effect
+from onepic_desktop_pet.emotion_effects import (
+    EMOTION_HEADROOM_LOGICAL,
+    draw_emotion_effect,
+)
 
 
 def _app() -> QApplication:
@@ -107,6 +110,19 @@ def test_aura_and_emotion_layers_can_be_composed() -> None:
     assert not aura.isNull()
     assert not composed.isNull()
     assert composed.size() == source.size()
+
+
+def test_emotion_headroom_keeps_top_outline_inside_the_canvas() -> None:
+    source = _source(160, 160)
+    clipped = draw_emotion_effect(source, PetState.SURPRISED)
+    safe = draw_emotion_effect(
+        source,
+        PetState.SURPRISED,
+        top_headroom=EMOTION_HEADROOM_LOGICAL,
+    )
+
+    assert QRegion(clipped.mask()).boundingRect().top() == 0
+    assert QRegion(safe.mask()).boundingRect().top() > 0
 
 
 def test_aura_remains_visible_inside_character_only_window_mask() -> None:

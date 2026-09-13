@@ -219,13 +219,13 @@ jobs:
               --clobber
             gh release edit "$release_tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $release_tag - 计时显示一致性与动作渲染修复" \
-              --notes "修复今日工作时长因旧版 SmoothDurationDisplay 限制每秒最多追 1 秒而永久落后的问题：改为 monotonic anchor，网络暂时不刷新时本地仍每秒前进，GUI 卡顿后一次性补齐，服务器出现新账号总量时立即校准。桌面六毛、自习室首页/专注页、暂停/完成文案和日报统一使用同一份账号今日时长。同步保留固定 source→target 动作过渡、20ms PreciseTimer、完整娃衣缩放与透明轮廓缓存、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - 表情边界与动作过渡修复" \
+              --notes "修复头顶感叹号、问号等表情标记因最终画布和透明窗口 mask 没有预留安全区而被裁切的问题：统一使用包含顶部 headroom 的最终显示画布，并让表情类型参与稳定轮廓缓存。动作过渡改为固定 source→target 的短时精确淡化，依据 monotonic elapsed time 完成，不因 GUI 事件延迟而拖慢；继续复用完整娃衣的缩放缓存和透明轮廓缓存。保留上一版的 monotonic 今日计时、桌面与自习室统一时长、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           else
             echo "Creating release $release_tag with verified artifacts."
             gh release create "$release_tag" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "Lili $release_tag - 计时显示一致性与动作渲染修复" \
-              --notes "修复今日工作时长因旧版 SmoothDurationDisplay 限制每秒最多追 1 秒而永久落后的问题：改为 monotonic anchor，网络暂时不刷新时本地仍每秒前进，GUI 卡顿后一次性补齐，服务器出现新账号总量时立即校准。桌面六毛、自习室首页/专注页、暂停/完成文案和日报统一使用同一份账号今日时长。同步保留固定 source→target 动作过渡、20ms PreciseTimer、完整娃衣缩放与透明轮廓缓存、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - 表情边界与动作过渡修复" \
+              --notes "修复头顶感叹号、问号等表情标记因最终画布和透明窗口 mask 没有预留安全区而被裁切的问题：统一使用包含顶部 headroom 的最终显示画布，并让表情类型参与稳定轮廓缓存。动作过渡改为固定 source→target 的短时精确淡化，依据 monotonic elapsed time 完成，不因 GUI 事件延迟而拖慢；继续复用完整娃衣的缩放缓存和透明轮廓缓存。保留上一版的 monotonic 今日计时、桌面与自习室统一时长、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           fi
