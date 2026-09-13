@@ -1841,6 +1841,28 @@ def test_window_uses_character_mask_and_reuses_render_cache() -> None:
     app.processEvents()
 
 
+def test_complete_sprite_mask_cache_is_stable_across_source_animation_frames() -> None:
+    """完整动作的透明轮廓不应随底层角色帧重复缩放和 setMask。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "login-3-day"
+    window._ambient_activity = "computer"
+    window._refresh_pixmap()
+    stable_keys = [
+        key for key in window._mask_cache if key[0] == "stable-silhouette"
+    ]
+    assert stable_keys
+    cache_size = len(window._mask_cache)
+
+    window._frame_index = (window._frame_index + 1) % len(window._pixmaps[window.state])
+    window._refresh_pixmap()
+
+    assert len(window._mask_cache) == cache_size
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_local_burst_keeps_character_mask_stable_and_is_reusable(monkeypatch) -> None:
     """The local event effect must not rebuild the character input mask."""
 
@@ -2157,6 +2179,13 @@ def test_social_food_overrides_hourly_outfit_and_cake_keeps_focus_running(monkey
     window.settings.equipped_outfit = "hour-07"
     window.start_work_timer()
 
+    captured: list[bool] = []
+
+    def probe(source, activity, outfit, phase, *, food_scene=False):
+        captured.append(bool(food_scene))
+        return source
+
+    monkeypatch.setattr("onepic_desktop_pet.window.draw_activity_overlay", probe)
     window._handle_food_interaction_accepted(
         {
             "kind": "food_cake_share",
@@ -2168,14 +2197,6 @@ def test_social_food_overrides_hourly_outfit_and_cake_keeps_focus_running(monkey
     assert window._ambient_activity == "feast"
     assert window._social_food_activity_until > time.monotonic()
 
-    captured: list[bool] = []
-
-    def probe(source, activity, outfit, phase, *, food_scene=False):
-        captured.append(bool(food_scene))
-        return source
-
-    monkeypatch.setattr("onepic_desktop_pet.window.draw_activity_overlay", probe)
-    window._refresh_pixmap()
     assert captured and captured[-1] is True
 
     window.close(); window.deleteLater(); app.processEvents()
@@ -3816,6 +3837,34 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     assert window._activity_transition_from.isNull()
     assert window._ambient_activity == "guitar"
     assert window.size() == original_size
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_activity_transition_uses_fixed_target_and_precise_200ms_timer() -> None:
+    """动作淡化期间 target 不再随普通动画或表情刷新而变化。"""
+
+    app, window = _create_window()
+    window._change_ambient_activity("guitar")
+
+    assert window.activity_transition_timer.interval() == 20
+    assert window.activity_transition_timer.timerType() == Qt.TimerType.PreciseTimer
+    assert window.activity_transition_timer.isActive()
+    assert not window._activity_transition_target.isNull()
+    assert not window.animation_timer.isActive()
+    target_key = window._activity_transition_target.cacheKey()
+
+    window._effect_phase = 7
+    window._refresh_pixmap()
+    assert window._activity_transition_target.cacheKey() == target_key
+    for _ in range(window._activity_transition_steps - 1):
+        window._activity_transition_tick()
+        assert window._activity_transition_target.cacheKey() == target_key
+
+    window._activity_transition_tick()
+    assert not window.activity_transition_timer.isActive()
+    assert window._activity_transition_target.isNull()
     window.close()
     window.deleteLater()
     app.processEvents()

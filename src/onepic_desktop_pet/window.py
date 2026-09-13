@@ -123,6 +123,7 @@ from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .alarm_ui import AlarmCard, AlarmCenterDialog, AwayRecoveryCard
 from .accessories import (
     ALL_OUTFITS,
+    complete_sprite_path,
     LOGIN_3_ACTIVITIES,
     LOGIN_REWARD_OUTFIT,
     OUTFITS,
@@ -852,8 +853,15 @@ class PetWindow(QWidget):
         self._login3_greeting_pending = True
         self._night_limited_activity = ""
         self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
         self._activity_transition_step = 0
-        self._activity_transition_steps = 8
+        self._activity_transition_steps = 10
+        self._activity_transition_generation = 0
+        self._activity_transition_animation_was_active = False
+        self._activity_transition_effect_was_active = False
+        self._activity_transition_target_state = PetState.IDLE
+        self._activity_transition_target_direction = 0
+        self._activity_transition_target_silhouette_key: object | None = None
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
@@ -1108,7 +1116,8 @@ class PetWindow(QWidget):
         self.food_scene_timer.timeout.connect(self._food_scene_timeout)
 
         self.activity_transition_timer = QTimer(self)
-        self.activity_transition_timer.setInterval(35)
+        self.activity_transition_timer.setInterval(20)
+        self.activity_transition_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.activity_transition_timer.timeout.connect(self._activity_transition_tick)
 
         self.work_activity_timer = QTimer(self)
@@ -1440,6 +1449,11 @@ class PetWindow(QWidget):
             self.label.move(6, 0)
         self._effect_phase = 0
         self._configure_effect_timer()
+        if getattr(self, "activity_transition_timer", None) is not None and self.activity_transition_timer.isActive():
+            # A state callback can arrive while an ambient action is fading.
+            # Keep the already captured target fixed until the fade settles.
+            self.animation_timer.stop()
+            self.effect_timer.stop()
         self._refresh_pixmap()
 
     def _frame_interval(self, state: PetState, frame_index: int) -> int:
@@ -1480,6 +1494,29 @@ class PetWindow(QWidget):
     @_guard_qt_callback
     def _refresh_pixmap(self) -> None:
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
+
+        transition_timer = getattr(self, "activity_transition_timer", None)
+        if (
+            transition_timer is not None
+            and transition_timer.isActive()
+            and not self._activity_transition_target.isNull()
+        ):
+            # During an action transition, only blend two already-rendered
+            # pixmaps.  Do not re-run sprite scaling, emotion painting, or
+            # state animation while the fade is in flight: a changing target
+            # is the source of the translucent multi-image ghosting.
+            target = QPixmap(self._activity_transition_target)
+            visible = self._blend_activity_transition(target)
+            self.label.setPixmap(visible)
+            self._refresh_window_mask(
+                self._activity_transition_target_state,
+                visible,
+                self._activity_transition_target_direction,
+                0,
+                mask_source=target,
+                silhouette_key=self._activity_transition_target_silhouette_key,
+            )
+            return
 
         display_state, pixmap = self._current_source()
         ratio = max(1.0, self.devicePixelRatioF())
@@ -1552,6 +1589,11 @@ class PetWindow(QWidget):
             activity = "run"
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
+        complete_path = complete_sprite_path(
+            activity,
+            self.settings.equipped_outfit,
+            food_scene=food_scene_active,
+        )
         # Resolve the actual character/activity sprite before semantic
         # emotion effects. The local Burst is a separate overlay window, so
         # it cannot be erased by activity sprites or tint the character frame.
@@ -1579,10 +1621,11 @@ class PetWindow(QWidget):
             direction_key,
             effect_key ^ overlay_key,
             mask_source=mask_source,
+            silhouette_key=complete_path,
         )
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
-        """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
+        """Blend the frozen source and frozen target without changing either."""
 
         previous = self._activity_transition_from
         if previous.isNull() or self._activity_transition_step >= self._activity_transition_steps:
@@ -1594,6 +1637,7 @@ class PetWindow(QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
             previous.setDevicePixelRatio(target.devicePixelRatio())
+            self._activity_transition_from = previous
         progress = self._activity_transition_step / self._activity_transition_steps
         result = QPixmap(target.size())
         result.fill(Qt.GlobalColor.transparent)
@@ -1608,17 +1652,52 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _activity_transition_tick(self) -> None:
-        """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
+        """Advance the fixed 200 ms action cross-fade, then resume animation."""
 
         self._activity_transition_step += 1
-        if self._activity_transition_step >= self._activity_transition_steps:
-            self.activity_transition_timer.stop()
-            self._activity_transition_from = QPixmap()
-            self._mask_cache.clear()
         self._refresh_pixmap()
+        if self._activity_transition_step < self._activity_transition_steps:
+            return
+        self.activity_transition_timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
+        animation_was_active = self._activity_transition_animation_was_active
+        effect_was_active = self._activity_transition_effect_was_active
+        self._activity_transition_animation_was_active = False
+        self._activity_transition_effect_was_active = False
+        if animation_was_active:
+            frames = self._pixmaps.get(self.state, ())
+            if len(frames) > 1:
+                self.animation_timer.start(
+                    self._frame_interval(self.state, self._frame_index)
+                )
+        if effect_was_active:
+            self._configure_effect_timer()
+
+    def _cancel_activity_transition(self) -> None:
+        """Cancel a fade cleanly when a state/size/outfit change supersedes it."""
+
+        timer = getattr(self, "activity_transition_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
+        self._activity_transition_step = self._activity_transition_steps
+        animation_was_active = self._activity_transition_animation_was_active
+        effect_was_active = self._activity_transition_effect_was_active
+        self._activity_transition_animation_was_active = False
+        self._activity_transition_effect_was_active = False
+        if animation_was_active:
+            frames = self._pixmaps.get(self.state, ())
+            if len(frames) > 1:
+                self.animation_timer.start(
+                    self._frame_interval(self.state, self._frame_index)
+                )
+        if effect_was_active:
+            self._configure_effect_timer()
 
     def _change_ambient_activity(self, activity: str) -> None:
-        """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
+        """Switch complete activity using a fixed source-to-target fade."""
 
         valid_activities = (
             set(ACTION_SPRITES)
@@ -1629,13 +1708,46 @@ class PetWindow(QWidget):
         if next_activity == self._ambient_activity:
             self._refresh_pixmap()
             return
+        self._cancel_activity_transition()
         current = self.label.pixmap() if hasattr(self, "label") else QPixmap()
-        self._activity_transition_from = QPixmap(current) if not current.isNull() else QPixmap()
-        self._activity_transition_step = 0
         self._ambient_activity = next_activity
-        self._mask_cache.clear()
-        if not self._activity_transition_from.isNull():
-            self.activity_transition_timer.start()
+        if current.isNull():
+            self._refresh_pixmap()
+            return
+
+        self._activity_transition_animation_was_active = bool(
+            self.animation_timer.isActive()
+        )
+        self._activity_transition_effect_was_active = bool(
+            self.effect_timer.isActive()
+        )
+        self.animation_timer.stop()
+        self.effect_timer.stop()
+
+        # Render the destination exactly once with the animation/effect state
+        # frozen.  The following timer ticks only alpha-blend these two
+        # pixmaps, so the target cannot move underneath the fade.
+        self._activity_transition_step = self._activity_transition_steps
+        self._refresh_pixmap()
+        target = self.label.pixmap()
+        if target.isNull():
+            self._activity_transition_animation_was_active = False
+            self._activity_transition_effect_was_active = False
+            self._refresh_pixmap()
+            return
+        self._activity_transition_generation += 1
+        self._activity_transition_target_state = self.state
+        self._activity_transition_target_direction = (
+            self.direction if self.state is PetState.WALK else 0
+        )
+        self._activity_transition_target_silhouette_key = (
+            "activity-transition",
+            self._activity_transition_generation,
+        )
+        self._activity_transition_target = QPixmap(target)
+        self._activity_transition_from = QPixmap(current)
+        self._activity_transition_step = 0
+        self.activity_transition_timer.start()
         self._refresh_pixmap()
 
     def _login3_actions_enabled(self) -> bool:
@@ -1659,28 +1771,42 @@ class PetWindow(QWidget):
         effect_key: int,
         *,
         mask_source: QPixmap | None = None,
+        silhouette_key: object | None = None,
     ) -> None:
         """按当前人物轮廓设置窗口遮罩，使透明留白不拦截桌面点击。"""
 
-        cache_key = (
-            display_state,
-            self._frame_index,
-            direction_key,
-            effect_key,
-            self.label.width(),
-            self.label.height(),
-            self.label.x(),
-            self.label.y(),
-        )
+        source = mask_source if mask_source is not None else pixmap
+        if silhouette_key is not None:
+            # Complete outfit/action sprites have a stable silhouette even
+            # when the underlying PetState animation or emotion phase moves.
+            # Cache by the actual asset identity, not by the source frame.
+            cache_key = (
+                "stable-silhouette",
+                silhouette_key,
+                source.width(),
+                source.height(),
+                round(float(source.devicePixelRatio()), 3),
+                self.label.width(),
+                self.label.height(),
+            )
+        else:
+            cache_key = (
+                display_state,
+                self._frame_index,
+                direction_key,
+                effect_key,
+                self.label.width(),
+                self.label.height(),
+            )
+        applied_key = (*cache_key, "position", self.label.x(), self.label.y())
         # Detached Burst pixels deliberately never change the native input
         # silhouette. Avoid calling the relatively costly native setMask()
         # again while that silhouette key is unchanged.
-        if cache_key == self._last_applied_mask_key and cache_key in self._mask_cache:
+        if applied_key == self._last_applied_mask_key and cache_key in self._mask_cache:
             return
         region = self._mask_cache.get(cache_key)
         if region is None:
-            mask_pixmap = mask_source if mask_source is not None else pixmap
-            logical = mask_pixmap.scaled(
+            logical = source.scaled(
                 self.label.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
@@ -1690,12 +1816,14 @@ class PetWindow(QWidget):
             region = QRegion(logical.mask()).translated(offset_x, offset_y)
             self._remember_cache_item(self._mask_cache, cache_key, region)
         self.setMask(region.translated(self.label.x(), self.label.y()))
-        self._last_applied_mask_key = cache_key
+        self._last_applied_mask_key = applied_key
 
     @_guard_qt_callback
     def _effect_tick(self) -> None:
         """推进短暂表情符号；局部 Burst 使用自己的 bounded timer。"""
 
+        if self.activity_transition_timer.isActive():
+            return
         if not self._effect_timer_needed():
             self.effect_timer.stop()
             return
@@ -1707,6 +1835,8 @@ class PetWindow(QWidget):
     def _animation_tick(self) -> None:
         """推进循环或单次连续帧，并在反向过渡结束后执行回调。"""
 
+        if self.activity_transition_timer.isActive():
+            return
         display_state = self.state
         frames = self._pixmaps[display_state]
         if len(frames) <= 1:
@@ -3045,6 +3175,7 @@ class PetWindow(QWidget):
         self.setFixedSize(width + 12, self.settings.display_height + 14)
         self.label.setGeometry(6, 0, width, self.settings.display_height + 8)
         self._render_cache.clear()
+        self._cancel_activity_transition()
         self._mask_cache.clear()
         target = QPoint(
             old_center_x - self.width() // 2,
@@ -7991,9 +8122,7 @@ class PetWindow(QWidget):
         )
         self.settings.equipped_outfit = remote_outfit
         save_settings(self.settings)
-        self.activity_transition_timer.stop()
-        self._activity_transition_from = QPixmap()
-        self._activity_transition_step = self._activity_transition_steps
+        self._cancel_activity_transition()
         self._mask_cache.clear()
         self._refresh_pixmap()
         self._reflow_compact_todos_after_outfit(panel_was_visible)
@@ -9076,9 +9205,7 @@ class PetWindow(QWidget):
             self._maybe_show_login3_greeting()
         # Cancel a half-finished action cross-fade so the newly selected outfit
         # is visible immediately, even while a transient work action is ending.
-        self.activity_transition_timer.stop()
-        self._activity_transition_from = QPixmap()
-        self._activity_transition_step = self._activity_transition_steps
+        self._cancel_activity_transition()
         self._mask_cache.clear()
         self._refresh_pixmap()
         self._reflow_compact_todos_after_outfit(panel_was_visible)

@@ -123,6 +123,33 @@ def login3_action_sprite_path(activity: str, outfit: str) -> str | None:
         return None
     return LOGIN_3_ACTION_SPRITES.get(action)
 
+
+def complete_sprite_path(
+    activity: str,
+    outfit: str,
+    *,
+    food_scene: bool = False,
+) -> str | None:
+    """Return the complete sprite selected by the overlay precedence rules.
+
+    The path is also used by the window-mask cache.  Keeping this resolution
+    beside ``draw_activity_overlay`` prevents a visual asset and its stable
+    silhouette from drifting apart when a new complete action is added.
+    """
+
+    if activity in SPECIAL_LIMITED_ACTIVITY_SPRITES:
+        return SPECIAL_LIMITED_ACTIVITY_SPRITES[activity]
+    login3_sprite = login3_action_sprite_path(activity, outfit)
+    if login3_sprite:
+        return login3_sprite
+    if food_scene and activity in SPECIAL_ACTIVITY_SPRITES:
+        return SPECIAL_ACTIVITY_SPRITES[activity]
+    if outfit in SPECIAL_OUTFIT_SPRITES:
+        return SPECIAL_OUTFIT_SPRITES[outfit]
+    if activity in SPECIAL_ACTIVITY_SPRITES:
+        return SPECIAL_ACTIVITY_SPRITES[activity]
+    return None
+
 _FULL_SPRITE_CACHE: dict[str, QPixmap] = {}
 _FULL_SPRITE_RENDER_CACHE: dict[tuple[str, int, int, float], QPixmap] = {}
 
@@ -143,16 +170,13 @@ def draw_activity_overlay(
 ) -> QPixmap:
     """返回活动/食物场景和永久娃衣合成后的新像素图。"""
 
-    # A limited night scene is intentionally temporary and takes precedence.
-    if activity in SPECIAL_LIMITED_ACTIVITY_SPRITES:
-        return _full_sprite(source, SPECIAL_LIMITED_ACTIVITY_SPRITES[activity])
-    login3_sprite = login3_action_sprite_path(activity, outfit)
-    if login3_sprite:
-        return _full_sprite(source, login3_sprite)
-    # Food scenes are temporary life moments, not wardrobe items. They must
-    # be visible even when a permanent hourly outfit is equipped.
-    if food_scene and activity in SPECIAL_ACTIVITY_SPRITES:
-        return _full_sprite(source, SPECIAL_ACTIVITY_SPRITES[activity])
+    complete_path = complete_sprite_path(
+        activity,
+        outfit,
+        food_scene=food_scene,
+    )
+    if complete_path:
+        return _full_sprite(source, complete_path)
 
     # A manually selected outfit remains visible during ordinary transient
     # actions (thermos, guitar, work-study, etc.).
