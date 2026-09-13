@@ -293,7 +293,13 @@ def _create_window() -> tuple[QApplication, PetWindow]:
     """创建或复用离屏 Qt 应用，并返回采用默认设置的宠物窗口。"""
 
     app = QApplication.instance() or QApplication([])
-    window = PetWindow(PetSettings())
+    # Qt/offscreen CI has no real user input.  Keep unrelated rendering and
+    # window-state tests deterministic instead of letting the real 10-minute
+    # idle policy pause a session in the middle of a long test process.  Tests
+    # that verify idle pausing explicitly enable this setting below.
+    settings = PetSettings()
+    settings.auto_pause_on_idle = False
+    window = PetWindow(settings)
     window.show()
     app.processEvents()
     return app, window
@@ -2449,9 +2455,14 @@ def test_windows_quick_panel_keeps_primary_row_geometry_when_report_changes(monk
     monkeypatch.setattr("onepic_desktop_pet.controls.sys.platform", "win32")
     app, window = _create_window()
     window.move(320, 220)
+    # The offscreen backend has no meaningful cursor position.  Keep the
+    # hover poll over the work shortcut so it cannot hide the report tile
+    # between the explicit hover action and the assertion below.
+    panel = window.quick_panel
+    hover_target = {"button": panel.work_button}
+    panel._button_at_global_pos = lambda _position: hover_target["button"]
     window.show_quick_panel()
     app.processEvents()
-    panel = window.quick_panel
     assert panel._stable_windows_dock
     assert panel._secondary_container.isVisible()
     assert panel.sizeHint().height() > 90
@@ -2481,6 +2492,7 @@ def test_windows_quick_panel_keeps_primary_row_geometry_when_report_changes(monk
     ]
     assert panel.report_button.isVisible()
     assert primary_after == primary_before
+    hover_target["button"] = panel.social_button
     panel._set_hover_button(panel.social_button)
     app.processEvents()
     assert not panel.report_button.isVisible()
@@ -2972,6 +2984,7 @@ def test_idle_return_uses_the_same_away_recovery_card_as_fullscreen(monkeypatch)
         "onepic_desktop_pet.window.system_session_state",
         lambda: {"locked": False, "sleeping": False},
     )
+    window.settings.auto_pause_on_idle = True
     window.start_work_timer()
     monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 600)
     window._check_input_idle()
