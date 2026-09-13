@@ -326,6 +326,29 @@ def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> Non
     app.processEvents()
 
 
+def test_duration_bubble_content_refresh_does_not_bypass_owner_visibility_policy(monkeypatch) -> None:
+    """Detached duration visibility is restored by PetWindow, not the label."""
+
+    app, window = _create_window()
+    snapshot = type(
+        "Snapshot",
+        (),
+        {"status": "focus", "today_seconds": 123, "session_started_at": None},
+    )()
+    monkeypatch.setattr(window.focus_session, "snapshot", lambda **_kwargs: snapshot)
+    window.work_duration_bubble.hide()
+    window.work_duration_bubble.set_session("focus", 123, True)
+    assert not window.work_duration_bubble.isVisible()
+
+    window._update_work_duration_bubble(snapshot)
+    app.processEvents()
+    assert window.work_duration_bubble.isVisible()
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_taunt_state_schedules_periodic_followup_speech() -> None:
     app, window = _create_window()
     window._apply_taunt_state(

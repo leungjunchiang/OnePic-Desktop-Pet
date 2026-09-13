@@ -949,7 +949,9 @@ class PetWindow(QWidget):
 
         self.work_controls = WorkControlBubble()
         self.coffee_scene_prompt = CoffeeScenePrompt()
-        self.work_duration_bubble = WorkDurationBubble()
+        self.work_duration_bubble = WorkDurationBubble(
+            always_on_top=bool(settings.always_on_top),
+        )
         # One reusable local overlay.  It is intentionally not a child of the
         # character frame and is created once to avoid repeated QObject/native
         # window churn on rapid menu clicks.
@@ -1126,6 +1128,11 @@ class PetWindow(QWidget):
         self.topmost_timer = QTimer(self)
         self.topmost_timer.setInterval(3000)
         self.topmost_timer.timeout.connect(self._topmost_watchdog_tick)
+        # Start the supervisor immediately.  _update_topmost_watchdog() will
+        # stop it while the pet is hidden, suppressed by fullscreen, or in
+        # ordinary desktop mode.  Starting here closes the small lifecycle
+        # gap before the first showEvent on native Qt backends.
+        self.topmost_timer.start()
         # This is intentionally low frequency and non-activating. It repairs
         # a native layer that another window manager may have reordered, but
         # it never calls raise_(), activateWindow(), or focus APIs.
@@ -1977,6 +1984,8 @@ class PetWindow(QWidget):
             (self.photo_bubble, self.photo_bubble.isVisible(), self.photo_bubble.pos()),
             (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
         )
+        duration_visible = self.work_duration_bubble.isVisible()
+        duration_position = QPoint(self.work_duration_bubble.pos())
         self.settings.always_on_top = enabled
         self.ensure_pet_window_policy(event="SetAlwaysOnTop")
         self.move(position)
@@ -1991,6 +2000,16 @@ class PetWindow(QWidget):
             bubble.move(bubble_position)
             if visible:
                 self._show_nonactivating(bubble, always_on_top=enabled)
+        # WorkDurationBubble is another detached native surface.  Keep its
+        # Qt flag in lockstep with the owner setting; otherwise a previous
+        # WindowStaysOnTopHint could survive switching back to desktop mode.
+        self.work_duration_bubble.setWindowFlags(self._ambient_window_flags())
+        self.work_duration_bubble.move(duration_position)
+        if duration_visible:
+            self._show_nonactivating(
+                self.work_duration_bubble,
+                always_on_top=enabled,
+            )
         if self._compact_todo_panel is not None:
             self._compact_todo_panel.set_companion_topmost(enabled)
             if self._compact_todo_panel.isVisible():
@@ -2040,6 +2059,18 @@ class PetWindow(QWidget):
         """隐藏宠物时同步隐藏照片和文字气泡。"""
 
         lifecycle_log("pet_window.hide_event.begin", self)
+        if getattr(self, "_applying_pet_window_policy", False):
+            # setWindowFlags() may emit a transient hide while Qt recreates
+            # the native handle.  This is not a user hide and must not make
+            # detached surfaces disappear permanently.
+            super().hideEvent(event)
+            self._update_topmost_watchdog()
+            lifecycle_log(
+                "pet_window.hide_event.policy_recreation",
+                self,
+                reason="native_handle_recreation",
+            )
+            return
         self.photo_bubble.hide()
         self.speech_bubble.hide()
         self.work_controls.hide()
@@ -2165,6 +2196,10 @@ class PetWindow(QWidget):
             for widget, was_visible in restore.items():
                 if was_visible:
                     self._show_nonactivating(widget)
+            # Visibility can change while another app owns the display.  In
+            # particular, the duration badge must be derived from the current
+            # focus state rather than blindly replaying an old visible bit.
+            self._update_work_duration_bubble()
         self._position_accessories()
         # A Todo may have changed while another app was covering the desktop.
         self._refresh_todo_surfaces()
@@ -9262,7 +9297,7 @@ class PetWindow(QWidget):
         bubble.move(x, y)
 
     def _update_work_duration_bubble(self, snapshot=None) -> None:
-        """Render the shared focus snapshot without creating a second timer."""
+        """Render the shared snapshot and let PetWindow own visibility."""
 
         if not hasattr(self, "work_duration_bubble"):
             return
@@ -9279,15 +9314,26 @@ class PetWindow(QWidget):
             identity=f"{account_id}:{display_day}",
         )
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
+        should_show = bool(
+            show_duration
+            and status in {"focus", "rest"}
+            and self.isVisible()
+            and not getattr(self, "_manually_hidden", False)
+            and not getattr(self, "_fullscreen_hidden", False)
+        )
         was_visible = self.work_duration_bubble.isVisible()
         geometry_changed = self.work_duration_bubble.set_session(
             status,
             display_seconds,
-            show_duration,
+            should_show,
         )
-        if getattr(self, "_manually_hidden", False) or getattr(self, "_fullscreen_hidden", False):
-            # set_session() intentionally owns the normal visible/hidden
-            # state, so enforce fullscreen's temporary override afterwards.
+        if should_show:
+            if not was_visible:
+                self._show_nonactivating(
+                    self.work_duration_bubble,
+                    always_on_top=bool(self.settings.always_on_top),
+                )
+        elif was_visible:
             self.work_duration_bubble.hide()
         visible = self.work_duration_bubble.isVisible()
         pet_anchor = (self.x(), self.y(), self.width(), self.height())
@@ -9299,15 +9345,6 @@ class PetWindow(QWidget):
         )
         if needs_position:
             self._position_work_duration_bubble()
-        if visible and (not was_visible or geometry_changed):
-            if sys.platform == "darwin":
-                # Configure the native panel only when it is shown or its
-                # geometry/state changes, never on every one-second tick.
-                self._apply_macos_window_behavior(
-                    self.work_duration_bubble,
-                    always_on_top=bool(self.settings.always_on_top),
-                )
-            self._raise_accessory(self.work_duration_bubble)
         self._duration_bubble_pet_anchor = pet_anchor if visible else None
         # A changing clock label can cross a width boundary (mm:ss ->
         # h:mm:ss, or add the paused suffix).  Refresh the local effect's

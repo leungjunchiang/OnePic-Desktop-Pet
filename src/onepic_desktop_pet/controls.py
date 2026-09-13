@@ -255,7 +255,7 @@ class WorkControlBubble(QWidget):
 class WorkDurationBubble(RoundedSurfaceLabel):
     """跟随六毛脚边显示统一的本日工作时长的轻量状态标签。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, always_on_top: bool = True) -> None:
         super().__init__(
             None,
             fill="#f6fbfb",
@@ -263,12 +263,14 @@ class WorkDurationBubble(RoundedSurfaceLabel):
             radius=10,
         )
         self.setObjectName("workDurationHint")
-        self.setWindowFlags(
+        flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        if always_on_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -308,7 +310,12 @@ class WorkDurationBubble(RoundedSurfaceLabel):
         return min(self._surface_radius, self.height() / 2.0)
 
     def set_session(self, status: str, seconds: int, visible: bool) -> bool:
-        """Project the shared calendar-day snapshot; never owns a timer."""
+        """Render session content; the PetWindow owns top-level visibility.
+
+        This widget is a detached native window.  It must not decide its own
+        ``show``/``hide`` state during a timer refresh because that bypasses
+        the owner's manual-hide and fullscreen suppression policy.
+        """
 
         normalized = status if status in {"focus", "rest"} else "idle"
         active = bool(visible) and normalized in {"focus", "rest"}
@@ -348,8 +355,6 @@ class WorkDurationBubble(RoundedSurfaceLabel):
             if self.toolTip():
                 self.setToolTip("")
             self._last_status = "idle"
-        if old_visible != active:
-            self.setVisible(active)
         if active and geometry_changed:
             self.adjustSize()
             self.style().unpolish(self)
