@@ -8,7 +8,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
-from onepic_desktop_pet.accessories import draw_activity_overlay
+from onepic_desktop_pet.accessories import (
+    LOGIN_REWARD_OUTFIT,
+    draw_activity_overlay,
+    login3_action_sprite_path,
+)
 
 
 def _alpha_bbox(pixmap: QPixmap) -> tuple[int, int, int, int] | None:
@@ -61,6 +65,28 @@ def test_taunt_sprite_removes_the_reference_matte() -> None:
     source = QPixmap(300, 300)
     source.fill(Qt.GlobalColor.transparent)
     result = draw_activity_overlay(source, activity="taunt")
+    assert app is not None
+    assert result.toImage().pixelColor(0, 0).alpha() == 0
+    assert _alpha_bbox(result) is not None
+
+
+def test_login3_actions_are_outfit_scoped_and_use_complete_transparent_sprites() -> None:
+    """login-3 的工作/休息动作不应泄漏到其他娃衣。"""
+
+    app = QApplication.instance() or QApplication([])
+    source = QPixmap(560, 500)
+    source.fill(Qt.GlobalColor.transparent)
+
+    assert login3_action_sprite_path("work-flow", LOGIN_REWARD_OUTFIT.key).endswith(
+        "login-rewards/actions/report.png"
+    )
+    assert login3_action_sprite_path("work-flow", "hour-01") is None
+
+    result = draw_activity_overlay(
+        source,
+        activity="work-flow",
+        outfit=LOGIN_REWARD_OUTFIT.key,
+    )
     assert app is not None
     assert result.toImage().pixelColor(0, 0).alpha() == 0
     assert _alpha_bbox(result) is not None

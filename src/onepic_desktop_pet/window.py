@@ -123,6 +123,7 @@ from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .alarm_ui import AlarmCard, AlarmCenterDialog, AwayRecoveryCard
 from .accessories import (
     ALL_OUTFITS,
+    LOGIN_3_ACTIVITIES,
     LOGIN_REWARD_OUTFIT,
     OUTFITS,
     SPECIAL_LIMITED_ACTIVITY_SPRITES,
@@ -848,6 +849,7 @@ class PetWindow(QWidget):
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
+        self._login3_greeting_pending = True
         self._night_limited_activity = ""
         self._activity_transition_from = QPixmap()
         self._activity_transition_step = 0
@@ -1177,6 +1179,7 @@ class PetWindow(QWidget):
         self.set_state(PetState.IDLE)
         self._night_limited_tick()
         self._schedule(self.behavior.initial_idle())
+        self._maybe_show_login3_greeting()
         if should_start_startup_detection():
             QTimer.singleShot(0, self.agent_manager.start_background_check)
         self._log_timer_inventory()
@@ -1531,6 +1534,15 @@ class PetWindow(QWidget):
             # but keeps it pinned until the receiver pauses or the hour ends.
             activity = "work-cheer"
             food_scene_active = False
+        if (
+            self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+            and display_state is PetState.WALK
+            and activity in {"", "none"}
+        ):
+            # The login-3 set includes a complete running pose. Keep the
+            # existing WALK state/timer for movement physics, but render its
+            # static full action so no source frame is mixed into the outfit.
+            activity = "run"
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
         # Resolve the actual character/activity sprite before semantic
@@ -1601,7 +1613,11 @@ class PetWindow(QWidget):
     def _change_ambient_activity(self, activity: str) -> None:
         """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
 
-        valid_activities = set(ACTION_SPRITES) | set(SPECIAL_LIMITED_ACTIVITY_SPRITES)
+        valid_activities = (
+            set(ACTION_SPRITES)
+            | set(SPECIAL_LIMITED_ACTIVITY_SPRITES)
+            | set(LOGIN_3_ACTIVITIES)
+        )
         next_activity = activity if activity in valid_activities else "none"
         if next_activity == self._ambient_activity:
             self._refresh_pixmap()
@@ -1614,6 +1630,19 @@ class PetWindow(QWidget):
         if not self._activity_transition_from.isNull():
             self.activity_transition_timer.start()
         self._refresh_pixmap()
+
+    def _login3_actions_enabled(self) -> bool:
+        """Return whether the account is currently wearing the login-3 set."""
+
+        return self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+
+    def _maybe_show_login3_greeting(self) -> None:
+        """Show the login-3 greeting once when the outfit becomes active."""
+
+        if not self._login3_greeting_pending or not self._login3_actions_enabled():
+            return
+        self._login3_greeting_pending = False
+        self._set_temporary_activity("hello", 18_000)
 
     def _refresh_window_mask(
         self,
@@ -4624,8 +4653,11 @@ class PetWindow(QWidget):
         # Keep automatic work rotation strictly in the work set. The former
         # 45-minute branch randomly selected sleep/daydream even while the
         # user was actively typing, which looked like an unsolicited pause.
-        choices = FOCUS_ACTIONS
-        self._change_ambient_activity(random.choice(choices))
+        if self._login3_actions_enabled() and self.work_timer.session_seconds() >= 2 * 3600:
+            activity = "milk-tea"
+        else:
+            activity = random.choice(FOCUS_ACTIONS)
+        self._change_ambient_activity(activity)
         self._manual_activity_until = time.monotonic() + 120
         self._schedule_work_activity()
 
@@ -7932,6 +7964,8 @@ class PetWindow(QWidget):
         self._reflow_compact_todos_after_outfit(panel_was_visible)
         if self._social_dialog is not None:
             self._social_dialog.outfit_key = remote_outfit
+        if remote_outfit == LOGIN_REWARD_OUTFIT.key:
+            self._maybe_show_login3_greeting()
 
     @_guard_qt_callback
     def _social_sync_failed(self, message: str) -> None:
@@ -9003,6 +9037,8 @@ class PetWindow(QWidget):
             # the same UI turn so it cannot repaint the previous outfit before
             # the next heartbeat confirms the durable profile write.
             self._social_dialog.outfit_key = outfit_key
+        if outfit_key == LOGIN_REWARD_OUTFIT.key:
+            self._maybe_show_login3_greeting()
         # Cancel a half-finished action cross-fade so the newly selected outfit
         # is visible immediately, even while a transient work action is ending.
         self.activity_transition_timer.stop()
@@ -9629,6 +9665,10 @@ class PetWindow(QWidget):
         action_key = random.choice(("love", "encourage"))
         reply = self.companion.perform_action(action_key)
         option = ACTION_BY_KEY[action_key]
+        self._set_temporary_activity(
+            "love" if action_key == "love" else "work-cheer",
+            option.duration_ms,
+        )
         self._play_action_sequence(option.sequence or (reply.state,), option.duration_ms)
         self.show_speech(reply.text, max(5200, option.duration_ms + 1800))
         return True
@@ -9696,6 +9736,13 @@ class PetWindow(QWidget):
                 else:
                     activity = random.choice(RANDOM_ACTIONS)
                     text = self.companion.ambient_grumble(self.work_timer.is_running).text
+                if self._login3_actions_enabled() and not self.work_timer.is_running:
+                    if idle_seconds >= 30 * 60:
+                        activity = random.choice(("sleep", "milk-tea"))
+                        text = "六毛发现你很久没动啦，先睡一会儿或喝口奶茶吧。"
+                    elif random.random() < 0.62:
+                        activity = random.choice(("phone", "brush", "run", "message"))
+                        text = "三日连登六毛换个动作陪你待一会儿。"
                 # Automatic companion animations must not announce a rest
                 # state while the shared work timer is still running. A
                 # deliberate pause/food scene remains unaffected because it

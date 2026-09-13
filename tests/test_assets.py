@@ -286,5 +286,43 @@ def test_three_day_login_outfit_does_not_keep_faint_edge_noise() -> None:
     with Image.open(path) as image:
         alpha = image.convert("RGBA").getchannel("A")
         positive = [value for value in alpha.getdata() if value]
-        assert positive
-        assert min(positive) >= 8
+    assert positive
+    assert min(positive) >= 8
+
+
+def test_login3_action_library_is_transparent_complete_and_size_bounded() -> None:
+    """login-3 补充动作保持统一画布、无白底，并控制发布包体积。"""
+
+    manifest_path = PROJECT_ROOT / "assets" / "pet" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    actions = manifest["outfit_actions"]["login-3-day"]
+    assert set(actions) == {
+        "hello",
+        "phone",
+        "computer",
+        "milk-tea",
+        "encourage",
+        "book",
+        "message",
+        "love",
+        "run",
+        "brush",
+        "sleep",
+        "report",
+    }
+
+    total_size = 0
+    for relative in actions.values():
+        path = manifest_path.parent / relative
+        total_size += path.stat().st_size
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+            alpha = rgba.getchannel("A")
+            assert rgba.size == tuple(manifest["canvas_size"])
+            assert rgba.mode == "RGBA"
+            assert alpha.getextrema()[0] == 0
+            assert alpha.getbbox() is not None
+            assert alpha.getpixel((0, 0)) == 0
+            assert alpha.getpixel((rgba.width - 1, rgba.height - 1)) == 0
+
+    assert total_size < 3_000_000

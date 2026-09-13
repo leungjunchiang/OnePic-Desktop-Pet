@@ -72,6 +72,20 @@ CANVAS_PADDING = 16
 ROW_SPLIT_RATIO = 0.52
 TARGET_STANDING_HEIGHT = 450
 TARGET_SEATED_HEIGHT = 316
+LOGIN_3_ACTION_MANIFEST = {
+    "hello": "login-rewards/actions/hello.png",
+    "phone": "login-rewards/actions/phone.png",
+    "computer": "login-rewards/actions/computer.png",
+    "milk-tea": "login-rewards/actions/milk-tea.png",
+    "encourage": "login-rewards/actions/encourage.png",
+    "book": "login-rewards/actions/book.png",
+    "message": "login-rewards/actions/message.png",
+    "love": "login-rewards/actions/love.png",
+    "run": "login-rewards/actions/run.png",
+    "brush": "login-rewards/actions/brush.png",
+    "sleep": "login-rewards/actions/sleep.png",
+    "report": "login-rewards/actions/report.png",
+}
 
 
 @dataclass(frozen=True)
@@ -364,6 +378,7 @@ def prepare_assets(
         "target_standing_height": TARGET_STANDING_HEIGHT,
         "animations": animations,
         "icon": icon_path.relative_to(PROJECT_ROOT).as_posix(),
+        "outfit_actions": {"login-3-day": LOGIN_3_ACTION_MANIFEST},
     }
     manifest_path = output_root / "manifest.json"
     manifest_path.write_text(

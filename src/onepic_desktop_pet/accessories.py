@@ -70,7 +70,61 @@ SPECIAL_OUTFIT_SPRITES[LOGIN_REWARD_OUTFIT.key] = (
     "assets/pet/login-rewards/3-day-login.png"
 )
 
+# The three-day login outfit has a private, complete action set.  These are
+# semantic activity aliases rather than new global activities: other outfits
+# continue to use the existing public action sprites, while login-3 resolves
+# the same work/rest events to its matching artwork.
+LOGIN_3_ACTION_SPRITES = {
+    "hello": "assets/pet/login-rewards/actions/hello.png",
+    "phone": "assets/pet/login-rewards/actions/phone.png",
+    "computer": "assets/pet/login-rewards/actions/computer.png",
+    "milk-tea": "assets/pet/login-rewards/actions/milk-tea.png",
+    "encourage": "assets/pet/login-rewards/actions/encourage.png",
+    "book": "assets/pet/login-rewards/actions/book.png",
+    "message": "assets/pet/login-rewards/actions/message.png",
+    "love": "assets/pet/login-rewards/actions/love.png",
+    "run": "assets/pet/login-rewards/actions/run.png",
+    "brush": "assets/pet/login-rewards/actions/brush.png",
+    "sleep": "assets/pet/login-rewards/actions/sleep.png",
+    "report": "assets/pet/login-rewards/actions/report.png",
+}
+LOGIN_3_ACTIVITY_ALIASES = {
+    "hello": "hello",
+    "wave": "hello",
+    "phone": "phone",
+    "computer": "computer",
+    "office": "computer",
+    "work-flow": "report",
+    "report": "report",
+    "night-reading": "book",
+    "reading": "book",
+    "book": "book",
+    "work-study": "book",
+    "work-cheer": "encourage",
+    "encourage": "encourage",
+    "love": "love",
+    "sleep": "sleep",
+    "milk-tea": "milk-tea",
+    "thermos": "milk-tea",
+    "run": "run",
+    "brush": "brush",
+    "message": "message",
+}
+LOGIN_3_ACTIVITIES = frozenset(LOGIN_3_ACTIVITY_ALIASES)
+
+
+def login3_action_sprite_path(activity: str, outfit: str) -> str | None:
+    """Return a login-3-only action sprite path for a semantic activity."""
+
+    if outfit != LOGIN_REWARD_OUTFIT.key:
+        return None
+    action = LOGIN_3_ACTIVITY_ALIASES.get(str(activity or ""))
+    if not action:
+        return None
+    return LOGIN_3_ACTION_SPRITES.get(action)
+
 _FULL_SPRITE_CACHE: dict[str, QPixmap] = {}
+_FULL_SPRITE_RENDER_CACHE: dict[tuple[str, int, int, float], QPixmap] = {}
 
 
 def unlocked_outfits(count: int) -> tuple[Outfit, ...]:
@@ -92,6 +146,9 @@ def draw_activity_overlay(
     # A limited night scene is intentionally temporary and takes precedence.
     if activity in SPECIAL_LIMITED_ACTIVITY_SPRITES:
         return _full_sprite(source, SPECIAL_LIMITED_ACTIVITY_SPRITES[activity])
+    login3_sprite = login3_action_sprite_path(activity, outfit)
+    if login3_sprite:
+        return _full_sprite(source, login3_sprite)
     # Food scenes are temporary life moments, not wardrobe items. They must
     # be visible even when a permanent hourly outfit is equipped.
     if food_scene and activity in SPECIAL_ACTIVITY_SPRITES:
@@ -171,6 +228,15 @@ def draw_activity_overlay(
 def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
     """把完整透明动作素材按源画布等比居中，保持桌宠窗口大小恒定。"""
 
+    cache_key = (
+        relative_path,
+        source.width(),
+        source.height(),
+        round(float(source.devicePixelRatio()), 3),
+    )
+    rendered = _FULL_SPRITE_RENDER_CACHE.get(cache_key)
+    if rendered is not None:
+        return QPixmap(rendered)
     sprite = _FULL_SPRITE_CACHE.get(relative_path)
     if sprite is None:
         sprite = QPixmap(str(resource_path(relative_path)))
@@ -198,6 +264,9 @@ def _full_sprite(source: QPixmap, relative_path: str) -> QPixmap:
         scaled,
     )
     painter.end()
+    _FULL_SPRITE_RENDER_CACHE[cache_key] = QPixmap(result)
+    while len(_FULL_SPRITE_RENDER_CACHE) > 48:
+        _FULL_SPRITE_RENDER_CACHE.pop(next(iter(_FULL_SPRITE_RENDER_CACHE)))
     return result
 
 
@@ -296,4 +365,3 @@ def _draw_outfit(painter: QPainter, rect: QRectF, outfit: str) -> None:
         points = [QPointF(w*.30,h*.15), QPointF(w*.36,h*.025), QPointF(w*.45,h*.12), QPointF(w*.52,h*.015), QPointF(w*.61,h*.12), QPointF(w*.69,h*.025), QPointF(w*.74,h*.15)]
         painter.drawPolygon(points)
         painter.setBrush(QColor("#ef5b5b")); painter.drawEllipse(QRectF(w*.49,h*.08,w*.055,w*.055))
-

@@ -2,7 +2,8 @@
   "character_id": "six-hair-doll",
   "display_name": "六毛公仔",
   "sources": [
-    "Public six-hair character action set approved by the repository owner"
+    "Public six-hair character action set approved by the repository owner",
+    "Repository-owner supplied login-3 outfit action set, normalized to transparent RGBA"
   ],
   "canvas_size": [
     560,
@@ -95,5 +96,21 @@
       "interact/selfie_04.png"
     ]
   },
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "outfit_actions": {
+    "login-3-day": {
+      "hello": "login-rewards/actions/hello.png",
+      "phone": "login-rewards/actions/phone.png",
+      "computer": "login-rewards/actions/computer.png",
+      "milk-tea": "login-rewards/actions/milk-tea.png",
+      "encourage": "login-rewards/actions/encourage.png",
+      "book": "login-rewards/actions/book.png",
+      "message": "login-rewards/actions/message.png",
+      "love": "login-rewards/actions/love.png",
+      "run": "login-rewards/actions/run.png",
+      "brush": "login-rewards/actions/brush.png",
+      "sleep": "login-rewards/actions/sleep.png",
+      "report": "login-rewards/actions/report.png"
+    }
+  }
 }
