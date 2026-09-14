@@ -24,7 +24,7 @@ os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtGui import QContextMenuEvent, QFontMetrics, QMouseEvent
-from PySide6.QtTest import QSignalSpy
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
 
 from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
@@ -300,6 +300,13 @@ def _create_window() -> tuple[QApplication, PetWindow]:
     settings = PetSettings()
     settings.auto_pause_on_idle = False
     window = PetWindow(settings)
+    # The macOS runner uses UTC and can construct the pet during the
+    # night-limited window.  That intentionally starts an ambient transition
+    # during production startup, but this helper must return a settled window
+    # so animation assertions do not depend on the CI machine's local clock.
+    if window.activity_transition_timer.isActive():
+        window._cancel_activity_transition()
+        window._refresh_pixmap()
     window.show()
     app.processEvents()
     return app, window
@@ -3515,6 +3522,10 @@ def test_dialogue_panel_passes_text_to_local_reply() -> None:
     window._chat_dialog.input.setText("今天有点累")
     window._chat_dialog._submit()
     app.processEvents()
+    # The offline reply is emitted synchronously, but the queued repaint and
+    # native offscreen event turn can otherwise run after this assertion on a
+    # long-lived Qt test process.
+    QTest.qWait(10)
 
     assert window.state is PetState.SLEEPY
     assert "喝口水" in window.speech_bubble.text()
