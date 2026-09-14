@@ -135,7 +135,6 @@ from .activity import (
     active_application_category,
     active_application_name,
     active_fullscreen_game,
-    active_fullscreen_presentation,
     active_fullscreen_video,
     active_window_display_mode,
     active_window_is_fullscreen,
@@ -2008,6 +2007,16 @@ class PetWindow(QWidget):
             int(geometry.top() + geometry.height()),
         )
 
+    def _pet_native_window_handle(self) -> int | None:
+        """Return the pet HWND used to make fullscreen detection DPI-safe."""
+
+        if os.name != "nt":
+            return None
+        try:
+            return int(self.winId())
+        except (AttributeError, TypeError, ValueError):
+            return None
+
     def _update_topmost_watchdog(self) -> None:
         """Run the native z-order watchdog only while the pet is really shown."""
 
@@ -2349,7 +2358,15 @@ class PetWindow(QWidget):
         repairs so a window-manager reorder cannot leave one accessory behind.
         """
 
-        mode = active_window_display_mode(self._pet_monitor_bounds())
+        monitor_bounds = self._pet_monitor_bounds()
+        native_window_handle = self._pet_native_window_handle()
+        if native_window_handle is None:
+            mode = active_window_display_mode(monitor_bounds)
+        else:
+            mode = active_window_display_mode(
+                monitor_bounds,
+                reference_hwnd=native_window_handle,
+            )
         suppressed = mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}
         if suppressed:
             if not self._fullscreen_hidden:

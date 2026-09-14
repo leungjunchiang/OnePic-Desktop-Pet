@@ -590,13 +590,13 @@ def test_fullscreen_restore_repairs_native_policy_immediately_and_after_delay(mo
     )
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "fullscreen",
+        lambda _screen_bounds, **_kwargs: "fullscreen",
     )
     window._sync_fullscreen_visibility()
 
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "normal",
+        lambda _screen_bounds, **_kwargs: "normal",
     )
     window._sync_fullscreen_visibility()
     delayed = [callback for delay, callback in scheduled if delay == 150]
@@ -608,6 +608,31 @@ def test_fullscreen_restore_repairs_native_policy_immediately_and_after_delay(mo
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_fullscreen_poll_passes_pet_native_monitor_reference_on_windows(monkeypatch) -> None:
+    """Scaled Windows monitors use native monitor identity for PPT takeover."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.os.name", "nt")
+    monkeypatch.setattr(window, "winId", lambda: 4242)
+    observed: list[int | None] = []
+
+    def fake_display_mode(_screen_bounds, *, reference_hwnd=None):
+        observed.append(reference_hwnd)
+        return "fullscreen" if reference_hwnd == 4242 else "normal"
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        fake_display_mode,
+    )
+    window._sync_fullscreen_visibility()
+    app.processEvents()
+
+    assert observed == [4242]
+    assert window._fullscreen_hidden
+    assert not window.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
 
 
 def test_macos_accessory_raise_is_suppressed(monkeypatch) -> None:
@@ -1790,7 +1815,7 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     # same transition on every CI runner.
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "fullscreen",
+        lambda _screen_bounds, **_kwargs: "fullscreen",
     )
     window._sync_fullscreen_visibility()
     app.processEvents()
@@ -1808,7 +1833,7 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
 
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "normal",
+        lambda _screen_bounds, **_kwargs: "normal",
     )
     window._sync_fullscreen_visibility()
     app.processEvents()
@@ -1856,12 +1881,12 @@ def test_manual_hide_wins_over_fullscreen_restore(monkeypatch) -> None:
     window.hide_pet()
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "maximized",
+        lambda _screen_bounds, **_kwargs: "maximized",
     )
     window._sync_fullscreen_visibility()
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "normal",
+        lambda _screen_bounds, **_kwargs: "normal",
     )
     window._sync_fullscreen_visibility()
     window._finish_fullscreen_restore()
@@ -2219,6 +2244,11 @@ def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
     window.show_quick_panel()
     app.processEvents()
     assert window.quick_panel.isVisible()
+    # A desktop runner may place its real cursor inside the offscreen panel,
+    # which legitimately stops the auto-hide timer via enterEvent.  The test
+    # is about the explicit toggle contract, so settle the timer state before
+    # asserting it rather than depending on the host cursor location.
+    window.quick_panel.hide_timer.start(8000)
     assert window.quick_panel.hide_timer.isActive()
     window.show_quick_panel()
     assert not window.quick_panel.isVisible()
@@ -3011,14 +3041,14 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
 
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "fullscreen",
+        lambda _screen_bounds, **_kwargs: "fullscreen",
     )
     window._sync_fullscreen_visibility()
     assert window._fullscreen_hidden
 
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "normal",
+        lambda _screen_bounds, **_kwargs: "normal",
     )
     window._sync_fullscreen_visibility()
     app.processEvents()
@@ -3038,7 +3068,7 @@ def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) ->
     window.start_work_timer()
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "maximized",
+        lambda _screen_bounds, **_kwargs: "maximized",
     )
     window._sync_fullscreen_visibility()
     assert window._fullscreen_hidden
@@ -3048,7 +3078,7 @@ def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) ->
 
     monkeypatch.setattr(
         "onepic_desktop_pet.window.active_window_display_mode",
-        lambda _screen_bounds: "normal",
+        lambda _screen_bounds, **_kwargs: "normal",
     )
     window._sync_fullscreen_visibility()
     assert window.isVisible()

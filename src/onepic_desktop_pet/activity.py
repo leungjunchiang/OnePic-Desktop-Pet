@@ -194,6 +194,17 @@ def _windows_foreground_is_normal_window(
         return False
 
 
+def _windows_foreground_is_borderless(user32, hwnd) -> bool:
+    """Return whether a foreground window has no caption or resize frame."""
+
+    try:
+        get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        style = int(get_style(hwnd, -16))
+        return not bool(style & (0x00C00000 | 0x00040000))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
 def _is_known_media_process(name: str) -> bool:
     """Return whether a process can own a browser/player video fullscreen."""
 
@@ -330,6 +341,8 @@ def _windows_foreground_display_mode(
     user32,
     hwnd,
     screen_bounds: tuple[int, int, int, int] | None = None,
+    *,
+    reference_hwnd=None,
 ) -> str:
     if _windows_foreground_is_desktop_shell(user32, hwnd):
         return DISPLAY_MODE_NORMAL
@@ -345,11 +358,33 @@ def _windows_foreground_display_mode(
     except (AttributeError, OSError, TypeError, ValueError):
         is_zoomed = False
 
+    # Qt screen.geometry() is reported in logical coordinates while Win32
+    # window rectangles are physical pixels on a scaled display.  When the
+    # caller can provide the pet's native HWND, compare monitor handles first
+    # so a 125/150% DPI difference cannot make a same-monitor PowerPoint slide
+    # show look like a window on another display.  Keep the rectangle fallback
+    # for callers without a native reference (including pure activity tests).
+    native_monitor_match_known = False
+    if reference_hwnd is not None:
+        try:
+            foreground_monitor = user32.MonitorFromWindow(hwnd, 2)
+            reference_monitor = user32.MonitorFromWindow(reference_hwnd, 2)
+            if foreground_monitor and reference_monitor:
+                native_monitor_match_known = True
+                if int(foreground_monitor) != int(reference_monitor):
+                    return DISPLAY_MODE_NORMAL
+        except (AttributeError, OSError, TypeError, ValueError):
+            native_monitor_match_known = False
+
     rectangles = _windows_foreground_rectangles(user32, hwnd)
     if rectangles is None:
         return DISPLAY_MODE_MAXIMIZED if is_zoomed else DISPLAY_MODE_NORMAL
     _window_bounds, monitor_bounds, _work_bounds = rectangles
-    if screen_bounds is not None and not _rect_close(screen_bounds, monitor_bounds):
+    if (
+        screen_bounds is not None
+        and not native_monitor_match_known
+        and not _rect_close(screen_bounds, monitor_bounds)
+    ):
         # The foreground window belongs to another monitor; it must not hide
         # a pet living on the current monitor.
         return DISPLAY_MODE_NORMAL
@@ -364,6 +399,17 @@ def _windows_foreground_display_mode(
     if normal_window:
         return DISPLAY_MODE_MAXIMIZED if is_zoomed else DISPLAY_MODE_NORMAL
     if _rect_close(_window_bounds, monitor_bounds):
+        return DISPLAY_MODE_FULLSCREEN
+    # PowerPoint can use the monitor's work area for a slideshow while the
+    # taskbar remains reserved.  A borderless presentation-sized surface is a
+    # real takeover even though it is a few pixels shorter than rcMonitor;
+    # require both the known presentation process and a borderless style so a
+    # normal framed PowerPoint editing window is never hidden by this fallback.
+    if (
+        allow_presentation_fullscreen
+        and _windows_foreground_is_borderless(user32, hwnd)
+        and _rect_close(_window_bounds, _work_bounds, tolerance=8)
+    ):
         return DISPLAY_MODE_FULLSCREEN
     return DISPLAY_MODE_MAXIMIZED if is_zoomed else DISPLAY_MODE_NORMAL
 
@@ -480,6 +526,8 @@ def _macos_window_display_mode(
 
 def active_window_display_mode(
     screen_bounds: tuple[int, int, int, int] | None = None,
+    *,
+    reference_hwnd=None,
 ) -> str:
     """Return ``normal``, ``maximized`` or ``fullscreen`` for the front window.
 
@@ -506,7 +554,12 @@ def active_window_display_mode(
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return DISPLAY_MODE_NORMAL
-        return _windows_foreground_display_mode(user32, hwnd, screen_bounds)
+        return _windows_foreground_display_mode(
+            user32,
+            hwnd,
+            screen_bounds,
+            reference_hwnd=reference_hwnd,
+        )
     except (AttributeError, OSError, TypeError, ValueError):
         return DISPLAY_MODE_NORMAL
 
@@ -552,10 +605,27 @@ def active_fullscreen_game() -> bool:
     return active_window_is_fullscreen()
 
 
-def active_fullscreen_presentation() -> bool:
-    """Return true only for a known PowerPoint/Keynote fullscreen surface."""
+def active_fullscreen_presentation(
+    screen_bounds: tuple[int, int, int, int] | None = None,
+    *,
+    reference_hwnd=None,
+) -> bool:
+    """Return true only for a known PowerPoint/Keynote fullscreen surface.
+
+    ``screen_bounds`` and ``reference_hwnd`` are optional so existing callers
+    retain the process-wide query.  Windows callers can pass both to keep
+    presentation detection monitor-scoped even with mixed DPI displays.
+    """
 
     name = active_application_name().casefold().strip()
     if not _is_known_presentation_process(name):
         return False
-    return active_window_is_fullscreen()
+    if screen_bounds is None and reference_hwnd is None:
+        return active_window_is_fullscreen()
+    return (
+        active_window_display_mode(
+            screen_bounds,
+            reference_hwnd=reference_hwnd,
+        )
+        == DISPLAY_MODE_FULLSCREEN
+    )
