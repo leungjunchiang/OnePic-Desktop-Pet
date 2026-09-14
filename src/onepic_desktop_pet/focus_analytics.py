@@ -338,6 +338,34 @@ class FocusAnalyticsStore:
 
         return _as_beijing(self._now())
 
+    def readonly_clone(self, *, now_provider: Callable[[], datetime] | None = None) -> "FocusAnalyticsStore":
+        """Return an isolated, non-persisting copy for background reports.
+
+        Report aggregation is pure read work, but the live desktop store is
+        also mutated by the GUI timer and checkpoint callbacks.  A shallow
+        object copy with private state copied below the boundary lets a
+        worker calculate a report without reading a file, writing the live
+        ledger, or racing the GUI's in-memory dictionaries.
+        """
+
+        clone = object.__new__(type(self))
+        clone.__dict__ = dict(self.__dict__)
+        clone._state = copy.deepcopy(self._state)
+        clone._live = copy.deepcopy(self._live)
+        clone._live_projection_segments = list(self._live_projection_segments)
+        clone._remote_effective_projection = copy.deepcopy(
+            self._remote_effective_projection
+        )
+        clone._focus_segment_source_by_id = dict(self._focus_segment_source_by_id)
+        clone._focus_sync_metrics = dict(self._focus_sync_metrics)
+        clone._persist = False
+        clone._uses_explicit_path = True
+        if now_provider is not None:
+            clone._now = now_provider
+        if hasattr(clone, "account_projection"):
+            clone.account_projection = AccountFocusProjection(clone)
+        return clone
+
     def merge_remote_state(
         self,
         *,

@@ -2764,7 +2764,15 @@ class SocialHubDialog(QDialog):
     account_state_changed = Signal(bool)
     login_streak_updated = Signal(dict)
 
-    def __init__(self, client: SocialClient, outfit_key: str = "", owner_nickname: str = "", parent=None) -> None:
+    def __init__(
+        self,
+        client: SocialClient,
+        outfit_key: str = "",
+        owner_nickname: str = "",
+        parent=None,
+        *,
+        defer_pages: bool = False,
+    ) -> None:
         super().__init__(parent)
         lifecycle_log("study_room.construct.begin", self)
         self.destroyed.connect(
@@ -2812,6 +2820,13 @@ class SocialHubDialog(QDialog):
         self._local_focus_week_seconds_provider: Callable[[], int] | None = None
         self._local_focus_week_seconds: int | None = None
         self._applying_dashboard = False
+        self._defer_pages = bool(defer_pages)
+        self._lazy_page_factories: dict[int, Callable[[], QWidget]] = {}
+        self._lazy_page_built: set[int] = set()
+        self._lazy_bootstrap_started = False
+        self._cached_bootstrap_payload: dict[str, Any] | None = None
+        self._dashboard_pending_payload: dict[str, Any] | None = None
+        self._dashboard_apply_scheduled = False
         self._room_goal_state: dict[str, Any] = {}
         self._room_schedule_state: dict[str, Any] = {}
         self._room_challenge_state: dict[str, Any] = {}
@@ -2921,36 +2936,32 @@ class SocialHubDialog(QDialog):
         tab_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         tab_bar.setUsesScrollButtons(False)
         tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
-        self.tabs.addTab(self._home_page(), "首页")
-        self.tabs.addTab(self._chat_page(), "互动")
-        self.tabs.addTab(self._focus_page(), "专注")
-        self.tabs.addTab(self._mine_page(), "我的")
+        page_factories = (
+            ("首页", self._home_page),
+            ("互动", self._chat_page),
+            ("专注", self._focus_page),
+            ("我的", self._mine_page),
+        )
+        if self._defer_pages:
+            self._lazy_page_factories = {
+                index: factory for index, (_label, factory) in enumerate(page_factories)
+            }
+            for label, _factory in page_factories:
+                self.tabs.addTab(self._loading_page(label), label)
+        else:
+            for label, factory in page_factories:
+                self.tabs.addTab(factory(), label)
         self.tabs.currentChanged.connect(self._tab_changed)
         root.addWidget(self.tabs, 1)
         QTimer.singleShot(0, self._apply_adaptive_tab_widths)
-        self._update_account_state()
-        if client.signed_in:
-            # Paint the last local snapshot before the first network round
-            # trip.  It is explicitly marked as offline/cache data, so this
-            # only improves perceived startup and never triggers visit or
-            # notification side effects; the live refresh below replaces it.
-            cached_loader = getattr(client, "cached_dashboard", None)
-            if callable(cached_loader):
-                try:
-                    cached = cached_loader(None)
-                except Exception:
-                    cached = None
-                if isinstance(cached, dict):
-                    # Let the top-level window paint first.  Applying a large
-                    # cached dashboard synchronously in the constructor made
-                    # the first study-room click wait for card/layout work.
-                    cached_payload = dict(cached)
-                    QTimer.singleShot(
-                        0,
-                        lambda payload=cached_payload: self.apply_dashboard(payload),
-                    )
-            self._initial_refresh_timer.start(50)
-            QTimer.singleShot(180, self._record_login_streak)
+        if self._defer_pages:
+            # Show a real, lightweight window first. Materialize one full page
+            # per event-loop turn so the shortcut click and the first paint do
+            # not wait for every scroll list and form to be created.
+            QTimer.singleShot(0, self._materialize_next_lazy_page)
+        else:
+            self._update_account_state()
+            self._prepare_bootstrap()
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt API
         was_closed = self._closed
@@ -2978,6 +2989,102 @@ class SocialHubDialog(QDialog):
         lifecycle_log("study_room.close_event.begin", self)
         super().closeEvent(event)
         lifecycle_log("study_room.close_event.end", self)
+
+    @staticmethod
+    def _loading_page(label: str) -> QWidget:
+        """Return a tiny placeholder used while a study-room page is built."""
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(22, 24, 22, 24)
+        label_widget = QLabel(f"正在准备{label}页面…")
+        label_widget.setObjectName("muted")
+        layout.addWidget(label_widget)
+        layout.addStretch(1)
+        return page
+
+    def _prepare_bootstrap(self) -> None:
+        """Queue cached data and the first network round after construction."""
+
+        if self._lazy_bootstrap_started:
+            return
+        self._lazy_bootstrap_started = True
+        if not self.client.signed_in:
+            return
+        # Paint the last local snapshot before the first network round.
+        # Applying a large cached dashboard synchronously in the constructor
+        # made the first study-room click wait for card/layout work.
+        cached_loader = getattr(self.client, "cached_dashboard", None)
+        if callable(cached_loader):
+            try:
+                cached = cached_loader(None)
+            except Exception:
+                cached = None
+            if isinstance(cached, dict):
+                self._cached_bootstrap_payload = dict(cached)
+                QTimer.singleShot(
+                    0,
+                    lambda payload=self._cached_bootstrap_payload: self._queue_dashboard_apply(payload),
+                )
+        self._initial_refresh_timer.start(50)
+        QTimer.singleShot(180, self._record_login_streak)
+
+    def _materialize_lazy_page(self, index: int) -> None:
+        factory = self._lazy_page_factories.pop(int(index), None)
+        if factory is None or not hasattr(self, "tabs"):
+            return
+        index = int(index)
+        was_current = self.tabs.currentIndex() == index
+        label = self.tabs.tabText(index)
+        old_page = self.tabs.widget(index)
+        page = factory()
+        self.tabs.removeTab(index)
+        self.tabs.insertTab(index, page, label)
+        if was_current:
+            self.tabs.setCurrentIndex(index)
+        self._lazy_page_built.add(index)
+        if old_page is not None:
+            old_page.deleteLater()
+        self._apply_adaptive_tab_widths()
+
+    def _materialize_next_lazy_page(self) -> None:
+        if not self._lazy_page_factories:
+            self._update_account_state()
+            self._prepare_bootstrap()
+            return
+        index = min(self._lazy_page_factories)
+        self._materialize_lazy_page(index)
+        if self._lazy_page_factories:
+            QTimer.singleShot(0, self._materialize_next_lazy_page)
+        else:
+            self._update_account_state()
+            self._prepare_bootstrap()
+
+    def _queue_dashboard_apply(self, data: dict[str, Any] | None) -> None:
+        """Coalesce same-turn dashboard payloads before touching layouts."""
+
+        if not isinstance(data, dict) or self._closed:
+            return
+        self._dashboard_pending_payload = dict(data)
+        if self._dashboard_apply_scheduled:
+            return
+        self._dashboard_apply_scheduled = True
+        QTimer.singleShot(0, self._flush_dashboard_apply)
+
+    def _flush_dashboard_apply(self) -> None:
+        self._dashboard_apply_scheduled = False
+        payload = self._dashboard_pending_payload
+        self._dashboard_pending_payload = None
+        if not isinstance(payload, dict) or self._closed:
+            return
+        # Suppress intermediate paints while the payload updates several
+        # independent lists. The event loop remains free between payloads.
+        self.setUpdatesEnabled(False)
+        try:
+            self.apply_dashboard(payload)
+        finally:
+            self.setUpdatesEnabled(True)
+            self.update()
 
     def _apply_adaptive_tab_widths(self) -> None:
         """Make all four primary tabs equal and fill the available width."""
@@ -3648,6 +3755,8 @@ class SocialHubDialog(QDialog):
     def _tab_changed(self, index: int) -> None:
         """Refresh viewer-scoped request/note overlays when their pages open."""
 
+        if index in self._lazy_page_factories:
+            self._materialize_lazy_page(index)
         if index not in {1, 3} or self._applying_dashboard or not self.client.signed_in:
             return
         self.refresh()
@@ -3810,7 +3919,7 @@ class SocialHubDialog(QDialog):
         if requested_room and requested_room != self.current_room_id:
             self._room_refresh_timer.start(0)
             return
-        self.apply_dashboard(data)
+        self._queue_dashboard_apply(data)
         self._start_leaderboard_refresh()
 
     def _start_leaderboard_refresh(self) -> None:

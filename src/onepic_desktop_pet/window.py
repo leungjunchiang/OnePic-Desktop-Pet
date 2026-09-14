@@ -74,6 +74,7 @@ from PySide6.QtCore import (
     QTimer,
     QUrl,
     Signal,
+    Slot,
 )
 from PySide6.QtGui import (
     QCloseEvent,
@@ -225,7 +226,14 @@ from .focus_segments import (
     deterministic_focus_segment_id,
 )
 from .focus_session import FocusSessionManager
-from .work_report import WorkReportDialog, build_work_report
+from .work_report import (
+    ReportDailyStatsSnapshot,
+    ReportTimerSnapshot,
+    WorkReportBuildThread,
+    WorkReportDialog,
+    build_work_report,
+    report_range_is_standard,
+)
 from .growth import (
     ACTION_GROUPS,
     ACTION_SPRITES,
@@ -577,6 +585,9 @@ class PetWindow(QWidget):
         self._economy_dialog: EconomyDialog | None = None
         self._food_scene_dialog: FoodSceneDialog | None = None
         self._work_report_dialog: WorkReportDialog | None = None
+        self._work_report_thread: WorkReportBuildThread | None = None
+        self._work_report_refresh_pending = False
+        self._work_report_generation = 0
         self._alarm_center_dialog: AlarmCenterDialog | None = None
         self._alarm_card: AlarmCard | None = None
         # Keep a closing card alive until its queued QMediaPlayer stop has
@@ -613,6 +624,13 @@ class PetWindow(QWidget):
         # refreshed by the small live-projection RPC and never enter
         # FocusAnalyticsStore or the FocusSession fact sync.
         self._cross_device_today_display_live_rows: list[object] | None = None
+        # The display projection is pure local arithmetic over already-fetched
+        # rows.  It only needs to be recomputed when facts/state change or
+        # roughly once per second; rebuilding the complete interval union on
+        # every 250 ms paint tick needlessly occupied the GUI thread.
+        self._cross_device_today_display_projection_cache_key: tuple[object, ...] | None = None
+        self._cross_device_today_display_projection_cache_value: int | None = None
+        self._cross_device_today_display_projection_cache_at = 0.0
         self._smooth_work_duration_display = SmoothDurationDisplay()
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
@@ -4161,7 +4179,7 @@ class PetWindow(QWidget):
             self.economy.finish_food_scene("work_finished")
             self.food_scene_timer.stop()
         if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
-            self._work_report_dialog.refresh(force=True)
+            self._work_report_dialog.request_refresh(force=True)
         return reply
 
     # Public state-machine commands.  The older *_work_timer names remain as
@@ -5524,6 +5542,7 @@ class PetWindow(QWidget):
     def _clear_cross_device_today_display(self) -> None:
         """Drop the account-scoped live display projection on account changes."""
 
+        self._invalidate_cross_device_display_projection_cache()
         self._cross_device_today_display_seconds = None
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_date = ""
@@ -5537,6 +5556,13 @@ class PetWindow(QWidget):
         dialog = getattr(self, "_social_dialog", None)
         if dialog is not None:
             dialog.set_cross_device_today_display_seconds(None, account_id="")
+
+    def _invalidate_cross_device_display_projection_cache(self) -> None:
+        """Forget the derived display union after a facts/state update."""
+
+        self._cross_device_today_display_projection_cache_key = None
+        self._cross_device_today_display_projection_cache_value = None
+        self._cross_device_today_display_projection_cache_at = 0.0
 
     def _set_local_live_focus_projection(self, snapshot: object | None = None) -> None:
         """Keep the current local segment in the shared read-only projection."""
@@ -5828,6 +5854,7 @@ class PetWindow(QWidget):
             # erase a previously validated live display snapshot.
             self._cross_device_today_display_live_rows = list(live_rows or [])
         self._cross_device_today_display_seconds = candidate_seconds
+        self._invalidate_cross_device_display_projection_cache()
         self._cross_device_today_display_account_id = account_id
         self._cross_device_today_display_date = display_date
         self._cross_device_today_display_session_id = (
@@ -5871,6 +5898,29 @@ class PetWindow(QWidget):
         ):
             return None
         current = snapshot
+        current_status = str(getattr(current, "status", "") or "") if current is not None else ""
+        current_session = (
+            str(getattr(self.work_timer, "focus_session_id", "") or "")
+            if current_status == "focus"
+            else ""
+        )
+        projection_key = (
+            account_id,
+            str(self._cross_device_today_display_date or ""),
+            current_status,
+            current_session,
+            int(self._cross_device_today_display_seconds or 0),
+            self._cross_device_today_display_live_rows is not None,
+        )
+        if (
+            projection_key == self._cross_device_today_display_projection_cache_key
+            and time.monotonic()
+            - self._cross_device_today_display_projection_cache_at
+            < 0.75
+        ):
+            cached_value = self._cross_device_today_display_projection_cache_value
+            if cached_value is not None:
+                return cached_value
         if self._cross_device_today_display_live_rows is not None:
             # Re-run only the read-only display projection while any device is
             # live.  This keeps a remote computer's interval advancing between
@@ -5933,7 +5983,11 @@ class PetWindow(QWidget):
                         display_seconds,
                         max(0, int(remote_effective.get("today_seconds", 0) or 0)),
                     )
-                return min(24 * 60 * 60, display_seconds)
+                display_seconds = min(24 * 60 * 60, display_seconds)
+                self._cross_device_today_display_projection_cache_key = projection_key
+                self._cross_device_today_display_projection_cache_value = display_seconds
+                self._cross_device_today_display_projection_cache_at = time.monotonic()
+                return display_seconds
             except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError):
                 # Keep the last validated cached value if a local transition
                 # races this display-only recalculation.
@@ -5962,7 +6016,11 @@ class PetWindow(QWidget):
                 value,
                 max(0, int(remote_effective.get("today_seconds", 0) or 0)),
             )
-        return min(24 * 60 * 60, value)
+        value = min(24 * 60 * 60, value)
+        self._cross_device_today_display_projection_cache_key = projection_key
+        self._cross_device_today_display_projection_cache_value = value
+        self._cross_device_today_display_projection_cache_at = time.monotonic()
+        return value
 
     def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
         """Return day/week totals from the single account interval ledger."""
@@ -6409,6 +6467,145 @@ class PetWindow(QWidget):
             current_device_id=str(getattr(self.focus_analytics, "_device_id", "") or ""),
         )
 
+    def _capture_work_report_builder(self) -> Callable[[], dict[str, object]]:
+        """Capture a stable report input set before handing aggregation away."""
+
+        moment = datetime.now(BEIJING_TIMEZONE)
+        focus_snapshot = self.focus_session.snapshot(include_projection=False)
+        # The local live row is a tiny in-memory update; do it before cloning
+        # so the worker sees the same current segment as the desktop bubble.
+        self._set_local_live_focus_projection(focus_snapshot)
+        analytics = self.focus_analytics.readonly_clone(
+            now_provider=lambda captured=moment: captured,
+        )
+        timer = ReportTimerSnapshot(
+            running=bool(self.work_timer.is_running),
+            active=bool(self.work_timer.has_active_session),
+            elapsed_seconds=int(self.work_timer.current_elapsed_seconds() or 0),
+            session_id=(
+                str(self.work_timer.focus_session_id or "")
+                if self.work_timer.has_active_session
+                else ""
+            ),
+            segment_started_at=self.work_timer.current_segment_started_at(),
+        )
+        daily_stats = ReportDailyStatsSnapshot(self.daily_stats.snapshot())
+        extra_live_segments = [
+            item
+            for item in analytics.live_projection_segments()
+            if isinstance(item, FocusSegment)
+            and str(item.segment_id or "") == "display-live-local"
+        ]
+        current_date = moment.date()
+        task_stats = {
+            "day": self.time_memory.records.stats(
+                start=current_date,
+                end=current_date,
+            ),
+            "week": self.time_memory.records.week_stats(current_date.isoformat()),
+            "month": self.time_memory.records.month_stats(current_date.isoformat()),
+        }
+        selected_range = None
+        dialog = self._work_report_dialog
+        if dialog is not None:
+            period = dialog._current_period()
+            start, end = dialog._ranges[period]
+            if not report_range_is_standard(period, start, end, current_date):
+                selected_range = (period, start, end)
+        best_buddy = self._best_buddy_for_report()
+        account_id = str(_session_user_id(self.social_client) or "")
+        current_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
+
+        def build() -> dict[str, object]:
+            return build_work_report(
+                analytics,
+                timer,
+                daily_stats,
+                best_buddy=best_buddy,
+                focus_snapshot=focus_snapshot,
+                focus_projection=None,
+                task_stats=task_stats,
+                selected_range=selected_range,
+                extra_live_segments=extra_live_segments,
+                now=moment,
+                account_id=account_id,
+                current_device_id=current_device_id,
+            )
+
+        return build
+
+    def _start_work_report_refresh(self, force: bool = False) -> None:
+        """Build the report asynchronously and coalesce repeated refreshes."""
+
+        dialog = self._work_report_dialog
+        if dialog is None:
+            return
+        thread = self._work_report_thread
+        if thread is not None and thread.isRunning():
+            self._work_report_refresh_pending = True
+            return
+        if not force and dialog._cached_report is not None:
+            return
+        self._work_report_generation += 1
+        generation = self._work_report_generation
+        try:
+            builder = self._capture_work_report_builder()
+        except Exception as exc:
+            dialog.apply_report({"error": f"报告暂时无法读取：{exc}"})
+            return
+        thread = WorkReportBuildThread(builder, generation, self)
+        self._work_report_thread = thread
+        lifecycle_log("work_report.build.begin", thread, generation=generation)
+        # Connect directly to QObject slots.  A lambda/partial has no Qt
+        # receiver affinity and may therefore run in the worker thread;
+        # report application must always happen on the GUI thread.
+        thread.completed.connect(self._work_report_build_completed)
+        thread.failed.connect(self._work_report_build_failed)
+        thread.finished.connect(self._work_report_thread_finished)
+        thread.start()
+
+    @Slot(int, object)
+    def _work_report_build_completed(self, generation: int, report: object) -> None:
+        if generation != self._work_report_generation:
+            return
+        dialog = self._work_report_dialog
+        if dialog is not None:
+            dialog.apply_report(report if isinstance(report, dict) else None)
+            lifecycle_log("work_report.build.complete", dialog, generation=generation)
+
+    @Slot(int, object)
+    def _work_report_build_failed(self, generation: int, error: object) -> None:
+        if generation != self._work_report_generation:
+            return
+        dialog = self._work_report_dialog
+        if dialog is not None:
+            dialog.apply_report({"error": f"报告暂时无法读取：{error}"})
+        lifecycle_log(
+            "work_report.build.failed",
+            self,
+            generation=generation,
+            error=str(error)[:180],
+        )
+
+    @Slot()
+    def _work_report_thread_finished(self) -> None:
+        thread = self.sender()
+        if not isinstance(thread, WorkReportBuildThread):
+            return
+        if self._work_report_thread is thread:
+            self._work_report_thread = None
+        thread.deleteLater()
+        if self._work_report_refresh_pending:
+            self._work_report_refresh_pending = False
+            QTimer.singleShot(0, lambda: self._start_work_report_refresh(force=True))
+
+    def _activate_work_report_window(self) -> None:
+        dialog = self._work_report_dialog
+        if dialog is None or not dialog.isVisible():
+            return
+        dialog.raise_()
+        dialog.activateWindow()
+
     def show_work_report(self) -> None:
         """Open the live day/week/month report without creating a local image."""
 
@@ -6430,12 +6627,16 @@ class PetWindow(QWidget):
                 )
             )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
-        # An explicit open is a user request for current numbers; the dialog's
-        # 30-second timer throttles passive refreshes, not this action.
-        self._work_report_dialog.refresh(force=True)
+            self._work_report_dialog.set_async_refresh_handler(
+                lambda force=False: self._start_work_report_refresh(bool(force))
+            )
         self._work_report_dialog.showNormal()
-        self._work_report_dialog.raise_()
-        self._work_report_dialog.activateWindow()
+        # An explicit open is a user request for current numbers.  The
+        # expensive snapshot is built by WorkReportBuildThread after the
+        # window is visible, so the shortcut click never waits for analytics
+        # aggregation or chart construction.
+        self._work_report_dialog.request_refresh(force=True)
+        QTimer.singleShot(0, self._activate_work_report_window)
         lifecycle_log("work_report.show.complete", self._work_report_dialog)
 
     def configure_daily_report(self) -> None:
@@ -6974,6 +7175,7 @@ class PetWindow(QWidget):
                 self.settings.equipped_outfit,
                 self._owner_nickname(),
                 None,
+                defer_pages=True,
             )
             lifecycle_log("study_room.create", self._social_dialog)
             self._social_dialog.destroyed.connect(
@@ -7912,6 +8114,8 @@ class PetWindow(QWidget):
                     week_seconds=int(effective_week or 0),
                 )
             )
+            if effective_projection_changed:
+                self._invalidate_cross_device_display_projection_cache()
         analytics_changed = self.focus_analytics.merge_remote_state(
             focus_date=str(remote_date or ""),
             today_seconds=int(remote_today or 0),
