@@ -591,6 +591,8 @@ class PetWindow(QWidget):
         self._work_report_thread: WorkReportBuildThread | None = None
         self._work_report_refresh_pending = False
         self._work_report_generation = 0
+        self._social_analytics_snapshot_scheduled = False
+        self._last_social_week_ui_refresh = 0.0
         self._alarm_center_dialog: AlarmCenterDialog | None = None
         self._alarm_card: AlarmCard | None = None
         # Keep a closing card alive until its queued QMediaPlayer stop has
@@ -7299,14 +7301,18 @@ class PetWindow(QWidget):
                 initial_snapshot,
                 today_display_seconds=initial_today_display_seconds,
             )
-            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
             self._social_dialog.set_local_focus_week_seconds_provider(
-                lambda: self.focus_analytics.account_week_seconds()
+                lambda: self.focus_analytics.account_week_seconds(),
+                refresh=False,
             )
             self._social_dialog.set_cross_device_today_display_seconds(
                 initial_today_display_seconds,
                 account_id=self._current_social_user_id(),
             )
+            # Do not build the full continuity summary inside the shortcut
+            # click. The first page can paint immediately; the metrics are
+            # filled on the next idle turn by the coalesced updater below.
+            self._schedule_social_analytics_snapshot(delay_ms=160)
         # A second click on the menu must restore a minimized study-room
         # window instead of leaving it hidden in the taskbar/Dock.
         if self._social_dialog.isMinimized():
@@ -7318,6 +7324,37 @@ class PetWindow(QWidget):
         # Queue it after the show turn so the shortcut click returns and the
         # study room can paint before the OS foreground negotiation runs.
         QTimer.singleShot(0, self._activate_social_hub_window)
+
+    def _schedule_social_analytics_snapshot(self, *, delay_ms: int = 80) -> None:
+        """Refresh non-clock analytics after the study-room paint turn.
+
+        ``FocusAnalyticsStore.snapshot`` is intentionally rich and may scan
+        a long local history. It must not sit in the click handler or in the
+        250 ms live timer callback. Coalescing also prevents several state
+        signals in one turn from queueing duplicate summaries.
+        """
+
+        dialog = self._social_dialog
+        if dialog is None or getattr(dialog, "_closed", False):
+            return
+        if self._social_analytics_snapshot_scheduled:
+            return
+        self._social_analytics_snapshot_scheduled = True
+
+        def refresh() -> None:
+            self._social_analytics_snapshot_scheduled = False
+            current = self._social_dialog
+            if current is None or getattr(current, "_closed", False):
+                return
+            try:
+                current.set_focus_analytics(self.focus_analytics.snapshot())
+                current.refresh_local_focus_week_seconds()
+            except (RuntimeError, TypeError, ValueError, OverflowError):
+                # The analytics panel is supplementary; a malformed or
+                # closing store must never interrupt the live pet clock.
+                return
+
+        QTimer.singleShot(max(0, int(delay_ms)), refresh)
 
     def _activate_social_hub_window(self) -> None:
         dialog = self._social_dialog
@@ -7359,10 +7396,21 @@ class PetWindow(QWidget):
                 snapshot,
                 today_display_seconds=today_display_seconds,
             )
-            self._social_dialog.refresh_local_focus_week_seconds()
             now = time.monotonic()
+            # The week provider performs an interval projection. Calling it
+            # on every 250 ms presentation tick made the study-room window
+            # compete with the pet animation for the GUI thread, even when
+            # the value had not changed. A five-second refresh is sufficient
+            # for this label and keeps the live second clock independent from
+            # analytics aggregation.
+            if (
+                status_changed
+                or now - self._last_social_week_ui_refresh >= 5.0
+            ):
+                self._social_dialog.refresh_local_focus_week_seconds()
+                self._last_social_week_ui_refresh = now
             if status_changed or now - self._last_focus_analytics_ui_refresh >= 5.0:
-                self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+                self._schedule_social_analytics_snapshot()
                 self._last_focus_analytics_ui_refresh = now
                 self._last_focus_snapshot_status = snapshot_status
         else:
@@ -7419,7 +7467,7 @@ class PetWindow(QWidget):
             due_at = (datetime.now().astimezone() + timedelta(minutes=int(minutes))).isoformat()
         self.focus_analytics.set_current_task(title, due_at=due_at, target_seconds=max(0, int(minutes)) * 60)
         if self._social_dialog is not None:
-            self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
+            self._schedule_social_analytics_snapshot(delay_ms=0)
         self.show_speech(f"这轮只盯一件事：{title[:80]}", 4200)
 
     def _set_tomorrow_review(self, title: str) -> None:

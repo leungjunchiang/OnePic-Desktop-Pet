@@ -1902,7 +1902,11 @@ class WorkReportDialog(QDialog):
         finally:
             self.setUpdatesEnabled(True)
         if self._render_queue:
-            QTimer.singleShot(0, lambda: self._render_next_page(generation))
+            # Keep the visible page responsive before constructing the next
+            # chart-heavy page. A short real delay is intentional here: a
+            # chain of zero-delay timers can run back-to-back and still make
+            # the report feel frozen while all four pages are rebuilt.
+            QTimer.singleShot(12, lambda: self._render_next_page(generation))
 
     @staticmethod
     def _metric(label: str, value: str) -> QFrame:

@@ -361,7 +361,42 @@ class FocusAnalyticsStore:
 
         clone = object.__new__(type(self))
         clone.__dict__ = dict(self.__dict__)
-        clone._state = copy.deepcopy(self._state)
+        # The report only reads the account ledger.  A full deepcopy also
+        # walks the upload acknowledgement/fingerprint map, which can be as
+        # large as the entire history and is never touched by report code.
+        # Copy the mutable projection fields explicitly while keeping the
+        # report clone independent from the live GUI store.
+        source_state = self._state if isinstance(self._state, dict) else {}
+        clone._state = dict(source_state)
+        records = source_state.get("records", [])
+        clone._state["records"] = [
+            dict(item) for item in records if isinstance(item, dict)
+        ]
+        days = source_state.get("days", {})
+        clone._state["days"] = {
+            str(key): dict(value)
+            for key, value in days.items()
+            if isinstance(value, dict)
+        } if isinstance(days, dict) else {}
+        legacy_daily = source_state.get("legacy_daily", {})
+        clone._state["legacy_daily"] = {
+            str(key): dict(value)
+            for key, value in legacy_daily.items()
+            if isinstance(value, dict)
+        } if isinstance(legacy_daily, dict) else {}
+        reviews = source_state.get("reviews", {})
+        clone._state["reviews"] = dict(reviews) if isinstance(reviews, dict) else {}
+        current_task = source_state.get("current_task")
+        clone._state["current_task"] = (
+            dict(current_task) if isinstance(current_task, dict) else current_task
+        )
+        # Account-state metadata is read-only during report construction.  A
+        # shallow mapping is enough and avoids copying the potentially large
+        # upload ACK history.
+        account_state = source_state.get("account_state", {})
+        clone._state["account_state"] = (
+            dict(account_state) if isinstance(account_state, dict) else {}
+        )
         clone._live = copy.deepcopy(self._live)
         clone._live_projection_segments = list(self._live_projection_segments)
         clone._remote_effective_projection = copy.deepcopy(
@@ -1601,6 +1636,39 @@ class FocusAnalyticsStore:
         raw_segments = self.focus_segments()
         has_raw_facts = bool(raw_segments)
 
+        # Build one bounded daily union for the continuity window instead of
+        # rebuilding the full segment list once per day.  The old approach
+        # called ``_raw_day_seconds`` up to 742 times (streak + longest-run),
+        # which made opening the study room increasingly expensive as history
+        # grew.  This is still the same canonical interval union; only the
+        # projection is shared across the read-only calculations below.
+        continuity_start = today - timedelta(days=366)
+        continuity_start_at = datetime.combine(
+            continuity_start,
+            time.min,
+            tzinfo=BEIJING_TIMEZONE,
+        )
+        continuity_end_at = datetime.combine(
+            today + timedelta(days=1),
+            time.min,
+            tzinfo=BEIJING_TIMEZONE,
+        )
+        continuity_daily: dict[str, int] = {}
+        if has_raw_facts:
+            try:
+                continuity_daily = {
+                    str(key): max(0, int(value or 0))
+                    for key, value in self.range_aggregate(
+                        continuity_start_at,
+                        continuity_end_at,
+                    ).daily.items()
+                }
+            except (TypeError, ValueError, OverflowError):
+                # Keep the existing defensive behavior if a malformed legacy
+                # row prevents a broad read; period_summary below will still
+                # validate the visible day/week values independently.
+                continuity_daily = {}
+
         def day_value(day: date, key: str) -> int:
             raw = days.get(day.isoformat(), {})
             try:
@@ -1615,7 +1683,7 @@ class FocusAnalyticsStore:
                 # A quarantined local checkpoint cannot contribute, but a
                 # server-confirmed legacy daily evidence row still can.
                 return legacy_seconds or None
-            canonical_seconds = self._raw_day_seconds(day, moment) if has_raw_facts else 0
+            canonical_seconds = continuity_daily.get(day.isoformat(), 0) if has_raw_facts else 0
             return max(canonical_seconds, legacy_seconds)
 
         weekly_total = sum(

@@ -3055,7 +3055,10 @@ class SocialHubDialog(QDialog):
         index = min(self._lazy_page_factories)
         self._materialize_lazy_page(index)
         if self._lazy_page_factories:
-            QTimer.singleShot(0, self._materialize_next_lazy_page)
+            # Give the just-materialized page one paint/input turn before
+            # constructing the next dense page. A zero-delay chain can still
+            # monopolize the event queue on slower Windows machines.
+            QTimer.singleShot(8, self._materialize_next_lazy_page)
         else:
             self._update_account_state()
             self._prepare_bootstrap()
@@ -3382,11 +3385,17 @@ class SocialHubDialog(QDialog):
         self._owner_nickname_dirty = True
         self._render_self_identity()
 
-    def set_local_focus_week_seconds_provider(self, provider: Callable[[], int] | None) -> None:
+    def set_local_focus_week_seconds_provider(
+        self,
+        provider: Callable[[], int] | None,
+        *,
+        refresh: bool = True,
+    ) -> None:
         """Attach the local account projection for the viewer's own row."""
 
         self._local_focus_week_seconds_provider = provider
-        self.refresh_local_focus_week_seconds()
+        if refresh:
+            self.refresh_local_focus_week_seconds()
 
     def refresh_local_focus_week_seconds(self) -> None:
         provider = self._local_focus_week_seconds_provider
