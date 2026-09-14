@@ -219,13 +219,13 @@ jobs:
               --clobber
             gh release edit "$release_tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $release_tag - PPT 全屏与渲染修复" \
-              --notes "修复 PowerPoint 全屏放映时六毛无法自动隐藏的问题：Windows 优先使用六毛与前台窗口的原生显示器句柄判断是否同屏，兼容高 DPI/多屏，并识别无边框 PowerPoint 工作区全屏而不误隐藏普通编辑窗口。保留头顶表情 headroom、固定 source→target 动作过渡、娃衣缩放缓存、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - login-3 打电脑动作与透明渲染优化" \
+              --notes "更新 login-3 专属打电脑动作：使用新的六毛打电脑素材，去除白色背景并保留透明轮廓与底部阴影；素材统一为 560×500 RGBA 画布，继续复用完整动作的缩放/DPR 渲染缓存，避免动画每帧重复高质量缩放。其他娃衣不会调用该 login-3 专属动作。保留 PowerPoint 全屏隐藏、头顶表情 headroom、固定 source→target 动作过渡、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           else
             echo "Creating release $release_tag with verified artifacts."
             gh release create "$release_tag" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "Lili $release_tag - PPT 全屏与渲染修复" \
-              --notes "修复 PowerPoint 全屏放映时六毛无法自动隐藏的问题：Windows 优先使用六毛与前台窗口的原生显示器句柄判断是否同屏，兼容高 DPI/多屏，并识别无边框 PowerPoint 工作区全屏而不误隐藏普通编辑窗口。保留头顶表情 headroom、固定 source→target 动作过渡、娃衣缩放缓存、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、login-3 专属动作、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - login-3 打电脑动作与透明渲染优化" \
+              --notes "更新 login-3 专属打电脑动作：使用新的六毛打电脑素材，去除白色背景并保留透明轮廓与底部阴影；素材统一为 560×500 RGBA 画布，继续复用完整动作的缩放/DPR 渲染缓存，避免动画每帧重复高质量缩放。其他娃衣不会调用该 login-3 专属动作。保留 PowerPoint 全屏隐藏、头顶表情 headroom、固定 source→target 动作过渡、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           fi
