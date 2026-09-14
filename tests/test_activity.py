@@ -43,6 +43,8 @@ def test_windows_desktop_shell_class_matching_is_normalized() -> None:
 def _fake_windows_user32(
     *,
     zoomed: bool = False,
+    visible: bool = True,
+    iconic: bool = False,
     style: int = 0,
     window_bounds: tuple[int, int, int, int] = (0, 0, 1920, 1080),
     monitor_bounds: tuple[int, int, int, int] = (0, 0, 1920, 1080),
@@ -61,6 +63,18 @@ def _fake_windows_user32(
         @staticmethod
         def IsZoomed(_hwnd):
             return int(zoomed)
+
+        @staticmethod
+        def IsWindow(_hwnd):
+            return 1
+
+        @staticmethod
+        def IsWindowVisible(_hwnd):
+            return int(visible)
+
+        @staticmethod
+        def IsIconic(_hwnd):
+            return int(iconic)
 
         @staticmethod
         def GetWindowLongW(_hwnd, _index):
@@ -84,6 +98,44 @@ def _fake_windows_user32(
             return 1
 
     return User32()
+
+
+def test_windows_minimized_foreground_window_does_not_suppress_pet(monkeypatch) -> None:
+    """A minimize transition must fail open instead of hiding the pet."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=_fake_windows_user32(
+                zoomed=True,
+                iconic=True,
+                window_bounds=(0, 0, 1920, 1080),
+            )
+        ),
+        raising=False,
+    )
+
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_NORMAL
+
+
+def test_windows_hidden_foreground_window_does_not_suppress_pet(monkeypatch) -> None:
+    """A stale hidden HWND is not evidence of a display takeover."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(user32=_fake_windows_user32(zoomed=True, visible=False)),
+        raising=False,
+    )
+
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_NORMAL
 
 
 def test_windows_maximised_chatgpt_is_not_treated_as_fullscreen(monkeypatch) -> None:

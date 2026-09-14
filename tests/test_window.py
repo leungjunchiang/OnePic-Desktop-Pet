@@ -3121,8 +3121,8 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     window.close(); window.deleteLater(); app.processEvents()
 
 
-def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) -> None:
-    """Maximised apps yield visually but do not change FocusSession."""
+def test_normal_maximized_window_keeps_pet_visible_without_pausing_focus(monkeypatch) -> None:
+    """普通最大化应用不应让位，且不改变 FocusSession。"""
 
     app, window = _create_window()
     window.start_work_timer()
@@ -3131,8 +3131,8 @@ def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) ->
         lambda _screen_bounds, **_kwargs: "maximized",
     )
     window._sync_fullscreen_visibility()
-    assert window._fullscreen_hidden
-    assert not window.isVisible()
+    assert not window._fullscreen_hidden
+    assert window.isVisible()
     assert window.work_timer.is_running
     assert window.work_timer.pause_reason is None
 
@@ -3142,7 +3142,6 @@ def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) ->
     )
     window._sync_fullscreen_visibility()
     assert window.isVisible()
-    window._finish_fullscreen_restore()
     assert not window._fullscreen_hidden
     window.close(); window.deleteLater(); app.processEvents()
 

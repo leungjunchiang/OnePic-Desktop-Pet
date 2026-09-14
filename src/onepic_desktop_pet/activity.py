@@ -344,6 +344,24 @@ def _windows_foreground_display_mode(
     *,
     reference_hwnd=None,
 ) -> str:
+    # A minimized or otherwise hidden HWND is not currently taking over the
+    # desktop.  During a minimize transition Windows can briefly keep the
+    # old HWND as the foreground handle; treating its stale geometry as a
+    # maximized/fullscreen takeover would hide the pet until the next window
+    # lifecycle event.  Fail open for the pet visibility policy.
+    try:
+        is_window = getattr(user32, "IsWindow", None)
+        if is_window is not None and not bool(is_window(hwnd)):
+            return DISPLAY_MODE_NORMAL
+        is_visible = getattr(user32, "IsWindowVisible", None)
+        if is_visible is not None and not bool(is_visible(hwnd)):
+            return DISPLAY_MODE_NORMAL
+        is_iconic = getattr(user32, "IsIconic", None)
+        if is_iconic is not None and bool(is_iconic(hwnd)):
+            return DISPLAY_MODE_NORMAL
+    except (AttributeError, OSError, TypeError, ValueError):
+        return DISPLAY_MODE_NORMAL
+
     if _windows_foreground_is_desktop_shell(user32, hwnd):
         return DISPLAY_MODE_NORMAL
 
@@ -554,6 +572,15 @@ def active_window_display_mode(
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return DISPLAY_MODE_NORMAL
+        # The pet uses a non-activating top-level HWND.  Some window-manager
+        # transitions can still report it as foreground for one poll; it can
+        # never be evidence that another app owns the display.
+        if reference_hwnd is not None:
+            try:
+                if int(hwnd) == int(reference_hwnd):
+                    return DISPLAY_MODE_NORMAL
+            except (TypeError, ValueError):
+                pass
         return _windows_foreground_display_mode(
             user32,
             hwnd,

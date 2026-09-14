@@ -143,7 +143,6 @@ from .activity import (
     active_window_display_mode,
     active_window_is_fullscreen,
     DISPLAY_MODE_FULLSCREEN,
-    DISPLAY_MODE_MAXIMIZED,
 )
 from .behavior import (
     BehaviorModel,
@@ -2383,11 +2382,13 @@ class PetWindow(QWidget):
         """Synchronise NORMAL/SUPPRESSED/RESTORING pet visibility state.
 
         The display-mode detector is intentionally separate from the focus
-        activity detector.  A normal maximised window suppresses the visual
-        pet and its detached surfaces, but it never pauses FocusSession.  The
-        saved visibility map is restored only after the foreground window has
-        returned to NORMAL and is followed by two non-activating native policy
-        repairs so a window-manager reorder cannot leave one accessory behind.
+        activity detector.  Only a real fullscreen takeover suppresses the
+        visual pet and its detached surfaces; ordinary maximised, minimized,
+        browser, work-report, and remote-control windows must leave the pet
+        visible and topmost.  The saved visibility map is restored only after
+        a fullscreen surface has returned to NORMAL and is followed by two
+        non-activating native policy repairs so a window-manager reorder
+        cannot leave one accessory behind.
         """
 
         monitor_bounds = self._pet_monitor_bounds()
@@ -2399,7 +2400,11 @@ class PetWindow(QWidget):
                 monitor_bounds,
                 reference_hwnd=native_window_handle,
             )
-        suppressed = mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}
+        # Maximized desktop applications are not display takeovers.  Keep the
+        # pet visible above them without activation or focus stealing.  Only
+        # true fullscreen surfaces (PPT slideshow, video fullscreen, games)
+        # are allowed to suppress the pet.
+        suppressed = mode == DISPLAY_MODE_FULLSCREEN
         if suppressed:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
@@ -2461,7 +2466,7 @@ class PetWindow(QWidget):
             self._update_topmost_watchdog()
             return
         mode = active_window_display_mode(self._pet_monitor_bounds())
-        if mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}:
+        if mode == DISPLAY_MODE_FULLSCREEN:
             # The foreground app reclaimed the display during the repair.
             self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
             self._sync_fullscreen_visibility()
