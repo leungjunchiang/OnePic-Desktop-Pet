@@ -183,6 +183,42 @@ def test_live_projection_bridge_keeps_a_stopped_device_until_closed_fact_arrives
     assert get_cross_device_today_display_seconds("account-1", NOW, live_rows) == 6 * 60 * 60
 
 
+def test_stopped_live_projection_does_not_advance_after_both_devices_pause() -> None:
+    """两台设备都暂停后，临时 projection 只能保留已结束区间。"""
+
+    live_rows = live_projection_rows(
+        "account-1",
+        {
+            "devices": [
+                {
+                    "device_id": "mac",
+                    "session_id": "mac-session",
+                    "start_at": "2026-08-31T09:00:00+08:00",
+                    "end_at": "2026-08-31T11:00:00+08:00",
+                    "working": False,
+                },
+                {
+                    "device_id": "win",
+                    "session_id": "win-session",
+                    "start_at": "2026-08-31T10:00:00+08:00",
+                    "end_at": "2026-08-31T12:00:00+08:00",
+                    "working": False,
+                },
+            ]
+        },
+        now=NOW,
+    )
+
+    before = get_cross_device_today_display_seconds("account-1", NOW, live_rows)
+    after = get_cross_device_today_display_seconds(
+        "account-1",
+        NOW.replace(hour=16),
+        live_rows,
+    )
+    assert before == 3 * 60 * 60
+    assert after == before
+
+
 def test_live_projection_rejects_foreign_or_duplicate_devices() -> None:
     with pytest.raises(CrossDeviceDisplayDataError):
         live_projection_rows(

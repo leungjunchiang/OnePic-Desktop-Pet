@@ -33,7 +33,7 @@ from onepic_desktop_pet.social_ui import (
 )
 
 
-def test_heartbeat_worker_defers_inactive_presence_until_focus_ack() -> None:
+def test_heartbeat_worker_sends_inactive_presence_without_waiting_for_focus_ack() -> None:
     class Client:
         pass
 
@@ -47,7 +47,8 @@ def test_heartbeat_worker_defers_inactive_presence_until_focus_ack() -> None:
         },
         immediate=True,
     )
-    assert worker._pending is None
+    assert worker._pending["working"] is False
+    assert worker._pending["session_active"] is False
     worker.update_presence(
         {
             "user_id": "account-a",
@@ -67,7 +68,8 @@ def test_heartbeat_worker_defers_inactive_presence_until_focus_ack() -> None:
             "_defer_inactive_until_focus_ack": True,
         }
     )
-    assert worker._shutdown_payload is None
+    assert worker._shutdown_payload["working"] is False
+    assert worker._shutdown_payload["session_active"] is False
 
 
 def test_focus_upload_ack_requires_every_requested_segment_id() -> None:

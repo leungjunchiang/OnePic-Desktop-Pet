@@ -4105,7 +4105,9 @@ class PetWindow(QWidget):
         self.show_speech(reply.text + quality_text, 5600)
         self.work_timer_changed.emit(False)
         self._sync_state_effect()
-        self._schedule_social_tick()
+        # Freeze presence immediately. FocusSegment upload/ACK remains an
+        # independent retry path and must not keep this paused account live.
+        self._schedule_social_tick(immediate=True)
         # 直接操作完成后收起控制条；下一次右键六毛时会按最新状态重建。
         self.work_controls.hide()
         self._refresh_pixmap()
@@ -4173,7 +4175,7 @@ class PetWindow(QWidget):
         self._request_local_effect_event(LocalEffectKind.GOLD)
         self.work_timer_changed.emit(False)
         self._sync_state_effect()
-        self._schedule_social_tick()
+        self._schedule_social_tick(immediate=True)
         self.work_controls.hide()
         self.work_activity_timer.stop()
         self._set_temporary_activity(random.choice(COMPLETE_ACTIONS), 45_000)
@@ -6418,7 +6420,7 @@ class PetWindow(QWidget):
                     self.focus_session.refresh()
                     self.work_timer_changed.emit(False)
                     self._sync_state_effect()
-                    self._schedule_social_tick()
+                    self._schedule_social_tick(immediate=True)
 
     def _generate_daily_report(self, *, show_dialog: bool, mark_generated: bool = False) -> Path | None:
         """生成只保存在本机的工作日报；可选展示预览窗口。"""
@@ -7662,11 +7664,6 @@ class PetWindow(QWidget):
             "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
             if self._room_quick_status_expires_at is not None else None,
         }
-        if not active_session and self.focus_analytics.has_pending_focus_handoff():
-            # Strict ACK-before-inactive fallback: keep the last remote live
-            # projection untouched until the sealed local fact is accepted by
-            # the existing delta RPC. This adds no polling or history pull.
-            presence["_defer_inactive_until_focus_ack"] = True
         presence_context_signature = (
             str(room_id or ""),
             str(self.settings.equipped_outfit or "")[:60],

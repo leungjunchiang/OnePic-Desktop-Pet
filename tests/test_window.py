@@ -3801,6 +3801,27 @@ def test_focus_start_requests_immediate_social_flush(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_focus_pause_requests_immediate_inactive_social_flush(monkeypatch) -> None:
+    """暂停后不能等下一轮 30 秒同步才停止跨设备实时投影。"""
+
+    app, window = _create_window()
+    scheduled: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        window,
+        "_schedule_social_tick",
+        lambda **kwargs: scheduled.append(dict(kwargs)),
+    )
+
+    window.start_work_timer()
+    scheduled.clear()
+    window.pause_work_timer()
+
+    assert scheduled == [{"immediate": True}]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_pause_survives_secondary_projection_failure(monkeypatch) -> None:
     """A non-canonical local card failure cannot leave the timer running."""
 
