@@ -125,6 +125,7 @@ from .accessories import (
     ALL_OUTFITS,
     complete_sprite_path,
     LOGIN_3_ACTIVITIES,
+    LOGIN_3_WORK_ACTIVITIES,
     LOGIN_REWARD_OUTFIT,
     OUTFITS,
     SPECIAL_LIMITED_ACTIVITY_SPRITES,
@@ -1806,6 +1807,13 @@ class PetWindow(QWidget):
         """Return whether the account is currently wearing the login-3 set."""
 
         return self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+
+    def _focus_activity_choices(self) -> tuple[str, ...]:
+        """Return automatic work activities, including login-3-only art."""
+
+        if self._login3_actions_enabled():
+            return FOCUS_ACTIONS + LOGIN_3_WORK_ACTIVITIES
+        return FOCUS_ACTIONS
 
     def _maybe_show_login3_greeting(self) -> None:
         """Show the login-3 greeting once when the outfit becomes active."""
@@ -4904,7 +4912,7 @@ class PetWindow(QWidget):
         if self._login3_actions_enabled() and self.work_timer.session_seconds() >= 2 * 3600:
             activity = "milk-tea"
         else:
-            activity = random.choice(FOCUS_ACTIONS)
+            activity = random.choice(self._focus_activity_choices())
         self._change_ambient_activity(activity)
         self._manual_activity_until = time.monotonic() + 120
         self._schedule_work_activity()
@@ -4925,7 +4933,7 @@ class PetWindow(QWidget):
             self._night_limited_tick()
             return
         self._change_ambient_activity(
-            random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+            random.choice(self._focus_activity_choices()) if self.work_timer.is_running else "none"
         )
 
     @_guard_qt_callback
@@ -9925,7 +9933,9 @@ class PetWindow(QWidget):
                 self.activity_timer.stop()
                 self._manual_activity_until = 0.0
                 self._change_ambient_activity(
-                    random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+                    random.choice(self._focus_activity_choices())
+                    if self.work_timer.is_running
+                    else "none"
                 )
             return
         self._night_limited_activity = selected

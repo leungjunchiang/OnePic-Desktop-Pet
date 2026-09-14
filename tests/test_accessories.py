@@ -80,7 +80,17 @@ def test_login3_actions_are_outfit_scoped_and_use_complete_transparent_sprites()
     assert login3_action_sprite_path("work-flow", LOGIN_REWARD_OUTFIT.key).endswith(
         "login-rewards/actions/report.png"
     )
+    assert login3_action_sprite_path("typing", LOGIN_REWARD_OUTFIT.key).endswith(
+        "login-rewards/actions/typing.png"
+    )
+    assert login3_action_sprite_path("desk", LOGIN_REWARD_OUTFIT.key).endswith(
+        "login-rewards/actions/desk.png"
+    )
+    assert login3_action_sprite_path("paperwork", LOGIN_REWARD_OUTFIT.key).endswith(
+        "login-rewards/actions/paperwork.png"
+    )
     assert login3_action_sprite_path("work-flow", "hour-01") is None
+    assert login3_action_sprite_path("typing", "hour-01") is None
 
     result = draw_activity_overlay(
         source,

@@ -2198,6 +2198,22 @@ def test_work_activity_rotation_never_selects_rest_actions(monkeypatch) -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_login3_work_rotation_includes_private_action_art() -> None:
+    """新加入的三张工作图只进入 login-3 的自动工作轮换。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "login-3-day"
+    assert {"typing", "desk", "paperwork"}.issubset(
+        window._focus_activity_choices()
+    )
+
+    window.settings.equipped_outfit = "hour-01"
+    assert not {"typing", "desk", "paperwork"}.intersection(
+        window._focus_activity_choices()
+    )
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_pause_disables_running_but_keeps_ambient_state_timer() -> None:
     """暂停跑动时应进入生活状态并继续计时，而不是冻结在站立帧。"""
 

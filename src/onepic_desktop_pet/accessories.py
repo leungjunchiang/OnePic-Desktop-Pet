@@ -78,6 +78,9 @@ LOGIN_3_ACTION_SPRITES = {
     "hello": "assets/pet/login-rewards/actions/hello.png",
     "phone": "assets/pet/login-rewards/actions/phone.png",
     "computer": "assets/pet/login-rewards/actions/computer.png",
+    "typing": "assets/pet/login-rewards/actions/typing.png",
+    "desk": "assets/pet/login-rewards/actions/desk.png",
+    "paperwork": "assets/pet/login-rewards/actions/paperwork.png",
     "milk-tea": "assets/pet/login-rewards/actions/milk-tea.png",
     "encourage": "assets/pet/login-rewards/actions/encourage.png",
     "book": "assets/pet/login-rewards/actions/book.png",
@@ -94,6 +97,13 @@ LOGIN_3_ACTIVITY_ALIASES = {
     "phone": "phone",
     "computer": "computer",
     "office": "computer",
+    "typing": "typing",
+    "keyboard": "typing",
+    "desk": "desk",
+    "desk-work": "desk",
+    "paperwork": "paperwork",
+    "papers": "paperwork",
+    "overwhelmed": "paperwork",
     "work-flow": "report",
     "report": "report",
     "night-reading": "book",
@@ -111,6 +121,7 @@ LOGIN_3_ACTIVITY_ALIASES = {
     "message": "message",
 }
 LOGIN_3_ACTIVITIES = frozenset(LOGIN_3_ACTIVITY_ALIASES)
+LOGIN_3_WORK_ACTIVITIES = ("typing", "desk", "paperwork")
 
 
 def login3_action_sprite_path(activity: str, outfit: str) -> str | None:

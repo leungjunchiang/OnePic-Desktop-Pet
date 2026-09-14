@@ -219,13 +219,13 @@ jobs:
               --clobber
             gh release edit "$release_tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Lili $release_tag - login-3 打电脑动作与透明渲染优化" \
-              --notes "更新 login-3 专属打电脑动作：使用新的六毛打电脑素材，去除白色背景并保留透明轮廓与底部阴影；素材统一为 560×500 RGBA 画布，继续复用完整动作的缩放/DPR 渲染缓存，避免动画每帧重复高质量缩放。其他娃衣不会调用该 login-3 专属动作。保留 PowerPoint 全屏隐藏、头顶表情 headroom、固定 source→target 动作过渡、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - login-3 专属工作动作扩展" \
+              --notes "扩展 login-3 专属工作动作：加入快速打字、桌面工作、文件堆工作三张新素材，并保留此前更新的打电脑动作；三张素材均保持透明 alpha，统一为 560×500 RGBA 画布，自动工作轮换会在 login-3 穿戴时启用，其他娃衣不会调用。继续复用完整动作的缩放/DPR 渲染缓存，避免动画每帧重复高质量缩放；同时保留 PowerPoint 全屏隐藏、头顶表情 headroom、固定 source→target 动作过渡、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           else
             echo "Creating release $release_tag with verified artifacts."
             gh release create "$release_tag" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "Lili $release_tag - login-3 打电脑动作与透明渲染优化" \
-              --notes "更新 login-3 专属打电脑动作：使用新的六毛打电脑素材，去除白色背景并保留透明轮廓与底部阴影；素材统一为 560×500 RGBA 画布，继续复用完整动作的缩放/DPR 渲染缓存，避免动画每帧重复高质量缩放。其他娃衣不会调用该 login-3 专属动作。保留 PowerPoint 全屏隐藏、头顶表情 headroom、固定 source→target 动作过渡、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
+              --title "Lili $release_tag - login-3 专属工作动作扩展" \
+              --notes "扩展 login-3 专属工作动作：加入快速打字、桌面工作、文件堆工作三张新素材，并保留此前更新的打电脑动作；三张素材均保持透明 alpha，统一为 560×500 RGBA 画布，自动工作轮换会在 login-3 穿戴时启用，其他娃衣不会调用。继续复用完整动作的缩放/DPR 渲染缓存，避免动画每帧重复高质量缩放；同时保留 PowerPoint 全屏隐藏、头顶表情 headroom、固定 source→target 动作过渡、透明轮廓缓存、monotonic 今日计时、桌面与自习室统一时长、非激活置顶 watchdog，以及全屏/最大化恢复策略。"
           fi
