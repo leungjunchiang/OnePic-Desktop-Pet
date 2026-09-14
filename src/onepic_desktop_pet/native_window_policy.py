@@ -1,7 +1,7 @@
 """桌宠原生窗口层级的低频、非激活平台桥。
 
-Qt flags 是唯一的窗口策略来源；本模块只在 Show、WinIdChange、屏幕或
-应用生命周期节点校验已经存在的 native handle。Windows 使用
+Qt flags 是唯一的窗口策略来源；本模块只在 Show、WinIdChange、屏幕、
+应用生命周期节点或低频 watchdog 中校验已经存在的 native handle。Windows 使用
 ``SetWindowPos`` 的 ``NOACTIVATE`` 方式，macOS 使用 PyObjC 包装 Qt
 创建的 NSWindow；不通过裸 Objective-C ABI 调用、不接管 Cocoa delegate，也不抢占焦点。
 """

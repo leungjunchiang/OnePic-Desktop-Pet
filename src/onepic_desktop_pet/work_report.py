@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 from time import monotonic
 from typing import Any, Callable
 
-from PySide6.QtCore import QDate, QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QDate, QRect, QSize, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -37,6 +37,76 @@ from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
 from .focus_segments import FocusSegment, parse_focus_timestamp
 from .work_timer import WorkTimerModel, format_work_duration
 from .lifecycle_log import lifecycle_log
+
+
+class ReportTimerSnapshot:
+    """Read-only timer view safe to use while a report is built in a worker."""
+
+    def __init__(
+        self,
+        *,
+        running: bool,
+        active: bool,
+        elapsed_seconds: int,
+        session_id: str,
+        segment_started_at: datetime | None,
+    ) -> None:
+        self._running = bool(running)
+        self._active = bool(active)
+        self._elapsed_seconds = max(0, int(elapsed_seconds or 0))
+        self._session_id = str(session_id or "")
+        self._segment_started_at = segment_started_at
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def has_active_session(self) -> bool:
+        return self._active
+
+    @property
+    def focus_session_id(self) -> str:
+        return self._session_id
+
+    def current_elapsed_seconds(self) -> int:
+        return self._elapsed_seconds
+
+    def current_segment_started_at(self) -> datetime | None:
+        return self._segment_started_at
+
+
+class ReportDailyStatsSnapshot:
+    """Minimal immutable adapter for ``DailyCompanionStats.snapshot()``."""
+
+    def __init__(self, values: dict[str, Any] | None) -> None:
+        self._values = dict(values or {})
+
+    def snapshot(self) -> dict[str, Any]:
+        return dict(self._values)
+
+
+class WorkReportBuildThread(QThread):
+    """Build one report snapshot without occupying the Qt GUI thread."""
+
+    completed = Signal(int, object)
+    failed = Signal(int, object)
+
+    def __init__(
+        self,
+        builder: Callable[[], dict[str, Any]],
+        generation: int,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._builder = builder
+        self._generation = int(generation)
+
+    def run(self) -> None:  # pragma: no cover - exercised through Qt event loop
+        try:
+            self.completed.emit(self._generation, self._builder())
+        except Exception as exc:
+            self.failed.emit(self._generation, exc)
 
 
 REPORT_STYLE = """
@@ -1502,6 +1572,12 @@ class WorkReportDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._snapshot_provider = snapshot_provider
+        self._async_refresh_handler: Callable[[bool], None] | None = None
+        self._refresh_request_scheduled = False
+        self._pending_refresh_force = False
+        self._render_generation = 0
+        self._render_queue: list[str] = []
+        self._render_report: dict[str, Any] | None = None
         self._pet_name = pet_name.strip() or "六毛"
         self.setObjectName("workReportDialog")
         self.setWindowTitle(f"{self._pet_name}工作报告")
@@ -1585,16 +1661,19 @@ class WorkReportDialog(QDialog):
         # pages every five seconds was enough to create visible event-loop
         # stalls while the pet itself was otherwise ticking cheaply.
         self._refresh_timer.setInterval(30_000)
-        self._refresh_timer.timeout.connect(self.refresh)
+        self._refresh_timer.timeout.connect(self.request_refresh)
         self._last_render_fingerprint: str | None = None
         self._cached_report: dict[str, Any] | None = None
         self._last_provider_refresh_at = 0.0
         self._update_navigator()
+        loading = QLabel("正在生成工作报告…")
+        loading.setObjectName("reportHint")
+        self._pages["day"].addWidget(loading)
 
     def showEvent(self, event) -> None:
         lifecycle_log("work_report.show_event.begin", self)
         super().showEvent(event)
-        self.refresh()
+        self.request_refresh()
         self._refresh_timer.start()
         lifecycle_log("work_report.show_event.end", self)
 
@@ -1614,6 +1693,33 @@ class WorkReportDialog(QDialog):
     def _current_period(self) -> str:
         return REPORT_PERIODS[max(0, min(self.tabs.currentIndex(), len(REPORT_PERIODS) - 1))]
 
+    def set_async_refresh_handler(
+        self,
+        handler: Callable[[bool], None] | None,
+    ) -> None:
+        """Let the owner build snapshots off the GUI thread."""
+
+        self._async_refresh_handler = handler
+
+    def request_refresh(self, *, force: bool = False) -> None:
+        """Schedule a refresh without doing report work in the click handler."""
+
+        handler = self._async_refresh_handler
+        if handler is not None:
+            handler(bool(force))
+            return
+        self._pending_refresh_force = self._pending_refresh_force or bool(force)
+        if self._refresh_request_scheduled:
+            return
+        self._refresh_request_scheduled = True
+        QTimer.singleShot(0, self._run_scheduled_refresh)
+
+    def _run_scheduled_refresh(self) -> None:
+        self._refresh_request_scheduled = False
+        force = self._pending_refresh_force
+        self._pending_refresh_force = False
+        self.refresh(force=force)
+
     def _update_navigator(self) -> None:
         key = self._current_period()
         start, end = self._ranges[key]
@@ -1627,14 +1733,14 @@ class WorkReportDialog(QDialog):
         key = self._current_period()
         self._ranges[key] = standard_report_range(key, datetime.now(BEIJING_TIMEZONE).date())
         self._update_navigator()
-        self.refresh(force=True)
+        self.request_refresh(force=True)
 
     def _shift_range(self, direction: int) -> None:
         key = self._current_period()
         start, end = self._ranges[key]
         self._ranges[key] = move_report_range(key, start, end, direction, fine=False)
         self._update_navigator()
-        self.refresh(force=True)
+        self.request_refresh(force=True)
 
     def _shift_by_days(self, days: int, *, period: str | None = None) -> None:
         key = period or self._current_period()
@@ -1650,7 +1756,7 @@ class WorkReportDialog(QDialog):
         delta = timedelta(days=int(days))
         self._ranges[key] = start + delta, end + delta
         self._update_navigator()
-        self.refresh(force=True)
+        self.request_refresh(force=True)
 
     def _open_range_picker(self) -> None:
         key = self._current_period()
@@ -1684,7 +1790,7 @@ class WorkReportDialog(QDialog):
         apply_button.clicked.connect(apply)
         if picker.exec() == QDialog.DialogCode.Accepted:
             self._update_navigator()
-            self.refresh(force=True)
+            self.request_refresh(force=True)
 
     def refresh(self, *, force: bool = False) -> None:
         now = monotonic()
@@ -1734,20 +1840,69 @@ class WorkReportDialog(QDialog):
         if fingerprint == self._last_render_fingerprint:
             return
         self._last_render_fingerprint = fingerprint
+        self._queue_report_render(report)
+
+    def apply_report(self, report: dict[str, Any] | None) -> None:
+        """Apply an already-built report on the GUI thread."""
+
+        normalized = (
+            dict(report)
+            if isinstance(report, dict)
+            else {"error": "报告数据格式无效。"}
+        )
+        self._cached_report = normalized
+        self._last_provider_refresh_at = monotonic()
+        fingerprint = repr({
+            key: normalized.get(key)
+            for key in ("error", "current_status", "day", "week", "month", "year")
+            if key in normalized
+        })
+        if fingerprint == self._last_render_fingerprint:
+            return
+        self._last_render_fingerprint = fingerprint
+        self._queue_report_render(normalized)
+
+    def _queue_report_render(self, report: dict[str, Any]) -> None:
+        """Render the visible tab first, then yield between other pages."""
+
         self.finish_button.setEnabled(
             report.get("current_status") in {"focus", "rest"}
             if not report.get("error")
             else False
         )
-        for key, layout in self._pages.items():
+        self._render_generation += 1
+        generation = self._render_generation
+        current = self._current_period()
+        self._render_queue = [current] + [
+            key for key in self._pages if key != current
+        ]
+        self._render_report = report
+        QTimer.singleShot(0, lambda: self._render_next_page(generation))
+
+    def _render_next_page(self, generation: int) -> None:
+        """Render one report page per Qt turn to keep input responsive."""
+
+        if generation != self._render_generation or not self._render_queue:
+            return
+        key = self._render_queue.pop(0)
+        layout = self._pages.get(key)
+        report = self._render_report
+        if layout is None or report is None:
+            return
+        self.setUpdatesEnabled(False)
+        try:
             _clear_layout(layout)
             if report.get("error"):
                 label = QLabel(str(report["error"]))
                 label.setWordWrap(True)
                 layout.addWidget(label)
-                continue
-            self._render_period(layout, key, report)
-            layout.addStretch(1)
+            else:
+                self._render_period(layout, key, report)
+                layout.addStretch(1)
+        finally:
+            self.setUpdatesEnabled(True)
+        if self._render_queue:
+            QTimer.singleShot(0, lambda: self._render_next_page(generation))
 
     @staticmethod
     def _metric(label: str, value: str) -> QFrame:

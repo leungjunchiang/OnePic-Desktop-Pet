@@ -21,7 +21,7 @@
 - 今日时长读取账号级 sealed/live 区间并集，同时把本机暂停与另一台设备工作明确区分；
 - 另一台设备的 live projection RPC 暂时不可用时，使用服务器已确认的 me_presence 做只读兜底，避免等待下一个 sealed checkpoint 才显示当前工作；
 - 键鼠空闲或视频/游戏全屏自动暂停后，回到屏幕时显示可关闭的闹钟风格“继续工作”卡片；
-- Windows 与 macOS 均只向真正的视频/游戏全屏让位，普通最大化文档窗口不遮挡桌宠；
+- Windows 与 macOS 均在普通最大化或真正的视频/游戏/PPT 全屏时暂时隐藏桌宠，退出后按原可见状态恢复；最大化只影响视觉，不自动暂停专注；
 - 根据前台应用粗粒度类别显示电脑、耳机、吉他、鼓、阅读或写字图层；
 - 支持头部摸动、脸部/身体/相机分区点击、连续戳击、悬停注视和拖拽后表情；
 - 通过与角色素材解耦的矢量图层增强开心、害羞、惊讶、生气、困倦、疑惑、自拍和拖拽反馈；
@@ -76,6 +76,7 @@ from PySide6.QtCore import (
     QTimer,
     QUrl,
     Signal,
+    Slot,
 )
 from PySide6.QtGui import (
     QCloseEvent,
@@ -125,6 +126,9 @@ from .ai import AIChatService, CredentialStore, PROVIDER_PRESETS
 from .alarm_ui import AlarmCard, AlarmCenterDialog, AwayRecoveryCard
 from .accessories import (
     ALL_OUTFITS,
+    complete_sprite_path,
+    LOGIN_3_ACTIVITIES,
+    LOGIN_3_WORK_ACTIVITIES,
     LOGIN_REWARD_OUTFIT,
     OUTFITS,
     SPECIAL_LIMITED_ACTIVITY_SPRITES,
@@ -135,9 +139,11 @@ from .activity import (
     active_application_category,
     active_application_name,
     active_fullscreen_game,
-    active_fullscreen_presentation,
     active_fullscreen_video,
+    active_window_display_mode,
     active_window_is_fullscreen,
+    DISPLAY_MODE_FULLSCREEN,
+    DISPLAY_MODE_MAXIMIZED,
 )
 from .behavior import (
     BehaviorModel,
@@ -189,7 +195,11 @@ from .focus_activity import (
 )
 from .input_activity import system_idle_seconds, system_session_state
 from .idle_classifier import IdleClassification, IdleEvidence, classify_idle
-from .emotion_effects import draw_emotion_effect, emotion_effect_name
+from .emotion_effects import (
+    EMOTION_HEADROOM_LOGICAL,
+    draw_emotion_effect,
+    emotion_effect_name,
+)
 from .local_burst_effect import EffectExclusionRegion, LocalBurstEffectWindow
 from .state_effects import (
     LocalEffectKind,
@@ -218,7 +228,14 @@ from .focus_segments import (
     deterministic_focus_segment_id,
 )
 from .focus_session import FocusSessionManager
-from .work_report import WorkReportDialog, build_work_report
+from .work_report import (
+    ReportDailyStatsSnapshot,
+    ReportTimerSnapshot,
+    WorkReportBuildThread,
+    WorkReportDialog,
+    build_work_report,
+    report_range_is_standard,
+)
 from .growth import (
     ACTION_GROUPS,
     ACTION_SPRITES,
@@ -344,6 +361,15 @@ SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
 SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
 FOCUS_HISTORY_RECOVERY_CHECK_SECONDS = 15 * 60.0
+
+# The visibility state is deliberately independent from FocusSession.  An
+# ordinary maximised application suppresses the pet visually, but must not
+# pause or mutate the focus timer.  RESTORING is kept explicit so a queued
+# repaint/show callback cannot re-enter the normal state halfway through the
+# two-stage native z-order repair.
+FULLSCREEN_VISIBILITY_NORMAL = "normal"
+FULLSCREEN_VISIBILITY_SUPPRESSED = "suppressed"
+FULLSCREEN_VISIBILITY_RESTORING = "restoring"
 
 
 def _guard_qt_callback(method):
@@ -562,6 +588,9 @@ class PetWindow(QWidget):
         self._economy_dialog: EconomyDialog | None = None
         self._food_scene_dialog: FoodSceneDialog | None = None
         self._work_report_dialog: WorkReportDialog | None = None
+        self._work_report_thread: WorkReportBuildThread | None = None
+        self._work_report_refresh_pending = False
+        self._work_report_generation = 0
         self._alarm_center_dialog: AlarmCenterDialog | None = None
         self._alarm_card: AlarmCard | None = None
         # Keep a closing card alive until its queued QMediaPlayer stop has
@@ -598,6 +627,13 @@ class PetWindow(QWidget):
         # refreshed by the small live-projection RPC and never enter
         # FocusAnalyticsStore or the FocusSession fact sync.
         self._cross_device_today_display_live_rows: list[object] | None = None
+        # The display projection is pure local arithmetic over already-fetched
+        # rows.  It only needs to be recomputed when facts/state change or
+        # roughly once per second; rebuilding the complete interval union on
+        # every 250 ms paint tick needlessly occupied the GUI thread.
+        self._cross_device_today_display_projection_cache_key: tuple[object, ...] | None = None
+        self._cross_device_today_display_projection_cache_value: int | None = None
+        self._cross_device_today_display_projection_cache_at = 0.0
         self._smooth_work_duration_display = SmoothDurationDisplay()
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
@@ -686,6 +722,8 @@ class PetWindow(QWidget):
         self._fullscreen_hidden = False
         self._manually_hidden = False
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
+        self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+        self._fullscreen_suppression_mode = "normal"
         self._process_started_at = datetime.now().astimezone()
         self._sleep_after_sit = False
         self._room_quick_status = ""
@@ -802,7 +840,7 @@ class PetWindow(QWidget):
         self.offline_dialogue_manager = OfflineDialogueManager(
             self.companion,
             self._shared_work_status_text,
-            lambda: self._shared_today_focus_seconds() // 3600,
+            lambda: self._account_today_display_seconds() // 3600,
             local_context=self.time_memory.summary.context,
             lyrics_path=lambda: self.settings.local_lyrics_path,
         )
@@ -838,10 +876,20 @@ class PetWindow(QWidget):
         self._action_sequence_id = 0
         self._last_announced_hour = ""
         self._ambient_activity = "none"
+        self._login3_greeting_pending = True
         self._night_limited_activity = ""
         self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
         self._activity_transition_step = 0
-        self._activity_transition_steps = 8
+        self._activity_transition_steps = 10
+        self._activity_transition_started_at: float | None = None
+        self._activity_transition_duration_seconds = 0.2
+        self._activity_transition_animation_was_active = False
+        self._activity_transition_effect_was_active = False
+        self._activity_transition_target_state = PetState.IDLE
+        self._activity_transition_target_direction = 0
+        self._activity_transition_target_silhouette_key: object | None = None
+        self._current_render_silhouette_key: object | None = None
         self._manual_activity_until = 0.0
         self._last_app_category = "other"
         self._late_wakeup_shown = False
@@ -885,14 +933,18 @@ class PetWindow(QWidget):
 
         source = self._pixmaps[PetState.IDLE][0]
         width = round(settings.display_height * source.width() / source.height())
-        self.setFixedSize(width + 12, settings.display_height + 14)
+        label_height = settings.display_height + 8 + EMOTION_HEADROOM_LOGICAL
+        self.setFixedSize(
+            width + 12,
+            settings.display_height + 14 + EMOTION_HEADROOM_LOGICAL,
+        )
         self.label = QLabel(self)
         self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.label.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.label.setAutoFillBackground(False)
         self.label.setStyleSheet("background: transparent;")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setGeometry(6, 0, width, settings.display_height + 8)
+        self.label.setGeometry(6, 0, width, label_height)
 
         self.photo_bubble = QLabel()
         self.photo_bubble.setWindowFlags(self._ambient_window_flags())
@@ -937,7 +989,9 @@ class PetWindow(QWidget):
 
         self.work_controls = WorkControlBubble()
         self.coffee_scene_prompt = CoffeeScenePrompt()
-        self.work_duration_bubble = WorkDurationBubble()
+        self.work_duration_bubble = WorkDurationBubble(
+            always_on_top=bool(settings.always_on_top),
+        )
         # One reusable local overlay.  It is intentionally not a child of the
         # character frame and is created once to avoid repeated QObject/native
         # window churn on rapid menu clicks.
@@ -1094,7 +1148,8 @@ class PetWindow(QWidget):
         self.food_scene_timer.timeout.connect(self._food_scene_timeout)
 
         self.activity_transition_timer = QTimer(self)
-        self.activity_transition_timer.setInterval(35)
+        self.activity_transition_timer.setInterval(20)
+        self.activity_transition_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.activity_transition_timer.timeout.connect(self._activity_transition_tick)
 
         self.work_activity_timer = QTimer(self)
@@ -1112,11 +1167,16 @@ class PetWindow(QWidget):
         self.app_timer.start()
 
         self.topmost_timer = QTimer(self)
-        self.topmost_timer.setInterval(4000)
-        self.topmost_timer.timeout.connect(self._ensure_on_top)
-        # Topmost is restored at lifecycle boundaries below. A timer would
-        # turn a window-layer repair into continuous z-order traffic and, on
-        # macOS, can make AppKit reconsider the active application.
+        self.topmost_timer.setInterval(3000)
+        self.topmost_timer.timeout.connect(self._topmost_watchdog_tick)
+        # Start the supervisor immediately.  _update_topmost_watchdog() will
+        # stop it while the pet is hidden, suppressed by fullscreen, or in
+        # ordinary desktop mode.  Starting here closes the small lifecycle
+        # gap before the first showEvent on native Qt backends.
+        self.topmost_timer.start()
+        # This is intentionally low frequency and non-activating. It repairs
+        # a native layer that another window manager may have reordered, but
+        # it never calls raise_(), activateWindow(), or focus APIs.
 
         self._last_social_heartbeat_at = 0.0
         self._social_heartbeat_due = True
@@ -1139,7 +1199,7 @@ class PetWindow(QWidget):
         # work-idle policy so the pet and its accessories disappear quickly,
         # then return with exactly the visibility state they had before.
         self.fullscreen_poll_timer = QTimer(self)
-        self.fullscreen_poll_timer.setInterval(1000)
+        self.fullscreen_poll_timer.setInterval(200)
         self.fullscreen_poll_timer.timeout.connect(self._sync_fullscreen_visibility)
         self.fullscreen_poll_timer.start()
 
@@ -1167,6 +1227,7 @@ class PetWindow(QWidget):
         self.set_state(PetState.IDLE)
         self._night_limited_tick()
         self._schedule(self.behavior.initial_idle())
+        self._maybe_show_login3_greeting()
         if should_start_startup_detection():
             QTimer.singleShot(0, self.agent_manager.start_background_check)
         self._log_timer_inventory()
@@ -1420,6 +1481,11 @@ class PetWindow(QWidget):
             self.label.move(6, 0)
         self._effect_phase = 0
         self._configure_effect_timer()
+        if getattr(self, "activity_transition_timer", None) is not None and self.activity_transition_timer.isActive():
+            # A state callback can arrive while an ambient action is fading.
+            # Keep the already captured target fixed until the fade settles.
+            self.animation_timer.stop()
+            self.effect_timer.stop()
         self._refresh_pixmap()
 
     def _frame_interval(self, state: PetState, frame_index: int) -> int:
@@ -1461,6 +1527,29 @@ class PetWindow(QWidget):
     def _refresh_pixmap(self) -> None:
         """从缓存取得或按当前屏幕设备像素比栅格化当前动画帧。"""
 
+        transition_timer = getattr(self, "activity_transition_timer", None)
+        if (
+            transition_timer is not None
+            and transition_timer.isActive()
+            and not self._activity_transition_target.isNull()
+        ):
+            # During an action transition, only blend two already-rendered
+            # pixmaps.  Do not re-run sprite scaling, emotion painting, or
+            # state animation while the fade is in flight: a changing target
+            # is the source of the translucent multi-image ghosting.
+            target = QPixmap(self._activity_transition_target)
+            visible = self._blend_activity_transition(target)
+            self.label.setPixmap(visible)
+            self._refresh_window_mask(
+                self._activity_transition_target_state,
+                visible,
+                self._activity_transition_target_direction,
+                0,
+                mask_source=target,
+                silhouette_key=self._activity_transition_target_silhouette_key,
+            )
+            return
+
         display_state, pixmap = self._current_source()
         ratio = max(1.0, self.devicePixelRatioF())
         direction_key = self.direction if display_state is PetState.WALK else 0
@@ -1474,16 +1563,34 @@ class PetWindow(QWidget):
         )
         scaled = self._render_cache.get(cache_key)
         if scaled is None:
-            target = QSize(
+            canvas_size = QSize(
                 max(1, round(self.label.width() * ratio)),
                 max(1, round(self.label.height() * ratio)),
             )
-            scaled = pixmap.scaled(
+            content_height = max(
+                1,
+                self.label.height() - EMOTION_HEADROOM_LOGICAL,
+            )
+            target = QSize(
+                max(1, round(self.label.width() * ratio)),
+                max(1, round(content_height * ratio)),
+            )
+            body = pixmap.scaled(
                 target,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
+            body.setDevicePixelRatio(ratio)
+            scaled = QPixmap(canvas_size)
+            scaled.fill(Qt.GlobalColor.transparent)
             scaled.setDevicePixelRatio(ratio)
+            body_x = (scaled.width() - body.width()) // 2
+            body_y = round(EMOTION_HEADROOM_LOGICAL * ratio) + (
+                target.height() - body.height()
+            ) // 2
+            painter = QPainter(scaled)
+            painter.drawPixmap(body_x, body_y, body)
+            painter.end()
             self._remember_cache_item(self._render_cache, cache_key, scaled)
         activity = self._ambient_activity
         food_scene = self.economy.active_food_scene() or {}
@@ -1521,8 +1628,22 @@ class PetWindow(QWidget):
             # but keeps it pinned until the receiver pauses or the hour ends.
             activity = "work-cheer"
             food_scene_active = False
+        if (
+            self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+            and display_state is PetState.WALK
+            and activity in {"", "none"}
+        ):
+            # The login-3 set includes a complete running pose. Keep the
+            # existing WALK state/timer for movement physics, but render its
+            # static full action so no source frame is mixed into the outfit.
+            activity = "run"
         if self.work_timer.is_running and activity in {"", "none"}:
             activity = "computer"
+        complete_path = complete_sprite_path(
+            activity,
+            self.settings.equipped_outfit,
+            food_scene=food_scene_active,
+        )
         # Resolve the actual character/activity sprite before semantic
         # emotion effects. The local Burst is a separate overlay window, so
         # it cannot be erased by activity sprites or tint the character frame.
@@ -1533,7 +1654,12 @@ class PetWindow(QWidget):
             self._effect_phase,
             food_scene=food_scene_active,
         )
-        mask_source = draw_emotion_effect(base_frame, display_state, self._effect_phase)
+        mask_source = draw_emotion_effect(
+            base_frame,
+            display_state,
+            self._effect_phase,
+            top_headroom=EMOTION_HEADROOM_LOGICAL,
+        )
         # Persistent Aura compositing is intentionally disabled.  The only
         # new visual effect is LocalBurstEffectWindow, which remains outside
         # this character pixmap and therefore cannot tint or mask the pet.
@@ -1550,10 +1676,12 @@ class PetWindow(QWidget):
             direction_key,
             effect_key ^ overlay_key,
             mask_source=mask_source,
+            silhouette_key=complete_path,
         )
+        self._current_render_silhouette_key = complete_path
 
     def _blend_activity_transition(self, target: QPixmap) -> QPixmap:
-        """把上一个完整动作与目标动作短暂交叉淡化，避免静态图硬切。"""
+        """Blend the frozen source and frozen target without changing either."""
 
         previous = self._activity_transition_from
         if previous.isNull() or self._activity_transition_step >= self._activity_transition_steps:
@@ -1565,7 +1693,17 @@ class PetWindow(QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
             previous.setDevicePixelRatio(target.devicePixelRatio())
-        progress = self._activity_transition_step / self._activity_transition_steps
+            self._activity_transition_from = previous
+        step_progress = self._activity_transition_step / self._activity_transition_steps
+        elapsed_progress = 0.0
+        if self._activity_transition_started_at is not None:
+            elapsed_progress = (
+                time.monotonic() - self._activity_transition_started_at
+            ) / max(0.001, self._activity_transition_duration_seconds)
+        # Timer cadence provides deterministic progress as a fallback;
+        # monotonic elapsed time prevents a delayed GUI event from stretching
+        # the visual transition indefinitely.
+        progress = min(1.0, max(step_progress, elapsed_progress))
         result = QPixmap(target.size())
         result.fill(Qt.GlobalColor.transparent)
         result.setDevicePixelRatio(target.devicePixelRatio())
@@ -1579,31 +1717,133 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _activity_transition_tick(self) -> None:
-        """推进约 280 毫秒的动作交叉淡化；原有逐帧走路动画不经过这里。"""
+        """Advance the fixed 200 ms action cross-fade, then resume animation."""
 
         self._activity_transition_step += 1
-        if self._activity_transition_step >= self._activity_transition_steps:
-            self.activity_transition_timer.stop()
-            self._activity_transition_from = QPixmap()
-            self._mask_cache.clear()
         self._refresh_pixmap()
+        finished_by_time = (
+            self._activity_transition_started_at is not None
+            and time.monotonic() - self._activity_transition_started_at
+            >= self._activity_transition_duration_seconds
+        )
+        if (
+            self._activity_transition_step < self._activity_transition_steps
+            and not finished_by_time
+        ):
+            return
+        self.activity_transition_timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
+        self._activity_transition_started_at = None
+        animation_was_active = self._activity_transition_animation_was_active
+        effect_was_active = self._activity_transition_effect_was_active
+        self._activity_transition_animation_was_active = False
+        self._activity_transition_effect_was_active = False
+        if animation_was_active:
+            frames = self._pixmaps.get(self.state, ())
+            if len(frames) > 1:
+                self.animation_timer.start(
+                    self._frame_interval(self.state, self._frame_index)
+                )
+        if effect_was_active:
+            self._configure_effect_timer()
+
+    def _cancel_activity_transition(self) -> None:
+        """Cancel a fade cleanly when a state/size/outfit change supersedes it."""
+
+        timer = getattr(self, "activity_transition_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._activity_transition_from = QPixmap()
+        self._activity_transition_target = QPixmap()
+        self._activity_transition_step = self._activity_transition_steps
+        self._activity_transition_started_at = None
+        animation_was_active = self._activity_transition_animation_was_active
+        effect_was_active = self._activity_transition_effect_was_active
+        self._activity_transition_animation_was_active = False
+        self._activity_transition_effect_was_active = False
+        if animation_was_active:
+            frames = self._pixmaps.get(self.state, ())
+            if len(frames) > 1:
+                self.animation_timer.start(
+                    self._frame_interval(self.state, self._frame_index)
+                )
+        if effect_was_active:
+            self._configure_effect_timer()
 
     def _change_ambient_activity(self, activity: str) -> None:
-        """统一切换完整动作，并从当前实际画面平滑过渡到目标图。"""
+        """Switch complete activity using a fixed source-to-target fade."""
 
-        valid_activities = set(ACTION_SPRITES) | set(SPECIAL_LIMITED_ACTIVITY_SPRITES)
+        valid_activities = (
+            set(ACTION_SPRITES)
+            | set(SPECIAL_LIMITED_ACTIVITY_SPRITES)
+            | set(LOGIN_3_ACTIVITIES)
+        )
         next_activity = activity if activity in valid_activities else "none"
         if next_activity == self._ambient_activity:
             self._refresh_pixmap()
             return
+        self._cancel_activity_transition()
         current = self.label.pixmap() if hasattr(self, "label") else QPixmap()
-        self._activity_transition_from = QPixmap(current) if not current.isNull() else QPixmap()
-        self._activity_transition_step = 0
         self._ambient_activity = next_activity
-        self._mask_cache.clear()
-        if not self._activity_transition_from.isNull():
-            self.activity_transition_timer.start()
+        if current.isNull():
+            self._refresh_pixmap()
+            return
+
+        self._activity_transition_animation_was_active = bool(
+            self.animation_timer.isActive()
+        )
+        self._activity_transition_effect_was_active = bool(
+            self.effect_timer.isActive()
+        )
+        self.animation_timer.stop()
+        self.effect_timer.stop()
+
+        # Render the destination exactly once with the animation/effect state
+        # frozen.  The following timer ticks only alpha-blend these two
+        # pixmaps, so the target cannot move underneath the fade.
+        self._activity_transition_step = self._activity_transition_steps
         self._refresh_pixmap()
+        target = self.label.pixmap()
+        if target.isNull():
+            self._activity_transition_animation_was_active = False
+            self._activity_transition_effect_was_active = False
+            self._refresh_pixmap()
+            return
+        self._activity_transition_target_state = self.state
+        self._activity_transition_target_direction = (
+            self.direction if self.state is PetState.WALK else 0
+        )
+        self._activity_transition_target_silhouette_key = (
+            self._current_render_silhouette_key
+            or ("activity-transition", target.cacheKey())
+        )
+        self._activity_transition_target = QPixmap(target)
+        self._activity_transition_from = QPixmap(current)
+        self._activity_transition_step = 0
+        self._activity_transition_started_at = time.monotonic()
+        self.activity_transition_timer.start()
+        self._refresh_pixmap()
+
+    def _login3_actions_enabled(self) -> bool:
+        """Return whether the account is currently wearing the login-3 set."""
+
+        return self.settings.equipped_outfit == LOGIN_REWARD_OUTFIT.key
+
+    def _focus_activity_choices(self) -> tuple[str, ...]:
+        """Return automatic work activities, including login-3-only art."""
+
+        if self._login3_actions_enabled():
+            return FOCUS_ACTIONS + LOGIN_3_WORK_ACTIVITIES
+        return FOCUS_ACTIONS
+
+    def _maybe_show_login3_greeting(self) -> None:
+        """Show the login-3 greeting once when the outfit becomes active."""
+
+        if not self._login3_greeting_pending or not self._login3_actions_enabled():
+            return
+        self._login3_greeting_pending = False
+        self._set_temporary_activity("hello", 18_000)
 
     def _refresh_window_mask(
         self,
@@ -1613,43 +1853,67 @@ class PetWindow(QWidget):
         effect_key: int,
         *,
         mask_source: QPixmap | None = None,
+        silhouette_key: object | None = None,
     ) -> None:
         """按当前人物轮廓设置窗口遮罩，使透明留白不拦截桌面点击。"""
 
-        cache_key = (
-            display_state,
-            self._frame_index,
-            direction_key,
-            effect_key,
-            self.label.width(),
-            self.label.height(),
-            self.label.x(),
-            self.label.y(),
-        )
+        source = mask_source if mask_source is not None else pixmap
+        emotion_key = emotion_effect_name(display_state) or ""
+        if silhouette_key is not None:
+            # Complete outfit/action sprites have a stable silhouette even
+            # when the underlying PetState animation or emotion phase moves.
+            # Cache by the actual asset identity, not by the source frame.
+            cache_key = (
+                "stable-silhouette",
+                silhouette_key,
+                emotion_key,
+                source.width(),
+                source.height(),
+                round(float(source.devicePixelRatio()), 3),
+                self.label.width(),
+                self.label.height(),
+            )
+        else:
+            cache_key = (
+                display_state,
+                self._frame_index,
+                direction_key,
+                effect_key,
+                self.label.width(),
+                self.label.height(),
+            )
+        applied_key = (*cache_key, "position", self.label.x(), self.label.y())
         # Detached Burst pixels deliberately never change the native input
         # silhouette. Avoid calling the relatively costly native setMask()
         # again while that silhouette key is unchanged.
-        if cache_key == self._last_applied_mask_key and cache_key in self._mask_cache:
+        if applied_key == self._last_applied_mask_key and cache_key in self._mask_cache:
             return
         region = self._mask_cache.get(cache_key)
         if region is None:
-            mask_pixmap = mask_source if mask_source is not None else pixmap
-            logical = mask_pixmap.scaled(
-                self.label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            if (
+                source.devicePixelRatio() == 1.0
+                and source.size() == self.label.size()
+            ):
+                logical = source
+            else:
+                logical = source.scaled(
+                    self.label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
             offset_x = (self.label.width() - logical.width()) // 2
             offset_y = (self.label.height() - logical.height()) // 2
             region = QRegion(logical.mask()).translated(offset_x, offset_y)
             self._remember_cache_item(self._mask_cache, cache_key, region)
         self.setMask(region.translated(self.label.x(), self.label.y()))
-        self._last_applied_mask_key = cache_key
+        self._last_applied_mask_key = applied_key
 
     @_guard_qt_callback
     def _effect_tick(self) -> None:
         """推进短暂表情符号；局部 Burst 使用自己的 bounded timer。"""
 
+        if self.activity_transition_timer.isActive():
+            return
         if not self._effect_timer_needed():
             self.effect_timer.stop()
             return
@@ -1661,6 +1925,8 @@ class PetWindow(QWidget):
     def _animation_tick(self) -> None:
         """推进循环或单次连续帧，并在反向过渡结束后执行回调。"""
 
+        if self.activity_transition_timer.isActive():
+            return
         display_state = self.state
         frames = self._pixmaps[display_state]
         if len(frames) <= 1:
@@ -1717,6 +1983,7 @@ class PetWindow(QWidget):
         elif event_type == QEvent.Type.WindowStateChange:
             # Restore/show transitions can replace or reorder a native window
             # without changing the Python QWidget instance.
+            QTimer.singleShot(0, self._sync_fullscreen_visibility)
             QTimer.singleShot(
                 0,
                 lambda: self.ensure_pet_window_policy(event="WindowStateChange"),
@@ -1747,16 +2014,85 @@ class PetWindow(QWidget):
                     ),
                 )
         self._position_accessories()
+        self._sync_fullscreen_visibility()
+        self._update_topmost_watchdog()
         QTimer.singleShot(0, lambda: self._ensure_on_top(event="Show"))
         lifecycle_log("pet_window.show_event.end", self)
+
+    def _pet_monitor_bounds(self) -> tuple[int, int, int, int] | None:
+        """Return the pet monitor in native-style half-open coordinates."""
+
+        screen = self.screen()
+        if screen is None and self.windowHandle() is not None:
+            screen = self.windowHandle().screen()
+        if screen is None:
+            screen = QGuiApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            return None
+        geometry = screen.geometry()
+        return (
+            int(geometry.left()),
+            int(geometry.top()),
+            int(geometry.left() + geometry.width()),
+            int(geometry.top() + geometry.height()),
+        )
+
+    def _pet_native_window_handle(self) -> int | None:
+        """Return the pet HWND used to make fullscreen detection DPI-safe."""
+
+        if os.name != "nt":
+            return None
+        try:
+            return int(self.winId())
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _update_topmost_watchdog(self) -> None:
+        """Run the native z-order watchdog only while the pet is really shown."""
+
+        timer = getattr(self, "topmost_timer", None)
+        if timer is None:
+            return
+        app = QApplication.instance()
+        should_run = bool(
+            getattr(self.settings, "always_on_top", False)
+            and self.isVisible()
+            and not getattr(self, "_manually_hidden", False)
+            and not getattr(self, "_fullscreen_hidden", False)
+            and getattr(self, "_fullscreen_visibility_state", FULLSCREEN_VISIBILITY_NORMAL)
+            == FULLSCREEN_VISIBILITY_NORMAL
+            and app is not None
+            and not app.closingDown()
+        )
+        if should_run and not timer.isActive():
+            timer.start()
+        elif not should_run and timer.isActive():
+            timer.stop()
+
+    @_guard_qt_callback
+    def _topmost_watchdog_tick(self) -> None:
+        """Repair native z-order without ever activating or raising a window."""
+
+        self._update_topmost_watchdog()
+        if not self.topmost_timer.isActive():
+            return
+        self._sync_fullscreen_visibility()
+        if self._fullscreen_hidden or not self.isVisible():
+            self._update_topmost_watchdog()
+            return
+        self._ensure_on_top(event="TopmostWatchdog")
 
     @_guard_qt_callback
     def _ensure_on_top(self, *, event: str = "PolicyCheck") -> None:
         """在生命周期节点校验 native 层级，但绝不激活或抢输入焦点。"""
 
-        if not self.isVisible():
+        visible_surfaces = [
+            widget for widget in self._fullscreen_surfaces() if widget.isVisible()
+        ]
+        if not visible_surfaces:
             return
-        self._apply_native_window_policy_for_widget(self, event=event)
+        if self.isVisible():
+            self._apply_native_window_policy_for_widget(self, event=event)
         # Detached passive surfaces are separate native windows. Recheck them
         # in the same lifecycle pass, but never poll or call activateWindow().
         for accessory in self._fullscreen_surfaces():
@@ -1878,6 +2214,8 @@ class PetWindow(QWidget):
             (self.photo_bubble, self.photo_bubble.isVisible(), self.photo_bubble.pos()),
             (self.speech_bubble, self.speech_bubble.isVisible(), self.speech_bubble.pos()),
         )
+        duration_visible = self.work_duration_bubble.isVisible()
+        duration_position = QPoint(self.work_duration_bubble.pos())
         self.settings.always_on_top = enabled
         self.ensure_pet_window_policy(event="SetAlwaysOnTop")
         self.move(position)
@@ -1892,6 +2230,16 @@ class PetWindow(QWidget):
             bubble.move(bubble_position)
             if visible:
                 self._show_nonactivating(bubble, always_on_top=enabled)
+        # WorkDurationBubble is another detached native surface.  Keep its
+        # Qt flag in lockstep with the owner setting; otherwise a previous
+        # WindowStaysOnTopHint could survive switching back to desktop mode.
+        self.work_duration_bubble.setWindowFlags(self._ambient_window_flags())
+        self.work_duration_bubble.move(duration_position)
+        if duration_visible:
+            self._show_nonactivating(
+                self.work_duration_bubble,
+                always_on_top=enabled,
+            )
         if self._compact_todo_panel is not None:
             self._compact_todo_panel.set_companion_topmost(enabled)
             if self._compact_todo_panel.isVisible():
@@ -1919,6 +2267,7 @@ class PetWindow(QWidget):
                 self._ensure_on_top(event="SetAlwaysOnTop")
 
             QTimer.singleShot(0, restore_position_after_show)
+        self._update_topmost_watchdog()
         if persist:
             save_settings(self.settings)
             self.show_speech(
@@ -1940,6 +2289,18 @@ class PetWindow(QWidget):
         """隐藏宠物时同步隐藏照片和文字气泡。"""
 
         lifecycle_log("pet_window.hide_event.begin", self)
+        if getattr(self, "_applying_pet_window_policy", False):
+            # setWindowFlags() may emit a transient hide while Qt recreates
+            # the native handle.  This is not a user hide and must not make
+            # detached surfaces disappear permanently.
+            super().hideEvent(event)
+            self._update_topmost_watchdog()
+            lifecycle_log(
+                "pet_window.hide_event.policy_recreation",
+                self,
+                reason="native_handle_recreation",
+            )
+            return
         self.photo_bubble.hide()
         self.speech_bubble.hide()
         self.work_controls.hide()
@@ -1955,6 +2316,7 @@ class PetWindow(QWidget):
             self._restore_compact_todos_after_show = self._compact_todo_panel.isVisible()
             self._compact_todo_panel.hide()
         super().hideEvent(event)
+        self._update_topmost_watchdog()
         lifecycle_log("pet_window.hide_event.end", self)
 
     def hide_pet(self) -> None:
@@ -1969,6 +2331,7 @@ class PetWindow(QWidget):
             if widget is not self:
                 widget.hide()
         self.hide()
+        self._update_topmost_watchdog()
 
     def show_pet(self) -> None:
         """Explicitly show the pet again, respecting an active full-screen app."""
@@ -1982,8 +2345,10 @@ class PetWindow(QWidget):
         self._sync_fullscreen_visibility()
         if self._fullscreen_hidden:
             lifecycle_log("pet_window.show.blocked_fullscreen", self)
+            self._update_topmost_watchdog()
             return
         self.show()
+        self._update_topmost_watchdog()
         lifecycle_log("pet_window.show.call", self, source="explicit")
 
     def _fullscreen_surfaces(self) -> list[QWidget]:
@@ -2013,59 +2378,96 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _sync_fullscreen_visibility(self) -> None:
-        """Temporarily yield only to fullscreen media or games.
+        """Synchronise NORMAL/SUPPRESSED/RESTORING pet visibility state.
 
-        macOS exposes many ordinary maximised windows as screen-sized Quartz
-        windows.  Treating the geometry alone as a fullscreen takeover makes
-        the desktop pet disappear behind Word, browsers, terminals, and
-        other everyday apps.  On macOS we therefore require both the native
-        fullscreen geometry and a known media/game process.  Other platforms
-        keep the existing conservative geometry fallback for compatibility.
+        The display-mode detector is intentionally separate from the focus
+        activity detector.  A normal maximised window suppresses the visual
+        pet and its detached surfaces, but it never pauses FocusSession.  The
+        saved visibility map is restored only after the foreground window has
+        returned to NORMAL and is followed by two non-activating native policy
+        repairs so a window-manager reorder cannot leave one accessory behind.
         """
 
-        # A screen-sized Word, browser or terminal window is still an ordinary
-        # desktop window. Use the same process-aware media/game policy on every
-        # desktop platform; only a known video player/browser video fullscreen
-        # or a known game fullscreen may temporarily cover the pet.
-        fullscreen = bool(
-            active_fullscreen_video()
-            or active_fullscreen_game()
-            or active_fullscreen_presentation()
-        )
-        if fullscreen:
+        monitor_bounds = self._pet_monitor_bounds()
+        native_window_handle = self._pet_native_window_handle()
+        if native_window_handle is None:
+            mode = active_window_display_mode(monitor_bounds)
+        else:
+            mode = active_window_display_mode(
+                monitor_bounds,
+                reference_hwnd=native_window_handle,
+            )
+        suppressed = mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}
+        if suppressed:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
                     widget: bool(widget.isVisible())
                     and widget is not getattr(self, "_local_burst_effect", None)
                     for widget in self._fullscreen_surfaces()
                 }
-                self._fullscreen_hidden = True
-            # Re-hide on every poll as a defensive measure. Some passive
-            # widgets (especially WorkDurationBubble) update their own
-            # visibility from a live FocusSession snapshot after the first
-            # fullscreen transition.
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_SUPPRESSED
+            self._fullscreen_suppression_mode = str(mode)
+            self._fullscreen_hidden = True
+            # Re-hide on every poll as a defensive measure. Duration/status
+            # refreshes can otherwise show a detached surface again.
             for widget in self._fullscreen_surfaces():
                 if widget.isVisible():
                     widget.hide()
+            self._update_topmost_watchdog()
             return
 
-        if not self._fullscreen_hidden:
+        if self._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_RESTORING:
+            # The delayed second native repair owns this short interval. Do
+            # not replay the visibility map if another Qt callback arrives.
             return
-        restore = self._fullscreen_restore_visible
+        if not self._fullscreen_hidden:
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+            self._fullscreen_suppression_mode = "normal"
+            self._update_topmost_watchdog()
+            return
+
+        self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_RESTORING
+        restore = dict(self._fullscreen_restore_visible)
         self._fullscreen_restore_visible = {}
         self._fullscreen_hidden = False
-        for widget, was_visible in restore.items():
-            if was_visible and not self._manually_hidden:
-                self._show_nonactivating(widget)
+        if not self._manually_hidden:
+            for widget, was_visible in restore.items():
+                if was_visible:
+                    self._show_nonactivating(widget)
+            # Visibility can change while another app owns the display.  In
+            # particular, the duration badge must be derived from the current
+            # focus state rather than blindly replaying an old visible bit.
+            self._update_work_duration_bubble()
         self._position_accessories()
-        # A Todo may have changed while media/game fullscreen was covering
-        # the desktop. Re-evaluate the unread projection after restoring.
+        # A Todo may have changed while another app was covering the desktop.
         self._refresh_todo_surfaces()
         if (
             self.work_timer.has_active_session
             and self.work_timer.pause_reason == "fullscreen_video"
         ):
             self._show_away_recovery_prompt("fullscreen_video")
+
+        self._ensure_on_top(event="FullscreenExit")
+        QTimer.singleShot(150, self._finish_fullscreen_restore)
+
+    @_guard_qt_callback
+    def _finish_fullscreen_restore(self) -> None:
+        """Complete the delayed, non-activating z-order repair after restore."""
+
+        if self._manually_hidden or QApplication.closingDown():
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+            self._update_topmost_watchdog()
+            return
+        mode = active_window_display_mode(self._pet_monitor_bounds())
+        if mode in {DISPLAY_MODE_MAXIMIZED, DISPLAY_MODE_FULLSCREEN}:
+            # The foreground app reclaimed the display during the repair.
+            self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+            self._sync_fullscreen_visibility()
+            return
+        self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
+        self._fullscreen_suppression_mode = "normal"
+        self._ensure_on_top(event="FullscreenExitSettled")
+        self._update_topmost_watchdog()
 
     def _thread_shutdown_roots(self) -> tuple[QObject | None, ...]:
         """Return every top-level object that can own a Qt worker thread."""
@@ -2128,6 +2530,7 @@ class PetWindow(QWidget):
                 self._qt_application.removeNativeEventFilter(self._focus_activity_bridge)
         self._focus_activity_bridge.stop()
         self.fullscreen_poll_timer.stop()
+        self.topmost_timer.stop()
         self.chat_manager.shutdown()
         if self._chat_history_dialog is not None:
             self._chat_history_dialog.close()
@@ -2196,6 +2599,7 @@ class PetWindow(QWidget):
         QTimer.singleShot(0, self._refresh_pixmap)
         QTimer.singleShot(0, self._position_accessories)
         self.ensure_pet_window_policy(event="ScreenChange")
+        self._sync_fullscreen_visibility()
         QTimer.singleShot(
             0,
             lambda: self._ensure_on_top(event="ScreenChange"),
@@ -2208,6 +2612,7 @@ class PetWindow(QWidget):
         if not self.isVisible():
             return
         self.ensure_pet_window_policy(event="ScreenTopologyChange")
+        self._sync_fullscreen_visibility()
         QTimer.singleShot(
             0,
             lambda: self._ensure_on_top(event="ScreenTopologyChange"),
@@ -2875,9 +3280,14 @@ class PetWindow(QWidget):
         width = round(
             self.settings.display_height * source.width() / source.height()
         )
-        self.setFixedSize(width + 12, self.settings.display_height + 14)
-        self.label.setGeometry(6, 0, width, self.settings.display_height + 8)
+        label_height = self.settings.display_height + 8 + EMOTION_HEADROOM_LOGICAL
+        self.setFixedSize(
+            width + 12,
+            self.settings.display_height + 14 + EMOTION_HEADROOM_LOGICAL,
+        )
+        self.label.setGeometry(6, 0, width, label_height)
         self._render_cache.clear()
+        self._cancel_activity_transition()
         self._mask_cache.clear()
         target = QPoint(
             old_center_x - self.width() // 2,
@@ -3657,7 +4067,7 @@ class PetWindow(QWidget):
         self._award_focus_rewards()
         self.work_activity_timer.stop()
         self._set_temporary_activity("thermos", 25_000)
-        duration = format_work_duration(self._shared_today_focus_seconds())
+        duration = format_work_duration(self._account_today_display_seconds())
         if was_running and reason in {"sleep", "lock", "display_off"}:
             system_event = {
                 "lock": "电脑已锁屏",
@@ -3743,8 +4153,8 @@ class PetWindow(QWidget):
         self._invalidate_focus_projection("focus_finished")
         # The timer is reset by ``finish``; read the just-committed analytics
         # projection so the completion message uses the same day total as the
-        # study room and work report.
-        total = self._shared_today_focus_seconds()
+        # study room, desktop bubble, and work report.
+        total = self._account_today_display_seconds()
         self._award_focus_rewards()
         self.set_paused(False)
         self._recorded_focus_session_seconds = 0
@@ -3773,7 +4183,7 @@ class PetWindow(QWidget):
             self.economy.finish_food_scene("work_finished")
             self.food_scene_timer.stop()
         if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
-            self._work_report_dialog.refresh(force=True)
+            self._work_report_dialog.request_refresh(force=True)
         return reply
 
     # Public state-machine commands.  The older *_work_timer names remain as
@@ -4487,7 +4897,7 @@ class PetWindow(QWidget):
     def show_daily_growth(self) -> None:
         """显示今天 0–8 小时成长节点和下一个可见奖励。"""
 
-        seconds = self._shared_today_focus_seconds()
+        seconds = self._account_today_display_seconds()
         stage = stage_for_seconds(seconds)
         self._set_temporary_activity(stage.activity, 35_000)
         self.show_speech(
@@ -4521,8 +4931,11 @@ class PetWindow(QWidget):
         # Keep automatic work rotation strictly in the work set. The former
         # 45-minute branch randomly selected sleep/daydream even while the
         # user was actively typing, which looked like an unsolicited pause.
-        choices = FOCUS_ACTIONS
-        self._change_ambient_activity(random.choice(choices))
+        if self._login3_actions_enabled() and self.work_timer.session_seconds() >= 2 * 3600:
+            activity = "milk-tea"
+        else:
+            activity = random.choice(self._focus_activity_choices())
+        self._change_ambient_activity(activity)
         self._manual_activity_until = time.monotonic() + 120
         self._schedule_work_activity()
 
@@ -4542,7 +4955,7 @@ class PetWindow(QWidget):
             self._night_limited_tick()
             return
         self._change_ambient_activity(
-            random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+            random.choice(self._focus_activity_choices()) if self.work_timer.is_running else "none"
         )
 
     @_guard_qt_callback
@@ -4595,7 +5008,11 @@ class PetWindow(QWidget):
         # still emit the normal FocusSession signal, while this callback only
         # updates the small live labels.
         snapshot = self.focus_session.snapshot(include_projection=False)
-        self._update_work_duration_bubble(snapshot)
+        today_display_seconds = self._account_today_display_seconds(snapshot)
+        self._update_work_duration_bubble(
+            snapshot,
+            display_seconds=today_display_seconds,
+        )
         now = time.monotonic()
         last_secondary_refresh = float(
             getattr(self, "_last_work_clock_secondary_refresh_at", 0.0) or 0.0
@@ -4605,7 +5022,15 @@ class PetWindow(QWidget):
         self._last_work_clock_secondary_refresh_at = now
         self._refresh_shortcut_state(snapshot)
         if self._social_dialog is not None and self._social_dialog.isVisible():
-            self._social_dialog.set_focus_snapshot(snapshot)
+            # The social hub keeps a scalar account-wide display value so its
+            # minute labels do not fall back to the last network snapshot.
+            # Refresh that value from the same local projection used by the
+            # desktop bubble before handing over the snapshot.  This is a
+            # local calculation and must not trigger a network request.
+            self._social_dialog.set_focus_snapshot(
+                snapshot,
+                today_display_seconds=today_display_seconds,
+            )
         self._update_taunt_countdown()
         if self.work_controls.isVisible():
             self.work_controls.set_duration_visible(bool(self.settings.show_work_duration))
@@ -4928,7 +5353,7 @@ class PetWindow(QWidget):
     def _show_new_outfit_unlock(self) -> None:
         """跨过当天 1–8 小时节点时显示成长状态，而非机械更换衣服。"""
 
-        stage = stage_for_seconds(self._shared_today_focus_seconds())
+        stage = stage_for_seconds(self._account_today_display_seconds())
         if stage.hour <= self._last_growth_hour:
             return
         self._last_growth_hour = stage.hour
@@ -5129,6 +5554,7 @@ class PetWindow(QWidget):
     def _clear_cross_device_today_display(self) -> None:
         """Drop the account-scoped live display projection on account changes."""
 
+        self._invalidate_cross_device_display_projection_cache()
         self._cross_device_today_display_seconds = None
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_date = ""
@@ -5142,6 +5568,13 @@ class PetWindow(QWidget):
         dialog = getattr(self, "_social_dialog", None)
         if dialog is not None:
             dialog.set_cross_device_today_display_seconds(None, account_id="")
+
+    def _invalidate_cross_device_display_projection_cache(self) -> None:
+        """Forget the derived display union after a facts/state update."""
+
+        self._cross_device_today_display_projection_cache_key = None
+        self._cross_device_today_display_projection_cache_value = None
+        self._cross_device_today_display_projection_cache_at = 0.0
 
     def _set_local_live_focus_projection(self, snapshot: object | None = None) -> None:
         """Keep the current local segment in the shared read-only projection."""
@@ -5511,6 +5944,7 @@ class PetWindow(QWidget):
             # erase a previously validated live display snapshot.
             self._cross_device_today_display_live_rows = list(live_rows or [])
         self._cross_device_today_display_seconds = candidate_seconds
+        self._invalidate_cross_device_display_projection_cache()
         self._cross_device_today_display_account_id = account_id
         self._cross_device_today_display_date = display_date
         self._cross_device_today_display_session_id = (
@@ -5554,6 +5988,29 @@ class PetWindow(QWidget):
         ):
             return None
         current = snapshot
+        current_status = str(getattr(current, "status", "") or "") if current is not None else ""
+        current_session = (
+            str(getattr(self.work_timer, "focus_session_id", "") or "")
+            if current_status == "focus"
+            else ""
+        )
+        projection_key = (
+            account_id,
+            str(self._cross_device_today_display_date or ""),
+            current_status,
+            current_session,
+            int(self._cross_device_today_display_seconds or 0),
+            self._cross_device_today_display_live_rows is not None,
+        )
+        if (
+            projection_key == self._cross_device_today_display_projection_cache_key
+            and time.monotonic()
+            - self._cross_device_today_display_projection_cache_at
+            < 0.75
+        ):
+            cached_value = self._cross_device_today_display_projection_cache_value
+            if cached_value is not None:
+                return cached_value
         if self._cross_device_today_display_live_rows is not None:
             # Re-run only the read-only display projection while any device is
             # live.  This keeps a remote computer's interval advancing between
@@ -5616,7 +6073,11 @@ class PetWindow(QWidget):
                         display_seconds,
                         max(0, int(remote_effective.get("today_seconds", 0) or 0)),
                     )
-                return min(24 * 60 * 60, display_seconds)
+                display_seconds = min(24 * 60 * 60, display_seconds)
+                self._cross_device_today_display_projection_cache_key = projection_key
+                self._cross_device_today_display_projection_cache_value = display_seconds
+                self._cross_device_today_display_projection_cache_at = time.monotonic()
+                return display_seconds
             except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError):
                 # Keep the last validated cached value if a local transition
                 # races this display-only recalculation.
@@ -5645,7 +6106,11 @@ class PetWindow(QWidget):
                 value,
                 max(0, int(remote_effective.get("today_seconds", 0) or 0)),
             )
-        return min(24 * 60 * 60, value)
+        value = min(24 * 60 * 60, value)
+        self._cross_device_today_display_projection_cache_key = projection_key
+        self._cross_device_today_display_projection_cache_value = value
+        self._cross_device_today_display_projection_cache_at = time.monotonic()
+        return value
 
     def _shared_focus_period_seconds(self, moment: datetime | None = None) -> dict[str, int]:
         """Return day/week totals from the single account interval ledger."""
@@ -5775,6 +6240,31 @@ class PetWindow(QWidget):
             ),
         }
 
+    def _account_today_display_seconds(self, snapshot: object | None = None) -> int:
+        """Return the single live value used by every visible today-total UI.
+
+        The cross-device projection is the authoritative input when it has
+        been validated.  Before the first account projection arrives, the
+        lightweight FocusSession snapshot is the local fallback.  The
+        monotonic display projector then keeps that same value moving while
+        the network is quiet, so the desktop bubble and study room receive an
+        identical integer without another Supabase request.
+        """
+
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
+        authoritative = self._cross_device_today_display_value(current)
+        if authoritative is None:
+            authoritative = int(getattr(current, "today_seconds", 0) or 0)
+        authoritative = max(0, min(24 * 60 * 60, int(authoritative)))
+        status = str(getattr(current, "status", "idle") or "idle")
+        account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
+        display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
+        return self._smooth_work_duration_display.project(
+            authoritative,
+            active=status == "focus",
+            identity=f"{account_id}:{display_day}",
+        )
+
     def _shared_today_focus_seconds(self) -> int:
         """Backward-compatible day-only accessor for legacy callers."""
 
@@ -5822,7 +6312,7 @@ class PetWindow(QWidget):
         """Return the user-facing work status with the canonical day total."""
 
         return (
-            f"今日工作 {format_work_duration(self._shared_today_focus_seconds())}"
+            f"今日工作 {format_work_duration(self._account_today_display_seconds())}"
             f"{self._shared_work_status_suffix()}"
         )
 
@@ -5936,7 +6426,7 @@ class PetWindow(QWidget):
         photo = self.label.pixmap() if hasattr(self, "label") else QPixmap()
         try:
             path = render_daily_report(
-                self._shared_today_focus_seconds(),
+                self._account_today_display_seconds(),
                 self.daily_stats.snapshot(),
                 photo,
             )
@@ -6067,6 +6557,145 @@ class PetWindow(QWidget):
             current_device_id=str(getattr(self.focus_analytics, "_device_id", "") or ""),
         )
 
+    def _capture_work_report_builder(self) -> Callable[[], dict[str, object]]:
+        """Capture a stable report input set before handing aggregation away."""
+
+        moment = datetime.now(BEIJING_TIMEZONE)
+        focus_snapshot = self.focus_session.snapshot(include_projection=False)
+        # The local live row is a tiny in-memory update; do it before cloning
+        # so the worker sees the same current segment as the desktop bubble.
+        self._set_local_live_focus_projection(focus_snapshot)
+        analytics = self.focus_analytics.readonly_clone(
+            now_provider=lambda captured=moment: captured,
+        )
+        timer = ReportTimerSnapshot(
+            running=bool(self.work_timer.is_running),
+            active=bool(self.work_timer.has_active_session),
+            elapsed_seconds=int(self.work_timer.current_elapsed_seconds() or 0),
+            session_id=(
+                str(self.work_timer.focus_session_id or "")
+                if self.work_timer.has_active_session
+                else ""
+            ),
+            segment_started_at=self.work_timer.current_segment_started_at(),
+        )
+        daily_stats = ReportDailyStatsSnapshot(self.daily_stats.snapshot())
+        extra_live_segments = [
+            item
+            for item in analytics.live_projection_segments()
+            if isinstance(item, FocusSegment)
+            and str(item.segment_id or "") == "display-live-local"
+        ]
+        current_date = moment.date()
+        task_stats = {
+            "day": self.time_memory.records.stats(
+                start=current_date,
+                end=current_date,
+            ),
+            "week": self.time_memory.records.week_stats(current_date.isoformat()),
+            "month": self.time_memory.records.month_stats(current_date.isoformat()),
+        }
+        selected_range = None
+        dialog = self._work_report_dialog
+        if dialog is not None:
+            period = dialog._current_period()
+            start, end = dialog._ranges[period]
+            if not report_range_is_standard(period, start, end, current_date):
+                selected_range = (period, start, end)
+        best_buddy = self._best_buddy_for_report()
+        account_id = str(_session_user_id(self.social_client) or "")
+        current_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
+
+        def build() -> dict[str, object]:
+            return build_work_report(
+                analytics,
+                timer,
+                daily_stats,
+                best_buddy=best_buddy,
+                focus_snapshot=focus_snapshot,
+                focus_projection=None,
+                task_stats=task_stats,
+                selected_range=selected_range,
+                extra_live_segments=extra_live_segments,
+                now=moment,
+                account_id=account_id,
+                current_device_id=current_device_id,
+            )
+
+        return build
+
+    def _start_work_report_refresh(self, force: bool = False) -> None:
+        """Build the report asynchronously and coalesce repeated refreshes."""
+
+        dialog = self._work_report_dialog
+        if dialog is None:
+            return
+        thread = self._work_report_thread
+        if thread is not None and thread.isRunning():
+            self._work_report_refresh_pending = True
+            return
+        if not force and dialog._cached_report is not None:
+            return
+        self._work_report_generation += 1
+        generation = self._work_report_generation
+        try:
+            builder = self._capture_work_report_builder()
+        except Exception as exc:
+            dialog.apply_report({"error": f"报告暂时无法读取：{exc}"})
+            return
+        thread = WorkReportBuildThread(builder, generation, self)
+        self._work_report_thread = thread
+        lifecycle_log("work_report.build.begin", thread, generation=generation)
+        # Connect directly to QObject slots.  A lambda/partial has no Qt
+        # receiver affinity and may therefore run in the worker thread;
+        # report application must always happen on the GUI thread.
+        thread.completed.connect(self._work_report_build_completed)
+        thread.failed.connect(self._work_report_build_failed)
+        thread.finished.connect(self._work_report_thread_finished)
+        thread.start()
+
+    @Slot(int, object)
+    def _work_report_build_completed(self, generation: int, report: object) -> None:
+        if generation != self._work_report_generation:
+            return
+        dialog = self._work_report_dialog
+        if dialog is not None:
+            dialog.apply_report(report if isinstance(report, dict) else None)
+            lifecycle_log("work_report.build.complete", dialog, generation=generation)
+
+    @Slot(int, object)
+    def _work_report_build_failed(self, generation: int, error: object) -> None:
+        if generation != self._work_report_generation:
+            return
+        dialog = self._work_report_dialog
+        if dialog is not None:
+            dialog.apply_report({"error": f"报告暂时无法读取：{error}"})
+        lifecycle_log(
+            "work_report.build.failed",
+            self,
+            generation=generation,
+            error=str(error)[:180],
+        )
+
+    @Slot()
+    def _work_report_thread_finished(self) -> None:
+        thread = self.sender()
+        if not isinstance(thread, WorkReportBuildThread):
+            return
+        if self._work_report_thread is thread:
+            self._work_report_thread = None
+        thread.deleteLater()
+        if self._work_report_refresh_pending:
+            self._work_report_refresh_pending = False
+            QTimer.singleShot(0, lambda: self._start_work_report_refresh(force=True))
+
+    def _activate_work_report_window(self) -> None:
+        dialog = self._work_report_dialog
+        if dialog is None or not dialog.isVisible():
+            return
+        dialog.raise_()
+        dialog.activateWindow()
+
     def show_work_report(self) -> None:
         """Open the live day/week/month report without creating a local image."""
 
@@ -6088,12 +6717,16 @@ class PetWindow(QWidget):
                 )
             )
             self._work_report_dialog.finish_requested.connect(self.finish_work_timer)
-        # An explicit open is a user request for current numbers; the dialog's
-        # 30-second timer throttles passive refreshes, not this action.
-        self._work_report_dialog.refresh(force=True)
+            self._work_report_dialog.set_async_refresh_handler(
+                lambda force=False: self._start_work_report_refresh(bool(force))
+            )
         self._work_report_dialog.showNormal()
-        self._work_report_dialog.raise_()
-        self._work_report_dialog.activateWindow()
+        # An explicit open is a user request for current numbers.  The
+        # expensive snapshot is built by WorkReportBuildThread after the
+        # window is visible, so the shortcut click never waits for analytics
+        # aggregation or chart construction.
+        self._work_report_dialog.request_refresh(force=True)
+        QTimer.singleShot(0, self._activate_work_report_window)
         lifecycle_log("work_report.show.complete", self._work_report_dialog)
 
     def configure_daily_report(self) -> None:
@@ -6632,6 +7265,7 @@ class PetWindow(QWidget):
                 self.settings.equipped_outfit,
                 self._owner_nickname(),
                 None,
+                defer_pages=True,
             )
             lifecycle_log("study_room.create", self._social_dialog)
             self._social_dialog.destroyed.connect(
@@ -6657,15 +7291,20 @@ class PetWindow(QWidget):
             self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
             self._social_dialog.room_changed.connect(self._social_room_changed)
             self._social_dialog.quick_action_requested.connect(self._room_quick_action)
-            self._social_dialog.set_focus_snapshot(self.focus_session.snapshot())
+            initial_snapshot = self.focus_session.snapshot(include_projection=False)
+            initial_today_display_seconds = self._account_today_display_seconds(
+                initial_snapshot
+            )
+            self._social_dialog.set_focus_snapshot(
+                initial_snapshot,
+                today_display_seconds=initial_today_display_seconds,
+            )
             self._social_dialog.set_focus_analytics(self.focus_analytics.snapshot())
             self._social_dialog.set_local_focus_week_seconds_provider(
                 lambda: self.focus_analytics.account_week_seconds()
             )
             self._social_dialog.set_cross_device_today_display_seconds(
-                self._cross_device_today_display_value(
-                    self.focus_session.snapshot(include_projection=False)
-                ),
+                initial_today_display_seconds,
                 account_id=self._current_social_user_id(),
             )
         # A second click on the menu must restore a minimized study-room
@@ -6701,7 +7340,11 @@ class PetWindow(QWidget):
                 snapshot=snapshot,
                 source="focus_state_changed",
             )
-        self._update_work_duration_bubble(snapshot)
+        today_display_seconds = self._account_today_display_seconds(snapshot)
+        self._update_work_duration_bubble(
+            snapshot,
+            display_seconds=today_display_seconds,
+        )
         if self.work_controls.isVisible():
             status = snapshot_status
             seconds = int(getattr(snapshot, "session_seconds", 0) or 0)
@@ -6712,11 +7355,10 @@ class PetWindow(QWidget):
                 if status in {"focus", "rest"} else "本轮未开始"
             )
         if self._social_dialog is not None:
-            self._social_dialog.set_cross_device_today_display_seconds(
-                self._cross_device_today_display_value(snapshot),
-                account_id=self._current_social_user_id(),
+            self._social_dialog.set_focus_snapshot(
+                snapshot,
+                today_display_seconds=today_display_seconds,
             )
-            self._social_dialog.set_focus_snapshot(snapshot)
             self._social_dialog.refresh_local_focus_week_seconds()
             now = time.monotonic()
             if status_changed or now - self._last_focus_analytics_ui_refresh >= 5.0:
@@ -7563,6 +8205,8 @@ class PetWindow(QWidget):
                     week_seconds=int(effective_week or 0),
                 )
             )
+            if effective_projection_changed:
+                self._invalidate_cross_device_display_projection_cache()
         analytics_changed = self.focus_analytics.merge_remote_state(
             focus_date=str(remote_date or ""),
             today_seconds=int(remote_today or 0),
@@ -7899,14 +8543,14 @@ class PetWindow(QWidget):
         )
         self.settings.equipped_outfit = remote_outfit
         save_settings(self.settings)
-        self.activity_transition_timer.stop()
-        self._activity_transition_from = QPixmap()
-        self._activity_transition_step = self._activity_transition_steps
+        self._cancel_activity_transition()
         self._mask_cache.clear()
         self._refresh_pixmap()
         self._reflow_compact_todos_after_outfit(panel_was_visible)
         if self._social_dialog is not None:
             self._social_dialog.outfit_key = remote_outfit
+        if remote_outfit == LOGIN_REWARD_OUTFIT.key:
+            self._maybe_show_login3_greeting()
 
     @_guard_qt_callback
     def _social_sync_failed(self, message: str) -> None:
@@ -8978,11 +9622,11 @@ class PetWindow(QWidget):
             # the same UI turn so it cannot repaint the previous outfit before
             # the next heartbeat confirms the durable profile write.
             self._social_dialog.outfit_key = outfit_key
+        if outfit_key == LOGIN_REWARD_OUTFIT.key:
+            self._maybe_show_login3_greeting()
         # Cancel a half-finished action cross-fade so the newly selected outfit
         # is visible immediately, even while a transient work action is ending.
-        self.activity_transition_timer.stop()
-        self._activity_transition_from = QPixmap()
-        self._activity_transition_step = self._activity_transition_steps
+        self._cancel_activity_transition()
         self._mask_cache.clear()
         self._refresh_pixmap()
         self._reflow_compact_todos_after_outfit(panel_was_visible)
@@ -9200,33 +9844,41 @@ class PetWindow(QWidget):
             y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
         bubble.move(x, y)
 
-    def _update_work_duration_bubble(self, snapshot=None) -> None:
-        """Render the shared focus snapshot without creating a second timer."""
+    def _update_work_duration_bubble(
+        self,
+        snapshot=None,
+        *,
+        display_seconds: int | None = None,
+    ) -> None:
+        """Render the one account-wide display value and own visibility."""
 
         if not hasattr(self, "work_duration_bubble"):
             return
-        current = snapshot or self.focus_session.snapshot()
-        display_seconds = self._cross_device_today_display_value(current)
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
         if display_seconds is None:
-            display_seconds = int(getattr(current, "today_seconds", 0) or 0)
+            display_seconds = self._account_today_display_seconds(current)
         status = str(getattr(current, "status", "idle"))
-        account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
-        display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
-        display_seconds = self._smooth_work_duration_display.project(
-            display_seconds,
-            active=status == "focus",
-            identity=f"{account_id}:{display_day}",
-        )
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
+        should_show = bool(
+            show_duration
+            and status in {"focus", "rest"}
+            and self.isVisible()
+            and not getattr(self, "_manually_hidden", False)
+            and not getattr(self, "_fullscreen_hidden", False)
+        )
         was_visible = self.work_duration_bubble.isVisible()
         geometry_changed = self.work_duration_bubble.set_session(
             status,
             display_seconds,
-            show_duration,
+            should_show,
         )
-        if getattr(self, "_manually_hidden", False) or getattr(self, "_fullscreen_hidden", False):
-            # set_session() intentionally owns the normal visible/hidden
-            # state, so enforce fullscreen's temporary override afterwards.
+        if should_show:
+            if not was_visible:
+                self._show_nonactivating(
+                    self.work_duration_bubble,
+                    always_on_top=bool(self.settings.always_on_top),
+                )
+        elif was_visible:
             self.work_duration_bubble.hide()
         visible = self.work_duration_bubble.isVisible()
         pet_anchor = (self.x(), self.y(), self.width(), self.height())
@@ -9238,15 +9890,6 @@ class PetWindow(QWidget):
         )
         if needs_position:
             self._position_work_duration_bubble()
-        if visible and (not was_visible or geometry_changed):
-            if sys.platform == "darwin":
-                # Configure the native panel only when it is shown or its
-                # geometry/state changes, never on every one-second tick.
-                self._apply_macos_window_behavior(
-                    self.work_duration_bubble,
-                    always_on_top=bool(self.settings.always_on_top),
-                )
-            self._raise_accessory(self.work_duration_bubble)
         self._duration_bubble_pet_anchor = pet_anchor if visible else None
         # A changing clock label can cross a width boundary (mm:ss ->
         # h:mm:ss, or add the paused suffix).  Refresh the local effect's
@@ -9390,9 +10033,7 @@ class PetWindow(QWidget):
         labels = {"idle": "开始工作", "focus": "暂停工作", "rest": "继续工作"}
         work_status_text = ""
         if snapshot.status in {"focus", "rest"}:
-            display_seconds = self._cross_device_today_display_value(snapshot)
-            if display_seconds is None:
-                display_seconds = int(snapshot.today_seconds)
+            display_seconds = self._account_today_display_seconds(snapshot)
             work_status_text = (
                 f"⏱ 今日已工作 {format_elapsed_clock(display_seconds)}"
                 f"{self._shared_work_status_suffix()}"
@@ -9587,7 +10228,9 @@ class PetWindow(QWidget):
                 self.activity_timer.stop()
                 self._manual_activity_until = 0.0
                 self._change_ambient_activity(
-                    random.choice(FOCUS_ACTIONS) if self.work_timer.is_running else "none"
+                    random.choice(self._focus_activity_choices())
+                    if self.work_timer.is_running
+                    else "none"
                 )
             return
         self._night_limited_activity = selected
@@ -9604,6 +10247,10 @@ class PetWindow(QWidget):
         action_key = random.choice(("love", "encourage"))
         reply = self.companion.perform_action(action_key)
         option = ACTION_BY_KEY[action_key]
+        self._set_temporary_activity(
+            "love" if action_key == "love" else "work-cheer",
+            option.duration_ms,
+        )
         self._play_action_sequence(option.sequence or (reply.state,), option.duration_ms)
         self.show_speech(reply.text, max(5200, option.duration_ms + 1800))
         return True
@@ -9671,6 +10318,13 @@ class PetWindow(QWidget):
                 else:
                     activity = random.choice(RANDOM_ACTIONS)
                     text = self.companion.ambient_grumble(self.work_timer.is_running).text
+                if self._login3_actions_enabled() and not self.work_timer.is_running:
+                    if idle_seconds >= 30 * 60:
+                        activity = random.choice(("sleep", "milk-tea"))
+                        text = "六毛发现你很久没动啦，先睡一会儿或喝口奶茶吧。"
+                    elif random.random() < 0.62:
+                        activity = random.choice(("phone", "brush", "run", "message"))
+                        text = "三日连登六毛换个动作陪你待一会儿。"
                 # Automatic companion animations must not announce a rest
                 # state while the shared work timer is still running. A
                 # deliberate pause/food scene remains unaffected because it
@@ -9753,7 +10407,7 @@ class PetWindow(QWidget):
             remaining = max(0, (count + 1) * 3600 - self.work_timer.lifetime_seconds())
             next_text = f"距下一套娃衣约 {format_work_duration(remaining)}"
         self.show_speech(
-            f"{self.companion.status_text(self._shared_today_focus_seconds() // 600)}\n{next_text}",
+            f"{self.companion.status_text(self._account_today_display_seconds() // 600)}\n{next_text}",
             6200,
         )
 

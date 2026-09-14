@@ -25,6 +25,7 @@ def test_macos_finder_desktop_is_not_treated_as_fullscreen(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "AppKit", SimpleNamespace(NSWorkspace=Workspace))
 
     assert activity.active_window_is_fullscreen() is False
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_NORMAL
 
 
 def test_macos_desktop_shell_name_matching_is_normalized() -> None:
@@ -39,7 +40,14 @@ def test_windows_desktop_shell_class_matching_is_normalized() -> None:
     assert activity._is_windows_desktop_shell_class("Chrome_WidgetWin_1") is False
 
 
-def _fake_windows_user32(*, zoomed: bool = False, style: int = 0):
+def _fake_windows_user32(
+    *,
+    zoomed: bool = False,
+    style: int = 0,
+    window_bounds: tuple[int, int, int, int] = (0, 0, 1920, 1080),
+    monitor_bounds: tuple[int, int, int, int] = (0, 0, 1920, 1080),
+    work_bounds: tuple[int, int, int, int] = (0, 0, 1920, 1080),
+):
     class User32:
         @staticmethod
         def GetForegroundWindow():
@@ -61,10 +69,7 @@ def _fake_windows_user32(*, zoomed: bool = False, style: int = 0):
         @staticmethod
         def GetWindowRect(_hwnd, rect):
             rect = getattr(rect, "_obj", rect)
-            rect.left = 0
-            rect.top = 0
-            rect.right = 1920
-            rect.bottom = 1080
+            rect.left, rect.top, rect.right, rect.bottom = window_bounds
             return 1
 
         @staticmethod
@@ -74,10 +79,8 @@ def _fake_windows_user32(*, zoomed: bool = False, style: int = 0):
         @staticmethod
         def GetMonitorInfoW(_monitor, info):
             info = getattr(info, "_obj", info)
-            info.rcMonitor.left = 0
-            info.rcMonitor.top = 0
-            info.rcMonitor.right = 1920
-            info.rcMonitor.bottom = 1080
+            info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right, info.rcMonitor.bottom = monitor_bounds
+            info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom = work_bounds
             return 1
 
     return User32()
@@ -97,6 +100,7 @@ def test_windows_maximised_chatgpt_is_not_treated_as_fullscreen(monkeypatch) -> 
     )
 
     assert activity.active_window_is_fullscreen() is False
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_MAXIMIZED
 
 
 def test_windows_browser_video_fullscreen_is_treated_as_fullscreen(monkeypatch) -> None:
@@ -138,6 +142,29 @@ def test_windows_maximised_browser_is_not_treated_as_video_fullscreen(monkeypatc
 
     assert activity.active_window_is_fullscreen() is False
     assert activity.active_fullscreen_video() is False
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_MAXIMIZED
+
+
+def test_windows_large_nonmaximized_window_is_not_suppressed(monkeypatch) -> None:
+    """A manually resized monitor-sized window is not system maximised."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(activity, "active_application_name", lambda: "notepad.exe")
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=_fake_windows_user32(
+                zoomed=False,
+                style=0x00C00000 | 0x00040000,
+            )
+        ),
+        raising=False,
+    )
+
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_NORMAL
 
 
 def test_windows_borderless_monitor_window_is_treated_as_fullscreen(monkeypatch) -> None:
@@ -154,6 +181,59 @@ def test_windows_borderless_monitor_window_is_treated_as_fullscreen(monkeypatch)
     )
 
     assert activity.active_window_is_fullscreen() is True
+    assert activity.active_window_display_mode() == activity.DISPLAY_MODE_FULLSCREEN
+
+
+def test_windows_powerpoint_work_area_slideshow_is_treated_as_fullscreen(monkeypatch) -> None:
+    """A borderless PPT slideshow may end at the work area above the taskbar."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(activity, "active_application_name", lambda: "POWERPNT.EXE")
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=_fake_windows_user32(
+                window_bounds=(0, 0, 1920, 1040),
+                monitor_bounds=(0, 0, 1920, 1080),
+                work_bounds=(0, 0, 1920, 1040),
+            )
+        ),
+        raising=False,
+    )
+
+    assert activity.active_window_display_mode((0, 0, 1920, 1080)) == activity.DISPLAY_MODE_FULLSCREEN
+    assert activity.active_fullscreen_presentation((0, 0, 1920, 1080)) is True
+
+    # The logical Qt geometry may be smaller than the physical Win32 monitor
+    # rectangle at 125/150% scaling; a native monitor reference still keeps
+    # this same-display slideshow classified as fullscreen.
+    assert (
+        activity.active_window_display_mode(
+            (0, 0, 1536, 864),
+            reference_hwnd=4242,
+        )
+        == activity.DISPLAY_MODE_FULLSCREEN
+    )
+
+    # A framed PowerPoint editing window occupying the work area is not the
+    # slideshow surface and must remain visible.
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=_fake_windows_user32(
+                style=0x00C00000 | 0x00040000,
+                window_bounds=(0, 0, 1920, 1040),
+                monitor_bounds=(0, 0, 1920, 1080),
+                work_bounds=(0, 0, 1920, 1040),
+            )
+        ),
+        raising=False,
+    )
+    assert activity.active_window_display_mode((0, 0, 1920, 1080)) == activity.DISPLAY_MODE_NORMAL
 
 
 def test_windows_fullscreen_game_with_window_style_is_treated_as_fullscreen(monkeypatch) -> None:
@@ -177,6 +257,28 @@ def test_windows_fullscreen_game_with_window_style_is_treated_as_fullscreen(monk
 
     assert activity.active_window_is_fullscreen() is True
     assert activity.active_fullscreen_game() is True
+
+
+def test_windows_maximized_window_on_another_monitor_does_not_suppress_pet(monkeypatch) -> None:
+    """Only the foreground window's own monitor may suppress a pet."""
+
+    monkeypatch.setattr(activity.os, "name", "nt")
+    monkeypatch.setattr(activity.sys, "platform", "win32")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(activity, "active_application_name", lambda: "chrome.exe")
+    monkeypatch.setattr(
+        activity.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=_fake_windows_user32(
+                zoomed=True,
+                style=0x00C00000 | 0x00040000,
+            )
+        ),
+        raising=False,
+    )
+
+    assert activity.active_window_display_mode((1920, 0, 3840, 1080)) == activity.DISPLAY_MODE_NORMAL
 
 
 def test_macos_fullscreen_yield_is_limited_to_media_and_games(monkeypatch) -> None:

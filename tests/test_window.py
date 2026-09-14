@@ -24,7 +24,7 @@ os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtGui import QContextMenuEvent, QFontMetrics, QMouseEvent
-from PySide6.QtTest import QSignalSpy
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
 
 from onepic_desktop_pet.ai import AIConnectionError, CredentialStore
@@ -32,8 +32,14 @@ from onepic_desktop_pet import __version__
 from onepic_desktop_pet.behavior import PetState, StateDecision
 from onepic_desktop_pet.chat_manager import AgentConnectionState
 from onepic_desktop_pet.config import PetSettings
-from onepic_desktop_pet.emotion_effects import emotion_effect_name
+from onepic_desktop_pet.emotion_effects import (
+    EMOTION_HEADROOM_LOGICAL,
+    emotion_effect_name,
+)
 from onepic_desktop_pet.window import (
+    FULLSCREEN_VISIBILITY_NORMAL,
+    FULLSCREEN_VISIBILITY_RESTORING,
+    FULLSCREEN_VISIBILITY_SUPPRESSED,
     PetWindow,
     SOCIAL_DASHBOARD_INTERVAL_MS,
     SOCIAL_LEADERBOARD_REFRESH_SECONDS,
@@ -125,6 +131,51 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_activity_transition_finishes_from_elapsed_time_after_gui_delay(monkeypatch) -> None:
+    """GUI 延迟不应把短动作过渡拉长成慢吞吞的逐帧追赶。"""
+
+    app, window = _create_window()
+    clock = [100.0]
+    monkeypatch.setattr("onepic_desktop_pet.window.time.monotonic", lambda: clock[0])
+
+    window._change_ambient_activity("guitar")
+    assert window.activity_transition_timer.isActive()
+    clock[0] += window._activity_transition_duration_seconds + 0.01
+    window._activity_transition_tick()
+
+    assert not window.activity_transition_timer.isActive()
+    assert window._activity_transition_target.isNull()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_login3_emotion_mask_includes_headroom_and_reuses_phase_independent_key() -> None:
+    """登录三日套装的表情层完整可见，浮动相位不反复重建轮廓。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "login-3-day"
+    window._ambient_activity = "computer"
+    window.set_state(PetState.SURPRISED)
+
+    assert window.label.height() == (
+        window.settings.display_height + 8 + EMOTION_HEADROOM_LOGICAL
+    )
+    assert window.height() == (
+        window.settings.display_height + 14 + EMOTION_HEADROOM_LOGICAL
+    )
+    assert any("exclamation" in key for key in window._mask_cache)
+    cache_size = len(window._mask_cache)
+
+    window._effect_phase = 7
+    window._refresh_pixmap()
+
+    assert len(window._mask_cache) == cache_size
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     """The display bubble keeps the server effective total without raw rows."""
 
@@ -194,6 +245,61 @@ def test_cross_device_display_uses_account_presence_when_live_rpc_is_missing(mon
     app.processEvents()
 
 
+def test_work_clock_tick_pushes_live_account_total_to_social_hub(monkeypatch) -> None:
+    """自习室首页每次轻量刷新都应收到桌面六毛的实时账号总时长。"""
+
+    app, window = _create_window()
+
+    class ProbeDialog:
+        def __init__(self) -> None:
+            self.cross_device_values: list[tuple[int | None, str]] = []
+            self.snapshots: list[object] = []
+            self.today_display_values: list[int | None] = []
+
+        def isVisible(self) -> bool:
+            return True
+
+        def set_cross_device_today_display_seconds(
+            self, seconds: int | None, *, account_id: str = ""
+        ) -> None:
+            self.cross_device_values.append((seconds, account_id))
+
+        def set_focus_snapshot(
+            self,
+            snapshot: object,
+            *,
+            today_display_seconds: int | None = None,
+        ) -> None:
+            self.snapshots.append(snapshot)
+            self.today_display_values.append(today_display_seconds)
+
+    dialog = ProbeDialog()
+    snapshot = SimpleNamespace(status="focus", session_seconds=123)
+    window._social_dialog = dialog
+    window._last_work_clock_secondary_refresh_at = -1_000_000.0
+    monkeypatch.setattr(window.focus_session, "snapshot", lambda **_kwargs: snapshot)
+    monkeypatch.setattr(
+        window,
+        "_update_work_duration_bubble",
+        lambda _snapshot, **_kwargs: None,
+    )
+    monkeypatch.setattr(window, "_refresh_shortcut_state", lambda _snapshot: None)
+    monkeypatch.setattr(window, "_update_taunt_countdown", lambda: None)
+    monkeypatch.setattr(window, "_cross_device_today_display_value", lambda _snapshot: 3_368)
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
+
+    window._work_timer_tick_impl()
+
+    assert dialog.cross_device_values == []
+    assert dialog.today_display_values == [3_368]
+    assert dialog.snapshots == [snapshot]
+
+    window._social_dialog = None
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_empty_focus_delta_does_not_rearm_social_tick(monkeypatch) -> None:
     """空的成功增量不能把后台同步重新排成高频循环。"""
 
@@ -224,7 +330,20 @@ def _create_window() -> tuple[QApplication, PetWindow]:
     """创建或复用离屏 Qt 应用，并返回采用默认设置的宠物窗口。"""
 
     app = QApplication.instance() or QApplication([])
-    window = PetWindow(PetSettings())
+    # Qt/offscreen CI has no real user input.  Keep unrelated rendering and
+    # window-state tests deterministic instead of letting the real 10-minute
+    # idle policy pause a session in the middle of a long test process.  Tests
+    # that verify idle pausing explicitly enable this setting below.
+    settings = PetSettings()
+    settings.auto_pause_on_idle = False
+    window = PetWindow(settings)
+    # The macOS runner uses UTC and can construct the pet during the
+    # night-limited window.  That intentionally starts an ambient transition
+    # during production startup, but this helper must return a settled window
+    # so animation assertions do not depend on the CI machine's local clock.
+    if window.activity_transition_timer.isActive():
+        window._cancel_activity_transition()
+        window._refresh_pixmap()
     window.show()
     app.processEvents()
     return app, window
@@ -312,6 +431,29 @@ def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> Non
     bubble.hide()
     app.processEvents()
     assert window._local_burst_exclusions() == ()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_duration_bubble_content_refresh_does_not_bypass_owner_visibility_policy(monkeypatch) -> None:
+    """Detached duration visibility is restored by PetWindow, not the label."""
+
+    app, window = _create_window()
+    snapshot = type(
+        "Snapshot",
+        (),
+        {"status": "focus", "today_seconds": 123, "session_started_at": None},
+    )()
+    monkeypatch.setattr(window.focus_session, "snapshot", lambda **_kwargs: snapshot)
+    window.work_duration_bubble.hide()
+    window.work_duration_bubble.set_session("focus", 123, True)
+    assert not window.work_duration_bubble.isVisible()
+
+    window._update_work_duration_bubble(snapshot)
+    app.processEvents()
+    assert window.work_duration_bubble.isVisible()
+
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -420,23 +562,121 @@ def test_encouragement_uses_private_display_name() -> None:
     app.processEvents()
 
 
-def test_macos_pet_does_not_poll_native_topmost_layer(monkeypatch) -> None:
-    """macOS must not re-apply the native level while another app is active."""
+def test_macos_pet_uses_a_low_frequency_nonactivating_topmost_watchdog(monkeypatch) -> None:
+    """macOS repairs the layer slowly without re-activating another app."""
 
     monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "darwin")
     app, window = _create_window()
-    assert not window.topmost_timer.isActive()
+    assert window.topmost_timer.isActive()
+    assert window.topmost_timer.interval() == 3000
+    assert window.fullscreen_poll_timer.interval() == 200
     window.close()
     window.deleteLater()
     app.processEvents()
 
 
-def test_pet_topmost_repair_is_lifecycle_driven_not_timer_driven() -> None:
+def test_pet_topmost_watchdog_stops_when_pet_is_hidden_or_desktop_mode() -> None:
     app, window = _create_window()
+    assert window.topmost_timer.isActive()
+    window.hide_pet()
+    assert not window.topmost_timer.isActive()
+    window.show_pet()
+    window.set_always_on_top(False, persist=False)
     assert not window.topmost_timer.isActive()
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_topmost_watchdog_repairs_without_raise_or_activation(monkeypatch) -> None:
+    """The periodic repair must never steal the user's foreground focus."""
+
+    app, window = _create_window()
+    policy_events = []
+    monkeypatch.setattr(
+        window,
+        "_ensure_on_top",
+        lambda **kwargs: policy_events.append(kwargs.get("event")),
+    )
+    monkeypatch.setattr(
+        window,
+        "raise_",
+        lambda: (_ for _ in ()).throw(AssertionError("raise_ must not be called")),
+    )
+    monkeypatch.setattr(
+        window,
+        "activateWindow",
+        lambda: (_ for _ in ()).throw(AssertionError("activateWindow must not be called")),
+    )
+
+    window._topmost_watchdog_tick()
+
+    assert policy_events == ["TopmostWatchdog"]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_fullscreen_restore_repairs_native_policy_immediately_and_after_delay(monkeypatch) -> None:
+    """Exit restore performs an immediate and a settled non-activating repair."""
+
+    app, window = _create_window()
+    events = []
+    scheduled = []
+    monkeypatch.setattr(
+        window,
+        "_ensure_on_top",
+        lambda **kwargs: events.append(kwargs.get("event")),
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((int(delay), callback)),
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "fullscreen",
+    )
+    window._sync_fullscreen_visibility()
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "normal",
+    )
+    window._sync_fullscreen_visibility()
+    delayed = [callback for delay, callback in scheduled if delay == 150]
+    assert events[-1] == "FullscreenExit"
+    assert delayed
+    delayed[-1]()
+    assert events[-1] == "FullscreenExitSettled"
+
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_fullscreen_poll_passes_pet_native_monitor_reference_on_windows(monkeypatch) -> None:
+    """Scaled Windows monitors use native monitor identity for PPT takeover."""
+
+    app, window = _create_window()
+    monkeypatch.setattr("onepic_desktop_pet.window.os.name", "nt")
+    monkeypatch.setattr(window, "winId", lambda: 4242)
+    observed: list[int | None] = []
+
+    def fake_display_mode(_screen_bounds, *, reference_hwnd=None):
+        observed.append(reference_hwnd)
+        return "fullscreen" if reference_hwnd == 4242 else "normal"
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        fake_display_mode,
+    )
+    window._sync_fullscreen_visibility()
+    app.processEvents()
+
+    assert observed == [4242]
+    assert window._fullscreen_hidden
+    assert not window.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
 
 
 def test_macos_accessory_raise_is_suppressed(monkeypatch) -> None:
@@ -1615,15 +1855,16 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     assert window.quick_panel.isVisible()
     assert window.work_duration_bubble.isVisible()
 
-    # macOS deliberately ignores generic screen-sized windows and only
-    # yields to a detected media/game fullscreen surface.  Patch both paths
-    # so this test exercises the same transition on every CI runner.
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    # Use the platform-independent display-mode seam so this exercises the
+    # same transition on every CI runner.
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "fullscreen",
+    )
     window._sync_fullscreen_visibility()
     app.processEvents()
     assert window._fullscreen_hidden
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_SUPPRESSED
     assert not window.isVisible()
     assert not window.quick_panel.isVisible()
     assert not window.work_duration_bubble.isVisible()
@@ -1634,15 +1875,19 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
     app.processEvents()
     assert not window.work_duration_bubble.isVisible()
 
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "normal",
+    )
     window._sync_fullscreen_visibility()
     app.processEvents()
     assert not window._fullscreen_hidden
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_RESTORING
     assert window.isVisible()
     assert window.quick_panel.isVisible()
     assert window.work_duration_bubble.isVisible()
+    window._finish_fullscreen_restore()
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_NORMAL
 
     window.close()
     window.deleteLater()
@@ -1670,6 +1915,29 @@ def test_manual_hide_also_hides_duration_bubble_until_explicit_show() -> None:
     app.processEvents()
     assert window.isVisible()
     assert window.work_duration_bubble.isVisible()
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_manual_hide_wins_over_fullscreen_restore(monkeypatch) -> None:
+    """A temporary display suppression must not resurrect an explicit hide."""
+
+    app, window = _create_window()
+    window.hide_pet()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "maximized",
+    )
+    window._sync_fullscreen_visibility()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "normal",
+    )
+    window._sync_fullscreen_visibility()
+    window._finish_fullscreen_restore()
+
+    assert window._manually_hidden
+    assert not window.isVisible()
+    assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_NORMAL
     window.close(); window.deleteLater(); app.processEvents()
 
 
@@ -1703,6 +1971,28 @@ def test_window_uses_character_mask_and_reuses_render_cache() -> None:
     assert window.mask().boundingRect().width() < window.width()
     assert len(window._render_cache) == initial_render_count
     assert len(window._mask_cache) == initial_mask_count
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_complete_sprite_mask_cache_is_stable_across_source_animation_frames() -> None:
+    """完整动作的透明轮廓不应随底层角色帧重复缩放和 setMask。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "login-3-day"
+    window._ambient_activity = "computer"
+    window._refresh_pixmap()
+    stable_keys = [
+        key for key in window._mask_cache if key[0] == "stable-silhouette"
+    ]
+    assert stable_keys
+    cache_size = len(window._mask_cache)
+
+    window._frame_index = (window._frame_index + 1) % len(window._pixmaps[window.state])
+    window._refresh_pixmap()
+
+    assert len(window._mask_cache) == cache_size
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -1945,6 +2235,22 @@ def test_work_activity_rotation_never_selects_rest_actions(monkeypatch) -> None:
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_login3_work_rotation_includes_private_action_art() -> None:
+    """新加入的三张工作图只进入 login-3 的自动工作轮换。"""
+
+    app, window = _create_window()
+    window.settings.equipped_outfit = "login-3-day"
+    assert {"typing", "desk", "paperwork"}.issubset(
+        window._focus_activity_choices()
+    )
+
+    window.settings.equipped_outfit = "hour-01"
+    assert not {"typing", "desk", "paperwork"}.intersection(
+        window._focus_activity_choices()
+    )
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_pause_disables_running_but_keeps_ambient_state_timer() -> None:
     """暂停跑动时应进入生活状态并继续计时，而不是冻结在站立帧。"""
 
@@ -1971,8 +2277,8 @@ def test_display_size_preset_updates_geometry_and_settings() -> None:
     window.set_display_height(280)
 
     assert window.settings.display_height == 280
-    assert window.height() == 294
-    assert window.label.height() == 288
+    assert window.height() == 318
+    assert window.label.height() == 312
     assert not window.mask().isEmpty()
     window.close()
     window.deleteLater()
@@ -1985,7 +2291,7 @@ def test_default_workmate_size_is_smaller_than_previous_standard() -> None:
     app, window = _create_window()
 
     assert window.settings.display_height == 160
-    assert window.height() == 174
+    assert window.height() == 198
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -1998,6 +2304,11 @@ def test_quick_panel_double_click_behavior_toggles_and_auto_hides() -> None:
     window.show_quick_panel()
     app.processEvents()
     assert window.quick_panel.isVisible()
+    # A desktop runner may place its real cursor inside the offscreen panel,
+    # which legitimately stops the auto-hide timer via enterEvent.  The test
+    # is about the explicit toggle contract, so settle the timer state before
+    # asserting it rather than depending on the host cursor location.
+    window.quick_panel.hide_timer.start(8000)
     assert window.quick_panel.hide_timer.isActive()
     window.show_quick_panel()
     assert not window.quick_panel.isVisible()
@@ -2024,6 +2335,13 @@ def test_social_food_overrides_hourly_outfit_and_cake_keeps_focus_running(monkey
     window.settings.equipped_outfit = "hour-07"
     window.start_work_timer()
 
+    captured: list[bool] = []
+
+    def probe(source, activity, outfit, phase, *, food_scene=False):
+        captured.append(bool(food_scene))
+        return source
+
+    monkeypatch.setattr("onepic_desktop_pet.window.draw_activity_overlay", probe)
     window._handle_food_interaction_accepted(
         {
             "kind": "food_cake_share",
@@ -2035,14 +2353,6 @@ def test_social_food_overrides_hourly_outfit_and_cake_keeps_focus_running(monkey
     assert window._ambient_activity == "feast"
     assert window._social_food_activity_until > time.monotonic()
 
-    captured: list[bool] = []
-
-    def probe(source, activity, outfit, phase, *, food_scene=False):
-        captured.append(bool(food_scene))
-        return source
-
-    monkeypatch.setattr("onepic_desktop_pet.window.draw_activity_overlay", probe)
-    window._refresh_pixmap()
     assert captured and captured[-1] is True
 
     window.close(); window.deleteLater(); app.processEvents()
@@ -2235,9 +2545,14 @@ def test_windows_quick_panel_keeps_primary_row_geometry_when_report_changes(monk
     monkeypatch.setattr("onepic_desktop_pet.controls.sys.platform", "win32")
     app, window = _create_window()
     window.move(320, 220)
+    # The offscreen backend has no meaningful cursor position.  Keep the
+    # hover poll over the work shortcut so it cannot hide the report tile
+    # between the explicit hover action and the assertion below.
+    panel = window.quick_panel
+    hover_target = {"button": panel.work_button}
+    panel._button_at_global_pos = lambda _position: hover_target["button"]
     window.show_quick_panel()
     app.processEvents()
-    panel = window.quick_panel
     assert panel._stable_windows_dock
     assert panel._secondary_container.isVisible()
     assert panel.sizeHint().height() > 90
@@ -2267,6 +2582,7 @@ def test_windows_quick_panel_keeps_primary_row_geometry_when_report_changes(monk
     ]
     assert panel.report_button.isVisible()
     assert primary_after == primary_before
+    hover_target["button"] = panel.social_button
     panel._set_hover_button(panel.social_button)
     app.processEvents()
     assert not panel.report_button.isVisible()
@@ -2758,6 +3074,7 @@ def test_idle_return_uses_the_same_away_recovery_card_as_fullscreen(monkeypatch)
         "onepic_desktop_pet.window.system_session_state",
         lambda: {"locked": False, "sleeping": False},
     )
+    window.settings.auto_pause_on_idle = True
     window.start_work_timer()
     monkeypatch.setattr("onepic_desktop_pet.window.system_idle_seconds", lambda: 600)
     window._check_input_idle()
@@ -2782,17 +3099,20 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     window.pause_work_timer(reason="fullscreen_video")
     assert window.work_timer.pause_reason == "fullscreen_video"
 
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "fullscreen",
+    )
     window._sync_fullscreen_visibility()
     assert window._fullscreen_hidden
 
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "normal",
+    )
     window._sync_fullscreen_visibility()
     app.processEvents()
+    window._finish_fullscreen_restore()
     card = window._away_recovery_card
     assert card is not None
     assert card.isVisible()
@@ -2801,14 +3121,28 @@ def test_fullscreen_return_uses_the_same_away_recovery_card(monkeypatch) -> None
     window.close(); window.deleteLater(); app.processEvents()
 
 
-def test_normal_maximized_window_does_not_hide_pet(monkeypatch) -> None:
-    """A screen-sized Word/browser window is not a media/game takeover."""
+def test_normal_maximized_window_hides_pet_without_pausing_focus(monkeypatch) -> None:
+    """Maximised apps yield visually but do not change FocusSession."""
 
     app, window = _create_window()
-    monkeypatch.setattr("onepic_desktop_pet.window.active_window_is_fullscreen", lambda: True)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_video", lambda: False)
-    monkeypatch.setattr("onepic_desktop_pet.window.active_fullscreen_game", lambda: False)
+    window.start_work_timer()
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "maximized",
+    )
     window._sync_fullscreen_visibility()
+    assert window._fullscreen_hidden
+    assert not window.isVisible()
+    assert window.work_timer.is_running
+    assert window.work_timer.pause_reason is None
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.active_window_display_mode",
+        lambda _screen_bounds, **_kwargs: "normal",
+    )
+    window._sync_fullscreen_visibility()
+    assert window.isVisible()
+    window._finish_fullscreen_restore()
     assert not window._fullscreen_hidden
     window.close(); window.deleteLater(); app.processEvents()
 
@@ -3241,6 +3575,10 @@ def test_dialogue_panel_passes_text_to_local_reply() -> None:
     window._chat_dialog.input.setText("今天有点累")
     window._chat_dialog._submit()
     app.processEvents()
+    # The offline reply is emitted synchronously, but the queued repaint and
+    # native offscreen event turn can otherwise run after this assertion on a
+    # long-lived Qt test process.
+    QTest.qWait(10)
 
     assert window.state is PetState.SLEEPY
     assert "喝口水" in window.speech_bubble.text()
@@ -3666,6 +4004,34 @@ def test_complete_picture_actions_crossfade_without_resizing_window() -> None:
     assert window._activity_transition_from.isNull()
     assert window._ambient_activity == "guitar"
     assert window.size() == original_size
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_activity_transition_uses_fixed_target_and_precise_200ms_timer() -> None:
+    """动作淡化期间 target 不再随普通动画或表情刷新而变化。"""
+
+    app, window = _create_window()
+    window._change_ambient_activity("guitar")
+
+    assert window.activity_transition_timer.interval() == 20
+    assert window.activity_transition_timer.timerType() == Qt.TimerType.PreciseTimer
+    assert window.activity_transition_timer.isActive()
+    assert not window._activity_transition_target.isNull()
+    assert not window.animation_timer.isActive()
+    target_key = window._activity_transition_target.cacheKey()
+
+    window._effect_phase = 7
+    window._refresh_pixmap()
+    assert window._activity_transition_target.cacheKey() == target_key
+    for _ in range(window._activity_transition_steps - 1):
+        window._activity_transition_tick()
+        assert window._activity_transition_target.cacheKey() == target_key
+
+    window._activity_transition_tick()
+    assert not window.activity_transition_timer.isActive()
+    assert window._activity_transition_target.isNull()
     window.close()
     window.deleteLater()
     app.processEvents()
