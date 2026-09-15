@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import date as calendar_date, datetime, time as calendar_time, timedelta
+from datetime import date as calendar_date, datetime, time as calendar_time, timedelta, timezone
 import logging
 import re
 from typing import Any, Callable, Iterable, Iterator
@@ -31,6 +31,12 @@ REMINDER_MODES = {REMINDER_NONE, REMINDER_PET, REMINDER_ALARM}
 MAX_ACTIVE_TODOS = 10
 
 LOGGER = logging.getLogger(__name__)
+
+# A Todo's ``date`` + ``time`` is a calendar appointment, not a timestamp
+# measured in whichever timezone happens to be configured on a device (or a
+# CI runner).  Lili already uses the Beijing calendar for focus reporting;
+# retain that same stable calendar contract for cloud-synchronised Todos.
+TODO_SCHEDULE_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 
 def normalize_reminder_mode(value: Any, *, legacy_reminder: bool = False) -> str:
@@ -57,8 +63,10 @@ def scheduled_local_iso(
     ``date`` and ``time`` are the Todo UI's durable schedule fields. A naive
     ``YYYY-MM-DDTHH:MM:SS`` is ambiguous to Postgres ``timestamptz`` columns
     and was previously interpreted as UTC, which shifted Beijing todos by
-    eight hours after cloud sync. Always attach the device's local offset
-    before this value crosses the sync boundary.
+    eight hours after cloud sync. Always attach Lili's calendar offset before
+    this value crosses the sync boundary.  The optional provider is retained
+    for API compatibility; a user-entered calendar appointment must not vary
+    with a test runner's or a second computer's host timezone.
     """
 
     raw_date = str(date_value or "").strip()[:10]
@@ -71,8 +79,11 @@ def scheduled_local_iso(
         event_time = calendar_time(hour=hour, minute=minute)
     except (TypeError, ValueError, OverflowError):
         return None
-    local_now = now_local(now_provider)
-    return datetime.combine(event_date, event_time, tzinfo=local_now.tzinfo).isoformat()
+    return datetime.combine(
+        event_date,
+        event_time,
+        tzinfo=TODO_SCHEDULE_TIMEZONE,
+    ).isoformat()
 
 
 def _recover_legacy_inline_event(

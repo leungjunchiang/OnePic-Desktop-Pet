@@ -147,6 +147,28 @@ def test_scheduled_todo_is_uploaded_with_an_explicit_local_offset(tmp_path) -> N
     service.close()
 
 
+def test_scheduled_todo_uses_lili_calendar_not_sync_worker_timezone(tmp_path) -> None:
+    """A worker on UTC must not rewrite a Chinese 12:30 as UTC 12:30."""
+
+    utc_clock = datetime(2026, 9, 15, 1, 0, tzinfo=timezone.utc)
+    manager = TodoManager(tmp_path / "todos.json", now_provider=lambda: utc_clock)
+    service = TodoSyncService(
+        manager,
+        account_id=ACCOUNT_ID,
+        device_id=DEVICE_ID,
+        transport=FakeTodoTransport(),
+        queue_path=tmp_path / "todo_sync_queue.json",
+        state_path=tmp_path / "todo_sync_state.json",
+    )
+    item = manager.add("党会", date="2026-09-16", time="12:30")
+
+    payload = service._remote_payload_from_local(item.to_dict(), operation="upsert")
+
+    assert payload is not None
+    assert payload["due_at"] == "2026-09-16T12:30:00+08:00"
+    service.close()
+
+
 def test_legacy_utc_schedule_is_repaired_through_todo_queue_only(tmp_path) -> None:
     path = tmp_path / "todos.json"
     path.write_text(

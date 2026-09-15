@@ -92,7 +92,11 @@ def todo_event_parts(item: Any) -> tuple[str, str | None]:
         try:
             parsed = datetime.fromisoformat(due_value.replace("Z", "+00:00"))
             if parsed.tzinfo is not None:
-                parsed = parsed.astimezone()
+                # Older cloud rows without explicit display metadata still
+                # follow the same stable Lili calendar rather than whichever
+                # timezone this particular computer uses.
+                from .todo_manager import TODO_SCHEDULE_TIMEZONE
+                parsed = parsed.astimezone(TODO_SCHEDULE_TIMEZONE)
             return parsed.date().isoformat(), parsed.strftime("%H:%M")
         except (TypeError, ValueError, OverflowError):
             # A malformed due_at should not make a legacy Todo disappear.
