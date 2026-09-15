@@ -134,6 +134,54 @@ def test_local_todo_change_only_adds_todo_queue_state(tmp_path) -> None:
     service.close()
 
 
+def test_scheduled_todo_is_uploaded_with_an_explicit_local_offset(tmp_path) -> None:
+    manager, service = _service(tmp_path)
+    item = manager.add("党会", date="2026-09-16", time="12:30")
+
+    payload = service._remote_payload_from_local(item.to_dict(), operation="upsert")
+
+    assert payload is not None
+    assert payload["due_at"] == "2026-09-16T12:30:00+08:00"
+    assert payload["metadata"]["date"] == "2026-09-16"
+    assert payload["metadata"]["time"] == "12:30"
+    service.close()
+
+
+def test_legacy_utc_schedule_is_repaired_through_todo_queue_only(tmp_path) -> None:
+    path = tmp_path / "todos.json"
+    path.write_text(
+        json.dumps(
+            [{
+                "id": "2b34db03-465b-433a-9f40-34e07a9b584d",
+                "title": "党会",
+                "date": "2026-09-16",
+                "date_explicit": True,
+                "time": "12:30",
+                "due_at": "2026-09-16T12:30:00+00:00",
+                "reminder": True,
+                "reminder_mode": "pet",
+                "reminder_minutes_before": 10,
+                "remind_at": "2026-09-16T12:20:00+00:00",
+                "created_at": _clock().isoformat(),
+                "updated_at": _clock().isoformat(),
+            }],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manager, service = _service(tmp_path)
+
+    item = manager.get("2b34db03-465b-433a-9f40-34e07a9b584d")
+    assert item is not None
+    assert item.due_at == "2026-09-16T12:30:00+08:00"
+    assert item.remind_at == "2026-09-16T12:20:00+08:00"
+    assert service.pending_count == 1
+    payload = service._remote_payload_from_local(item.to_dict(), operation="upsert")
+    assert payload is not None
+    assert payload["due_at"] == "2026-09-16T12:30:00+08:00"
+    service.close()
+
+
 def test_todo_network_failure_keeps_local_todo_and_other_data_untouched(tmp_path) -> None:
     unrelated = tmp_path / "focus.json"
     unrelated.write_text('{"seconds": 456}', encoding="utf-8")

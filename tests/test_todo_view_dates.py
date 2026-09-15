@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from datetime import datetime
 
-from onepic_desktop_pet.todo_view import collect_todo_view, display_todo_title
+from onepic_desktop_pet.todo_view import collect_todo_view, display_todo_title, todo_event_parts
 from onepic_desktop_pet.todo_manager import TodoManager
 
 
@@ -81,3 +81,17 @@ def test_explicit_today_schedule_is_not_hidden_just_because_created_today(tmp_pa
         anniversary_remaining=lambda _item: 0,
         anniversary_next_date=lambda _item: None,
     )[0].display_text == "交材料 · 15:00"
+
+
+def test_explicit_wall_clock_schedule_wins_over_utc_due_at():
+    """A cloud instant must not visually shift an entered Beijing time."""
+
+    item = SimpleNamespace(
+        date="2026-09-16",
+        time="12:30",
+        date_explicit=True,
+        # This was the v1 bug: local 12:30 was written as 12:30Z.
+        due_at="2026-09-16T12:30:00+00:00",
+        remind_at=None,
+    )
+    assert todo_event_parts(item) == ("2026-09-16", "12:30")

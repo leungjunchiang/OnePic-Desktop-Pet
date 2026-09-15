@@ -68,11 +68,24 @@ def _todo_date_label(item_date: str, today_date: str) -> str:
 def todo_event_parts(item: Any) -> tuple[str, str | None]:
     """Return the event date/time used by Todo views.
 
-    ``due_at`` is the actual event/deadline. ``remind_at`` is deliberately
-    excluded: it is only the internal notification schedule and must never be
-    rendered as if the event itself happened at that time. The legacy
-    ``date``/``time`` fields remain the fallback for old records.
+    Explicit ``date``/``time`` are the user-entered wall-clock schedule and
+    take precedence in every Todo surface. ``due_at`` is the absolute instant
+    for reminder delivery and cloud synchronization, and remains a fallback
+    for older rows without explicit display fields. This keeps a user-entered
+    12:30 from becoming 20:30 because of a server-side timezone conversion.
     """
+
+    date_value = str(getattr(item, "date", "") or "")[:10]
+    time_value = str(getattr(item, "time", None) or "").strip()[:5] or None
+    # Reminder-only records intentionally carry a date for storage/order but
+    # have no event time. Keep their notification schedule out of the visual
+    # Todo timeline just as the legacy branch below did.
+    if (
+        bool(getattr(item, "date_explicit", False))
+        and date_value
+        and (time_value or not getattr(item, "remind_at", None))
+    ):
+        return date_value, time_value
 
     due_value = str(getattr(item, "due_at", None) or "").strip()
     if due_value:
@@ -96,8 +109,6 @@ def todo_event_parts(item: Any) -> tuple[str, str | None]:
     if not bool(getattr(item, "date_explicit", False)):
         return "", None
 
-    date_value = str(getattr(item, "date", "") or "")[:10]
-    time_value = str(getattr(item, "time", None) or "").strip()[:5] or None
     return date_value, time_value
 
 

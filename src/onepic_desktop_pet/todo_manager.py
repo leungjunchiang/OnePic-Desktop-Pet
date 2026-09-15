@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import date as calendar_date, datetime, time as calendar_time, timedelta
 import logging
 import re
 from typing import Any, Callable, Iterable, Iterator
@@ -45,6 +45,34 @@ def normalize_reminder_mode(value: Any, *, legacy_reminder: bool = False) -> str
     if text in REMINDER_MODES:
         return text
     return REMINDER_PET if legacy_reminder else REMINDER_NONE
+
+
+def scheduled_local_iso(
+    date_value: str | None,
+    time_value: str | None,
+    now_provider: Callable[[], datetime] | None = None,
+) -> str | None:
+    """Return the instant for a user-entered local wall-clock schedule.
+
+    ``date`` and ``time`` are the Todo UI's durable schedule fields. A naive
+    ``YYYY-MM-DDTHH:MM:SS`` is ambiguous to Postgres ``timestamptz`` columns
+    and was previously interpreted as UTC, which shifted Beijing todos by
+    eight hours after cloud sync. Always attach the device's local offset
+    before this value crosses the sync boundary.
+    """
+
+    raw_date = str(date_value or "").strip()[:10]
+    raw_time = str(time_value or "").strip()[:5]
+    if not raw_date or not raw_time:
+        return None
+    try:
+        event_date = calendar_date.fromisoformat(raw_date)
+        hour, minute = (int(part) for part in raw_time.split(":", 1))
+        event_time = calendar_time(hour=hour, minute=minute)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    local_now = now_local(now_provider)
+    return datetime.combine(event_date, event_time, tzinfo=local_now.tzinfo).isoformat()
 
 
 def _recover_legacy_inline_event(
@@ -462,8 +490,10 @@ class TodoManager:
         # timestamp exclusively in ``remind_at``; showing it as ``time``
         # would make the desktop sticky note claim that the event itself is
         # happening when the reminder fires.
-        due_value = parsed_due.isoformat() if parsed_due else (
-            f"{parsed_date}T{display_time}:00" if display_time else None
+        due_value = parsed_due.isoformat() if parsed_due else scheduled_local_iso(
+            parsed_date,
+            display_time,
+            self._now,
         )
         remind_value = parsed_remind.isoformat() if parsed_remind else None
         if remind_value is None and clean_mode != REMINDER_NONE and due_value:
@@ -660,7 +690,7 @@ class TodoManager:
         elif "reminder" in changes:
             item.reminder_mode = REMINDER_PET if item.reminder else REMINDER_NONE
         if changed_date_or_time and not explicit_due:
-            item.due_at = f"{item.date}T{item.time}:00" if item.time else None
+            item.due_at = scheduled_local_iso(item.date, item.time, self._now)
         if "date_explicit" in changes and not item.date_explicit and not item.time:
             item.due_at = None
         if item.reminder_mode != REMINDER_NONE and not explicit_remind and (
@@ -908,6 +938,54 @@ class TodoManager:
         self._save()
         return result
 
+    def repair_scheduled_instants(self) -> int:
+        """Repair legacy UTC-interpreted schedules inside this Todo store.
+
+        Only explicitly scheduled Todos are eligible. Their user-visible
+        date/time fields are authoritative, and every correction is emitted
+        through the isolated Todo listener; focus, presence, Auth, and every
+        other synchronization domain are untouched.
+        """
+
+        repaired: list[TodoItem] = []
+        timestamp = now_local(self._now).isoformat()
+        for item in self._items:
+            if not item.date_explicit or not item.time:
+                continue
+            expected_due = scheduled_local_iso(item.date, item.time, self._now)
+            if not expected_due:
+                continue
+            try:
+                current_due = parse_datetime(item.due_at, self._now) if item.due_at else None
+                expected_due_dt = parse_datetime(expected_due, self._now)
+            except (TypeError, ValueError, OverflowError):
+                current_due = None
+                expected_due_dt = None
+            changed = current_due != expected_due_dt
+            if changed:
+                item.due_at = expected_due
+            if item.reminder_mode != REMINDER_NONE and expected_due_dt is not None:
+                expected_remind = (
+                    expected_due_dt - timedelta(minutes=item.reminder_minutes_before)
+                ).isoformat()
+                try:
+                    current_remind = parse_datetime(item.remind_at, self._now) if item.remind_at else None
+                    expected_remind_dt = parse_datetime(expected_remind, self._now)
+                except (TypeError, ValueError, OverflowError):
+                    current_remind = None
+                    expected_remind_dt = None
+                if current_remind != expected_remind_dt:
+                    item.remind_at = expected_remind
+                    changed = True
+            if changed:
+                item.updated_at = timestamp
+                repaired.append(item)
+        if repaired:
+            self._save()
+            for item in repaired:
+                self._emit_change("upsert", item.to_dict())
+        return len(repaired)
+
     def remove_sync_snapshot(self, item_id: str) -> bool:
         """Remove one remotely soft-deleted Todo from the local projection."""
 
@@ -951,7 +1029,7 @@ class TodoManager:
             if item and not item.completed:
                 item.date = target
                 item.date_explicit = True
-                item.due_at = f"{target}T{item.time}:00" if item.time else None
+                item.due_at = scheduled_local_iso(target, item.time, self._now)
                 if item.reminder_mode != REMINDER_NONE:
                     if item.due_at:
                         due = parse_datetime(item.due_at, self._now)

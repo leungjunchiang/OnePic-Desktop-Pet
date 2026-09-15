@@ -28,12 +28,12 @@ from uuid import UUID, uuid4
 from PySide6.QtCore import QThread, Signal
 
 from .local_data import read_json, write_json_atomic
-from .todo_manager import TodoManager
+from .todo_manager import TodoManager, scheduled_local_iso
 
 
 LOGGER = logging.getLogger(__name__)
 
-TODO_SYNC_VERSION = 1
+TODO_SYNC_VERSION = 2
 TODO_SYNC_PAGE_SIZE = 100
 TODO_SYNC_MAX_PULL_PAGES = 5
 TODO_SYNC_MAX_PUSH_ITEMS = 20
@@ -234,6 +234,18 @@ class TodoSyncService:
             with self._lock:
                 self._save_state_locked()
         self.todos.add_change_listener(self._on_local_change)
+        # Version 1 sent local wall-clock strings without an offset. Postgres
+        # correctly read those ambiguous values as UTC, which was not the
+        # user's intended schedule. Repair this Todo store only after the
+        # Todo-only listener is installed, so corrections converge through
+        # the isolated queue and cannot affect another sync domain.
+        if _safe_int(self._state.get("schedule_timezone_repair_version", 0), minimum=0) < 1:
+            repaired = self.todos.repair_scheduled_instants()
+            self._state["schedule_timezone_repair_version"] = 1
+            if repaired:
+                LOGGER.info("Todo schedule timezone repair queued count=%s", repaired)
+            with self._lock:
+                self._save_state_locked()
 
     def close(self) -> None:
         """Detach the observer; queued data remains available for next launch."""
@@ -268,6 +280,7 @@ class TodoSyncService:
             "version": TODO_SYNC_VERSION,
             "domain": "todo",
             "account_id": self.account_id,
+            "schedule_timezone_repair_version": 0,
             "last_pull_updated_at": None,
             "last_pull_id": None,
             "last_pull_at": None,
@@ -298,6 +311,7 @@ class TodoSyncService:
                 state[key] = raw[key]
         state["domain"] = "todo"
         state["account_id"] = self.account_id
+        state["version"] = TODO_SYNC_VERSION
         if not isinstance(state.get("quarantined"), dict):
             state["quarantined"] = {}
         return state
@@ -422,7 +436,14 @@ class TodoSyncService:
             "content": str(value.get("content") or "")[:4000],
             "status": status,
             "priority": priority,
-            "due_at": str(value.get("due_at") or "").strip() or None,
+            # Always derive the cloud instant from the explicit local schedule
+            # when it exists. A bare ISO timestamp must never reach a
+            # timestamptz column, where it would be interpreted as UTC.
+            "due_at": scheduled_local_iso(
+                metadata["date"],
+                metadata["time"],
+                self._clock,
+            ) or str(value.get("due_at") or "").strip() or None,
             "created_at": created_at,
             "updated_at": updated_at if operation != "delete" else now,
             "completed_at": str(value.get("completed_at") or "").strip() or None,
