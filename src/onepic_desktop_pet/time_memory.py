@@ -200,11 +200,25 @@ class TimeMemory:
         Keep this named entry point separate from the detailed Todo Center's
         tab partitioning.  The compact strip, startup restore, account
         rebinding and manual ``显示待办`` command must all ask the same
-        projection for their content; otherwise a newly selected account can
-        show events in Todo Center while the resident panel stays empty.
+        projection for their content.  Every unfinished ordinary Todo is
+        included, even when it is scheduled farther than the seven-day
+        upcoming view: a task saved in the detailed Todo Center must also be
+        reachable from the pet-attached compact strip.  Countdown and
+        anniversary records still use their own lead-window/pinned policy in
+        ``collect_todo_view`` so far-away calendar events do not fill it.
         """
 
-        return self.todo_view_upcoming(include_read=include_read)
+        today = self.now().date()
+        return collect_todo_view(
+            self._visible_todos_until(date.max, include_read=include_read),
+            self.countdowns.items,
+            self.anniversaries.items,
+            countdown_remaining=self.countdowns.remaining_days,
+            anniversary_remaining=self.anniversaries.remaining_days,
+            anniversary_next_date=self.anniversaries.next_date,
+            today_date=today.isoformat(),
+            show_future_dates=True,
+        )
 
     def _visible_todos_until(
         self,

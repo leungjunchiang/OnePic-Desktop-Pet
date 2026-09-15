@@ -54,6 +54,23 @@ def test_upcoming_todo_view_shows_tomorrow_with_a_date_label(tmp_path) -> None:
     assert memory.get_todo_view_item(task.id).display_text == item.display_text
 
 
+def test_desktop_todo_view_includes_all_unfinished_detailed_todos(tmp_path) -> None:
+    """The pet strip must not silently drop a Todo merely because it is far away."""
+
+    clock = Clock(datetime(2026, 9, 15, 12, 0))
+    memory = TimeMemory(tmp_path, now_provider=clock)
+    tomorrow = memory.todos.add("党会", date="2026-09-16", time="12:30")
+    later = memory.todos.add("叶老师助学金材料", date="2026-09-23", time="16:30")
+    far_later = memory.todos.add("肖莹奖学金材料", date="2026-09-29", time="12:00")
+
+    desktop = {item.id: item for item in memory.todo_view_desktop()}
+
+    assert set(desktop) >= {tomorrow.id, later.id, far_later.id}
+    assert desktop[tomorrow.id].display_text == "明天 · 党会 · 12:30"
+    assert desktop[later.id].display_text == "还有8天 · 叶老师助学金材料 · 16:30"
+    assert desktop[far_later.id].display_text == "还有14天 · 肖莹奖学金材料 · 12:00"
+
+
 def test_manual_todo_projection_can_restore_read_item(tmp_path) -> None:
     """The explicit desktop “显示待办” command can reopen a read task."""
 

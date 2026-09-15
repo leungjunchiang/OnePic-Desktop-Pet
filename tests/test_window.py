@@ -1209,6 +1209,29 @@ def test_compact_todo_panel_keeps_unfinished_read_todos_visible(tmp_path) -> Non
     app.processEvents()
 
 
+def test_compact_todo_panel_keeps_far_future_detailed_todos(tmp_path) -> None:
+    """Tasks written in Todo Center must reach the pet's compact surface."""
+
+    app = QApplication.instance() or QApplication([])
+    memory = TimeMemory(
+        tmp_path,
+        now_provider=lambda: datetime(2026, 9, 15, 12, 0),
+        persist=False,
+    )
+    tomorrow = memory.todos.add("党会", date="2026-09-16", time="12:30")
+    far_later = memory.todos.add("肖莹奖学金材料", date="2026-09-29", time="12:00")
+    panel = CompactTodoPanel(memory, settings=PetSettings(today_note_mode="compact"))
+    panel.show()
+    app.processEvents()
+
+    assert panel.refresh()
+    assert set(panel.rows) == {tomorrow.id, far_later.id}
+    assert "还有14天" in panel.rows[far_later.id].label.toolTip()
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
 def test_compact_todo_panel_reappears_after_todo_center_write(tmp_path) -> None:
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)
