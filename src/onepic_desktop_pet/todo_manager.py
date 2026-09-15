@@ -86,6 +86,34 @@ def scheduled_local_iso(
     ).isoformat()
 
 
+def scheduled_datetime(
+    value: str | datetime,
+    now_provider: Callable[[], datetime] | None = None,
+) -> datetime:
+    """Parse a Todo schedule in the stable Lili calendar timezone.
+
+    The generic time helpers intentionally follow the host timezone for
+    ordinary local data. A Todo appointment is different: its date/time are
+    user-visible calendar fields shared across devices, so a naive value must
+    mean Asia/Shanghai rather than the timezone of a background worker.
+    """
+
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=TODO_SCHEDULE_TIMEZONE)
+    return parsed.astimezone(TODO_SCHEDULE_TIMEZONE)
+
+
+def scheduled_now(now_provider: Callable[[], datetime] | None = None) -> datetime:
+    """Return ``now`` in the Todo calendar, including for naive test clocks."""
+
+    value = now_provider() if now_provider is not None else datetime.now(TODO_SCHEDULE_TIMEZONE)
+    return scheduled_datetime(value, now_provider)
+
+
 def _recover_legacy_inline_event(
     title: str,
     *,
@@ -268,14 +296,14 @@ class TodoItem:
             try:
                 due_dt = datetime.fromisoformat(due_value.replace("Z", "+00:00"))
                 if due_dt.tzinfo is None:
-                    due_dt = due_dt.astimezone()
+                    due_dt = due_dt.replace(tzinfo=TODO_SCHEDULE_TIMEZONE)
                 remind_dt = (
                     datetime.fromisoformat(remind_value.replace("Z", "+00:00"))
                     if remind_value
                     else None
                 )
                 if remind_dt is not None and remind_dt.tzinfo is None:
-                    remind_dt = remind_dt.astimezone()
+                    remind_dt = remind_dt.replace(tzinfo=TODO_SCHEDULE_TIMEZONE)
                 if remind_dt is None or remind_dt == due_dt:
                     remind_value = (due_dt - timedelta(minutes=reminder_minutes)).isoformat()
             except (TypeError, ValueError, OverflowError):
@@ -466,8 +494,8 @@ class TodoManager:
         date_text = str(date or "").strip()
         parsed_date = parse_date(date_text or None, self._now).isoformat()
         clean_time = str(time or "").strip()[:5] or None
-        parsed_due = parse_datetime(due_at, self._now) if due_at else None
-        parsed_remind = parse_datetime(remind_at, self._now) if remind_at else None
+        parsed_due = scheduled_datetime(due_at, self._now) if due_at else None
+        parsed_remind = scheduled_datetime(remind_at, self._now) if remind_at else None
         try:
             clean_priority = int(priority) if priority is not None else None
         except (TypeError, ValueError):
@@ -509,7 +537,7 @@ class TodoManager:
         remind_value = parsed_remind.isoformat() if parsed_remind else None
         if remind_value is None and clean_mode != REMINDER_NONE and due_value:
             try:
-                reminder_due = parse_datetime(due_value, self._now)
+                reminder_due = scheduled_datetime(due_value, self._now)
                 remind_value = (
                     reminder_due - timedelta(minutes=clean_reminder_minutes)
                 ).isoformat()
@@ -690,7 +718,7 @@ class TodoManager:
             elif key == "work_seconds":
                 value = max(0, int(value))
             elif key in {"due_at", "remind_at"}:
-                value = parse_datetime(value, self._now).isoformat() if value else None
+                value = scheduled_datetime(value, self._now).isoformat() if value else None
                 if key == "due_at" and value is not None and "date_explicit" not in changes:
                     item.date_explicit = True
             elif key == "source":
@@ -708,7 +736,7 @@ class TodoManager:
             changed_date_or_time or "reminder_minutes_before" in changes or "reminder" in changes
         ):
             if item.due_at:
-                due = parse_datetime(item.due_at, self._now)
+                due = scheduled_datetime(item.due_at, self._now)
                 item.remind_at = (
                     due - timedelta(minutes=item.reminder_minutes_before)
                 ).isoformat()
@@ -898,12 +926,10 @@ class TodoManager:
             return False
         due_text = item.due_at or f"{item.date}T{item.time}:00"
         try:
-            due = parse_datetime(due_text, self._now)
+            due = scheduled_datetime(due_text, self._now)
         except (TypeError, ValueError):
             return False
-        current = now_local(self._now) if now is None else now
-        if current.tzinfo is None:
-            current = current.astimezone()
+        current = scheduled_now(self._now) if now is None else scheduled_datetime(now, self._now)
         return current > due + timedelta(hours=24)
 
     def delete(self, item_id: str) -> bool:
@@ -967,8 +993,8 @@ class TodoManager:
             if not expected_due:
                 continue
             try:
-                current_due = parse_datetime(item.due_at, self._now) if item.due_at else None
-                expected_due_dt = parse_datetime(expected_due, self._now)
+                current_due = scheduled_datetime(item.due_at, self._now) if item.due_at else None
+                expected_due_dt = scheduled_datetime(expected_due, self._now)
             except (TypeError, ValueError, OverflowError):
                 current_due = None
                 expected_due_dt = None
@@ -980,8 +1006,8 @@ class TodoManager:
                     expected_due_dt - timedelta(minutes=item.reminder_minutes_before)
                 ).isoformat()
                 try:
-                    current_remind = parse_datetime(item.remind_at, self._now) if item.remind_at else None
-                    expected_remind_dt = parse_datetime(expected_remind, self._now)
+                    current_remind = scheduled_datetime(item.remind_at, self._now) if item.remind_at else None
+                    expected_remind_dt = scheduled_datetime(expected_remind, self._now)
                 except (TypeError, ValueError, OverflowError):
                     current_remind = None
                     expected_remind_dt = None
@@ -1043,7 +1069,7 @@ class TodoManager:
                 item.due_at = scheduled_local_iso(target, item.time, self._now)
                 if item.reminder_mode != REMINDER_NONE:
                     if item.due_at:
-                        due = parse_datetime(item.due_at, self._now)
+                        due = scheduled_datetime(item.due_at, self._now)
                         item.remind_at = (
                             due - timedelta(minutes=item.reminder_minutes_before)
                         ).isoformat()

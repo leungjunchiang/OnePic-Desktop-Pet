@@ -16,7 +16,7 @@ from .reminder_manager import ReminderManager
 from .structured_actions import LocalActionExecutor
 from .sticky_note_manager import StickyNoteManager
 from .timeline_manager import TimelineManager
-from .todo_manager import TodoManager
+from .todo_manager import TodoManager, scheduled_datetime
 from .todo_view import TodoViewItem, collect_todo_view
 from .time_service import now_local, parse_datetime
 from .work_session_manager import WorkSessionManager
@@ -248,7 +248,7 @@ class TimeMemory:
             if item.time or item.due_at:
                 due_text = item.due_at or f"{item.date}T{item.time}:00"
                 try:
-                    due = parse_datetime(due_text, self._now)
+                    due = scheduled_datetime(due_text, self._now)
                 except (TypeError, ValueError):
                     due = None
                 if due is not None and due.date() <= latest:
@@ -380,7 +380,7 @@ class TimeMemory:
         reminder_expired = False
         if reminder_at:
             try:
-                reminder_expired = parse_datetime(reminder_at, self._now) <= now
+                reminder_expired = scheduled_datetime(reminder_at, self._now) <= scheduled_datetime(now, self._now)
             except (TypeError, ValueError, OverflowError):
                 reminder_expired = False
         restored = self.todos.update(
