@@ -1,12 +1,18 @@
-"""本地持久待办及其事项日期语义；兼容旧字段但区分创建时间与事件时间。"""
+"""本地持久待办及其事项日期语义；兼容旧字段但区分创建时间与事件时间。
+
+本模块只负责本地 Todo 和变更通知；云端队列由旁路 ``todo_sync`` 模块
+单独持有，通知失败不能回滚或阻断任何本地待办操作。
+"""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+import logging
 import re
-from typing import Any, Callable, Iterable
-from uuid import uuid4
+from typing import Any, Callable, Iterable, Iterator
+from uuid import UUID, uuid4
 
 from .local_data import local_data_path, read_json, write_json_atomic
 from .time_service import now_local, parse_date, parse_datetime, today_key
@@ -23,6 +29,8 @@ REMINDER_PET = "pet"
 REMINDER_ALARM = "alarm"
 REMINDER_MODES = {REMINDER_NONE, REMINDER_PET, REMINDER_ALARM}
 MAX_ACTIVE_TODOS = 10
+
+LOGGER = logging.getLogger(__name__)
 
 
 def normalize_reminder_mode(value: Any, *, legacy_reminder: bool = False) -> str:
@@ -106,6 +114,7 @@ class TodoItem:
     id: str
     title: str
     date: str
+    content: str = ""
     # ``date`` is retained for compatibility with old storage and ordering.
     # This flag says whether it is a user-specified event date rather than a
     # legacy/default creation-day placeholder.
@@ -119,6 +128,7 @@ class TodoItem:
     reminder: bool = False
     created_at: str = ""
     completed_at: str | None = None
+    updated_at: str = ""
     work_seconds: int = 0
     due_at: str | None = None
     remind_at: str | None = None
@@ -146,6 +156,14 @@ class TodoItem:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TodoItem":
+        raw_id = str(value.get("id") or "").strip()
+        try:
+            item_id = str(UUID(raw_id))
+        except (AttributeError, TypeError, ValueError):
+            # A pre-sync local record may have had an arbitrary string key.
+            # Todo cloud identity is UUID-only; migrate that one record to a
+            # durable client UUID instead of silently leaving it unuploadable.
+            item_id = str(uuid4())
         date_value = str(value.get("date") or today_key())[:10]
         time_value = str(value.get("time") or "").strip()[:5] or None
         due_value = str(value.get("due_at") or "").strip() or None
@@ -171,6 +189,7 @@ class TodoItem:
         except (TypeError, ValueError):
             reminder_minutes = 10
         created_at = str(value.get("created_at") or datetime.now().astimezone().isoformat())
+        updated_at = str(value.get("updated_at") or created_at)
         reminder = bool(value.get("reminder", False))
         reminder_mode = normalize_reminder_mode(
             value.get("reminder_mode"), legacy_reminder=reminder
@@ -236,8 +255,9 @@ class TodoItem:
         else:
             date_explicit = bool(raw_explicit)
         return cls(
-            id=str(value.get("id") or uuid4().hex),
+            id=item_id,
             title=title_value,
+            content=str(value.get("content") or "")[:4000],
             date=date_value,
             date_explicit=date_explicit,
             time=time_value,
@@ -247,6 +267,7 @@ class TodoItem:
             reminder=reminder,
             created_at=created_at,
             completed_at=str(value.get("completed_at") or "") or None,
+            updated_at=updated_at,
             work_seconds=max(0, int(value.get("work_seconds", 0) or 0)),
             due_at=due_value,
             remind_at=remind_value,
@@ -278,17 +299,35 @@ class TodoManager:
         *,
         now_provider: Callable[[], datetime] | None = None,
         persist: bool = True,
+        change_listener: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self.path = path or local_data_path("todos.json")
         self._now = now_provider or (lambda: datetime.now().astimezone())
         self.persist = bool(persist)
+        self._change_listeners: list[Callable[[str, dict[str, Any]], None]] = []
+        self._change_notifications_suppressed = 0
+        if change_listener is not None:
+            self._change_listeners.append(change_listener)
         raw = read_json(self.path, [])
         if isinstance(raw, dict):
             raw = raw.get("tasks", [])
-        self._items = [TodoItem.from_dict(item) for item in raw if isinstance(item, dict)]
+        self._items = []
+        migrated_ids = False
+        for value in raw if isinstance(raw, list) else []:
+            if not isinstance(value, dict):
+                continue
+            item = TodoItem.from_dict(value)
+            raw_id = str(value.get("id") or "").strip()
+            migrated_ids = migrated_ids or raw_id != item.id
+            self._items.append(item)
         # Upgrade the old five-item queue into one continuous sticky-note
         # order. Existing dates and completion/read state remain untouched.
         self._normalize_current_order(save=False)
+        if migrated_ids:
+            # Persist UUID migration immediately. Otherwise the next process
+            # would generate a different cloud identity for the same legacy
+            # record and create a duplicate Todo on every launch.
+            self._save()
 
     @property
     def items(self) -> tuple[TodoItem, ...]:
@@ -298,10 +337,62 @@ class TodoManager:
         if self.persist:
             write_json_atomic(self.path, [item.to_dict() for item in self._items])
 
+    def add_change_listener(
+        self,
+        listener: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        """Observe local Todo mutations without making the writer depend on sync.
+
+        Listeners are deliberately best-effort.  A cloud-sync observer must
+        never make a local Todo edit fail, and remote merge code can suppress
+        the callback while applying an already-authoritative server row.
+        """
+
+        if listener not in self._change_listeners:
+            self._change_listeners.append(listener)
+
+    def remove_change_listener(
+        self,
+        listener: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        """Detach one observer, tolerating an already-detached listener."""
+
+        try:
+            self._change_listeners.remove(listener)
+        except ValueError:
+            pass
+
+    @contextmanager
+    def suppress_change_notifications(self) -> Iterator[None]:
+        """Temporarily prevent remote merges from being re-enqueued locally."""
+
+        self._change_notifications_suppressed += 1
+        try:
+            yield
+        finally:
+            self._change_notifications_suppressed = max(
+                0, self._change_notifications_suppressed - 1
+            )
+
+    def _emit_change(self, operation: str, payload: dict[str, Any]) -> None:
+        """Notify isolated observers while keeping the local write fail-safe."""
+
+        if self._change_notifications_suppressed:
+            return
+        snapshot = dict(payload)
+        for listener in tuple(self._change_listeners):
+            try:
+                listener(str(operation), dict(snapshot))
+            except Exception:
+                # Sync is an optional side effect.  Never roll back or hide a
+                # local Todo because a listener is unavailable or malformed.
+                LOGGER.exception("Todo change listener failed operation=%s", operation)
+
     def add(
         self,
         title: str,
         *,
+        content: str = "",
         date: str | None = None,
         time: str | None = None,
         date_explicit: bool | None = None,
@@ -326,6 +417,13 @@ class TodoManager:
             raise ValueError("任务标题不能为空")
         if sum(1 for item in self._items if not item.completed) >= MAX_ACTIVE_TODOS:
             raise ValueError(f"当前待办已经有{MAX_ACTIVE_TODOS}件了。先做掉一件，或者删除/完成一件再加。")
+        if item_id:
+            try:
+                item_id = str(UUID(str(item_id).strip()))
+            except (AttributeError, TypeError, ValueError):
+                # Callers may pass a stale/legacy key, but every new cloud
+                # identity remains a client-generated UUID.
+                item_id = str(uuid4())
         date_text = str(date or "").strip()
         parsed_date = parse_date(date_text or None, self._now).isoformat()
         clean_time = str(time or "").strip()[:5] or None
@@ -376,18 +474,21 @@ class TodoManager:
                 ).isoformat()
             except (TypeError, ValueError):
                 remind_value = None
+        created_timestamp = now_local(self._now).isoformat()
         item = TodoItem(
-            id=item_id or uuid4().hex,
+            id=item_id or str(uuid4()),
             title=title,
             date=parsed_date,
+            content=str(content or "")[:4000],
             date_explicit=explicit_schedule,
             time=display_time,
             important=bool(important),
             highlight=bool(highlight),
             reminder=clean_mode != REMINDER_NONE,
-            created_at=now_local(self._now).isoformat(),
+            created_at=created_timestamp,
             due_at=due_value,
             remind_at=remind_value,
+            updated_at=created_timestamp,
             priority=clean_priority,
             # New tasks are always appended. The editor no longer exposes a
             # "第几" selector, but this default also protects chat-created
@@ -406,7 +507,18 @@ class TodoManager:
         if clean_queue_position is not None:
             self.set_queue_position(item.id, clean_queue_position)
         else:
-            self._normalize_current_order(save=True)
+            # Normalization can change the persisted position of older
+            # sticky notes (for example after importing a legacy list). Those
+            # records are still Todo mutations and must reach the isolated
+            # Todo queue just like an explicit edit. Remote merge paths use
+            # the default ``emit=False`` below so a pull never re-enqueues
+            # itself.
+            self._normalize_current_order(
+                save=True,
+                touch_updated_at=True,
+                emit=True,
+            )
+        self._emit_change("upsert", item.to_dict())
         return item
 
     def get(self, item_id: str) -> TodoItem | None:
@@ -464,7 +576,7 @@ class TodoManager:
         if item is None:
             raise KeyError(item_id)
         allowed = {
-            "title", "date", "date_explicit", "time", "important", "highlight", "completed", "reminder",
+            "title", "content", "date", "date_explicit", "time", "important", "highlight", "completed", "reminder",
             "work_seconds", "due_at", "remind_at", "priority", "read",
             "queue_position",
             "read_at", "reminder_minutes_before", "reminder_mode", "alarm_sound_id",
@@ -473,9 +585,11 @@ class TodoManager:
         changed_date_or_time = False
         explicit_due = "due_at" in changes
         explicit_remind = "remind_at" in changes
+        changed = False
         for key, value in changes.items():
             if key not in allowed:
                 continue
+            changed = True
             if key == "date":
                 raw_date = str(value or "").strip()
                 value = parse_date(raw_date or None, self._now).isoformat()
@@ -486,6 +600,8 @@ class TodoManager:
                 value = bool(value)
             elif key == "title":
                 value = " ".join(str(value).split())[:240]
+            elif key == "content":
+                value = str(value or "")[:4000]
             elif key == "time":
                 value = str(value or "").strip()[:5] or None
                 if value and "date_explicit" not in changes:
@@ -580,6 +696,8 @@ class TodoManager:
             item.read_at = now_local(self._now).isoformat()
         if not item.read:
             item.read_at = None
+        if changed:
+            item.updated_at = now_local(self._now).isoformat()
         self._save()
         if "queue_position" in changes and not item.completed:
             return self.set_queue_position(item.id, item.queue_position)
@@ -589,6 +707,8 @@ class TodoManager:
             # desktop strip and TodoCenter therefore never disagree about
             # which note is first.
             self.normalize_queue()
+        if changed:
+            self._emit_change("upsert", item.to_dict())
         return item
 
     def complete(self, item_id: str, completed: bool = True) -> TodoItem:
@@ -615,9 +735,16 @@ class TodoManager:
         current = self._current_order_items()
         return len(current) + 1 if len(current) < MAX_ACTIVE_TODOS else None
 
-    def _normalize_current_order(self, *, save: bool = True) -> tuple[TodoItem, ...]:
+    def _normalize_current_order(
+        self,
+        *,
+        save: bool = True,
+        touch_updated_at: bool = False,
+        emit: bool = False,
+    ) -> tuple[TodoItem, ...]:
         """Make the current sticky-note order continuous without changing dates."""
 
+        before = {item.id: item.queue_position for item in self._items}
         ordered = self._current_order_items()
         for index, item in enumerate(ordered[:MAX_ACTIVE_TODOS], start=1):
             item.queue_position = index
@@ -625,8 +752,20 @@ class TodoManager:
         # records are blocked at MAX_ACTIVE_TODOS until the user clears one.
         for item in ordered[MAX_ACTIVE_TODOS:]:
             item.queue_position = None
+        changed_items = [
+            item
+            for item in self._items
+            if before.get(item.id) != item.queue_position
+        ]
+        if touch_updated_at and changed_items:
+            changed_at = now_local(self._now).isoformat()
+            for item in changed_items:
+                item.updated_at = changed_at
         if save:
             self._save()
+        if emit:
+            for item in changed_items:
+                self._emit_change("upsert", item.to_dict())
         return tuple(ordered)
 
     def _explicit_queue_items(self) -> list[TodoItem]:
@@ -645,6 +784,7 @@ class TodoManager:
         item = self.get(item_id)
         if item is None:
             raise KeyError(item_id)
+        before = {candidate.id: candidate.queue_position for candidate in self._items}
         current = [queued for queued in self._explicit_queue_items() if queued.id != item.id]
         if position in set(range(1, MAX_ACTIVE_TODOS + 1)) and not item.completed and not item.read:
             index = min(int(position) - 1, len(current))
@@ -653,12 +793,23 @@ class TodoManager:
             candidate.queue_position = None
         for index, candidate in enumerate(current[:MAX_ACTIVE_TODOS], start=1):
             candidate.queue_position = index
+        changed_at = now_local(self._now).isoformat()
+        changed_items = [
+            candidate
+            for candidate in self._items
+            if before.get(candidate.id) != candidate.queue_position
+        ]
+        for candidate in changed_items:
+            candidate.updated_at = changed_at
         self._save()
+        for candidate in changed_items:
+            self._emit_change("upsert", candidate.to_dict())
         return item
 
     def reorder_queue(self, item_ids: list[str]) -> tuple[TodoItem, ...]:
         """Apply a drag/drop order atomically and normalize positions."""
 
+        before = {candidate.id: candidate.queue_position for candidate in self._items}
         by_id = {item.id: item for item in self._explicit_queue_items()}
         ordered = [by_id[item_id] for item_id in item_ids if item_id in by_id]
         for candidate in self._explicit_queue_items():
@@ -668,7 +819,17 @@ class TodoManager:
             candidate.queue_position = None
         for index, candidate in enumerate(ordered[:MAX_ACTIVE_TODOS], start=1):
             candidate.queue_position = index
+        changed_at = now_local(self._now).isoformat()
+        changed_items = [
+            candidate
+            for candidate in self._items
+            if before.get(candidate.id) != candidate.queue_position
+        ]
+        for candidate in changed_items:
+            candidate.updated_at = changed_at
         self._save()
+        for candidate in changed_items:
+            self._emit_change("upsert", candidate.to_dict())
         return tuple(ordered[:MAX_ACTIVE_TODOS])
 
     def normalize_queue(self) -> tuple[TodoItem, ...]:
@@ -705,19 +866,67 @@ class TodoManager:
         return current > due + timedelta(hours=24)
 
     def delete(self, item_id: str) -> bool:
+        target = self.get(item_id)
         before = len(self._items)
         self._items = [item for item in self._items if item.id != str(item_id)]
         changed = len(self._items) != before
         if changed:
             self.normalize_queue()
+            deleted_at = now_local(self._now).isoformat()
+            payload = target.to_dict() if target is not None else {"id": str(item_id)}
+            payload.update(
+                {
+                    "deleted_at": deleted_at,
+                    "updated_at": deleted_at,
+                }
+            )
+            self._emit_change("delete", payload)
         return changed
+
+    def apply_sync_snapshot(self, value: dict[str, Any]) -> TodoItem | None:
+        """Apply one already-authorized remote Todo without emitting a write.
+
+        The Todo sync service performs ownership and last-write-wins checks
+        before calling this method.  Keeping the final local replacement here
+        preserves the manager's normal legacy-field normalization while making
+        it impossible for a remote merge to enqueue itself again.
+        """
+
+        if not isinstance(value, dict) or not str(value.get("id") or "").strip():
+            return None
+        incoming = TodoItem.from_dict(value)
+        existing = self.get(incoming.id)
+        if existing is None:
+            self._items.append(incoming)
+            result = incoming
+        else:
+            incoming.id = existing.id
+            for key, field_value in asdict(incoming).items():
+                setattr(existing, key, field_value)
+            result = existing
+        self._normalize_current_order(save=False)
+        self._save()
+        return result
+
+    def remove_sync_snapshot(self, item_id: str) -> bool:
+        """Remove one remotely soft-deleted Todo from the local projection."""
+
+        before = len(self._items)
+        self._items = [item for item in self._items if item.id != str(item_id)]
+        if len(self._items) == before:
+            return False
+        self._normalize_current_order(save=False)
+        self._save()
+        return True
 
     def add_work_seconds(self, item_id: str | None, seconds: int) -> TodoItem | None:
         item = self.get(item_id) if item_id else None
         if item is None or int(seconds) <= 0:
             return item
         item.work_seconds += max(0, int(seconds))
+        item.updated_at = now_local(self._now).isoformat()
         self._save()
+        self._emit_change("upsert", item.to_dict())
         return item
 
     def for_date(self, date: str | None = None) -> list[TodoItem]:
@@ -751,7 +960,10 @@ class TodoManager:
                         ).isoformat()
                 item.read = False
                 item.read_at = None
+                item.updated_at = now_local(self._now).isoformat()
                 moved.append(item)
         if moved:
             self._save()
+            for item in moved:
+                self._emit_change("upsert", item.to_dict())
         return moved

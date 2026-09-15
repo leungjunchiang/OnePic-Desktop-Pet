@@ -1,6 +1,7 @@
 """Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
 只发送账号认证、昵称、六毛外观、实时工作状态、FocusSession 区间事实、房间与串门事件。
+Todo 使用独立的 Direct-only RPC 旁路，不进入通用路由回退，也不拥有认证生命周期。
 工作心跳只描述当前活动会话的存活状态，不携带任何累计时长；最终时长始终从有效
 FocusSession 区间派生。密码从不保存；
 刷新令牌保存在系统凭据库。邮箱注册明确区分“已创建、等待确认”和“已登录”，并支持
@@ -1502,6 +1503,8 @@ class SocialBackend(Protocol):
     def health(self) -> dict[str, Any]: ...
     def dashboard(self, room_id: str | None = None, *, allow_cache: bool = True, force_auxiliary_refresh: bool = False) -> dict[str, Any]: ...
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
+    def todo_upsert(self, payload: dict[str, Any]) -> Any: ...
+    def todo_pull(self, *, after_updated_at: str | None, after_id: str | None, limit: int) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None: ...
@@ -1668,6 +1671,69 @@ class HttpSocialBackend:
         session = self.auth_manager.accept_auth(data)
         self.session = session
         return session is not None
+
+    def _todo_raw(self, path: str, body: Any = None) -> Any:
+        """Call the Todo RPC with the current token, without owning Auth state.
+
+        Todo synchronization is an optional side channel.  It may read the
+        current access token, but it must not force refresh rotation, clear a
+        session, mark the account for relogin, or fall back to another
+        business backend.  The regular social request path keeps its existing
+        auth behavior; this narrow path converts a stale token/network error
+        into a Todo-local exception for the isolated queue to retry.
+        """
+
+        if self.transport != "direct":
+            raise SocialError(
+                "Todo 同步只支持 Supabase Direct。",
+                kind="config",
+                retryable=True,
+            )
+        session = self.auth_manager.current() or self.session
+        if session is None:
+            raise SocialError("请先登录搭子自习室。", kind="auth", retryable=True)
+        payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {session.access_token}",
+        }
+        if self.client_key:
+            headers["apikey"] = self.client_key
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=payload,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with _verified_urlopen(
+                request,
+                timeout=_social_request_timeout(),
+            ) as response:
+                raw = response.read()
+                return json.loads(raw.decode("utf-8")) if raw else None
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+                error_code = str(data.get("error_code") or data.get("code") or "")
+                message = data.get("message") or data.get("error_description") or data.get("error") or raw
+            except json.JSONDecodeError:
+                error_code = ""
+                message = raw or str(exc)
+            status = int(exc.code)
+            kind = "auth" if status in (401, 403) else "server" if status >= 500 else "http"
+            raise SocialError(
+                str(message)[:300],
+                kind=kind,
+                endpoint=_endpoint_host(self.base_url),
+                retryable=status >= 500 or status in (401, 403),
+                status=status,
+                error_code=error_code,
+            ) from exc
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            raise _network_error(exc, self.base_url) from exc
 
     def _signup_result(self, data: dict[str, Any] | None, email: str) -> SignupResult:
         session = self.auth_manager.accept_auth(data)
@@ -2049,6 +2115,50 @@ class HttpSocialBackend:
             "lili_focus_live_projection": "/rpc/lili_focus_live_projection",
         }
         return self._raw("POST", routes.get(name, f"/rpc/{name}"), body, authenticated=True)
+
+    def todo_upsert(self, payload: dict[str, Any]) -> Any:
+        """Write one Todo through Supabase Direct only.
+
+        Todo synchronization is deliberately not part of the generic route
+        fallback.  The proxy does not own the Todo schema, so a transient Todo
+        failure must remain a Todo-only retry instead of being replayed through
+        another business backend.
+        """
+
+        if self.transport != "direct":
+            raise SocialError(
+                "Todo 同步只支持 Supabase Direct。",
+                kind="config",
+                retryable=True,
+            )
+        return self._todo_raw(
+            "/rest/v1/rpc/lili_todo_upsert",
+            {"p_todo": dict(payload)},
+        )
+
+    def todo_pull(
+        self,
+        *,
+        after_updated_at: str | None,
+        after_id: str | None,
+        limit: int,
+    ) -> Any:
+        """Pull one composite-cursor page from the independent Todo table."""
+
+        if self.transport != "direct":
+            raise SocialError(
+                "Todo 同步只支持 Supabase Direct。",
+                kind="config",
+                retryable=True,
+            )
+        return self._todo_raw(
+            "/rest/v1/rpc/lili_todo_pull",
+            {
+                "p_after_updated_at": after_updated_at,
+                "p_after_id": after_id,
+                "p_limit": int(limit),
+            },
+        )
 
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
         clean = nickname.strip()[:24]
@@ -3788,6 +3898,26 @@ class BackendRouteManager:
                 self._mark_success(started)
                 return result
 
+    def todo_upsert(self, payload: dict[str, Any]) -> Any:
+        """Send Todo data to Direct without entering generic route fallback."""
+
+        return self.direct.todo_upsert(payload)
+
+    def todo_pull(
+        self,
+        *,
+        after_updated_at: str | None,
+        after_id: str | None,
+        limit: int,
+    ) -> Any:
+        """Read Todo deltas from Direct using the shared auth session only."""
+
+        return self.direct.todo_pull(
+            after_updated_at=after_updated_at,
+            after_id=after_id,
+            limit=limit,
+        )
+
 
 class SupabaseFirstSocialClient(DashboardCacheClientBase):
     """Production social client with one Supabase source of truth."""
@@ -4110,6 +4240,40 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return result
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._manager.request("rpc", name, body)
+
+    def todo_upsert(self, payload: dict[str, Any]) -> Any:
+        """Write an isolated Todo row without proxy fallback or global sync."""
+
+        method = getattr(self._manager, "todo_upsert", None)
+        if not callable(method):
+            raise SocialError(
+                "当前自习室客户端不支持 Todo 同步，请更新客户端。",
+                kind="config",
+                retryable=True,
+            )
+        return method(dict(payload))
+
+    def todo_pull(
+        self,
+        *,
+        after_updated_at: str | None,
+        after_id: str | None,
+        limit: int,
+    ) -> Any:
+        """Read only the current account's Todo delta from Supabase Direct."""
+
+        method = getattr(self._manager, "todo_pull", None)
+        if not callable(method):
+            raise SocialError(
+                "当前自习室客户端不支持 Todo 同步，请更新客户端。",
+                kind="config",
+                retryable=True,
+            )
+        return method(
+            after_updated_at=after_updated_at,
+            after_id=after_id,
+            limit=int(limit),
+        )
 
     def focus_live_projection(self) -> dict[str, Any] | None:
         """Read the tiny per-device live interval projection, if available."""

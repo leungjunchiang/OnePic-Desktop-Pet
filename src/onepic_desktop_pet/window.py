@@ -33,6 +33,7 @@
 - Qt 定时器、平台探测和异步同步回调均设置故障边界，单次失败只记录日志，不终止桌宠进程；
 - 宠物图层使用透明顶层窗口；工作状态、串门和提示卡片使用可读的实色背景，避免平台默认背景造成黑色或透明内容区。
 - 桌面待办浮层独立于工作报告窗口，两个窗口可以同时显示且互不改变可见状态。
+- Todo 跨设备同步由独立队列、游标和线程驱动，只刷新 Todo 投影，不参与 Auth、Presence、Heartbeat 或 Focus 生命周期。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -288,6 +289,7 @@ from .workflow import WorkflowError, character_is_approved, load_workflow
 from .time_memory import TimeMemory
 from .today_note import TimeMemoryWindow, TodayNoteWindow
 from .todo_center import TodoCenterWindow
+from .todo_sync import TodoSyncBatch, TodoSyncService, TodoSyncThread
 
 
 from .compact_todo import CompactTodoPanel, compact_todo_candidates
@@ -752,6 +754,17 @@ class PetWindow(QWidget):
         self.social_client = SocialClient(
             persist_tokens=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
         )
+        # Todo is a separate synchronization domain.  These fields are kept
+        # beside, but never inside, the social/presence workers so a Todo
+        # request cannot reset or gate Auth, heartbeat, Focus, or dashboard
+        # synchronization.
+        self._todo_sync_service: TodoSyncService | None = None
+        self._todo_sync_thread: TodoSyncThread | None = None
+        self._todo_sync_generation = 0
+        self._todo_sync_timer: QTimer | None = None
+        self._todo_sync_kick_timer: QTimer | None = None
+        self._todo_sync_wake_pending = False
+        self._close_in_progress = False
         self._social_dialog: SocialHubDialog | None = None
         self._close_retry_scheduled = False
         self._social_thread: SocialSyncThread | None = None
@@ -1197,6 +1210,22 @@ class PetWindow(QWidget):
         self.social_sync_timer.timeout.connect(self._social_tick)
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
+
+        # Todo has its own low-frequency worker and wake-up timer in the real
+        # application.  It never runs through ``_social_tick`` or the generic
+        # social route fallback: a stalled Todo RPC can therefore only leave
+        # Todo rows pending.  Offscreen/demo windows intentionally do not
+        # create the extra timer or worker surface.
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1":
+            self._todo_sync_kick_timer = QTimer(self)
+            self._todo_sync_kick_timer.setSingleShot(True)
+            self._todo_sync_kick_timer.timeout.connect(self._todo_sync_tick)
+            self._todo_sync_timer = QTimer(self)
+            self._todo_sync_timer.setInterval(60_000)
+            self._todo_sync_timer.timeout.connect(self._todo_sync_tick)
+            self._todo_sync_timer.start()
+            if self._todo_sync_service is not None and self._todo_sync_service.account_id:
+                QTimer.singleShot(3500, self._todo_sync_tick)
 
         # A real video/PPT fullscreen window must own the whole display.  Poll
         # the coarse, privacy-preserving geometry signal separately from the
@@ -2499,10 +2528,16 @@ class PetWindow(QWidget):
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
         lifecycle_log("pet_window.close_event.begin", self)
+        self._close_in_progress = True
         # Pause/seal first, then ask workers to stop. Do not hide the pet,
         # bubbles, status item, or Dock integration until every Qt worker has
         # actually drained; an ignored close event must leave a coherent,
         # visible application instead of a headless process.
+        for timer in (self._todo_sync_timer, self._todo_sync_kick_timer):
+            if timer is not None:
+                timer.stop()
+        if self._todo_sync_service is not None:
+            self._todo_sync_service.close()
         self.shutdown_work_timer()
         thread_roots = self._thread_shutdown_roots()
         request_stop_all(*thread_roots)
@@ -8693,6 +8728,129 @@ class PetWindow(QWidget):
                     "你还没有加入自习室；本地功能不受影响，联网后搭子状态会自动同步。"
                 )
 
+    def _configure_todo_sync(self, account_id: str | None) -> None:
+        """Bind the isolated Todo service to the currently loaded account.
+
+        Account switching recreates ``TimeMemory.todos``.  Rebinding here is
+        therefore mandatory: a previous account's listener and queue must not
+        survive into the new namespace, and an anonymous Todo must never be
+        uploaded after a later login.
+        """
+
+        old_service = self._todo_sync_service
+        if old_service is not None:
+            old_service.close()
+        old_thread = self._todo_sync_thread
+        if old_thread is not None and old_thread.isRunning():
+            old_thread.requestInterruption()
+        clean = str(account_id or "").strip()
+        self._todo_sync_generation += 1
+        if not clean:
+            self._todo_sync_wake_pending = False
+        persistent = os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1"
+        service = TodoSyncService(
+            self.time_memory.todos,
+            account_id=clean,
+            transport=self.social_client if clean else None,
+            persist=persistent,
+        )
+        service.set_wakeup_callback(self._todo_sync_requested)
+        self._todo_sync_service = service
+        imported = service.ensure_initial_queue() if clean else 0
+        if imported or service.pending_count:
+            self._todo_sync_requested()
+
+    @_guard_qt_callback
+    def _todo_sync_requested(self) -> None:
+        """Coalesce local Todo edits into one independent worker kick."""
+
+        if self._close_in_progress:
+            return
+        current = self._todo_sync_thread
+        if current is not None and current.isRunning():
+            # The one-shot timer may have fired while a previous Todo request
+            # was still in flight. Remember the local edit and replay exactly
+            # one kick after that worker drains; do not start a parallel
+            # worker or spin on a backoff-only queue.
+            self._todo_sync_wake_pending = True
+            return
+        timer = self._todo_sync_kick_timer
+        if timer is not None:
+            timer.start(350)
+
+    @_guard_qt_callback
+    def _todo_sync_tick(self) -> None:
+        """Run one bounded Todo-only network cycle outside the GUI thread."""
+
+        if self._close_in_progress:
+            return
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1":
+            return
+        service = self._todo_sync_service
+        if service is None or not service.account_id:
+            return
+        if not self.social_client.signed_in:
+            # The Auth lifecycle remains owned by the social synchronizer.
+            # Todo simply waits with its queue intact.
+            return
+        current = self._todo_sync_thread
+        if current is not None and current.isRunning():
+            self._todo_sync_wake_pending = True
+            return
+        service.ensure_initial_queue()
+        generation = self._todo_sync_generation
+        thread = TodoSyncThread(service, self)
+        self._todo_sync_thread = thread
+        thread.completed.connect(
+            lambda batch, expected=service, expected_generation=generation: self._todo_sync_completed(
+                expected,
+                expected_generation,
+                batch,
+            ),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.finished.connect(
+            lambda current_thread=thread: self._todo_sync_thread_finished(current_thread),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.start()
+
+    @_guard_qt_callback
+    def _todo_sync_completed(
+        self,
+        service: TodoSyncService,
+        generation: int,
+        batch: object,
+    ) -> None:
+        """Apply only Todo rows after a worker has completed."""
+
+        if generation != self._todo_sync_generation or service is not self._todo_sync_service:
+            return
+        result = service.apply_batch(batch) if isinstance(batch, TodoSyncBatch) else None
+        if result is None:
+            return
+        if result.changed_count or result.removed_count:
+            self._refresh_todo_surfaces()
+        if result.errors:
+            LOGGER.info(
+                "todo sync deferred errors=%s pending=%s",
+                len(result.errors),
+                result.pending_count,
+            )
+
+    @_guard_qt_callback
+    def _todo_sync_thread_finished(self, thread: TodoSyncThread) -> None:
+        """Release one Todo worker and retry a pending queue item later."""
+
+        if self._todo_sync_thread is thread:
+            self._todo_sync_thread = None
+        thread.deleteLater()
+        service = self._todo_sync_service
+        retry_wake = self._todo_sync_wake_pending
+        self._todo_sync_wake_pending = False
+        if not self._close_in_progress and retry_wake and service is not None and service.pending_count:
+            self._todo_sync_requested()
+
     def _social_account_state_changed(self, signed_in: bool) -> None:
         """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
 
@@ -8924,6 +9082,8 @@ class PetWindow(QWidget):
 
         clean = str(account_id or "").strip()
         if clean == self._active_focus_account_id:
+            if self._todo_sync_service is None:
+                self._configure_todo_sync(clean)
             self._recover_persisted_focus_session()
             self._run_focus_history_recovery()
             return
@@ -8942,6 +9102,7 @@ class PetWindow(QWidget):
         self._recover_persisted_focus_session()
         self.daily_stats.switch_account(clean or None)
         self.time_memory.switch_account(clean or None)
+        self._configure_todo_sync(clean)
         self._rebind_todo_surfaces_to_current_memory()
         self.economy.switch_account(clean or None)
         if hasattr(self, "_chat_memory"):
