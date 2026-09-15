@@ -362,28 +362,116 @@ def _presence_working(presence: dict[str, Any]) -> bool:
     return bool(value)
 
 
+def _presence_last_seen_age_seconds(
+    presence: dict[str, Any],
+    now: datetime | None = None,
+) -> int | None:
+    """Return the age of the peer's last heartbeat when it is observable."""
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    for field in ("last_seen_at", "last_seen"):
+        raw = presence.get(field)
+        if not str(raw or "").strip():
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age = int((current - parsed.astimezone(timezone.utc)).total_seconds())
+        return max(0, age)
+    try:
+        cached_age = presence.get("presence_age_seconds")
+        if cached_age is not None:
+            return max(0, int(cached_age))
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def _presence_has_login_evidence(presence: dict[str, Any]) -> bool:
+    """Whether the payload proves that this account has logged in before.
+
+    ``online=False`` is derived from a freshness timeout in the server RPC;
+    it is not a logout event. A non-null heartbeat timestamp is therefore
+    enough to keep the peer in the conservative “resting, unconfirmed” state.
+    """
+
+    if presence.get("presence_never_seen"):
+        return False
+    if presence.get("presence_history_known"):
+        return True
+    if bool(presence.get("presence_transport_stale")):
+        return True
+    return any(
+        str(presence.get(field) or "").strip()
+        for field in ("last_seen_at", "last_seen")
+    )
+
+
+def _presence_uncertain(presence: dict[str, Any]) -> bool:
+    """Separate “not currently verified” from a confirmed offline account."""
+
+    if bool(presence.get("presence_uncertain")) or bool(
+        presence.get("presence_transport_stale")
+    ):
+        return True
+    return presence.get("online") is False and _presence_has_login_evidence(presence)
+
+
 def _presence_status(presence: dict[str, Any]) -> str:
     """Return a stable user-facing status for old and new API payloads."""
 
-    # A short dashboard outage is a transport problem, not a peer leave.  Keep
+    # A transport-stale cache has already been conservatively downgraded to a
+    # resting state by social.py. Keep that state stable even after the cache
+    # is older than the short grace period; cache age belongs to this viewer,
+    # not to the peer's account state.
+    if bool(presence.get("presence_transport_stale")):
+        return "rest" if not presence.get("presence_never_seen") else "offline"
+    # A short dashboard outage is a transport problem, not a peer leave. Keep
     # that state distinct so an old snapshot cannot be rendered as a false
     # “offline” result.
     if bool(presence.get("presence_uncertain")):
+        if presence.get("online") is False and _presence_has_login_evidence(presence):
+            return "rest"
         return "unknown"
     if bool(presence.get("stale_presence")):
         return "offline"
     # Some older dashboard payloads can retain ``working`` or ``status``
     # after the server has already marked the user offline.  The explicit
-    # online flag is authoritative in that case, otherwise the UI shows a
-    # grey dot together with the contradictory “正在工作” label.
+    # online flag is authoritative only after the shared confirmation buffer;
+    # just-past-boundary heartbeats are shown as resting until the state is
+    # confirmed offline.
     if presence.get("online") is False:
+        if _presence_has_login_evidence(presence):
+            return "rest"
         return "offline"
     status = str(presence.get("status") or "").strip().casefold()
     if status in {"offline", "离线"}:
+        if _presence_has_login_evidence(presence):
+            return "rest"
         return "offline"
     if _presence_working(presence):
         return "focus"
     return "rest"
+
+
+def _presence_is_online(presence: dict[str, Any], status: str | None = None) -> bool:
+    """Return the card's online dot state using the same status policy."""
+
+    resolved = status or _presence_status(presence)
+    if resolved == "offline":
+        return False
+    if bool(presence.get("presence_transport_stale")):
+        return True
+    if presence.get("online") is False:
+        return _presence_has_login_evidence(presence)
+    online_flag = presence.get("online")
+    return online_flag is None or bool(online_flag)
 
 
 def _taunt_available(presence: dict[str, Any]) -> bool:
@@ -1463,6 +1551,39 @@ class SocialHealthThread(QThread):
             self.failed.emit(SocialError(f"健康检查失败：{exc}", kind="network"))
 
 
+class SocialAuthRecoveryThread(QThread):
+    """Retry a stored auth refresh without blocking the Qt event loop."""
+
+    completed = Signal()
+    failed = Signal(object)
+
+    def __init__(self, client: SocialClient, parent=None) -> None:
+        super().__init__(parent)
+        self.client = client
+
+    def run(self) -> None:
+        try:
+            recover = getattr(self.client, "recover_session", None)
+            if not callable(recover) or not recover():
+                raise SocialError(
+                    "本地登录凭据暂时无法恢复。",
+                    kind="auth_refresh",
+                    retryable=True,
+                )
+            self.completed.emit()
+        except SocialError as exc:
+            self.failed.emit(exc)
+        except Exception as exc:
+            self.failed.emit(
+                SocialError(
+                    "登录状态恢复失败，稍后会自动重试。",
+                    kind="auth_refresh",
+                    retryable=True,
+                )
+            )
+            LOGGER.debug("background auth recovery crashed: %s", exc, exc_info=True)
+
+
 class SocialLoginThread(QThread):
     """Authenticate without blocking the Qt GUI thread."""
 
@@ -2001,23 +2122,22 @@ class BuddyCardWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 5, 8, 5)
         root.setSpacing(2)
-        uncertain = bool(buddy.get("presence_uncertain"))
+        uncertain = _presence_uncertain(buddy)
         status = _presence_status(buddy)
-        online_flag = buddy.get("online")
-        online = (
-            status != "offline"
-            and (online_flag is None or bool(online_flag))
-            and not bool(buddy.get("stale_presence"))
-        )
+        online = _presence_is_online(buddy, status)
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         if status == "unknown":
             if bool(buddy.get("online")) and bool(buddy.get("working")):
                 status_text = "正在工作（同步恢复中）"
-            elif bool(buddy.get("online")):
-                status_text = "在线待确认"
+            elif bool(buddy.get("online")) or _presence_has_login_evidence(buddy):
+                # A known account whose transport is recovering is much less
+                # alarming as “resting” with a yellow dot than as a large
+                # “status pending” label. The dot and the small detail line
+                # still preserve the uncertainty without hiding it.
+                status_text = "正在休息"
             else:
-                status_text = "状态待确认"
+                status_text = "同步中"
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         headline = QLabel(
@@ -2031,9 +2151,9 @@ class BuddyCardWidget(QWidget):
         duration = buddy.get("today_seconds")
         week_duration = buddy.get("week_seconds")
         if uncertain:
-            age = int(buddy.get("presence_age_seconds") or 0)
-            age_text = f"约 {max(1, age // 60)} 分钟前" if age else "刚才"
-            time_text = f"实时状态暂无法确认（最后确认{age_text}），正在自动恢复"
+            age = _presence_last_seen_age_seconds(buddy)
+            age_text = f"约 {max(1, age // 60)} 分钟前" if age is not None else "时间未知"
+            time_text = f"同步中 · 最后确认{age_text}"
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
@@ -2104,21 +2224,16 @@ class BuddyCardWidget(QWidget):
         """Update live status/time labels without rebuilding the card tree."""
 
         self.buddy = dict(buddy)
-        uncertain = bool(buddy.get("presence_uncertain"))
+        uncertain = _presence_uncertain(buddy)
         status = _presence_status(buddy)
-        online_flag = buddy.get("online")
-        online = (
-            status != "offline"
-            and (online_flag is None or bool(online_flag))
-            and not bool(buddy.get("stale_presence"))
-        )
+        online = _presence_is_online(buddy, status)
         if status == "unknown":
             if bool(buddy.get("online")) and bool(buddy.get("working")):
                 status_text = "正在工作（同步恢复中）"
-            elif bool(buddy.get("online")):
-                status_text = "在线待确认"
+            elif bool(buddy.get("online")) or _presence_has_login_evidence(buddy):
+                status_text = "正在休息"
             else:
-                status_text = "状态待确认"
+                status_text = "同步中"
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         nickname = _owner_nickname(buddy)
@@ -2130,9 +2245,9 @@ class BuddyCardWidget(QWidget):
         duration = buddy.get("today_seconds")
         week_duration = buddy.get("week_seconds")
         if uncertain:
-            age = int(buddy.get("presence_age_seconds") or 0)
-            age_text = f"约 {max(1, age // 60)} 分钟前" if age else "刚才"
-            time_text = f"实时状态暂无法确认（最后确认{age_text}），正在自动恢复"
+            age = _presence_last_seen_age_seconds(buddy)
+            age_text = f"约 {max(1, age // 60)} 分钟前" if age is not None else "时间未知"
+            time_text = f"同步中 · 最后确认{age_text}"
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
@@ -2215,10 +2330,16 @@ class RoomPetCardWidget(QWidget):
         details.setSpacing(2)
 
         status = _presence_status(buddy)
-        uncertain = bool(buddy.get("presence_uncertain"))
-        online = status != "offline" and not bool(buddy.get("stale_presence"))
+        uncertain = _presence_uncertain(buddy)
+        online = _presence_is_online(buddy, status)
         if status == "unknown":
-            status_text = "正在工作（同步恢复中）" if buddy.get("working") else "在线待确认"
+            status_text = (
+                "正在工作（同步恢复中）"
+                if buddy.get("working")
+                else "正在休息"
+                if _presence_is_online(buddy, status) or _presence_has_login_evidence(buddy)
+                else "同步中"
+            )
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         nickname = _owner_nickname(buddy)
@@ -2287,10 +2408,16 @@ class RoomPetCardWidget(QWidget):
 
         self.buddy = dict(buddy)
         status = _presence_status(buddy)
-        uncertain = bool(buddy.get("presence_uncertain"))
-        online = status != "offline" and not bool(buddy.get("stale_presence"))
+        uncertain = _presence_uncertain(buddy)
+        online = _presence_is_online(buddy, status)
         if status == "unknown":
-            status_text = "正在工作（同步恢复中）" if buddy.get("working") else "在线待确认"
+            status_text = (
+                "正在工作（同步恢复中）"
+                if buddy.get("working")
+                else "正在休息"
+                if _presence_is_online(buddy, status) or _presence_has_login_evidence(buddy)
+                else "同步中"
+            )
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         self._headline_label.setText(
@@ -2797,6 +2924,13 @@ class SocialHubDialog(QDialog):
         self._buddy_card_structure: dict[str, tuple[Any, ...]] = {}
         self._room_pet_card_widgets: dict[str, tuple[QListWidgetItem, RoomPetCardWidget]] = {}
         self._buddy_presence_versions: dict[str, tuple[int, dict[str, Any]]] = {}
+        # A newer dashboard response can omit optional presence columns while
+        # still carrying ``online=false`` from a freshness timeout.  Keep a
+        # small in-memory record of evidence already seen in this dialog so a
+        # response-shape difference cannot turn a known peer into a false
+        # logout.  This is UI continuity only; the server remains authoritative
+        # for fresh presence and the record is cleared on account logout.
+        self._known_presence_evidence: dict[str, dict[str, Any]] = {}
         self.current_room_id: str | None = None
         self._room_selection_explicit = False
         self._focus_snapshot: Any = None
@@ -3523,8 +3657,8 @@ class SocialHubDialog(QDialog):
             _owner_nickname(buddy),
             _owner_label(buddy),
             _presence_status(buddy),
-            bool(buddy.get("online")),
-            bool(buddy.get("presence_uncertain")),
+            _presence_is_online(buddy),
+            _presence_uncertain(buddy),
             bool(buddy.get("stale_presence")),
             str(buddy.get("outfit_key") or ""),
             str(buddy.get("quick_status") or ""),
@@ -5010,7 +5144,7 @@ class SocialHubDialog(QDialog):
         thread.deleteLater()
 
     def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
+        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._known_presence_evidence.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
         if self._closed:
@@ -5065,6 +5199,106 @@ class SocialHubDialog(QDialog):
                     continue
                 if sequence:
                     self._buddy_presence_versions[buddy_id] = (sequence, dict(raw_item))
+        return payload
+
+    def _preserve_known_presence_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Keep a known peer resting when a later payload omits presence data.
+
+        Dashboard responses come from mixed client/server versions and from
+        both healthy and cached transport paths.  Some of those responses
+        include ``online=false`` but omit ``last_seen_at``.  That flag is a
+        freshness projection, not a logout acknowledgement.  Once this
+        dialog has observed a peer with an online/rest/focus state or a
+        heartbeat timestamp, preserve that evidence across an omission and
+        mark the state uncertain instead of rendering a false offline card.
+
+        This does not create evidence for a peer whose first payload is simply
+        ``online=false`` with no history.  Once this dialog has already seen
+        a peer, however, a later nullable/legacy ``presence_never_seen`` flag
+        is treated as a missing projection rather than a retroactive logout;
+        the server has not supplied a deletion event.
+        """
+
+        presence_statuses = {
+            # ``offline`` is deliberately excluded: by itself it is the
+            # result of a freshness projection, not positive evidence that a
+            # previously known account logged out.
+            "focus", "working", "rest", "idle",
+            "专注", "工作", "休息", "休息中",
+        }
+        timestamp_fields = (
+            "last_seen_at", "last_seen", "status_updated_at", "server_updated_at",
+        )
+        lists: list[Any] = [
+            payload.get("buddies"),
+            payload.get("room_people"),
+            payload.get("active_visits"),
+        ]
+        current_room = payload.get("current_room")
+        if isinstance(current_room, dict):
+            lists.extend((current_room.get("room_people"), current_room.get("active_visits")))
+
+        def identity(row: dict[str, Any]) -> str:
+            return str(row.get("user_id") or row.get("peer_id") or row.get("id") or "").strip()
+
+        def has_evidence(row: dict[str, Any]) -> bool:
+            if row.get("presence_never_seen"):
+                return False
+            status = str(row.get("status") or "").strip().casefold()
+            return bool(
+                row.get("online") is True
+                or row.get("working") is True
+                or status in presence_statuses
+                or row.get("presence_uncertain")
+                or row.get("presence_transport_stale")
+                or any(str(row.get(field) or "").strip() for field in timestamp_fields)
+            )
+
+        for items in lists:
+            if not isinstance(items, list):
+                continue
+            for index, raw_item in enumerate(items):
+                if not isinstance(raw_item, dict):
+                    continue
+                buddy_id = identity(raw_item)
+                if not buddy_id:
+                    continue
+                if raw_item.get("presence_never_seen") and buddy_id not in self._known_presence_evidence:
+                    continue
+                known = self._known_presence_evidence.get(buddy_id)
+                if has_evidence(raw_item):
+                    record = dict(known or {})
+                    record["known"] = True
+                    for field in timestamp_fields:
+                        value = raw_item.get(field)
+                        if str(value or "").strip():
+                            record[field] = value
+                    self._known_presence_evidence[buddy_id] = record
+                    continue
+                if not known or not known.get("known"):
+                    continue
+
+                preserved = dict(raw_item)
+                for field in timestamp_fields:
+                    if field not in preserved and field in known:
+                        preserved[field] = known[field]
+                # ``presence_history_known`` is consumed by the status
+                # normalizer above.  Transport-stale is also useful to the
+                # card because it keeps the dot online while explaining that
+                # the current heartbeat is not confirmed.
+                preserved["presence_history_known"] = True
+                preserved["presence_uncertain"] = True
+                preserved["presence_transport_stale"] = True
+                # The marker can be synthesized from a nullable legacy
+                # column. It must not override evidence already observed in
+                # this dialog.
+                preserved.pop("presence_never_seen", None)
+                preserved.pop("stale_presence", None)
+                preserved["online"] = True
+                preserved["working"] = False
+                preserved["session_active"] = False
+                preserved["status"] = "rest"
+                items[index] = preserved
         return payload
 
     def _render_inbox_items(self) -> None:
@@ -5152,6 +5386,7 @@ class SocialHubDialog(QDialog):
                 sorted(str(key) for key in payload.keys()),
             )
         payload = self._apply_presence_sequence_fence(payload)
+        payload = self._preserve_known_presence_evidence(payload)
 
         snapshot_notes = _private_notes_from_dashboard(payload)
         if payload.get("_private_notes_loaded"):
@@ -5316,7 +5551,7 @@ class SocialHubDialog(QDialog):
             # A transport outage must not turn an unknown state into a false
             # zero. During the short cache grace window, show the last
             # confirmed working count with an explicit uncertainty label.
-            if bool(buddy.get("presence_uncertain")):
+            if _presence_uncertain(buddy):
                 presence_uncertain = True
             if status == "focus":
                 working_count += 1

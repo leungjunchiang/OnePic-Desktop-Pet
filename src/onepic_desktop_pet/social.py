@@ -1179,6 +1179,21 @@ class AuthSessionManager:
             or error.error_code in {"invalid_refresh_token", "refresh_token_already_used", "invalid_grant", "refresh_failed"}
         ) and not error.retryable)
 
+    @property
+    def can_recover_session(self) -> bool:
+        """Whether a persisted session still has a refresh credential.
+
+        ``requires_relogin`` is a sticky diagnostic marker, not proof that the
+        local credential is unusable forever.  A process can set it after a
+        transient refresh race while another process has already written a
+        newer token to the shared credential store.  Keep the recovery check
+        separate from ``signed_in`` so the background sync loop can make one
+        safe refresh attempt instead of permanently returning early.
+        """
+
+        session = self.current()
+        return bool(session is not None and str(session.refresh_token or "").strip())
+
     def _read_store(self) -> SocialSession | None:
         if not self.persist_tokens:
             return self._state.session
@@ -1471,6 +1486,9 @@ class SocialBackend(Protocol):
     @property
     def signed_in(self) -> bool: ...
 
+    @property
+    def can_recover_session(self) -> bool: ...
+
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult: ...
     def resend_confirmation(self, email: str) -> bool: ...
     def sign_in(self, email: str, password: str) -> None: ...
@@ -1487,6 +1505,7 @@ class SocialBackend(Protocol):
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None: ...
+    def recover_session(self) -> bool: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
     def record_economy_event(self, *, event_id: str, category: str, amount: int, label: str, source_key: str, occurred_on: str) -> None: ...
@@ -1528,6 +1547,10 @@ class HttpSocialBackend:
     @property
     def signed_in(self) -> bool:
         return (self.session is not None or self.auth_manager.current() is not None) and not self.auth_manager.requires_relogin
+
+    @property
+    def can_recover_session(self) -> bool:
+        return self.auth_manager.can_recover_session
 
     @property
     def account_email(self) -> str:
@@ -1686,6 +1709,32 @@ class HttpSocialBackend:
             force_refresh=force,
         )
         self.session = session
+
+    def recover_session(self) -> bool:
+        """Retry one stored refresh-token rotation off the GUI thread.
+
+        This intentionally does not accept a password and never clears a
+        session on failure.  A successful rotation clears the stale auth
+        error through ``accept_auth``; an actually invalid refresh token keeps
+        the existing relogin marker so the UI can ask for credentials.
+        """
+
+        if not self.can_recover_session:
+            return False
+        before = self.auth_manager.current()
+        self._ensure_fresh(force=True)
+        current = self.auth_manager.current()
+        if current is None:
+            return False
+        self.session = current
+        lifecycle = "initial" if before is None else "rotated"
+        LOGGER.info(
+            "auth session recovery succeeded transport=%s generation=%s mode=%s",
+            self.transport,
+            current.generation,
+            lifecycle,
+        )
+        return True
 
     def sign_up(self, email: str, password: str, nickname: str) -> SignupResult:
         normalized_email = normalize_email(email)
@@ -2313,6 +2362,20 @@ class LegacyDirectSocialClient:
     def signed_in(self) -> bool:
         return self._http_backend.signed_in if self._http_backend is not None else (self.auth_manager.current() is not None and not self.auth_manager.requires_relogin)
 
+    @property
+    def can_recover_session(self) -> bool:
+        backend = self._http_backend
+        if backend is not None:
+            return bool(getattr(backend, "can_recover_session", False))
+        return self.auth_manager.can_recover_session
+
+    def recover_session(self) -> bool:
+        backend = self._http_backend
+        if backend is not None:
+            recover = getattr(backend, "recover_session", None)
+            return bool(recover()) if callable(recover) else False
+        return False
+
     @staticmethod
     def _keyring():
         import keyring
@@ -2442,11 +2505,16 @@ class LegacyDirectSocialClient:
         if presence_grace:
             self._mark_remote_presence_uncertain(data, age_seconds)
         else:
-            self._mark_remote_presence_stale(data)
+            # An old local snapshot proves that *this viewer's* dashboard
+            # transport is down; it does not prove that every peer signed
+            # out.  Preserve the last account evidence and conservatively
+            # downgrade a cached focus to resting instead of manufacturing an
+            # offline event from the cache age alone.
+            self._mark_cached_remote_presence_uncertain(data, age_seconds)
         data["_sync_offline"] = True
         data["_connection_state"] = "DEGRADED" if presence_grace else "OFFLINE"
         data["_presence_grace_active"] = presence_grace
-        data["_presence_uncertainty_seconds"] = age_seconds if presence_grace else 0
+        data["_presence_uncertainty_seconds"] = age_seconds
         # Keep the freshness contract explicit at the payload boundary.  A
         # cached number may be rendered for continuity, but it must never be
         # mistaken for a current server statistic.
@@ -2518,6 +2586,61 @@ class LegacyDirectSocialClient:
                     continue
                 item.pop("stale_presence", None)
                 item["presence_uncertain"] = True
+                item["presence_age_seconds"] = age_seconds
+
+        mark(data.get("buddies"))
+        mark(data.get("room_people"))
+        mark(data.get("active_visits"))
+        room = data.get("current_room")
+        if isinstance(room, dict):
+            mark(room.get("room_people"))
+            summary = room.get("room_summary")
+            if isinstance(summary, dict):
+                summary["presence_uncertain"] = True
+        summary = data.get("room_summary")
+        if isinstance(summary, dict):
+            summary["presence_uncertain"] = True
+
+    @staticmethod
+    def _mark_cached_remote_presence_uncertain(data: dict[str, Any], age_seconds: int) -> None:
+        """Keep cached peers visible without claiming that they are working.
+
+        Cache age is a property of the viewer's failed dashboard request, not
+        a server acknowledgement that a peer left.  A cached focus is therefore
+        safe to show as a last-known resting state with an uncertainty marker;
+        the marker lets the UI explain that the viewer is recovering while
+        keeping two clients from disagreeing merely because their cache ages
+        crossed ``PRESENCE_GRACE_SECONDS`` at different times.
+        """
+
+        def mark(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict) or item.get("is_self"):
+                    continue
+                # A profile with no presence record must remain clearly
+                # unconfirmed.  Do not turn a never-seen account into an
+                # invented online state.
+                if item.get("presence_never_seen"):
+                    continue
+                has_presence_evidence = bool(
+                    item.get("online") is True
+                    or item.get("working") is True
+                    or str(item.get("status") or "").strip().casefold()
+                    in {"focus", "working", "rest", "idle", "专注", "工作", "休息", "休息中"}
+                    or any(str(item.get(field) or "").strip() for field in _PRESENCE_TIMESTAMP_FIELDS)
+                )
+                if not has_presence_evidence:
+                    continue
+                item["online"] = True
+                item["working"] = False
+                item["session_active"] = False
+                item["session_seconds"] = 0
+                item["status"] = "rest"
+                item.pop("stale_presence", None)
+                item["presence_uncertain"] = True
+                item["presence_transport_stale"] = True
                 item["presence_age_seconds"] = age_seconds
 
         mark(data.get("buddies"))
@@ -2986,6 +3109,13 @@ class DashboardCacheClientBase:
     def signed_in(self) -> bool:
         return bool(self._http_backend is not None and self._http_backend.signed_in)
 
+    @property
+    def can_recover_session(self) -> bool:
+        return bool(
+            self._http_backend is not None
+            and getattr(self._http_backend, "can_recover_session", False)
+        )
+
     def _require_backend(self) -> SocialBackend:
         if self._http_backend is None:
             raise SocialError("自习室服务尚未配置。", kind="config")
@@ -3094,7 +3224,8 @@ class DashboardCacheClientBase:
         def mark(items: Any) -> None:
             if not isinstance(items, list): return
             for item in items:
-                if not isinstance(item, dict) or item.get("is_self") or item.get("stale_presence"): continue
+                if not isinstance(item, dict) or item.get("is_self"): continue
+                if item.get("stale_presence"): continue
                 item.pop("stale_presence", None)
                 item["presence_uncertain"] = True
                 item["presence_age_seconds"] = age_seconds
@@ -3104,6 +3235,58 @@ class DashboardCacheClientBase:
             mark(room.get("room_people"))
             if isinstance(room.get("room_summary"), dict): room["room_summary"]["presence_uncertain"] = True
         if isinstance(data.get("room_summary"), dict): data["room_summary"]["presence_uncertain"] = True
+
+    @staticmethod
+    def _mark_cached_remote_presence_uncertain(data: dict[str, Any], age_seconds: int) -> None:
+        """Keep cached peers visible as last-known resting states.
+
+        A stale cache is evidence about the viewer's transport, not proof that
+        a peer signed out. Never synthesize an offline event from cache age.
+        """
+
+        def mark(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict) or item.get("is_self"):
+                    continue
+                if item.get("presence_never_seen"):
+                    continue
+                has_presence_evidence = bool(
+                    item.get("online") is True
+                    or item.get("working") is True
+                    or str(item.get("status") or "").strip().casefold()
+                    in {"focus", "working", "rest", "idle", "专注", "工作", "休息", "休息中"}
+                    or any(str(item.get(field) or "").strip() for field in _PRESENCE_TIMESTAMP_FIELDS)
+                )
+                if not has_presence_evidence:
+                    continue
+                item.update(
+                    {
+                        "online": True,
+                        "working": False,
+                        "session_active": False,
+                        "session_seconds": 0,
+                        "status": "rest",
+                        "presence_uncertain": True,
+                        "presence_transport_stale": True,
+                        "presence_age_seconds": age_seconds,
+                    }
+                )
+                item.pop("stale_presence", None)
+
+        mark(data.get("buddies"))
+        mark(data.get("room_people"))
+        mark(data.get("active_visits"))
+        room = data.get("current_room")
+        if isinstance(room, dict):
+            mark(room.get("room_people"))
+            summary = room.get("room_summary")
+            if isinstance(summary, dict):
+                summary["presence_uncertain"] = True
+        summary = data.get("room_summary")
+        if isinstance(summary, dict):
+            summary["presence_uncertain"] = True
 
     def cached_dashboard(self, room_id: str | None = None) -> dict[str, Any] | None:
         account_id = _session_user_id(self)
@@ -3142,9 +3325,15 @@ class DashboardCacheClientBase:
         saved_at = float(entry.get("saved_at") or 0)
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)
-        if presence_grace: self._mark_remote_presence_uncertain(data, age_seconds)
-        else: self._mark_remote_presence_stale(data)
-        data.update({"_sync_offline": True, "_connection_state": "DEGRADED" if presence_grace else "OFFLINE", "_presence_grace_active": presence_grace, "_presence_uncertainty_seconds": age_seconds if presence_grace else 0, "is_stale": True, "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int(age_seconds / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
+        if presence_grace:
+            self._mark_remote_presence_uncertain(data, age_seconds)
+        else:
+            # Cache age describes this viewer's failed transport, not a
+            # confirmed logout by every peer. Preserve evidence and downgrade
+            # cached focus to resting so clients do not disagree solely because
+            # their local cache crossed the grace boundary at different times.
+            self._mark_cached_remote_presence_uncertain(data, age_seconds)
+        data.update({"_sync_offline": True, "_connection_state": "DEGRADED" if presence_grace else "OFFLINE", "_presence_grace_active": presence_grace, "_presence_uncertainty_seconds": age_seconds, "is_stale": True, "data_source": "local_cache", "_data_source": "local_cache", "_sync_age_minutes": max(0, int(age_seconds / 60)) if saved_at else 0, "_sync_error": self._last_error or "当前网络无法访问自习室服务"})
         self.connection.set(
             "DEGRADED" if presence_grace else "OFFLINE",
             data_source="local_cache",
@@ -3331,6 +3520,27 @@ class BackendRouteManager:
         manager = getattr(self.direct, "auth_manager", None)
         fallback_session = self.proxy.session if self.proxy is not None else None
         return bool((manager.current() if isinstance(manager, AuthSessionManager) else (self.direct.session or fallback_session)) and not (manager.requires_relogin if isinstance(manager, AuthSessionManager) else False))
+
+    @property
+    def can_recover_session(self) -> bool:
+        manager = getattr(self.direct, "auth_manager", None)
+        if isinstance(manager, AuthSessionManager):
+            return manager.can_recover_session
+        return bool(getattr(self.direct, "can_recover_session", False))
+
+    def recover_session(self) -> bool:
+        """Recover the shared auth session without routing credentials.
+
+        Refresh-token rotation belongs to the Direct Supabase auth manager.
+        The proxy shares that manager, so retrying through Direct also updates
+        whichever route the next heartbeat/dashboard request selects.
+        """
+
+        if not self.can_recover_session:
+            return False
+        recovered = self.direct.recover_session()
+        self._sync_sessions(self.direct, self.proxy)
+        return bool(recovered)
 
     @property
     def active(self) -> HttpSocialBackend:
@@ -3635,6 +3845,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return self._manager.signed_in
 
     @property
+    def can_recover_session(self) -> bool:
+        return bool(getattr(self._manager, "can_recover_session", False))
+
+    @property
     def session(self) -> SocialSession | None:
         """Expose the active Supabase session to local profile sync helpers.
 
@@ -3713,6 +3927,10 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         # usable session before Supabase has accepted the replacement.  The
         # successful auth response atomically replaces the stored session.
         self._manager.request("sign_in", normalize_email(email), password)
+
+    def recover_session(self) -> bool:
+        recover = getattr(self._manager, "recover_session", None)
+        return bool(recover()) if callable(recover) else False
 
     def record_login_streak(self) -> dict[str, Any]:
         return dict(self._manager.request("record_login_streak") or {})

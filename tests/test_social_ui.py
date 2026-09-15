@@ -1099,6 +1099,73 @@ def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
+def test_known_server_heartbeat_timeout_is_displayed_as_uncertain_rest() -> None:
+    """A heartbeat timeout is not a logout confirmation."""
+
+    app = QApplication.instance() or QApplication([])
+    widget = BuddyCardWidget(
+        {
+            "nickname": "搭子",
+            "online": False,
+            "working": False,
+            "status": "offline",
+            "last_seen_at": "2020-01-01T00:00:00+00:00",
+        }
+    )
+    labels = [label.text() for label in widget.findChildren(QLabel)]
+    assert any("正在休息" in text for text in labels)
+    assert any(text.startswith("🟡") for text in labels)
+    assert all("已离线" not in text for text in labels)
+    widget.close(); widget.deleteLater(); app.processEvents()
+
+
+def test_dashboard_presence_omission_keeps_known_peer_resting() -> None:
+    """A later sparse row must not turn a previously known peer offline."""
+
+    app = QApplication.instance() or QApplication([])
+    client = SignedInClient()
+    dialog = SocialHubDialog(client)
+    first = client.dashboard()
+    first["me"]["user_id"] = "viewer-1"
+    first["buddies"] = [
+        {
+            "user_id": "buddy-1",
+            "nickname": "搭子",
+            "online": True,
+            "working": False,
+            "status": "rest",
+            "last_seen_at": "2026-09-15T08:00:00+08:00",
+        }
+    ]
+    dialog.apply_dashboard(first)
+
+    second = client.dashboard()
+    second["me"]["user_id"] = "viewer-1"
+    second["buddies"] = [
+        {
+            "user_id": "buddy-1",
+            "nickname": "搭子",
+            "online": False,
+            "working": False,
+            "status": "offline",
+            # This is what the client-side legacy normalizer produces when a
+            # nullable last_seen column is returned without a value.
+            "presence_never_seen": True,
+        }
+    ]
+    dialog.apply_dashboard(second)
+    app.processEvents()
+
+    item = dialog.buddies.item(0)
+    widget = dialog.buddies.itemWidget(item)
+    assert widget is not None
+    labels = [label.text() for label in widget.findChildren(QLabel)]
+    assert any("正在休息" in text for text in labels)
+    assert any(text.startswith("🟡") for text in labels)
+    assert all("已离线" not in text for text in labels)
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
 def test_reaction_label_follows_presence_state_and_window_is_checked_separately() -> None:
     tz = timezone(timedelta(hours=8))
     rest = {"online": False, "status": "offline", "working": False}

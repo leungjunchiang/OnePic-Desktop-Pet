@@ -407,6 +407,46 @@ def test_authenticated_401_refreshes_once_and_retries_request(monkeypatch):
     assert backend.auth_manager.current().access_token == "new-access"
 
 
+def test_stored_session_can_recover_after_sticky_refresh_error():
+    """A retained token must get one background recovery chance."""
+
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+    old = SocialSession("old-access", "old-refresh", "user-1", time.time() - 1, 4)
+    backend.auth_manager.adopt(old)
+    backend.session = old
+    backend.auth_manager._state.last_error = SocialError(
+        "previous refresh marker",
+        kind="auth_refresh",
+        error_code="refresh_failed",
+    )
+    requests: list[str] = []
+
+    def fake_raw(_method, path, _body=None, **_kwargs):
+        requests.append(path)
+        assert path == "/auth/v1/token?grant_type=refresh_token"
+        return {
+            "access_token": "fresh-access",
+            "refresh_token": "fresh-refresh",
+            "expires_in": 3600,
+            "user": {"id": "user-1"},
+        }
+
+    backend._raw = fake_raw  # type: ignore[method-assign]
+
+    assert backend.signed_in is False
+    assert backend.can_recover_session is True
+    assert backend.recover_session() is True
+    assert requests == ["/auth/v1/token?grant_type=refresh_token"]
+    assert backend.signed_in is True
+    assert backend.session is not None
+    assert backend.session.access_token == "fresh-access"
+
+
 def test_private_buddy_notes_decorate_all_local_dashboard_projections():
     data = {
         "buddies": [{"user_id": "buddy-1", "owner_nickname": "公开昵称"}],
@@ -2562,7 +2602,7 @@ def test_cached_dashboard_preserves_viewer_private_buddy_note():
     client._dashboard_cache = {
         "user-1:room-1": {
             "account_id": "user-1",
-            "saved_at": time.time() - 30,
+            "saved_at": time.time() - PRESENCE_GRACE_SECONDS - 1,
             "data": {
                 "me": {"user_id": "user-1", "nickname": "小梁"},
                 "buddies": [
@@ -2609,7 +2649,7 @@ def test_cached_dashboard_uses_saved_private_note_when_snapshot_omits_field():
     assert cached["buddies"][0]["private_note_name"] == "论文搭子"
 
 
-def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
+def test_old_cached_dashboard_keeps_last_seen_peer_as_uncertain_rest():
     direct = FakeTransport("direct")
     proxy = FakeTransport("proxy")
     proxy.session = direct.session
@@ -2635,10 +2675,51 @@ def test_old_cached_dashboard_is_marked_offline_after_presence_grace():
     assert cached["is_stale"] is True
     assert client.connection_state == "OFFLINE"
     peer = cached["buddies"][0]
-    assert peer["online"] is False
+    # The transport is offline, but cache age alone is not proof that the
+    # peer signed out. Keep the last-seen account visible as a conservative
+    # resting state so two viewers do not diverge at the local cache boundary.
+    assert peer["online"] is True
     assert peer["working"] is False
-    assert peer["stale_presence"] is True
-    assert peer["presence_uncertain"] is False
+    assert peer["status"] == "rest"
+    assert peer["presence_transport_stale"] is True
+    assert peer["presence_uncertain"] is True
+    assert peer.get("stale_presence") is not True
+
+
+def test_cached_dashboard_keeps_known_expired_heartbeat_as_uncertain_rest():
+    direct = FakeTransport("direct")
+    proxy = FakeTransport("proxy")
+    proxy.session = direct.session
+    manager = BackendRouteManager(direct, proxy, persist_state=False)
+    client = SocialClient(backend=manager, persist_tokens=False)
+    client._dashboard_cache = {
+        "user-1:room-1": {
+            "account_id": "user-1",
+            "saved_at": time.time() - PRESENCE_GRACE_SECONDS - 1,
+            "data": {
+                "buddies": [
+                    {
+                        "user_id": "buddy-1",
+                        "online": False,
+                        "working": False,
+                        "status": "offline",
+                        "last_seen_at": "2020-01-01T00:00:00+00:00",
+                        "today_seconds": 600,
+                    }
+                ]
+            },
+        }
+    }
+
+    cached = client.cached_dashboard("room-1")
+
+    assert cached is not None
+    peer = cached["buddies"][0]
+    assert peer["online"] is True
+    assert peer["status"] == "rest"
+    assert peer["presence_transport_stale"] is True
+    assert peer["presence_uncertain"] is True
+    assert peer.get("stale_presence") is not True
 
 
 def test_dashboard_cache_rejects_unscoped_or_other_account_snapshots():

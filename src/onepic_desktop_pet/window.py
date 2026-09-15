@@ -266,6 +266,7 @@ from .social import SocialClient, _session_user_id, presence_device_id
 from .social_ui import (
     BuddyVisitWindow,
     IncomingVisitNotice,
+    SocialAuthRecoveryThread,
     SocialEventThread,
     SocialHeartbeatWorker,
     SocialHubDialog,
@@ -754,6 +755,8 @@ class PetWindow(QWidget):
         self._social_dialog: SocialHubDialog | None = None
         self._close_retry_scheduled = False
         self._social_thread: SocialSyncThread | None = None
+        self._social_auth_recovery_thread: SocialAuthRecoveryThread | None = None
+        self._last_social_auth_recovery_attempt_at = 0.0
         self._social_request_generation = 0
         self._last_applied_social_generation = 0
         # Presence must not wait behind the dashboard/statistics request chain.
@@ -7515,6 +7518,74 @@ class PetWindow(QWidget):
         with self._performance.measure("social.tick_prepare"):
             self._social_tick_impl()
 
+    def _start_social_auth_recovery(self) -> None:
+        """Retry a locally retained session without blocking the GUI thread."""
+
+        if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1":
+            return
+        if not bool(getattr(self.social_client, "can_recover_session", False)):
+            return
+        thread = self._social_auth_recovery_thread
+        if thread is not None and thread.isRunning():
+            return
+        now = time.monotonic()
+        # The normal social timer is 30 seconds.  A one-minute backoff avoids
+        # hammering Supabase when a refresh token really is invalid, while a
+        # transient marker/network race still self-heals without a relogin.
+        if now - self._last_social_auth_recovery_attempt_at < 60.0:
+            return
+        self._last_social_auth_recovery_attempt_at = now
+        lifecycle_log(
+            "social.auth_recovery.start",
+            self,
+            reason="stored_session_not_signed_in",
+        )
+        thread = SocialAuthRecoveryThread(self.social_client, self)
+        self._social_auth_recovery_thread = thread
+        thread.completed.connect(self._social_auth_recovery_succeeded)
+        thread.failed.connect(self._social_auth_recovery_failed)
+        thread.finished.connect(
+            lambda current=thread: self._social_auth_recovery_finished(current),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.start()
+
+    @_guard_qt_callback
+    def _social_auth_recovery_succeeded(self) -> None:
+        """Resume both liveness and dashboard reads after auth recovery."""
+
+        lifecycle_log("social.auth_recovery.succeeded", self)
+        self._social_heartbeat_due = True
+        self._social_personal_sync_due = True
+        self._social_presence_context_signature = None
+        # Re-enter the ordinary path so the recovered session immediately
+        # sends presence and starts a dashboard read on the next worker turn.
+        self._social_tick()
+
+    @_guard_qt_callback
+    def _social_auth_recovery_failed(self, error: object) -> None:
+        exc = error if isinstance(error, SocialError) else SocialError(
+            str(error), kind="auth_refresh", retryable=True
+        )
+        lifecycle_log(
+            "social.auth_recovery.failed",
+            self,
+            kind=exc.kind,
+            error_code=exc.error_code,
+            retryable=bool(exc.retryable),
+        )
+        LOGGER.info(
+            "background social auth recovery deferred kind=%s error_code=%s",
+            exc.kind,
+            exc.error_code,
+        )
+
+    @_guard_qt_callback
+    def _social_auth_recovery_finished(self, thread: SocialAuthRecoveryThread) -> None:
+        if self._social_auth_recovery_thread is thread:
+            self._social_auth_recovery_thread = None
+        thread.deleteLater()
+
     def _build_social_personal_state(self) -> dict[str, object]:
         """Build the compatibility sync payload outside the GUI thread.
 
@@ -7578,6 +7649,7 @@ class PetWindow(QWidget):
             return
         if not self.social_client.signed_in:
             self._economy_sync_user_id = ""
+            self._start_social_auth_recovery()
             return
         heartbeat_thread = self._social_heartbeat_thread
         # Do not create a background worker for anonymous/offline pet windows.
