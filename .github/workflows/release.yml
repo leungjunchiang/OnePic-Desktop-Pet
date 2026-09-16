@@ -41,6 +41,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         shell: powershell
         run: |
+          # Todo's legacy release verification uses wall-clock values. Keep
+          # the hosted Windows runner on Lili's China Standard Time calendar
+          # so this rollback release is tested in its user-facing timezone.
+          tzutil /s "China Standard Time"
           # Keep each Qt-heavy test module in its own Python process. This
           # prevents a Windows runner's native Qt state from leaking between
           # modules while still running the complete test suite.
