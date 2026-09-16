@@ -3303,15 +3303,51 @@ class DashboardCacheClientBase:
                 sorted(str(key) for key in data.keys()) if isinstance(data, dict) else [],
             )
             return
+        key = f"{account_id}:{str(room_id or '')}"
+        previous = self._dashboard_cache.get(key)
+        previous_order = (
+            [str(item).strip() for item in previous.get("buddy_order") if str(item).strip()]
+            if isinstance(previous, dict) and isinstance(previous.get("buddy_order"), list)
+            else []
+        )
         snapshot = json.loads(json.dumps(data, ensure_ascii=False))
         _normalise_never_seen_presence(snapshot)
-        self._dashboard_cache[f"{account_id}:{str(room_id or '')}"] = {
+        entry = {
             "account_id": account_id,
             "saved_at": time.time(),
             "private_notes": dict(self._private_note_by_user),
             "data": snapshot,
         }
+        # The visible order belongs to this account-scoped dashboard cache,
+        # not to any server business record. Preserve it when a new server
+        # snapshot replaces the cached payload.
+        if previous_order:
+            entry["buddy_order"] = previous_order
+        self._dashboard_cache[key] = entry
         self._save_dashboard_cache()
+
+    def remember_dashboard_buddy_order(
+        self,
+        room_id: str | None,
+        buddy_ids: list[str],
+    ) -> None:
+        """Persist only the completed UI order beside the dashboard cache."""
+
+        account_id = _session_user_id(self)
+        if not account_id:
+            return
+        key = f"{account_id}:{str(room_id or '')}"
+        entry = self._dashboard_cache.get(key)
+        if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict):
+            return
+        order = []
+        for buddy_id in buddy_ids:
+            value = str(buddy_id or "").strip()
+            if value and value not in order:
+                order.append(value)
+        if order:
+            entry["buddy_order"] = order
+            self._save_dashboard_cache()
 
     @staticmethod
     def _mark_remote_presence_stale(data: dict[str, Any]) -> None:
@@ -3432,6 +3468,11 @@ class DashboardCacheClientBase:
             self._private_note_by_user.update(_private_notes_from_dashboard(data))
             self._private_notes_loaded = True
         _apply_buddy_private_notes(data, self._private_note_by_user)
+        cached_order = entry.get("buddy_order")
+        if isinstance(cached_order, list):
+            data["_cached_buddy_order"] = [
+                str(item).strip() for item in cached_order if str(item).strip()
+            ]
         saved_at = float(entry.get("saved_at") or 0)
         age_seconds = max(0, int(time.time() - saved_at)) if saved_at else 0
         presence_grace = bool(saved_at and age_seconds <= PRESENCE_GRACE_SECONDS)

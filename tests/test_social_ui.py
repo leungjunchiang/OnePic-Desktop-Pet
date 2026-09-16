@@ -3,6 +3,7 @@
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from functools import cmp_to_key
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,9 +24,13 @@ from onepic_desktop_pet.social_ui import (
     SocialSyncThread,
     SocialVisitResponseThread,
     _focus_upload_ack_status,
+    _compare_buddies,
+    _format_last_confirmed_age_seconds,
     _reaction_label,
     _merge_dashboard_snapshot,
     _project_legacy_live_focus_totals,
+    _presence_load_state,
+    _presence_status,
     _study_focus_summary_text,
     _taunt_window_open,
     _unwrap_reaction_payload,
@@ -760,6 +765,96 @@ def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted()
     assert any("已离线" in label.text() for label in last.findChildren(QLabel))
     assert any("本周已专注 20分钟" in label.text() for label in first.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_buddy_sort_is_state_then_today_week_confirmation_and_stable_id() -> None:
+    def row(user_id: str, status: str, today: int, week: int, confirmed: str) -> dict:
+        return {
+            "user_id": user_id,
+            "online": status != "offline",
+            "working": status == "focus",
+            "status": status,
+            "today_seconds": today,
+            "week_seconds": week,
+            "last_confirmed_at": confirmed,
+        }
+
+    rows = [
+        row("offline-rich", "offline", 9000, 9000, "2026-09-16T12:00:00+08:00"),
+        row("rest-rich", "rest", 9000, 9000, "2026-09-16T12:00:00+08:00"),
+        row("focus-today-high", "focus", 1200, 100, "2026-09-16T09:00:00+08:00"),
+        row("focus-today-low", "focus", 600, 9000, "2026-09-16T12:00:00+08:00"),
+        row("focus-week-high", "focus", 600, 900, "2026-09-16T08:00:00+08:00"),
+        row("focus-confirm-new", "focus", 300, 300, "2026-09-16T12:00:00+08:00"),
+        row("focus-confirm-old", "focus", 300, 300, "2026-09-16T10:00:00+08:00"),
+        row("same-id-b", "rest", 10, 10, "2026-09-16T11:00:00+08:00"),
+        row("same-id-a", "rest", 10, 10, "2026-09-16T11:00:00+08:00"),
+    ]
+
+    ordered = sorted(rows, key=cmp_to_key(_compare_buddies))
+    assert [item["user_id"] for item in ordered] == [
+        "focus-today-high",
+        "focus-today-low",
+        "focus-week-high",
+        "focus-confirm-new",
+        "focus-confirm-old",
+        "rest-rich",
+        "same-id-a",
+        "same-id-b",
+        "offline-rich",
+    ]
+
+
+def test_initial_unknown_presence_keeps_order_and_never_renders_offline() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    incoming = {
+        "me": {"nickname": "六毛搭子"},
+        "buddies": [
+            {"user_id": "b", "nickname": "乙", "load_state": "unknown", "today_seconds": 900},
+            {"user_id": "a", "nickname": "甲", "load_state": "unknown", "today_seconds": 1},
+        ],
+        "room_people": [],
+    }
+    dialog.apply_dashboard(incoming)
+    app.processEvents()
+
+    assert dialog._buddy_presence_batch_ready is False
+    assert [
+        dialog.buddies.item(index).data(Qt.ItemDataRole.UserRole)["user_id"]
+        for index in range(dialog.buddies.count())
+    ] == ["b", "a"]
+    for index in range(dialog.buddies.count()):
+        labels = [label.text() for label in dialog.buddies.itemWidget(dialog.buddies.item(index)).findChildren(QLabel)]
+        assert any("状态同步中" in text for text in labels)
+        assert all("已离线" not in text for text in labels)
+
+    complete = {
+        "me": {"nickname": "六毛搭子"},
+        "buddies": [
+            {"user_id": "b", "nickname": "乙", "online": True, "working": False, "status": "rest", "today_seconds": 900, "week_seconds": 900},
+            {"user_id": "a", "nickname": "甲", "online": True, "working": True, "status": "focus", "today_seconds": 1, "week_seconds": 1},
+        ],
+        "room_people": [],
+    }
+    dialog.apply_dashboard(complete)
+    app.processEvents()
+    assert dialog._buddy_presence_batch_ready is True
+    assert [
+        dialog.buddies.item(index).data(Qt.ItemDataRole.UserRole)["user_id"]
+        for index in range(dialog.buddies.count())
+    ] == ["a", "b"]
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_presence_load_state_and_last_confirmation_format_are_explicit() -> None:
+    assert _presence_load_state({"user_id": "buddy"}) == "unknown"
+    assert _presence_status({"user_id": "buddy"}) == "unknown"
+    assert _presence_load_state({"online": False, "status": "offline"}) == "ready"
+    assert _format_last_confirmed_age_seconds(None) == "暂无确认记录"
+    assert _format_last_confirmed_age_seconds(59) == "刚刚确认"
+    assert _format_last_confirmed_age_seconds(61) == "最后确认约 1分钟前"
+    assert _format_last_confirmed_age_seconds(24770 * 60) == "最后确认约 17天4小时50分钟前"
 
 
 def test_homepage_uses_weekly_focus_leaderboard_labels() -> None:

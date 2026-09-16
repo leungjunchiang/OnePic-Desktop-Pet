@@ -18,8 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QEvent, QLocale, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtCore import QCollator
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QHideEvent, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
@@ -366,13 +365,23 @@ def _presence_last_seen_age_seconds(
     presence: dict[str, Any],
     now: datetime | None = None,
 ) -> int | None:
-    """Return the age of the peer's last heartbeat when it is observable."""
+    """Return the age of the newest observable peer confirmation."""
 
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
-    for field in ("last_seen_at", "last_seen"):
+    timestamps: list[datetime] = []
+    for field in (
+        "last_confirmed_at",
+        "lastConfirmedAt",
+        "last_heartbeat_at",
+        "last_seen_at",
+        "last_seen",
+        "status_updated_at",
+        "server_updated_at",
+        "updated_at",
+    ):
         raw = presence.get(field)
         if not str(raw or "").strip():
             continue
@@ -382,7 +391,9 @@ def _presence_last_seen_age_seconds(
             continue
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
-        age = int((current - parsed.astimezone(timezone.utc)).total_seconds())
+        timestamps.append(parsed.astimezone(timezone.utc))
+    if timestamps:
+        age = int((current - max(timestamps)).total_seconds())
         return max(0, age)
     try:
         cached_age = presence.get("presence_age_seconds")
@@ -409,13 +420,89 @@ def _presence_has_login_evidence(presence: dict[str, Any]) -> bool:
         return True
     return any(
         str(presence.get(field) or "").strip()
-        for field in ("last_seen_at", "last_seen")
+        for field in (
+            "last_confirmed_at",
+            "lastConfirmedAt",
+            "last_heartbeat_at",
+            "last_seen_at",
+            "last_seen",
+            "status_updated_at",
+            "server_updated_at",
+            "updated_at",
+        )
     )
+
+
+_PRESENCE_LOAD_STATE_FIELDS = (
+    "load_state",
+    "loadState",
+    "presence_load_state",
+    "presenceLoadState",
+    "_presence_load_state",
+)
+_PRESENCE_LOAD_READY_FIELDS = (
+    "presence_ready",
+    "presence_loaded",
+    "_presence_data_ready",
+    "_presence_loaded",
+)
+_PRESENCE_FIELDS = frozenset(
+    {
+        "online",
+        "working",
+        "session_active",
+        "status",
+        "session_id",
+        "session_started_at",
+        "session_seconds",
+        "last_confirmed_at",
+        "lastConfirmedAt",
+        "last_heartbeat_at",
+        "last_seen_at",
+        "last_seen",
+        "status_updated_at",
+        "server_updated_at",
+        "presence_age_seconds",
+        "presence_never_seen",
+        "presence_history_known",
+        "presence_transport_stale",
+        "presence_uncertain",
+        "stale_presence",
+    }
+)
+
+
+def _presence_load_state(presence: dict[str, Any] | None) -> str:
+    """Return ``ready`` or ``unknown`` without guessing a missing presence.
+
+    Dashboard identity/relationship rows can arrive before the asynchronous
+    presence context is attached.  A row with no presence fields is therefore
+    not an offline row.  Explicit loading markers win over the heuristic so a
+    newer backend can make the boundary unambiguous.
+    """
+
+    if not isinstance(presence, dict):
+        return "unknown"
+    for field in _PRESENCE_LOAD_STATE_FIELDS:
+        value = str(presence.get(field) or "").strip().casefold()
+        if value in {
+            "unknown", "loading", "pending", "not_loaded", "not-loaded",
+            "not_ready", "not-ready", "unavailable",
+        }:
+            return "unknown"
+        if value in {"ready", "loaded", "complete", "ok"}:
+            return "ready"
+    for field in _PRESENCE_LOAD_READY_FIELDS:
+        if field in presence:
+            return "ready" if bool(presence.get(field)) else "unknown"
+    return "ready" if any(field in presence for field in _PRESENCE_FIELDS) else "unknown"
 
 
 def _presence_uncertain(presence: dict[str, Any]) -> bool:
     """Separate “not currently verified” from a confirmed offline account."""
 
+    if _presence_load_state(presence) != "ready":
+        return True
     if bool(presence.get("presence_uncertain")) or bool(
         presence.get("presence_transport_stale")
     ):
@@ -426,6 +513,8 @@ def _presence_uncertain(presence: dict[str, Any]) -> bool:
 def _presence_status(presence: dict[str, Any]) -> str:
     """Return a stable user-facing status for old and new API payloads."""
 
+    if _presence_load_state(presence) != "ready":
+        return "unknown"
     # A transport-stale cache has already been conservatively downgraded to a
     # resting state by social.py. Keep that state stable even after the cache
     # is older than the short grace period; cache age belongs to this viewer,
@@ -464,6 +553,8 @@ def _presence_is_online(presence: dict[str, Any], status: str | None = None) -> 
     """Return the card's online dot state using the same status policy."""
 
     resolved = status or _presence_status(presence)
+    if resolved == "unknown":
+        return False
     if resolved == "offline":
         return False
     if bool(presence.get("presence_transport_stale")):
@@ -590,27 +681,164 @@ def _notification_sender_id(record: dict[str, Any] | None) -> str:
     )
 
 
+def _buddy_identifier(record: dict[str, Any] | None) -> str:
+    """Return a stable account/peer identifier for ordering and reuse."""
+
+    if not isinstance(record, dict):
+        return ""
+    return str(
+        record.get("user_id")
+        or record.get("partner_id")
+        or record.get("peer_id")
+        or record.get("id")
+        or ""
+    ).strip()
+
+
+def _buddy_number(record: dict[str, Any] | None, fields: tuple[str, ...]) -> int:
+    """Read a non-negative focus metric across current/legacy field names."""
+
+    if not isinstance(record, dict):
+        return 0
+    for field in fields:
+        if field not in record or record.get(field) is None:
+            continue
+        try:
+            value = max(0, int(record.get(field) or 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if field.endswith("_minutes") or field.endswith("Minutes"):
+            return value * 60
+        return value
+    return 0
+
+
+def _buddy_last_confirmed_timestamp(record: dict[str, Any] | None) -> datetime | None:
+    """Read the newest server confirmation timestamp from a buddy row."""
+
+    if not isinstance(record, dict):
+        return None
+    values: list[datetime] = []
+    for field in (
+        "last_confirmed_at",
+        "lastConfirmedAt",
+        "last_heartbeat_at",
+        "last_seen_at",
+        "last_seen",
+        "status_updated_at",
+        "server_updated_at",
+        "updated_at",
+    ):
+        parsed = _focus_timestamp(record.get(field))
+        if parsed is not None:
+            values.append(parsed)
+    return max(values) if values else None
+
+
+def _buddy_status_rank(record: dict[str, Any] | None) -> int | None:
+    """Map confirmed buddy state to the requested green/yellow order."""
+
+    if _presence_load_state(record) != "ready":
+        return None
+    status = _presence_status(record)
+    online = _presence_is_online(record, status)
+    if not _presence_uncertain(record) and online and status == "focus":
+        return 0
+    if not _presence_uncertain(record) and online and status == "rest":
+        return 1
+    return 2
+
+
+def _buddy_presence_batch_ready(records: list[dict[str, Any]]) -> bool:
+    """Whether one dashboard batch has enough presence data to be sorted."""
+
+    return all(_presence_load_state(record) == "ready" for record in records)
+
+
+def _format_elapsed_minutes(total_minutes: int) -> str:
+    """Format an elapsed duration without exposing an unreadable minute count."""
+
+    minutes = max(0, int(total_minutes))
+    if minutes < 60:
+        return f"{minutes}分钟"
+    hours, remain_minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}小时{remain_minutes}分钟" if remain_minutes else f"{hours}小时"
+    days, remain_hours = divmod(hours, 24)
+    parts = [f"{days}天"]
+    if remain_hours:
+        parts.append(f"{remain_hours}小时")
+    if remain_minutes:
+        parts.append(f"{remain_minutes}分钟")
+    return "".join(parts)
+
+
+def _format_last_confirmed_age_seconds(age_seconds: int | None) -> str:
+    """Format a buddy's last confirmation in a human-readable duration."""
+
+    if age_seconds is None:
+        return "暂无确认记录"
+    age = max(0, int(age_seconds))
+    if age < 60:
+        return "刚刚确认"
+    return f"最后确认约 {_format_elapsed_minutes(age // 60)}前"
+
+
 def _compare_buddies(left: dict[str, Any], right: dict[str, Any]) -> int:
-    """在线优先、今日专注降序，最后按备注/姓名的中文拼音排序。"""
+    """Order buddies by state, today, week, confirmation time and ID.
 
-    def online(record: dict[str, Any]) -> int:
-        return 0 if _presence_status(record) in {"focus", "rest"} else 1
+    Unknown rows deliberately compare equal.  ``SocialHubDialog`` does not
+    call this comparator until every first-batch row has a ready presence
+    payload; this fallback keeps direct callers from turning an unknown row
+    into an artificial offline rank.
+    """
 
-    left_online, right_online = online(left), online(right)
-    if left_online != right_online:
-        return -1 if left_online < right_online else 1
-    try:
-        left_today = max(0, int(left.get("today_seconds") or 0))
-    except (TypeError, ValueError):
-        left_today = 0
-    try:
-        right_today = max(0, int(right.get("today_seconds") or 0))
-    except (TypeError, ValueError):
-        right_today = 0
+    left_rank, right_rank = _buddy_status_rank(left), _buddy_status_rank(right)
+    if left_rank is None or right_rank is None:
+        return 0
+    if left_rank != right_rank:
+        return -1 if left_rank < right_rank else 1
+
+    left_today = _buddy_number(
+        left,
+        (
+            "today_seconds", "today_focus_seconds", "today_focus",
+            "todayFocus", "today_focus_minutes", "todayFocusMinutes",
+        ),
+    )
+    right_today = _buddy_number(
+        right,
+        (
+            "today_seconds", "today_focus_seconds", "today_focus",
+            "todayFocus", "today_focus_minutes", "todayFocusMinutes",
+        ),
+    )
     if left_today != right_today:
         return -1 if left_today > right_today else 1
-    collator = QCollator(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
-    return collator.compare(_owner_nickname(left), _owner_nickname(right))
+    left_week = _buddy_number(
+        left,
+        (
+            "week_seconds", "week_focus_seconds", "week_focus",
+            "weekFocus", "week_focus_minutes", "weekFocusMinutes",
+        ),
+    )
+    right_week = _buddy_number(
+        right,
+        (
+            "week_seconds", "week_focus_seconds", "week_focus",
+            "weekFocus", "week_focus_minutes", "weekFocusMinutes",
+        ),
+    )
+    if left_week != right_week:
+        return -1 if left_week > right_week else 1
+    left_confirmed = _buddy_last_confirmed_timestamp(left)
+    right_confirmed = _buddy_last_confirmed_timestamp(right)
+    left_stamp = left_confirmed.timestamp() if left_confirmed is not None else 0.0
+    right_stamp = right_confirmed.timestamp() if right_confirmed is not None else 0.0
+    if left_stamp != right_stamp:
+        return -1 if left_stamp > right_stamp else 1
+    left_id, right_id = _buddy_identifier(left), _buddy_identifier(right)
+    return -1 if left_id < right_id else 1 if left_id > right_id else 0
 
 
 def _focus_timestamp(value: object) -> datetime | None:
@@ -2128,13 +2356,13 @@ class BuddyCardWidget(QWidget):
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         if status == "unknown":
-            if bool(buddy.get("online")) and bool(buddy.get("working")):
+            if _presence_load_state(buddy) != "ready":
+                # A relationship row can be painted before its presence
+                # context arrives. Never infer rest/offline from absence.
+                status_text = "状态同步中"
+            elif bool(buddy.get("online")) and bool(buddy.get("working")):
                 status_text = "正在工作（同步恢复中）"
             elif bool(buddy.get("online")) or _presence_has_login_evidence(buddy):
-                # A known account whose transport is recovering is much less
-                # alarming as “resting” with a yellow dot than as a large
-                # “status pending” label. The dot and the small detail line
-                # still preserve the uncertainty without hiding it.
                 status_text = "正在休息"
             else:
                 status_text = "同步中"
@@ -2152,8 +2380,8 @@ class BuddyCardWidget(QWidget):
         week_duration = buddy.get("week_seconds")
         if uncertain:
             age = _presence_last_seen_age_seconds(buddy)
-            age_text = f"约 {max(1, age // 60)} 分钟前" if age is not None else "时间未知"
-            time_text = f"同步中 · 最后确认{age_text}"
+            age_text = _format_last_confirmed_age_seconds(age)
+            time_text = f"状态同步中 · {age_text}"
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
@@ -2164,6 +2392,13 @@ class BuddyCardWidget(QWidget):
         self._focus_label = focus
         focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
+        confirmation = QLabel(
+            _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
+        )
+        self._confirmation_label = confirmation
+        confirmation.setStyleSheet("color:#61727d;font-size:11px;")
+        confirmation.setWordWrap(False)
+        root.addWidget(confirmation)
         quick_status = str(buddy.get("quick_status") or "").strip()
         expires = str(buddy.get("quick_status_expires_at") or "")
         if quick_status and (not expires or expires > datetime.now().astimezone().isoformat()):
@@ -2228,7 +2463,9 @@ class BuddyCardWidget(QWidget):
         status = _presence_status(buddy)
         online = _presence_is_online(buddy, status)
         if status == "unknown":
-            if bool(buddy.get("online")) and bool(buddy.get("working")):
+            if _presence_load_state(buddy) != "ready":
+                status_text = "状态同步中"
+            elif bool(buddy.get("online")) and bool(buddy.get("working")):
                 status_text = "正在工作（同步恢复中）"
             elif bool(buddy.get("online")) or _presence_has_login_evidence(buddy):
                 status_text = "正在休息"
@@ -2246,8 +2483,8 @@ class BuddyCardWidget(QWidget):
         week_duration = buddy.get("week_seconds")
         if uncertain:
             age = _presence_last_seen_age_seconds(buddy)
-            age_text = f"约 {max(1, age // 60)} 分钟前" if age is not None else "时间未知"
-            time_text = f"同步中 · 最后确认{age_text}"
+            age_text = _format_last_confirmed_age_seconds(age)
+            time_text = f"状态同步中 · {age_text}"
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
@@ -2255,6 +2492,9 @@ class BuddyCardWidget(QWidget):
             week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
             time_text = f"{today_text}　·　{week_text}"
         self._focus_label.setText(time_text)
+        self._confirmation_label.setText(
+            _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
+        )
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         self._footer_label.setText(f"娃衣：{outfit}")
         self._footer_label.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
@@ -2333,13 +2573,16 @@ class RoomPetCardWidget(QWidget):
         uncertain = _presence_uncertain(buddy)
         online = _presence_is_online(buddy, status)
         if status == "unknown":
-            status_text = (
-                "正在工作（同步恢复中）"
-                if buddy.get("working")
-                else "正在休息"
-                if _presence_is_online(buddy, status) or _presence_has_login_evidence(buddy)
-                else "同步中"
-            )
+            if _presence_load_state(buddy) != "ready":
+                status_text = "状态同步中"
+            else:
+                status_text = (
+                    "正在工作（同步恢复中）"
+                    if buddy.get("working")
+                    else "正在休息"
+                    if _presence_is_online(buddy, status) or _presence_has_login_evidence(buddy)
+                    else "同步中"
+                )
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         nickname = _owner_nickname(buddy)
@@ -2411,13 +2654,16 @@ class RoomPetCardWidget(QWidget):
         uncertain = _presence_uncertain(buddy)
         online = _presence_is_online(buddy, status)
         if status == "unknown":
-            status_text = (
-                "正在工作（同步恢复中）"
-                if buddy.get("working")
-                else "正在休息"
-                if _presence_is_online(buddy, status) or _presence_has_login_evidence(buddy)
-                else "同步中"
-            )
+            if _presence_load_state(buddy) != "ready":
+                status_text = "状态同步中"
+            else:
+                status_text = (
+                    "正在工作（同步恢复中）"
+                    if buddy.get("working")
+                    else "正在休息"
+                    if _presence_is_online(buddy, status) or _presence_has_login_evidence(buddy)
+                    else "同步中"
+                )
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         self._headline_label.setText(
@@ -2924,6 +3170,11 @@ class SocialHubDialog(QDialog):
         self._buddy_card_structure: dict[str, tuple[Any, ...]] = {}
         self._room_pet_card_widgets: dict[str, tuple[QListWidgetItem, RoomPetCardWidget]] = {}
         self._buddy_presence_versions: dict[str, tuple[int, dict[str, Any]]] = {}
+        # The first dashboard response may contain relationship rows before
+        # its asynchronous presence projection.  Keep the last rendered order
+        # and defer formal sorting until one complete batch is available.
+        self._buddy_presence_batch_ready = False
+        self._buddy_order_ids: list[str] = []
         # A newer dashboard response can omit optional presence columns while
         # still carrying ``online=false`` from a freshness timeout.  Keep a
         # small in-memory record of evidence already seen in this dialog so a
@@ -3668,6 +3919,89 @@ class SocialHubDialog(QDialog):
             _reaction_label(buddy),
         )
 
+    def _order_buddy_batch(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        is_cached_snapshot: bool = False,
+        is_partial_snapshot: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Apply one atomic buddy order without sorting incomplete data.
+
+        A cache is already a last-known-good visual snapshot, so its incoming
+        order is preserved for the first paint.  A live complete batch is the
+        only input allowed to establish a new formal order.  While presence is
+        still loading or a partial response is being merged, retain the last
+        order and append genuinely new rows in server order.
+        """
+
+        ready = (
+            not is_cached_snapshot
+            and not is_partial_snapshot
+            and _buddy_presence_batch_ready(records)
+        )
+        self._buddy_presence_batch_ready = ready
+        if ready:
+            ordered = sorted(records, key=cmp_to_key(_compare_buddies))
+            self._buddy_order_ids = [_buddy_identifier(item) for item in ordered]
+            self._persist_buddy_order(self._buddy_order_ids)
+            return ordered
+
+        if not self._buddy_order_ids:
+            if is_cached_snapshot:
+                cached_order = self.data.get("_cached_buddy_order")
+                if isinstance(cached_order, list):
+                    by_id = {
+                        _buddy_identifier(item): item
+                        for item in records
+                        if _buddy_identifier(item)
+                    }
+                    ordered = [
+                        by_id[str(item).strip()]
+                        for item in cached_order
+                        if str(item).strip() in by_id
+                    ]
+                    existing = {_buddy_identifier(item) for item in ordered}
+                    ordered.extend(
+                        item for item in records
+                        if _buddy_identifier(item) not in existing
+                    )
+                    self._buddy_order_ids = [_buddy_identifier(item) for item in ordered]
+                    return ordered
+            self._buddy_order_ids = [_buddy_identifier(item) for item in records]
+            return records
+
+        by_id = {
+            _buddy_identifier(item): item
+            for item in records
+            if _buddy_identifier(item)
+        }
+        ordered = [
+            by_id[buddy_id]
+            for buddy_id in self._buddy_order_ids
+            if buddy_id in by_id
+        ]
+        existing = {_buddy_identifier(item) for item in ordered}
+        ordered.extend(
+            item for item in records
+            if _buddy_identifier(item) not in existing
+        )
+        self._buddy_order_ids = [_buddy_identifier(item) for item in ordered]
+        return ordered
+
+    def _persist_buddy_order(self, buddy_ids: list[str]) -> None:
+        """Persist only the account-scoped visual order when supported."""
+
+        saver = getattr(self.client, "remember_dashboard_buddy_order", None)
+        if not callable(saver):
+            return
+        try:
+            saver(self.current_room_id, list(buddy_ids))
+        except Exception:
+            # A cache write is an optimization. It must never make a healthy
+            # dashboard render look like a failed network request.
+            LOGGER.info("unable to persist buddy display order", exc_info=True)
+
     def _home_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         welcome, welcome_layout = self._card("今天也一起往前一点", "查看搭子动态、待处理邀请和当前专注状态。")
@@ -3688,7 +4022,10 @@ class SocialHubDialog(QDialog):
         network_row.addWidget(network_check)
         welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。右键搭子卡片可设置消息免打扰或删除搭子。")
+        buddies_card, buddies_layout = self._card(
+            "我的搭子",
+            "正在专注的绿色搭子优先，其次是绿色休息；黄灯/离线排在后面。相同状态按今日专注、本周专注、最后确认时间和账号 ID 稳定排序。首次同步完成前显示同步中，不会把未加载误判为离线。",
+        )
         buddy_tools = QHBoxLayout()
         add_buddy = QPushButton("用搭子码添加")
         add_buddy.clicked.connect(self._add_buddy)
@@ -4798,6 +5135,8 @@ class SocialHubDialog(QDialog):
         self.client.sign_out()
         self.data = {}
         self._muted_buddy_ids.clear()
+        self._buddy_presence_batch_ready = False
+        self._buddy_order_ids = []
         self._account_email = ""
         self._update_account_state()
         self.account_state_changed.emit(False)
@@ -4870,6 +5209,8 @@ class SocialHubDialog(QDialog):
             self._fill_signed_out_placeholders()
 
     def _fill_signed_out_placeholders(self) -> None:
+        self._buddy_presence_batch_ready = False
+        self._buddy_order_ids = []
         self.buddies.clear(); self.buddies.addItem("登录后，这里会显示搭子的在线与专注状态。")
         self.inbox.clear(); self.inbox.addItem("登录后可接收搭子申请与串门邀请。")
         if hasattr(self, "copy_buddy_code_button"):
@@ -5144,7 +5485,7 @@ class SocialHubDialog(QDialog):
         thread.deleteLater()
 
     def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._known_presence_evidence.clear(); self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
+        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._known_presence_evidence.clear(); self._buddy_presence_batch_ready = False; self._buddy_order_ids = []; self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
         if self._closed:
@@ -5162,7 +5503,11 @@ class SocialHubDialog(QDialog):
         volatile_fields = (
             "working", "session_active", "status", "online", "session_id",
             "session_started_at", "session_seconds", "today_seconds", "week_seconds",
-            "last_seen_at", "status_updated_at", "server_updated_at", "sequence",
+            "last_confirmed_at", "lastConfirmedAt", "last_heartbeat_at",
+            "last_seen_at", "last_seen", "status_updated_at", "server_updated_at",
+            "updated_at", "load_state", "loadState", "presence_load_state",
+            "presenceLoadState", "presence_ready", "presence_loaded",
+            "_presence_data_ready", "_presence_loaded", "sequence",
         )
         lists: list[Any] = [
             payload.get("buddies"),
@@ -5179,7 +5524,7 @@ class SocialHubDialog(QDialog):
             for index, raw_item in enumerate(items):
                 if not isinstance(raw_item, dict):
                     continue
-                buddy_id = str(raw_item.get("user_id") or raw_item.get("peer_id") or "").strip()
+                buddy_id = _buddy_identifier(raw_item)
                 if not buddy_id:
                     continue
                 try:
@@ -5227,7 +5572,9 @@ class SocialHubDialog(QDialog):
             "专注", "工作", "休息", "休息中",
         }
         timestamp_fields = (
+            "last_confirmed_at", "lastConfirmedAt", "last_heartbeat_at",
             "last_seen_at", "last_seen", "status_updated_at", "server_updated_at",
+            "updated_at",
         )
         lists: list[Any] = [
             payload.get("buddies"),
@@ -5239,7 +5586,7 @@ class SocialHubDialog(QDialog):
             lists.extend((current_room.get("room_people"), current_room.get("active_visits")))
 
         def identity(row: dict[str, Any]) -> str:
-            return str(row.get("user_id") or row.get("peer_id") or row.get("id") or "").strip()
+            return _buddy_identifier(row)
 
         def has_evidence(row: dict[str, Any]) -> bool:
             if row.get("presence_never_seen"):
@@ -5511,7 +5858,7 @@ class SocialHubDialog(QDialog):
             if not isinstance(buddy, dict):
                 continue
             buddy = dict(buddy)
-            buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+            buddy_id = _buddy_identifier(buddy)
             if buddy_id in seen:
                 continue
             buddy["notifications_muted"] = bool(
@@ -5519,8 +5866,12 @@ class SocialHubDialog(QDialog):
             )
             seen.add(buddy_id)
             unique_people.append(buddy)
-        unique_people.sort(key=cmp_to_key(_compare_buddies))
-        ordered_ids = [str(item.get("user_id") or item.get("id") or "") for item in unique_people]
+        unique_people = self._order_buddy_batch(
+            unique_people,
+            is_cached_snapshot=str(self.data.get("data_source") or "").casefold() == "local_cache",
+            is_partial_snapshot=bool(partial or self.data.get("_dashboard_partial")),
+        )
+        ordered_ids = [_buddy_identifier(item) for item in unique_people]
         reuse_buddy_cards = bool(unique_people) and (
             ordered_ids == list(self._buddy_card_widgets)
             and all(
@@ -5536,7 +5887,7 @@ class SocialHubDialog(QDialog):
         last_confirmed_working_count = 0
         presence_uncertain = bool(self.data.get("_presence_grace_active"))
         for buddy in unique_people:
-            buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+            buddy_id = _buddy_identifier(buddy)
             if buddy.get("subscribed") and not buddy.get("notifications_muted"):
                 previous_buddies = {
                     str(item.get("user_id")): item
@@ -5888,7 +6239,7 @@ class SocialHubDialog(QDialog):
     def _set_subscription(self, buddy: dict[str, Any], enabled: bool) -> None:
         if not self._require_login():
             return
-        buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
+            buddy_id = _buddy_identifier(buddy)
         if not buddy_id:
             return
         try:
