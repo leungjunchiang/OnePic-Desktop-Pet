@@ -41,6 +41,11 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         shell: powershell
         run: |
+          # Todo's pre-v0.23.278 test clocks are deliberately wall-clock
+          # values.  Run the legacy v0.23.277 release verification in the
+          # same China Standard Time calendar used by the desktop app rather
+          # than the hosted Windows runner's default UTC timezone.
+          tzutil /s "China Standard Time"
           # Keep each Qt-heavy test module in its own Python process. This
           # prevents a Windows runner's native Qt state from leaking between
           # modules while still running the complete test suite.
