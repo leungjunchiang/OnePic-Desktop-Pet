@@ -16,7 +16,7 @@ from .reminder_manager import ReminderManager
 from .structured_actions import LocalActionExecutor
 from .sticky_note_manager import StickyNoteManager
 from .timeline_manager import TimelineManager
-from .todo_manager import TodoManager, scheduled_datetime, scheduled_now
+from .todo_manager import TodoManager, scheduled_datetime
 from .todo_view import TodoViewItem, collect_todo_view
 from .time_service import now_local, parse_datetime
 from .work_session_manager import WorkSessionManager
@@ -152,7 +152,7 @@ class TimeMemory:
         user completes or manually marks it as read.
         """
 
-        today = scheduled_now(self._now).date()
+        today = self.now().date()
         scheduled = self._visible_todos_until(today)
 
         return collect_todo_view(
@@ -178,7 +178,7 @@ class TimeMemory:
         marked read.
         """
 
-        today = scheduled_now(self._now).date()
+        today = self.now().date()
         latest = today + timedelta(days=max(0, int(days)))
         scheduled = self._visible_todos_until(latest, include_read=include_read)
         return collect_todo_view(
@@ -208,7 +208,7 @@ class TimeMemory:
         ``collect_todo_view`` so far-away calendar events do not fill it.
         """
 
-        today = scheduled_now(self._now).date()
+        today = self.now().date()
         return collect_todo_view(
             self._visible_todos_until(date.max, include_read=include_read),
             self.countdowns.items,
@@ -234,11 +234,7 @@ class TimeMemory:
         timed notes remain through the 24-hour grace period after due time.
         """
 
-        # Todo due dates are Beijing calendar appointments.  Do not route the
-        # test clock through ``TimeMemory.now()`` here: that generic helper
-        # follows the host timezone, which made a UTC CI runner regard a
-        # naive 23:29 local clock as the following morning in Beijing.
-        current = scheduled_now(self._now)
+        current = self.now()
         result: list[object] = []
         for item in self.todos.items:
             if item.completed or (
@@ -379,15 +375,12 @@ class TimeMemory:
         item = self.todos.get(task_id)
         if item is None:
             return False
-        # Keep restore/reminder expiry in the same calendar as the persisted
-        # Todo schedule.  A generic host-local ``now`` can be eight hours
-        # ahead when a naive test or legacy clock runs on a UTC machine.
-        now = scheduled_now(self._now)
+        now = self.now()
         reminder_at = getattr(item, "remind_at", None) or getattr(item, "due_at", None)
         reminder_expired = False
         if reminder_at:
             try:
-                reminder_expired = scheduled_datetime(reminder_at, self._now) <= now
+                reminder_expired = scheduled_datetime(reminder_at, self._now) <= scheduled_datetime(now, self._now)
             except (TypeError, ValueError, OverflowError):
                 reminder_expired = False
         restored = self.todos.update(

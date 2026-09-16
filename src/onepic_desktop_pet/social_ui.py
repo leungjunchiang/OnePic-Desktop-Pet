@@ -366,23 +366,13 @@ def _presence_last_seen_age_seconds(
     presence: dict[str, Any],
     now: datetime | None = None,
 ) -> int | None:
-    """Return the age of the peer's newest observable confirmation.
-
-    The server normally provides ``last_seen_at``.  Mixed client/server
-    versions have used a few equivalent names, though, so cards and sorting
-    share one tolerant reader rather than rendering a huge raw minute count
-    merely because a legacy field was used.
-    """
+    """Return the age of the peer's last heartbeat when it is observable."""
 
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
-    for field in (
-        "last_confirmed_at", "lastConfirmedAt", "last_heartbeat_at",
-        "last_seen_at", "last_seen", "status_updated_at",
-        "server_updated_at", "updated_at",
-    ):
+    for field in ("last_seen_at", "last_seen"):
         raw = presence.get(field)
         if not str(raw or "").strip():
             continue
@@ -401,35 +391,6 @@ def _presence_last_seen_age_seconds(
     except (TypeError, ValueError, OverflowError):
         pass
     return None
-
-
-def _format_elapsed_minutes(total_minutes: int) -> str:
-    """Render an elapsed duration compactly for a buddy card."""
-
-    minutes = max(0, int(total_minutes))
-    if minutes < 60:
-        return f"{minutes}分钟"
-    hours, remain_minutes = divmod(minutes, 60)
-    if hours < 24:
-        return f"{hours}小时{remain_minutes}分钟" if remain_minutes else f"{hours}小时"
-    days, remain_hours = divmod(hours, 24)
-    parts = [f"{days}天"]
-    if remain_hours:
-        parts.append(f"{remain_hours}小时")
-    if remain_minutes:
-        parts.append(f"{remain_minutes}分钟")
-    return "".join(parts)
-
-
-def _format_last_confirmed_age_seconds(age_seconds: int | None) -> str:
-    """Format the last server-confirmed presence without unreadable minutes."""
-
-    if age_seconds is None:
-        return "暂无确认记录"
-    age = max(0, int(age_seconds))
-    if age < 60:
-        return "刚刚确认"
-    return f"最后确认约 {_format_elapsed_minutes(age // 60)}前"
 
 
 def _presence_has_login_evidence(presence: dict[str, Any]) -> bool:
@@ -630,67 +591,26 @@ def _notification_sender_id(record: dict[str, Any] | None) -> str:
 
 
 def _compare_buddies(left: dict[str, Any], right: dict[str, Any]) -> int:
-    """Order buddies by state, today, week, then newest confirmation.
+    """在线优先、今日专注降序，最后按备注/姓名的中文拼音排序。"""
 
-    This is deliberately a lexicographic ordering rather than a weighted
-    score: a current green focus/rest state always wins over historical focus
-    totals, while people in the same state group are ordered by how much they
-    have participated today and this week before recency breaks a tie.
-    """
+    def online(record: dict[str, Any]) -> int:
+        return 0 if _presence_status(record) in {"focus", "rest"} else 1
 
-    def status_priority(record: dict[str, Any]) -> int:
-        status = _presence_status(record)
-        online = _presence_is_online(record, status)
-        if not _presence_uncertain(record) and online and status == "focus":
-            return 0
-        if not _presence_uncertain(record) and online and status == "rest":
-            return 1
-        # Yellow/recovering, offline, and heartbeat-timeout rows remain
-        # together after the two confirmed-green groups.
-        return 2
-
-    def confirmation_timestamp(record: dict[str, Any]) -> float:
-        current = datetime.now(timezone.utc)
-        age = _presence_last_seen_age_seconds(record, current)
-        if age is None:
-            return 0.0
-        return current.timestamp() - age
-
-    left_priority, right_priority = status_priority(left), status_priority(right)
-    if left_priority != right_priority:
-        return -1 if left_priority < right_priority else 1
-
-    def nonnegative_seconds(record: dict[str, Any], field: str) -> int:
-        try:
-            return max(0, int(record.get(field) or 0))
-        except (TypeError, ValueError, OverflowError):
-            return 0
-
-    left_today, right_today = (
-        nonnegative_seconds(left, "today_seconds"),
-        nonnegative_seconds(right, "today_seconds"),
-    )
+    left_online, right_online = online(left), online(right)
+    if left_online != right_online:
+        return -1 if left_online < right_online else 1
+    try:
+        left_today = max(0, int(left.get("today_seconds") or 0))
+    except (TypeError, ValueError):
+        left_today = 0
+    try:
+        right_today = max(0, int(right.get("today_seconds") or 0))
+    except (TypeError, ValueError):
+        right_today = 0
     if left_today != right_today:
         return -1 if left_today > right_today else 1
-
-    left_week, right_week = (
-        nonnegative_seconds(left, "week_seconds"),
-        nonnegative_seconds(right, "week_seconds"),
-    )
-    if left_week != right_week:
-        return -1 if left_week > right_week else 1
-
-    left_confirmed, right_confirmed = confirmation_timestamp(left), confirmation_timestamp(right)
-    if left_confirmed != right_confirmed:
-        return -1 if left_confirmed > right_confirmed else 1
     collator = QCollator(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
-    compared = collator.compare(_owner_nickname(left), _owner_nickname(right))
-    if compared:
-        return compared
-    return collator.compare(
-        str(left.get("user_id") or left.get("id") or ""),
-        str(right.get("user_id") or right.get("id") or ""),
-    )
+    return collator.compare(_owner_nickname(left), _owner_nickname(right))
 
 
 def _focus_timestamp(value: object) -> datetime | None:
@@ -2231,7 +2151,9 @@ class BuddyCardWidget(QWidget):
         duration = buddy.get("today_seconds")
         week_duration = buddy.get("week_seconds")
         if uncertain:
-            time_text = "同步中；已保留上次确认状态"
+            age = _presence_last_seen_age_seconds(buddy)
+            age_text = f"约 {max(1, age // 60)} 分钟前" if age is not None else "时间未知"
+            time_text = f"同步中 · 最后确认{age_text}"
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
@@ -2242,13 +2164,6 @@ class BuddyCardWidget(QWidget):
         self._focus_label = focus
         focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
-        confirmation = QLabel(
-            _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
-        )
-        self._confirmation_label = confirmation
-        confirmation.setStyleSheet("color:#61727d;font-size:11px;")
-        confirmation.setWordWrap(False)
-        root.addWidget(confirmation)
         quick_status = str(buddy.get("quick_status") or "").strip()
         expires = str(buddy.get("quick_status_expires_at") or "")
         if quick_status and (not expires or expires > datetime.now().astimezone().isoformat()):
@@ -2330,7 +2245,9 @@ class BuddyCardWidget(QWidget):
         duration = buddy.get("today_seconds")
         week_duration = buddy.get("week_seconds")
         if uncertain:
-            time_text = "同步中；已保留上次确认状态"
+            age = _presence_last_seen_age_seconds(buddy)
+            age_text = f"约 {max(1, age // 60)} 分钟前" if age is not None else "时间未知"
+            time_text = f"同步中 · 最后确认{age_text}"
         elif buddy.get("stale_presence"):
             time_text = "离线缓存；上次状态不计入当前专注"
         else:
@@ -2338,9 +2255,6 @@ class BuddyCardWidget(QWidget):
             week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
             time_text = f"{today_text}　·　{week_text}"
         self._focus_label.setText(time_text)
-        self._confirmation_label.setText(
-            _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
-        )
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         self._footer_label.setText(f"娃衣：{outfit}")
         self._footer_label.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
@@ -3774,7 +3688,7 @@ class SocialHubDialog(QDialog):
         network_row.addWidget(network_check)
         welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
-        buddies_card, buddies_layout = self._card("我的搭子", "正在专注的在线搭子优先，其次是在线休息；黄灯/离线搭子排在后面。每组按最后确认时间从新到旧排列。绿色表示最近两分钟内有心跳；右键搭子卡片可设置消息免打扰或删除搭子。")
+        buddies_card, buddies_layout = self._card("我的搭子", "在线搭子优先，其次按今天专注时间，最后按备注/姓名拼音排序。绿色表示最近两分钟内有心跳；灰色表示已离线。右键搭子卡片可设置消息免打扰或删除搭子。")
         buddy_tools = QHBoxLayout()
         add_buddy = QPushButton("用搭子码添加")
         add_buddy.clicked.connect(self._add_buddy)
@@ -5248,7 +5162,6 @@ class SocialHubDialog(QDialog):
         volatile_fields = (
             "working", "session_active", "status", "online", "session_id",
             "session_started_at", "session_seconds", "today_seconds", "week_seconds",
-            "last_confirmed_at", "lastConfirmedAt", "last_heartbeat_at",
             "last_seen_at", "status_updated_at", "server_updated_at", "sequence",
         )
         lists: list[Any] = [
@@ -5314,7 +5227,6 @@ class SocialHubDialog(QDialog):
             "专注", "工作", "休息", "休息中",
         }
         timestamp_fields = (
-            "last_confirmed_at", "lastConfirmedAt", "last_heartbeat_at",
             "last_seen_at", "last_seen", "status_updated_at", "server_updated_at",
         )
         lists: list[Any] = [

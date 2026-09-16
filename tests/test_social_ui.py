@@ -23,7 +23,6 @@ from onepic_desktop_pet.social_ui import (
     SocialSyncThread,
     SocialVisitResponseThread,
     _focus_upload_ack_status,
-    _format_last_confirmed_age_seconds,
     _reaction_label,
     _merge_dashboard_snapshot,
     _project_legacy_live_focus_totals,
@@ -761,91 +760,6 @@ def test_hidden_buddy_remains_visible_as_offline_and_online_buddies_are_sorted()
     assert any("已离线" in label.text() for label in last.findChildren(QLabel))
     assert any("本周已专注 20分钟" in label.text() for label in first.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
-
-
-def test_buddies_sort_by_state_then_today_week_and_last_confirmation() -> None:
-    """Buddy ordering is state > today > week > final confirmation time."""
-
-    app = QApplication.instance() or QApplication([])
-    dialog = SocialHubDialog(SignedInClient())
-    dialog.apply_dashboard({
-        "me": {"nickname": "六毛搭子"},
-        "buddies": [
-            {
-                "user_id": "yellow-new", "nickname": "黄灯新", "online": False,
-                "status": "offline", "last_seen_at": "2026-09-15T11:59:00+08:00",
-                "today_seconds": 99 * 3600,
-                "week_seconds": 99 * 3600,
-            },
-            {
-                "user_id": "rest-old", "nickname": "休息旧", "online": True,
-                "status": "rest", "last_confirmed_at": "2026-09-15T10:00:00+08:00",
-                "today_seconds": 99 * 3600,
-                "week_seconds": 99 * 3600,
-            },
-            {
-                "user_id": "focus-today-high", "nickname": "专注今日高", "online": True,
-                "status": "focus", "working": True,
-                "last_confirmed_at": "2026-09-15T09:00:00+08:00",
-                "today_seconds": 20 * 60, "week_seconds": 3 * 3600,
-            },
-            {
-                "user_id": "focus-today-low", "nickname": "专注今日低", "online": True,
-                "status": "focus", "working": True,
-                "last_confirmed_at": "2026-09-15T12:00:00+08:00",
-                "today_seconds": 5 * 60, "week_seconds": 10 * 3600,
-            },
-            {
-                "user_id": "focus-week-high", "nickname": "专注本周高", "online": True,
-                "status": "focus", "working": True,
-                "last_confirmed_at": "2026-09-15T08:00:00+08:00",
-                "today_seconds": 10 * 60, "week_seconds": 10 * 3600,
-            },
-            {
-                "user_id": "focus-week-low", "nickname": "专注本周低", "online": True,
-                "status": "focus", "working": True,
-                "last_confirmed_at": "2026-09-15T12:00:00+08:00",
-                "today_seconds": 10 * 60, "week_seconds": 3 * 3600,
-            },
-            {
-                "user_id": "focus-confirm-old", "nickname": "专注确认旧", "online": True,
-                "status": "focus", "working": True,
-                "last_confirmed_at": "2026-09-15T10:00:00+08:00",
-                "today_seconds": 8 * 60, "week_seconds": 2 * 3600,
-            },
-            {
-                "user_id": "focus-confirm-new", "nickname": "专注确认新", "online": True,
-                "status": "focus", "working": True,
-                "last_confirmed_at": "2026-09-15T11:00:00+08:00",
-                "today_seconds": 8 * 60, "week_seconds": 2 * 3600,
-            },
-        ],
-        "room_people": [], "requests": [], "visits": [],
-    })
-    app.processEvents()
-
-    ordered = [
-        dialog.buddies.item(index).data(Qt.ItemDataRole.UserRole)["user_id"]
-        for index in range(dialog.buddies.count())
-    ]
-    assert ordered == [
-        "focus-today-high",
-        "focus-week-high",
-        "focus-week-low",
-        "focus-confirm-new",
-        "focus-confirm-old",
-        "focus-today-low",
-        "rest-old",
-        "yellow-new",
-    ]
-    dialog.close(); dialog.deleteLater(); app.processEvents()
-
-
-def test_last_confirmation_duration_uses_days_hours_and_minutes() -> None:
-    assert _format_last_confirmed_age_seconds(None) == "暂无确认记录"
-    assert _format_last_confirmed_age_seconds(59) == "刚刚确认"
-    assert _format_last_confirmed_age_seconds(61) == "最后确认约 1分钟前"
-    assert _format_last_confirmed_age_seconds(24770 * 60) == "最后确认约 17天4小时50分钟前"
 
 
 def test_homepage_uses_weekly_focus_leaderboard_labels() -> None:
