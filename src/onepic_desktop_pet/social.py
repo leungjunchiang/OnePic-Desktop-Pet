@@ -2659,7 +2659,6 @@ class LegacyDirectSocialClient:
                 item["working"] = False
                 item["status"] = "offline"
                 item["session_seconds"] = 0
-                item["today_seconds"] = None
                 item["stale_presence"] = True
                 item["presence_uncertain"] = False
 
@@ -3355,7 +3354,7 @@ class DashboardCacheClientBase:
             if not isinstance(items, list): return
             for item in items:
                 if not isinstance(item, dict) or item.get("is_self"): continue
-                item.update({"online": False, "working": False, "status": "offline", "session_seconds": 0, "today_seconds": None, "stale_presence": True, "presence_uncertain": False})
+                item.update({"online": False, "working": False, "status": "offline", "session_seconds": 0, "stale_presence": True, "presence_uncertain": False})
         mark(data.get("buddies")); mark(data.get("room_people")); mark(data.get("active_visits"))
         room = data.get("current_room")
         if isinstance(room, dict):

@@ -1562,7 +1562,8 @@ def test_recent_cached_presence_is_not_rendered_as_peer_offline() -> None:
     assert any("正在工作（同步恢复中）" in text for text in peer_labels)
     assert all("已离线" not in text for text in peer_labels)
     assert "连接暂时不稳定" in dialog.status_label.text()
-    assert "最近确认 1 位搭子正在专注（实时状态待确认）" in dialog.study_summary.text()
+    assert "最近确认 1 位搭子正在专注" in dialog.study_summary.text()
+    assert "实时状态待确认" not in dialog.study_summary.text()
     assert "现在 0 位搭子正在专注" not in dialog.study_summary.text()
 
     dialog.apply_dashboard(RoomClient().dashboard())
@@ -1574,8 +1575,37 @@ def test_recent_cached_presence_is_not_rendered_as_peer_offline() -> None:
 
 def test_degraded_study_summary_never_converts_unknown_presence_to_zero() -> None:
     assert _study_focus_summary_text(0, 12 * 60, presence_uncertain=True) == (
-        "搭子实时专注人数待确认　·　我的今日专注 12分钟"
+        "最近确认 0 位搭子正在专注　·　我的今日专注 12分钟"
     )
+
+
+def test_buddy_card_keeps_focus_totals_when_presence_is_uncertain_or_stale() -> None:
+    app = QApplication.instance() or QApplication([])
+    for presence in (
+        {
+            "online": True,
+            "working": False,
+            "status": "rest",
+            "presence_uncertain": True,
+            "today_seconds": 2 * 3600 + 3 * 60,
+            "week_seconds": 12 * 3600 + 8 * 60,
+        },
+        {
+            "online": False,
+            "working": False,
+            "status": "offline",
+            "stale_presence": True,
+            "today_seconds": 2 * 3600 + 3 * 60,
+            "week_seconds": 12 * 3600 + 8 * 60,
+        },
+    ):
+        widget = BuddyCardWidget({"nickname": "搭子", **presence})
+        labels = [label.text() for label in widget.findChildren(QLabel)]
+        assert any("今日已专注 2小时3分钟" in text for text in labels)
+        assert any("本周已专注 12小时8分钟" in text for text in labels)
+        assert all("状态同步中 ·" not in text for text in labels)
+        widget.close(); widget.deleteLater()
+    app.processEvents()
 
 
 def test_offline_dashboard_does_not_mask_local_focus_when_no_room_is_selected() -> None:

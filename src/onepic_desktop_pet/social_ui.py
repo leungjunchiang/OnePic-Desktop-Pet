@@ -329,17 +329,38 @@ def _study_focus_summary_text(
     *,
     presence_uncertain: bool = False,
 ) -> str:
-    """Render the homepage count without turning an unknown state into zero."""
+    """Render the homepage count without exposing transport state machinery."""
 
-    if presence_uncertain:
-        focus_text = (
-            f"最近确认 {int(working_count)} 位搭子正在专注（实时状态待确认）"
-            if working_count > 0
-            else "搭子实时专注人数待确认"
-        )
-    else:
-        focus_text = f"现在 {int(working_count)} 位搭子正在专注"
+    focus_text = (
+        f"最近确认 {int(working_count)} 位搭子正在专注"
+        if presence_uncertain
+        else f"现在 {int(working_count)} 位搭子正在专注"
+    )
     return f"{focus_text}　·　我的今日专注 {format_work_duration(me_seconds)}"
+
+
+def _buddy_focus_totals_text(buddy: dict[str, Any]) -> str:
+    """Render historical focus totals independently of live presence.
+
+    An offline or uncertain presence only describes how fresh the live state
+    is. It does not invalidate today's or this week's returned statistics.
+    ``None`` remains an intentional hidden/missing value and is never
+    converted into a fabricated zero.
+    """
+
+    today = buddy.get("today_seconds")
+    week = buddy.get("week_seconds")
+    today_text = (
+        "今日专注时长已隐藏"
+        if today is None
+        else f"今日已专注 {format_work_duration(today)}"
+    )
+    week_text = (
+        "本周专注时长已隐藏"
+        if week is None
+        else f"本周已专注 {format_work_duration(week)}"
+    )
+    return f"{today_text}　·　{week_text}"
 
 
 def _presence_working(presence: dict[str, Any]) -> bool:
@@ -2376,18 +2397,10 @@ class BuddyCardWidget(QWidget):
         headline.setWordWrap(False)
         headline.setStyleSheet("font-size:14px;font-weight:600;color:#203847;")
         root.addWidget(headline)
-        duration = buddy.get("today_seconds")
-        week_duration = buddy.get("week_seconds")
-        if uncertain:
-            age = _presence_last_seen_age_seconds(buddy)
-            age_text = _format_last_confirmed_age_seconds(age)
-            time_text = f"状态同步中 · {age_text}"
-        elif buddy.get("stale_presence"):
-            time_text = "离线缓存；上次状态不计入当前专注"
-        else:
-            today_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
-            week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
-            time_text = f"{today_text}　·　{week_text}"
+        # Historical totals remain useful even when live presence is
+        # uncertain or timed out. The confirmation label below communicates
+        # freshness separately, so it must not replace these totals.
+        time_text = _buddy_focus_totals_text(buddy)
         focus = QLabel(time_text)
         self._focus_label = focus
         focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
@@ -2479,19 +2492,7 @@ class BuddyCardWidget(QWidget):
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if is_self else ''}"
         )
-        duration = buddy.get("today_seconds")
-        week_duration = buddy.get("week_seconds")
-        if uncertain:
-            age = _presence_last_seen_age_seconds(buddy)
-            age_text = _format_last_confirmed_age_seconds(age)
-            time_text = f"状态同步中 · {age_text}"
-        elif buddy.get("stale_presence"):
-            time_text = "离线缓存；上次状态不计入当前专注"
-        else:
-            today_text = "今日专注时长已隐藏" if duration is None else f"今日已专注 {format_work_duration(duration)}"
-            week_text = "本周专注时长已隐藏" if week_duration is None else f"本周已专注 {format_work_duration(week_duration)}"
-            time_text = f"{today_text}　·　{week_text}"
-        self._focus_label.setText(time_text)
+        self._focus_label.setText(_buddy_focus_totals_text(buddy))
         self._confirmation_label.setText(
             _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
         )

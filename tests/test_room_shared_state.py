@@ -109,7 +109,7 @@ def test_social_card_uses_owner_nickname_without_renaming_pet():
     widget.deleteLater(); app.processEvents()
 
 
-def test_social_card_prefers_explicit_owner_nickname_and_marks_stale_presence_offline():
+def test_social_card_prefers_explicit_owner_nickname_and_keeps_stale_presence_offline():
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({
         "user_id": "peer",
@@ -122,7 +122,8 @@ def test_social_card_prefers_explicit_owner_nickname_and_marks_stale_presence_of
     })
     labels = widget.findChildren(QLabel)
     assert "小梁家的六毛已离线" in labels[0].text()
-    assert "离线缓存" in labels[1].text()
+    assert "今日专注时长已隐藏" in labels[1].text()
+    assert "本周专注时长已隐藏" in labels[1].text()
     assert "六毛搭子的六毛" not in labels[0].text()
     widget.deleteLater(); app.processEvents()
 
