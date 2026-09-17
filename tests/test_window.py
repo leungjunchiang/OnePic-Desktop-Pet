@@ -40,6 +40,7 @@ from onepic_desktop_pet.window import (
     FULLSCREEN_VISIBILITY_NORMAL,
     FULLSCREEN_VISIBILITY_RESTORING,
     FULLSCREEN_VISIBILITY_SUPPRESSED,
+    FOCUS_LIVE_DISPLAY_CACHE_TTL_SECONDS,
     PetWindow,
     SOCIAL_DASHBOARD_INTERVAL_MS,
     SOCIAL_LEADERBOARD_REFRESH_SECONDS,
@@ -243,6 +244,134 @@ def test_cross_device_display_uses_account_presence_when_live_rpc_is_missing(mon
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_paused_display_freezes_cached_remote_live_row_until_server_refresh(monkeypatch) -> None:
+    """Pause must not keep extending a remote row cached before the click."""
+
+    app, window = _create_window()
+    account_id = "account-1"
+    moment = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
+    clock = [moment]
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: clock[0])
+    monkeypatch.setattr(
+        window.focus_analytics,
+        "focus_segments",
+        lambda: [
+            FocusSegment(
+                segment_id="sealed-before-pause",
+                session_id="remote-session",
+                start_at=moment - timedelta(minutes=30),
+                end_at=moment,
+                device_id="remote-device",
+            )
+        ],
+    )
+    window._active_focus_account_id = account_id
+    window._cross_device_today_display_account_id = account_id
+    window._cross_device_today_display_date = moment.date().isoformat()
+    window._cross_device_today_display_seconds = 30 * 60
+    window._cross_device_today_display_live_rows = [
+        FocusSegment(
+            segment_id="display-live-device:remote-device",
+            session_id="remote-session",
+            start_at=moment - timedelta(minutes=30),
+            end_at=None,
+            device_id="remote-device",
+        )
+    ]
+    window._cross_device_today_display_live_rows_received_at = time.monotonic()
+    paused = SimpleNamespace(status="rest", session_started_at=None, current_continuous_seconds=0)
+
+    window._freeze_cached_live_display_until_refresh()
+    clock[0] += timedelta(minutes=1)
+
+    assert window._cross_device_today_display_value(paused) == 30 * 60
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_explicit_stopped_presence_clears_cached_live_rows_after_pause(monkeypatch) -> None:
+    """A fresh all-devices-paused dashboard result ends stale live projection."""
+
+    app, window = _create_window()
+    account_id = "account-1"
+    moment = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
+    clock = [moment]
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: clock[0])
+    monkeypatch.setattr(
+        window.focus_analytics,
+        "focus_segments",
+        lambda: [
+            FocusSegment(
+                segment_id="sealed-before-pause",
+                session_id="remote-session",
+                start_at=moment - timedelta(minutes=30),
+                end_at=moment,
+                device_id="remote-device",
+            )
+        ],
+    )
+    monkeypatch.setattr(window, "_shared_today_focus_seconds", lambda: 30 * 60)
+    window._active_focus_account_id = account_id
+    window._cross_device_today_display_account_id = account_id
+    window._cross_device_today_display_date = moment.date().isoformat()
+    window._cross_device_today_display_seconds = 30 * 60
+    window._cross_device_today_display_live_rows = [
+        FocusSegment(
+            segment_id="display-live-device:remote-device",
+            session_id="remote-session",
+            start_at=moment - timedelta(minutes=30),
+            end_at=None,
+            device_id="remote-device",
+        )
+    ]
+    window._cross_device_today_display_live_rows_received_at = time.monotonic()
+    window._freeze_cached_live_display_until_refresh()
+    paused = SimpleNamespace(status="rest", session_started_at=None, current_continuous_seconds=0)
+
+    assert window._refresh_cross_device_today_display(
+        {"me_presence": {"account_working": False, "working_device_count": 0}},
+        snapshot=paused,
+        source="all-devices-paused",
+    )
+    assert window._cross_device_today_display_live_rows == []
+    assert not window._cross_device_today_display_live_refresh_required
+    clock[0] += timedelta(minutes=1)
+    assert window._cross_device_today_display_value(paused) == 30 * 60
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_expired_cached_live_projection_cannot_extend_a_paused_total(monkeypatch) -> None:
+    """A failed refresh may retain a value, but never a growing open interval."""
+
+    app, window = _create_window()
+    account_id = "account-1"
+    moment = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment + timedelta(minutes=2))
+    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [])
+    window._active_focus_account_id = account_id
+    window._cross_device_today_display_account_id = account_id
+    window._cross_device_today_display_date = moment.date().isoformat()
+    window._cross_device_today_display_seconds = 30 * 60
+    window._cross_device_today_display_live_rows = [
+        FocusSegment(
+            segment_id="display-live-device:remote-device",
+            session_id="remote-session",
+            start_at=moment - timedelta(minutes=30),
+            end_at=None,
+            device_id="remote-device",
+        )
+    ]
+    window._cross_device_today_display_live_rows_received_at = (
+        time.monotonic() - FOCUS_LIVE_DISPLAY_CACHE_TTL_SECONDS - 1
+    )
+    paused = SimpleNamespace(status="rest", session_started_at=None, current_continuous_seconds=0)
+
+    assert window._cross_device_today_display_value(paused) == 30 * 60
+    window.close(); window.deleteLater(); app.processEvents()
 
 
 def test_work_clock_tick_pushes_live_account_total_to_social_hub(monkeypatch) -> None:

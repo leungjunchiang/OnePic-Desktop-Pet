@@ -363,6 +363,11 @@ SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
 SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
 FOCUS_HISTORY_RECOVERY_CHECK_SECONDS = 15 * 60.0
+# A live row is only a short-lived display hint, never durable focus truth.
+# Dashboard/live-projection reads normally arrive every 30 seconds.  Keep a
+# bounded fallback for a transient request failure, but never let an old open
+# interval keep adding seconds forever after a device has paused.
+FOCUS_LIVE_DISPLAY_CACHE_TTL_SECONDS = 120.0
 
 # The visibility state is deliberately independent from FocusSession.  An
 # ordinary maximised application suppresses the pet visually, but must not
@@ -631,6 +636,12 @@ class PetWindow(QWidget):
         # refreshed by the small live-projection RPC and never enter
         # FocusAnalyticsStore or the FocusSession fact sync.
         self._cross_device_today_display_live_rows: list[object] | None = None
+        self._cross_device_today_display_live_rows_received_at = 0.0
+        # A local Pause/Finish is a stronger fact than an older remote live
+        # snapshot.  Until the next server response confirms that another
+        # device is still working, freeze cached remote open intervals rather
+        # than continuing to manufacture account time from their old end.
+        self._cross_device_today_display_live_refresh_required = False
         # The display projection is pure local arithmetic over already-fetched
         # rows.  It only needs to be recomputed when facts/state change or
         # roughly once per second; rebuilding the complete interval union on
@@ -4081,6 +4092,7 @@ class PetWindow(QWidget):
                 LOGGER.exception(
                     "focus analytics pause projection failed after timer pause"
                 )
+            self._freeze_cached_live_display_until_refresh()
             self._refresh_cross_device_today_display(
                 snapshot=self.focus_session.snapshot(include_projection=False),
                 source="focus_paused",
@@ -4193,6 +4205,7 @@ class PetWindow(QWidget):
         )
         self.focus_session.finish()
         self.focus_analytics.finish_focus_session(completed=True)
+        self._freeze_cached_live_display_until_refresh()
         self._refresh_cross_device_today_display(
             snapshot=self.focus_session.snapshot(include_projection=False),
             source="focus_finished",
@@ -5609,6 +5622,8 @@ class PetWindow(QWidget):
         self._cross_device_today_display_live_seconds = 0
         self._cross_device_today_display_remote_rows = None
         self._cross_device_today_display_live_rows = None
+        self._cross_device_today_display_live_rows_received_at = 0.0
+        self._cross_device_today_display_live_refresh_required = False
         setter = getattr(self.focus_analytics, "set_live_projection_segments", None)
         if callable(setter):
             setter([])
@@ -5622,6 +5637,30 @@ class PetWindow(QWidget):
         self._cross_device_today_display_projection_cache_key = None
         self._cross_device_today_display_projection_cache_value = None
         self._cross_device_today_display_projection_cache_at = 0.0
+
+    def _freeze_cached_live_display_until_refresh(self) -> None:
+        """Stop old open device rows from advancing after this device pauses.
+
+        The server may still report a genuinely working second device on the
+        very next heartbeat/dashboard response.  Until that response arrives,
+        however, a cached open row is not sufficient evidence to extend an
+        account total: both computers may already have pressed Pause.
+        """
+
+        self._cross_device_today_display_live_refresh_required = True
+        self._invalidate_cross_device_display_projection_cache()
+
+    def _cached_live_display_rows_are_fresh(self) -> bool:
+        """Return whether the retained remote live rows may still advance."""
+
+        if self._cross_device_today_display_live_rows is None:
+            return False
+        received_at = float(self._cross_device_today_display_live_rows_received_at or 0.0)
+        return (
+            received_at > 0.0
+            and time.monotonic() - received_at
+            < FOCUS_LIVE_DISPLAY_CACHE_TTL_SECONDS
+        )
 
     def _set_local_live_focus_projection(self, snapshot: object | None = None) -> None:
         """Keep the current local segment in the shared read-only projection."""
@@ -5740,6 +5779,28 @@ class PetWindow(QWidget):
         except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError):
             return []
 
+    @staticmethod
+    def _dashboard_confirms_no_account_live_focus(
+        data: dict[str, object] | None,
+    ) -> bool:
+        """Return true only for an explicit account-level stopped snapshot."""
+
+        if not isinstance(data, dict):
+            return False
+        presence = data.get("me_presence")
+        if not isinstance(presence, dict):
+            return False
+        if "working_device_count" in presence:
+            try:
+                return max(0, int(presence.get("working_device_count") or 0)) == 0
+            except (TypeError, ValueError, OverflowError):
+                return False
+        if "account_working" in presence:
+            return not bool(presence.get("account_working"))
+        if "working" in presence:
+            return not bool(presence.get("working"))
+        return False
+
     def _refresh_cross_device_today_display(
         self,
         data: dict[str, object] | None = None,
@@ -5816,7 +5877,11 @@ class PetWindow(QWidget):
             data,
             now=moment,
         )
+        dashboard_confirms_no_live_focus = self._dashboard_confirms_no_account_live_focus(
+            data
+        )
         live_rows: list[object] | None = None
+        live_projection_confirmed = False
         if has_live_payload:
             try:
                 live_rows = live_projection_rows(
@@ -5855,8 +5920,10 @@ class PetWindow(QWidget):
                     if str(getattr(row, "device_id", "") or "")
                     not in known_live_devices
                 )
+            live_projection_confirmed = True
         elif presence_fallback_rows:
             live_rows = list(presence_fallback_rows)
+            live_projection_confirmed = True
             lifecycle_log(
                 "focus.display.live_presence_fallback",
                 self,
@@ -5864,8 +5931,25 @@ class PetWindow(QWidget):
                 source=source,
                 reason="live_projection_missing",
             )
-        elif self._cross_device_today_display_live_rows is not None:
+        elif dashboard_confirms_no_live_focus:
+            # Account aggregation is an explicit server confirmation that no
+            # device is currently working. It is enough to retire any older
+            # open rows even if the optional live-projection RPC was skipped.
+            live_rows = []
+            live_projection_confirmed = True
+        elif (
+            not self._cross_device_today_display_live_refresh_required
+            and self._cached_live_display_rows_are_fresh()
+        ):
             live_rows = list(self._cross_device_today_display_live_rows)
+        elif self._cross_device_today_display_live_rows is not None:
+            # Do not retain an open interval after its freshness budget, or
+            # after a local Pause/Finish has requested server confirmation.
+            # A later successful live projection can re-add a genuinely
+            # working remote device without changing any sealed facts.
+            live_rows = []
+            self._cross_device_today_display_live_rows = []
+            self._cross_device_today_display_live_rows_received_at = 0.0
         if live_rows is not None:
             self.focus_analytics.set_live_projection_segments(live_rows or [])
             self._set_local_live_focus_projection(current)
@@ -5985,11 +6069,13 @@ class PetWindow(QWidget):
             # Commit only after the pure projection validated successfully;
             # malformed or foreign rows can never poison the retained input.
             self._cross_device_today_display_remote_rows = list(remote_rows or [])
-        if has_live_payload:
+        if live_projection_confirmed:
             # Commit only after the projection has passed validation and the
-            # union calculation above succeeded.  A missing/old RPC can never
-            # erase a previously validated live display snapshot.
+            # union calculation above succeeded. A fresh empty projection or
+            # account-level stopped presence deliberately clears old rows.
             self._cross_device_today_display_live_rows = list(live_rows or [])
+            self._cross_device_today_display_live_rows_received_at = time.monotonic()
+            self._cross_device_today_display_live_refresh_required = False
         self._cross_device_today_display_seconds = candidate_seconds
         self._invalidate_cross_device_display_projection_cache()
         self._cross_device_today_display_account_id = account_id
@@ -6047,7 +6133,8 @@ class PetWindow(QWidget):
             current_status,
             current_session,
             int(self._cross_device_today_display_seconds or 0),
-            self._cross_device_today_display_live_rows is not None,
+            self._cached_live_display_rows_are_fresh(),
+            bool(self._cross_device_today_display_live_refresh_required),
         )
         if (
             projection_key == self._cross_device_today_display_projection_cache_key
@@ -6058,7 +6145,10 @@ class PetWindow(QWidget):
             cached_value = self._cross_device_today_display_projection_cache_value
             if cached_value is not None:
                 return cached_value
-        if self._cross_device_today_display_live_rows is not None:
+        if (
+            not self._cross_device_today_display_live_refresh_required
+            and self._cached_live_display_rows_are_fresh()
+        ):
             # Re-run only the read-only display projection while any device is
             # live.  This keeps a remote computer's interval advancing between
             # 30-second network polls without changing FocusSession or doing a
