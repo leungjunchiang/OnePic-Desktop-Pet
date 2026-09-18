@@ -2160,6 +2160,11 @@ class PetWindow(QWidget):
                 widget,
                 topmost=bool(self.settings.always_on_top),
                 qt_stays_on_top=qt_stays_on_top,
+                # Windows can retain WS_EX_TOPMOST even after a third-party
+                # app moved its HWND ahead of us.  Only the low-frequency
+                # watchdog forces a non-activating native reassertion; normal
+                # lifecycle checks remain cheap verification passes.
+                force_topmost=event == "TopmostWatchdog",
             )
             lifecycle_log(
                 "pet-window.native-policy",

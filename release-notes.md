@@ -1327,3 +1327,8 @@
 - 本地 Store 写盘失败时回滚内存投影，保留 WAL 作为恢复边界，避免暂停路径把未落盘的 segment 当成已完成事实。
 - 暂停/结束后的 inactive presence 严格等待对应 sealed segment 获得逐条 delta ACK；沿用现有 stable segment identity、delta cursor、additive merge、empty delta no-op 和 interval union，未新增历史全量下载或 heartbeat 频率。
 - 新增 WAL 回放、写盘失败、ACK 交接和 heartbeat 延迟 inactive 的回归测试。
+## v0.23.284 — 修复 Word、UU 远程等普通窗口偶发遮挡六毛
+
+- Windows 每 3 秒以 `HWND_TOPMOST + SWP_NOACTIVATE` 重新确认六毛及当前可见附属窗口的原生层级；即使第三方软件重排 Z-order 但未清除 topmost style，也会自动恢复。
+- 全程不调用 `raise_()` 或 `activateWindow()`，因此六毛保持最前但不会抢 Word、UU 远程或浏览器的键盘焦点。
+- 保留 v0.23.283 的双设备暂停计时冻结修复，以及既有全屏隐藏、手动隐藏和“关闭置顶”行为。

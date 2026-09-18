@@ -47,6 +47,7 @@ def apply_windows_window_policy(
     *,
     topmost: bool,
     qt_stays_on_top: bool,
+    force_topmost: bool = False,
 ) -> dict[str, Any]:
     """在不移动、不改变焦点的前提下校验一个 HWND 的 topmost 状态。"""
 
@@ -75,7 +76,14 @@ def apply_windows_window_policy(
 
         hwnd_topmost = bool(extended & 0x00000008)  # WS_EX_TOPMOST
         result["native_topmost"] = hwnd_topmost
-        if hwnd_topmost != bool(topmost):
+        # Some applications (notably remote-control clients and Office) can
+        # reorder an HWND without changing WS_EX_TOPMOST.  The style bit alone
+        # then says "topmost" while the user can still see another normal
+        # window in front of the pet.  A low-frequency watchdog may explicitly
+        # reassert the level.  It deliberately keeps SWP_NOACTIVATE, so this
+        # cannot steal keyboard focus from the foreground app.
+        should_reassert_topmost = bool(topmost and force_topmost)
+        if hwnd_topmost != bool(topmost) or should_reassert_topmost:
             insert_after = -1 if topmost else -2  # HWND_TOPMOST/NOTOPMOST
             flags = 0x0001 | 0x0002 | 0x0010 | 0x0200  # NOMOVE/NOSIZE/NOACTIVATE/NOOWNERZORDER
             if not bool(user32.SetWindowPos(native_id, insert_after, 0, 0, 0, 0, flags)):
@@ -83,7 +91,12 @@ def apply_windows_window_policy(
                 return result
             refreshed = int(get_style(native_id, -20))
             result["native_topmost"] = bool(refreshed & 0x00000008)
-            result["action"] = "restore_topmost" if topmost else "restore_normal_level"
+            if topmost:
+                result["action"] = (
+                    "reassert_topmost" if should_reassert_topmost else "restore_topmost"
+                )
+            else:
+                result["action"] = "restore_normal_level"
         elif desired_extended != extended:
             # The style repair itself is enough; SetWindowPos is not needed.
             result["action"] = "restore_nonactivating_style"
@@ -195,6 +208,7 @@ def apply_native_window_policy(
     *,
     topmost: bool,
     qt_stays_on_top: bool,
+    force_topmost: bool = False,
 ) -> dict[str, Any]:
     """按当前平台调用唯一 native 层级入口。"""
 
@@ -203,6 +217,7 @@ def apply_native_window_policy(
             widget,
             topmost=topmost,
             qt_stays_on_top=qt_stays_on_top,
+            force_topmost=force_topmost,
         )
     if sys.platform == "darwin":
         return apply_macos_window_policy(

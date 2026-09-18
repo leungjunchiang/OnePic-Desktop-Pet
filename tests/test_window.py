@@ -746,6 +746,26 @@ def test_topmost_watchdog_repairs_without_raise_or_activation(monkeypatch) -> No
     app.processEvents()
 
 
+def test_topmost_watchdog_forces_only_native_reassertion(monkeypatch) -> None:
+    """Only watchdog passes force level reassertion; regular Show stays cheap."""
+
+    app, window = _create_window()
+    calls = []
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.apply_native_window_policy",
+        lambda *_args, **kwargs: calls.append(kwargs) or {"native_id": 1, "action": "verify", "available": True},
+    )
+
+    window._apply_native_window_policy_for_widget(window, event="Show")
+    window._apply_native_window_policy_for_widget(window, event="TopmostWatchdog")
+
+    assert calls[0]["force_topmost"] is False
+    assert calls[1]["force_topmost"] is True
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_fullscreen_restore_repairs_native_policy_immediately_and_after_delay(monkeypatch) -> None:
     """Exit restore performs an immediate and a settled non-activating repair."""
 

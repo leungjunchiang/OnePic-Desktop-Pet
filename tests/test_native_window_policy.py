@@ -175,3 +175,45 @@ def test_windows_policy_demotes_when_always_on_top_is_disabled(monkeypatch) -> N
     assert result["native_topmost"] is False
     assert user32.calls[0][1] == -2
     assert user32.calls[0][2][-1] & 0x0010  # SWP_NOACTIVATE
+
+
+def test_windows_watchdog_reasserts_topmost_without_activation(monkeypatch) -> None:
+    """The watchdog repairs z-order even when WS_EX_TOPMOST still looks set."""
+
+    class FakeUser32:
+        def __init__(self) -> None:
+            self.style = 0x00000080 | 0x08000000 | 0x00000008
+            self.calls: list[tuple[int, int, tuple[int, ...]]] = []
+
+        def GetWindowLongPtrW(self, _hwnd, _index):
+            return self.style
+
+        def GetWindowLongW(self, _hwnd, _index):
+            return self.style
+
+        def SetWindowLongPtrW(self, _hwnd, _index, value):
+            self.style = int(value)
+            return self.style
+
+        def SetWindowLongW(self, _hwnd, _index, value):
+            self.style = int(value)
+            return self.style
+
+        def SetWindowPos(self, hwnd, insert_after, x, y, width, height, flags):
+            self.calls.append((int(hwnd), int(insert_after), (x, y, width, height, flags)))
+            return 1
+
+    user32 = FakeUser32()
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+
+    result = native_window_policy.apply_windows_window_policy(
+        SimpleNamespace(winId=lambda: 101),
+        topmost=True,
+        qt_stays_on_top=True,
+        force_topmost=True,
+    )
+
+    assert result["action"] == "reassert_topmost"
+    assert result["native_topmost"] is True
+    assert user32.calls[0][1] == -1
+    assert user32.calls[0][2][-1] & 0x0010  # SWP_NOACTIVATE
