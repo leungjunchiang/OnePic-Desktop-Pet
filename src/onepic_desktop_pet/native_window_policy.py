@@ -118,6 +118,7 @@ def apply_macos_window_policy(
     *,
     topmost: bool,
     qt_stays_on_top: bool,
+    force_topmost: bool = False,
 ) -> dict[str, Any]:
     """用 PyObjC 设置浮动层级，并明确拒绝加入全屏 Space。"""
 
@@ -177,6 +178,15 @@ def apply_macos_window_policy(
             window.setCollectionBehavior_(desired_behavior)
         if changed_style:
             window.setStyleMask_(desired_style_mask)
+        # A different app can reorder a floating NSWindow without changing its
+        # numeric level.  Reassert ordering only from the low-frequency
+        # watchdog.  orderFrontRegardless: orders the panel without making it
+        # key, so the foreground app keeps keyboard focus.
+        should_reassert_topmost = bool(topmost and force_topmost)
+        if should_reassert_topmost:
+            order_front_regardless = getattr(window, "orderFrontRegardless_", None)
+            if callable(order_front_regardless):
+                order_front_regardless()
         hides_on_deactivate = getattr(window, "setHidesOnDeactivate_", None)
         if callable(hides_on_deactivate):
             hides_on_deactivate(False)
@@ -188,7 +198,9 @@ def apply_macos_window_policy(
         result["native_topmost"] = bool(
             topmost and result["native_level"] == desired_level
         )
-        if changed_level or changed_behavior or changed_style:
+        if should_reassert_topmost:
+            result["action"] = "reassert_topmost"
+        elif changed_level or changed_behavior or changed_style:
             result["action"] = "restore_topmost" if topmost else "restore_normal_level"
         return result
     except Exception as exc:
@@ -224,6 +236,7 @@ def apply_native_window_policy(
             widget,
             topmost=topmost,
             qt_stays_on_top=qt_stays_on_top,
+            force_topmost=force_topmost,
         )
     return {
         "native_id": 0,

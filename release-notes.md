@@ -1332,3 +1332,7 @@
 - Windows 每 3 秒以 `HWND_TOPMOST + SWP_NOACTIVATE` 重新确认六毛及当前可见附属窗口的原生层级；即使第三方软件重排 Z-order 但未清除 topmost style，也会自动恢复。
 - 全程不调用 `raise_()` 或 `activateWindow()`，因此六毛保持最前但不会抢 Word、UU 远程或浏览器的键盘焦点。
 - 保留 v0.23.283 的双设备暂停计时冻结修复，以及既有全屏隐藏、手动隐藏和“关闭置顶”行为。
+## v0.23.285 — 补齐 macOS 普通窗口遮挡的层级恢复
+
+- macOS 的低频置顶守护现在也会重新确认 Floating Window 的前序；即使 `NSWindow.level` 未改变但被其他应用重排，也会自动恢复。
+- 使用不成为 key window 的原生排序入口，保持六毛在前但不抢当前应用的键盘焦点；继续不加入全屏 Space，演示/PPT 全屏时仍按既有规则隐藏。

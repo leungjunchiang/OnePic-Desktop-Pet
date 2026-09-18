@@ -17,6 +17,7 @@ def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:
             self._style = 0
             self.hides_on_deactivate = None
             self.becomes_key_only = None
+            self.order_front_regardless_calls = 0
 
         def level(self):
             return self._level
@@ -41,6 +42,9 @@ def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:
 
         def setBecomesKeyOnlyIfNeeded_(self, value):
             self.becomes_key_only = bool(value)
+
+        def orderFrontRegardless_(self):
+            self.order_front_regardless_calls += 1
 
     native = FakeWindow()
     fake_objc = SimpleNamespace(
@@ -72,6 +76,71 @@ def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:
     assert native._behavior == 128
     assert native.hides_on_deactivate is False
     assert native.becomes_key_only is True
+
+
+def test_macos_watchdog_reasserts_floating_order_without_focus(monkeypatch) -> None:
+    class FakeWindow:
+        def __init__(self) -> None:
+            self._level = 3
+            self._behavior = 128
+            self._style = 128
+            self.order_front_regardless_calls = 0
+
+        def level(self):
+            return self._level
+
+        def setLevel_(self, value):
+            self._level = int(value)
+
+        def collectionBehavior(self):
+            return self._behavior
+
+        def setCollectionBehavior_(self, value):
+            self._behavior = int(value)
+
+        def styleMask(self):
+            return self._style
+
+        def setStyleMask_(self, value):
+            self._style = int(value)
+
+        def setHidesOnDeactivate_(self, _value):
+            pass
+
+        def setBecomesKeyOnlyIfNeeded_(self, _value):
+            pass
+
+        def orderFrontRegardless_(self):
+            self.order_front_regardless_calls += 1
+
+    native = FakeWindow()
+    monkeypatch.setattr(native_window_policy.sys, "platform", "darwin")
+    monkeypatch.setattr(native_window_policy, "_is_headless_qt_backend", lambda: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "objc",
+        SimpleNamespace(objc_object=lambda **_kwargs: SimpleNamespace(window=lambda: native)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "AppKit",
+        SimpleNamespace(
+            NSFloatingWindowLevel=3,
+            NSNormalWindowLevel=0,
+            NSWindowCollectionBehaviorFullScreenNone=128,
+            NSWindowStyleMaskNonactivatingPanel=128,
+        ),
+    )
+
+    result = native_window_policy.apply_macos_window_policy(
+        SimpleNamespace(winId=lambda: 321),
+        topmost=True,
+        qt_stays_on_top=True,
+        force_topmost=True,
+    )
+
+    assert result["action"] == "reassert_topmost"
+    assert native.order_front_regardless_calls == 1
 
 
 def test_macos_policy_skips_cocoa_bridge_for_headless_qt(monkeypatch) -> None:
