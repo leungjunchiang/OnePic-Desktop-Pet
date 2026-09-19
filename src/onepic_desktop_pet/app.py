@@ -504,7 +504,14 @@ class DesktopPetApplication(QObject):
             or getattr(self.settings, "today_note_display_mode", "always") == "always"
             or bool(getattr(self.settings, "today_note_autoshow", False))
         )
-        if note_style != "hidden" and should_show_paper:
+        compact_surface_enabled = bool(
+            getattr(self.settings, "compact_todos_visible", True)
+        )
+        if (
+            note_style != "hidden"
+            and should_show_paper
+            and (note_style != "compact" or compact_surface_enabled)
+        ):
             # Startup UI must never steal the user's current editor/browser
             # focus.  The compact panel hides itself when the shared Todo
             # projection is empty; explicit user actions still open the

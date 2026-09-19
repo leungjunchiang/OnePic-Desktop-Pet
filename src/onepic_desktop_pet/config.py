@@ -150,6 +150,9 @@ class PetSettings:
     # is empty, so a restart cannot silently hide existing work.
     today_note_display_mode: str = "always"
     today_note_mode: str = "compact"
+    # This is a device-local surface preference, not Todo data.  A user may
+    # keep the same synced Todos visible on one computer and hidden on another.
+    compact_todos_visible: bool = True
     today_note_defaults_version: int = 3
     today_note_always_on_top: bool = False
     today_note_autoshow: bool = False
@@ -337,6 +340,9 @@ def _validated(data: dict[str, Any]) -> PetSettings:
         settings.today_note_display_mode = "always"
     if settings.today_note_mode not in {"detailed", "compact", "hidden"}:
         settings.today_note_mode = "compact"
+    settings.compact_todos_visible = bool(
+        getattr(settings, "compact_todos_visible", True)
+    )
     settings.today_note_defaults_version = max(3, int(settings.today_note_defaults_version))
     settings.today_note_always_on_top = bool(settings.today_note_always_on_top)
     settings.today_note_autoshow = bool(settings.today_note_autoshow)
@@ -432,6 +438,7 @@ def load_settings(
                 "equipped_outfit",
                 "today_note_display_mode",
                 "today_note_mode",
+                "compact_todos_visible",
                 "today_note_defaults_version",
                 "today_note_always_on_top",
                 "today_note_autoshow",
@@ -561,6 +568,7 @@ def save_settings(settings: PetSettings, path: Path | None = None) -> Path:
         "equipped_outfit": settings.equipped_outfit,
         "today_note_display_mode": settings.today_note_display_mode,
         "today_note_mode": settings.today_note_mode,
+        "compact_todos_visible": bool(settings.compact_todos_visible),
         "today_note_defaults_version": settings.today_note_defaults_version,
         "today_note_always_on_top": settings.today_note_always_on_top,
         "today_note_autoshow": settings.today_note_autoshow,

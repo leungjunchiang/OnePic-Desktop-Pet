@@ -1411,8 +1411,8 @@ def test_compact_todo_panel_reappears_after_todo_center_write(tmp_path) -> None:
     app.processEvents()
 
 
-def test_pending_todos_restore_a_hidden_compact_panel_automatically(tmp_path) -> None:
-    """An unfinished Todo must remain visible without requiring a manual restore."""
+def test_pending_todos_do_not_restore_a_locally_hidden_compact_panel(monkeypatch, tmp_path) -> None:
+    """A Todo refresh must not override this computer's hidden preference."""
 
     app = QApplication.instance() or QApplication([])
     memory = TimeMemory(tmp_path, persist=False)
@@ -1422,6 +1422,7 @@ def test_pending_todos_restore_a_hidden_compact_panel_automatically(tmp_path) ->
         work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
     )
     window.time_memory = memory
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
     window.show()
     app.processEvents()
 
@@ -1435,15 +1436,17 @@ def test_pending_todos_restore_a_hidden_compact_panel_automatically(tmp_path) ->
 
     window._refresh_todo_surfaces()
     app.processEvents()
-    assert panel.isVisible()
+    assert not panel.isVisible()
     assert set(panel.rows) == set(panel.visible_task_ids)
+
+    assert window.settings.compact_todos_visible is False
 
     window.close()
     window.deleteLater()
     app.processEvents()
 
 
-def test_show_todos_command_restores_an_existing_hidden_panel(tmp_path) -> None:
+def test_show_todos_command_restores_an_existing_hidden_panel(monkeypatch, tmp_path) -> None:
     """Manual “显示待办” must restore tasks already present in the panel."""
 
     app = QApplication.instance() or QApplication([])
@@ -1454,6 +1457,7 @@ def test_show_todos_command_restores_an_existing_hidden_panel(tmp_path) -> None:
         work_timer=WorkTimerModel(path=tmp_path / "work_timer.json"),
     )
     window.time_memory = memory
+    monkeypatch.setattr("onepic_desktop_pet.window.save_settings", lambda _settings: None)
     window.show()
     app.processEvents()
 
@@ -1469,6 +1473,7 @@ def test_show_todos_command_restores_an_existing_hidden_panel(tmp_path) -> None:
     app.processEvents()
     assert panel.isVisible()
     assert set(panel.rows) == set(panel.visible_task_ids)
+    assert window.settings.compact_todos_visible is True
 
     window.close()
     window.deleteLater()

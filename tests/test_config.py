@@ -109,6 +109,18 @@ def test_today_note_mode_supports_three_persistent_choices(tmp_path) -> None:
     assert load_settings(override_path=invalid).today_note_mode == "compact"
 
 
+def test_compact_todo_visibility_is_a_local_persisted_preference(tmp_path) -> None:
+    """Two installations may choose different Todo surface visibility."""
+
+    first = PetSettings(compact_todos_visible=False)
+    second = PetSettings(compact_todos_visible=True)
+    first_path = save_settings(first, tmp_path / "computer-a.json")
+    second_path = save_settings(second, tmp_path / "computer-b.json")
+
+    assert load_settings(override_path=first_path).compact_todos_visible is False
+    assert load_settings(override_path=second_path).compact_todos_visible is True
+
+
 def test_legacy_default_todo_surface_migrates_to_compact(tmp_path) -> None:
     legacy = tmp_path / "legacy-settings.json"
     legacy.write_text(

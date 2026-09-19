@@ -589,7 +589,11 @@ class PetWindow(QWidget):
         self._today_note_window: TodayNoteWindow | None = None
         self._compact_todo_panel: CompactTodoPanel | None = None
         self._restore_compact_todos_after_show = False
-        self._compact_todos_manually_hidden = False
+        # Todo facts may synchronize across devices; the compact surface is
+        # intentionally local to this machine and is restored from settings.
+        self._compact_todos_manually_hidden = not bool(
+            getattr(self.settings, "compact_todos_visible", True)
+        )
         self._time_memory_window: TimeMemoryWindow | None = None
         self._todo_center_window: TodoCenterWindow | None = None
         self._economy_dialog: EconomyDialog | None = None
@@ -4269,7 +4273,9 @@ class PetWindow(QWidget):
         """Open the configured surface without stealing focus when passive."""
 
         if str(getattr(self.settings, "today_note_mode", "compact")) == "compact":
-            self.show_compact_todos()
+            # Startup is passive and must respect this device's hidden choice;
+            # a direct user request is the same as the menu's “显示待办”.
+            self.show_compact_todos(manual=not passive)
         else:
             self.show_sticky_note(passive=passive)
 
@@ -4316,13 +4322,30 @@ class PetWindow(QWidget):
         self._today_note_window.activateWindow()
         self._position_sticky_note()
 
+    def _compact_todos_are_locally_visible(self) -> bool:
+        """Return this computer's persisted compact-Todo surface preference.
+
+        Todo records live in ``TimeMemory`` and may sync independently.  This
+        flag intentionally stays in local ``PetSettings`` so another device's
+        Todo write never decides whether this desktop gets an accessory window.
+        """
+
+        return bool(getattr(self.settings, "compact_todos_visible", True))
+
     def show_compact_todos(self, *, manual: bool = False) -> None:
         """Show the frameless Todo strip directly below the pet."""
 
+        if not manual and not self._compact_todos_are_locally_visible():
+            lifecycle_log("todo.show.suppressed", self, reason="local_visibility_hidden")
+            return
         if manual:
+            changed = not self._compact_todos_are_locally_visible()
+            self.settings.compact_todos_visible = True
             self._compact_todos_manually_hidden = False
             if str(getattr(self.settings, "today_note_mode", "compact")) == "hidden":
                 self.settings.today_note_mode = "compact"
+                changed = True
+            if changed:
                 save_settings(self.settings)
         self._record_user_interaction()
         if self._today_note_window is not None:
@@ -4698,6 +4721,10 @@ class PetWindow(QWidget):
     def hide_compact_todos(self) -> None:
         self._restore_compact_todos_after_show = False
         self._compact_todos_manually_hidden = True
+        self.settings.compact_todos_visible = False
+        # This is written only to this installation's settings.json.  It is
+        # never part of Todo push/pull payloads or social profile sync.
+        save_settings(self.settings)
         if self._compact_todo_panel is not None:
             # Hiding the accessory is a window-layer action.  Do not switch
             # the panel back to an unread-only projection: an unfinished item
@@ -4738,6 +4765,7 @@ class PetWindow(QWidget):
             if (
                 compact_mode
                 and display_mode != "hidden"
+                and self._compact_todos_are_locally_visible()
                 and compact_todo_candidates(self.time_memory)
             ):
                 self.show_compact_todos()
@@ -4752,14 +4780,14 @@ class PetWindow(QWidget):
                     self._compact_todo_panel = None
                 return
             if has_visible_tasks:
-                # Pending Todos are authoritative: if any unfinished item
-                # remains, a hidden compact panel must recover automatically.
-                # Manual hiding is only effective while there are no pending
-                # items; this prevents the panel from silently disappearing
-                # while the user still has work to do.
+                # Content refresh must never override this device's hidden
+                # preference.  A synced Todo still exists locally and remains
+                # available in Todo Center; only the compact accessory stays
+                # hidden until the user explicitly chooses “显示待办”.
                 if (
                     compact_mode
                     and display_mode != "hidden"
+                    and self._compact_todos_are_locally_visible()
                     and not panel.isVisible()
                 ):
                     self.show_compact_todos()
@@ -4795,6 +4823,7 @@ class PetWindow(QWidget):
                 self._compact_todo_panel is None
                 and str(getattr(self.settings, "today_note_mode", "compact")) == "compact"
                 and str(getattr(self.settings, "today_note_display_mode", "always")) != "hidden"
+                and self._compact_todos_are_locally_visible()
             ):
                 self.show_compact_todos()
 
