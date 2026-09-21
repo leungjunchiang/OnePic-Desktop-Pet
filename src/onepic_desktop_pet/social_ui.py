@@ -1035,12 +1035,22 @@ class SocialHeartbeatWorker:
         self._shutdown_payload: dict[str, Any] | None = None
         self._send_now = False
         self._thread: threading.Thread | None = None
+        # The GUI owns recovery decisions, but the actual transport lives on
+        # this plain Python thread. Keep a tiny health record so the GUI can
+        # distinguish an alive worker from a recent server ACK.
+        self._started_at = 0.0
+        self._last_attempt_at = 0.0
+        self._last_success_at = 0.0
+        self._last_failure_at = 0.0
+        self._consecutive_failures = 0
+        self._last_error_kind = ""
 
     def start(self) -> None:
         with self._condition:
             if self._thread is not None and self._thread.is_alive():
                 return
             self._stopped = False
+            self._started_at = time.monotonic()
             self._thread = threading.Thread(
                 target=self.run,
                 name="lili-social-heartbeat",
@@ -1058,6 +1068,21 @@ class SocialHeartbeatWorker:
             return True
         thread.join(max(0.0, float(timeout_ms)) / 1000.0)
         return not thread.is_alive()
+
+    def health_snapshot(self) -> dict[str, float | int | str | bool]:
+        """Return liveness-transport health without touching presence data."""
+
+        with self._condition:
+            thread = self._thread
+            return {
+                "running": bool(thread is not None and thread.is_alive()),
+                "started_at": self._started_at,
+                "last_attempt_at": self._last_attempt_at,
+                "last_success_at": self._last_success_at,
+                "last_failure_at": self._last_failure_at,
+                "consecutive_failures": self._consecutive_failures,
+                "last_error_kind": self._last_error_kind,
+            }
 
     def update_presence(self, presence: dict[str, Any], *, immediate: bool = False) -> None:
         raw = dict(presence)
@@ -1136,8 +1161,14 @@ class SocialHeartbeatWorker:
                 # can therefore never reuse or reorder a presence version.
                 payload["sequence"] = _next_presence_sequence(user_id)
             heartbeat_started = time.monotonic()
+            with self._condition:
+                self._last_attempt_at = heartbeat_started
             try:
                 self.client.heartbeat(**payload)
+                with self._condition:
+                    self._last_success_at = time.monotonic()
+                    self._consecutive_failures = 0
+                    self._last_error_kind = ""
                 LOGGER.debug("social heartbeat sent independently")
                 lifecycle_log(
                     "social.heartbeat.sent",
@@ -1148,6 +1179,10 @@ class SocialHeartbeatWorker:
                     latency_ms=round((time.monotonic() - heartbeat_started) * 1000, 1),
                 )
             except (SocialError, TypeError) as exc:
+                with self._condition:
+                    self._last_failure_at = time.monotonic()
+                    self._consecutive_failures += 1
+                    self._last_error_kind = str(getattr(exc, "kind", "transport") or "transport")
                 # Do not terminate the worker for a transient outage.  The
                 # next payload retries naturally, while dashboard polling can
                 # continue to use its own fallback route.
@@ -1162,6 +1197,10 @@ class SocialHeartbeatWorker:
                     error_kind=getattr(exc, "kind", "transport"),
                 )
             except Exception:
+                with self._condition:
+                    self._last_failure_at = time.monotonic()
+                    self._consecutive_failures += 1
+                    self._last_error_kind = "unexpected"
                 # A transport adapter must not be able to kill the dedicated
                 # liveness loop. Keep the next latest payload eligible for a
                 # retry and leave the diagnostic traceback in the log.

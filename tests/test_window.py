@@ -43,6 +43,8 @@ from onepic_desktop_pet.window import (
     FOCUS_LIVE_DISPLAY_CACHE_TTL_SECONDS,
     PetWindow,
     SOCIAL_DASHBOARD_INTERVAL_MS,
+    SOCIAL_HEARTBEAT_STALE_SECONDS,
+    SOCIAL_HEARTBEAT_WATCHDOG_INTERVAL_MS,
     SOCIAL_LEADERBOARD_REFRESH_SECONDS,
     SOCIAL_REACTION_REFRESH_SECONDS,
     SOCIAL_SYNC_TICK_INTERVAL_MS,
@@ -59,8 +61,57 @@ from onepic_desktop_pet.focus_segments import FocusSegment
 def test_phase1_social_read_gates_keep_heartbeat_separate() -> None:
     assert SOCIAL_DASHBOARD_INTERVAL_MS == 90_000
     assert SOCIAL_SYNC_TICK_INTERVAL_MS == 30_000
+    assert SOCIAL_HEARTBEAT_WATCHDOG_INTERVAL_MS == 15_000
+    assert SOCIAL_HEARTBEAT_STALE_SECONDS == 60.0
     assert SOCIAL_LEADERBOARD_REFRESH_SECONDS == 300.0
     assert SOCIAL_REACTION_REFRESH_SECONDS == 60.0
+
+
+def test_stale_heartbeat_watchdog_rebuilds_presence_and_recovers_auth(monkeypatch) -> None:
+    """A stale ACK must self-heal even while the pet is merely resting."""
+
+    app, window = _create_window()
+
+    class Worker:
+        def isRunning(self) -> bool:
+            return True
+
+        def stop(self, _final_presence=None) -> None:
+            return None
+
+        def health_snapshot(self) -> dict[str, float | int | str]:
+            return {
+                "started_at": time.monotonic() - 90.0,
+                "last_success_at": time.monotonic() - 90.0,
+                "consecutive_failures": 2,
+                "last_error_kind": "auth_refresh",
+            }
+
+    scheduled: list[bool] = []
+    reasons: list[str] = []
+    window._social_heartbeat_thread = Worker()  # type: ignore[assignment]
+    monkeypatch.delenv("ONEPIC_USE_DEMO_ASSETS", raising=False)
+    monkeypatch.setattr(
+        type(window.social_client), "signed_in", property(lambda _client: True)
+    )
+    monkeypatch.setattr(
+        window,
+        "_schedule_social_tick",
+        lambda *, immediate=False: scheduled.append(bool(immediate)),
+    )
+    monkeypatch.setattr(
+        window,
+        "_start_social_auth_recovery",
+        lambda *, reason="": reasons.append(str(reason)),
+    )
+
+    window._social_heartbeat_watchdog_tick()
+
+    assert scheduled == [True]
+    assert reasons == ["heartbeat_stale"]
+    window.close()
+    window.deleteLater()
+    app.processEvents()
 
 
 def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:

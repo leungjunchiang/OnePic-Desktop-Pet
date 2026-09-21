@@ -2204,11 +2204,15 @@ class HttpSocialBackend:
         if managed_session is not None:
             self.session = managed_session
         if not self.session:
-            LOGGER.info(
-                "social heartbeat skipped authenticated=%s reason=no_session",
-                self.signed_in,
+            # A skipped heartbeat is not a successful heartbeat. Returning
+            # silently made the liveness worker report a false ACK and hid a
+            # recoverable retained-session failure from its watchdog.
+            raise SocialError(
+                "登录会话暂时不可用，正在恢复在线状态。",
+                kind="auth_refresh",
+                error_code="no_session",
+                retryable=True,
             )
-            return
         # The independent heartbeat worker includes the account id in its
         # transport-neutral liveness tuple.  Keep that field through the
         # HTTP boundary and reject an accidental cross-account payload rather
@@ -3108,7 +3112,12 @@ class LegacyDirectSocialClient:
         if self._http_backend is not None:
             return self._http_backend.heartbeat(user_id=user_id, working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence, input_idle_seconds=input_idle_seconds)
         if not self.session:
-            return
+            raise SocialError(
+                "登录会话暂时不可用，正在恢复在线状态。",
+                kind="auth_refresh",
+                error_code="no_session",
+                retryable=True,
+            )
         session_user_id = str(self.session.user_id)
         if user_id and str(user_id).strip() != session_user_id:
             raise SocialError("登录账号已切换，请稍后重试。", kind="auth", error_code="account_mismatch")

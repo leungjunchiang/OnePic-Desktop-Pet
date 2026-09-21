@@ -360,6 +360,11 @@ SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
 # independent presence/personal-state paths. Dashboard reads inside it are
 # admitted by the 90-second client coordinator above, not by this timer.
 SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
+# The worker writes a lightweight heartbeat every 15 seconds. This GUI-side
+# check only verifies that writes are being ACKed; it never changes the
+# server's online threshold or a user's rest/focus state.
+SOCIAL_HEARTBEAT_WATCHDOG_INTERVAL_MS = 15_000
+SOCIAL_HEARTBEAT_STALE_SECONDS = 60.0
 SOCIAL_REACTION_REFRESH_SECONDS = 60.0
 SOCIAL_LEADERBOARD_REFRESH_SECONDS = 300.0
 FOCUS_HISTORY_RECOVERY_CHECK_SECONDS = 15 * 60.0
@@ -1223,6 +1228,16 @@ class PetWindow(QWidget):
         self.social_sync_timer = QTimer(self)
         self.social_sync_timer.setSingleShot(True)
         self.social_sync_timer.timeout.connect(self._social_tick)
+        self.social_heartbeat_watchdog_timer = QTimer(self)
+        self.social_heartbeat_watchdog_timer.setInterval(
+            SOCIAL_HEARTBEAT_WATCHDOG_INTERVAL_MS
+        )
+        self.social_heartbeat_watchdog_timer.timeout.connect(
+            self._social_heartbeat_watchdog_tick
+        )
+        # Keep liveness independent from the desktop UI state: a resting,
+        # hidden, minimized, or tray-only pet is still online.
+        self.social_heartbeat_watchdog_timer.start()
         if self.social_client.signed_in:
             QTimer.singleShot(2500, self._social_tick)
 
@@ -2596,6 +2611,9 @@ class PetWindow(QWidget):
         self._focus_activity_bridge.stop()
         self.fullscreen_poll_timer.stop()
         self.topmost_timer.stop()
+        self.social_timer.stop()
+        self.social_sync_timer.stop()
+        self.social_heartbeat_watchdog_timer.stop()
         self.chat_manager.shutdown()
         if self._chat_history_dialog is not None:
             self._chat_history_dialog.close()
@@ -7677,7 +7695,9 @@ class PetWindow(QWidget):
         with self._performance.measure("social.tick_prepare"):
             self._social_tick_impl()
 
-    def _start_social_auth_recovery(self) -> None:
+    def _start_social_auth_recovery(
+        self, *, reason: str = "stored_session_not_signed_in"
+    ) -> None:
         """Retry a locally retained session without blocking the GUI thread."""
 
         if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1":
@@ -7697,7 +7717,7 @@ class PetWindow(QWidget):
         lifecycle_log(
             "social.auth_recovery.start",
             self,
-            reason="stored_session_not_signed_in",
+            reason=reason,
         )
         thread = SocialAuthRecoveryThread(self.social_client, self)
         self._social_auth_recovery_thread = thread
@@ -7744,6 +7764,51 @@ class PetWindow(QWidget):
         if self._social_auth_recovery_thread is thread:
             self._social_auth_recovery_thread = None
         thread.deleteLater()
+
+    @_guard_qt_callback
+    def _social_heartbeat_watchdog_tick(self) -> None:
+        """Recover a stale heartbeat channel without relaxing peer freshness."""
+
+        if (
+            self._close_in_progress
+            or os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1"
+        ):
+            return
+        heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
+        if heartbeat_thread is None:
+            return
+        if not self.social_client.signed_in:
+            self._start_social_auth_recovery(reason="heartbeat_auth_unavailable")
+            return
+        if not heartbeat_thread.isRunning():
+            lifecycle_log("social.heartbeat.worker_restart", self)
+            heartbeat_thread.start()
+            self._schedule_social_tick(immediate=True)
+            return
+        health_reader = getattr(heartbeat_thread, "health_snapshot", None)
+        health = health_reader() if callable(health_reader) else {}
+        if not isinstance(health, dict):
+            return
+        now = time.monotonic()
+        last_success_at = float(health.get("last_success_at") or 0.0)
+        started_at = float(health.get("started_at") or 0.0)
+        reference_at = last_success_at or started_at
+        if not reference_at or now - reference_at < SOCIAL_HEARTBEAT_STALE_SECONDS:
+            return
+        lifecycle_log(
+            "social.heartbeat.stale",
+            self,
+            stale_seconds=round(now - reference_at, 1),
+            consecutive_failures=int(health.get("consecutive_failures") or 0),
+            error_kind=str(health.get("last_error_kind") or ""),
+        )
+        # Rebuild the current rest/focus payload and ask the existing worker
+        # for an immediate send. This is safe while dashboard work is busy.
+        self._schedule_social_tick(immediate=True)
+        # A retained refresh credential can outlive a broken in-memory access
+        # session. The established one-minute auth backoff prevents token
+        # hammering while restoring it off the GUI thread.
+        self._start_social_auth_recovery(reason="heartbeat_stale")
 
     def _build_social_personal_state(self) -> dict[str, object]:
         """Build the compatibility sync payload outside the GUI thread.

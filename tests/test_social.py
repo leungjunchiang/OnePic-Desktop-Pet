@@ -68,6 +68,24 @@ def test_heartbeat_payload_drops_local_only_focus_fields() -> None:
     }
 
 
+def test_heartbeat_without_session_is_a_retryable_failure() -> None:
+    """A skipped transport write must not be mistaken for a heartbeat ACK."""
+
+    backend = HttpSocialBackend(
+        "https://supabase.example.test",
+        client_key="sb_publishable_test",
+        persist_tokens=False,
+        transport="direct",
+    )
+
+    with pytest.raises(SocialError) as raised:
+        backend.heartbeat(working=False, session_active=False)
+
+    assert raised.value.kind == "auth_refresh"
+    assert raised.value.error_code == "no_session"
+    assert raised.value.retryable is True
+
+
 def test_dashboard_core_shape_requires_identity_and_relationship_lists() -> None:
     assert _dashboard_payload_has_core_shape(
         {"me": {"user_id": "user-1"}, "buddies": [], "room_people": []}

@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
 
@@ -75,6 +76,45 @@ def test_heartbeat_worker_sends_inactive_presence_without_waiting_for_focus_ack(
     )
     assert worker._shutdown_payload["working"] is False
     assert worker._shutdown_payload["session_active"] is False
+
+
+def test_heartbeat_worker_records_a_server_ack_for_resting_presence(monkeypatch) -> None:
+    """Rest is online presence, not a reason to stop the liveness loop."""
+
+    class Client:
+        def __init__(self) -> None:
+            self.sent = threading.Event()
+            self.payloads: list[dict] = []
+
+        def heartbeat(self, **payload) -> None:
+            self.payloads.append(dict(payload))
+            self.sent.set()
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._next_presence_sequence",
+        lambda _user_id: 41,
+    )
+    client = Client()
+    worker = SocialHeartbeatWorker(client)
+    worker.start()
+    try:
+        worker.update_presence(
+            {
+                "user_id": "account-resting",
+                "working": False,
+                "session_active": False,
+            },
+            immediate=True,
+        )
+        assert client.sent.wait(1.0)
+        assert client.payloads[0]["working"] is False
+        assert client.payloads[0]["session_active"] is False
+        health = worker.health_snapshot()
+        assert health["last_success_at"] > 0
+        assert health["consecutive_failures"] == 0
+    finally:
+        worker.stop()
+        assert worker.wait(1_000)
 
 
 def test_focus_upload_ack_requires_every_requested_segment_id() -> None:
