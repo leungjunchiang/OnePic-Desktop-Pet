@@ -64,6 +64,17 @@ FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL = timedelta(hours=24)
 # dashboard tick.  Missing facts are still repaired through the normal
 # targeted segment-id backfill once an audit succeeds.
 FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 24 * 60 * 60
+# A one-time, account-local repair for clients that advanced a delta cursor
+# while an older release still retained only 500 sealed facts. This is not a
+# replacement for the ordinary delta stream: it only reads a bounded recent
+# window, page by page, and never changes the delta cursor or server facts.
+FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION = 1
+FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS = 60
+FOCUS_SEGMENT_RECENT_RECONCILIATION_PAGE_SIZE = 500
+# A busy account can legitimately produce more than 500 sealed intervals in
+# two months. Retaining 2,000 keeps the bounded recovery useful without
+# turning the local account ledger into an unbounded history archive.
+FOCUS_SEGMENT_LOCAL_RECORD_LIMIT = 2_000
 # A malformed/partial acknowledgement must remain retryable, but retrying a
 # bounded batch on every 30-second social tick can create an egress storm when
 # a relay is unhealthy.  The normal delta read continues during this cooldown;
@@ -754,6 +765,79 @@ class FocusAnalyticsStore:
             return "recovery_backfill"
         return "delta"
 
+    def focus_segment_recent_reconciliation_request(self) -> dict[str, Any] | None:
+        """Return one bounded page request for a post-upgrade ledger repair.
+
+        The request is deliberately independent of the normal composite
+        delta cursor. A corrupt or advanced delta cursor must not prevent a
+        report from recovering recent canonical facts, and a recovery page
+        must never acknowledge or move that normal cursor.
+        """
+
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        if int(state.get("focus_recent_reconciliation_version") or 0) >= (
+            FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION
+        ):
+            return None
+        cursor = str(
+            state.get("focus_recent_reconciliation_cursor") or ""
+        ).strip()[:320]
+        return {
+            "p_cursor": cursor or None,
+            "p_days": FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS,
+            "p_limit": FOCUS_SEGMENT_RECENT_RECONCILIATION_PAGE_SIZE,
+        }
+
+    def apply_focus_segment_recent_reconciliation(
+        self, payload: Any
+    ) -> tuple[bool, bool, int, bool]:
+        """Merge one validated recent-ledger page and persist only its cursor.
+
+        Returns ``(success, changed, recovered_count, has_more)``. A bad
+        response leaves the repair cursor untouched, so the same bounded page
+        remains retryable. No server state and no ordinary delta state is
+        written here.
+        """
+
+        if not isinstance(payload, dict) or payload.get("_error"):
+            return False, False, 0, False
+        entries = payload.get("segments")
+        has_more = payload.get("has_more")
+        if not isinstance(entries, list) or not isinstance(has_more, bool):
+            return False, False, 0, False
+        next_cursor = str(payload.get("next_cursor") or "").strip()[:320]
+        if has_more and not next_cursor:
+            return False, False, 0, False
+        success, changed, recovered_count = self.merge_remote_segments_checked(
+            {"segments": entries}
+        )
+        if not success:
+            return False, False, 0, False
+        previous = copy.deepcopy(self._state)
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            self._state = previous
+            return False, False, 0, False
+        if has_more:
+            state["focus_recent_reconciliation_cursor"] = next_cursor
+        else:
+            state["focus_recent_reconciliation_version"] = (
+                FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION
+            )
+            state["focus_recent_reconciliation_completed_at"] = (
+                self.current_time().isoformat()
+            )
+            state.pop("focus_recent_reconciliation_cursor", None)
+        try:
+            self._save()
+        except Exception:
+            self._state = previous
+            raise
+        return True, changed, recovered_count, has_more
+
     def _ensure_focus_segment_upload_state(self) -> bool:
         """Detect acknowledgements written before the production grant fix.
 
@@ -1265,12 +1349,12 @@ class FocusAnalyticsStore:
                 merged_count += 1
             if row_changed:
                 affected_dates.update(self._segment_dates(segment))
-        if len(records) > 500:
-            for removed in records[:-500]:
+        if len(records) > FOCUS_SEGMENT_LOCAL_RECORD_LIMIT:
+            for removed in records[:-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT]:
                 removed_segment = segment_from_record(removed, 0)
                 if removed_segment is not None:
                     affected_dates.update(self._segment_dates(removed_segment))
-            del records[:-500]
+            del records[:-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT]
             changed = True
         if changed:
             # Only dates touched by the inserted/replaced fact are rebuilt.
@@ -1422,8 +1506,12 @@ class FocusAnalyticsStore:
             records = self._state.setdefault("records", [])
             records.append(record)
             self._focus_segment_source_by_id[value.segment_id] = str(source or "canonical_focus_store")[:80]
-            removed_records = records[:-500] if len(records) > 500 else []
-            self._state["records"] = records[-500:]
+            removed_records = (
+                records[:-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT]
+                if len(records) > FOCUS_SEGMENT_LOCAL_RECORD_LIMIT
+                else []
+            )
+            self._state["records"] = records[-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT:]
             affected_record_dates = self._segment_dates(value)
             for removed in removed_records:
                 removed_segment = segment_from_record(removed, 0)

@@ -300,6 +300,55 @@ def test_social_sync_runs_compact_integrity_audit_without_full_history() -> None
     )[0] is False
 
 
+def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> None:
+    class Session:
+        user_id = "account-a"
+
+    class Client(SignedInClient):
+        session = Session()
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def rpc(self, name, body):
+            self.calls.append((name, dict(body)))
+            if name == "lili_sync_focus_segments_delta_v2":
+                return {
+                    "segments": [], "next_cursor": body.get("p_since"),
+                    "accepted_segment_ids": [],
+                }
+            if name == "lili_focus_recent_segments_v1":
+                return {
+                    "segments": [], "next_cursor": None, "has_more": False,
+                }
+            return {}
+
+    client = Client()
+    completed: list[dict] = []
+    thread = SocialSyncThread(
+        client,
+        {
+            "personal_state": {
+                "focus_segments": [],
+                "focus_segments_sync_cursor": "delta-before",
+                "focus_history": [],
+                "focus_segment_recent_reconciliation_request": {
+                    "p_cursor": None, "p_days": 60, "p_limit": 500,
+                },
+            },
+        },
+    )
+    thread.completed.connect(completed.append)
+    thread.run()
+
+    assert ("lili_focus_recent_segments_v1", {
+        "p_cursor": None, "p_days": 60, "p_limit": 500,
+    }) in client.calls
+    assert completed[-1]["_focus_segment_recent_reconciliation"] == {
+        "segments": [], "next_cursor": None, "has_more": False,
+    }
+
+
 def _upload_segment_row(segment_id: str, *, end_at: str = "2026-09-08T09:00:00+08:00"):
     return {
         "segment_id": segment_id,

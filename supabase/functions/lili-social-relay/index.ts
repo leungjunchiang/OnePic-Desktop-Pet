@@ -37,6 +37,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_sync_focus_segments_delta",
   "lili_sync_focus_segments_delta_v2",
   "lili_focus_segment_integrity_v1",
+  "lili_focus_recent_segments_v1",
   "lili_focus_live_projection",
   "lili_focus_weekly_leaderboard",
   "lili_update_presence_context",

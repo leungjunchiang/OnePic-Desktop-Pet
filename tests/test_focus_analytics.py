@@ -8,10 +8,61 @@ import pytest
 from onepic_desktop_pet import local_data
 from onepic_desktop_pet.focus_analytics import (
     AccountFocusStore,
+    FOCUS_SEGMENT_LOCAL_RECORD_LIMIT,
     FocusAnalyticsStore,
     FocusQualityTracker,
     score_focus_quality,
 )
+
+
+def test_recent_reconciliation_is_paged_and_does_not_touch_delta_cursor(tmp_path) -> None:
+    now = datetime(2026, 9, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    store.set_focus_segments_sync_cursor('{"updated_at":"2026-09-20T00:00:00+00:00","segment_id":"delta"}')
+
+    request = store.focus_segment_recent_reconciliation_request()
+    assert request == {"p_cursor": None, "p_days": 60, "p_limit": 500}
+    ok, changed, recovered, has_more = store.apply_focus_segment_recent_reconciliation({
+        "segments": [{
+            "segment_id": "remote-1",
+            "session_id": "remote-session",
+            "device_id": "mac",
+            "start_at": "2026-09-14T09:00:00+08:00",
+            "end_at": "2026-09-14T10:00:00+08:00",
+        }],
+        "next_cursor": '{"start_at":"2026-09-14T01:00:00+00:00","segment_id":"remote-1"}',
+        "has_more": True,
+    })
+    assert (ok, changed, recovered, has_more) == (True, True, 1, True)
+    assert store.focus_segments_sync_cursor() == '{"updated_at":"2026-09-20T00:00:00+00:00","segment_id":"delta"}'
+    assert store.focus_segment_recent_reconciliation_request()["p_cursor"].endswith('"remote-1"}')
+
+    ok, changed, recovered, has_more = store.apply_focus_segment_recent_reconciliation({
+        "segments": [], "next_cursor": None, "has_more": False,
+    })
+    assert (ok, changed, recovered, has_more) == (True, False, 0, False)
+    assert store.focus_segment_recent_reconciliation_request() is None
+
+
+def test_recent_reconciliation_can_retain_more_than_legacy_500_rows(tmp_path) -> None:
+    now = datetime(2026, 9, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
+    rows = [
+        {
+            "segment_id": f"remote-{index}",
+            "session_id": f"session-{index}",
+            "device_id": "mac",
+            "start_at": (now - timedelta(minutes=index + 1)).isoformat(),
+            "end_at": (now - timedelta(minutes=index)).isoformat(),
+        }
+        for index in range(501)
+    ]
+    ok, changed, recovered, has_more = store.apply_focus_segment_recent_reconciliation({
+        "segments": rows, "next_cursor": None, "has_more": False,
+    })
+    assert (ok, changed, recovered, has_more) == (True, True, 501, False)
+    assert len(store.focus_segments()) == 501
+    assert FOCUS_SEGMENT_LOCAL_RECORD_LIMIT >= 2_000
 
 
 def test_focus_quality_explains_switches_and_away_time() -> None:

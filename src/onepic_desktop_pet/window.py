@@ -799,6 +799,7 @@ class PetWindow(QWidget):
         self._social_personal_sync_due = True
         self._last_social_personal_sync_at = 0.0
         self._last_focus_history_recovery_check_at = 0.0
+        self._last_social_heartbeat_worker_restart_at = 0.0
         self._last_social_leaderboard_at = 0.0
         self._last_social_reaction_state_at = 0.0
         self._social_presence_context_signature: tuple[str, str, str, str] | None = None
@@ -7869,6 +7870,52 @@ class PetWindow(QWidget):
             worker_running=bool(getattr(heartbeat_thread, "isRunning", lambda: False)()),
         )
 
+    def _replace_stale_social_heartbeat_worker(self) -> bool:
+        """Replace a live-but-stuck heartbeat transport without changing state.
+
+        A Python worker can remain alive while a platform socket is wedged.
+        Merely scheduling another dashboard request leaves that worker as the
+        only presence writer. Retire it and start a fresh, current-state
+        worker instead. The old daemon is stopped cooperatively; if its
+        bounded request returns later, its older sequence cannot overwrite
+        the new worker's later presence sequence on the server.
+        """
+
+        current = getattr(self, "_social_heartbeat_thread", None)
+        pending_reader = getattr(current, "pending_presence", None)
+        stopper = getattr(current, "stop", None)
+        if not callable(pending_reader) or not callable(stopper):
+            return False
+        now = time.monotonic()
+        if (
+            now - float(getattr(self, "_last_social_heartbeat_worker_restart_at", 0.0) or 0.0)
+            < SOCIAL_HEARTBEAT_STALE_SECONDS
+        ):
+            return False
+        pending = pending_reader()
+        if not isinstance(pending, dict):
+            pending = {}
+        stopper()
+        user_id = self._heartbeat_identity_for_local_state() or str(
+            pending.get("user_id") or ""
+        ).strip()
+        replacement = SocialHeartbeatWorker(self.social_client)
+        payload = self._build_local_liveness_presence(user_id=user_id)
+        if not str(payload.get("user_id") or "").strip() and user_id:
+            payload["user_id"] = user_id
+        replacement.update_presence(payload, immediate=True)
+        replacement.start()
+        self._social_heartbeat_thread = replacement
+        self._last_social_heartbeat_worker_restart_at = now
+        lifecycle_log(
+            "social.heartbeat.worker_replaced",
+            self,
+            user_id=str(payload.get("user_id") or ""),
+            working=bool(payload.get("working")),
+            session_active=bool(payload.get("session_active")),
+        )
+        return True
+
     def _request_pending_focus_segment_flush(self, *, source: str) -> bool:
         """Prioritize upload of the sealed local FocusSegment without races.
 
@@ -7962,8 +8009,13 @@ class PetWindow(QWidget):
             consecutive_failures=int(health.get("consecutive_failures") or 0),
             error_kind=str(health.get("last_error_kind") or ""),
         )
-        # Rebuild the current rest/focus payload and ask the existing worker
-        # for an immediate send. This is safe while dashboard work is busy.
+        # A worker can remain alive while a macOS/Windows network call is
+        # stuck. Replace the transport before requesting ordinary work so a
+        # fresh heartbeat is not trapped behind the stale thread.
+        self._replace_stale_social_heartbeat_worker()
+        # Rebuild the dashboard/personal-state path as well. This never owns
+        # heartbeat freshness, but keeps profile and sealed segment syncing
+        # convergent after transport recovery.
         self._schedule_social_tick(immediate=True)
         # A retained refresh credential can outlive a broken in-memory access
         # session. The established one-minute auth backoff prevents token
@@ -8019,6 +8071,9 @@ class PetWindow(QWidget):
                 self.focus_analytics.focus_segment_reconciliation_manifest()
             ),
             "focus_segment_integrity_manifest_kind": "reconciliation",
+            "focus_segment_recent_reconciliation_request": (
+                self.focus_analytics.focus_segment_recent_reconciliation_request()
+            ),
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
         }
@@ -8851,6 +8906,57 @@ class PetWindow(QWidget):
                     0, int(sync_diagnostics.get("response_bytes") or 0)
                 ),
             )
+        recent_reconciliation_payload = (
+            data.get("_focus_segment_recent_reconciliation")
+            if isinstance(data, dict)
+            else None
+        )
+        if recent_reconciliation_payload is not None:
+            recent_ok = False
+            recent_changed = False
+            recent_count = 0
+            recent_has_more = False
+            recent_error = ""
+            try:
+                apply_recent = getattr(
+                    self.focus_analytics,
+                    "apply_focus_segment_recent_reconciliation",
+                    None,
+                )
+                if callable(apply_recent):
+                    (
+                        recent_ok,
+                        recent_changed,
+                        recent_count,
+                        recent_has_more,
+                    ) = apply_recent(recent_reconciliation_payload)
+                else:
+                    recent_error = "recent_reconciliation_not_supported"
+            except Exception as exc:
+                recent_error = "recent_reconciliation_persist_failed"
+                LOGGER.warning("recent focus reconciliation persistence failed: %s", exc)
+            if not recent_ok and not recent_error:
+                recent_error = str(
+                    recent_reconciliation_payload.get("_error")
+                    if isinstance(recent_reconciliation_payload, dict)
+                    else "recent_reconciliation_payload_invalid"
+                )[:120]
+            lifecycle_log(
+                "focus.segment_recent_reconciliation",
+                self,
+                recovered_count=max(0, int(recent_count)),
+                changed=bool(recent_changed),
+                has_more=bool(recent_has_more),
+                success=bool(recent_ok),
+                error=recent_error,
+            )
+            if recent_ok:
+                segment_changed = bool(segment_changed or recent_changed)
+                # Pages are serialized through the existing social worker. A
+                # follow-up page is only requested after this one has safely
+                # persisted locally; it never shares or rewinds delta state.
+                if recent_has_more:
+                    self._schedule_social_tick(immediate=True)
         integrity_payload = data.get("_focus_segment_integrity") if isinstance(data, dict) else None
         if integrity_payload is not None:
             def audit_number(key: str, *, decimal: bool = False) -> int | float:

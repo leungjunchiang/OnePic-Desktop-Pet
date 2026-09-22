@@ -2468,6 +2468,34 @@ def test_focus_segment_integrity_audit_is_available_through_every_relay():
         assert "lili_focus_segment_integrity_v1" in source
 
 
+def test_recent_focus_reconciliation_is_bounded_read_only_and_relay_available():
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "supabase" / "migrations"
+        / "20260922100000_lili_focus_recent_segment_reconciliation.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.casefold().split())
+
+    assert "security invoker" in normalized
+    assert "current_user_id uuid := (select auth.uid())" in normalized
+    assert "bounded_days integer := greatest(1, least" in normalized
+    assert "bounded_limit integer := greatest(1, least" in normalized
+    assert "limit bounded_limit" in normalized
+    assert "s.user_id = current_user_id" in normalized
+    assert "insert into public.lili_focus_segments" not in normalized
+    assert "update public.lili_focus_segments" not in normalized
+    assert "delete from public.lili_focus_segments" not in normalized
+    assert "grant execute on function public.lili_focus_recent_segments_v1(text, integer, integer) to authenticated" in normalized
+
+    for path in (
+        root / "src" / "onepic_desktop_pet" / "social.py",
+        root / "supabase" / "functions" / "lili-social-relay" / "index.ts",
+        root / "relay" / "cloudbase-function" / "index.js",
+        root / "relay" / "cloudflare-worker" / "src" / "index.js",
+    ):
+        assert "lili_focus_recent_segments_v1" in path.read_text(encoding="utf-8")
+
+
 def test_focus_sync_deploy_workflow_applies_the_complete_ordered_contract():
     root = Path(__file__).resolve().parents[1]
     script = (
@@ -2487,6 +2515,7 @@ def test_focus_sync_deploy_workflow_applies_the_complete_ordered_contract():
         "20260907213000_lili_focus_segment_integrity_audit.sql",
         "20260907230000_lili_focus_segment_reconciliation_manifest.sql",
         "20260908090000_lili_focus_week_canonical_union.sql",
+        "20260922100000_lili_focus_recent_segment_reconciliation.sql",
     )
     positions = [script.index(name) for name in expected]
     assert positions == sorted(positions)

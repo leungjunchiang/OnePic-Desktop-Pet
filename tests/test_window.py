@@ -114,6 +114,50 @@ def test_stale_heartbeat_watchdog_rebuilds_presence_and_recovers_auth(monkeypatc
     app.processEvents()
 
 
+def test_stale_heartbeat_transport_is_replaced_with_current_presence(monkeypatch) -> None:
+    """A socket-stuck worker must not remain the only heartbeat writer."""
+
+    app, window = _create_window()
+    old = window._social_heartbeat_thread
+    old.update_presence({
+        "user_id": "account-a",
+        "working": True,
+        "session_active": True,
+        "session_id": "old-session",
+        "session_started_at": "2026-09-22T09:00:00+08:00",
+    })
+
+    class ReplacementWorker:
+        def __init__(self, _client) -> None:
+            self.payload = None
+            self.started = False
+
+        def update_presence(self, payload, *, immediate=False) -> None:
+            assert immediate is True
+            self.payload = dict(payload)
+
+        def start(self) -> None:
+            self.started = True
+
+        def isRunning(self) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.SocialHeartbeatWorker", ReplacementWorker
+    )
+
+    assert window._replace_stale_social_heartbeat_worker() is True
+    replacement = window._social_heartbeat_thread
+    assert isinstance(replacement, ReplacementWorker)
+    assert replacement.started is True
+    assert replacement.payload["user_id"] == "account-a"
+    assert replacement.payload["working"] is False
+    assert replacement.payload["session_active"] is False
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     """A later local lifecycle refresh must not downgrade the account total."""
 

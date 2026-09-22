@@ -1281,6 +1281,7 @@ class SocialSyncThread(QThread):
             focus_history_result = None
             focus_segments_result = None
             focus_segment_integrity_result = None
+            focus_segment_recent_reconciliation_result = None
             focus_live_projection_result = None
             personal_state_result = None
             presence_context_updated: bool | None = None
@@ -1667,6 +1668,32 @@ class SocialSyncThread(QThread):
                             focus_segment_integrity_result["_device_id"] = (
                                 focus_segments_device_id
                             )
+                    # Older clients could retain only 500 rows and therefore
+                    # miss a report window even after their ordinary delta
+                    # cursor had advanced. This one-time paged read is a
+                    # bounded account-local repair; it neither uploads facts
+                    # nor resets/advances the normal delta cursor.
+                    recent_reconciliation_request = personal_state.get(
+                        "focus_segment_recent_reconciliation_request"
+                    )
+                    if isinstance(recent_reconciliation_request, dict):
+                        try:
+                            focus_segment_recent_reconciliation_result = sync_rpc(
+                                "lili_focus_recent_segments_v1",
+                                dict(recent_reconciliation_request),
+                            )
+                        except (SocialError, AttributeError, TypeError) as exc:
+                            LOGGER.info(
+                                "recent focus reconciliation deferred: %s", exc
+                            )
+                            focus_segment_recent_reconciliation_result = {
+                                "_error": str(exc)[:240]
+                            }
+                        except Exception as exc:
+                            LOGGER.exception("recent focus reconciliation crashed")
+                            focus_segment_recent_reconciliation_result = {
+                                "_error": str(exc)[:240]
+                            }
             # Active FocusSession intervals remain local/canonical until they
             # close.  Read the separate per-device liveness projection so the
             # display can union all currently active devices without mutating
@@ -1757,6 +1784,11 @@ class SocialSyncThread(QThread):
             if isinstance(focus_segment_integrity_result, dict):
                 data = dict(data or {})
                 data["_focus_segment_integrity"] = focus_segment_integrity_result
+            if isinstance(focus_segment_recent_reconciliation_result, dict):
+                data = dict(data or {})
+                data["_focus_segment_recent_reconciliation"] = (
+                    focus_segment_recent_reconciliation_result
+                )
             if isinstance(focus_live_projection_result, dict):
                 data = dict(data or {})
                 data["_focus_live_projection"] = focus_live_projection_result
