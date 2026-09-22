@@ -1134,7 +1134,10 @@ class ReportBarChart(QWidget):
                 f"完成专注段：{int(row.get('rounds', 0) or 0)} 段"
             )
         if row.get("trusted") is False:
-            detail += "\n该日期数据已剔除（旧版异常记录）"
+            if row.get("seconds") is None:
+                detail += "\n该日期未纳入可信区间统计（旧版重复检查点）"
+            else:
+                detail += "\n该日期保留日级兼容数据；旧版区间未纳入详细统计"
         return f"{title}\n{detail}"
 
     def mouseMoveEvent(self, event) -> None:  # pragma: no cover - rendered by Qt
@@ -1540,13 +1543,15 @@ class ReportYearHeatmap(QWidget):
             if row.get("is_future"):
                 tooltip = f"{focus_date} {weekday}\n该日期尚未到达，暂无数据"
             elif row.get("seconds") is None:
-                tooltip = f"{focus_date} {weekday}\n该日期数据已剔除（旧版异常记录）"
+                tooltip = f"{focus_date} {weekday}\n该日期未纳入可信区间统计（旧版重复检查点）"
             else:
                 tooltip = (
                     f"{focus_date} {weekday}\n"
                     f"工作时长：{format_work_duration(int(row.get('seconds', 0) or 0))}\n"
                     f"专注段：{int(row.get('rounds', 0) or 0)} 段"
                 )
+                if row.get("trusted") is False:
+                    tooltip += "\n该日保留日级兼容数据；旧版区间未纳入详细统计"
             QToolTip.showText(QCursor.pos(), tooltip, self)
             return
         QToolTip.hideText()
@@ -2111,7 +2116,18 @@ class WorkReportDialog(QDialog):
             return
         if not bool(quality.get("trusted", True)):
             days = len(quality.get("untrusted_days") or [])
-            warning = QLabel(f"ⓘ 已排除 {days} 天旧版异常计时记录，未纳入本页统计。")
+            compatibility_days = len(quality.get("legacy_compatibility_days") or [])
+            if compatibility_days:
+                warning_text = (
+                    f"ⓘ 已跳过 {days} 天旧版重复检查点；"
+                    f"其中 {compatibility_days} 天保留服务器日级兼容数据。"
+                )
+            else:
+                warning_text = (
+                    f"ⓘ 已跳过 {days} 天旧版重复检查点；"
+                    "原始记录仍保留，仅未作为可信区间统计。"
+                )
+            warning = QLabel(warning_text)
             warning.setObjectName("reportWarning")
             warning.setWordWrap(True)
             layout.addWidget(warning)

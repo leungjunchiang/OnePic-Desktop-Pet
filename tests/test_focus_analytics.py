@@ -986,6 +986,31 @@ def test_multi_device_facts_keep_attribution_and_report_account_union(tmp_path) 
     assert [item["device_id"] for item in persisted["records"]] == ["device-a", "device-b"]
 
 
+def test_canonical_overlaps_are_not_quarantined_as_legacy_checkpoints(tmp_path) -> None:
+    now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(
+        path=tmp_path / "focus.json",
+        now_provider=lambda: now,
+        persist=False,
+    )
+    for device_id, prefix in (("device-a", "a"), ("device-b", "b")):
+        for index, started_at in enumerate(
+            (datetime(2026, 8, 21, 9, 0), datetime(2026, 8, 21, 9, 30))
+        ):
+            store.record_session(
+                60 * 60,
+                started_at=started_at,
+                record_id=f"{prefix}-{index}",
+                session_id=f"{prefix}-session-{index}",
+                device_id=device_id,
+            )
+
+    store._rebuild_days_from_records()
+
+    assert store._state["days"]["2026-08-21"].get("seconds_untrusted") is not True
+    assert store.period_summary("day", now)["total_seconds"] == 90 * 60
+
+
 def test_duplicate_remote_device_segment_remains_idempotent(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone(timedelta(hours=8)))
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)

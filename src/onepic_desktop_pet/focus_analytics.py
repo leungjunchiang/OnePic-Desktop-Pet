@@ -2287,7 +2287,7 @@ class FocusAnalyticsStore:
                 "untrusted_days": sorted(untrusted_dates.intersection({str(row.get("date")) for row in daily})),
                 "consistency_errors": list(aggregate.errors),
                 "message": (
-                    "本区间包含旧版异常计时记录；异常日期已剔除。"
+                    "本区间发现旧版重复检查点；这些日期未作为可信区间证据。"
                     if untrusted_dates.intersection({str(row.get("date")) for row in daily})
                     else "本区间统计存在一致性异常，异常区间已剔除。"
                     if aggregate.errors
@@ -2601,7 +2601,8 @@ class FocusAnalyticsStore:
                 "status": (
                     "future" if is_future
                     else "untrusted" if untrusted and not legacy_seconds
-                    else "legacy_compatibility" if legacy_seconds > 0 and not has_raw_facts
+                    else "legacy_compatibility"
+                    if legacy_seconds > 0 and (untrusted or not has_raw_facts)
                     else "observed"
                 ),
             })
@@ -2806,7 +2807,7 @@ class FocusAnalyticsStore:
                 ],
                 "consistency_errors": list(aggregate.errors),
                 "message": (
-                    "本周期包含旧版异常计时记录；异常日期已从报告指标中剔除，避免把重复检查点当成真实工作时间。"
+                    "本周期发现旧版重复检查点；异常原始区间未纳入详细指标，可信日期仍按区间并集统计。"
                     if untrusted_days
                     else "本周期区间统计存在一致性异常，异常区间已剔除。"
                     if aggregate.errors
@@ -2852,11 +2853,17 @@ class FocusAnalyticsStore:
 
         Raw records are intentionally retained.  Only the derived daily
         ``seconds`` field is repaired, so a future migration can still inspect
-        the original checkpoints that caused an over-count.
+        the original checkpoints that caused an over-count.  The legacy
+        checkpoint quarantine is deliberately limited to rows without a
+        canonical FocusSegment identity.  Stable interval facts from one or
+        more devices may overlap legitimately; the account interval union is
+        the correct way to count those facts and must not be quarantined just
+        because their raw durations add up to more than the union.
         """
 
         intervals: dict[str, list[tuple[datetime, datetime]]] = {}
-        raw_durations: dict[str, list[int]] = {}
+        legacy_intervals: dict[str, list[tuple[datetime, datetime]]] = {}
+        legacy_durations: dict[str, list[int]] = {}
         changed = False
         for raw in self._state.get("records", []):
             if not isinstance(raw, dict):
@@ -2878,7 +2885,9 @@ class FocusAnalyticsStore:
             if raw.get("started_at") != canonical_started:
                 raw["started_at"] = canonical_started
                 changed = True
-            raw_durations.setdefault(day_key, []).append(duration)
+            is_legacy_checkpoint = self._is_legacy_checkpoint_record(raw)
+            if is_legacy_checkpoint:
+                legacy_durations.setdefault(day_key, []).append(duration)
             end = started + timedelta(seconds=duration)
             cursor = started
             while cursor.date() < end.date():
@@ -2886,11 +2895,18 @@ class FocusAnalyticsStore:
                     cursor.date() + timedelta(days=1), time.min, tzinfo=cursor.tzinfo
                 )
                 intervals.setdefault(cursor.date().isoformat(), []).append((cursor, boundary))
+                if is_legacy_checkpoint:
+                    legacy_intervals.setdefault(cursor.date().isoformat(), []).append(
+                        (cursor, boundary)
+                    )
                 cursor = boundary
             intervals.setdefault(cursor.date().isoformat(), []).append((cursor, end))
+            if is_legacy_checkpoint:
+                legacy_intervals.setdefault(cursor.date().isoformat(), []).append((cursor, end))
 
         days = self._state.setdefault("days", {})
-        for day_key, pieces in intervals.items():
+
+        def union_seconds(pieces: list[tuple[datetime, datetime]]) -> int:
             pieces.sort(key=lambda item: item[0])
             merged: list[list[datetime]] = []
             for start, end in pieces:
@@ -2898,21 +2914,27 @@ class FocusAnalyticsStore:
                     merged.append([start, end])
                 elif end > merged[-1][1]:
                     merged[-1][1] = end
-            seconds = min(
+            return min(
                 MAX_ANALYTICS_DAY_SECONDS,
                 sum(max(0, int((end - start).total_seconds())) for start, end in merged),
             )
+
+        for day_key, pieces in intervals.items():
+            seconds = union_seconds(pieces)
             day = days.setdefault(day_key, self._empty_day())
-            raw_total = sum(raw_durations.get(day_key, []))
+            legacy_rows = legacy_durations.get(day_key, [])
+            legacy_union = union_seconds(legacy_intervals.get(day_key, []))
+            legacy_raw_total = sum(legacy_rows)
             # Before the session cursor was persisted, a recovered app could
-            # write the cumulative timer total repeatedly.  A large raw/union
-            # ratio with several records is a strong signal of that specific
-            # corruption.  Keep the raw data for diagnostics, but never use
-            # the derived value for a day-vs-day comparison.
+            # write the cumulative timer total repeatedly as rows that have
+            # no stable FocusSegment identity.  Only that legacy-shaped subset
+            # participates in this heuristic.  Never compare the raw sum of
+            # canonical facts across devices with their account union: overlap
+            # is expected there and is already removed by interval union.
             seconds_untrusted = (
-                len(raw_durations.get(day_key, [])) >= 3
-                and seconds > 0
-                and raw_total >= seconds * 1.5
+                len(legacy_rows) >= 3
+                and legacy_union > 0
+                and legacy_raw_total >= legacy_union * 1.5
             )
             if int(day.get("seconds", 0) or 0) != seconds:
                 day["seconds"] = seconds
@@ -2920,7 +2942,39 @@ class FocusAnalyticsStore:
             if bool(day.get("seconds_untrusted")) != seconds_untrusted:
                 day["seconds_untrusted"] = seconds_untrusted
                 changed = True
+            if seconds_untrusted:
+                reason = "legacy_cumulative_checkpoint"
+                if day.get("seconds_untrusted_reason") != reason:
+                    day["seconds_untrusted_reason"] = reason
+                    changed = True
+            elif day.pop("seconds_untrusted_reason", None) is not None:
+                changed = True
         return changed
+
+    @staticmethod
+    def _is_legacy_checkpoint_record(raw: dict[str, Any]) -> bool:
+        """Return whether *raw* is eligible for legacy-checkpoint quarantine.
+
+        Current and recovered facts carry a stable record/segment identity and
+        a session or device provenance.  Their overlaps are valid account
+        facts, including when two computers worked at the same time.  Rows
+        without that provenance are the old ``started_at + seconds`` shape;
+        an explicit ``legacy:`` identity is also treated as legacy because it
+        is how the historical compatibility importer labels those rows.
+        """
+
+        if not isinstance(raw, dict):
+            return False
+        record_id = str(raw.get("segment_id") or raw.get("record_id") or "").strip().casefold()
+        if record_id.startswith("legacy:"):
+            return True
+        if record_id.startswith("fs2:"):
+            return False
+        session_id = str(raw.get("session_id") or "").strip()
+        device_id = str(raw.get("device_id") or "").strip()
+        if session_id or device_id:
+            return False
+        return True
 
     @staticmethod
     def _record_date(raw: dict[str, Any]) -> date | None:
