@@ -1217,6 +1217,10 @@ class PetWindow(QWidget):
 
         self._last_social_heartbeat_at = 0.0
         self._social_heartbeat_due = True
+        # A sealed FocusSegment is a durable cross-device fact. Keep its
+        # flush request separate from a dashboard/heartbeat repaint so an
+        # automatic pause cannot lose the upload behind an in-flight worker.
+        self._social_focus_segment_flush_due = False
         self.social_timer = QTimer(self)
         # Keep incoming visits and food interactions responsive without
         # requiring the study-room window to be opened or manually refreshed.
@@ -4104,6 +4108,21 @@ class PetWindow(QWidget):
             reason,
             effective_end_at=effective_end_at,
         )
+        # This must happen in the same transition that changes the local UI
+        # to paused. Do not delegate it solely to ``_schedule_social_tick``:
+        # that helper deliberately waits for an authenticated dashboard loop,
+        # while the heartbeat worker may otherwise keep retrying its last
+        # active payload during an Auth refresh.
+        self._force_local_heartbeat_inactive(source=f"focus_paused:{reason}")
+        # The interval ending at the verified idle/display/sleep cutoff is a
+        # separate canonical fact from the inactive heartbeat. Request its
+        # strict-ACK delta upload now, after the local session has stopped,
+        # so another computer can replace its old open live row with this
+        # sealed interval as soon as it performs its next read.
+        if was_running:
+            self._request_pending_focus_segment_flush(
+                source=f"focus_paused:{reason}"
+            )
         if was_running and reason in {"idle_10m", "fullscreen_video"}:
             self._away_recovery_reason = reason
             self._away_recovery_started_at = time.monotonic()
@@ -4231,6 +4250,11 @@ class PetWindow(QWidget):
             started_at=segment_started_at,
         )
         self.focus_session.finish()
+        # Finish clears the local session immediately, so it must also
+        # replace any retained active heartbeat before background segment
+        # upload/dashboard work has a chance to run.
+        self._force_local_heartbeat_inactive(source="focus_finished")
+        self._request_pending_focus_segment_flush(source="focus_finished")
         self.focus_analytics.finish_focus_session(completed=True)
         self._freeze_cached_live_display_until_refresh()
         self._refresh_cross_device_today_display(
@@ -7765,6 +7789,130 @@ class PetWindow(QWidget):
             self._social_auth_recovery_thread = None
         thread.deleteLater()
 
+    def _heartbeat_identity_for_local_state(self) -> str:
+        """Return only an already-known account id for a local state handoff.
+
+        ``signed_in`` can be false briefly while refresh recovery copies an
+        access token back into the client. A pause must still neutralize the
+        worker's old payload for that same account. The account-scoped focus
+        and economy values come from a previous authenticated sync, so they
+        are safe fallbacks; no id is fabricated.
+        """
+
+        return str(
+            _session_user_id(self.social_client)
+            or getattr(self, "_economy_sync_user_id", "")
+            or getattr(self, "_active_focus_account_id", "")
+            or ""
+        ).strip()
+
+    def _build_local_liveness_presence(
+        self,
+        snapshot: object | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Build the one liveness tuple used by local UI and heartbeat writes.
+
+        A heartbeat may be active only when the current local FocusSession,
+        WorkTimerModel identity, and open segment all agree. This prevents a
+        stale UI snapshot or a paused durable session from becoming a new
+        active presence payload.
+        """
+
+        current = snapshot or self.focus_session.snapshot(include_projection=False)
+        has_active_session = bool(getattr(self.work_timer, "has_active_session", False))
+        session_id = str(getattr(self.work_timer, "focus_session_id", "") or "").strip()
+        live_segment_started_at = (
+            self.work_timer.current_segment_started_at()
+            if bool(getattr(current, "is_running", False)) and has_active_session and session_id
+            else None
+        )
+        active = bool(live_segment_started_at is not None)
+        input_idle_seconds: int | None = None
+        if active:
+            # The heartbeat carries no duration. It only proves that the
+            # explicit local timer has recent aggregate keyboard/mouse input.
+            try:
+                observed_idle_seconds = system_idle_seconds()
+                if observed_idle_seconds is not None:
+                    input_idle_seconds = max(0, min(86_400, int(observed_idle_seconds)))
+            except (TypeError, ValueError, OverflowError):
+                input_idle_seconds = None
+        return {
+            "user_id": str(user_id or self._heartbeat_identity_for_local_state() or "").strip(),
+            "working": active,
+            "session_active": active,
+            "session_id": session_id if active else None,
+            "session_started_at": live_segment_started_at.isoformat() if active else None,
+            "input_idle_seconds": input_idle_seconds,
+        }
+
+    def _force_local_heartbeat_inactive(self, *, source: str) -> None:
+        """Replace a stale active worker payload without depending on Auth/UI ticks."""
+
+        heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
+        if heartbeat_thread is None:
+            return
+        force_inactive = getattr(heartbeat_thread, "force_inactive_presence", None)
+        if not callable(force_inactive):
+            return
+        payload = force_inactive(
+            user_id=self._heartbeat_identity_for_local_state(),
+            immediate=True,
+        )
+        lifecycle_log(
+            "social.heartbeat.force_inactive",
+            self,
+            source=str(source or "local_state"),
+            user_id=str(payload.get("user_id") or ""),
+            worker_running=bool(getattr(heartbeat_thread, "isRunning", lambda: False)()),
+        )
+
+    def _request_pending_focus_segment_flush(self, *, source: str) -> bool:
+        """Prioritize upload of the sealed local FocusSegment without races.
+
+        Presence tells peers that this device stopped; the sealed interval is
+        the canonical fact that lets every device converge on the same final
+        total.  The normal social worker owns the delta cursor, so this
+        method never starts a parallel upload.  It retains a small due flag
+        until that worker can safely begin the next serialized delta cycle.
+        """
+
+        pending_reader = getattr(
+            self.focus_analytics, "pending_focus_handoff_segment_id", None
+        )
+        pending_segment_id = (
+            str(pending_reader() or "").strip()
+            if callable(pending_reader)
+            else ""
+        )
+        if not pending_segment_id:
+            return False
+        self._social_focus_segment_flush_due = True
+        self._social_personal_sync_due = True
+        lifecycle_log(
+            "focus.segment_sync.flush_requested",
+            self,
+            source=str(source or "focus_lifecycle"),
+            segment_id=pending_segment_id,
+            signed_in=bool(getattr(self.social_client, "signed_in", False)),
+            worker_busy=bool(
+                self._social_thread is not None and self._social_thread.isRunning()
+            ),
+        )
+        if self.social_client.signed_in:
+            # ``_social_tick_impl`` preserves the due flag while a previous
+            # sync owns the cursor, then launches the strict ACK upload at
+            # the first safe point.  Do not bypass it with a parallel RPC.
+            self._schedule_social_tick(immediate=True)
+        else:
+            # The handoff stays durable in AccountFocusStore/WAL. Ask the
+            # existing auth owner to recover; its success path re-enters the
+            # same social tick and sees this retained flag.
+            self._start_social_auth_recovery(reason="focus_segment_flush")
+        return True
+
     @_guard_qt_callback
     def _social_heartbeat_watchdog_tick(self) -> None:
         """Recover a stale heartbeat channel without relaxing peer freshness."""
@@ -7777,6 +7925,18 @@ class PetWindow(QWidget):
         heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
         if heartbeat_thread is None:
             return
+        # A missed transition callback must never allow a retained active
+        # payload to keep a visibly-paused desktop working on the server.
+        # Run this before the signed-in gate so temporary Auth recovery cannot
+        # postpone the correction.
+        pending_reader = getattr(heartbeat_thread, "pending_presence", None)
+        pending = pending_reader() if callable(pending_reader) else {}
+        if (
+            not self.work_timer.is_running
+            and isinstance(pending, dict)
+            and (bool(pending.get("working")) or bool(pending.get("session_active")))
+        ):
+            self._force_local_heartbeat_inactive(source="watchdog_paused")
         if not self.social_client.signed_in:
             self._start_social_auth_recovery(reason="heartbeat_auth_unavailable")
             return
@@ -7920,42 +8080,8 @@ class PetWindow(QWidget):
         # Keep this GUI callback cheap.  Calendar aggregation, raw segment
         # serialization and personal-state sync are performed by the worker.
         snapshot = self.focus_session.snapshot(include_projection=False)
-        active_session = bool(snapshot.is_running and self.work_timer.has_active_session)
-        live_segment_started_at = (
-            self.work_timer.current_segment_started_at()
-            if active_session
-            else None
-        )
-        input_idle_seconds: int | None = None
-        if active_session:
-            # The heartbeat carries no accumulated duration.  It may only
-            # prove that the explicit local timer still has recent aggregate
-            # keyboard/mouse activity.  A missing native probe deliberately
-            # stays ``None`` so the server cannot mistake a login-only or
-            # broken-client loop for an active focus session.
-            try:
-                observed_idle_seconds = system_idle_seconds()
-                if observed_idle_seconds is not None:
-                    input_idle_seconds = max(0, min(86_400, int(observed_idle_seconds)))
-            except (TypeError, ValueError, OverflowError):
-                input_idle_seconds = None
         presence = {
-            "user_id": user_id,
-            "working": bool(snapshot.is_running),
-            # Paused/resting sessions are durable history, not live presence.
-            # This invariant prevents the server from projecting paused time.
-            "session_active": active_session,
-            "session_id": self.work_timer.focus_session_id if active_session else None,
-            # Presence describes the currently running segment, not the
-            # whole paused/resumed FocusSession. This keeps live union from
-            # counting pause gaps; closed segments remain the only history
-            # facts.
-            "session_started_at": (
-                live_segment_started_at.isoformat()
-                if live_segment_started_at is not None
-                else None
-            ),
-            "input_idle_seconds": input_idle_seconds,
+            **self._build_local_liveness_presence(snapshot, user_id=user_id),
             # The following are dashboard/personal-sync context only.  The
             # heartbeat worker applies _heartbeat_payload before transport,
             # so they can never become presence duration fields.
@@ -7983,6 +8109,7 @@ class PetWindow(QWidget):
             }
             self._social_presence_context_signature = presence_context_signature
         now_monotonic = time.monotonic()
+        focus_segment_flush_due = bool(self._social_focus_segment_flush_due)
         # Taunt/encouragement state is not liveness.  It only needs a modest
         # polling cadence, while the independent heartbeat keeps presence
         # fresh.  Avoid making every dashboard request perform a
@@ -7994,6 +8121,7 @@ class PetWindow(QWidget):
             not dashboard_busy
             and (
                 self._social_personal_sync_due
+                or focus_segment_flush_due
                 or now_monotonic - self._last_social_personal_sync_at >= 60.0
             )
         ):
@@ -8038,6 +8166,15 @@ class PetWindow(QWidget):
             send_heartbeat=False,
             request_generation=request_generation,
         )
+        if focus_segment_flush_due:
+            # The worker now owns one serialized strict-ACK attempt. If it
+            # was busy above, this flag was deliberately retained instead.
+            self._social_focus_segment_flush_due = False
+            lifecycle_log(
+                "focus.segment_sync.flush_started",
+                self,
+                request_generation=request_generation,
+            )
         self._social_thread = thread
         thread.completed.connect(self._social_dashboard_received)
         thread.failed.connect(self._social_sync_failed)
@@ -8603,9 +8740,10 @@ class PetWindow(QWidget):
             and focus_segments_payload.get("_upload_ack_ok", not uploaded_segments)
         )
         transaction_ok = bool(merge_ok and upload_ack_ok)
-        # Capture this before the local ACK clears the handoff marker.  Only
-        # an actual sealed-fact handoff needs one follow-up inactive heartbeat;
-        # a normal empty/duplicate delta must not schedule another worker.
+        # Capture this before the local ACK clears the handoff marker. Only
+        # an actual sealed-fact handoff needs one follow-up shared-state
+        # refresh; a normal empty/duplicate delta must not schedule another
+        # worker.
         focus_handoff_pending_before_merge = bool(
             self.focus_analytics.has_pending_focus_handoff()
         )
@@ -8629,9 +8767,10 @@ class PetWindow(QWidget):
                 else "upload_ack_deferred_merge_failed"
             )
         if transaction_ok and focus_handoff_pending_before_merge:
-            # The heartbeat worker skipped inactive presence while the
-            # handoff marker was pending. Send the normal inactive snapshot
-            # on the next coalesced tick after the local ACK is durable.
+            # The dedicated heartbeat handoff already made this device rest
+            # immediately. Refresh the normal shared snapshot after the
+            # local strict ACK becomes durable so the dashboard/cache path
+            # converges on the sealed interval as well.
             self._schedule_social_tick()
         note_upload_result = getattr(
             self.focus_analytics, "note_focus_segment_upload_result", None
@@ -9588,7 +9727,14 @@ class PetWindow(QWidget):
         # flight. In that case the due flag intentionally stays set; re-arm
         # the coalesced timer so a sealed Mac/Windows segment is not stranded
         # until unrelated future UI activity.
-        if self._social_personal_sync_due or self._social_heartbeat_due:
+        if self._social_focus_segment_flush_due:
+            timer = getattr(self, "social_sync_timer", None)
+            if timer is not None and self.social_client.signed_in:
+                # A lifecycle boundary arrived while this worker held the
+                # delta cursor. Run the next serialized upload immediately,
+                # not after the normal 250 ms/30 s dashboard cadence.
+                timer.start(0)
+        elif self._social_personal_sync_due or self._social_heartbeat_due:
             timer = getattr(self, "social_sync_timer", None)
             if timer is not None and self.social_client.signed_in:
                 timer.start(250)

@@ -4049,6 +4049,103 @@ def test_focus_pause_requests_immediate_inactive_social_flush(monkeypatch) -> No
     app.processEvents()
 
 
+def test_focus_pause_replaces_retained_active_heartbeat_when_auth_is_unavailable(monkeypatch) -> None:
+    """Pause is authoritative even if the next social tick cannot authenticate."""
+
+    app, window = _create_window()
+
+    class Worker:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def force_inactive_presence(self, **kwargs) -> dict[str, object]:
+            self.calls.append(dict(kwargs))
+            return {"user_id": "account-a", "working": False, "session_active": False}
+
+        def isRunning(self) -> bool:
+            return True
+
+        def stop(self, _final_presence=None) -> None:
+            return None
+
+    worker = Worker()
+    window._social_heartbeat_thread = worker  # type: ignore[assignment]
+    monkeypatch.setattr(
+        type(window.social_client), "signed_in", property(lambda _client: False)
+    )
+    monkeypatch.setattr(window, "_heartbeat_identity_for_local_state", lambda: "account-a")
+    monkeypatch.setattr(window, "_schedule_social_tick", lambda **_kwargs: None)
+
+    window.start_work_timer()
+    window.pause_work_timer()
+
+    assert worker.calls == [{"user_id": "account-a", "immediate": True}]
+    assert not window.work_timer.is_running
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_auto_pause_requests_strict_focus_segment_flush(monkeypatch) -> None:
+    """An automatic pause uploads its pre-pause interval as a canonical fact."""
+
+    app, window = _create_window()
+    requested: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_request_pending_focus_segment_flush",
+        lambda *, source: requested.append(str(source)) or True,
+    )
+    monkeypatch.setattr(window, "_schedule_social_tick", lambda **_kwargs: None)
+
+    window.start_work_timer()
+    window.pause_work_timer(reason="idle_10m")
+
+    assert requested == ["focus_paused:idle_10m"]
+    assert not window.work_timer.is_running
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_busy_social_worker_retains_pending_focus_segment_flush(monkeypatch) -> None:
+    """A running dashboard worker cannot consume and lose an auto-pause flush."""
+
+    app, window = _create_window()
+
+    class BusyThread:
+        def isRunning(self) -> bool:
+            return True
+
+    window._social_thread = BusyThread()  # type: ignore[assignment]
+    window._social_focus_segment_flush_due = True
+    window._social_personal_sync_due = False
+    monkeypatch.delenv("ONEPIC_USE_DEMO_ASSETS", raising=False)
+    monkeypatch.setattr(
+        type(window.social_client), "signed_in", property(lambda _client: True)
+    )
+    monkeypatch.setattr(
+        window,
+        "_build_local_liveness_presence",
+        lambda *_args, **_kwargs: {
+            "user_id": "account-a",
+            "working": False,
+            "session_active": False,
+            "session_id": None,
+            "session_started_at": None,
+            "input_idle_seconds": None,
+        },
+    )
+
+    window._social_tick_impl()
+
+    assert window._social_focus_segment_flush_due is True
+    window._social_thread = None
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_pause_survives_secondary_projection_failure(monkeypatch) -> None:
     """A non-canonical local card failure cannot leave the timer running."""
 

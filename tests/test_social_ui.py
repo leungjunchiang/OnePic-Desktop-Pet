@@ -78,6 +78,83 @@ def test_heartbeat_worker_sends_inactive_presence_without_waiting_for_focus_ack(
     assert worker._shutdown_payload["session_active"] is False
 
 
+def test_heartbeat_worker_force_inactive_replaces_retained_active_payload() -> None:
+    """A paused device must not keep repeating the prior active payload."""
+
+    class Client:
+        pass
+
+    worker = SocialHeartbeatWorker(Client())
+    worker.update_presence(
+        {
+            "user_id": "account-a",
+            "working": True,
+            "session_active": True,
+            "session_id": "session-a",
+            "session_started_at": "2026-09-22T09:00:00+08:00",
+            "input_idle_seconds": 0,
+        }
+    )
+
+    payload = worker.force_inactive_presence()
+
+    assert payload["user_id"] == "account-a"
+    assert payload["working"] is False
+    assert payload["session_active"] is False
+    assert payload["session_id"] is None
+    assert payload["session_started_at"] is None
+    assert payload["input_idle_seconds"] is None
+    assert worker.pending_presence() == payload
+    assert worker._send_now is True
+
+
+def test_heartbeat_worker_sends_forced_inactive_after_an_active_heartbeat(monkeypatch) -> None:
+    """The next transport send must reflect Pause, not the retained active state."""
+
+    class Client:
+        def __init__(self) -> None:
+            self.payloads: list[dict] = []
+            self.first_sent = threading.Event()
+            self.second_sent = threading.Event()
+
+        def heartbeat(self, **payload) -> None:
+            self.payloads.append(dict(payload))
+            if len(self.payloads) == 1:
+                self.first_sent.set()
+            elif len(self.payloads) == 2:
+                self.second_sent.set()
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._next_presence_sequence",
+        lambda _user_id: 41,
+    )
+    client = Client()
+    worker = SocialHeartbeatWorker(client)
+    worker.start()
+    try:
+        worker.update_presence(
+            {
+                "user_id": "account-a",
+                "working": True,
+                "session_active": True,
+                "session_id": "session-a",
+                "session_started_at": "2026-09-22T09:00:00+08:00",
+            },
+            immediate=True,
+        )
+        assert client.first_sent.wait(1.0)
+
+        worker.force_inactive_presence()
+
+        assert client.second_sent.wait(1.0)
+        assert client.payloads[-1]["working"] is False
+        assert client.payloads[-1]["session_active"] is False
+        assert client.payloads[-1]["session_id"] is None
+    finally:
+        worker.stop()
+        assert worker.wait(1_000)
+
+
 def test_heartbeat_worker_records_a_server_ack_for_resting_presence(monkeypatch) -> None:
     """Rest is online presence, not a reason to stop the liveness loop."""
 

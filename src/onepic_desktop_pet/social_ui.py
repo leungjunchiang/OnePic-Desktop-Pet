@@ -1097,6 +1097,52 @@ class SocialHeartbeatWorker:
             self._send_now = self._send_now or bool(immediate)
             self._condition.notify()
 
+    def pending_presence(self) -> dict[str, Any]:
+        """Return a copy of the next/repeated payload for state reconciliation.
+
+        This is intentionally transport-local diagnostic state. It never
+        reads or changes the authenticated session, so a paused desktop can
+        invalidate an obsolete active heartbeat even while Auth is recovering.
+        """
+
+        with self._condition:
+            return dict(self._pending or {})
+
+    def force_inactive_presence(
+        self,
+        *,
+        user_id: str | None = None,
+        immediate: bool = True,
+    ) -> dict[str, Any]:
+        """Atomically replace any retained active heartbeat with a rest one.
+
+        The worker repeats ``_pending`` at the heartbeat cadence. A local
+        pause must therefore overwrite that retained value directly instead
+        of waiting for the dashboard tick, which may be blocked while an
+        access token is being restored. Preserve only a known account id;
+        never invent an anonymous heartbeat.
+        """
+
+        with self._condition:
+            raw = dict(self._pending or {})
+            resolved_user_id = str(user_id or raw.get("user_id") or "").strip()
+            if resolved_user_id:
+                raw["user_id"] = resolved_user_id
+            raw.update(
+                {
+                    "working": False,
+                    "session_active": False,
+                    "session_id": None,
+                    "session_started_at": None,
+                    "input_idle_seconds": None,
+                }
+            )
+            payload = _heartbeat_payload(raw)
+            self._pending = dict(payload)
+            self._send_now = self._send_now or bool(immediate)
+            self._condition.notify()
+            return dict(payload)
+
     def stop(self, final_presence: dict[str, Any] | None = None) -> None:
         with self._condition:
             if isinstance(final_presence, dict):

@@ -599,6 +599,9 @@ def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
                 "session_active": False,
                 "session_id": None,
                 "session_started_at": None,
+                # An idle proof is meaningful only for a live focus session.
+                # Never let a retained active proof accompany a rest payload.
+                "input_idle_seconds": None,
             }
         )
     else:
