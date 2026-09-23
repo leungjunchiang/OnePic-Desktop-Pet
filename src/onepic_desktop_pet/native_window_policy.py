@@ -3,7 +3,8 @@
 Qt flags 是唯一的窗口策略来源；本模块只在 Show、WinIdChange、屏幕、
 应用生命周期节点或低频 watchdog 中校验已经存在的 native handle。Windows 使用
 ``SetWindowPos`` 的 ``NOACTIVATE`` 方式，macOS 使用 PyObjC 包装 Qt
-创建的 NSWindow；不通过裸 Objective-C ABI 调用、不接管 Cocoa delegate，也不抢占焦点。
+创建的 NSWindow，并用正确的无参数 ``orderFrontRegardless`` 选择器恢复浮动层级；
+不通过裸 Objective-C ABI 调用、不接管 Cocoa delegate，也不抢占焦点。
 """
 
 from __future__ import annotations
@@ -180,13 +181,24 @@ def apply_macos_window_policy(
             window.setStyleMask_(desired_style_mask)
         # A different app can reorder a floating NSWindow without changing its
         # numeric level.  Reassert ordering only from the low-frequency
-        # watchdog.  orderFrontRegardless: orders the panel without making it
-        # key, so the foreground app keeps keyboard focus.
+        # watchdog or app-deactivation repair. orderFrontRegardless() orders
+        # the panel without making it key, so the foreground app keeps focus.
         should_reassert_topmost = bool(topmost and force_topmost)
         if should_reassert_topmost:
-            order_front_regardless = getattr(window, "orderFrontRegardless_", None)
-            if callable(order_front_regardless):
-                order_front_regardless()
+            # PyObjC replaces Objective-C selector colons with underscores.
+            # This selector has no arguments, so the real Python name has no
+            # trailing underscore. Treat a missing bridge method as failure
+            # instead of logging a false successful reassertion.
+            order_front_regardless = getattr(window, "orderFrontRegardless", None)
+            if not callable(order_front_regardless):
+                result.update(
+                    {
+                        "available": False,
+                        "action": "reassert_selector_unavailable",
+                    }
+                )
+                return result
+            order_front_regardless()
         hides_on_deactivate = getattr(window, "setHidesOnDeactivate_", None)
         if callable(hides_on_deactivate):
             hides_on_deactivate(False)

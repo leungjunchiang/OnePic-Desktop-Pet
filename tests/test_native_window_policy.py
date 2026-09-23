@@ -43,7 +43,7 @@ def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:
         def setBecomesKeyOnlyIfNeeded_(self, value):
             self.becomes_key_only = bool(value)
 
-        def orderFrontRegardless_(self):
+        def orderFrontRegardless(self):
             self.order_front_regardless_calls += 1
 
     native = FakeWindow()
@@ -110,7 +110,7 @@ def test_macos_watchdog_reasserts_floating_order_without_focus(monkeypatch) -> N
         def setBecomesKeyOnlyIfNeeded_(self, _value):
             pass
 
-        def orderFrontRegardless_(self):
+        def orderFrontRegardless(self):
             self.order_front_regardless_calls += 1
 
     native = FakeWindow()

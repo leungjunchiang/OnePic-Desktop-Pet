@@ -4,6 +4,7 @@
 职责范围：
 - 创建无边框、透明、可选始终置顶的 QWidget；
 - 使用 Windows/macOS 原生窗口层级补强置顶，同时保持不激活、不占任务栏和轮廓外点击穿透；
+- macOS 应用失焦时立即修复宠物和计时小栏层级，并在浮动窗口 watchdog 中重新核对小栏可见性；
 - 提供“始终置顶/桌面模式”即时切换并持久化，切换时不破坏动画、拖动和互动状态；
 - 播放循环或单次 PNG 序列，并支持拖拽、坐下、坐姿入睡和反向起身；
 - 处理左右翻转、边缘转身停顿、亚像素时间驱动移动和同步身体起伏；
@@ -2148,6 +2149,11 @@ class PetWindow(QWidget):
         if self._fullscreen_hidden or not self.isVisible():
             self._update_topmost_watchdog()
             return
+        if sys.platform == "darwin":
+            # WorkDurationBubble is a detached NSPanel. Re-derive its intended
+            # visibility from the current session each pass so an external
+            # orderOut/window recreation cannot leave the Qt surface missing.
+            self._update_work_duration_bubble()
         self._ensure_on_top(event="TopmostWatchdog")
 
     @_guard_qt_callback
@@ -2184,11 +2190,16 @@ class PetWindow(QWidget):
                 widget,
                 topmost=bool(self.settings.always_on_top),
                 qt_stays_on_top=qt_stays_on_top,
-                # Windows can retain WS_EX_TOPMOST even after a third-party
-                # app moved its HWND ahead of us.  Only the low-frequency
-                # watchdog forces a non-activating native reassertion; normal
-                # lifecycle checks remain cheap verification passes.
-                force_topmost=event == "TopmostWatchdog",
+                # A third-party app can reorder a native surface without
+                # changing its topmost level. The low-frequency watchdog and
+                # macOS app-switch repair force a non-activating reassertion;
+                # ordinary lifecycle checks remain verification passes.
+                force_topmost=event
+                in {
+                    "TopmostWatchdog",
+                    "ApplicationDeactivate",
+                    "ApplicationDeactivateSettled",
+                },
             )
             lifecycle_log(
                 "pet-window.native-policy",
@@ -2708,15 +2719,50 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _on_application_state_changed(self, state: Qt.ApplicationState) -> None:
-        """应用重新激活时恢复层级，但不把六毛变成前台焦点窗口。"""
+        """应用切换时修复原生层级，不把六毛变成前台焦点窗口。"""
 
-        if state != Qt.ApplicationState.ApplicationActive or not self.isVisible():
+        if not self.isVisible():
+            return
+        if (
+            sys.platform == "darwin"
+            and state == Qt.ApplicationState.ApplicationInactive
+            and self.settings.always_on_top
+            and not self._manually_hidden
+            and not self._fullscreen_hidden
+        ):
+            self._repair_macos_order_after_app_switch(event="ApplicationDeactivate")
+            QTimer.singleShot(
+                120,
+                lambda: self._repair_macos_order_after_app_switch(
+                    event="ApplicationDeactivateSettled"
+                ),
+            )
+            return
+        if state != Qt.ApplicationState.ApplicationActive:
             return
         self.ensure_pet_window_policy(event="ApplicationActivate")
+        self._update_work_duration_bubble()
         QTimer.singleShot(
             0,
             lambda: self._ensure_on_top(event="ApplicationActivate"),
         )
+
+    @_guard_qt_callback
+    def _repair_macos_order_after_app_switch(self, *, event: str) -> None:
+        """在其他应用完成置前后恢复可见桌宠窗口，保持当前应用焦点。"""
+
+        if (
+            not self.isVisible()
+            or not self.settings.always_on_top
+            or self._manually_hidden
+            or QApplication.closingDown()
+        ):
+            return
+        self._sync_fullscreen_visibility()
+        if self._fullscreen_hidden:
+            return
+        self._update_work_duration_bubble()
+        self._ensure_on_top(event=event)
 
     @_guard_qt_callback
     def _on_dpi_changed(self, _dpi: float) -> None:

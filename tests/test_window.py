@@ -842,7 +842,7 @@ def test_topmost_watchdog_repairs_without_raise_or_activation(monkeypatch) -> No
 
 
 def test_topmost_watchdog_forces_only_native_reassertion(monkeypatch) -> None:
-    """Only watchdog passes force level reassertion; regular Show stays cheap."""
+    """Watchdog/app-switch passes force reassertion; ordinary Show stays cheap."""
 
     app, window = _create_window()
     calls = []
@@ -853,9 +853,61 @@ def test_topmost_watchdog_forces_only_native_reassertion(monkeypatch) -> None:
 
     window._apply_native_window_policy_for_widget(window, event="Show")
     window._apply_native_window_policy_for_widget(window, event="TopmostWatchdog")
+    window._apply_native_window_policy_for_widget(
+        window,
+        event="ApplicationDeactivateSettled",
+    )
 
     assert calls[0]["force_topmost"] is False
     assert calls[1]["force_topmost"] is True
+    assert calls[2]["force_topmost"] is True
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_macos_app_deactivation_repairs_detached_surfaces_without_focus(monkeypatch) -> None:
+    """Switching to another Mac app repairs the pet and its time badge in place."""
+
+    monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "darwin")
+    app, window = _create_window()
+    window.settings.always_on_top = True
+    events = []
+    scheduled = []
+    monkeypatch.setattr(
+        window,
+        "_sync_fullscreen_visibility",
+        lambda: events.append("fullscreen-check"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_update_work_duration_bubble",
+        lambda: events.append("duration-visibility-check"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_ensure_on_top",
+        lambda **kwargs: events.append(kwargs["event"]),
+    )
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+
+    window._on_application_state_changed(Qt.ApplicationState.ApplicationInactive)
+
+    assert events == [
+        "fullscreen-check",
+        "duration-visibility-check",
+        "ApplicationDeactivate",
+    ]
+    assert len(scheduled) == 1 and scheduled[0][0] == 120
+    scheduled[0][1]()
+    assert events[-3:] == [
+        "fullscreen-check",
+        "duration-visibility-check",
+        "ApplicationDeactivateSettled",
+    ]
     window.close()
     window.deleteLater()
     app.processEvents()
