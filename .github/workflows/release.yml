@@ -190,7 +190,7 @@ jobs:
             --ref "$GITHUB_REF_NAME" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json
-      - name: Ensure release tag exists
+      - name: Ensure release tag matches the built commit
         if: startsWith(github.ref, 'refs/heads/release/')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -201,7 +201,18 @@ jobs:
             echo "无法从 ref 推导合法版本：$GITHUB_REF_NAME" >&2
             exit 1
           fi
-          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag" >/dev/null 2>&1; then
+          tag_ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag"
+          if gh api "$tag_ref" >/dev/null 2>&1; then
+            tag_sha="$(gh api "$tag_ref" --jq '.object.sha')"
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              # A release branch may be created before its final code is
+              # pushed. Move the tag only by fast-forward so its source
+              # archive always matches the verified installer assets.
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$release_tag" \
+                -f "sha=$GITHUB_SHA" \
+                -F force=false
+            fi
+          else
             gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f "ref=refs/tags/$release_tag" \
               -f "sha=$GITHUB_SHA"
