@@ -26,7 +26,10 @@ from .focus_segments import (
 from .local_data import platform_app_data_root, read_json, write_json_atomic
 
 
-FOCUS_HISTORY_RECOVERY_VERSION = 2
+# Re-scan exact local interval sources after upgrading. This is a bounded,
+# idempotent one-time pass that can recover sealed facts absent from the
+# server, while scalar-only timer counters remain ineligible.
+FOCUS_HISTORY_RECOVERY_VERSION = 3
 MAX_RECOVERY_LOG_RUNS = 20
 
 

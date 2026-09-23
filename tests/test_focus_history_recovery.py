@@ -210,6 +210,44 @@ def test_automatic_scan_rechecks_when_exact_history_source_changes(tmp_path):
     assert len(store.focus_segments()) == 2
 
 
+def test_recovery_version_bump_rescans_unchanged_exact_history(tmp_path):
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=BEIJING)
+    account_dir = tmp_path / "account-a"
+    account_dir.mkdir()
+    start = datetime(2026, 9, 19, 9, 0, tzinfo=BEIJING)
+    end = start + timedelta(minutes=23)
+    history_path = account_dir / "work_sessions.json"
+    history_path.write_text(
+        json.dumps([{
+            "id": "missing-day-session",
+            "started_at": start.isoformat(),
+            "ended_at": end.isoformat(),
+            "seconds": 23 * 60,
+        }]),
+        encoding="utf-8",
+    )
+    store = AccountFocusStore(
+        path=account_dir / "focus_analytics.json",
+        now_provider=lambda: now,
+        persist=True,
+        device_id="device-a",
+    )
+    scanner = _scanner(tmp_path, store, now)
+    scanner.state_path.write_text(
+        json.dumps({
+            "completed_version": 2,
+            "source_signatures": scanner._source_signatures(),
+        }),
+        encoding="utf-8",
+    )
+
+    report = scanner.run()
+
+    assert not report.already_checked
+    assert report.recovered == 1
+    assert store.focus_segments_payload()[0]["start_at"] == start.isoformat()
+
+
 def test_deterministic_segment_identity_changes_only_with_interval_identity():
     start = datetime(2026, 9, 10, 9, 0, tzinfo=BEIJING)
     end = start + timedelta(minutes=15)

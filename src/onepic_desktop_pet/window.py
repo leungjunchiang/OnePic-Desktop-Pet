@@ -635,6 +635,7 @@ class PetWindow(QWidget):
         self._cross_device_today_display_seconds: int | None = None
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_date = ""
+        self._cross_device_today_display_rollover_attempt_date = ""
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
         # Keep the last validated server interval payload in memory only.
@@ -5741,6 +5742,7 @@ class PetWindow(QWidget):
         self._cross_device_today_display_seconds = None
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_date = ""
+        self._cross_device_today_display_rollover_attempt_date = ""
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
         self._cross_device_today_display_remote_rows = None
@@ -6233,6 +6235,7 @@ class PetWindow(QWidget):
         """Return the account union, advancing every cached live device."""
 
         account_id = self._current_social_user_id()
+        display_date = self.focus_analytics.current_time().date().isoformat()
         if (
             not account_id
             or (
@@ -6240,6 +6243,7 @@ class PetWindow(QWidget):
                 and str(getattr(self, "_active_focus_account_id", "") or "") != account_id
             )
             or account_id != self._cross_device_today_display_account_id
+            or display_date != self._cross_device_today_display_date
             or self._cross_device_today_display_seconds is None
         ):
             return None
@@ -6252,7 +6256,7 @@ class PetWindow(QWidget):
         )
         projection_key = (
             account_id,
-            str(self._cross_device_today_display_date or ""),
+            display_date,
             current_status,
             current_session,
             int(self._cross_device_today_display_seconds or 0),
@@ -6512,13 +6516,28 @@ class PetWindow(QWidget):
         """
 
         current = snapshot or self.focus_session.snapshot(include_projection=False)
+        display_day = self.focus_analytics.current_time().date().isoformat()
+        if (
+            self._cross_device_today_display_date
+            and self._cross_device_today_display_date != display_day
+            and self._cross_device_today_display_rollover_attempt_date != display_day
+        ):
+            # The account display cache is a *daily* scalar. At Beijing
+            # midnight, reproject the already-fetched intervals and the local
+            # live session once, without waiting for a network response. A
+            # failed projection is rejected below instead of leaking
+            # yesterday's total into today's monotonic clock.
+            self._cross_device_today_display_rollover_attempt_date = display_day
+            self._refresh_cross_device_today_display(
+                snapshot=current,
+                source="beijing_day_rollover",
+            )
         authoritative = self._cross_device_today_display_value(current)
         if authoritative is None:
             authoritative = int(getattr(current, "today_seconds", 0) or 0)
         authoritative = max(0, min(24 * 60 * 60, int(authoritative)))
         status = str(getattr(current, "status", "idle") or "idle")
         account_id = str(getattr(self, "_active_focus_account_id", "") or "local")
-        display_day = datetime.now(BEIJING_TIMEZONE).date().isoformat()
         return self._smooth_work_duration_display.project(
             authoritative,
             active=status == "focus",
@@ -6961,6 +6980,11 @@ class PetWindow(QWidget):
 
         lifecycle_log("work_report.show.request", self)
         self._record_user_interaction()
+        # Opening the report is an explicit request for current account data.
+        # Kick the existing background sync path so a pending bounded history
+        # reconciliation can repair this device's local interval ledger; the
+        # report remains non-blocking and is refreshed after the merge.
+        self._schedule_social_tick(immediate=True)
         # Close the floating shortcut first. Showing both top-level windows
         # in one mouse event can leave the report behind the dock on macOS.
         self.quick_panel.hide()
@@ -9123,6 +9147,13 @@ class PetWindow(QWidget):
         # events that actually change the canonical projection.
         if history_changed or segment_changed or derived_changed or live_projection_changed:
             self._invalidate_focus_projection("remote_focus_reconciled")
+        if history_changed or segment_changed:
+            # WorkReport builds from a readonly local-ledger snapshot. If the
+            # first paint races the remote reconciliation, refresh the open
+            # report only after exact facts have been durably merged.
+            report_dialog = self._work_report_dialog
+            if report_dialog is not None and report_dialog.isVisible():
+                report_dialog.request_refresh(force=True)
         local_day = self.focus_analytics.period_summary("day")
         if (
             bool(local_day.get("raw_period_evidence"))

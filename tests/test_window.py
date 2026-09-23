@@ -304,6 +304,63 @@ def test_cross_device_display_keeps_server_effective_floor(monkeypatch) -> None:
     app.processEvents()
 
 
+def test_account_today_display_reprojects_cached_intervals_at_beijing_midnight(monkeypatch) -> None:
+    """Yesterday's account total must not be added to today's live clock."""
+
+    app, window = _create_window()
+    moment = datetime(2026, 9, 24, 0, 0, 30, tzinfo=timezone(timedelta(hours=8)))
+    account_id = "account-1"
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: account_id)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
+    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [])
+    monkeypatch.setattr(window, "_shared_today_focus_seconds", lambda: 0)
+    window._active_focus_account_id = account_id
+    window._cross_device_today_display_account_id = account_id
+    window._cross_device_today_display_date = "2026-09-23"
+    window._cross_device_today_display_seconds = 4 * 3600 + 29 * 60 + 35
+    window._cross_device_today_display_remote_rows = [
+        {
+            "user_id": account_id,
+            "segment_id": "cross-midnight",
+            "session_id": "session-1",
+            "start_at": "2026-09-23T23:59:30+08:00",
+            "end_at": "2026-09-24T00:00:30+08:00",
+            "device_id": "other-device",
+        }
+    ]
+    snapshot = SimpleNamespace(
+        status="rest", today_seconds=0, session_started_at=None,
+        current_continuous_seconds=0,
+    )
+
+    assert window._cross_device_today_display_value(snapshot) is None
+    assert window._account_today_display_seconds(snapshot) == 30
+    assert window._cross_device_today_display_date == "2026-09-24"
+    assert window._cross_device_today_display_seconds == 30
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_failed_midnight_reprojection_cannot_show_yesterday_total(monkeypatch) -> None:
+    """A bad cached interval must fall back to today's local value."""
+
+    app, window = _create_window()
+    moment = datetime(2026, 9, 24, 0, 0, 30, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
+    window._active_focus_account_id = "account-1"
+    window._cross_device_today_display_account_id = "account-1"
+    window._cross_device_today_display_date = "2026-09-23"
+    window._cross_device_today_display_seconds = 4 * 3600 + 29 * 60 + 35
+    monkeypatch.setattr(window, "_refresh_cross_device_today_display", lambda **_kwargs: False)
+    snapshot = SimpleNamespace(status="rest", today_seconds=47)
+
+    assert window._account_today_display_seconds(snapshot) == 47
+    assert window._cross_device_today_display_value(snapshot) is None
+
+    window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_cross_device_display_uses_account_presence_when_live_rpc_is_missing(monkeypatch) -> None:
     """当前 sealed checkpoint 之后的工作也必须在另一台设备可见。"""
 
@@ -1389,6 +1446,52 @@ def test_work_report_keeps_visible_compact_todos_open(tmp_path) -> None:
     assert panel.isVisible()
     assert panel.visible_task_ids
 
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_work_report_open_kicks_existing_background_sync(monkeypatch) -> None:
+    app, window = _create_window()
+    scheduled: list[bool] = []
+    monkeypatch.setattr(
+        window,
+        "_schedule_social_tick",
+        lambda *, immediate=False: scheduled.append(bool(immediate)),
+    )
+
+    window.show_work_report()
+
+    assert scheduled == [True]
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_remote_focus_segment_merge_refreshes_open_work_report(monkeypatch) -> None:
+    app, window = _create_window()
+    refreshes: list[bool] = []
+    window._work_report_dialog = SimpleNamespace(
+        isVisible=lambda: True,
+        request_refresh=lambda *, force=False: refreshes.append(bool(force)),
+    )
+    now = window.focus_analytics.current_time()
+    segment = {
+        "segment_id": "report-refresh-regression-segment",
+        "session_id": "report-refresh-regression-session",
+        "device_id": "remote-device",
+        "start_at": (now - timedelta(minutes=10)).isoformat(),
+        "end_at": (now - timedelta(minutes=5)).isoformat(),
+        "completed": True,
+    }
+
+    window._merge_remote_personal_state({
+        "_focus_segments": {
+            "segments": [segment],
+            "_sync_mode": "delta",
+            "_upload_ack_ok": True,
+            "full_sync": False,
+        },
+    })
+
+    assert refreshes == [True]
+    window._work_report_dialog = None
     window.close(); window.deleteLater(); app.processEvents()
 
 

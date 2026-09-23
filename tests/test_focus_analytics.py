@@ -41,7 +41,24 @@ def test_recent_reconciliation_is_paged_and_does_not_touch_delta_cursor(tmp_path
         "segments": [], "next_cursor": None, "has_more": False,
     })
     assert (ok, changed, recovered, has_more) == (True, False, 0, False)
+    assert store._state["account_state"]["focus_recent_reconciliation_version"] == 2
     assert store.focus_segment_recent_reconciliation_request() is None
+
+
+def test_completed_v1_recent_reconciliation_is_safely_restarted_for_v2(tmp_path) -> None:
+    now = datetime(2026, 9, 22, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=True)
+    old_delta_cursor = '{"updated_at":"2026-09-20T00:00:00+00:00","segment_id":"delta"}'
+    store.set_focus_segments_sync_cursor(old_delta_cursor)
+    state = store._state.setdefault("account_state", {})
+    state["focus_recent_reconciliation_version"] = 1
+    state["focus_recent_reconciliation_completed_at"] = "2026-09-21T00:00:00+08:00"
+    store._save()
+
+    request = store.focus_segment_recent_reconciliation_request()
+
+    assert request == {"p_cursor": None, "p_days": 60, "p_limit": 500}
+    assert store.focus_segments_sync_cursor() == old_delta_cursor
 
 
 def test_recent_reconciliation_can_retain_more_than_legacy_500_rows(tmp_path) -> None:

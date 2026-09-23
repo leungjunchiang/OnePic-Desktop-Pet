@@ -64,11 +64,12 @@ FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL = timedelta(hours=24)
 # dashboard tick.  Missing facts are still repaired through the normal
 # targeted segment-id backfill once an audit succeeds.
 FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 24 * 60 * 60
-# A one-time, account-local repair for clients that advanced a delta cursor
-# while an older release still retained only 500 sealed facts. This is not a
-# replacement for the ordinary delta stream: it only reads a bounded recent
-# window, page by page, and never changes the delta cursor or server facts.
-FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION = 1
+# A versioned, account-local repair for clients that advanced a delta cursor
+# while an older release retained only a partial sealed-fact ledger. Bumping
+# this version intentionally re-runs one bounded recent pull for existing
+# installs; it is not a replacement for delta sync and never changes the
+# delta cursor or server facts.
+FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION = 2
 FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS = 60
 FOCUS_SEGMENT_RECENT_RECONCILIATION_PAGE_SIZE = 500
 # A busy account can legitimately produce more than 500 sealed intervals in
