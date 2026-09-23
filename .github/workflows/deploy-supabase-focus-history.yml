@@ -5,8 +5,10 @@ on:
   push:
     branches:
       - "release/v*"
-    tags:
-      - "v*"
+    paths:
+      - "supabase/migrations/**"
+      - "scripts/apply_supabase_focus_sync_migrations.ps1"
+      - "scripts/apply_supabase_focus_history.ps1"
 
 permissions:
   contents: read
