@@ -2,6 +2,9 @@
 
 闹钟卡片在 Windows 上只通过原生窗口层级 API 调整临时置顶，不在显示后
 反复切换 Qt window flag，避免触发 Qt 原生窗口重建。
+
+Windows 自定义音频通过 MCI 异步播放；只有确认播放已停止后才启动回退播放器，
+停止失败时保留别名并在后台重试，避免同一音源同时由两个后端播放。
 """
 
 from __future__ import annotations
@@ -9,7 +12,6 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
-import weakref
 from ctypes import wintypes
 from datetime import datetime
 from enum import Enum
@@ -378,7 +380,10 @@ class _WindowsAlarmAudio:
     the GUI never waits for either the command or the thread.
     """
 
-    _instances: weakref.WeakSet["_WindowsAlarmAudio"] = weakref.WeakSet()
+    # Keep an MCI backend alive until its native alias is actually closed.
+    # A WeakSet allowed a failed close to outlive its Python wrapper, so a
+    # later alarm could open a second alias for the same looping file.
+    _instances: set["_WindowsAlarmAudio"] = set()
     _instances_lock = threading.Lock()
 
     def __init__(
@@ -394,10 +399,19 @@ class _WindowsAlarmAudio:
         self.alias = f"lili_alarm_{uuid4().hex[:12]}"
         self._on_finished = on_finished
         self._on_error = on_error
+        # GUI-facing state is protected by a short-held lock. MCI calls can
+        # block (especially commands with ``wait``), so serialize those on a
+        # separate worker-only lock and never hold the state lock around them.
         self._lock = threading.Lock()
+        self._command_lock = threading.Lock()
         self._opened = False
+        self._closed = False
+        self._playback_stopped = False
         self._start_requested = False
         self._stop_requested = False
+        self._stop_worker_running = False
+        self._finished_notified = False
+        self._stop_retry_delay = 0.5
         self._mci = None
         try:
             mci = ctypes.windll.winmm.mciSendStringW
@@ -411,19 +425,32 @@ class _WindowsAlarmAudio:
             self._mci = mci
         except (AttributeError, OSError):
             self._mci = None
-        with self._instances_lock:
-            self._instances.add(self)
+        if self._mci is not None:
+            with self._instances_lock:
+                self._instances.add(self)
 
     @property
     def available(self) -> bool:
         return self._mci is not None
 
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
+
+    @property
+    def playback_stopped(self) -> bool:
+        with self._lock:
+            return self._playback_stopped
+
     def start(self) -> None:
-        if self._start_requested or not self.available:
-            if not self.available:
-                self._notify_error("winmm 不可用")
+        if not self.available:
+            self._notify_error("winmm 不可用")
             return
-        self._start_requested = True
+        with self._lock:
+            if self._start_requested or self._stop_requested or self._closed:
+                return
+            self._start_requested = True
         threading.Thread(
             target=self._start_worker,
             name="LiliAlarmAudioStart",
@@ -434,9 +461,10 @@ class _WindowsAlarmAudio:
         """Request stop without joining the worker or waiting in the GUI."""
 
         with self._lock:
-            if self._stop_requested:
+            if self._closed or self._stop_worker_running:
                 return
             self._stop_requested = True
+            self._stop_worker_running = True
         threading.Thread(
             target=self._stop_worker,
             name="LiliAlarmAudioStop",
@@ -463,27 +491,59 @@ class _WindowsAlarmAudio:
 
     def _start_worker(self) -> None:
         error = ""
-        with self._lock:
-            if self._stop_requested:
-                self._notify_finished()
-                return
-            extension = str(self.path).lower().rsplit(".", 1)[-1]
-            device_type = "waveaudio" if extension == "wav" else "mpegvideo"
-            safe_path = self.path.replace('"', '""')
-            result = self._send(
-                f'open "{safe_path}" type {device_type} alias {self.alias}'
-            )
-            if result:
-                error = f"mci open failed: {result}"
+        closed_before_return = False
+        stop_succeeded = False
+        close_succeeded = False
+        with self._command_lock:
+            with self._lock:
+                stop_requested = self._stop_requested
+            if stop_requested:
+                with self._lock:
+                    closed_before_return = not self._opened
             else:
-                self._opened = True
-                volume = self.volume * 10
-                self._send(f"setaudio {self.alias} volume to {volume}")
-                result = self._send(f"play {self.alias} repeat")
+                extension = str(self.path).lower().rsplit(".", 1)[-1]
+                device_type = "waveaudio" if extension == "wav" else "mpegvideo"
+                safe_path = self.path.replace('"', '""')
+                result = self._send(
+                    f'open "{safe_path}" type {device_type} alias {self.alias}'
+                )
                 if result:
-                    error = f"mci play failed: {result}"
-                    self._send(f"close {self.alias}")
-                    self._opened = False
+                    error = f"mci open failed: {result}"
+                    with self._lock:
+                        closed_before_return = not self._opened
+                else:
+                    with self._lock:
+                        self._opened = True
+                        stop_requested = self._stop_requested
+                    if stop_requested:
+                        # Dismissal raced the open command. Do not start a new
+                        # looping player; the stop worker will close this alias.
+                        return
+                    volume = self.volume * 10
+                    self._send(f"setaudio {self.alias} volume to {volume}")
+                    result = self._send(f"play {self.alias} repeat")
+                    if result:
+                        error = f"mci play failed: {result}"
+                        stop_result = self._send(f"stop {self.alias} wait")
+                        stop_retry_result = 0
+                        if stop_result:
+                            stop_retry_result = self._send(f"stop {self.alias}")
+                        close_result = self._send(f"close {self.alias} wait")
+                        close_retry_result = 0
+                        if close_result:
+                            close_retry_result = self._send(f"close {self.alias}")
+                        stop_succeeded = stop_result == 0 or stop_retry_result == 0
+                        close_succeeded = close_result == 0 or close_retry_result == 0
+                        with self._lock:
+                            self._playback_stopped = stop_succeeded or close_succeeded
+                            if close_succeeded:
+                                self._opened = False
+                            if close_succeeded or not self._opened:
+                                closed_before_return = True
+                        if not close_succeeded and not stop_succeeded:
+                            self._schedule_stop_retry()
+        if closed_before_return:
+            self._mark_closed()
         if error:
             lifecycle_log(
                 "media.alarm.mci.error",
@@ -494,7 +554,11 @@ class _WindowsAlarmAudio:
             self._notify_error(error)
 
     def _stop_worker(self) -> None:
-        with self._lock:
+        with self._command_lock:
+            with self._lock:
+                if self._closed:
+                    self._stop_worker_running = False
+                    return
             # ``_opened`` is only a Python-side hint and can be stale if the
             # start/stop workers race. Always issue both native commands;
             # ``wait`` is confined to this daemon thread, never the GUI.
@@ -508,7 +572,17 @@ class _WindowsAlarmAudio:
             close_retry_result = 0
             if close_result:
                 close_retry_result = self._send(f"close {self.alias}")
-            self._opened = False
+            stop_succeeded = stop_result == 0 or stop_retry_result == 0
+            close_succeeded = close_result == 0 or close_retry_result == 0
+            with self._lock:
+                if stop_succeeded or close_succeeded:
+                    self._playback_stopped = True
+                if close_succeeded:
+                    self._opened = False
+                closed = close_succeeded or not self._opened
+                if closed:
+                    self._playback_stopped = True
+                self._stop_worker_running = False
         lifecycle_log(
             "media.alarm.mci.stop_commands",
             class_name="WindowsAlarmAudio",
@@ -517,7 +591,50 @@ class _WindowsAlarmAudio:
             stop_retry_result=stop_retry_result,
             close_result=close_result,
             close_retry_result=close_retry_result,
+            playback_stopped=self._playback_stopped,
+            alias_closed=closed,
         )
+        if closed:
+            self._mark_closed()
+            return
+        if self._playback_stopped:
+            # The UI can retire the card once playback is silent, while the
+            # strongly-held backend continues retrying the alias close.
+            self._notify_finished_once()
+        lifecycle_log(
+            "media.alarm.mci.stop_retry",
+            class_name="WindowsAlarmAudio",
+            alarm_alias=self.alias,
+            stop_result=stop_result,
+            stop_retry_result=stop_retry_result,
+            close_result=close_result,
+            close_retry_result=close_retry_result,
+        )
+        self._schedule_stop_retry()
+
+    def _schedule_stop_retry(self) -> None:
+        with self._lock:
+            delay = self._stop_retry_delay
+            self._stop_retry_delay = min(delay * 2, 30.0)
+        timer = threading.Timer(delay, self.request_stop)
+        timer.daemon = True
+        timer.start()
+
+    def _mark_closed(self) -> None:
+        with self._lock:
+            self._opened = False
+            self._closed = True
+            self._playback_stopped = True
+            self._stop_worker_running = False
+        with self._instances_lock:
+            self._instances.discard(self)
+        self._notify_finished_once()
+
+    def _notify_finished_once(self) -> None:
+        with self._lock:
+            if self._finished_notified:
+                return
+            self._finished_notified = True
         self._notify_finished()
 
     def _notify_finished(self) -> None:
@@ -587,6 +704,7 @@ class AlarmCard(QDialog):
         self._media_stop_completed = False
         self._media_drained = False
         self._audio_cleanup_ready = False
+        self._pending_audio_fallback = False
         self._windows_audio = None
         self._qt_fallback_output = None
         self._qt_fallback_player = None
@@ -1130,11 +1248,19 @@ class AlarmCard(QDialog):
         self._media_stop_pending = False
         self._media_stop_completed = True
         self._media_drained = True
+        self._windows_audio = None
         lifecycle_log(
             "media.alarm.mci.stop_complete",
             class_name="WindowsAlarmAudio",
             alarm_id=str(self.alarm.id),
         )
+        if self._pending_audio_fallback:
+            self._pending_audio_fallback = False
+            if not self._audio_closing:
+                if self._custom_audio and self._play_qt_fallback(self._custom_audio_path):
+                    return
+                self._fallback_to_system()
+                return
         self._emit_audio_cleanup_finished()
 
     def _on_windows_audio_error(self, error: str) -> None:
@@ -1145,9 +1271,15 @@ class AlarmCard(QDialog):
             error=str(error),
         )
         backend = self._windows_audio
-        self._windows_audio = None
         if backend is not None:
+            # Do not start Qt on the same file until MCI has confirmed that
+            # playback stopped.  Otherwise a partial MCI start can keep
+            # looping under the Qt fallback as a second audible player.
+            self._pending_audio_fallback = not self._audio_closing
             backend.request_stop()
+            if backend.closed or backend.playback_stopped:
+                self._windows_audio_finished.emit()
+            return
         if self._audio_closing:
             self._on_windows_audio_finished()
             return
