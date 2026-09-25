@@ -1277,7 +1277,13 @@ class AlarmCard(QDialog):
             # looping under the Qt fallback as a second audible player.
             self._pending_audio_fallback = not self._audio_closing
             backend.request_stop()
-            if backend.closed or backend.playback_stopped:
+            # Preserve compatibility with lightweight backend wrappers that
+            # implement the original request_stop contract but do not expose
+            # the new native-state properties. The concrete MCI backend has
+            # both properties and only falls back after a confirmed stop.
+            if getattr(backend, "closed", True) or getattr(
+                backend, "playback_stopped", False
+            ):
                 self._windows_audio_finished.emit()
             return
         if self._audio_closing:
