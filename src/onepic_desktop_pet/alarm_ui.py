@@ -1284,7 +1284,10 @@ class AlarmCard(QDialog):
             if getattr(backend, "closed", True) or getattr(
                 backend, "playback_stopped", False
             ):
-                self._windows_audio_finished.emit()
+                # This error handler is already queued onto Qt's GUI thread;
+                # process confirmed completion now instead of adding another
+                # event-loop turn before the fallback player can start.
+                self._on_windows_audio_finished()
             return
         if self._audio_closing:
             self._on_windows_audio_finished()
