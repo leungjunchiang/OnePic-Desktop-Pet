@@ -1,6 +1,7 @@
 """搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
+搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
 邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
 专注后台同步只传本设备待确认的 sealed facts；上传成功后把本地确认信息交给账号账本持久化。
 """
@@ -1278,6 +1279,8 @@ class SocialSyncThread(QThread):
     def run(self) -> None:
         try:
             heartbeat_error = ""
+            work_event_acked: list[str] = []
+            reminder_snapshot: dict[str, Any] | None = None
             focus_history_result = None
             focus_segments_result = None
             focus_segment_integrity_result = None
@@ -1315,6 +1318,22 @@ class SocialSyncThread(QThread):
                     LOGGER.exception("background personal-state preparation failed")
                     personal_state = None
             heartbeat_presence = _heartbeat_payload(self.presence)
+            reminder_rpc = getattr(self.client, "rpc", None)
+            # The outbox is a separate domain from liveness and FocusSegment
+            # sync. A failed event write remains queued for the next cycle.
+            if self.presence.get("_work_events") and callable(reminder_rpc) and getattr(self.client, "signed_in", True):
+                for event in self.presence.get("_work_events") or []:
+                    if not isinstance(event, dict):
+                        continue
+                    try:
+                        response = reminder_rpc("lili_publish_work_transition", event)
+                        if isinstance(response, dict) and response.get("accepted") is True:
+                            work_event_acked.append(str(event.get("p_event_id") or ""))
+                        else:
+                            break
+                    except (SocialError, AttributeError, TypeError) as exc:
+                        LOGGER.info("work event delivery deferred: %s", exc)
+                        break
             if self.send_heartbeat:
                 try:
                     self.client.heartbeat(**heartbeat_presence)
@@ -1753,6 +1772,14 @@ class SocialSyncThread(QThread):
                 # Keep third-party/test backends compatible while they adopt
                 # the room-scoped dashboard argument.
                 data = self.client.dashboard()
+            reminder_reader = getattr(self.client, "buddy_reminder_snapshot", None)
+            if callable(reminder_reader) and getattr(self.client, "signed_in", True):
+                try:
+                    snapshot = reminder_reader()
+                    if isinstance(snapshot, dict) and isinstance(snapshot.get("subscriptions"), list):
+                        reminder_snapshot = snapshot
+                except (SocialError, AttributeError, TypeError) as exc:
+                    LOGGER.info("buddy reminder read deferred: %s", exc)
             # The leaderboard is a low-frequency view, not presence data.
             # Fetching it on every passive dashboard cycle caused a slow
             # ranking RPC to hold up the completed signal and repaint path.
@@ -1772,6 +1799,12 @@ class SocialSyncThread(QThread):
             if heartbeat_error:
                 data = dict(data or {})
                 data["_presence_heartbeat_error"] = heartbeat_error
+            if work_event_acked:
+                data = dict(data or {})
+                data["_work_event_acked"] = work_event_acked
+            if reminder_snapshot is not None:
+                data = dict(data or {})
+                data["_reminder_snapshot"] = reminder_snapshot
             if presence_context_updated is not None:
                 data = dict(data or {})
                 data["_presence_context_updated"] = presence_context_updated
@@ -1806,6 +1839,7 @@ class SocialSyncThread(QThread):
                 data = dict(data or {})
                 data["_encouragement_state"] = encouragement_state_result
             data = dict(data or {})
+            data["_work_event_account_id"] = str(self.presence.get("user_id") or "")
             data["_focus_sync_metrics"] = dict(focus_sync_metrics)
             if isinstance(data, dict) and self.request_generation:
                 data = dict(data)
@@ -1859,6 +1893,15 @@ class SocialDashboardThread(QThread):
                     data = self.client.dashboard(room_id=self.room_id)
                 except TypeError:
                     data = self.client.dashboard()
+            reminder_reader = getattr(self.client, "buddy_reminder_snapshot", None)
+            if callable(reminder_reader) and getattr(self.client, "signed_in", True):
+                try:
+                    snapshot = reminder_reader()
+                    if isinstance(snapshot, dict) and isinstance(snapshot.get("subscriptions"), list):
+                        data = dict(data or {})
+                        data["_reminder_snapshot"] = snapshot
+                except (SocialError, AttributeError, TypeError) as exc:
+                    LOGGER.info("buddy reminder read deferred: %s", exc)
             self.completed.emit(dict(data or {}))
         except SocialError as exc:
             cached_loader = getattr(self.client, "cached_dashboard", None)
@@ -2475,7 +2518,7 @@ class BuddyCardWidget(QWidget):
     interaction_requested = Signal(dict, str)
     food_interaction_requested = Signal(dict, str)
     interaction_blocked = Signal(str)
-    subscription_requested = Signal(dict, bool)
+    subscription_requested = Signal(dict, str, bool)
 
     def __init__(self, buddy: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
@@ -2579,11 +2622,21 @@ class BuddyCardWidget(QWidget):
             actions.addWidget(button, index // 3, index % 3)
         root.addLayout(actions)
         if not is_self:
-            subscribe = QCheckBox("订阅开工/下班提醒")
-            subscribe.setFixedHeight(18)
-            subscribe.setChecked(bool(buddy.get("subscribed")))
-            subscribe.stateChanged.connect(lambda state: self.subscription_requested.emit(self.buddy, bool(state)))
-            root.addWidget(subscribe)
+            for event_type, field, label, hint in (
+                ("start_work", "on_focus_start", "🔔 开工提醒", "TA 每次开始专注时提醒我"),
+                ("finish_work", "on_focus_end", "🔔 下班提醒", "TA 每次结束当天工作时提醒我"),
+            ):
+                subscribe = QCheckBox(label)
+                subscribe.setFixedHeight(18)
+                subscribe.setToolTip(hint)
+                subscribe.setChecked(bool(buddy.get(field, buddy.get("subscribed", False))))
+                subscribe.setEnabled(event_type not in buddy.get("_reminder_pending_types", ()))
+                subscribe.stateChanged.connect(
+                    lambda state, kind=event_type: self.subscription_requested.emit(
+                        self.buddy, kind, bool(state)
+                    )
+                )
+                root.addWidget(subscribe)
 
     def update_buddy(self, buddy: dict[str, Any]) -> None:
         """Update live status/time labels without rebuilding the card tree."""
@@ -3335,6 +3388,7 @@ class SocialHubDialog(QDialog):
         self._seen_room_event_ids: set[str] = set()
         self._seen_buddy_request_ids: set[str] = set()
         self._muted_buddy_ids: set[str] = set()
+        self._pending_reminder_updates: dict[tuple[str, str], bool] = {}
         # Presence is polled frequently, but these collections usually do not
         # change.  Their signatures let a live status update avoid clearing
         # and recreating the corresponding QListWidgets.
@@ -4033,6 +4087,10 @@ class SocialHubDialog(QDialog):
             str(buddy.get("quick_status") or ""),
             str(buddy.get("quick_status_expires_at") or ""),
             bool(buddy.get("subscribed")),
+            bool(buddy.get("on_focus_start")),
+            bool(buddy.get("on_focus_end")),
+            bool(buddy.get("notifications_muted")),
+            tuple(buddy.get("_reminder_pending_types") or ()),
             bool(buddy.get("is_self")),
             _reaction_label(buddy),
         )
@@ -5603,7 +5661,17 @@ class SocialHubDialog(QDialog):
         thread.deleteLater()
 
     def _logout(self) -> None:
-        self.client.sign_out(); self.data = {}; self._muted_buddy_ids.clear(); self._buddy_presence_versions.clear(); self._known_presence_evidence.clear(); self._buddy_presence_batch_ready = False; self._buddy_order_ids = []; self._update_account_state(); self.account_state_changed.emit(False); self._set_status("已退出账号，六毛继续离线陪伴。")
+        self.client.sign_out()
+        self.data = {}
+        self._muted_buddy_ids.clear()
+        self._pending_reminder_updates.clear()
+        self._buddy_presence_versions.clear()
+        self._known_presence_evidence.clear()
+        self._buddy_presence_batch_ready = False
+        self._buddy_order_ids = []
+        self._update_account_state()
+        self.account_state_changed.emit(False)
+        self._set_status("已退出账号，六毛继续离线陪伴。")
 
     def refresh(self) -> None:
         if self._closed:
@@ -5845,6 +5913,14 @@ class SocialHubDialog(QDialog):
             return
 
         payload, partial = _merge_dashboard_snapshot(previous_data, payload)
+        if (
+            "_reminder_snapshot" not in payload
+            and isinstance(previous_data.get("_reminder_snapshot"), dict)
+            and str((previous_data.get("me") or {}).get("user_id") or "") == payload_user_id
+        ):
+            # A temporary reminder RPC failure must not repaint established
+            # server flags from a stale presence/dashboard projection.
+            payload["_reminder_snapshot"] = deepcopy(previous_data["_reminder_snapshot"])
         if partial:
             LOGGER.warning(
                 "partial social dashboard preserved last core snapshot keys=%s",
@@ -5852,6 +5928,32 @@ class SocialHubDialog(QDialog):
             )
         payload = self._apply_presence_sequence_fence(payload)
         payload = self._preserve_known_presence_evidence(payload)
+        reminder_snapshot = payload.get("_reminder_snapshot")
+        if isinstance(reminder_snapshot, dict) and isinstance(reminder_snapshot.get("subscriptions"), list):
+            subscriptions = {
+                str(row.get("buddy_id") or ""): row
+                for row in reminder_snapshot["subscriptions"] if isinstance(row, dict)
+            }
+            for field in ("buddies", "room_people"):
+                rows = payload.get(field)
+                if not isinstance(rows, list):
+                    continue
+                projected = []
+                for raw in rows:
+                    if not isinstance(raw, dict):
+                        projected.append(raw)
+                        continue
+                    buddy = dict(raw)
+                    subscription = subscriptions.get(_buddy_identifier(buddy), {})
+                    buddy["on_focus_start"] = bool(subscription.get("on_focus_start"))
+                    buddy["on_focus_end"] = bool(subscription.get("on_focus_end"))
+                    buddy["subscribed"] = buddy["on_focus_start"] or buddy["on_focus_end"]
+                    buddy["notifications_muted"] = bool(subscription.get("muted"))
+                    projected.append(buddy)
+                payload[field] = projected
+            payload["muted_buddy_ids"] = [
+                buddy_id for buddy_id, row in subscriptions.items() if row.get("muted")
+            ]
 
         snapshot_notes = _private_notes_from_dashboard(payload)
         if payload.get("_private_notes_loaded"):
@@ -5977,6 +6079,17 @@ class SocialHubDialog(QDialog):
                 continue
             buddy = dict(buddy)
             buddy_id = _buddy_identifier(buddy)
+            buddy.setdefault("on_focus_start", bool(buddy.get("subscribed")))
+            buddy.setdefault("on_focus_end", bool(buddy.get("subscribed")))
+            buddy["_reminder_pending_types"] = tuple(
+                kind for kind in ("start_work", "finish_work")
+                if (buddy_id, kind) in self._pending_reminder_updates
+            )
+            for event_type, field in (("start_work", "on_focus_start"), ("finish_work", "on_focus_end")):
+                pending = self._pending_reminder_updates.get((buddy_id, event_type))
+                if pending is not None:
+                    buddy[field] = pending
+            buddy["subscribed"] = bool(buddy.get("on_focus_start") or buddy.get("on_focus_end"))
             if buddy_id in seen:
                 continue
             buddy["notifications_muted"] = bool(
@@ -6006,16 +6119,6 @@ class SocialHubDialog(QDialog):
         presence_uncertain = bool(self.data.get("_presence_grace_active"))
         for buddy in unique_people:
             buddy_id = _buddy_identifier(buddy)
-            if buddy.get("subscribed") and not buddy.get("notifications_muted"):
-                previous_buddies = {
-                    str(item.get("user_id")): item
-                    for item in (previous_data.get("buddies") or [])
-                    if isinstance(item, dict)
-                }
-                previous = previous_buddies.get(str(buddy.get("user_id")))
-                if previous is not None and _presence_status(previous) != _presence_status(buddy):
-                    state_text = "开始专注" if _presence_status(buddy) == "focus" else "结束专注"
-                    self.buddy_subscription_notice.emit(f"{_owner_label(buddy)} {state_text}了。")
             status = _presence_status(buddy)
             # A transport outage must not turn an unknown state into a false
             # zero. During the short cache grace window, show the last
@@ -6354,22 +6457,68 @@ class SocialHubDialog(QDialog):
             self.refresh()
         except SocialError as exc: self._error(exc)
 
-    def _set_subscription(self, buddy: dict[str, Any], enabled: bool) -> None:
+    def _set_subscription(self, buddy: dict[str, Any], event_type: str, enabled: bool) -> None:
+        """Change exactly one durable subscription flag after a user click."""
+
         if not self._require_login():
             return
-            buddy_id = _buddy_identifier(buddy)
-        if not buddy_id:
+        buddy_id = _buddy_identifier(buddy)
+        if not buddy_id or event_type not in {"start_work", "finish_work"}:
             return
-        try:
-            setter = getattr(self.client, "set_buddy_subscription", None)
-            muted = bool(buddy.get("notifications_muted") or buddy_id in self._muted_buddy_ids)
-            if callable(setter):
-                setter(buddy_id=buddy_id, on_focus_start=enabled, on_focus_end=enabled, muted=muted)
-            else:
-                self.client.rpc("lili_set_buddy_subscription", {"p_buddy_id": buddy_id, "p_on_focus_start": enabled, "p_on_focus_end": enabled, "p_muted": muted})
-            self._set_status("搭子状态订阅已开启。" if enabled else "搭子状态订阅已关闭。")
-        except SocialError as exc:
-            self._error(exc)
+        account_id = _session_user_id(self.client)
+        key = (buddy_id, event_type)
+        if key in self._pending_reminder_updates:
+            QTimer.singleShot(0, lambda: self.apply_dashboard(self.data))
+            return
+        self._pending_reminder_updates[key] = bool(enabled)
+        # Rebuilding a card inside its own stateChanged callback can destroy
+        # the emitting checkbox. Repaint on the next Qt turn instead.
+        QTimer.singleShot(0, lambda: self.apply_dashboard(self.data))
+        thread = SocialBuddyRpcThread(self.client, "lili_set_buddy_reminder", {
+            "p_buddy_id": buddy_id, "p_event_type": event_type,
+            "p_enabled": bool(enabled),
+        }, self)
+        self._buddy_rpc_threads.append(thread)
+        thread.completed.connect(
+            lambda payload, key=key, account=account_id: self._reminder_update_completed(
+                key, account, payload
+            ), Qt.ConnectionType.QueuedConnection,
+        )
+        thread.failed.connect(
+            lambda error, key=key, account=account_id: self._reminder_update_failed(
+                key, account, error
+            ), Qt.ConnectionType.QueuedConnection,
+        )
+        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current), Qt.ConnectionType.QueuedConnection)
+        thread.start()
+
+    def _reminder_update_completed(
+        self, key: tuple[str, str], account_id: str, payload: object,
+    ) -> None:
+        if account_id != _session_user_id(self.client):
+            return
+        self._pending_reminder_updates.pop(key, None)
+        if isinstance(payload, dict):
+            snapshot = self.data.get("_reminder_snapshot")
+            if isinstance(snapshot, dict):
+                subscriptions = [
+                    row for row in snapshot.get("subscriptions", [])
+                    if isinstance(row, dict) and str(row.get("buddy_id") or "") != key[0]
+                ]
+                subscriptions.append(dict(payload))
+                snapshot["subscriptions"] = subscriptions
+        self._set_status("提醒订阅已更新；以后每次符合条件都会提醒。")
+        QTimer.singleShot(0, lambda: self.apply_dashboard(self.data))
+        self.refresh()
+
+    def _reminder_update_failed(
+        self, key: tuple[str, str], account_id: str, error: object,
+    ) -> None:
+        if account_id != _session_user_id(self.client):
+            return
+        self._pending_reminder_updates.pop(key, None)
+        self._buddy_rpc_failed(error)
+        self.refresh()
 
     def _set_buddy_muted(self, buddy: dict[str, Any], muted: bool) -> None:
         if not self._require_login():
@@ -6377,34 +6526,30 @@ class SocialHubDialog(QDialog):
         buddy_id = str(buddy.get("user_id") or buddy.get("id") or "")
         if not buddy_id:
             return
-        try:
-            subscribed = bool(buddy.get("subscribed"))
-            setter = getattr(self.client, "set_buddy_subscription", None)
-            if callable(setter):
-                setter(
-                    buddy_id=buddy_id,
-                    on_focus_start=subscribed,
-                    on_focus_end=subscribed,
-                    muted=bool(muted),
-                )
-            else:
-                self.client.rpc(
-                    "lili_set_buddy_subscription",
-                    {
-                        "p_buddy_id": buddy_id,
-                        "p_on_focus_start": subscribed,
-                        "p_on_focus_end": subscribed,
-                        "p_muted": bool(muted),
-                    },
-                )
+        account_id = _session_user_id(self.client)
+        thread = SocialBuddyRpcThread(self.client, "lili_set_buddy_reminder_mute", {
+            "p_buddy_id": buddy_id, "p_muted": bool(muted),
+        }, self)
+        self._buddy_rpc_threads.append(thread)
+        def completed(payload: object) -> None:
+            if account_id != _session_user_id(self.client):
+                return
             if muted:
                 self._muted_buddy_ids.add(buddy_id)
             else:
                 self._muted_buddy_ids.discard(buddy_id)
+            snapshot = self.data.get("_reminder_snapshot")
+            if isinstance(snapshot, dict) and isinstance(payload, dict):
+                snapshot["subscriptions"] = [
+                    row for row in snapshot.get("subscriptions", [])
+                    if isinstance(row, dict) and str(row.get("buddy_id") or "") != buddy_id
+                ] + [dict(payload)]
             self._set_status("已开启消息免打扰。" if muted else "已关闭消息免打扰。")
             self.refresh()
-        except SocialError as exc:
-            self._error(exc)
+        thread.completed.connect(completed, Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(self._buddy_rpc_failed, Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(lambda current=thread: self._buddy_rpc_finished(current), Qt.ConnectionType.QueuedConnection)
+        thread.start()
 
     def _remove_buddy(self, buddy: dict[str, Any]) -> None:
         if not self._require_login():

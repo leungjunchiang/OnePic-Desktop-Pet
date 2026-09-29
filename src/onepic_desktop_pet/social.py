@@ -2,6 +2,7 @@
 
 只发送账号认证、昵称、六毛外观、实时工作状态、FocusSession 区间事实、房间与串门事件。
 Todo 使用独立的 Direct-only RPC 旁路，不进入通用路由回退，也不拥有认证生命周期。
+搭子提醒订阅与明确的工作事件经独立 RPC 读写；心跳和 Presence 不携带订阅字段。
 工作心跳只描述当前活动会话的存活状态，不携带任何累计时长；最终时长始终从有效
 FocusSession 区间派生。密码从不保存；
 刷新令牌保存在系统凭据库。邮箱注册明确区分“已创建、等待确认”和“已登录”，并支持
@@ -4293,6 +4294,14 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         return result
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._manager.request("rpc", name, body)
+
+    def buddy_reminder_snapshot(self) -> dict[str, Any]:
+        """Read authoritative reminder flags and confirmed work events."""
+
+        result = self.rpc("lili_buddy_reminder_snapshot", {})
+        if not isinstance(result, dict) or not isinstance(result.get("subscriptions"), list):
+            raise SocialError("搭子提醒状态返回异常。", kind="malformed", retryable=True)
+        return result
 
     def todo_upsert(self, payload: dict[str, Any]) -> Any:
         """Write an isolated Todo row without proxy fallback or global sync."""

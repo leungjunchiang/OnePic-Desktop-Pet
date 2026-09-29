@@ -36,6 +36,7 @@
 - 桌面待办浮层独立于工作报告窗口，两个窗口可以同时显示且互不改变可见状态。
 - Todo 跨设备同步由独立队列、游标和线程驱动，只刷新 Todo 投影，不参与 Auth、Presence、Heartbeat 或 Focus 生命周期。
 - 北京时间跨日时封存前一天的专注事实并优先同步；今日显示只计入当天区间，三日连登的自动刷牙动作只在本地早晨出现。
+- 搭子提醒从独立的持久工作事件读取；订阅状态不随心跳或通知消耗改变，提示浮层不激活当前窗口。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -262,6 +263,8 @@ from .liumao_worldview import family_music_mode
 from .music import ARTIST_MUSIC_SERVICE_LABELS, open_chen_artist_page as launch_chen_artist_page
 from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
+from .buddy_reminders import BuddyReminderStore, NOTIFICATION_LIFETIME_SECONDS, _parse_time
+from .buddy_reminder_toast import BuddyReminderToast
 from .qt_lifecycle import request_stop_all, running_threads
 from .lifecycle_log import lifecycle_log
 from .performance import EventLoopLagTracker, PerformanceMonitor
@@ -852,6 +855,8 @@ class PetWindow(QWidget):
         self._shown_active_visit_ids: set[str] = set()
         self._seen_buddy_request_ids: set[str] = set()
         self._muted_buddy_ids: set[str] = set()
+        self._buddy_reminder_store: BuddyReminderStore | None = None
+        self._buddy_reminder_toasts: list[BuddyReminderToast] = []
         self._incoming_visit_notice: IncomingVisitNotice | None = None
         self._incoming_visit_queue: list[dict] = []
         self._incoming_visit_response_threads: list[SocialVisitResponseThread] = []
@@ -4030,6 +4035,7 @@ class PetWindow(QWidget):
     def start_work_timer(self) -> CompanionReply:
         """开始今日工作计时，并让六毛进入安静陪伴动作。"""
 
+        previous_pause_reason = self.work_timer.pause_reason
         self._record_user_interaction()
         self._reset_idle_episode()
         self._focus_activity_guard.reset_for_new_session()
@@ -4065,6 +4071,10 @@ class PetWindow(QWidget):
         self._invalidate_focus_projection("focus_started")
         if started:
             self.set_paused(True)
+            self._queue_buddy_work_transition(
+                "focused", self.work_timer.focus_session_id,
+                silent=previous_pause_reason in {"sleep", "lock", "display_off", "restart_safe_seal"},
+            )
         self._change_ambient_activity("computer")
         self._schedule_work_activity(25_000)
         reply = self.companion.work_started(resumed=not started)
@@ -4158,6 +4168,8 @@ class PetWindow(QWidget):
             reason,
             effective_end_at=effective_end_at,
         )
+        if was_running:
+            self._queue_buddy_work_transition("resting", str(session_id or ""))
         # This must happen in the same transition that changes the local UI
         # to paused. Do not delegate it solely to ``_schedule_social_tick``:
         # that helper deliberately waits for an authenticated dashboard loop,
@@ -4300,6 +4312,8 @@ class PetWindow(QWidget):
             started_at=segment_started_at,
         )
         self.focus_session.finish()
+        if session_id:
+            self._queue_buddy_work_transition("off_work", session_id)
         # Finish clears the local session immediately, so it must also
         # replace any retained active heartbeat before background segment
         # upload/dashboard work has a chance to run.
@@ -7627,7 +7641,6 @@ class PetWindow(QWidget):
             self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
             self._social_dialog.buddy_request_received.connect(self._buddy_request_received)
             self._social_dialog.room_event_received.connect(self._room_event_received)
-            self._social_dialog.buddy_subscription_notice.connect(self._buddy_subscription_notice)
             self._social_dialog.finished.connect(self._social_dialog_finished)
             self._social_dialog.focus_start_requested.connect(self.start_work_timer)
             self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
@@ -7827,10 +7840,46 @@ class PetWindow(QWidget):
             return
         self.show_speech(f"房间提醒：{label}！大家一起动起来。", 5000)
 
-    def _buddy_subscription_notice(self, message: str) -> None:
-        if detect_quiet_mode().blocked:
+    def _buddy_reminders_for_current_account(self) -> BuddyReminderStore | None:
+        account_id = self._current_social_user_id()
+        if not account_id:
+            return None
+        store = self._buddy_reminder_store
+        if store is None or store.account_id != account_id:
+            store = BuddyReminderStore(account_id)
+            self._buddy_reminder_store = store
+        return store
+
+    def _queue_buddy_work_transition(
+        self, status: str, session_id: str, *, silent: bool = False,
+    ) -> None:
+        store = self._buddy_reminders_for_current_account()
+        if store is None:
             return
-        self.show_speech(message, 4200)
+        if store.queue_transition(status, session_id, silent=silent):
+            self._schedule_social_tick(immediate=True)
+
+    def _show_buddy_reminder(self, event: dict) -> None:
+        event_type = str(event.get("event_type") or "")
+        nickname = str(event.get("nickname") or "搭子").strip()[:32] or "搭子"
+        stamp = _parse_time(event.get("occurred_at"))
+        local_time = stamp.astimezone().strftime("%H:%M") if stamp is not None else ""
+        title = (
+            f"🟢 {nickname}开始专注了" if event_type == "start_work"
+            else f"🌙 {nickname}下班了"
+        )
+        detail = f"{'开始专注' if event_type == 'start_work' else '结束当天工作'} · {local_time}"
+        age_seconds = max(0, (datetime.now(timezone.utc) - stamp).total_seconds()) if stamp else 0
+        remaining_ms = max(1, int((NOTIFICATION_LIFETIME_SECONDS - age_seconds) * 1000))
+        mini_title = f"{'🟢' if event_type == 'start_work' else '🌙'} {nickname}"
+        toast = BuddyReminderToast(title, detail, mini_title=mini_title, remaining_ms=remaining_ms)
+        toast.open_requested.connect(self.open_social_hub)
+        self._buddy_reminder_toasts = [item for item in self._buddy_reminder_toasts if item.isVisible()]
+        if len(self._buddy_reminder_toasts) >= 4:
+            self._buddy_reminder_toasts.pop(0).close()
+        stack_index = len(self._buddy_reminder_toasts)
+        self._buddy_reminder_toasts.append(toast)
+        toast.show_passive(stack_index=stack_index)
 
     def _social_dialog_finished(self) -> None:
         dialog = self._social_dialog
@@ -8279,6 +8328,9 @@ class PetWindow(QWidget):
             "quick_status_expires_at": self._room_quick_status_expires_at.isoformat()
             if self._room_quick_status_expires_at is not None else None,
         }
+        reminder_store = self._buddy_reminders_for_current_account()
+        if reminder_store is not None:
+            presence["_work_events"] = reminder_store.pending()
         presence_context_signature = (
             str(room_id or ""),
             str(self.settings.equipped_outfit or "")[:60],
@@ -8383,6 +8435,12 @@ class PetWindow(QWidget):
 
         if not isinstance(data, dict):
             return
+        source_account = str(data.get("_work_event_account_id") or "")
+        if source_account and source_account != self._current_social_user_id():
+            return
+        reminder_store = self._buddy_reminders_for_current_account()
+        if reminder_store is not None:
+            reminder_store.acknowledge(data.get("_work_event_acked") or [])
         generation = max(0, int(data.get("_request_generation") or 0))
         if generation and generation < self._last_applied_social_generation:
             lifecycle_log(
@@ -8437,6 +8495,17 @@ class PetWindow(QWidget):
         if self._social_dialog is not None:
             with self._performance.measure("social.dashboard_apply"):
                 self._social_dialog.apply_dashboard(data)
+
+        reminder_snapshot = data.get("_reminder_snapshot")
+        if (
+            reminder_store is not None
+            and isinstance(reminder_snapshot, dict)
+            and not data.get("_sync_offline")
+            and data.get("data_source") != "local_cache"
+        ):
+            for event in reminder_store.unseen_events(reminder_snapshot.get("events")):
+                if not detect_quiet_mode().blocked:
+                    self._show_buddy_reminder(event)
 
         taunt_active = self._apply_taunt_state(data.get("_taunt_state"))
         encouragement_active = self._apply_encouragement_state(data.get("_encouragement_state"))
@@ -9429,6 +9498,10 @@ class PetWindow(QWidget):
         """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
 
         account_id = self._current_social_user_id() if signed_in else ""
+        for toast in self._buddy_reminder_toasts:
+            toast.close()
+        self._buddy_reminder_toasts.clear()
+        self._buddy_reminder_store = None
         self._switch_focus_account(account_id)
         self._set_login_reward_account(account_id)
         # A new account has its own presence metadata row.  Force one
