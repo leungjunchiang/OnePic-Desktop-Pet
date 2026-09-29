@@ -35,6 +35,7 @@
 - 宠物图层使用透明顶层窗口；工作状态、串门和提示卡片使用可读的实色背景，避免平台默认背景造成黑色或透明内容区。
 - 桌面待办浮层独立于工作报告窗口，两个窗口可以同时显示且互不改变可见状态。
 - Todo 跨设备同步由独立队列、游标和线程驱动，只刷新 Todo 投影，不参与 Auth、Presence、Heartbeat 或 Focus 生命周期。
+- 北京时间跨日时封存前一天的专注事实并优先同步；今日显示只计入当天区间，三日连登的自动刷牙动作只在本地早晨出现。
 
 Agent 快速定位：
 - 窗口初始化和计时器设置位于 PetWindow.__init__()；
@@ -357,10 +358,9 @@ LOGGER = logging.getLogger(__name__)
 # Keep these gates local to the desktop client: FocusSession writes, sync
 # cadence, and all time/statistics calculations remain unchanged.
 SOCIAL_DASHBOARD_INTERVAL_MS = 90_000
-# The existing worker still needs a lightweight cadence to preserve the
-# independent presence/personal-state paths. Dashboard reads inside it are
-# admitted by the 90-second client coordinator above, not by this timer.
-SOCIAL_SYNC_TICK_INTERVAL_MS = 30_000
+# A passive second computer needs to fetch fresh per-device live intervals
+# promptly. Keep the independent presence heartbeat at its own cadence.
+SOCIAL_SYNC_TICK_INTERVAL_MS = 15_000
 # The worker writes a lightweight heartbeat every 15 seconds. This GUI-side
 # check only verifies that writes are being ACKed; it never changes the
 # server's online threshold or a user's rest/focus state.
@@ -636,6 +636,8 @@ class PetWindow(QWidget):
         self._cross_device_today_display_account_id = ""
         self._cross_device_today_display_date = ""
         self._cross_device_today_display_rollover_attempt_date = ""
+        self._last_focus_clock_date = self.focus_analytics.current_time().date().isoformat()
+        self._last_focus_day_boundary_attempt_at = 0.0
         self._cross_device_today_display_session_id = ""
         self._cross_device_today_display_live_seconds = 0
         # Keep the last validated server interval payload in memory only.
@@ -5184,13 +5186,12 @@ class PetWindow(QWidget):
             self._work_timer_tick_impl()
 
     def _work_timer_tick_impl(self) -> None:
-        """只刷新当前专注的轻量显示，不做持久化、统计或网络工作。"""
+        """Refresh the live clock; seal and queue a fact once at day rollover."""
 
         # Calendar projections and raw-history aggregation belong to the
-        # background social/report paths, never to the GUI clock refresh.  A
-        # live clock tick is not a state-transition event: start/pause/finish
-        # still emit the normal FocusSession signal, while this callback only
-        # updates the small live labels.
+        # background social/report paths. Apart from the once-per-day durable
+        # boundary seal, this callback only updates the small live labels.
+        self._seal_previous_focus_day_if_needed()
         snapshot = self.focus_session.snapshot(include_projection=False)
         today_display_seconds = self._account_today_display_seconds(snapshot)
         self._update_work_duration_bubble(
@@ -5726,6 +5727,51 @@ class PetWindow(QWidget):
             session_id=self.work_timer.focus_session_id,
             started_at=self.work_timer.current_segment_started_at(),
         )
+
+    def _seal_previous_focus_day_if_needed(self) -> None:
+        """Seal yesterday's exact interval at midnight and queue its upload."""
+
+        moment = self.focus_analytics.current_time()
+        today = moment.date().isoformat()
+        previous = self._last_focus_clock_date
+        if today == previous:
+            return
+        if not self.work_timer.is_running:
+            self._last_focus_clock_date = today
+            return
+        started_at = self.work_timer.current_segment_started_at()
+        boundary = datetime.combine(moment.date(), datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        if started_at is None or started_at >= boundary:
+            self._last_focus_clock_date = today
+            return
+        recorded = max(0, int(self._recorded_focus_session_seconds or 0))
+        # The raw session start is stable across timer persistence checkpoints.
+        # Its offset, unlike the cumulative session counter, has an exact
+        # calendar cutoff and cannot carry yesterday into today's display.
+        through_boundary = max(0, int((boundary - started_at).total_seconds()))
+        total = min(max(0, int(self.work_timer.session_seconds())), through_boundary)
+        if total > recorded:
+            attempt_at = time.monotonic()
+            if attempt_at - self._last_focus_day_boundary_attempt_at < 5.0:
+                return
+            self._last_focus_day_boundary_attempt_at = attempt_at
+            try:
+                self._record_focus_segment(
+                    total,
+                    completed=False,
+                    session_id=self.work_timer.focus_session_id,
+                    started_at=started_at,
+                    update_daily_stats=False,
+                )
+            except Exception:
+                LOGGER.exception("midnight focus seal failed; retaining pending interval")
+                return
+            # Reuse the serialized delta worker. A busy worker retains this
+            # flag and the durable local fact is retried after network recovery.
+            self._social_focus_segment_flush_due = True
+            self._schedule_social_tick(immediate=True)
+        self._last_focus_clock_date = today
+        self._invalidate_focus_projection("beijing_day_rollover")
 
     def _invalidate_focus_projection(self, reason: str = "") -> None:
         """Invalidate the closed-session projection after a lifecycle event."""
@@ -6474,6 +6520,8 @@ class PetWindow(QWidget):
                     cached["base_local_elapsed"] = 0
             self._focus_projection_cache = cached
         local_delta = 0
+        today_local_delta = 0
+        week_local_delta = 0
         if self.work_timer.is_running:
             elapsed_reader = (
                 self.work_timer.current_elapsed_seconds
@@ -6485,8 +6533,23 @@ class PetWindow(QWidget):
                 int(elapsed_reader() or 0)
                 - int(cached.get("base_local_elapsed", 0) or 0),
             )
-        today_seconds = max(0, int(cached.get("base_day", 0) or 0)) + local_delta
-        week_seconds = max(0, int(cached.get("base_week", 0) or 0)) + local_delta
+            today_local_delta = local_delta
+            week_local_delta = local_delta
+            if not cached.get("has_account_projection"):
+                # session_seconds() can include the entire preceding evening.
+                # The timer's daily bucket already clips that same live work
+                # at Beijing midnight, so never append more than today's work.
+                today_local_delta = min(local_delta, self.work_timer.today_seconds())
+                week_start = datetime.combine(
+                    moment.date() - timedelta(days=moment.weekday()),
+                    datetime.min.time(),
+                    tzinfo=BEIJING_TIMEZONE,
+                )
+                week_local_delta = min(
+                    local_delta, max(0, int((moment - week_start).total_seconds()))
+                )
+        today_seconds = max(0, int(cached.get("base_day", 0) or 0)) + today_local_delta
+        week_seconds = max(0, int(cached.get("base_week", 0) or 0)) + week_local_delta
         # The live display projection can advance remote devices between
         # network polls. Use it when available; it is still local arithmetic
         # over already-fetched rows and never invokes Supabase.
@@ -11056,6 +11119,15 @@ class PetWindow(QWidget):
         self.show_speech(reply.text, max(5200, option.duration_ms + 1800))
         return True
 
+    @staticmethod
+    def _login3_ambient_actions(now: datetime) -> tuple[str, ...]:
+        """Only start the 42-second brushing animation during local morning."""
+
+        actions = ("phone", "run", "message")
+        if now.hour >= 6 and (now.hour, now.minute, now.second) < (10, 59, 18):
+            return actions + ("brush",)
+        return actions
+
     @_guard_qt_callback
     def _ambient_tick(self) -> None:
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
@@ -11124,7 +11196,7 @@ class PetWindow(QWidget):
                         activity = random.choice(("sleep", "milk-tea"))
                         text = "六毛发现你很久没动啦，先睡一会儿或喝口奶茶吧。"
                     elif random.random() < 0.62:
-                        activity = random.choice(("phone", "brush", "run", "message"))
+                        activity = random.choice(self._login3_ambient_actions(datetime.now()))
                         text = "三日连登六毛换个动作陪你待一会儿。"
                 # Automatic companion animations must not announce a rest
                 # state while the shared work timer is still running. A

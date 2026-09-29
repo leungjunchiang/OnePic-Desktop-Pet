@@ -60,7 +60,7 @@ from onepic_desktop_pet.focus_segments import FocusSegment
 
 def test_phase1_social_read_gates_keep_heartbeat_separate() -> None:
     assert SOCIAL_DASHBOARD_INTERVAL_MS == 90_000
-    assert SOCIAL_SYNC_TICK_INTERVAL_MS == 30_000
+    assert SOCIAL_SYNC_TICK_INTERVAL_MS == 15_000
     assert SOCIAL_HEARTBEAT_WATCHDOG_INTERVAL_MS == 15_000
     assert SOCIAL_HEARTBEAT_STALE_SECONDS == 60.0
     assert SOCIAL_LEADERBOARD_REFRESH_SECONDS == 300.0
@@ -359,6 +359,74 @@ def test_failed_midnight_reprojection_cannot_show_yesterday_total(monkeypatch) -
     assert window._cross_device_today_display_value(snapshot) is None
 
     window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_unsealed_overnight_session_uses_only_today_in_day_projection(monkeypatch) -> None:
+    """A continuous session's previous evening must not become today's total."""
+
+    app, window = _create_window()
+    moment = datetime(2026, 9, 24, 0, 10, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
+    monkeypatch.setattr(
+        window.focus_analytics, "period_summary", lambda *_args: {"total_seconds": 0}
+    )
+    monkeypatch.setattr(window.work_timer, "session_seconds", lambda: 8 * 3600 + 600)
+    monkeypatch.setattr(window.work_timer, "today_seconds", lambda: 600)
+    window.work_timer._running_since = time.monotonic() - 600
+    window._focus_projection_cache = None
+
+    totals = window._shared_focus_period_seconds(moment)
+    assert totals["today_seconds"] == 600
+    assert totals["week_seconds"] == 8 * 3600 + 600
+
+    window.work_timer._running_since = None
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_midnight_seals_previous_day_and_requests_immediate_sync(monkeypatch) -> None:
+    """A running Mac/Windows session emits an exact day-end sealed fact."""
+
+    app, window = _create_window()
+    tz = timezone(timedelta(hours=8))
+    started = datetime(2026, 9, 23, 23, 50, tzinfo=tz)
+    moment = datetime(2026, 9, 24, 0, 0, 10, tzinfo=tz)
+    monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
+    monkeypatch.setattr(window.work_timer, "_now", lambda: moment)
+    scheduled = []
+    monkeypatch.setattr(
+        window, "_schedule_social_tick", lambda *, immediate=False: scheduled.append(immediate)
+    )
+    timer = window.work_timer
+    timer._date_key = "2026-09-23"
+    timer._running_started_at = started
+    timer._last_trusted_checkpoint_at = started
+    timer._running_since = time.monotonic() - 610
+    timer._session_active = True
+    timer._session_id = "overnight-session"
+    window._recorded_focus_session_seconds = 0
+    window._last_focus_clock_date = "2026-09-23"
+
+    window._seal_previous_focus_day_if_needed()
+
+    segments = window.focus_analytics.focus_segments()
+    assert len(segments) == 1
+    assert segments[0].start_at == started
+    assert segments[0].end_at == datetime(2026, 9, 24, tzinfo=tz)
+    assert window._recorded_focus_session_seconds == 600
+    assert window._social_focus_segment_flush_due
+    assert scheduled[-1] is True
+    assert window._last_focus_clock_date == "2026-09-24"
+
+    timer._running_since = None
+    window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_login3_brushing_is_limited_to_morning() -> None:
+    assert "brush" not in PetWindow._login3_ambient_actions(datetime(2026, 9, 24, 5, 59, 59))
+    assert "brush" in PetWindow._login3_ambient_actions(datetime(2026, 9, 24, 6))
+    assert "brush" in PetWindow._login3_ambient_actions(datetime(2026, 9, 24, 10, 59, 17))
+    assert "brush" not in PetWindow._login3_ambient_actions(datetime(2026, 9, 24, 10, 59, 18))
+    assert "brush" not in PetWindow._login3_ambient_actions(datetime(2026, 9, 24, 20))
 
 
 def test_cross_device_display_uses_account_presence_when_live_rpc_is_missing(monkeypatch) -> None:
