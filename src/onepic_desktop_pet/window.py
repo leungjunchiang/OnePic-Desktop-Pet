@@ -3966,10 +3966,9 @@ class PetWindow(QWidget):
                 release()
         self.show_speech(f"正在给 {recipient_label} 发送投喂…", 2400)
         try:
-            worker = self._discipline_rpc("lili_send_food_interaction",
-                {"p_target": target, "p_kind": str(kind), "p_payload": payload}, completed, failed)
-            # 即使账号切换而忽略结果，也须清理旧账号的待发送预留。
-            worker.finished.connect(release, Qt.ConnectionType.QueuedConnection)
+            self._discipline_rpc("lili_send_food_interaction",
+                {"p_target": target, "p_kind": str(kind), "p_payload": payload}, completed, failed,
+                finally_callback=release)
         except Exception as error:
             failed(error)
 
@@ -8167,7 +8166,7 @@ class PetWindow(QWidget):
             if isinstance(row, dict) and not bool(row.get("is_self"))
         ]
 
-    def _discipline_rpc(self, name: str, body: dict, callback, failure) -> SocialBuddyRpcThread:
+    def _discipline_rpc(self, name: str, body: dict, callback, failure, *, finally_callback=None) -> SocialBuddyRpcThread:
         """复用搭子 worker 执行训导及投喂请求，账号切换后拒绝旧结果。"""
 
         account_id = str(self._current_social_user_id() or "")
@@ -8188,6 +8187,9 @@ class PetWindow(QWidget):
             Qt.ConnectionType.QueuedConnection,
         )
         thread.finished.connect(thread.deleteLater)
+        if finally_callback is not None:
+            # 启动之前绑定清理，快速结束或切换账号也不会漏释放请求预留。
+            thread.finished.connect(finally_callback, Qt.ConnectionType.QueuedConnection)
         thread.start()
         return thread
 

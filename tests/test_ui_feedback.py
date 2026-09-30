@@ -151,7 +151,7 @@ def test_food_request_waits_for_ack_deduplicates_and_releases_reservation(failur
     calls = []; notices = []; worker = Worker()
     window = SimpleNamespace(social_client=SimpleNamespace(signed_in=True), economy=Economy(),
         _current_social_user_id=lambda: "a", show_speech=lambda text, ms: notices.append(text),
-        _discipline_rpc=lambda name, body, done, fail: calls.append((done, fail)) or worker,
+        _discipline_rpc=lambda name, body, done, fail, **kwargs: calls.append((done, fail)) or worker,
         _sync_economy_events=lambda events: None, _set_social_food_activity=lambda *args: None)
     buddy = {"user_id": "b", "private_note_name": "论文搭子"}
     PetWindow._send_food_interaction(window, buddy, "food_milk_tea")
