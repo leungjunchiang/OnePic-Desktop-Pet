@@ -103,8 +103,9 @@ def test_failed_master_switch_does_not_claim_revocation_succeeded():
         lambda name, body, callback, failure: calls.append((callback, failure)), lambda *_: None)
     panel._apply(policy())
     panel.enabled.setChecked(False); panel._toggle_enabled()
+    panel._save()
     calls[-1][1]("授权已在另一台电脑修改，请刷新后重试")
-    assert panel.enabled.isChecked() and engine.mode == "officer"
+    assert not panel.enabled.isChecked() and panel.dirty and engine.mode == "officer"
     assert "另一台电脑" in panel.status.text()
     panel.close(); panel.deleteLater(); app.processEvents()
 
@@ -151,7 +152,9 @@ def test_all_request_exit_paths_release_controls(editable_panel, failure, operat
         def broken_apply(_):
             raise RuntimeError("callback failed")
         panel._apply = broken_apply
-    panel.refresh() if operation == "read" else panel._save()
+    if operation == "save":
+        panel.permissions["view_plan"].click()
+    panel._reload() if operation == "read" else panel._save()
     if failure == "payload":
         calls[-1][2]({"policy": None})
     elif failure == "network":
@@ -169,7 +172,7 @@ def test_all_request_exit_paths_release_controls(editable_panel, failure, operat
         assert not panel.pending
         callback(policy(99, False))  # Timed-out replies cannot resurrect state.
         assert panel.revision == 7
-    assert not panel.pending and panel.save.isEnabled()
+    assert not panel.pending and panel.save.isEnabled() == panel.dirty
     assert panel.enabled.isEnabled() and panel.scope.isEnabled()
     assert "重试" in panel.status.text()
 
@@ -177,35 +180,40 @@ def test_all_request_exit_paths_release_controls(editable_panel, failure, operat
 def test_master_off_alone_disables_dependents_and_save_preserves_later_edits(editable_panel):
     panel, calls = editable_panel
     calls[-1][2](policy(7))
+    count = len(calls)
     panel.enabled.click()
     assert panel.enabled.isEnabled() and not panel.scope.isEnabled()
-    assert not panel.save.isEnabled()
-    panel.enabled.click()  # Re-enable during save, keep latest intent and queue it.
+    assert panel.save.isEnabled() and len(calls) == count
+    panel._save()
+    assert not panel.save.isEnabled() and panel.save.text() == "正在保存…"
+    panel.enabled.click()  # A new draft is editable while the earlier save is running.
     assert panel.scope.isEnabled()
     calls[-1][2](policy(8, False))
-    assert panel.enabled.isChecked() and panel.scope.isEnabled()
+    assert panel.enabled.isChecked() and panel.scope.isEnabled() and panel.dirty
+    assert not panel.pending and len(calls) == count + 1
+    panel._save()
     assert calls[-1][1]["p_policy"]["enabled"] is True
     assert calls[-1][1]["p_expected_revision"] == 8
     calls[-1][2](policy(9))
-    assert not panel.pending and panel.save.isEnabled()
+    assert not panel.pending and not panel.dirty and not panel.save.isEnabled()
 
 
 def test_stale_and_duplicate_callbacks_cannot_change_current_form(editable_panel):
     panel, calls = editable_panel
     old = calls[-1][2]
     old(policy(8))
-    panel.refresh()
+    panel._reload()
     old(policy(99, False))
     assert panel.pending and panel.enabled.isChecked()
     calls[-1][2](policy(7, False))
     assert panel.revision == 8 and panel.enabled.isChecked()
 
 
-def test_periodic_sync_updates_authority_without_discarding_existing_dirty_form(editable_panel):
+def test_manual_refresh_updates_authority_without_discarding_existing_dirty_form(editable_panel):
     panel, calls = editable_panel
     calls[-1][2](policy(7))
     panel.permissions["view_progress"].click()
-    panel.refresh()
+    panel._reload()
     assert panel.pending and panel.save.isEnabled()
     calls[-1][2](policy(8))
     assert panel.revision == 8 and panel.dirty
@@ -217,11 +225,11 @@ def test_late_response_is_rejected_even_before_delayed_timer_delivery(editable_p
     calls[-1][2](policy(7))
     ticks = [1000.0]
     monkeypatch.setattr("onepic_desktop_pet.supervision_ui.monotonic", lambda: ticks[0])
-    panel.refresh()
+    panel._reload()
     ticks[0] += 31
     calls[-1][2](policy(99, False))
     assert panel.revision == 7 and panel.enabled.isChecked()
-    assert not panel.pending and panel.save.isEnabled()
+    assert not panel.pending and panel.save.isEnabled() == panel.dirty
     assert "超时" in panel.status.text()
 
 
@@ -229,7 +237,7 @@ def test_dirty_form_only_updates_changed_fields_after_another_device_saved(edita
     panel, calls = editable_panel
     calls[-1][2](policy(7))
     panel.permissions["view_plan"].click()
-    panel.refresh()
+    panel._reload()
     remote = policy(8, False)
     remote["policy"].update({"scope": "all", "view_reports": False})
     calls[-1][2](remote)
@@ -240,3 +248,63 @@ def test_dirty_form_only_updates_changed_fields_after_another_device_saved(edita
     assert body["p_policy"]["view_reports"] is False  # Other device edit survives.
     assert body["p_policy"]["scope"] == "all"
     assert body["p_policy"]["enabled"] is False  # An old form cannot undo revocation.
+
+
+def test_configuration_reads_only_on_entry_or_explicit_refresh(editable_panel):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    count = len(calls)
+    for _ in range(50):
+        panel.refresh()
+    assert len(calls) == count
+    panel._save()
+    assert len(calls) == count and not panel.save.isEnabled()
+    panel.hide(); panel.show()
+    assert len(calls) == count + 1
+    calls[-1][2](policy(8))
+    panel._reload()
+    assert len(calls) == count + 2
+
+
+def test_reverting_draft_does_not_write_and_success_message_clears(editable_panel):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    count = len(calls)
+    check = panel.permissions["view_plan"]
+    check.click(); check.click()
+    assert not panel.dirty and not panel.save.isEnabled()
+    panel._save()
+    assert len(calls) == count
+    check.click(); panel._save()
+    saved = policy(8); saved["policy"]["view_plan"] = False
+    calls[-1][2](saved)
+    assert not panel.dirty and panel.save.text() == "✓ 已保存"
+    QTest.qWait(2100)
+    assert panel.save.text() == "保存设置" and panel.status.isHidden()
+
+
+def test_revert_during_save_remains_a_new_unsaved_change(editable_panel):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    panel.permissions["view_plan"].click()
+    panel._save()
+    panel.permissions["view_plan"].click()
+    saved = policy(8); saved["policy"]["view_plan"] = False
+    calls[-1][2](saved)
+    assert panel.dirty and panel.save.isEnabled()
+    panel._save()
+    assert calls[-1][1]["p_policy"]["view_plan"] is True
+
+
+def test_work_stats_refresh_does_not_read_policy(editable_panel):
+    from onepic_desktop_pet.discipline_ui import DisciplineDialog
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    engine = panel.engine_provider()
+    workspace = DisciplineDialog(engine.store, engine, lambda: (10, 100))
+    workspace.policy_panel = panel
+    count = len(calls)
+    for _ in range(20):
+        workspace.refresh()
+    assert len(calls) == count
+    workspace.close(); workspace.deleteLater()

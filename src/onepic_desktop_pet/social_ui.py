@@ -3,6 +3,7 @@
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
 本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
 搭子卡片直接展示串门、加油、嘲讽；投喂按配置聚合，持久提醒状态在身份区显示标签。
+按钮统一提供 hover、按下与忙碌反馈；互动 HTTP 请求使用既有 worker，配置读取不随统计刷新。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
 邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from .resources import resource_path
+from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons, begin_button_work, end_button_work, readable_milk_tea_label
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import (
     SignupResult,
@@ -2497,7 +2499,7 @@ class BuddyProfileDialog(QDialog):
 
 # 投喂入口配置；kind 复用服务端现有补给事件，可在此扩展菜单而不复制 UI。
 BUDDY_FEED_ITEMS = (
-    ("food_coffee", "☕ 咖啡"), ("food_milk_tea", "🧋 奶茶"),
+    ("food_coffee", "☕ 咖啡"), ("food_milk_tea", "🥤 奶茶"),
     ("food_tea", "🍵 茶"), ("food_cake", "🍰 蛋糕"),
 )
 
@@ -2596,6 +2598,7 @@ class BuddyCardWidget(QWidget):
         actions.setSpacing(6)
         def make_button(label, background, hover):
             button = QPushButton(label)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setMinimumHeight(32)
             button.setMinimumWidth(0)
             button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -2613,9 +2616,9 @@ class BuddyCardWidget(QWidget):
         interactions = QHBoxLayout()
         interactions.setSpacing(4)
         for kind, label, bg, hover in (
-            ("visit", "🏠 串门", "#e1f3ec", "#ceeadd"),
-            ("cheer", "💪 加油", "#e2f4f4", "#cce9e9"),
-            ("taunt", "😈 嘲讽", "#f0eafa", "#e0d5f1"),
+            ("visit", "🏠 串门", "#e1f3ec", "#bddfd0"),
+            ("cheer", "💪 加油", "#e2f4f4", "#b8e1df"),
+            ("taunt", "😈 嘲讽", "#f0eafa", "#d8c9eb"),
         ):
             button = make_button(label, bg, hover)
             self._buttons[kind] = button
@@ -2624,7 +2627,7 @@ class BuddyCardWidget(QWidget):
             else:
                 button.clicked.connect(lambda _checked=False, value=kind: self._request_reaction(value))
             interactions.addWidget(button, 1)
-        self.feed_button = make_button("🎁 投喂⌄", "#fff1d9", "#f5e2b9")
+        self.feed_button = make_button("🎁 投喂", "#fff1d9", "#eed8a3")
         self.feed_menu = QMenu(self.feed_button)
         self.feed_menu.setStyleSheet(
             "QMenu{background:#fffaf1;color:#493d2d;border:1px solid #d7c9ad;}"
@@ -2632,7 +2635,7 @@ class BuddyCardWidget(QWidget):
             "QMenu::item:disabled{color:#697078;}"
         )
         for kind, label in BUDDY_FEED_ITEMS:
-            action = self.feed_menu.addAction(label)
+            action = self.feed_menu.addAction(readable_milk_tea_label(label, self.feed_menu.font()))
             action.setEnabled(not is_self)
             self._food_buttons[kind] = action
             action.triggered.connect(lambda _checked=False, value=kind: self._request_food(value))
@@ -2752,7 +2755,7 @@ class BuddyCardWidget(QWidget):
             QTimer.singleShot(max(1, int(remaining * 1000) + 1), self, lambda: self._restore_button(kind))
             return
         if kind in self._food_buttons:
-            self._food_buttons[kind].setText(dict(BUDDY_FEED_ITEMS)[kind])
+            self._food_buttons[kind].setText(readable_milk_tea_label(dict(BUDDY_FEED_ITEMS)[kind], self.feed_menu.font()))
         self._sync_action_controls()
 
 
@@ -2771,7 +2774,9 @@ class RoomPetCardWidget(QWidget):
             "QWidget#roomPetCard{background:#f7fbfc;border:1px solid #c3d9df;border-radius:12px;}"
             "QPushButton{min-height:25px;padding:2px 7px;border-radius:7px;font-size:11px;"
             "background:#d8eeea;color:#245c59;}"
-            "QPushButton:disabled{color:#9ba9ad;background:#e7eef0;}"
+            "QPushButton:hover{background:#b5dcd2;border:1px solid #719eaa;}"
+            "QPushButton:pressed{background:#95c6b9;border:1px solid #527f8b;}"
+            "QPushButton:disabled{color:#5b6970;background:#e7eef0;}"
         )
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 7, 8, 7)
@@ -2967,7 +2972,7 @@ class IncomingVisitNotice(QDialog):
         nickname = _owner_label(self._event_payload)
         labels = {
             "food_coffee": "☕ 请你喝咖啡",
-            "food_milk_tea": "🧋 请你喝奶茶",
+            "food_milk_tea": "🥤 请你喝奶茶",
             "food_tea": "🍵 请你喝茶",
             "food_cake": "🍰 请你吃蛋糕",
             "food_cake_share": "🍰 请你一起吃蛋糕",
@@ -3505,7 +3510,7 @@ class SocialHubDialog(QDialog):
             QPushButton { min-width:0px; max-width:16777215px; min-height:20px; padding:8px 14px; border:0; border-radius:9px; background:#d7ece8; color:#204c4a; font-weight:600; text-align:center; }
             QPushButton:hover { background:#c2e2dd; }
             QPushButton:disabled { color:#91a1a8; background:#e8eef0; }
-        """)
+        """ + ACTION_BUTTON_STYLE)
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 18, 22, 20)
         root.setSpacing(9)
@@ -3562,6 +3567,7 @@ class SocialHubDialog(QDialog):
         else:
             self._update_account_state()
             self._prepare_bootstrap()
+        decorate_buttons(self)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt API
         was_closed = self._closed
@@ -3639,6 +3645,7 @@ class SocialHubDialog(QDialog):
         label = self.tabs.tabText(index)
         old_page = self.tabs.widget(index)
         page = factory()
+        decorate_buttons(page)
         self.tabs.removeTab(index)
         self.tabs.insertTab(index, page, label)
         if was_current:
@@ -3763,11 +3770,12 @@ class SocialHubDialog(QDialog):
         start_enabled = str(status) != "focus"
         pause_enabled = str(status) == "focus"
         finish_enabled = int(session_seconds) > 0 or int(today_seconds) > 0
-        if self.focus_start.isEnabled() != start_enabled:
+        if not self.focus_start.property("actionBusy"):
             self.focus_start.setEnabled(start_enabled)
-        if self.focus_pause.isEnabled() != pause_enabled:
+            self.focus_start.setText("继续专注" if str(status) == "rest" else "开始专注")
+        if not self.focus_pause.property("actionBusy"):
             self.focus_pause.setEnabled(pause_enabled)
-        if self.focus_finish.isEnabled() != finish_enabled:
+        if not self.focus_finish.property("actionBusy"):
             self.focus_finish.setEnabled(finish_enabled)
         self._refresh_multi_device_focus_hint()
         self._refresh_own_focus_labels()
@@ -4115,6 +4123,7 @@ class SocialHubDialog(QDialog):
 
     @staticmethod
     def _set_buddy_item_height(item: QListWidgetItem, widget: QWidget) -> None:
+        decorate_buttons(widget)
         widget.ensurePolished()
         # Keep a dense, repeatable row so a room with many buddies remains
         # scannable. The widget still determines the font/DPI-aware height;
@@ -4323,7 +4332,7 @@ class SocialHubDialog(QDialog):
             engine.store, engine, self._focus_progress,
             supervisor_open_callback=self._open_supervisor, parent=self,
             engine_provider=self._focus_engine, policy_factory=self._supervision_policy_panel,
-            rest_day_callback=self._set_rest_day,
+            rest_day_callback=lambda done: self._set_rest_day(done, self.focus_workspace.snooze_button),
         )
         self.focus_workspace.tabs.insertTab(0, today_page, "今日")
         self.focus_workspace.tabs.setCurrentIndex(0)
@@ -4335,20 +4344,56 @@ class SocialHubDialog(QDialog):
         self._refresh_focus_goals()
         return self.focus_workspace
 
-    def _set_rest_day(self, callback):
+    def _set_rest_day(self, callback, button=None):
+        if getattr(self, "_rest_day_pending", False):
+            return
+        if button is not None and not begin_button_work(button, "正在设置…"):
+            return
+        self._rest_day_pending = True
+        timer = QTimer(self); timer.setSingleShot(True)
+        deadline = time.monotonic() + 30
+        active = True
+        def finish():
+            nonlocal active
+            active = False
+            timer.stop(); timer.deleteLater()
+            self._rest_day_pending = False
+            if button is not None:
+                end_button_work(button)
+            callback()
+            self._refresh_focus_goals()
         engine = self._focus_engine()
         account = engine.store.account_id
         if not bool(getattr(self.client, "signed_in", False)):
-            if engine.store.exempt_today():
-                self._refresh_focus_goals()
-                callback()
+            try:
+                engine.store.exempt_today()
+            finally:
+                finish()
             return
         def completed(payload):
-            if self._focus_engine().store.account_id == account:
-                engine.store.merge_remote(payload)
-                self._refresh_focus_goals()
-                callback()
-        self.study_rpc("lili_set_rest_day", {}, completed, self._set_status)
+            if not active:
+                return
+            if time.monotonic() >= deadline:
+                failed("请求超时")
+                return
+            try:
+                if self._focus_engine().store.account_id == account:
+                    engine.store.merge_remote(payload)
+            finally:
+                finish()
+        def failed(error):
+            if not active:
+                return
+            try:
+                self._set_status("设置失败，请重试：" + str(error), error=True)
+            finally:
+                finish()
+        try:
+            timer.timeout.connect(lambda: failed("请求超时"))
+            timer.start(30000)
+            self.study_rpc("lili_set_rest_day", {}, completed, failed)
+        except Exception as error:
+            failed(error)
 
     def open_focus_section(self, index=0) -> None:
         self.tabs.setCurrentIndex(2)
@@ -4372,8 +4417,9 @@ class SocialHubDialog(QDialog):
                 if target else f"{title} {format_work_duration(actual)} · {'休息日' if key == 'today' else '未设目标'}")
             self.focus_goal_bars[key].setValue(min(100, actual * 100 // target) if target else 0)
         exempt = engine.store.is_exempt(datetime.now(BEIJING_TIMEZONE).date())
-        self.rest_day_button.setEnabled(not exempt and engine.store.settings.is_workday(datetime.now(BEIJING_TIMEZONE).date()))
-        self.rest_day_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if exempt else "🏳️ 高挂免战牌 · 今日休息")
+        if not self.rest_day_button.property("actionBusy"):
+            self.rest_day_button.setEnabled(not exempt and engine.store.settings.is_workday(datetime.now(BEIJING_TIMEZONE).date()))
+            self.rest_day_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if exempt else "🏳️ 高挂免战牌 · 今日休息")
         if exempt:
             self.focus_status.setText("🏳️ 高挂免战牌 · 今日休息")
         self.set_focus_analytics(self._focus_analytics)
@@ -4446,9 +4492,9 @@ class SocialHubDialog(QDialog):
         self.focus_start = QPushButton("开始专注")
         self.focus_pause = QPushButton("暂停休息")
         self.focus_finish = QPushButton("结束本轮")
-        self.focus_start.clicked.connect(self.focus_start_requested.emit)
-        self.focus_pause.clicked.connect(self.focus_pause_requested.emit)
-        self.focus_finish.clicked.connect(self.focus_finish_requested.emit)
+        self.focus_start.clicked.connect(lambda: self._focus_button_action(self.focus_start, self.focus_start_requested, "正在开始…"))
+        self.focus_pause.clicked.connect(lambda: self._focus_button_action(self.focus_pause, self.focus_pause_requested, "正在暂停…"))
+        self.focus_finish.clicked.connect(lambda: self._focus_button_action(self.focus_finish, self.focus_finish_requested, "正在结束…"))
         for column, button in enumerate((self.focus_start, self.focus_pause, self.focus_finish)):
             controls.addWidget(button, 0, column)
             controls.setColumnStretch(column, 1)
@@ -4458,7 +4504,7 @@ class SocialHubDialog(QDialog):
         report_button.clicked.connect(self.work_report_requested.emit)
         focus_layout.addWidget(report_button)
         self.rest_day_button = QPushButton("🏳️ 高挂免战牌 · 今日休息")
-        self.rest_day_button.clicked.connect(lambda: self._set_rest_day(self.focus_workspace.refresh))
+        self.rest_day_button.clicked.connect(lambda: self._set_rest_day(self.focus_workspace.refresh, self.rest_day_button))
         focus_layout.addWidget(self.rest_day_button)
         task_button = QPushButton("设置一次只盯一件事")
         task_button.clicked.connect(self._set_focus_task)
@@ -4829,6 +4875,50 @@ class SocialHubDialog(QDialog):
             force_auxiliary_refresh=True,
         )
 
+    def _focus_button_action(self, button, signal, label):
+        if not begin_button_work(button, label):
+            return
+        account = _session_user_id(self.client)
+        def perform():
+            try:
+                if account == _session_user_id(self.client):
+                    signal.emit()
+            finally:
+                end_button_work(button)
+                if self._focus_snapshot is not None:
+                    self.set_focus_snapshot(self._focus_snapshot, today_display_seconds=getattr(self, "_today_display_seconds", None))
+        QTimer.singleShot(0, self, perform)
+
+    def _send_interaction_rpc(self, buddy, name, body, kind, fallback=False):
+        # 复用搭子 RPC worker；等待时仅限制同一搭子的同一种互动。
+        key = (str(body.get("target") or body.get("p_target")), kind)
+        pending = getattr(self, "_pending_interactions", None)
+        if pending is None:
+            pending = self._pending_interactions = set()
+        if key in pending:
+            return
+        pending.add(key)
+        account = _session_user_id(self.client)
+        thread = SocialBuddyRpcThread(self.client, name, body, self)
+        self._buddy_rpc_threads.append(thread)
+        def done(_):
+            if account == _session_user_id(self.client):
+                self._interaction_sent(_owner_label(buddy), kind)
+        def failed(error):
+            if account != _session_user_id(self.client):
+                return
+            unsupported = getattr(error, "status", None) in {404, 405} or "不支持" in str(error)
+            if fallback and unsupported:
+                self._send_room_interaction(buddy, "cheer")
+            else:
+                self._set_status("互动没有送出：" + social_user_message(error), error=True)
+        thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(failed, Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(lambda: pending.discard(key), Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(lambda: self._buddy_rpc_finished(thread), Qt.ConnectionType.QueuedConnection)
+        self._set_status(f"正在向 {_owner_label(buddy)} 送出互动…")
+        thread.start()
+
     def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
             return
@@ -4836,11 +4926,7 @@ class SocialHubDialog(QDialog):
         nickname = _owner_label(buddy)
         labels = {"visit": "发出串门邀请", "cheer": "送上加油"}
         if kind == "visit":
-            try:
-                self.client.rpc("lili_send_visit", {"target": target, "visit_kind": "visit"})
-                self._interaction_sent(nickname, kind)
-            except SocialError as exc:
-                self._error(exc)
+            self._send_interaction_rpc(buddy, "lili_send_visit", {"target": target, "visit_kind": "visit"}, kind)
             return
         if kind == "cheer":
             # Outside a focus session this is a playful, persistent taunt.
@@ -4852,26 +4938,17 @@ class SocialHubDialog(QDialog):
                         "现在是嘲讽时间之外，给对方留点私人休息时间。"
                     )
                     return
-                try:
-                    self.client.rpc("lili_send_taunt", {"p_target": target})
-                    self._interaction_sent(nickname, "taunt")
-                except SocialError as exc:
-                    self._error(exc)
+                self._send_interaction_rpc(buddy, "lili_send_taunt", {"p_target": target}, "taunt")
                 return
             if _presence_working(buddy):
-                try:
-                    self.client.rpc("lili_send_encouragement", {"p_target": target})
-                    self._interaction_sent(nickname, "encouragement")
-                except SocialError as exc:
-                    # A relay/database that predates the reaction migration
-                    # can still accept the original short room cheer. Do not
-                    # turn an otherwise working button into a hard failure.
-                    unsupported = getattr(exc, "status", None) in {404, 405} or "不支持" in str(exc)
-                    if not unsupported:
-                        self._error(exc)
-                        return
-                else:
-                    return
+                self._send_interaction_rpc(buddy, "lili_send_encouragement", {"p_target": target}, "encouragement", fallback=True)
+                return
+        self._send_room_interaction(buddy, kind)
+
+    def _send_room_interaction(self, buddy, kind):
+        target = str(buddy.get("user_id") or buddy.get("id") or "")
+        nickname = _owner_label(buddy)
+        labels = {"visit": "发出串门邀请", "cheer": "送上加油"}
         if not self.current_room_id:
             self._set_status("请先选择一个共同房间，再向房间成员互动。", error=True)
             return
@@ -4905,14 +4982,21 @@ class SocialHubDialog(QDialog):
             if not event_id or event_id in self._auto_accepting_food:
                 continue
             self._auto_accepting_food.add(event_id)
-            try:
-                self.client.rpc("lili_respond_visit", {"event_id": event_id, "accept": True})
-                self.food_interaction_accepted.emit(visit)
-            except SocialError as exc:
-                self._auto_accepting_food.discard(event_id)
-                self._error(exc)
-                continue
-            self.refresh()
+            account = _session_user_id(self.client)
+            thread = SocialVisitResponseThread(self.client, visit, True, self)
+            self._event_threads.append(thread)
+            def accepted(event, _accept, expected=account):
+                if expected == _session_user_id(self.client):
+                    self.food_interaction_accepted.emit(event)
+                    self.refresh()
+            def failed(event, error, expected=account):
+                self._auto_accepting_food.discard(str(event.get("id") or ""))
+                if expected == _session_user_id(self.client):
+                    self._set_status("投喂没有接下：" + social_user_message(SocialError(str(error), kind="network")), error=True)
+            thread.completed.connect(accepted, Qt.ConnectionType.QueuedConnection)
+            thread.failed.connect(failed, Qt.ConnectionType.QueuedConnection)
+            thread.finished.connect(lambda worker=thread: self._event_thread_finished(worker), Qt.ConnectionType.QueuedConnection)
+            thread.start()
 
     def _send_food_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
@@ -6070,7 +6154,7 @@ class SocialHubDialog(QDialog):
             )
         labels = {
             "food_coffee": "☕ 一起开工邀请",
-            "food_milk_tea": "🧋 一起休息邀请",
+            "food_milk_tea": "🥤 一起休息邀请",
             "food_tea": "🍵 敬茶",
             "food_cake": "🍰 庆祝邀请",
             "food_cake_share": "🍰 请你一起吃蛋糕",
@@ -7013,10 +7097,7 @@ class SocialHubDialog(QDialog):
         if not item: return self._error(SocialError("请先选择一位搭子。"))
         buddy = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(buddy, dict): return self._error(SocialError("请先选择一位搭子。"))
-        self._begin_action("六毛正在准备出发…")
-        try:
-            self.client.rpc("lili_send_visit",{"target":buddy["user_id"],"visit_kind":"visit"}); self._end_action(); self._set_status("六毛已经出发，等待对方接受串门。"); QMessageBox.information(self,"已出发","六毛已经出发，等待对方接受串门。")
-        except SocialError as exc: self._error(exc)
+        self._send_interaction(buddy, "visit")
     def _accept_inbox(self) -> None:
         if not self._require_login(): return
         item=self.inbox.currentItem()

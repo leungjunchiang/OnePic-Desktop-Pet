@@ -1,9 +1,10 @@
-"""专注导航中的工作计划、本人训导范围、监督规则与纪律记录。"""
+"""专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单。"""
 
 from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any, Callable
+from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons
 
 from PySide6.QtCore import QTime, Qt, Signal, QSize
 from PySide6.QtGui import QColor, QPainter
@@ -108,7 +109,7 @@ class DisciplineWorkspace(QWidget):
         self.setStyleSheet(
             "QTabWidget::pane{background:white;border:1px solid #d3e0e6;"
             "border-radius:10px;} QLabel{color:#273946;} QPushButton{min-height:30px;padding:5px 12px;"
-            "background:#dcefeb;color:#155a52;border:0;border-radius:8px;font-weight:600;}"
+            "background:#dcefeb;color:#155a52;border:0;border-radius:8px;font-weight:600;}" + ACTION_BUTTON_STYLE
         )
         root = QVBoxLayout(self)
         self.tabs = FocusTabWidget()
@@ -292,7 +293,10 @@ class DisciplineWorkspace(QWidget):
                 self.engine = engine
                 self.store = engine.store
                 self._load_settings()
+                if hasattr(self, "policy_panel"):
+                    self.policy_panel.refresh()
         self._render_summaries()
+        decorate_buttons(self)
 
     def _load_settings(self) -> None:
         settings = self.store.settings
@@ -365,8 +369,10 @@ class DisciplineWorkspace(QWidget):
         from .discipline import as_beijing
         now_day = as_beijing().date()
         today = self.engine.daily_summary(now_day, today_seconds, week_seconds)
-        self.snooze_button.setEnabled(self.store.settings.is_workday(now_day) and not today["exempt"])
-        self.snooze_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if today["exempt"] else "🏳️ 高挂免战牌 · 今日休息")
+        if not self.snooze_button.property("actionBusy"):
+            self.snooze_button.setEnabled(self.store.settings.is_workday(now_day) and not today["exempt"])
+            self.snooze_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if today["exempt"] else "🏳️ 高挂免战牌 · 今日休息")
+        decorate_buttons(self)
         target = int(today["daily_target_seconds"])
         actual = int(today["today_seconds"])
         gap = int(today["daily_gap_seconds"])

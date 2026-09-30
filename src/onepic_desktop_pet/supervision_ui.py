@@ -1,10 +1,11 @@
-"""训导授权使用服务端版本；后台读取不锁表单，超时和异常统一恢复请求状态。"""
+"""训导设置仅在进入页面、手动刷新和保存时读取；草稿、请求状态与服务端版本独立。"""
 
 from PySide6.QtCore import Qt, QTimer
 from time import monotonic
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox, QListWidget, QListWidgetItem, QPushButton
 
 from .buddy_identity import buddy_choice, buddy_name
+from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons
 
 
 class SupervisionPolicyWidget(QWidget):
@@ -29,9 +30,18 @@ class SupervisionPolicyWidget(QWidget):
         self._policy = {}
         self._form_baseline = None
         self._master_edited = False
+        self._entry_requested = False
+        self._notice_serial = 0
+        self._success_label = False
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 10)
-        root.addWidget(QLabel("👨‍🏫 谁可以训导我"))
+        header = QHBoxLayout()
+        header.addWidget(QLabel("👨‍🏫 谁可以训导我")); header.addStretch()
+        self.reload = QPushButton("↻ 刷新")
+        self.reload.setObjectName("minorRefresh")
+        self.reload.setToolTip("手动刷新最新设置，保留尚未保存的修改")
+        self.reload.clicked.connect(self._reload)
+        header.addWidget(self.reload); root.addLayout(header)
         self.enabled = QCheckBox("允许搭子训导我")
         self.enabled.clicked.connect(self._toggle_enabled)
         self.enabled.setEnabled(False)
@@ -70,10 +80,10 @@ class SupervisionPolicyWidget(QWidget):
         self.officers = QListWidget(); self.officers.setMaximumHeight(110)
         self.officers.itemChanged.connect(self._changed); root.addWidget(self.officers)
         row = QHBoxLayout()
-        self.save = QPushButton("保存训导范围"); self.save.clicked.connect(self._save)
-        self.reload = QPushButton("重新读取授权"); self.reload.clicked.connect(self._reload)
-        row.addWidget(self.reload); row.addWidget(self.save); root.addLayout(row)
-        self.status = QLabel("登录并打开此页后读取授权。")
+        self.save = QPushButton("保存设置"); self.save.clicked.connect(self._save)
+        row.addWidget(self.save); root.addLayout(row)
+        self.status = QLabel()
+        self.status.hide()
         self.status.setWordWrap(True); root.addWidget(self.status)
         root.addWidget(QLabel("我正在训导"))
         self.supervising = QListWidget(); self.supervising.setMaximumHeight(120)
@@ -86,10 +96,9 @@ class SupervisionPolicyWidget(QWidget):
             "QComboBox{background:#f7fbfc;color:#203847;border:1px solid #a8c4c9;"
             "border-radius:5px;padding:4px 8px;}"
             "QComboBox:disabled{background:#e8edef;color:#596b74;border-color:#c2ccd0;}"
-            "QCheckBox:disabled{color:#596b74;}"
+            "QCheckBox:disabled{color:#596b74;}" + ACTION_BUTTON_STYLE
         )
-        self.timer = QTimer(self); self.timer.setInterval(10000)
-        self.timer.timeout.connect(self.refresh); self.timer.start()
+        decorate_buttons(self)
 
     def _set_controls(self, ready):
         self.enabled.setEnabled(ready)
@@ -98,17 +107,32 @@ class SupervisionPolicyWidget(QWidget):
             widget.setEnabled(ready and self.enabled.isChecked())
         for widget in (self.invite, self.uninvite):
             widget.setEnabled(ready and self.enabled.isChecked() and not self.pending)
-        self.save.setEnabled(ready and not self._mutation_pending)
+        self.save.setEnabled(ready and self.dirty and not self._mutation_pending)
+        self.save.setText("正在保存…" if self._mutation_pending else "✓ 已保存" if self._success_label else "保存设置")
         self.reload.setEnabled(not self.pending)
 
     def _changed(self, *_):
         self._edit_serial += 1
-        self.dirty = True
+        self.dirty = self.revision is not None and self._form_policy() != self._form_baseline
+        self._success_label = False
         self.selected.setVisible(self.scope.currentData() == "selected")
         self.officers.setVisible(self.officer_scope.currentData() == "selected")
         for widget in (self.invited_hint, self.invitee, self.invite, self.uninvite):
             widget.setVisible(self.scope.currentData() == "invited")
         self._set_controls(self.revision is not None)
+
+    def _notice(self, text, *, error=False, saved=False):
+        self._notice_serial += 1
+        serial = self._notice_serial
+        self._success_label = saved
+        self.status.setText(text); self.status.setVisible(bool(text))
+        if not error:
+            def clear():
+                if serial == self._notice_serial and not self.pending:
+                    self.status.clear(); self.status.hide()
+                    self._success_label = False
+                    self._set_controls(self.revision is not None)
+            QTimer.singleShot(1800, self, clear)
 
     def _rpc(self, name, body, callback):
         if self.pending:
@@ -122,7 +146,10 @@ class SupervisionPolicyWidget(QWidget):
         self.pending = True
         self._mutation_pending = mutation
         self._set_controls(self.revision is not None)
-        self.status.setText("正在保存授权…" if mutation else "正在同步授权…")
+        self._notice_serial += 1
+        self._success_label = False
+        self.status.setText("正在加载设置…" if not mutation else "")
+        self.status.setVisible(not mutation)
         timeout = QTimer(self)
         deadline = monotonic() + self.request_timeout_ms / 1000
         self._request_timer = timeout
@@ -142,11 +169,8 @@ class SupervisionPolicyWidget(QWidget):
                 self._save_requested = False
                 self._save()
         def report_error(error):
-            if mutation and edit_serial == self._edit_serial:
-                # A failed master save must not claim that consent was revoked.
-                self.enabled.setChecked(bool(self._policy.get("enabled")))
-                self._master_edited = False
-            self.status.setText(str(error)[:300] + "\n可重新读取授权后重试，未保存的其他设置仍保留。")
+            self.dirty = self._form_policy() != self._form_baseline
+            self._notice("保存失败，请重试。\n" + str(error)[:260] if mutation else "加载失败，请点击右上角刷新重试。\n" + str(error)[:260], error=True)
         def done(payload):
             if not current():
                 return
@@ -156,6 +180,7 @@ class SupervisionPolicyWidget(QWidget):
             try:
                 self._preserve_edits = edit_serial != self._edit_serial or (not mutation and self.dirty)
                 callback(payload)
+                self._notice("" if mutation else "设置已加载", saved=mutation)
             except Exception as error:
                 report_error(error)
             finally:
@@ -186,13 +211,16 @@ class SupervisionPolicyWidget(QWidget):
             self._save_requested = False; self._mutation_pending = False
             self._policy = {}
             self._form_baseline = None; self._master_edited = False
+            self._entry_requested = False
             self.selected.clear(); self.officers.clear(); self.supervising.clear()
             self.enabled.setChecked(False); self._set_controls(False)
-        if self.isVisible() and not self.pending:
+        if self.isVisible() and not self.pending and not self._entry_requested:
+            self._entry_requested = True
             self._rpc("lili_supervision_snapshot", {}, self._apply)
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._entry_requested = False
         self.refresh()
 
     def _apply(self, data):
@@ -211,7 +239,9 @@ class SupervisionPolicyWidget(QWidget):
         self._policy = dict(p)
         self.revision = revision
         if self._preserve_edits:
-            self.status.setText("授权已同步；保留你正在修改的设置，请保存后生效。")
+            if self._mutation_pending:
+                self._form_baseline = {key: p.get(key, "selected" if key in {"scope", "officer_scope"} else [] if key.endswith("_ids") else key != "enabled") for key in self._form_policy()}
+            self.dirty = self._form_policy() != self._form_baseline
             return
         self.enabled.setChecked(bool(p.get("enabled")))
         self.scope.setCurrentIndex(max(0, self.scope.findData(p.get("scope", "selected"))))
@@ -248,8 +278,8 @@ class SupervisionPolicyWidget(QWidget):
         self._set_controls(True)
         supervisors = data.get("supervisors", [])
         names = "\n".join(buddy_name(by_id.get(row.get("supervisor_id"), {"user_id": row.get("supervisor_id")})) + " · " + ("严格训导" if row.get("mode") == "officer" else "普通训导") for row in supervisors)
-        self.status.setText(("已开启，范围内搭子无需再次申请。" + ("\n正在训导我：" + names if names else "\n暂无搭子正在监督我。"))
-                            if p.get("enabled") else "搭子训导已关闭。历史记录保留。")
+        self.enabled.setToolTip("正在训导我：" + names if names else "范围内搭子可直接监督；关闭后保留历史记录。")
+        self.status.clear(); self.status.hide()
 
     @staticmethod
     def _checked(listing):
@@ -263,8 +293,14 @@ class SupervisionPolicyWidget(QWidget):
                   **{key: check.isChecked() for key, check in self.permissions.items()}}
 
     def _save(self):
+        if self._form_baseline is not None:
+            self.dirty = self._form_policy() != self._form_baseline
+        if not self.dirty:
+            self._set_controls(self.revision is not None)
+            return
         if self.pending:
-            self._save_requested = True
+            if not self._mutation_pending:
+                self._save_requested = True
             return
         if self.revision is None or self.account_id != self.engine_provider().store.account_id:
             self.refresh(); return
@@ -280,20 +316,20 @@ class SupervisionPolicyWidget(QWidget):
         self._rpc("lili_set_supervision_policy", {"p_policy": policy, "p_expected_revision": self.revision}, self._apply)
 
     def _toggle_enabled(self):
-        self._master_edited = True
+        self._master_edited = self._form_baseline is not None and self.enabled.isChecked() != self._form_baseline.get("enabled")
         self._changed()
-        self._save()
 
     def _reload(self):
-        self.dirty = False
-        self.refresh()
+        if not self.pending:
+            self._entry_requested = False
+            self.refresh()
 
     def _invite(self, enabled):
         identifier = self.invitee.currentData()
         if identifier and not self.dirty:
             self._rpc("lili_invite_supervisor", {"p_buddy_id": identifier, "p_enabled": enabled}, self._apply)
         elif self.dirty:
-            self.status.setText("先保存训导范围，再邀请搭子。")
+            self._notice("先保存设置，再邀请搭子。", error=True)
 
     def _open_room(self, item):
         if item:

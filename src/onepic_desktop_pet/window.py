@@ -4,6 +4,7 @@
 职责范围：
 - 复用周目标参考与免战日，默认不以固定下班时间审查，免战日不显示搭子训导提醒；
 - 将本人训导范围与搭子有效监督模式分开同步，私有备注优先显示，轻提醒保持不激活窗口；
+- 投喂复用搭子 RPC worker，待发送邀请独立防重入和预留价格，收到成功结果后才记账；
 - 创建无边框、透明、可选始终置顶的 QWidget；
 - 使用 Windows/macOS 原生窗口层级补强置顶，同时保持不激活、不占任务栏和轮廓外点击穿透；
 - macOS 应用失焦时立即修复宠物和计时小栏层级，并在浮动窗口 watchdog 中重新核对小栏可见性；
@@ -3818,7 +3819,7 @@ class PetWindow(QWidget):
             minutes = int(scene.get("duration_minutes") or 10)
             self._set_temporary_activity("milk-tea", minutes * 60 * 1000)
             self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
-            self.show_speech(f"🧋 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
+            self.show_speech(f"🥤 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
         elif item_key == "cake":
             self._set_temporary_activity("feast", 20_000)
             self.food_scene_timer.start(20_000)
@@ -3905,7 +3906,16 @@ class PetWindow(QWidget):
             return
         catalog = self.economy.catalog().get(item_key) or {}
         price = int(catalog.get("price") or 0)
-        if self.economy.balance < price:
+        account = str(self._current_social_user_id() or "")
+        pending = getattr(self, "_pending_food_gifts", None)
+        if pending is None:
+            pending = self._pending_food_gifts = {}
+        key = (account, target, str(kind))
+        if key in pending:
+            self.show_speech("这份投喂正在发送，请稍等。", 2400)
+            return
+        reserved = sum(value[0] for identity, value in pending.items() if identity[0] == account)
+        if self.economy.balance - reserved < price:
             self.show_speech("哥们，钱袋有点瘪。", 4200)
             return
         recipient_label = str(
@@ -3927,35 +3937,41 @@ class PetWindow(QWidget):
                 "cake": "这件事值得庆祝一下。",
             }.get(item_key, ""),
         }
+        # 请求离开 GUI 线程；同一邀请防重入，待发送价格预留，成功后才记账。
+        reservation = (price, operation_key)
+        pending[key] = reservation
+        def release():
+            if pending.get(key) == reservation:
+                pending.pop(key, None)
+        def completed(_result):
+            try:
+                event = self.economy.record_food_gift_sent(target, recipient_label, item_key, operation_key=operation_key)
+                if event is None:
+                    self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
+                    return
+                self._sync_economy_events([event.as_dict()])
+                self._set_social_food_activity(item_key, duration)
+                text = {
+                    "coffee": f"☕ 已邀请 {recipient_label} 一起开工 30 分钟。",
+                    "milk_tea": f"🥤 已邀请 {recipient_label} 一起歇会儿。",
+                    "tea": f"🍵 已给 {recipient_label} 敬茶。",
+                }.get(item_key, "互动已经送出。")
+                self.show_speech(text, 5200)
+            finally:
+                release()
+        def failed(error):
+            try:
+                self.show_speech(f"没送出去：{str(error)[:120]}", 5200)
+            finally:
+                release()
+        self.show_speech(f"正在给 {recipient_label} 发送投喂…", 2400)
         try:
-            self.social_client.rpc(
-                "lili_send_food_interaction",
-                {"p_target": target, "p_kind": str(kind), "p_payload": payload},
-            )
-        except Exception as exc:
-            self.show_speech(f"没送出去：{str(exc)[:120]}", 5200)
-            return
-        event = self.economy.record_food_gift_sent(
-            target,
-            recipient_label,
-            item_key,
-            operation_key=operation_key,
-        )
-        if event is None:
-            self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
-            return
-        self._sync_economy_events([event.as_dict()])
-        # A drink invitation is a shared visual moment, not a local break:
-        # the sender changes into the same limited food pose immediately and
-        # keeps any active focus timer running.
-        self._set_social_food_activity(item_key, duration)
-        text = {
-            "coffee": f"☕ 已邀请 {recipient_label} 一起开工 30 分钟。",
-            "milk_tea": f"🧋 已邀请 {recipient_label} 一起歇会儿。",
-            "tea": f"🍵 已给 {recipient_label} 敬茶。",
-            "cake": f"🍰 已请 {recipient_label} 庆祝一下。",
-        }.get(item_key, "互动已经送出。")
-        self.show_speech(text, 5200)
+            worker = self._discipline_rpc("lili_send_food_interaction",
+                {"p_target": target, "p_kind": str(kind), "p_payload": payload}, completed, failed)
+            # 即使账号切换而忽略结果，也须清理旧账号的待发送预留。
+            worker.finished.connect(release, Qt.ConnectionType.QueuedConnection)
+        except Exception as error:
+            failed(error)
 
     def _set_social_food_activity(self, item_key: str, duration_minutes: int = 0) -> None:
         """Show a food-interaction pose without pausing or starting focus."""
@@ -3998,7 +4014,7 @@ class PetWindow(QWidget):
         self._set_social_food_activity(item_key, duration)
         labels = {
             "coffee": "☕ 一起喝咖啡",
-            "milk_tea": "🧋 一起喝奶茶",
+            "milk_tea": "🥤 一起喝奶茶",
             "tea": "🍵 一起喝茶",
             "cake": "🍰 一起吃蛋糕",
         }
@@ -8151,8 +8167,8 @@ class PetWindow(QWidget):
             if isinstance(row, dict) and not bool(row.get("is_self"))
         ]
 
-    def _discipline_rpc(self, name: str, body: dict, callback, failure) -> None:
-        """Run an explicit supervisor action off the GUI thread."""
+    def _discipline_rpc(self, name: str, body: dict, callback, failure) -> SocialBuddyRpcThread:
+        """复用搭子 worker 执行训导及投喂请求，账号切换后拒绝旧结果。"""
 
         account_id = str(self._current_social_user_id() or "")
         thread = SocialBuddyRpcThread(self.social_client, name, body, self)
@@ -8173,6 +8189,7 @@ class PetWindow(QWidget):
         )
         thread.finished.connect(thread.deleteLater)
         thread.start()
+        return thread
 
     def _discipline_rpc_finished(self, thread: SocialBuddyRpcThread) -> None:
         if thread in self._discipline_rpc_threads:

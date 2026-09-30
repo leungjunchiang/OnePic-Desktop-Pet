@@ -1111,8 +1111,10 @@ def test_core_interactions_are_visible_and_supplies_share_feed_menu() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
     buttons = {button.text() for button in widget.findChildren(QPushButton)}
-    assert buttons == {"查看搭子", "🏠 串门", "💪 加油", "😈 嘲讽", "🎁 投喂⌄"}
-    assert {"☕ 咖啡", "🧋 奶茶", "🍵 茶", "🍰 蛋糕"} == {action.text() for action in widget.feed_menu.actions()}
+    assert buttons == {"查看搭子", "🏠 串门", "💪 加油", "😈 嘲讽", "🎁 投喂"}
+    labels = {action.text() for action in widget.feed_menu.actions()}
+    assert {"☕ 咖啡", "🍵 茶", "🍰 蛋糕"}.issubset(labels)
+    assert len(labels) == 4 and ("🥤 奶茶" in labels or "奶茶" in labels)
     assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton))
     sent = []
     widget.food_interaction_requested.connect(lambda buddy, kind: sent.append((buddy, kind)))
@@ -1308,7 +1310,7 @@ def test_incoming_visit_notice_has_direct_accept_reject_and_later_actions() -> N
         {"id": "visit-1", "nickname": "论文搭子", "kind": "food_milk_tea"}
     )
     labels = [button.text() for button in notice.findChildren(QPushButton)]
-    assert "论文搭子家的六毛🧋 请你喝奶茶" in [label.text() for label in notice.findChildren(QLabel)]
+    assert "论文搭子家的六毛🥤 请你喝奶茶" in [label.text() for label in notice.findChildren(QLabel)]
     assert {"接受", "拒绝", "稍后处理"} <= set(labels)
     notice.close_without_notice(); notice.deleteLater(); app.processEvents()
 
