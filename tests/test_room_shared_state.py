@@ -1,4 +1,4 @@
-"""验证房间状态、互动菜单冷却反馈和空闲暂停。"""
+"""验证房间状态、清楚的身份状态分隔、互动菜单冷却与空闲暂停。"""
 
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ def test_social_card_uses_owner_nickname_without_renaming_pet():
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"user_id": "peer", "nickname": "小梁", "online": True, "working": True})
     headline = widget.findChildren(QLabel)[0].text()
-    assert "小梁家的六毛正在工作" in headline
+    assert "小梁家的六毛 · 正在工作" in headline
     assert "小梁家的六毛家的六毛" not in headline
     widget.deleteLater(); app.processEvents()
 
@@ -121,9 +121,9 @@ def test_social_card_prefers_explicit_owner_nickname_and_keeps_stale_presence_of
         "stale_presence": True,
     })
     labels = widget.findChildren(QLabel)
-    assert "小梁家的六毛已离线" in labels[0].text()
-    assert "今日专注时长已隐藏" in labels[1].text()
-    assert "本周专注时长已隐藏" in labels[1].text()
+    assert "小梁家的六毛 · 已离线" in labels[0].text()
+    assert "今日专注时长已隐藏" in widget._focus_label.text()
+    assert "本周专注时长已隐藏" in widget._focus_label.text()
     assert "六毛搭子的六毛" not in labels[0].text()
     widget.deleteLater(); app.processEvents()
 

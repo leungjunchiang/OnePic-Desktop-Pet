@@ -4,6 +4,7 @@
 // Realtime and all durable business data remain the single source of truth.
 
 const RPC_ALLOWLIST = new Set([
+  "lili_discipline_sync", "lili_buddy_study_overview", "lili_discipline_supervisor_report", "lili_mark_discipline_report_read", "lili_supervision_snapshot", "lili_set_supervision_policy", "lili_invite_supervisor", "lili_start_supervision", "lili_supervision_nudge",
   "lili_add_buddy_by_code", "lili_lookup_buddy_by_code", "lili_buddy_requests", "lili_respond_buddy", "lili_cancel_buddy_request", "lili_remove_buddy", "lili_create_room", "lili_join_room",
   "lili_send_visit", "lili_respond_visit", "lili_send_taunt", "lili_taunt_state", "lili_send_encouragement", "lili_encouragement_state", "lili_reaction_state", "lili_dashboard", "lili_room_dashboard",
   "lili_record_room_event", "lili_send_interaction", "lili_create_cake_share", "lili_set_room_goal", "lili_leave_room",

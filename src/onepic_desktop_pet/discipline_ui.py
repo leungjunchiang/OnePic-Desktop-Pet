@@ -1,4 +1,4 @@
-"""专注二级导航中的工作计划、训导规则、纪律记录与明确监督授权。"""
+"""专注导航中的工作计划、本人训导范围、监督规则与纪律记录。"""
 
 from __future__ import annotations
 
@@ -53,189 +53,6 @@ class FinishReviewDialog(QDialog):
         self.accept()
 
 
-class DisciplineSupervisorDialog(QDialog):
-    """Manage explicit two-party supervisor consent and read authorized reports."""
-
-    def __init__(self, buddy_provider, rpc_executor, parent=None) -> None:
-        super().__init__(parent)
-        self.buddy_provider = buddy_provider
-        self.rpc_executor = rpc_executor
-        self.setWindowTitle("训导主任授权与报告")
-        self.resize(520, 540)
-        layout = QVBoxLayout(self)
-        privacy = QLabel(
-            "监督者只能在你主动授权后查看纪律摘要。摘要包含计划、开工/下班、专注时长和纪律事件；"
-            "不包含应用名称、窗口标题、文件或聊天内容。你可以随时撤销授权。"
-        )
-        privacy.setWordWrap(True)
-        layout.addWidget(privacy)
-
-        layout.addWidget(QLabel("邀请一位已确认搭子担任你的训导主任"))
-        request_row = QHBoxLayout()
-        self.buddies = QComboBox()
-        self.buddies.setMinimumContentsLength(20)
-        request_row.addWidget(self.buddies, 1)
-        request = QPushButton("发送授权申请")
-        request.clicked.connect(self._request_supervisor)
-        request_row.addWidget(request)
-        layout.addLayout(request_row)
-        self.owned_status = QLabel("正在读取授权状态…")
-        layout.addWidget(self.owned_status)
-        revoke = QPushButton("撤销当前训导主任授权")
-        revoke.clicked.connect(self._revoke)
-        layout.addWidget(revoke, alignment=Qt.AlignmentFlag.AlignRight)
-
-        layout.addWidget(QLabel("待处理的授权申请"))
-        self.incoming = QListWidget()
-        layout.addWidget(self.incoming, 1)
-        response_row = QHBoxLayout()
-        accept = QPushButton("接受邀请，担任对方训导主任")
-        accept.clicked.connect(lambda: self._respond(True))
-        reject = QPushButton("拒绝")
-        reject.clicked.connect(lambda: self._respond(False))
-        response_row.addWidget(accept)
-        response_row.addWidget(reject)
-        layout.addLayout(response_row)
-
-        layout.addWidget(QLabel("我监督的用户"))
-        report_row = QHBoxLayout()
-        self.supervised = QComboBox()
-        report_row.addWidget(self.supervised, 1)
-        report = QPushButton("查看近 30 天摘要")
-        report.clicked.connect(self._load_report)
-        report_row.addWidget(report)
-        layout.addLayout(report_row)
-        self.report = QListWidget()
-        self.report.itemClicked.connect(self._mark_read)
-        layout.addWidget(self.report, 2)
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-
-        self._request_ids: dict[str, dict[str, Any]] = {}
-        self._supervised_ids: dict[str, dict[str, Any]] = {}
-        self.refresh_buddies()
-        self._rpc("lili_discipline_supervisor_snapshot", {}, self._apply_snapshot)
-
-    def refresh_buddies(self) -> None:
-        self.buddies.clear()
-        count = 0
-        for buddy in self.buddy_provider() or []:
-            if not isinstance(buddy, dict):
-                continue
-            buddy_id = str(buddy.get("user_id") or buddy.get("id") or "").strip()
-            if not buddy_id:
-                continue
-            name = str(buddy.get("owner_nickname") or buddy.get("nickname") or "搭子").strip()
-            self.buddies.addItem(name, buddy_id)
-            count += 1
-        if not count:
-            self.buddies.addItem("暂无可选搭子（先刷新自习室好友）", "")
-
-    def _rpc(self, name: str, body: dict[str, Any], callback) -> None:
-        self.status.setText("正在安全地同步授权状态…")
-        self.rpc_executor(name, body, callback, self._failed)
-
-    def _request_supervisor(self) -> None:
-        target = str(self.buddies.currentData() or "")
-        if target:
-            self._rpc("lili_request_discipline_supervisor", {"p_supervisor_id": target}, self._action_done)
-        else:
-            self.status.setText("请先打开搭子自习室并刷新好友列表，再回来发送授权申请。")
-
-    def _respond(self, accepted: bool) -> None:
-        item = self.incoming.currentItem()
-        record = self._request_ids.get(str(item.data(Qt.ItemDataRole.UserRole) or "")) if item else None
-        if record:
-            self._rpc("lili_respond_discipline_supervisor", {
-                "p_request_id": record["request_id"], "p_accept": accepted,
-            }, self._action_done)
-
-    def _revoke(self) -> None:
-        self._rpc("lili_revoke_discipline_supervisor", {}, self._action_done)
-
-    def _load_report(self) -> None:
-        owner_id = str(self.supervised.currentData() or "")
-        if owner_id:
-            self.report.clear()
-            self._rpc("lili_discipline_supervisor_report", {"p_owner_id": owner_id}, self._apply_report)
-
-    def _apply_report(self, payload: object) -> None:
-        rows = payload.get("reports", []) if isinstance(payload, dict) else []
-        self.report.clear()
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
-            day = str(row.get("event_date") or "")
-            data = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            actual = int(data.get("today_seconds", 0) or 0)
-            target = int(data.get("daily_target_seconds", 0) or 0)
-            target_text = f" / {format_work_duration(target)}" if "daily_target_seconds" in data else ""
-            late_text = f"迟到 {int(data.get('lateness_minutes', 0) or 0)} 分" if "lateness_minutes" in data else "迟到信息未授权"
-            line = (
-                f"{day}  专注 {format_work_duration(actual)}{target_text}"
-                f"  · {late_text}"
-                f"  · 长休息 {int(data.get('long_break_count', 0) or 0)} 次"
-                f"  · 缺口 {format_work_duration(int(data.get('daily_gap_seconds', 0) or 0))}"
-                f"  · {'已阅' if row.get('read_at') else '未阅'}"
-            )
-            item = QListWidgetItem(line)
-            item.setData(Qt.ItemDataRole.UserRole, {"date": day, "owner_id": self.supervised.currentData()})
-            self.report.addItem(item)
-        self.status.setText("报告仅由已授权的监督者读取；打开摘要会记录已阅状态。")
-        if self.report.count():
-            self.report.setCurrentRow(0)
-            self._mark_read(self.report.item(0))
-
-    def _mark_read(self, item: QListWidgetItem) -> None:
-        row = item.data(Qt.ItemDataRole.UserRole) or {}
-        if row.get("date") and row.get("owner_id"):
-            self.rpc_executor(
-                "lili_mark_discipline_report_read",
-                {"p_owner_id": row["owner_id"], "p_report_date": row["date"]},
-                lambda _result, current=item: current.setText(current.text().replace("未阅", "已阅")),
-                self._failed,
-            )
-
-    def _action_done(self, payload: object) -> None:
-        message = payload.get("message") if isinstance(payload, dict) else None
-        self.status.setText(str(message or "操作已更新；双方授权状态已同步。"))
-        self._rpc("lili_discipline_supervisor_snapshot", {}, self._apply_snapshot)
-
-    def _apply_snapshot(self, payload: object) -> None:
-        data = payload if isinstance(payload, dict) else {}
-        owned = data.get("owned") if isinstance(data.get("owned"), dict) else None
-        if owned:
-            name = str(owned.get("supervisor_nickname") or "训导主任")
-            self.owned_status.setText(f"当前训导主任：{name}（已授权）")
-        else:
-            self.owned_status.setText("当前没有已授权的训导主任")
-        self.incoming.clear()
-        self._request_ids.clear()
-        for row in data.get("incoming", []) if isinstance(data.get("incoming"), list) else []:
-            if not isinstance(row, dict):
-                continue
-            request_id = str(row.get("request_id") or "")
-            label = f"{row.get('owner_nickname') or '搭子'} 邀请你担任 TA 的训导主任"
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, request_id)
-            self._request_ids[request_id] = row
-            self.incoming.addItem(item)
-        self.supervised.clear()
-        self._supervised_ids.clear()
-        for row in data.get("supervising", []) if isinstance(data.get("supervising"), list) else []:
-            if not isinstance(row, dict):
-                continue
-            owner_id = str(row.get("owner_id") or "")
-            name = str(row.get("owner_nickname") or "用户")
-            self.supervised.addItem(name, owner_id)
-            self._supervised_ids[owner_id] = row
-        self.status.setText(str(data.get("outgoing_status") or "授权状态已刷新。"))
-
-    def _failed(self, error: object) -> None:
-        self.status.setText(str(error)[:300])
-
-
 class DisciplineWorkspace(QWidget):
     """可直接嵌入专注导航的普通页面，统一管理计划、模式与记录。"""
 
@@ -243,7 +60,7 @@ class DisciplineWorkspace(QWidget):
         self, store: DisciplineStore, engine: DisciplineEngine,
         progress_provider: Callable[[], tuple[int, int]], *,
         supervisor_open_callback: Callable[[], object] | None = None, parent=None,
-        engine_provider=None,
+        engine_provider=None, policy_factory=None,
     ) -> None:
         super().__init__(parent)
         self.store = store
@@ -251,6 +68,7 @@ class DisciplineWorkspace(QWidget):
         self.progress_provider = progress_provider
         self.supervisor_open_callback = supervisor_open_callback
         self.engine_provider = engine_provider
+        self.policy_factory = policy_factory
         self.setStyleSheet(
             "QTabWidget::pane{background:white;border:1px solid #d3e0e6;"
             "border-radius:10px;} QLabel{color:#273946;} QPushButton{min-height:30px;padding:5px 12px;"
@@ -391,6 +209,10 @@ class DisciplineWorkspace(QWidget):
 
     def _build_mode_page(self) -> None:
         layout = QVBoxLayout(self.mode_page)
+        if self.policy_factory is not None:
+            self.policy_panel = self.policy_factory(self.mode_page)
+            layout.addWidget(self.policy_panel)
+        layout.addWidget(QLabel("自己的训导规则（独立于分享授权）"))
         self.duty_status = self._summary_label()
         layout.addWidget(self.duty_status)
         form = QFormLayout()
@@ -420,11 +242,6 @@ class DisciplineWorkspace(QWidget):
         save = QPushButton("保存训导规则")
         save.clicked.connect(lambda: self._save_settings("mode"))
         layout.addWidget(save, alignment=Qt.AlignmentFlag.AlignRight)
-        supervisor = QPushButton("监督关系与授权…")
-        supervisor.setEnabled(self.supervisor_open_callback is not None)
-        if self.supervisor_open_callback is not None:
-            supervisor.clicked.connect(self.supervisor_open_callback)
-        layout.addWidget(supervisor)
         layout.addStretch()
 
     def _update_mode_hint(self, *_args) -> None:

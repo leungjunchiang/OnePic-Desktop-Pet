@@ -19,6 +19,13 @@ if ([string]::IsNullOrWhiteSpace($projectRef) -or [string]::IsNullOrWhiteSpace($
     throw "Supabase project ref or access token is missing."
 }
 $sql = Get-Content -Raw -LiteralPath $MigrationPath
+if ($MigrationPath -like '*lili_supervision_policy.sql') {
+    # Upgrade all discipline RPCs atomically, so older definitions cannot
+    # temporarily bypass an owner's already revoked policy during deployment.
+    $baseSql = Get-Content -Raw -LiteralPath 'supabase/migrations/20260930100000_lili_discipline_state.sql'
+    $viewSql = Get-Content -Raw -LiteralPath 'supabase/migrations/20260930120000_lili_buddy_study_permissions.sql'
+    $sql = "begin;`n$baseSql`n$viewSql`n$sql`ncommit;"
+}
 if ([string]::IsNullOrWhiteSpace($sql)) {
     throw "Discipline migration is empty."
 }
@@ -43,6 +50,17 @@ if (-not ($row.settings_ready -and $row.events_ready -and $row.consent_ready -an
     throw "Discipline migration verification failed."
 }
 Write-Host "Discipline sync and consent schema/RPCs verified."
+if ($MigrationPath -like '*lili_supervision_policy.sql') {
+    $verificationSql = Get-Content -Raw -LiteralPath 'scripts/verify_supervision_policy.sql'
+    $verificationBody = @{ query = $verificationSql } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $verificationBody
+    Write-Host 'Owner policy, multiple supervisors, officer opt-in, stale-device conflicts, field redaction, revocation, legacy denial and nudge cooldown verified; fixtures rolled back.'
+    $upgradeSql = Get-Content -Raw -LiteralPath 'scripts/verify_supervision_upgrade.sql'
+    $upgradeSql = $upgradeSql.Replace('-- REPLAY_MIGRATION_HERE', (Get-Content -Raw -LiteralPath $MigrationPath))
+    $upgradeBody = @{ query = $upgradeSql } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $upgradeBody
+    Write-Host 'Legacy accepted scopes, disabled local rules, officer eligibility and idempotent migration verified; fixtures rolled back.'
+}
 if ($MigrationPath -like '*lili_buddy_study_permissions.sql') {
     $verificationSql = Get-Content -Raw -LiteralPath "scripts/verify_buddy_study_permissions.sql"
     $verificationBody = @{ query = $verificationSql } | ConvertTo-Json -Compress

@@ -1,13 +1,14 @@
-"""具体搭子的自习室：公开状态、共同专注、授权计划、监督关系与纪律摘要。"""
+"""搭子自习室优先显示私有备注，并按本人开放的范围直接监督与查看摘要。"""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QPushButton,
-    QTabWidget, QVBoxLayout, QWidget, QScrollArea,
+    QTabWidget, QVBoxLayout, QWidget, QScrollArea, QMessageBox,
 )
 
+from .buddy_identity import buddy_name, public_name
 from .discipline import DisciplineSettings, as_beijing
 from .work_timer import format_work_duration
 
@@ -27,7 +28,7 @@ class BuddyStudyDialog(QDialog):
         self._request_pending = False
         self._permissions_dirty = False
         self._overview = {}
-        self.setWindowTitle(f"{_owner_label(buddy)} · 搭子自习室")
+        self.setWindowTitle(f"{buddy_name(buddy)} · 搭子自习室 - Lili")
         self.resize(570, 610)
         root = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -62,30 +63,25 @@ class BuddyStudyDialog(QDialog):
         pages[2].addWidget(edit_plan)
         self.relationship = self._label(pages[3])
         self.permissions = {}
-        for key, title in (("view_plan", "允许 TA 查看我的计划"),
-                           ("view_reports", "向 TA 分享纪律日报"),
-                           ("view_lateness", "允许 TA 查看迟到和开工时间")):
-            check = QCheckBox(title)
-            check.clicked.connect(lambda: setattr(self, "_permissions_dirty", True))
-            self.permissions[key] = check
-            pages[3].addWidget(check)
-        save = QPushButton("保存对这位搭子的授权范围")
-        save.clicked.connect(self._save_permissions)
-        self.save_permissions_button = save
-        pages[3].addWidget(save)
-        self.invite = QPushButton("邀请 TA 担任我的训导主任")
-        self.invite.clicked.connect(lambda: self._action("lili_request_discipline_supervisor", {"p_supervisor_id": self.buddy_id}))
-        pages[3].addWidget(self.invite)
-        self.accept_invite = QPushButton("接受邀请，担任 TA 的训导主任")
-        self.accept_invite.clicked.connect(lambda: self._respond(True))
-        self.reject_invite = QPushButton("拒绝 TA 的监督邀请")
-        self.reject_invite.clicked.connect(lambda: self._respond(False))
-        pages[3].addWidget(self.accept_invite)
-        pages[3].addWidget(self.reject_invite)
-        self.revoke = QPushButton("撤销 TA 查看我的计划和纪律摘要的权限")
-        self.revoke.clicked.connect(lambda: self._action("lili_revoke_discipline_supervisor", {}))
-        pages[3].addWidget(self.revoke)
-        mode = QPushButton("设置我的监督模式与规则")
+        self.start_normal = QPushButton("普通监督")
+        self.start_normal.clicked.connect(lambda: self._start_supervision("normal"))
+        self.start_officer = QPushButton("军官监督")
+        self.start_officer.clicked.connect(lambda: self._start_supervision("officer"))
+        self.stop_supervising = QPushButton("停止我对 TA 的监督")
+        self.stop_supervising.clicked.connect(lambda: self._start_supervision("off"))
+        for button in (self.start_normal, self.start_officer, self.stop_supervising):
+            button.setEnabled(False); pages[3].addWidget(button)
+        self.nudges = {}
+        nudge_row = QHBoxLayout()
+        for kind, label in (("start", "催 TA 开工"), ("rest", "提醒休息太久"), ("finish", "提醒 TA 下班")):
+            button = QPushButton(label); button.setEnabled(False)
+            button.clicked.connect(lambda _checked=False, k=kind: self._action("lili_supervision_nudge", {"p_owner_id": self.buddy_id, "p_kind": k}))
+            self.nudges[kind] = button; nudge_row.addWidget(button)
+        pages[3].addLayout(nudge_row)
+        self.invite = QPushButton("邀请 TA 来管我")
+        self.invite.clicked.connect(lambda: self._action("lili_invite_supervisor", {"p_buddy_id": self.buddy_id, "p_enabled": True}))
+        self.invite.setEnabled(False); pages[3].addWidget(self.invite)
+        mode = QPushButton("设置谁可以训导我")
         mode.clicked.connect(lambda: self._open_own_section(2))
         pages[3].addWidget(mode)
         self.records_hint = self._label(pages[4])
@@ -103,13 +99,6 @@ class BuddyStudyDialog(QDialog):
         self.relationship.setText("正在读取双方监督关系与授权范围…")
         self.peer_plan.setText("正在读取 TA 的计划授权…")
         self.records_hint.setText("纪律日报需要 TA 明确授权后才能查看。")
-        self.save_permissions_button.setEnabled(False)
-        self.invite.setEnabled(False)
-        for check in self.permissions.values():
-            check.setEnabled(False)
-        for button in (self.accept_invite, self.reject_invite, self.revoke):
-            button.hide()
-
     @staticmethod
     def _label(layout):
         label = QLabel(); label.setWordWrap(True)
@@ -154,7 +143,12 @@ class BuddyStudyDialog(QDialog):
         status = {"focus": "🟢 正在专注", "rest": "正在休息", "offline": "已离线", "unknown": "状态同步中"}.get(_presence_status(self.buddy), "状态同步中")
         session = max(0, int(self.buddy.get("session_seconds", 0) or 0))
         session_text = format_work_duration(session) if self.buddy.get("session_seconds") is not None else "时长未公开"
-        self.status_summary.setText(f"{status} · 本轮 {session_text}\n{_buddy_focus_totals_text(self.buddy)}\n{_format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(self.buddy))}")
+        self.setWindowTitle(f"{buddy_name(self.buddy)} · 搭子自习室 - Lili")
+        identity = buddy_name(self.buddy)
+        secondary = public_name(self.buddy)
+        if identity != secondary:
+            identity += "\n" + secondary
+        self.status_summary.setText(f"{identity}\n{status} · 本轮 {session_text}\n{_buddy_focus_totals_text(self.buddy)}\n{_format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(self.buddy))}")
         for kind, field in (("start_work", "on_focus_start"), ("finish_work", "on_focus_end")):
             check = self.subscriptions[kind]
             check.setChecked(bool(self.buddy.get(field, self.buddy.get("subscribed", False))))
@@ -172,22 +166,23 @@ class BuddyStudyDialog(QDialog):
         self._generation += 1
         self._request_pending = False
         self._overview = payload if isinstance(payload, dict) else {}
-        owned = self._overview.get("owned_access") or {}
-        supervising = self._overview.get("supervising_access") or {}
+        permission = self._overview.get("peer_permission") or {}
+        own_permission = self._overview.get("own_permission") or {}
+        eligible = bool(permission.get("eligible"))
+        mode = self._overview.get("active_mode")
         self.relationship.setText(
-            ("TA 正在担任我的训导主任。" if owned else "TA 尚未获得我的监督授权。") + "\n" +
-            ("我已获准监督 TA。" if supervising else "我尚未获得 TA 的监督授权。") + "\n" +
-            str(self._overview.get("outgoing_status") or "双方同意后才生效，可随时撤销。"))
-        for key, check in self.permissions.items():
-            if not self._permissions_dirty:
-                check.setChecked(bool(owned.get(key, True)))
-            check.setEnabled(bool(owned))
-        self.save_permissions_button.setEnabled(bool(owned))
-        self.revoke.setVisible(bool(owned))
-        self.invite.setEnabled(not bool(self._overview.get("has_supervisor")) and self._overview.get("outgoing_status") != "pending")
-        request = self._overview.get("incoming_request") or {}
-        self.accept_invite.setVisible(bool(request))
-        self.reject_invite.setVisible(bool(request))
+            ("👨‍🏫 TA 允许搭子训导，你可直接开始普通监督。" if eligible else
+             "👨‍🏫 TA 仅向指定搭子开放训导。" if permission.get("enabled") else
+             "👨‍🏫 TA 尚未开启训导功能。") +
+            ("\n军官监督已向你开放。" if permission.get("officer") else "\n军官监督尚未向你开放。") +
+            (f"\n我正在以{'军官' if mode == 'officer' else '正常'}模式监督 TA。" if mode else ""))
+        self.start_normal.setEnabled(eligible)
+        self.start_officer.setEnabled(bool(permission.get("officer")))
+        self.stop_supervising.setEnabled(bool(mode))
+        self.invite.setEnabled(bool(own_permission.get("enabled")))
+        self.invite.setVisible(self._overview.get("own_scope") == "invited")
+        for button in self.nudges.values():
+            button.setEnabled(bool(permission.get("remind")))
         plan = self._overview.get("peer_plan")
         if isinstance(plan, dict):
             settings = DisciplineSettings.from_dict(plan)
@@ -211,10 +206,13 @@ class BuddyStudyDialog(QDialog):
         self.records.clear()
         for row in payload.get("reports", []) if isinstance(payload, dict) else []:
             data = row.get("metadata") or {}
-            line = f"{row.get('event_date', '')} · 专注 {format_work_duration(int(data.get('today_seconds', 0)))}"
+            line = str(row.get("event_date", ""))
+            if "today_seconds" in data:
+                line += f" · 专注 {format_work_duration(int(data['today_seconds']))}"
             if "daily_target_seconds" in data:
                 line += f" / {format_work_duration(int(data['daily_target_seconds']))}"
-            line += f" · 长休息 {int(data.get('long_break_count', 0))} 次"
+            if "long_break_count" in data:
+                line += f" · 长休息 {int(data['long_break_count'])} 次"
             if "lateness_minutes" in data:
                 line += f" · 迟到 {int(data['lateness_minutes'])} 分钟"
             self.records.addItem(line)
@@ -227,17 +225,17 @@ class BuddyStudyDialog(QDialog):
         self.message.setText("正在同步…")
         self._rpc(name, body, lambda _payload: self.refresh())
 
-    def _respond(self, accepted):
-        request = self._overview.get("incoming_request") or {}
-        if request.get("request_id"):
-            self._action("lili_respond_discipline_supervisor", {"p_request_id": request["request_id"], "p_accept": accepted})
-
-    def _save_permissions(self):
-        self._permissions_dirty = False
-        self._action("lili_set_discipline_permissions", {
-            "p_supervisor_id": self.buddy_id,
-            **{f"p_{key}": check.isChecked() for key, check in self.permissions.items()},
-        })
+    def _start_supervision(self, mode):
+        if mode == "officer" and self._overview.get("active_mode") != "officer":
+            answer = QMessageBox.question(self, "开始军官监督",
+                f"你将以军官模式监督 {buddy_name(self.buddy)}。\n"
+                "TA 已开放军官资格，允许查看的信息以 TA 的当前设置为准。\n"
+                "军官规则包括严重偏差说明、下班审查及纪律记录。是否开始？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._action("lili_start_supervision", {"p_owner_id": self.buddy_id, "p_mode": mode})
 
     def _open_own_section(self, index):
         self.hide()

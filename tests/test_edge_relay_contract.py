@@ -1,3 +1,5 @@
+"""验证中转路由保持认证转发，并开放本人训导政策所需的限定 RPC。"""
+
 from pathlib import Path
 
 
@@ -23,3 +25,13 @@ def test_social_edge_relay_has_stable_routes_and_no_server_secret() -> None:
     assert "p_week_seconds" not in source
     assert "p_device_claim" not in source
     assert "String(body.last_seen || now)" not in source
+
+
+def test_supervision_policy_rpcs_are_allowlisted_on_every_relay():
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("relay/cloudbase-function/index.js", "relay/cloudflare-worker/src/index.js", "supabase/functions/lili-social-relay/index.ts"):
+        source = (root / relative).read_text(encoding="utf-8")
+        allowlist = source.split("const RPC_ALLOWLIST = new Set([", 1)[1].split("]);", 1)[0]
+        for name in ("lili_supervision_snapshot", "lili_set_supervision_policy", "lili_invite_supervisor",
+                     "lili_start_supervision", "lili_supervision_nudge", "lili_discipline_sync"):
+            assert f'"{name}"' in allowlist

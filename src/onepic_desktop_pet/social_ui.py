@@ -1,6 +1,7 @@
 """搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 首页搭子卡片通往个人自习室，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的。
+本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
 邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
@@ -638,41 +639,19 @@ def _wealth_leaderboard_enabled(profile: dict[str, Any] | None) -> bool:
 
 
 def _owner_nickname(record: dict[str, Any] | None) -> str:
-    """Return the viewer label, with a private remark taking precedence.
-
-    A private remark is intentionally scoped to this viewer, so it may be used
-    in that viewer's buddy card. When it is absent, fall back to the buddy's
-    public self-chosen nickname. It must never be replaced by the neutral
-    default merely because another identity field is missing.
-    """
-
-    if not isinstance(record, dict):
-        return "搭子"
-    return str(
-        record.get("private_note_name")
-        or _public_owner_nickname(record)
-    ).strip() or "搭子"
+    from .buddy_identity import buddy_name
+    return buddy_name(record)
 
 
 def _public_owner_nickname(record: dict[str, Any] | None) -> str:
-    if not isinstance(record, dict):
-        return "搭子"
-    return str(
-        record.get("owner_nickname")
-        or record.get("nickname")
-        or record.get("display_name")
-        or "搭子"
-    ).strip() or "搭子"
+    from .buddy_identity import public_name
+    return public_name(record)
 
 
 def _owner_label(record: dict[str, Any] | None) -> str:
-    if isinstance(record, dict):
-        private_note = clean_social_pet_name(record.get("private_note_name"))
-        if private_note:
-            return social_pet_label(private_note)
-        # ``pet_name`` is a legacy compatibility field for the fixed pet
-        # identity.  It must never override the owner's public name: the only
-        # editable part of “XX家的六毛” is XX (owner_nickname).
+    from .buddy_identity import buddy_name
+    if isinstance(record, dict) and str(record.get("private_note_name") or "").strip():
+        return buddy_name(record)
     return social_pet_label(_public_owner_nickname(record))
 
 
@@ -2553,12 +2532,16 @@ class BuddyCardWidget(QWidget):
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
         headline = QLabel(
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
-            f"{status_text}{'（我）' if is_self else ''}"
+            f" · {status_text}{'（我）' if is_self else ''}"
         )
         self._headline_label = headline
         headline.setWordWrap(False)
         headline.setStyleSheet("font-size:14px;font-weight:600;color:#203847;")
         root.addWidget(headline)
+        self._identity_detail = QLabel(_public_owner_nickname(buddy))
+        self._identity_detail.setStyleSheet("color:#61727d;font-size:11px;")
+        self._identity_detail.setVisible(_owner_nickname(buddy) != _public_owner_nickname(buddy))
+        root.addWidget(self._identity_detail)
         # Historical totals remain useful even when live presence is
         # uncertain or timed out. The confirmation label below communicates
         # freshness separately, so it must not replace these totals.
@@ -2625,6 +2608,8 @@ class BuddyCardWidget(QWidget):
         """Update live status/time labels without rebuilding the card tree."""
 
         self.buddy = dict(buddy)
+        self._identity_detail.setText(_public_owner_nickname(buddy))
+        self._identity_detail.setVisible(_owner_nickname(buddy) != _public_owner_nickname(buddy))
         self.reminder_summary.setText(self._reminder_text(buddy))
         uncertain = _presence_uncertain(buddy)
         status = _presence_status(buddy)
@@ -2644,7 +2629,7 @@ class BuddyCardWidget(QWidget):
         is_self = bool(buddy.get("is_self"))
         self._headline_label.setText(
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
-            f"{status_text}{'（我）' if is_self else ''}"
+            f" · {status_text}{'（我）' if is_self else ''}"
         )
         self._focus_label.setText(_buddy_focus_totals_text(buddy))
         self._confirmation_label.setText(
@@ -4251,6 +4236,12 @@ class SocialHubDialog(QDialog):
         if self._discipline_supervisor_callback is not None:
             self._discipline_supervisor_callback()
 
+    def _supervision_policy_panel(self, parent):
+        from .supervision_ui import SupervisionPolicyWidget
+        return SupervisionPolicyWidget(self._focus_engine,
+            lambda: [b for b in self.data.get("buddies", []) if isinstance(b, dict) and not b.get("is_self")],
+            self.study_rpc, self.open_buddy_study, parent)
+
     def _focus_page(self) -> QWidget:
         from .discipline_ui import DisciplineWorkspace
         today_page = self._focus_today_page()
@@ -4258,7 +4249,7 @@ class SocialHubDialog(QDialog):
         self.focus_workspace = DisciplineWorkspace(
             engine.store, engine, self._focus_progress,
             supervisor_open_callback=self._open_supervisor, parent=self,
-            engine_provider=self._focus_engine,
+            engine_provider=self._focus_engine, policy_factory=self._supervision_policy_panel,
         )
         self.focus_workspace.tabs.insertTab(0, today_page, "今日")
         self.focus_workspace.tabs.setCurrentIndex(0)
@@ -6778,6 +6769,9 @@ class SocialHubDialog(QDialog):
         if isinstance(current_room, dict):
             for key in ("room_people", "active_visits", "visits"):
                 update(current_room.get(key))
+        for (_account, target), room in self._buddy_study_dialogs.items():
+            if target == buddy_id and room.isVisible():
+                room._render_public()
 
     def _save_buddy_private_note(self, buddy: dict[str, Any], value: str) -> None:
         if not self._require_login():

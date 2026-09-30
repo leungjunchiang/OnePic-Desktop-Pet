@@ -2,7 +2,7 @@
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
-- 将工作计划、训导规则与纪律记录接入自习室专注导航，搭子监督操作按当前账号异步执行；
+- 将本人训导范围与搭子有效监督模式分开同步，私有备注优先显示，轻提醒保持不激活窗口；
 - 创建无边框、透明、可选始终置顶的 QWidget；
 - 使用 Windows/macOS 原生窗口层级补强置顶，同时保持不激活、不占任务栏和轮廓外点击穿透；
 - macOS 应用失焦时立即修复宠物和计时小栏层级，并在浮动窗口 watchdog 中重新核对小栏可见性；
@@ -267,7 +267,7 @@ from .quiet_mode import detect_quiet_mode
 from .buddy_reminders import BuddyReminderStore, NOTIFICATION_LIFETIME_SECONDS, _parse_time
 from .buddy_reminder_toast import BuddyReminderToast
 from .discipline import DisciplineEngine, DisciplineStore, as_beijing
-from .discipline_ui import DisciplineDialog, DisciplineSupervisorDialog, FinishReviewDialog
+from .discipline_ui import DisciplineDialog, FinishReviewDialog
 from .qt_lifecycle import request_stop_all, running_threads
 from .lifecycle_log import lifecycle_log
 from .performance import EventLoopLagTracker, PerformanceMonitor
@@ -640,7 +640,7 @@ class PetWindow(QWidget):
         self._discipline_account_id: str | None = None
         self._discipline_engine: DisciplineEngine | None = None
         self._discipline_dialog: DisciplineDialog | None = None
-        self._discipline_supervisor_dialog: DisciplineSupervisorDialog | None = None
+        self._discipline_supervisor_dialog: QDialog | None = None
         self._discipline_supervisor_account_id = ""
         self._discipline_rpc_threads: list[SocialBuddyRpcThread] = []
         self._discipline_finish_review_dialog: FinishReviewDialog | None = None
@@ -4431,7 +4431,7 @@ class PetWindow(QWidget):
             now = as_beijing()
             progress = engine.progress(today, week, now)
             early = max(0, int((settings.finish_at(now.date()) - now).total_seconds() // 60))
-            officer = settings.mode == "officer"
+            officer = engine.mode == "officer"
             if not officer and early <= settings.early_finish_grace_minutes:
                 return False
             summary = engine.daily_summary(now.date(), today, week)
@@ -8022,7 +8022,7 @@ class PetWindow(QWidget):
                 return
             today, week = self._discipline_progress_seconds()
             now = as_beijing()
-            notices = engine.evaluate(today, week, now)
+            notices = engine.evaluate(today, week, now, working=self.work_timer.is_running)
             notices.extend(engine.break_notices(now))
             for notice in notices:
                 self._show_discipline_notice(notice)
@@ -8071,7 +8071,23 @@ class PetWindow(QWidget):
         if account_id != str(self._active_focus_account_id or ""):
             return
         try:
-            self._ensure_discipline_engine().store.merge_remote(result)
+            engine = self._ensure_discipline_engine()
+            engine.store.merge_remote(result)
+            accepted = engine.apply_supervision(result.get("supervision") if isinstance(result, dict) else None)
+            if accepted and isinstance(result, dict):
+                for nudge in result.get("nudges", []):
+                    identifier = str(nudge.get("id") or "")
+                    if not identifier or identifier in engine.store.seen_nudges:
+                        continue
+                    engine.store.seen_nudges.add(identifier)
+                    if not detect_quiet_mode().blocked:
+                        from .buddy_identity import buddy_name
+                        peer = self._buddy_display_record(str(nudge.get("supervisor_id") or ""))
+                        title = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班"}.get(nudge.get("kind"), "给你一个轻提醒")
+                        from .discipline import DisciplineNotice
+                        self._show_discipline_notice(DisciplineNotice("buddy_nudge", buddy_name(peer) + title,
+                            "来自你允许的搭子；是否开工或下班由你决定。", "info", identifier))
+                engine.store._save()
             if self._discipline_dialog is not None and self._discipline_dialog.isVisible():
                 self._discipline_dialog._render_summaries()
         except Exception:
@@ -8115,32 +8131,8 @@ class PetWindow(QWidget):
         self._social_dialog.open_focus_section(2)
 
     def show_discipline_supervisor_dialog(self, *_args) -> None:
-        """Open the two-party consent panel for trusted discipline reports."""
-
-        if not bool(getattr(self.social_client, "signed_in", False)):
-            QMessageBox.information(self, "训导主任授权", "请先登录搭子自习室并添加对方为搭子，再设置训导主任授权。")
-            self.open_social_hub()
-            return
-        account_id = str(self._current_social_user_id() or "")
-        if self._discipline_supervisor_account_id != account_id:
-            if self._discipline_supervisor_dialog is not None:
-                self._discipline_supervisor_dialog.close()
-            self._discipline_supervisor_dialog = None
-            self._discipline_supervisor_account_id = account_id
-        if self._discipline_supervisor_dialog is None:
-            self._discipline_supervisor_dialog = DisciplineSupervisorDialog(
-                self._discipline_buddy_choices, self._discipline_rpc, self,
-            )
-        else:
-            self._discipline_supervisor_dialog.refresh_buddies()
-            self._discipline_rpc(
-                "lili_discipline_supervisor_snapshot", {},
-                self._discipline_supervisor_dialog._apply_snapshot,
-                self._discipline_supervisor_dialog._failed,
-            )
-        self._discipline_supervisor_dialog.show()
-        self._discipline_supervisor_dialog.raise_()
-        self._discipline_supervisor_dialog.activateWindow()
+        """旧菜单入口统一进入本人训导范围设置。"""
+        self.show_discipline_dialog()
 
     def _discipline_buddy_choices(self) -> list[dict]:
         """Return only the already synchronized buddy list; never block UI on a fetch."""
@@ -8189,16 +8181,29 @@ class PetWindow(QWidget):
         if store.queue_transition(status, session_id, silent=silent):
             self._schedule_social_tick(immediate=True)
 
+    def _buddy_display_record(self, identifier: str, nickname: str = "") -> dict:
+        """只在本机加入本人私有备注，不改变任何上传的公开身份。"""
+        row = next((dict(b) for b in self._discipline_buddy_choices()
+                    if str(b.get("user_id") or b.get("id") or "") == identifier),
+                   {"user_id": identifier, "nickname": nickname})
+        notes = getattr(self.social_client, "_private_note_by_user", {})
+        if isinstance(notes, dict) and notes.get(identifier):
+            row["private_note_name"] = notes[identifier]
+        return row
+
     def _show_buddy_reminder(self, event: dict) -> None:
         event_type = str(event.get("event_type") or "")
-        nickname = str(event.get("nickname") or "搭子").strip()[:32] or "搭子"
+        from .buddy_identity import buddy_name, public_name
+        peer = self._buddy_display_record(str(event.get("target_user_id") or event.get("user_id") or ""), str(event.get("nickname") or "搭子"))
+        nickname = buddy_name(peer)
+        public = public_name(peer)
         stamp = _parse_time(event.get("occurred_at"))
         local_time = stamp.astimezone().strftime("%H:%M") if stamp is not None else ""
         title = (
             f"🟢 {nickname}开始专注了" if event_type == "start_work"
             else f"🌙 {nickname}下班了"
         )
-        detail = f"{'开始专注' if event_type == 'start_work' else '结束当天工作'} · {local_time}"
+        detail = f"{public} · {local_time}"
         age_seconds = max(0, (datetime.now(timezone.utc) - stamp).total_seconds()) if stamp else 0
         remaining_ms = max(1, int((NOTIFICATION_LIFETIME_SECONDS - age_seconds) * 1000))
         mini_title = f"{'🟢' if event_type == 'start_work' else '🌙'} {nickname}"

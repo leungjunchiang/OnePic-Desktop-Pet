@@ -1,4 +1,4 @@
-"""验证专注导航、计划保存、搭子授权撤销与跨账号回调隔离。"""
+"""验证专注导航、备注身份、直接监督、撤权与跨账号回调隔离。"""
 
 import os
 from datetime import datetime
@@ -143,4 +143,28 @@ def test_card_study_entry_and_repeated_deep_link_reuse_room():
     assert len(hub._buddy_study_dialogs) == 1
     room = next(iter(hub._buddy_study_dialogs.values()))
     assert room.tabs.currentIndex() == 3
+    dispose(room, hub)
+
+
+def test_buddy_supervision_is_direct_and_private_note_updates_title():
+    qt = app()
+    hub = SocialHubDialog(Client())
+    calls = []
+    hub.study_rpc = lambda name, body, callback, failure: calls.append((name, body, callback))
+    buddy = {"user_id": "b", "nickname": "毛毛冲", "private_note_name": "论文搭子"}
+    hub.data["buddies"] = [buddy]
+    room = BuddyStudyDialog(hub, buddy)
+    room.show(); room.tabs.setCurrentIndex(3)
+    room._apply_overview({"peer_permission": {"enabled": True, "eligible": True, "officer": False, "remind": True}})
+    assert room.windowTitle() == "论文搭子 · 搭子自习室 - Lili"
+    assert "论文搭子\n毛毛冲" in room.status_summary.text()
+    assert room.start_normal.isEnabled() and not room.start_officer.isEnabled()
+    room.start_normal.click()
+    assert calls[-1][:2] == ("lili_start_supervision", {"p_owner_id": "b", "p_mode": "normal"})
+    room._apply_overview({"peer_permission": {"enabled": False, "eligible": False}})
+    assert not room.start_normal.isEnabled() and all(not button.isEnabled() for button in room.nudges.values())
+    assert "尚未开启" in room.relationship.text()
+    hub._buddy_study_dialogs[("account-a", "b")] = room
+    hub._update_private_note_snapshot("b", "室友")
+    assert room.windowTitle().startswith("室友 · ")
     dispose(room, hub)

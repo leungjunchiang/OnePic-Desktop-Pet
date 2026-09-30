@@ -1,6 +1,6 @@
 """
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
-喂食、离线对话、陪伴动作、工作计时、专注导航入口和自拍成片。
+喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片。
 
 测试在 Qt 的离屏平台中创建真实 PetWindow，但不显示到用户桌面、不写配置文件，
 也不启动系统托盘。重点检查透明区域不会形成完整矩形点击区、重复绘制能够复用缓存，
@@ -4667,4 +4667,29 @@ def test_discipline_entry_opens_shared_focus_navigation_without_another_timer() 
     finally:
         if window._social_dialog is not None:
             window._social_dialog.close()
+        window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_reminder_uses_private_note_without_opening_main_window(monkeypatch) -> None:
+    """提醒在本人视角使用备注，公开昵称仍保留，显示过程不调用打开主窗口。"""
+    app, window = _create_window()
+    from datetime import datetime, timezone
+    from onepic_desktop_pet.buddy_reminder_toast import BuddyReminderToast
+    monkeypatch.setattr(window, "_discipline_buddy_choices", lambda: [
+        {"user_id": "buddy-b", "private_note_name": "论文搭子", "nickname": "毛毛冲"}])
+    monkeypatch.setattr(window, "open_social_hub", lambda: (_ for _ in ()).throw(AssertionError("Reminder opened main window")))
+    event = {"target_user_id": "buddy-b", "nickname": "毛毛冲", "event_type": "start_work",
+             "occurred_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        window._show_buddy_reminder(event)
+        toast = window._buddy_reminder_toasts[-1]
+        assert isinstance(toast, BuddyReminderToast)
+        assert "论文搭子开始专注了" in toast.title_label.text()
+        assert "毛毛冲" in toast.detail_label.text()
+        assert toast.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        assert window._social_dialog is None
+        assert event["nickname"] == "毛毛冲"
+    finally:
+        for toast in window._buddy_reminder_toasts:
+            toast.close()
         window.close(); window.deleteLater(); app.processEvents()

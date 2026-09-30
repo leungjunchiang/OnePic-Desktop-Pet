@@ -1,4 +1,4 @@
-"""训导主任的逐日工作计划、可选提醒规则、纪律事件与账号进度。"""
+"""训导主任的工作计划、账号账本与独立且限时有效的搭子监督授权。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from uuid import uuid4
+import time as monotonic_time
 
 from .focus_analytics import BEIJING_TIMEZONE
 from .local_data import account_local_data_path, read_json, write_json_atomic
@@ -150,6 +151,7 @@ class DisciplineStore:
         self.pending_explanations = [
             dict(row) for row in raw.get("pending_explanations", []) if isinstance(row, dict)
         ]
+        self.seen_nudges = set(str(i) for i in raw.get("seen_nudges", []))
 
     def _save(self) -> None:
         if self.persist:
@@ -160,6 +162,7 @@ class DisciplineStore:
                 "events": self.events,
                 "fired_rules": sorted(self.fired_rules)[-5_000:],
                 "pending_explanations": self.pending_explanations[-500:],
+                "seen_nudges": sorted(self.seen_nudges)[-500:],
             })
 
     def update_settings(self, settings: DisciplineSettings | dict[str, Any]) -> None:
@@ -322,10 +325,34 @@ class DisciplineEngine:
 
     def __init__(self, store: DisciplineStore) -> None:
         self.store = store
+        self.supervision = {}
+        self._supervision_revision = -1
+        self._remote_mode = "off"
+        self._remote_until = 0.0
+
+    def apply_supervision(self, payload: object) -> bool:
+        """远端监督只影响有效模式，不覆盖本人设置；旧响应不能复活撤销授权。"""
+        if not isinstance(payload, dict) or not isinstance(payload.get("policy"), dict):
+            return False
+        revision = int(payload["policy"].get("revision", 0))
+        if revision < self._supervision_revision:
+            return False
+        self.supervision = deepcopy(payload)
+        self._supervision_revision = revision
+        mode = str(payload.get("effective_mode", "off"))
+        self._remote_mode = mode if payload["policy"].get("enabled") and mode in MODES else "off"
+        self._remote_until = monotonic_time.monotonic() + 120
+        return True
+
+    @property
+    def mode(self) -> str:
+        remote = self._remote_mode if monotonic_time.monotonic() < self._remote_until else "off"
+        rank = {"off": 0, "normal": 1, "officer": 2}
+        return max((self.store.settings.mode, remote), key=rank.__getitem__)
 
     @property
     def enabled(self) -> bool:
-        return self.store.settings.mode in {"normal", "officer"}
+        return self.mode in {"normal", "officer"}
 
     def remaining_workdays(self, day: date) -> list[date]:
         monday = day - timedelta(days=day.weekday())
@@ -382,7 +409,7 @@ class DisciplineEngine:
     ) -> DisciplineNotice | None:
         rule = {"late_start_warning": "start", "long_break_warning": "break",
                 "focus_shortfall": "daily", "behind_schedule": "daily"}.get(event_type)
-        if self.store.settings.mode == "normal" and rule and not self.store.settings.reminder_rules.get(rule, True):
+        if self.mode == "normal" and rule and not self.store.settings.reminder_rules.get(rule, True):
             return None
         row = self.store.append_rule_once(
             key, event_type, at, metadata={"title": title, "detail": detail, "severity": severity},
@@ -411,7 +438,7 @@ class DisciplineEngine:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:late_start", "late_start", moment,
                     metadata={"minutes_late": late_minutes, "planned_start": planned.isoformat()},
-                    requires_explanation=(settings.mode == "officer" and late_minutes >= 30),
+                    requires_explanation=(self.mode == "officer" and late_minutes >= 30),
                 )
                 if row is None:
                     return notices
@@ -428,7 +455,7 @@ class DisciplineEngine:
                 elapsed = max(0, int((moment - break_start).total_seconds()))
                 over = max(0, elapsed - settings.break_limit_minutes * 60)
                 if over > 0:
-                    needs_reason = settings.mode == "officer" and over >= 10 * 60
+                    needs_reason = self.mode == "officer" and over >= 10 * 60
                     row = self.store.append_event(
                         "long_break", moment,
                         metadata={"duration_seconds": elapsed, "overtime_seconds": over,
@@ -448,7 +475,7 @@ class DisciplineEngine:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:early_finish", "early_finish", moment,
                     metadata={"minutes_early": early, "planned_finish": finish_at.isoformat()},
-                    requires_explanation=(settings.mode == "officer" and early >= 60),
+                    requires_explanation=(self.mode == "officer" and early >= 60),
                 )
                 if row is not None:
                     notices.append(DisciplineNotice(
@@ -462,7 +489,7 @@ class DisciplineEngine:
                     "今日计划小结",
                     f"今日缺口 {progress.daily_gap_seconds // 60} 分钟 · 本周还需 {progress.weekly_remaining_seconds // 60} 分钟",
                     severity="info",
-                    requires_explanation=(settings.mode == "officer" and progress.daily_gap_seconds >= 60 * 60),
+                    requires_explanation=(self.mode == "officer" and progress.daily_gap_seconds >= 60 * 60),
                 )
                 if notice:
                     notices.append(notice)
@@ -479,7 +506,7 @@ class DisciplineEngine:
                     metadata={"remaining_seconds": weekly_debt,
                               "weekly_target_seconds": progress.weekly_target_seconds,
                               "week_seconds": max(0, int(week_seconds))},
-                    requires_explanation=(settings.mode == "officer" and weekly_debt >= 60 * 60),
+                    requires_explanation=(self.mode == "officer" and weekly_debt >= 60 * 60),
                 )
                 if row is not None and weekly_debt > 0:
                     notices.append(DisciplineNotice(
@@ -513,7 +540,7 @@ class DisciplineEngine:
                         1 for row in day_events
                         if row.get("requires_explanation") and not row.get("explanation")
                     ),
-                    "mode": settings.mode,
+                    "mode": self.mode,
                 },
             )
             if daily_report is not None:
@@ -523,13 +550,13 @@ class DisciplineEngine:
                     f"本周剩余 {progress.weekly_remaining_seconds // 60} 分钟",
                     "info", str(daily_report["id"]),
                 ))
-        if settings.mode == "normal":
+        if self.mode == "normal":
             kinds = {"late_start": "start", "long_break": "break", "early_finish": "early",
                      "focus_shortfall": "daily", "daily_report": "daily", "weekly_shortfall": "weekly"}
             notices = [notice for notice in notices if settings.reminder_rules.get(kinds.get(notice.event_type, ""), True)]
         return notices
 
-    def evaluate(self, today_seconds: int, week_seconds: int, at: datetime | None = None) -> list[DisciplineNotice]:
+    def evaluate(self, today_seconds: int, week_seconds: int, at: datetime | None = None, *, working: bool = False) -> list[DisciplineNotice]:
         if not self.enabled:
             return []
         moment = as_beijing(at)
@@ -545,10 +572,10 @@ class DisciplineEngine:
         notices: list[DisciplineNotice] = []
         start = settings.start_at(moment.date())
         late_minutes = int((moment - start).total_seconds() // 60)
-        started_today = any(
+        started_today = working or any(
             row.get("event_type") == "start_work" for row in self.store.events_for_day(moment.date())
         )
-        thresholds = (settings.late_grace_minutes + 1,) if settings.mode == "normal" else LATE_ESCALATION_MINUTES
+        thresholds = (settings.late_grace_minutes + 1,) if self.mode == "normal" else LATE_ESCALATION_MINUTES
         if not started_today:
             for threshold in thresholds:
                 if late_minutes >= threshold:
@@ -571,10 +598,10 @@ class DisciplineEngine:
                 )
                 behind = expected - progress.today_seconds
                 if behind >= max(30 * 60, progress.catchup_target_seconds * 0.2):
-                    severity = "warning" if settings.mode == "normal" else "critical"
+                    severity = "warning" if self.mode == "normal" else "critical"
                     notice = self._notice(
                         f"{moment.date()}:behind:{moment.hour // 3}", "behind_schedule", moment,
-                        "今日进度落后" if settings.mode == "normal" else "训导主任提醒：进度落后",
+                        "今日进度落后" if self.mode == "normal" else "训导主任提醒：进度落后",
                         f"已完成 {today_seconds // 60} 分钟 · 距今日追赶目标还差 {remaining_work // 60} 分钟",
                         severity=severity,
                     )
@@ -603,7 +630,7 @@ class DisciplineEngine:
         start = as_beijing(datetime.fromisoformat(str(last_start["occurred_at"])))
         elapsed = max(0, int((moment - start).total_seconds() // 60))
         settings = self.store.settings
-        if settings.mode == "officer":
+        if self.mode == "officer":
             thresholds = tuple(dict.fromkeys((
                 max(1, settings.break_limit_minutes - 2), settings.break_limit_minutes,
                 settings.break_limit_minutes + 10, settings.break_limit_minutes + 25,
@@ -615,9 +642,9 @@ class DisciplineEngine:
             if elapsed >= threshold:
                 notice = self._notice(
                     f"{moment.date()}:break:{session_key}:{threshold}", "long_break_warning", moment,
-                    "训导主任：还有 2 分钟" if settings.mode == "officer" and threshold == settings.break_limit_minutes - 2
-                    else "训导主任：课间结束" if settings.mode == "officer" and threshold == settings.break_limit_minutes
-                    else "休息时间超出计划" if settings.mode == "normal" else f"训导主任：休息已 {elapsed} 分钟",
+                    "训导主任：还有 2 分钟" if self.mode == "officer" and threshold == settings.break_limit_minutes - 2
+                    else "训导主任：课间结束" if self.mode == "officer" and threshold == settings.break_limit_minutes
+                    else "休息时间超出计划" if self.mode == "normal" else f"训导主任：休息已 {elapsed} 分钟",
                     f"计划休息 {settings.break_limit_minutes} 分钟 · 已超时 {max(0, elapsed - settings.break_limit_minutes)} 分钟",
                     severity="critical" if threshold >= 45 else "warning",
                 )
@@ -649,7 +676,7 @@ class DisciplineEngine:
             end = min(as_beijing(), datetime.combine(day + timedelta(days=1), time(), BEIJING_TIMEZONE))
             rest_seconds += max(0, int((end - break_start).total_seconds()))
         return {
-            "date": day.isoformat(), "mode": self.store.settings.mode,
+            "date": day.isoformat(), "mode": self.mode,
             "planned_start": self.store.settings.start_at(day).strftime("%H:%M"),
             "actual_start": self._time_label(start_event),
             "lateness_minutes": int(late[0].get("metadata", {}).get("minutes_late", 0)) if late else 0,

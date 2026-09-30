@@ -30,12 +30,9 @@ jobs:
       - name: Apply and verify durable buddy reminder schema
         shell: pwsh
         run: ./scripts/apply_supabase_buddy_reminders.ps1
-      - name: Apply and verify discipline plan and consent schema
+      - name: Apply owner supervision policy atomically and verify real RPC authorization
         shell: pwsh
-        run: ./scripts/apply_supabase_discipline.ps1
-      - name: Apply and verify buddy study viewing permissions
-        shell: pwsh
-        run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930120000_lili_buddy_study_permissions.sql
+        run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930150000_lili_supervision_policy.sql
 
 
   windows-build:
