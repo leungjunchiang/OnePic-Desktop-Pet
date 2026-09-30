@@ -13,7 +13,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
@@ -31,19 +33,19 @@ jobs:
             if ($file.Name -eq 'test_window.py') {
               # Match the release gate: bounded interpreters prevent native
               # Qt handle accumulation in the long window test module.
-              $nodes = @(python -m pytest --collect-only $file.FullName 2>$null |
+              $nodes = @(.\.venv\Scripts\python.exe -m pytest --collect-only $file.FullName 2>$null |
                 Where-Object { $_ -match '::' } |
                 ForEach-Object { $_.Trim() })
               if ($nodes.Count -eq 0) { throw "No tests collected from $($file.FullName)." }
               for ($start = 0; $start -lt $nodes.Count; $start += 40) {
                 $end = [Math]::Min($start + 39, $nodes.Count - 1)
                 $chunk = @($nodes[$start..$end])
-                python -m pytest --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)-$start" $chunk
+                .\.venv\Scripts\python.exe -m pytest --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)-$start" $chunk
                 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               }
             } else {
               $detailArgs = if ($file.Name -eq "test_social_ui.py") { @("-vv", "-s") } else { @() }
-              python -m pytest @detailArgs --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)" $file.FullName
+              .\.venv\Scripts\python.exe -m pytest @detailArgs --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)" $file.FullName
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
           }
