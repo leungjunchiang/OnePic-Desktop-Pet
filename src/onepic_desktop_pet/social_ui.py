@@ -3553,12 +3553,12 @@ class SocialHubDialog(QDialog):
                 self.tabs.addTab(factory(), label)
         self.tabs.currentChanged.connect(self._tab_changed)
         root.addWidget(self.tabs, 1)
-        QTimer.singleShot(0, self._apply_adaptive_tab_widths)
+        QTimer.singleShot(0, self, self._apply_adaptive_tab_widths)
         if self._defer_pages:
             # Show a real, lightweight window first. Materialize one full page
             # per event-loop turn so the shortcut click and the first paint do
             # not wait for every scroll list and form to be created.
-            QTimer.singleShot(0, self._materialize_next_lazy_page)
+            QTimer.singleShot(0, self, self._materialize_next_lazy_page)
         else:
             self._update_account_state()
             self._prepare_bootstrap()
@@ -3624,10 +3624,11 @@ class SocialHubDialog(QDialog):
                 self._cached_bootstrap_payload = dict(cached)
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda payload=self._cached_bootstrap_payload: self._queue_dashboard_apply(payload),
                 )
         self._initial_refresh_timer.start(50)
-        QTimer.singleShot(180, self._record_login_streak)
+        QTimer.singleShot(180, self, self._record_login_streak)
 
     def _materialize_lazy_page(self, index: int) -> None:
         factory = self._lazy_page_factories.pop(int(index), None)
@@ -3658,7 +3659,7 @@ class SocialHubDialog(QDialog):
             # Give the just-materialized page one paint/input turn before
             # constructing the next dense page. A zero-delay chain can still
             # monopolize the event queue on slower Windows machines.
-            QTimer.singleShot(8, self._materialize_next_lazy_page)
+            QTimer.singleShot(8, self, self._materialize_next_lazy_page)
         else:
             self._update_account_state()
             self._prepare_bootstrap()
@@ -3672,7 +3673,7 @@ class SocialHubDialog(QDialog):
         if self._dashboard_apply_scheduled:
             return
         self._dashboard_apply_scheduled = True
-        QTimer.singleShot(0, self._flush_dashboard_apply)
+        QTimer.singleShot(0, self, self._flush_dashboard_apply)
 
     def _flush_dashboard_apply(self) -> None:
         self._dashboard_apply_scheduled = False
@@ -4758,6 +4759,16 @@ class SocialHubDialog(QDialog):
         if self._closed or not self.client.signed_in:
             return
         if "leaderboard" in self.data:
+            return
+        # 内存客户端与 dashboard 使用同样的同步边界，避免为本地空结果
+        # 启动 QThread，再在窗口销毁时与原生线程析构发生竞争。
+        if not isinstance(self.client, SocialClient):
+            try:
+                loader = getattr(self.client, "focus_leaderboard", None)
+                rows = loader(period="week") if callable(loader) else []
+                self._leaderboard_received(list(rows or []))
+            except Exception as error:
+                self._leaderboard_failed(error)
             return
         thread = self._leaderboard_thread
         if thread is not None and thread.isRunning():

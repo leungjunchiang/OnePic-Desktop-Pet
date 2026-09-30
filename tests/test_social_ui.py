@@ -8,7 +8,7 @@ from functools import cmp_to_key
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget, QSizePolicy
 
@@ -748,6 +748,7 @@ def test_cached_bootstrap_keeps_its_background_dashboard_refresh() -> None:
 
     assert client.dashboard_calls == 1
     assert dialog.data.get("data_source") == "server"
+    assert dialog._leaderboard_thread is None  # In-memory clients do not spawn native workers.
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -764,6 +765,16 @@ def test_private_buddy_note_is_preferred_in_buddy_card_and_list_has_context_menu
     assert any("论文搭子" in label.text() for label in widget.findChildren(QLabel))
     assert not any("论文搭子家的六毛" in label.text() for label in widget.findChildren(QLabel))
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_destroyed_hub_cancels_bootstrap_callbacks() -> None:
+    app = QApplication.instance() or QApplication([])
+    client = CachedBootstrapClient()
+    dialog = SocialHubDialog(client)
+    dialog.close(); dialog.deleteLater()
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QTest.qWait(220)
+    assert client.dashboard_calls == 0
 
 
 def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> None:
