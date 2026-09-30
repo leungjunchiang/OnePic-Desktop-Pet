@@ -2340,20 +2340,20 @@ class SocialEventThread(QThread):
     def __init__(self, client: SocialClient, event: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
         self.client = client
-        self.event = event
+        self.event_payload = dict(event)
 
     def run(self) -> None:
         try:
-            kind = str(self.event.get("kind") or "")
+            kind = str(self.event_payload.get("kind") or "")
             sender = getattr(self.client, "send_interaction", None)
             if kind in {"poke", "cheer", "drink"} and callable(sender):
                 sender(
-                    target=str(self.event.get("target_id") or ""),
+                    target=str(self.event_payload.get("target_id") or ""),
                     kind=kind,
-                    room_id=str(self.event.get("room_id") or "") or None,
+                    room_id=str(self.event_payload.get("room_id") or "") or None,
                 )
             else:
-                self.client.record_room_event(**self.event)
+                self.client.record_room_event(**self.event_payload)
             self.completed.emit()
         except (SocialError, AttributeError) as exc:
             self.failed.emit(str(exc))
@@ -2368,18 +2368,18 @@ class SocialVisitResponseThread(QThread):
     def __init__(self, client: SocialClient, event: dict[str, Any], accept: bool, parent=None) -> None:
         super().__init__(parent)
         self.client = client
-        self.event = dict(event)
+        self.event_payload = dict(event)
         self.accept = bool(accept)
 
     def run(self) -> None:
         try:
             self.client.rpc(
                 "lili_respond_visit",
-                {"event_id": str(self.event.get("id") or ""), "accept": self.accept},
+                {"event_id": str(self.event_payload.get("id") or ""), "accept": self.accept},
             )
-            self.completed.emit(self.event, self.accept)
+            self.completed.emit(self.event_payload, self.accept)
         except (SocialError, AttributeError, TypeError) as exc:
-            self.failed.emit(self.event, str(exc))
+            self.failed.emit(self.event_payload, str(exc))
 
 
 class SocialProfileThread(QThread):
@@ -5774,7 +5774,16 @@ class SocialHubDialog(QDialog):
         thread.deleteLater()
 
     def _record_login_streak(self) -> None:
-        if not self.client.signed_in:
+        if self._closed or not self.client.signed_in:
+            return
+        recorder = getattr(self.client, "record_login_streak", None)
+        if not callable(recorder):
+            return
+        if not isinstance(self.client, SocialClient):
+            try:
+                self._login_streak_completed(dict(recorder() or {}))
+            except Exception as error:
+                self._login_streak_failed(error)
             return
         if self._login_streak_thread is not None and self._login_streak_thread.isRunning():
             return

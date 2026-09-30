@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+import pytest
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
 
@@ -21,6 +22,7 @@ from onepic_desktop_pet.social_ui import (
     RoomPetCardWidget,
     SocialHubDialog,
     SocialHeartbeatWorker,
+    SocialEventThread,
     SocialSignupThread,
     SocialSyncThread,
     SocialVisitResponseThread,
@@ -37,6 +39,20 @@ from onepic_desktop_pet.social_ui import (
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def persistent_qt_application():
+    """Qt requires one application to outlive all windows and worker callbacks."""
+    app = QApplication.instance() or QApplication([])
+    yield app
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(autouse=True)
+def drain_deleted_windows(persistent_qt_application):
+    yield
+    persistent_qt_application.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_heartbeat_worker_sends_inactive_presence_without_waiting_for_focus_ack() -> None:
@@ -749,6 +765,8 @@ def test_cached_bootstrap_keeps_its_background_dashboard_refresh() -> None:
     assert client.dashboard_calls == 1
     assert dialog.data.get("data_source") == "server"
     assert dialog._leaderboard_thread is None  # In-memory clients do not spawn native workers.
+    dialog._record_login_streak()
+    assert dialog._login_streak_thread is None  # Missing optional APIs do not spawn empty workers.
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
@@ -1365,6 +1383,31 @@ def test_incoming_visit_response_thread_calls_visit_rpc() -> None:
     assert client.calls == [("lili_respond_visit", {"event_id": "visit-2", "accept": True})]
     assert completed == [(event, True)]
     thread.deleteLater(); app.processEvents()
+
+
+def test_interaction_workers_preserve_qt_event_dispatch_and_deferred_deletion() -> None:
+    app = QApplication.instance() or QApplication([])
+    class Client:
+        def __init__(self):
+            self.calls = []
+        def send_interaction(self, **body):
+            self.calls.append(body)
+        def rpc(self, name, body):
+            self.calls.append((name, body))
+    client = Client()
+    event = {"kind": "cheer", "target_id": "peer", "room_id": "room"}
+    outgoing = SocialEventThread(client, event)
+    incoming = SocialVisitResponseThread(client, {"id": "visit"}, True)
+    for worker in (outgoing, incoming):
+        # An event dictionary must not replace QObject.event(), which Qt
+        # invokes for DeferredDelete and native thread notifications.
+        assert callable(worker.event)
+        worker.start()
+        assert worker.wait(1000)
+        worker.deleteLater()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert client.calls == [{"target": "peer", "kind": "cheer", "room_id": "room"},
+                            ("lili_respond_visit", {"event_id": "visit", "accept": True})]
 
 
 def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
