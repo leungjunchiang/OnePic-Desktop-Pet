@@ -185,3 +185,20 @@ def test_failed_authority_refresh_clears_protected_cache():
     assert not room.start_normal.isEnabled()
     assert "清除缓存" in room.peer_plan.text()
     dispose(room, hub)
+
+
+def test_authorized_report_open_records_read_receipt_and_discards_revoked_callback():
+    qt = app()
+    hub = SocialHubDialog(Client())
+    calls = []
+    hub.study_rpc = lambda name, body, callback, failure: calls.append((name, body, callback))
+    room = BuddyStudyDialog(hub, {"user_id": "b"})
+    room.show(); room.tabs.setCurrentIndex(4)
+    room._apply_overview({"can_read_reports": True})
+    room._apply_reports({"reports": [{"event_date": "2026-09-30", "metadata": {"today_seconds": 3600}}]})
+    assert calls[-1][:2] == ("lili_mark_discipline_report_read", {"p_owner_id": "b", "p_report_date": "2026-09-30"})
+    old_receipt = calls[-1][2]
+    room._apply_overview({"can_read_reports": False})
+    old_receipt({"read_at": "2026-09-30"})
+    assert room.records.count() == 0
+    dispose(room, hub)

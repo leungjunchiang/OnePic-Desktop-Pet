@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QPushButton,
+    QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
     QTabWidget, QVBoxLayout, QWidget, QScrollArea, QMessageBox,
 )
 
@@ -87,6 +87,7 @@ class BuddyStudyDialog(QDialog):
         pages[3].addWidget(mode)
         self.records_hint = self._label(pages[4])
         self.records = QListWidget()
+        self.records.itemClicked.connect(self._mark_report_read)
         pages[4].addWidget(self.records, 1)
         for layout in pages[:4]:
             layout.addStretch()
@@ -224,9 +225,20 @@ class BuddyStudyDialog(QDialog):
                 line += f" · 长休息 {int(data['long_break_count'])} 次"
             if "lateness_minutes" in data:
                 line += f" · 迟到 {int(data['lateness_minutes'])} 分钟"
-            self.records.addItem(line)
+            line += " · 已阅" if row.get("read_at") else " · 未阅"
+            item = QListWidgetItem(line)
+            item.setData(Qt.ItemDataRole.UserRole, str(row.get("event_date") or ""))
+            self.records.addItem(item)
         if not self.records.count():
             self.records.addItem("暂无已同步的纪律日报；下班后生成当天摘要。")
+        elif self.isVisible() and self.tabs.currentIndex() == 4:
+            self._mark_report_read(self.records.item(0))
+
+    def _mark_report_read(self, item):
+        day = item.data(Qt.ItemDataRole.UserRole)
+        if day and self._overview.get("can_read_reports"):
+            self._rpc("lili_mark_discipline_report_read", {"p_owner_id": self.buddy_id, "p_report_date": day},
+                      lambda _payload: item.setText(item.text().replace("未阅", "已阅")))
 
     def _action(self, name, body):
         self._generation += 1
