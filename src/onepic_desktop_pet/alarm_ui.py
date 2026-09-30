@@ -1,4 +1,5 @@
-"""Non-modal UI for managing alarms and showing alarm-style recovery cards.
+"""勾选配置使用统一矢量绘制。
+Non-modal UI for managing alarms and showing alarm-style recovery cards.
 
 闹钟卡片在 Windows 上只通过原生窗口层级 API 调整临时置顶，不在显示后
 反复切换 Qt window flag，避免触发 Qt 原生窗口重建。
@@ -22,7 +23,6 @@ from PySide6.QtCore import QDateTime, QEvent, QTime, QUrl, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDateTimeEdit,
     QDialog,
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .alarm_manager import Alarm, AlarmManager, REPEAT_DAILY, REPEAT_ONCE, REPEAT_WEEKDAYS
 from .alarm_sounds import AlarmSoundLibrary

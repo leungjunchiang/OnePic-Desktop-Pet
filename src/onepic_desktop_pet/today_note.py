@@ -1,4 +1,5 @@
-"""Today's note and the non-resident time-memory window."""
+"""勾选配置使用统一矢量绘制。
+Today's note and the non-resident time-memory window."""
 
 from __future__ import annotations
 
@@ -8,7 +9,6 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox, CheckListWidget as QListWidget
 
 from .time_memory import TimeMemory
 from .time_service import format_duration

@@ -1,4 +1,5 @@
-"""A small, pet-attached Todo strip.
+"""勾选配置使用统一矢量绘制。
+A small, pet-attached Todo strip.
 
 The compact Todo surface is deliberately separate from ``TodayNoteWindow``.
 It is a frameless tool window with no title, statistics, chat text, or
@@ -21,7 +22,6 @@ from typing import Any, Callable
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QFontMetrics
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .time_memory import TimeMemory
 from .todo_manager import REMINDER_ALARM, REMINDER_NONE, REMINDER_PET
@@ -79,13 +80,6 @@ QWidget#todoActionColumn { background: transparent; border: 0; }
 QScrollArea { background: transparent; border: 0; }
 QWidget#todoViewport { background: transparent; border: 0; }
 QCheckBox { spacing: 6px; color: #183c4c; }
-QCheckBox::indicator { width: 16px; height: 16px; }
-QCheckBox::indicator:unchecked {
-    border: 1px solid #77a5ac; border-radius: 8px; background: #ffffff;
-}
-QCheckBox::indicator:checked {
-    border: 1px solid #2faaa0; border-radius: 8px; background: #55c7b1;
-}
 /* Keep the measured text width equal to the drawable text width.  The
    panel reserves the checkbox and action column explicitly, so an extra
    stylesheet padding here would silently eat the final glyphs. */

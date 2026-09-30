@@ -182,7 +182,7 @@ def test_report_and_records_share_actual_start_without_changing_natural_day_tota
     report = build_work_report(analytics, timer, diary, work_events=store.events, now=at(12))
     assert report["day"]["total_seconds"] == 5400  # 02:00 duration remains a natural-day fact
     assert report["day"]["actual_work_start"] == engine.daily_summary(at(12).date(),5400,5400)["actual_start"] == "07:42"
-    assert build_work_report(analytics,timer,diary,now=at(12))["day"]["actual_work_start"] == "尚未开工"
+    assert build_work_report(analytics,timer,diary,now=at(12))["day"]["actual_work_start"] == "07:42"
 
 
 def test_record_tabs_are_equal_and_history_groups_events_by_day(app):
@@ -197,6 +197,7 @@ def test_record_tabs_are_equal_and_history_groups_events_by_day(app):
     assert max(bar.tabRect(i).width() for i in range(3))-min(bar.tabRect(i).width() for i in range(3))<=1
     assert 46<=bar.height()<=52
     assert len(panel.discipline_metrics)==4
+    panel.records.setCurrentIndex(2);app.processEvents()
     assert panel.ledger.rowCount()==1  # start, lateness, gap and settlement are one date
     panel.ledger.selectRow(0);app.processEvents()
     assert panel.history_events.count()>0

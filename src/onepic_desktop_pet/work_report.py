@@ -1,4 +1,4 @@
-"""实际开工复用纪律事实的本地 06:00 口径，专注分析仍从自然日区间派生。
+"""实际开工复用时间轴背后的原始 FocusSession 和本地 06:00 口径，专注分析仍从自然日区间派生。
 按需计算并展示六毛工作报告，不生成或保存报告图片。
 
 报告只读取当前登录账号的本地专注历史、当前计时器和最近一次自习室同步
@@ -559,6 +559,7 @@ def build_work_report(
             live_segment = FocusSegment(
                 segment_id=f"live:{getattr(timer, 'focus_session_id', '')}",
                 session_id=getattr(timer, "focus_session_id", "") or "live",
+                device_id=str(getattr(analytics, "_device_id", "")),
                 start_at=live_started,
                 end_at=moment.astimezone(BEIJING_TIMEZONE),
                 task=str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
@@ -878,8 +879,10 @@ def build_work_report(
     }
     from .discipline import get_actual_work_start
     selected_day = selected_range[1] if selected_range and selected_key == "day" else moment.astimezone().date()
-    actual_start = get_actual_work_start(work_events or [], selected_day)
-    report["day"]["actual_work_start"] = actual_start.strftime("%H:%M") if actual_start else "尚未开工"
+    facts = analytics.range_segments(datetime(1970, 1, 1, tzinfo=BEIJING_TIMEZONE),
+        analytics.current_time()+timedelta(seconds=1), extra_segments=display_live_segments or None)
+    actual_start = get_actual_work_start(work_events or [], selected_day, sessions=facts, now=analytics.current_time())
+    report["day"]["actual_work_start"] = actual_start.strftime("%H:%M") if actual_start else "尚无开工记录"
     return report
 
 
@@ -2266,7 +2269,7 @@ class WorkReportDialog(QDialog):
             metrics = [
                 (
                     "今日节奏",
-                    f"实际开工 {data.get('actual_work_start', '尚未开工')} · 最后专注段 "
+                    f"实际开工 {data.get('actual_work_start', '尚无开工记录')} · 最后专注段 "
                     f"{data.get('last_ended_at', '暂无记录')} 结束",
                 ),
                 ("本周工作时间", format_work_duration(int(data.get("week_total_seconds", 0) or 0))),

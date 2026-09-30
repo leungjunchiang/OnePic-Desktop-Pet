@@ -1,4 +1,5 @@
-"""搭子自习室界面、后台同步线程和双六毛本地串门窗口。
+"""勾选配置使用统一矢量绘制。
+搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
 本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
@@ -27,11 +28,12 @@ from typing import Any, Callable
 from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QHideEvent, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
+    QApplication, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabBar, QTabWidget, QMenu,
     QVBoxLayout, QWidget, QSizePolicy, QProgressBar,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .resources import resource_path
 from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons, begin_button_work, end_button_work, readable_milk_tea_label

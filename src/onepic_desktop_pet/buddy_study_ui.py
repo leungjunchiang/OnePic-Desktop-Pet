@@ -1,12 +1,14 @@
-"""搭子详情仅展示 TA 的授权信息与双方监督关系，免战日暂停所有训导操作。"""
+"""勾选配置使用统一矢量绘制。
+搭子详情仅展示 TA 的授权信息与双方监督关系，免战日暂停所有训导操作。"""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
+    QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
     QTabWidget, QVBoxLayout, QWidget, QScrollArea, QMessageBox,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .buddy_identity import buddy_name, public_name
 from .discipline import DisciplineSettings, as_beijing
@@ -263,7 +265,7 @@ class BuddyStudyDialog(QDialog):
             if "long_break_count" in data:
                 line += f" · 长休息 {int(data['long_break_count'])} 次"
             if "lateness_minutes" in data:
-                line += f" · 迟到 {int(data['lateness_minutes'])} 分钟"
+                line += f" · 迟到 {int(data['lateness_minutes'])} 分钟" if data["lateness_minutes"] is not None else " · 缺少历史计划或开工基准"
             line += " · 已阅" if row.get("read_at") else " · 未阅"
             item = QListWidgetItem(line)
             item.setData(Qt.ItemDataRole.UserRole, str(row.get("event_date") or ""))

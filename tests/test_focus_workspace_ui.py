@@ -94,6 +94,7 @@ def test_history_includes_previous_weeks_and_pending_explanations():
     store = DisciplineStore("a", persist=False)
     store.append_event("late_start", datetime(2026, 8, 1, 10, tzinfo=BEIJING_TIMEZONE), requires_explanation=True)
     panel = DisciplineDialog(store, DisciplineEngine(store), lambda: (0, 0))
+    panel.records.setCurrentIndex(2)
     assert panel.ledger.rowCount() == 1
     assert panel.ledger.item(0, 0).text() == "2026-08-01"
     assert "1 项" in panel.duty_status.text()

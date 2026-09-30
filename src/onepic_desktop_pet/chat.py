@@ -1,4 +1,5 @@
-"""
+"""勾选配置使用统一矢量绘制。
+
 本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板。
 
 职责范围：
@@ -33,7 +34,6 @@ if TYPE_CHECKING:
 from PySide6.QtCore import QRect, QSize, QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QCloseEvent, QFontMetrics, QShowEvent
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .ai import (
     AIConnectionError,

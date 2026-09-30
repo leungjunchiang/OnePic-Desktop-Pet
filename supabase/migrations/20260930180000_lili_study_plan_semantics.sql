@@ -234,7 +234,7 @@ begin
         'mode', case when e.metadata->>'mode' in ('normal', 'officer')
           then e.metadata->>'mode' else 'off' end,
         'lateness_minutes', case when public.lili_is_rest_day(p_owner_id,e.event_date) then 0 when public.lili_actual_work_start_clock(p_owner_id,e.event_date) is not null and e.metadata->>'planned_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
-          then greatest(0,extract(epoch from public.lili_actual_work_start_clock(p_owner_id,e.event_date)::time-(e.metadata->>'planned_start')::time)::int/60) else 0 end,
+          then greatest(0,extract(epoch from public.lili_actual_work_start_clock(p_owner_id,e.event_date)::time-(e.metadata->>'planned_start')::time)::int/60) else null end,
         'today_seconds', case when e.metadata->>'today_seconds' ~ '^[0-9]{1,9}$'
           then (e.metadata->>'today_seconds')::integer else 0 end,
         'daily_target_seconds', case when public.lili_is_rest_day(p_owner_id,e.event_date) then 0 when e.metadata->>'daily_target_seconds' ~ '^[0-9]{1,9}$'
@@ -618,18 +618,38 @@ revoke execute on function public.lili_buddy_reminder_events() from public,anon,
 grant execute on function public.lili_buddy_reminder_events() to authenticated;
 
 
--- Internal, consent-filtered callers only. New clients carry the original local
--- clock; legacy explicit start events used Asia/Shanghai. Restore/presence is excluded.
-create index if not exists lili_discipline_start_day_idx on public.lili_discipline_events(user_id,event_date,occurred_at)
-where event_type='start_work';
+-- v303: original FocusSession facts are authoritative; no historical backfill writes.
+create index if not exists lili_focus_session_start_idx on public.lili_focus_segments(user_id,device_id,session_id,start_at);
 create or replace function public.lili_actual_work_start_clock(p_owner_id uuid,p_day date)
 returns text language sql stable security definer set search_path='' as $$
-  select real_start.clock from (
-    select e.occurred_at,case when e.metadata->>'actual_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
-      then e.metadata->>'actual_start' else to_char(e.occurred_at at time zone 'Asia/Shanghai','HH24:MI') end as clock
-    from public.lili_discipline_events e where e.user_id=p_owner_id and e.event_date=p_day and e.event_type='start_work'
+  with zone as (
+    select coalesce((select (e.metadata->>'utc_offset_minutes')::int
+      from public.lili_discipline_events e where e.user_id=p_owner_id and e.event_date=p_day
+        and e.event_type='start_work' and e.metadata->>'utc_offset_minutes' ~ '^-?[0-9]{1,3}$'
+        and (e.metadata->>'utc_offset_minutes')::int between -840 and 840
+      order by e.occurred_at limit 1),480) as minutes
+  ), bounds as (
+    select minutes,(p_day::timestamp at time zone 'UTC')-make_interval(mins=>minutes) as lo,
+      ((p_day+1)::timestamp at time zone 'UTC')-make_interval(mins=>minutes) as hi from zone
+  ), seeds as (
+    select distinct s.device_id,s.session_id,case when s.session_id='' then s.segment_id else '' end as independent
+    from public.lili_focus_segments s,bounds b where s.user_id=p_owner_id and s.start_at>=b.lo and s.start_at<b.hi
+      and s.end_at>=s.start_at and s.end_at-s.start_at<=interval '24 hours' and s.end_at<=now()+interval '2 minutes'
+  ), facts as (
+    select original.started from seeds seed cross join lateral (
+      select min(s.start_at) as started from public.lili_focus_segments s where s.user_id=p_owner_id
+        and s.device_id=seed.device_id and s.session_id=seed.session_id
+        and (seed.independent='' or s.segment_id=seed.independent)
+        and s.end_at>=s.start_at and s.end_at-s.start_at<=interval '24 hours' and s.end_at<=now()+interval '2 minutes'
+    ) original
+  ), explicit as (
+    select e.occurred_at as started from public.lili_discipline_events e
+    where e.user_id=p_owner_id and e.event_date=p_day and e.event_type='start_work'
+      and e.metadata->>'actual_start_source'='explicit_focus_start' and e.occurred_at<=now()+interval '2 minutes'
       and coalesce(e.metadata->>'source','') not in ('sleep','lock','display_off','restart_safe_seal','account_switch','restore','heartbeat','startup','reconnect')
       and coalesce(e.metadata->>'restored','false')<>'true'
-  ) real_start where real_start.clock>='06:00' order by real_start.occurred_at limit 1;
+  ), starts as (select started from facts union all select started from explicit)
+  select to_char((min(s.started) at time zone 'UTC')+make_interval(mins=>b.minutes),'HH24:MI')
+    from bounds b left join starts s on s.started>=b.lo+interval '6 hours' and s.started<b.hi group by b.minutes;
 $$;
 revoke execute on function public.lili_actual_work_start_clock(uuid,date) from public,anon,authenticated;

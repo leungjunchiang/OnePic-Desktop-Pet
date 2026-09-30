@@ -9,7 +9,7 @@ begin
   insert into auth.users(id,raw_user_meta_data) values(owner,'{}'),(other_user,'{}');
   perform set_config('request.jwt.claim.sub',owner::text,true);
   incoming:=jsonb_build_array(jsonb_build_object('id',event_id,'event_type','start_work','event_date',day,
-    'occurred_at',day::text||'T09:26:00+08:00','metadata',jsonb_build_object('rule_key',day||':actual_start','actual_start','09:26')),
+    'occurred_at',day::text||'T09:26:00+08:00','metadata',jsonb_build_object('rule_key',day||':actual_start','actual_start','09:26','actual_start_source','explicit_focus_start')),
     jsonb_build_object('id',bad_id,'event_type','start_break','event_date',day,'occurred_at',now(),'metadata','{}'::jsonb));
   payload:=public.lili_discipline_sync_delta('{"plan_version":2,"start_time":"09:00","weekly_target_minutes":2100}',now(),incoming,0,true);
   if jsonb_array_length(payload->'acknowledged_ids')<>1 or not payload->'acknowledged_ids' ? event_id::text then raise exception 'Valid-only ACK failed'; end if;
@@ -28,7 +28,7 @@ begin
   -- Earlier real start from an offline second device corrects the canonical event.
   replay:=public.lili_discipline_sync_delta(null,null,jsonb_build_array(jsonb_build_object(
     'id',gen_random_uuid(),'event_type','start_work','event_date',day,'occurred_at',day::text||'T07:30:00+08:00',
-    'metadata',jsonb_build_object('rule_key',day||':actual_start','actual_start','07:30'))),revision,false);
+    'metadata',jsonb_build_object('rule_key',day||':actual_start','actual_start','07:30','actual_start_source','explicit_focus_start'))),revision,false);
   if jsonb_array_length(replay->'events')<>2 or replay->'events'->0->'metadata'->>'actual_start'<>'07:30'
     or replay->'events'->1->'metadata'->>'minutes_late'<>'0'
     or (replay->'events'->1->>'requires_explanation')::boolean then raise exception 'Earlier-device correction failed'; end if;
@@ -55,6 +55,14 @@ begin
   replay:=public.lili_discipline_sync_delta(null,null,incoming,0,false);
   if exists(select 1 from public.lili_discipline_events where user_id=owner and id=event_id
     and (requires_explanation or metadata->>'gap_seconds'<>'0')) then raise exception 'Completed goal kept stale explanation'; end if;
+  insert into public.lili_discipline_events(user_id,id,event_type,event_date,occurred_at,metadata)
+    values(owner,gen_random_uuid(),'start_work',day-1,((day-1)::text||'T16:26:00+08:00')::timestamptz,'{"actual_start":"16:26"}');
+  insert into public.lili_focus_segments(user_id,segment_id,session_id,device_id,start_at,end_at) values
+    (owner,'test:pre-six','early','pc1',((day-1)::text||'T05:40:00+08:00')::timestamptz,((day-1)::text||'T06:10:00+08:00')::timestamptz),
+    (owner,'test:checkpoint','early','pc1',((day-1)::text||'T06:10:00+08:00')::timestamptz,((day-1)::text||'T06:30:00+08:00')::timestamptz),
+    (owner,'test:real','real','pc1',((day-1)::text||'T08:52:00+08:00')::timestamptz,((day-1)::text||'T09:01:00+08:00')::timestamptz);
+  if public.lili_actual_work_start_clock(owner,day-1)<>'08:52' then raise exception 'Session inference/checkpoint/legacy priority failed'; end if;
+  delete from public.lili_focus_segments where user_id=owner;
   -- Legacy IDs without a rule key are accepted without perpetual unique violations.
   event_id:=gen_random_uuid();
   insert into public.lili_discipline_events(user_id,id,event_type,event_date,occurred_at,metadata)

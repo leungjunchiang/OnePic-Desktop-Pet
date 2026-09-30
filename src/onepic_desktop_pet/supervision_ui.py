@@ -1,8 +1,10 @@
-"""训导设置仅在进入页面、手动刷新和保存时读取；草稿、请求状态与服务端版本独立。"""
+"""勾选配置使用统一矢量绘制。
+训导设置仅在进入页面、手动刷新和保存时读取；草稿、请求状态与服务端版本独立。"""
 
 from PySide6.QtCore import Qt, QTimer
 from time import monotonic
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox, QListWidget, QListWidgetItem, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QComboBox, QListWidgetItem, QPushButton
+from .check_controls import AppCheckBox as QCheckBox, CheckListWidget as QListWidget
 
 from .buddy_identity import buddy_choice, buddy_name
 from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons

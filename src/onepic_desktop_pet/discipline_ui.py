@@ -1,4 +1,5 @@
-"""专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
+"""勾选配置使用统一矢量绘制。
+专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
 
 from __future__ import annotations
 
@@ -12,10 +13,11 @@ from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons
 from PySide6.QtCore import QTime, Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout,
+    QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout,
     QLabel, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QTabWidget, QTabBar,
     QTableWidget, QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget, QScrollArea,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .discipline import DisciplineEngine, DisciplineSettings, DisciplineStore, WEEKDAYS, discipline_events, get_actual_work_start, local_work_time
 from .work_timer import format_work_duration
@@ -495,7 +497,8 @@ class DisciplineWorkspace(QWidget):
             self._load_settings()
         today_seconds, week_seconds = self.progress_provider()
         now_day = local_work_time().date()
-        today = self.engine.daily_summary(now_day, today_seconds, week_seconds)
+        starts = self.engine.work_start_index()
+        today = self.engine.daily_summary(now_day, today_seconds, week_seconds, sessions=starts)
         exempt = today["exempt"]
         if not self.snooze_button.property("actionBusy"):
             self.snooze_button.setEnabled(self.store.settings.is_workday(now_day) and not exempt)
@@ -505,9 +508,9 @@ class DisciplineWorkspace(QWidget):
         mode = {"off":"未启用训导", "normal":"普通训导", "officer":"严格训导"}[today["mode"]]
         self.today_title.setText(f"今日纪律 · {now_day:%m/%d}")
         self.today_badge.setText("🏳 今日免战" if exempt else mode)
-        late_text = "免战 · 不记迟到" if exempt else "尚未开工" if not today["actual_start"] else "迟到 " + format_work_duration(today["lateness_minutes"] * 60) if today["lateness_minutes"] else "准时开工"
+        late_text = "免战 · 不记迟到" if exempt else "尚无开工记录" if not today["actual_start"] else "迟到 " + format_work_duration(today["lateness_minutes"] * 60) if today["lateness_minutes"] else "准时开工"
         cards = (
-            f"<b>开工</b><h2>{today['actual_start'] or '尚未开工'}</h2>计划 {today['planned_start']}<br>{late_text}",
+            f"<b>开工</b><h2>{today['actual_start'] or '尚无开工记录'}</h2>计划 {today['planned_start']}<br>{late_text}",
             f"<b>今日缺口</b><h2>{'免战' if exempt else format_work_duration(gap)}</h2>已完成 {format_work_duration(actual)}<br>参考 {format_work_duration(target)}",
             f"<b>长休</b><h2>{today['long_break_count']} 次</h2>超时 {format_work_duration(today['break_overtime_seconds'])}",
             f"<b>待说明</b><h2>{today['unexplained_count']} 项</h2>{'今日无需说明' if exempt else '仅记录重要事项'}",
@@ -543,7 +546,7 @@ class DisciplineWorkspace(QWidget):
             rows = self.store.events_for_day(day)
             summary_row = next((row for row in reversed(rows) if row.get("event_type") == "daily_report"), None)
             meta = (summary_row or {}).get("metadata", {})
-            summary = self.engine.daily_summary(day, today_seconds if day == now_day else self._completed_day_seconds(day, int(meta.get("today_seconds", 0))), week_seconds)
+            summary = self.engine.daily_summary(day, today_seconds if day == now_day else self._completed_day_seconds(day, int(meta.get("today_seconds", 0))), week_seconds, sessions=starts)
             if summary["exempt"]:
                 exemptions += 1
                 result = "🏳 免战"
@@ -551,17 +554,31 @@ class DisciplineWorkspace(QWidget):
                 if summary["lateness_minutes"]: late_days.add(day)
                 long_count += summary["long_break_count"]
                 due_count += summary["unexplained_count"]
-                result = (summary['actual_start'] or "尚未开工") + "　" + ("迟到 " + format_work_duration(summary["lateness_minutes"] * 60) if summary["lateness_minutes"] else "正常" if summary["actual_start"] else "")
+                result = (summary['actual_start'] or "尚无开工记录") + "　" + ("迟到 " + format_work_duration(summary["lateness_minutes"] * 60) if summary["lateness_minutes"] else "缺少历史计划基准" if not summary.get("historical_plan_known",True) else "正常" if summary["actual_start"] else "")
             days.append(f"<p><b>{DAY_LABELS[offset]} {day:%m/%d}</b>　{result}　完成 {format_work_duration(summary['today_seconds'])}</p>")
         self.week_summary.setText(f"<h2>本周纪律</h2>本周目标 {format_work_duration(today['weekly_target_seconds'])} · 已完成 {format_work_duration(week_seconds)} · 剩余 {format_work_duration(today['weekly_remaining_seconds'])}<br>迟到 {len(late_days)} 次 · 长休超时 {long_count} 次 · 待说明 {due_count} 项 · 免战 {exemptions} 天<br>剩余工作日 {today['remaining_workdays']} · 周目标继续分摊")
         self.week_days.setText("".join(days))
         self.plan_summary.setText(f"今日参考目标：{format_work_duration(target)} · 已完成：{format_work_duration(actual)} · 剩余：{format_work_duration(gap)}<br>本周计划：{format_work_duration(today['weekly_target_seconds'])} · 已完成：{format_work_duration(week_seconds)} · 剩余：{format_work_duration(today['weekly_remaining_seconds'])}")
-        self.duty_status.setText(f"<h3>{mode}</h3>开工：{today['actual_start'] or '尚未开工'} · {late_text}<br>今日缺口：{format_work_duration(gap)} · 长休：{today['long_break_count']} 次 · 待说明总计：{len(self.store.due_explanations())} 项")
+        self.duty_status.setText(f"<h3>{mode}</h3>开工：{today['actual_start'] or '尚无开工记录'} · {late_text}<br>今日缺口：{format_work_duration(gap)} · 长休：{today['long_break_count']} 次 · 待说明总计：{len(self.store.due_explanations())} 项")
+        if self.records.currentIndex() != 2:
+            return  # 历史仅进入时展开；不随今日每次刷新扫描历史。
         rows = list(discipline_events(self.store.events))
-        signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)))
+        session_days = {stamp.date().isoformat() for stamp in starts.starts if stamp.date() < now_day} if starts else set()
+        signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)), starts)
         if signature == getattr(self, "_ledger_signature", None): return
         self._ledger_signature = signature
-        settled_days = sorted({str(row.get("event_date")) for row in rows if row.get("event_type") in {"daily_report", "finish_work", "rest_day"} or str(row.get("event_date")) < now_day.isoformat()}, reverse=True)
+        settled_days = sorted(session_days | {str(row.get("event_date")) for row in rows if row.get("event_type") in {"daily_report", "finish_work", "rest_day"} or str(row.get("event_date")) < now_day.isoformat()}, reverse=True)
+        history_totals = {}
+        owner = getattr(self.engine_provider, "__self__", None)
+        owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
+        analytics = getattr(owner, "focus_analytics", None)
+        if settled_days and callable(getattr(analytics, "range_aggregate", None)):
+            # 一次本地范围汇总，避免为历史每一行重复遍历全部区间；绝不请求服务器。
+            from .discipline import BEIJING_TIMEZONE
+            history_totals = analytics.range_aggregate(
+                datetime.combine(date.fromisoformat(settled_days[-1]), time(), BEIJING_TIMEZONE),
+                datetime.combine(now_day+timedelta(days=1), time(), BEIJING_TIMEZONE)).daily
+            self._day_totals_cache = {(self.store.account_id,key):(monotonic_time.monotonic(),value) for key,value in history_totals.items()}
         selected = self.ledger.item(self.ledger.currentRow(), 0)
         selected_day = selected.text() if selected else ""
         self.ledger.blockSignals(True)
@@ -570,8 +587,11 @@ class DisciplineWorkspace(QWidget):
             day_rows = [row for row in rows if row.get("event_date") == day_key]
             final = next((row for row in reversed(day_rows) if row.get("event_type") == "daily_report"), {})
             meta = final.get("metadata") or {}
-            summary = self.engine.daily_summary(date.fromisoformat(day_key), self._completed_day_seconds(date.fromisoformat(day_key), int(meta.get("today_seconds", 0))), week_seconds)
+            completed = history_totals.get(day_key, int(meta.get("today_seconds", 0)))
+            summary = self.engine.daily_summary(date.fromisoformat(day_key), completed, week_seconds, sessions=starts)
             result = "🏳 免战" if summary["exempt"] else " · ".join(filter(None, ("严格训导" if meta.get("mode") == "officer" else "正常", "迟到 " + format_work_duration(summary["lateness_minutes"] * 60) if summary["lateness_minutes"] else "", f"长休 {summary['long_break_count']} 次" if summary["long_break_count"] else "")))
+            result = (summary["actual_start"] + "开工 · " if summary["actual_start"] else "尚无开工记录 · ") + result
+            if not summary.get("historical_plan_known", True) and not summary["exempt"]: result += " · 缺少历史计划基准"
             values = (day_key, result, "完成 " + format_work_duration(summary["today_seconds"]) + (" · 缺口 " + format_work_duration(int(meta.get("daily_gap_seconds", 0))) if meta.get("daily_gap_seconds") else ""), str(summary["unexplained_count"]))
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
@@ -589,14 +609,16 @@ class DisciplineWorkspace(QWidget):
             self.explain_button.setEnabled(False)
             return
         day = date.fromisoformat(item.text())
-        rows = list(discipline_events(self.store.events, day))
+        summary = self.engine.daily_summary(day, self._completed_day_seconds(day, 0), 0)
+        rows = summary["events"]
         lines = []
         for row in rows:
             title, detail = self._event_description(row)
             lines.append(f"<p>{escape(str(row.get('occurred_at', ''))[11:16])}　<b>{title}</b>　{escape(detail)}</p>")
             if row.get("requires_explanation") and not row.get("explanation") and not self.store.is_exempt(day):
                 self.history_events.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
-        self.history_detail.setText(f"<h3>{day:%m/%d} 纪律记录</h3>" + "".join(lines))
+        baseline = "缺少历史计划基准；不按当前计划重新计算迟到。" if not summary.get("historical_plan_known", True) else "计划开工 " + summary["planned_start"]
+        self.history_detail.setText(f"<h3>{day:%m/%d} 纪律记录</h3>" + escape(baseline) + "".join(lines))
         self.history_events.setVisible(self.history_events.count() > 0)
         self.explain_button.setEnabled(self.history_events.count() > 0)
 

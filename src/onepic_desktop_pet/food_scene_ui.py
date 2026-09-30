@@ -1,4 +1,5 @@
-"""六毛补给站：食物是场景入口，仓库、商店和账本共用一个经济核心。"""
+"""勾选配置使用统一矢量绘制。
+六毛补给站：食物是场景入口，仓库、商店和账本共用一个经济核心。"""
 
 from __future__ import annotations
 
@@ -7,7 +8,6 @@ from typing import Any, Callable, Iterable
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QCheckBox,
     QDialog,
     QAbstractItemView,
     QFrame,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 from .economy import ACTIVE_HOUSEHOLD_KEYS, CATEGORY_LABELS, EconomyLedger, ITEM_CATALOG
 

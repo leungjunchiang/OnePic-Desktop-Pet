@@ -1,4 +1,4 @@
-"""以周目标为总账的动态工作计划、免战日账本与独立的搭子监督授权；本地过程与云端最终事件分开，实际开工统一为本地 06:00 后首次真实操作。"""
+"""动态计划与纪律账本；实际开工复用原始 FocusSession，历史计划快照独立于当前配置。"""
 
 from __future__ import annotations
 
@@ -36,6 +36,14 @@ DISCIPLINE_EVENT_TYPES = frozenset({
     "focus_shortfall", "weekly_shortfall", "daily_report", "rest_day", "cancel_rest_day",
 })
 RESTORE_SOURCES = {"sleep", "lock", "display_off", "restart_safe_seal", "account_switch", "restore", "heartbeat", "startup", "reconnect"}
+_SESSION_UNSET = object()
+
+
+@dataclass(frozen=True)
+class FocusStartIndex:
+    """一次读取缓存后构建的会话起点；本周/历史无需逐日重读相同事实。"""
+    starts: tuple[datetime, ...]
+    fingerprint: int = 0
 
 
 def local_work_time(value: datetime | None = None) -> datetime:
@@ -43,8 +51,44 @@ def local_work_time(value: datetime | None = None) -> datetime:
     return (value or datetime.now().astimezone()).astimezone()
 
 
-def get_actual_work_start(events, day: date, *, tz=None) -> datetime | None:
-    """当日 06:00 至午夜的首次真实 start_work；不从在线状态或区间切片推断。"""
+def focus_start_index(sessions, *, tz=None, now=None):
+    if sessions is not None:
+        if isinstance(sessions, FocusStartIndex): return sessions
+        from .focus_segments import FocusSegment, segment_from_record
+        firsts = {}
+        valid_facts = []
+        for index, raw in enumerate(sessions):
+            if isinstance(raw, dict) and (raw.get("source") in RESTORE_SOURCES or raw.get("synthetic") or raw.get("restored")):
+                continue
+            segment = raw if isinstance(raw, FocusSegment) else segment_from_record(raw, index)
+            if segment is None or segment.validation_error(now or datetime.now().astimezone()):
+                continue
+            # Cached presence intervals can show a live chart, but are not evidence of a new start.
+            if str(segment.segment_id).startswith(("display-live-device:", "display-live-remote", "presence:", "remote-live:")):
+                continue
+            stamp = segment.start_at.astimezone(tz) if tz is not None else segment.start_at.astimezone()
+            valid_facts.append(segment)
+            key = (segment.device_id, segment.session_id or segment.segment_id)
+            if key not in firsts or stamp < firsts[key]:
+                firsts[key] = stamp
+        return FocusStartIndex(tuple(firsts.values()), hash(tuple(valid_facts)))
+    return None
+
+
+def get_actual_work_start(events, day: date, *, tz=None, sessions=None, now=None) -> datetime | None:
+    """原始专注事实按设备/会话恢复最初 start，过滤 06:00 前和 checkpoint；兼容旧调用。"""
+    if sessions is not None:
+        index = focus_start_index(sessions, tz=tz, now=now)
+        candidates = [stamp for stamp in index.starts if stamp.date() == day and stamp.hour >= 6]
+        # Only new explicitly marked real starts may bridge the first seconds before a sealed fact.
+        for row in events:
+            meta = row.get("metadata") or {}
+            if meta.get("actual_start_source") != "explicit_focus_start":
+                continue
+            stamp = get_actual_work_start([row], day, tz=tz)
+            if stamp is not None:
+                candidates.append(stamp)
+        return min(candidates) if candidates else None
     candidates = []
     for row in events:
         if row.get("event_type") != "start_work":
@@ -480,12 +524,24 @@ class DisciplineNotice:
 class DisciplineEngine:
     """把计划和明确的 FocusSession 事件转换为有界提醒与纪律记录。"""
 
-    def __init__(self, store: DisciplineStore) -> None:
+    def __init__(self, store: DisciplineStore, *, focus_sessions_provider=None, now_provider=None) -> None:
         self.store = store
+        self.focus_sessions_provider = focus_sessions_provider
+        self.now_provider = now_provider
         self.supervision = {}
         self._supervision_revision = -1
         self._remote_mode = "off"
         self._remote_until = 0.0
+
+    def focus_sessions(self):
+        return self.focus_sessions_provider() if callable(self.focus_sessions_provider) else None
+
+    def actual_work_start(self, day, *, tz=None, sessions=_SESSION_UNSET):
+        return get_actual_work_start(self.store.events, day, tz=tz, sessions=self.focus_sessions() if sessions is _SESSION_UNSET else sessions,
+                                     now=self.now_provider() if callable(self.now_provider) else None)
+
+    def work_start_index(self):
+        return focus_start_index(self.focus_sessions(), now=self.now_provider() if callable(self.now_provider) else None)
 
     def apply_supervision(self, payload: object) -> bool:
         """远端监督只影响有效模式，不覆盖本人设置；旧响应不能复活撤销授权。"""
@@ -599,6 +655,8 @@ class DisciplineEngine:
             if get_actual_work_start(self.store.events, moment.date(), tz=moment.tzinfo) is not None:
                 return []
             details["actual_start"] = moment.strftime("%H:%M")
+            details["actual_start_source"] = "explicit_focus_start"
+            details["planned_start"] = settings.start_time
             details["utc_offset_minutes"] = int(moment.utcoffset().total_seconds() // 60)
             self.store.append_rule_once(f"{moment.date()}:actual_start", "start_work", moment, metadata=details)
         elif event_type == "finish_work":
@@ -695,7 +753,7 @@ class DisciplineEngine:
                         "warning", str(row["id"]),
                     ))
             day_events = self.store.events_for_day(moment.date())
-            actual_start = get_actual_work_start(self.store.events, moment.date(), tz=moment.tzinfo)
+            actual_start = self.actual_work_start(moment.date(), tz=moment.tzinfo)
             late_events = [row for row in day_events if row.get("event_type") == "late_start"]
             long_breaks = [row for row in day_events if row.get("event_type") == "long_break"]
             daily_report = self.store.append_rule_once(
@@ -752,7 +810,7 @@ class DisciplineEngine:
         notices: list[DisciplineNotice] = []
         start = settings.start_at(moment.date())
         late_minutes = int((moment - start).total_seconds() // 60)
-        started_today = working or get_actual_work_start(self.store.events, moment.date(), tz=moment.tzinfo) is not None
+        started_today = working or self.actual_work_start(moment.date(), tz=moment.tzinfo) is not None
         thresholds = (settings.late_grace_minutes + 1,) if self.mode == "normal" else tuple(settings.late_grace_minutes + delta for delta in (1, 15, 30))
         if not started_today:
             for threshold in thresholds:
@@ -832,7 +890,7 @@ class DisciplineEngine:
                     notices.append(notice)
         return notices
 
-    def daily_summary(self, day: date, today_seconds: int, week_seconds: int) -> dict[str, Any]:
+    def daily_summary(self, day: date, today_seconds: int, week_seconds: int, *, sessions=_SESSION_UNSET) -> dict[str, Any]:
         events = self.store.events_for_day(day)
         progress = self.progress(today_seconds, week_seconds, datetime.combine(day, time(23,59)).astimezone())
         late = [row for row in events if row.get("event_type") == "late_start"]
@@ -840,9 +898,34 @@ class DisciplineEngine:
         finishes = [row for row in events if row.get("event_type") == "early_finish"]
         if self.store.is_exempt(day):
             late, breaks, finishes = [], [], []
-        actual_start = get_actual_work_start(self.store.events, day)
-        planned = datetime.combine(day, time.fromisoformat(self.store.settings.start_time), actual_start.tzinfo if actual_start else None)
-        late_minutes = max(0, int((actual_start - planned).total_seconds() // 60)) if actual_start and not self.store.is_exempt(day) else 0
+        actual_start = self.actual_work_start(day, sessions=sessions)
+        historical = day < local_work_time().date() and callable(self.focus_sessions_provider)
+        planned_clock = self.store.settings.start_time if not historical else None
+        if historical:
+            for row in reversed(events):
+                meta = row.get("metadata") or {}
+                candidate = str(meta.get("planned_start") or "")
+                if row.get("event_type") not in {"daily_report", "late_start", "start_work"}: continue
+                if len(candidate) > 5: candidate = candidate[11:16]
+                try: time.fromisoformat(candidate)
+                except ValueError: continue
+                planned_clock = candidate; break
+        planned = datetime.combine(day, time.fromisoformat(planned_clock), actual_start.tzinfo if actual_start else None) if planned_clock else None
+        late_minutes = max(0, int((actual_start - planned).total_seconds() // 60)) if actual_start and planned and not self.store.is_exempt(day) else 0 if self.store.is_exempt(day) or not historical else None
+        display_events = list(discipline_events(events, day))
+        if callable(self.focus_sessions_provider):
+            # Read model only: unknown legacy actual-start values cannot override interval facts.
+            display_events = [dict(row) for row in display_events if row.get("event_type") != "start_work"]
+            if actual_start:
+                display_events.insert(0, {"id":"derived-start:"+day.isoformat(), "event_type":"start_work", "event_date":day.isoformat(),
+                    "occurred_at":actual_start.isoformat(), "metadata":{"actual_start_source":"inferred_from_focus_sessions"}, "requires_explanation":False})
+            for row in display_events:
+                if row.get("event_type") == "late_start" and late_minutes is not None:
+                    row["metadata"] = {**row.get("metadata", {}), "minutes_late":late_minutes}
+                    row["requires_explanation"] = bool(row.get("requires_explanation")) and late_minutes >= 30
+                    row["derived_resolved"] = late_minutes == 0
+            display_events = [row for row in display_events if not row.get("derived_resolved")]
+
         finish_event = next((row for row in reversed(events) if row.get("event_type") == "finish_work"), None)
         rest_seconds = 0
         break_start = None
@@ -861,7 +944,8 @@ class DisciplineEngine:
             rest_seconds += max(0, int((end - break_start).total_seconds()))
         return {
             "date": day.isoformat(), "mode": self.mode,
-            "planned_start": self.store.settings.start_at(day).strftime("%H:%M"),
+            "planned_start": planned_clock or "缺少历史计划",
+            "historical_plan_known": bool(planned_clock),
             "actual_start": actual_start.strftime("%H:%M") if actual_start else "",
             "lateness_minutes": late_minutes,
             "today_seconds": max(0, int(today_seconds)),
@@ -878,9 +962,9 @@ class DisciplineEngine:
             "weekly_remaining_seconds": progress.weekly_remaining_seconds,
             "remaining_workdays": progress.remaining_workdays,
             "caught_up_today_seconds": progress.caught_up_today_seconds,
-            "unexplained_count": 0 if self.store.is_exempt(day) else sum(1 for row in events if row.get("requires_explanation") and not row.get("explanation")),
+            "unexplained_count": 0 if self.store.is_exempt(day) else sum(1 for row in display_events if row.get("requires_explanation") and not row.get("explanation")),
             "exempt": self.store.is_exempt(day),
-            "events": list(discipline_events(events, day)),
+            "events": display_events,
         }
 
     @staticmethod

@@ -1,4 +1,5 @@
-"""
+"""勾选配置使用统一矢量绘制。
+
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
@@ -107,7 +108,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -121,6 +121,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox
 
 try:
     from PySide6.QtTextToSpeech import QTextToSpeech
@@ -8006,13 +8007,26 @@ class PetWindow(QWidget):
                 account_id, persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
             )
             self._discipline_account_id = account_id
-            self._discipline_engine = DisciplineEngine(self._discipline_store)
+            self._discipline_engine = DisciplineEngine(self._discipline_store,
+                focus_sessions_provider=self._discipline_focus_sessions,
+                now_provider=lambda: self.focus_analytics.current_time())
             self._discipline_break_session_key = ""
             if self._discipline_dialog is not None:
                 self._discipline_dialog.close()
                 self._discipline_dialog = None
         assert self._discipline_engine is not None
         return self._discipline_engine
+
+    def _discipline_focus_sessions(self):
+        """复用报告的本机缓存与真实活动 timer，绝不为开工额外请求服务器。"""
+        rows = self.focus_analytics.range_segments(
+            datetime(1970, 1, 1, tzinfo=BEIJING_TIMEZONE), self.focus_analytics.current_time()+timedelta(seconds=1))
+        if self.work_timer.is_running:
+            start = self.work_timer.current_segment_started_at()
+            if start is not None:
+                rows.append(FocusSegment(segment_id="display-live-local", session_id=self.work_timer.focus_session_id,
+                    device_id=str(getattr(self.focus_analytics, "_device_id", "")), start_at=start))
+        return rows
 
     def _discipline_progress_seconds(self) -> tuple[int, int]:
         """Read the same account-wide calendar projection shown by the app."""

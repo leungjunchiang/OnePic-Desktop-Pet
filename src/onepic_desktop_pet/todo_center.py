@@ -1,4 +1,5 @@
-"""Unified Todo Center for tasks, reminders, countdowns and anniversaries.
+"""勾选配置使用统一矢量绘制。
+Unified Todo Center for tasks, reminders, countdowns and anniversaries.
 
 The desktop CompactTodo remains intentionally small. This window reads the
 same TimeMemory stores; projected countdown/anniversary rows never create a
@@ -12,7 +13,6 @@ from datetime import date
 
 from PySide6.QtCore import QDate, QTime, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
@@ -32,6 +31,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .check_controls import AppCheckBox as QCheckBox, CheckListWidget as QListWidget
 
 from .time_memory import TimeMemory
 from .alarm_ui import AlarmCenterDialog, AlarmSoundSelector
