@@ -1079,6 +1079,10 @@ def test_fullscreen_poll_passes_pet_native_monitor_reference_on_windows(monkeypa
     """Scaled Windows monitors use native monitor identity for PPT takeover."""
 
     app, window = _create_window()
+    # This assertion covers one explicit lookup, independent of the 200ms
+    # background timer which can fire when the event loop is processed.
+    window.fullscreen_poll_timer.stop()
+    app.processEvents()
     monkeypatch.setattr("onepic_desktop_pet.window.os.name", "nt")
     monkeypatch.setattr(window, "winId", lambda: 4242)
     observed: list[int | None] = []
@@ -4673,10 +4677,6 @@ def test_discipline_entry_opens_shared_focus_navigation_without_another_timer() 
 def test_reminder_uses_private_note_without_opening_main_window(monkeypatch) -> None:
     """提醒在本人视角使用备注，公开昵称仍保留，显示过程不调用打开主窗口。"""
     app, window = _create_window()
-    # The test verifies one explicit native-monitor lookup. A slow runner can
-    # otherwise fire the unrelated 200ms poll inside processEvents below.
-    window.fullscreen_poll_timer.stop()
-    app.processEvents()
     from datetime import datetime, timezone
     from onepic_desktop_pet.buddy_reminder_toast import BuddyReminderToast
     monkeypatch.setattr(window, "_discipline_buddy_choices", lambda: [
