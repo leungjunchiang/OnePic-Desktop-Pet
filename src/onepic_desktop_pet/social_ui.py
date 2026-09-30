@@ -3,6 +3,7 @@
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
 本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
 搭子卡片直接展示串门、加油、嘲讽；投喂按配置聚合，持久提醒状态在身份区显示标签。
+卡片按实际视口宽度计算内容高度，在线 TTL 到期统一显示离线；
 按钮统一提供 hover、按下与忙碌反馈；互动 HTTP 请求使用既有 worker，配置读取不随统计刷新。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
@@ -36,6 +37,7 @@ from .resources import resource_path
 from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons, begin_button_work, end_button_work, readable_milk_tea_label
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import (
+    PRESENCE_ONLINE_TTL_SECONDS,
     SignupResult,
     SocialClient,
     SocialError,
@@ -399,7 +401,8 @@ def _presence_last_seen_age_seconds(
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
     timestamps: list[datetime] = []
-    for field in (
+    # 心跳优先；资料更新时间不能复活已经离线的搭子。
+    fields = (
         "last_confirmed_at",
         "lastConfirmedAt",
         "last_heartbeat_at",
@@ -408,7 +411,11 @@ def _presence_last_seen_age_seconds(
         "status_updated_at",
         "server_updated_at",
         "updated_at",
-    ):
+    )
+    heartbeat_fields = fields[:5]
+    if any(presence.get(key) for key in heartbeat_fields):
+        fields = heartbeat_fields
+    for field in fields:
         raw = presence.get(field)
         if not str(raw or "").strip():
             continue
@@ -537,61 +544,25 @@ def _presence_uncertain(presence: dict[str, Any]) -> bool:
     return presence.get("online") is False and _presence_has_login_evidence(presence)
 
 
-def _presence_status(presence: dict[str, Any]) -> str:
-    """Return a stable user-facing status for old and new API payloads."""
-
-    if presence.get("rest_day_date") == datetime.now(BEIJING_TIMEZONE).date().isoformat():
-        return "exempt"
+def _presence_status(presence: dict[str, Any], now: datetime | None = None) -> str:
+    """同一在线 TTL 决定卡片、详情与排序；工作状态仍单独保留。"""
     if _presence_load_state(presence) != "ready":
         return "unknown"
-    # A transport-stale cache has already been conservatively downgraded to a
-    # resting state by social.py. Keep that state stable even after the cache
-    # is older than the short grace period; cache age belongs to this viewer,
-    # not to the peer's account state.
-    if bool(presence.get("presence_transport_stale")):
-        return "rest" if not presence.get("presence_never_seen") else "offline"
-    # A short dashboard outage is a transport problem, not a peer leave. Keep
-    # that state distinct so an old snapshot cannot be rendered as a false
-    # “offline” result.
-    if bool(presence.get("presence_uncertain")):
-        if presence.get("online") is False and _presence_has_login_evidence(presence):
-            return "rest"
+    age = _presence_last_seen_age_seconds(presence, now)
+    if (age is not None and age > PRESENCE_ONLINE_TTL_SECONDS) or presence.get("stale_presence"):
+        return "offline"
+    if presence.get("online") is False or str(presence.get("status", "")).casefold() in {"offline", "离线"}:
+        return "offline"
+    if presence.get("presence_uncertain") or presence.get("presence_transport_stale"):
         return "unknown"
-    if bool(presence.get("stale_presence")):
-        return "offline"
-    # Some older dashboard payloads can retain ``working`` or ``status``
-    # after the server has already marked the user offline.  The explicit
-    # online flag is authoritative only after the shared confirmation buffer;
-    # just-past-boundary heartbeats are shown as resting until the state is
-    # confirmed offline.
-    if presence.get("online") is False:
-        if _presence_has_login_evidence(presence):
-            return "rest"
-        return "offline"
-    status = str(presence.get("status") or "").strip().casefold()
-    if status in {"offline", "离线"}:
-        if _presence_has_login_evidence(presence):
-            return "rest"
-        return "offline"
-    if _presence_working(presence):
-        return "focus"
-    return "rest"
+    if presence.get("rest_day_date") == (now or datetime.now(BEIJING_TIMEZONE)).date().isoformat():
+        return "exempt"
+    return "focus" if _presence_working(presence) else "rest"
 
 
 def _presence_is_online(presence: dict[str, Any], status: str | None = None) -> bool:
-    """Return the card's online dot state using the same status policy."""
-
-    resolved = status or _presence_status(presence)
-    if resolved == "unknown":
-        return False
-    if resolved == "offline":
-        return False
-    if bool(presence.get("presence_transport_stale")):
-        return True
-    if presence.get("online") is False:
-        return _presence_has_login_evidence(presence)
-    online_flag = presence.get("online")
-    return online_flag is None or bool(online_flag)
+    """在线圆点与统一状态完全一致。"""
+    return (status or _presence_status(presence)) in {"focus", "rest", "exempt"}
 
 
 def _taunt_available(presence: dict[str, Any]) -> bool:
@@ -1362,24 +1333,25 @@ class SocialSyncThread(QThread):
             if isinstance(personal_state, dict):
                 sync_rpc = getattr(self.client, "rpc", None)
                 if callable(sync_rpc):
-                    try:
-                        personal_state_result = sync_rpc(
-                            "lili_sync_personal_state",
-                            {
-                                "p_focus_date": str(personal_state.get("focus_date") or ""),
-                                "p_today_seconds": int(personal_state.get("today_seconds") or 0),
-                                "p_lifetime_seconds": int(personal_state.get("lifetime_seconds") or 0),
-                                "p_week_start": str(personal_state.get("week_start") or ""),
-                                "p_week_seconds": int(personal_state.get("week_seconds") or 0),
-                                "p_outfit_key": str(personal_state.get("outfit_key") or ""),
-                                "p_outfit_set": bool(personal_state.get("outfit_set")),
-                            },
-                        )
-                    except (SocialError, AttributeError, TypeError) as exc:
-                        # Older relays can serve the room dashboard before the
-                        # personal-state migration is deployed.  Keep the
-                        # social room usable and retry on the next heartbeat.
-                        LOGGER.info("personal state sync deferred: %s", exc)
+                    if personal_state.get("sync_compatibility_profile", True):
+                        try:
+                            personal_state_result = sync_rpc(
+                                "lili_sync_personal_state",
+                                {
+                                    "p_focus_date": str(personal_state.get("focus_date") or ""),
+                                    "p_today_seconds": int(personal_state.get("today_seconds") or 0),
+                                    "p_lifetime_seconds": int(personal_state.get("lifetime_seconds") or 0),
+                                    "p_week_start": str(personal_state.get("week_start") or ""),
+                                    "p_week_seconds": int(personal_state.get("week_seconds") or 0),
+                                    "p_outfit_key": str(personal_state.get("outfit_key") or ""),
+                                    "p_outfit_set": bool(personal_state.get("outfit_set")),
+                                },
+                            )
+                        except (SocialError, AttributeError, TypeError) as exc:
+                            # Older relays can serve the room dashboard before the
+                            # personal-state migration is deployed.  Keep the
+                            # social room usable and retry on the next heartbeat.
+                            LOGGER.info("personal state sync deferred: %s", exc)
                     focus_history = personal_state.get("focus_history")
                     if isinstance(focus_history, list) and focus_history:
                         try:
@@ -1881,7 +1853,10 @@ class SocialDashboardThread(QThread):
             reminder_reader = getattr(self.client, "buddy_reminder_snapshot", None)
             if callable(reminder_reader) and getattr(self.client, "signed_in", True):
                 try:
-                    snapshot = reminder_reader()
+                    try:
+                        snapshot = reminder_reader(force=self.force_auxiliary_refresh)
+                    except TypeError:
+                        snapshot = reminder_reader()
                     if isinstance(snapshot, dict) and isinstance(snapshot.get("subscriptions"), list):
                         data = dict(data or {})
                         data["_reminder_snapshot"] = snapshot
@@ -2521,7 +2496,9 @@ class BuddyCardWidget(QWidget):
         self._buttons: dict[str, QPushButton] = {}
         self._food_buttons = {}
         self.setObjectName("buddyCard")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
+        root.setAlignment(Qt.AlignmentFlag.AlignTop)
         root.setContentsMargins(8, 5, 8, 5)
         root.setSpacing(2)
         uncertain = _presence_uncertain(buddy)
@@ -2543,7 +2520,7 @@ class BuddyCardWidget(QWidget):
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         headline = QLabel(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f" · {status_text}{'（我）' if is_self else ''}"
         )
         self._headline_label = headline
@@ -2646,11 +2623,13 @@ class BuddyCardWidget(QWidget):
         for label in (headline, self._identity_detail, focus, confirmation, footer, self.reminder_summary):
             label.setWordWrap(True)
             label.setMinimumWidth(0)
-            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         # 身份行需要保留标签的宽度提示；Ignored 配合 stretch 会把 badge 压到零宽。
         for label in (self._identity_detail, self.reminder_summary):
             label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.reminder_summary.setWordWrap(False)
+        confirmation.setWordWrap(False)
+        footer.setWordWrap(False)
         self._sync_action_controls()
 
     @staticmethod
@@ -2684,7 +2663,7 @@ class BuddyCardWidget(QWidget):
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         self._headline_label.setText(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f" · {status_text}{'（我）' if is_self else ''}"
         )
         self._focus_label.setText(_buddy_focus_totals_text(buddy))
@@ -2804,7 +2783,7 @@ class RoomPetCardWidget(QWidget):
         # Create the headline before the image so existing accessibility/tests
         # and screen readers encounter identity/state first.
         headline = QLabel(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
         )
         headline.setStyleSheet("font-size:14px;font-weight:700;color:#203847;")
@@ -2882,7 +2861,7 @@ class RoomPetCardWidget(QWidget):
         else:
             status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         self._headline_label.setText(
-            f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
         )
         self._metrics_label.setText(
@@ -4121,6 +4100,18 @@ class SocialHubDialog(QDialog):
         desired = min(maximum, max(minimum, total + 8))
         widget.setFixedHeight(desired)
 
+    def eventFilter(self, watched, event):
+        if hasattr(self, "buddies") and watched is self.buddies.viewport() and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self, self._resize_buddy_items)
+        return super().eventFilter(watched, event)
+
+    def _resize_buddy_items(self):
+        for index in range(self.buddies.count()):
+            item = self.buddies.item(index)
+            widget = self.buddies.itemWidget(item)
+            if widget is not None:
+                self._set_buddy_item_height(item, widget)
+
     @staticmethod
     def _set_buddy_item_height(item: QListWidgetItem, widget: QWidget) -> None:
         decorate_buttons(widget)
@@ -4128,7 +4119,11 @@ class SocialHubDialog(QDialog):
         # Keep a dense, repeatable row so a room with many buddies remains
         # scannable. The widget still determines the font/DPI-aware height;
         # only a small platform safety margin is added.
-        item.setSizeHint(QSize(0, max(96, widget.sizeHint().height() + 6)))
+        listing = item.listWidget()
+        width = max(280, listing.viewport().width() - 4) if listing is not None else max(280, widget.width())
+        layout = widget.layout()
+        height = layout.totalHeightForWidth(width) if layout is not None and layout.hasHeightForWidth() else widget.sizeHint().height()
+        item.setSizeHint(QSize(width, max(widget.minimumSizeHint().height(), height) + 6))
 
     @staticmethod
     def _buddy_structure_key(buddy: dict[str, Any]) -> tuple[Any, ...]:
@@ -4258,6 +4253,7 @@ class SocialHubDialog(QDialog):
         buddy_tools.addStretch()
         buddies_layout.addLayout(buddy_tools)
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
+        self.buddies.viewport().installEventFilter(self)
         self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda item: self.open_buddy_study(item.data(Qt.ItemDataRole.UserRole)))
         self.buddies.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)

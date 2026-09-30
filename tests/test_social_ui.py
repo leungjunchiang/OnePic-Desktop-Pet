@@ -972,7 +972,7 @@ def test_buddy_sort_is_state_then_today_week_confirmation_and_stable_id() -> Non
             "status": status,
             "today_seconds": today,
             "week_seconds": week,
-            "last_confirmed_at": confirmed,
+            "last_confirmed_at": (datetime.now(timezone.utc) - timedelta(seconds=(12 - datetime.fromisoformat(confirmed).hour) * 10)).isoformat(),
         }
 
     rows = [
@@ -1423,8 +1423,8 @@ def test_explicit_offline_flag_wins_over_stale_focus_payload() -> None:
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
-def test_known_server_heartbeat_timeout_is_displayed_as_uncertain_rest() -> None:
-    """A heartbeat timeout is not a logout confirmation."""
+def test_known_server_heartbeat_timeout_is_displayed_as_offline() -> None:
+    """TTL controls display only; expiry never fabricates a work event."""
 
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget(
@@ -1437,14 +1437,14 @@ def test_known_server_heartbeat_timeout_is_displayed_as_uncertain_rest() -> None
         }
     )
     labels = [label.text() for label in widget.findChildren(QLabel)]
-    assert any("正在休息" in text for text in labels)
-    assert any(text.startswith("🟡") for text in labels)
-    assert all("已离线" not in text for text in labels)
+    assert any("已离线" in text for text in labels)
+    assert any(text.startswith("⚫") for text in labels)
+    assert all("正在休息" not in text for text in labels)
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
-def test_dashboard_presence_omission_keeps_known_peer_resting() -> None:
-    """A later sparse row must not turn a previously known peer offline."""
+def test_dashboard_presence_omission_keeps_old_confirmation_and_expires_offline() -> None:
+    """A sparse row retains last confirmation but cannot defeat its online TTL."""
 
     app = QApplication.instance() or QApplication([])
     client = SignedInClient()
@@ -1484,9 +1484,9 @@ def test_dashboard_presence_omission_keeps_known_peer_resting() -> None:
     widget = dialog.buddies.itemWidget(item)
     assert widget is not None
     labels = [label.text() for label in widget.findChildren(QLabel)]
-    assert any("正在休息" in text for text in labels)
-    assert any(text.startswith("🟡") for text in labels)
-    assert all("已离线" not in text for text in labels)
+    assert any("已离线" in text for text in labels)
+    assert any(text.startswith("⚫") for text in labels)
+    assert all("正在休息" not in text for text in labels)
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

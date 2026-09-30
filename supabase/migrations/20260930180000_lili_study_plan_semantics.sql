@@ -226,16 +226,15 @@ begin
       'metadata', (jsonb_build_object(
         'planned_start', case when e.metadata->>'planned_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
           then e.metadata->>'planned_start' else null end,
-        'actual_start', case when e.metadata->>'actual_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
-          then e.metadata->>'actual_start' else null end,
+        'actual_start', public.lili_actual_work_start_clock(p_owner_id,e.event_date),
         'actual_finish', case when e.metadata->>'actual_finish' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
           then e.metadata->>'actual_finish' else null end,
         'planned_finish', case when e.metadata->>'planned_finish' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
           then e.metadata->>'planned_finish' else null end,
         'mode', case when e.metadata->>'mode' in ('normal', 'officer')
           then e.metadata->>'mode' else 'off' end,
-        'lateness_minutes', case when public.lili_is_rest_day(p_owner_id,e.event_date) then 0 when e.metadata->>'lateness_minutes' ~ '^[0-9]{1,5}$'
-          then (e.metadata->>'lateness_minutes')::integer else 0 end,
+        'lateness_minutes', case when public.lili_is_rest_day(p_owner_id,e.event_date) then 0 when public.lili_actual_work_start_clock(p_owner_id,e.event_date) is not null and e.metadata->>'planned_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          then greatest(0,extract(epoch from public.lili_actual_work_start_clock(p_owner_id,e.event_date)::time-(e.metadata->>'planned_start')::time)::int/60) else 0 end,
         'today_seconds', case when e.metadata->>'today_seconds' ~ '^[0-9]{1,9}$'
           then (e.metadata->>'today_seconds')::integer else 0 end,
         'daily_target_seconds', case when public.lili_is_rest_day(p_owner_id,e.event_date) then 0 when e.metadata->>'daily_target_seconds' ~ '^[0-9]{1,9}$'
@@ -427,3 +426,210 @@ grant execute on function public.lili_dashboard() to authenticated;
 create or replace function public.lili_respond_discipline_supervisor(p_request_id uuid,p_accept boolean)
 returns jsonb language plpgsql security definer set search_path='' as $$
 begin raise exception '请升级六毛，在搭子详情直接选择普通训导或严格训导'; end; $$;
+
+-- v302: extend this idempotent deployment bundle; keep the old RPC for old clients.
+-- No second focus/statistics table. A commit-ordered, account-serialized event cursor
+-- avoids timestamp pagination skipping a late-committing write from another device.
+create sequence if not exists public.lili_discipline_revision_seq;
+alter table public.lili_discipline_events add column if not exists sync_revision bigint not null default 0;
+update public.lili_discipline_events set sync_revision=nextval('public.lili_discipline_revision_seq') where sync_revision=0;
+create index if not exists lili_discipline_delta_idx on public.lili_discipline_events(user_id,sync_revision);
+revoke all on sequence public.lili_discipline_revision_seq from public,anon,authenticated;
+
+create or replace function public.lili_discipline_revision_guard()
+returns trigger language plpgsql security definer set search_path='' as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended('lili-discipline:'||new.user_id::text,0));
+  if tg_op='UPDATE' and (new.event_type,new.event_date,new.occurred_at,new.metadata,new.requires_explanation,new.explanation)
+      is not distinct from (old.event_type,old.event_date,old.occurred_at,old.metadata,old.requires_explanation,old.explanation) then
+    return old; -- repeated legacy uploads must not move the cursor or rewrite timestamps
+  end if;
+  new.sync_revision:=nextval('public.lili_discipline_revision_seq');
+  new.updated_at:=clock_timestamp();
+  return new;
+end; $$;
+revoke execute on function public.lili_discipline_revision_guard() from public,anon,authenticated;
+drop trigger if exists lili_discipline_revision_guard on public.lili_discipline_events;
+create trigger lili_discipline_revision_guard before insert or update on public.lili_discipline_events
+for each row execute function public.lili_discipline_revision_guard();
+
+create or replace function public.lili_discipline_runtime_snapshot()
+returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare me uuid:=(select auth.uid()); enabled boolean; revision bigint; effective text;
+begin
+  if me is null then raise exception '请先登录'; end if;
+  select p.enabled,p.revision into enabled,revision from public.lili_supervision_policy p where p.owner_id=me;
+  select case when bool_or(s.mode='officer' and (public.lili_supervision_permission(me,s.supervisor_id)->>'officer')::boolean)
+    then 'officer' when count(*)>0 then 'normal' else 'off' end into effective
+  from public.lili_supervision_sessions s where s.owner_id=me and s.active
+    and (public.lili_supervision_permission(me,s.supervisor_id)->>'eligible')::boolean;
+  return jsonb_build_object('policy',jsonb_build_object('enabled',coalesce(enabled,false),'revision',coalesce(revision,0)),
+    'effective_mode',effective);
+end; $$;
+revoke execute on function public.lili_discipline_runtime_snapshot() from public,anon,authenticated;
+
+create or replace function public.lili_discipline_sync_delta(
+  p_settings jsonb default null,p_client_updated_at timestamptz default null,
+  p_events jsonb default '[]',p_after_revision bigint default 0,p_include_config boolean default false
+) returns jsonb language plpgsql security definer set search_path='' as $$
+declare
+  me uuid:=(select auth.uid()); item jsonb; event_id uuid; dedupe text; day date; kind text;
+  old_plan jsonb; remote_plan jsonb; remote_stamp timestamptz; accepted jsonb:='[]'; rows jsonb;
+  next_revision bigint:=greatest(coalesce(p_after_revision,0),0); has_more boolean; result jsonb;
+  affected_days date[]:=array[]::date[]; actual_clock text;
+begin
+  if me is null then raise exception '请先登录'; end if;
+  if jsonb_typeof(p_events) is distinct from 'array' or jsonb_array_length(p_events)>100
+    or octet_length(p_events::text)>819200 then raise exception '纪律事件批次无效'; end if;
+  if p_settings is not null and (jsonb_typeof(p_settings)<>'object' or octet_length(p_settings::text)>16384) then
+    raise exception '工作计划数据无效'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('lili-discipline:'||me::text,0));
+  if p_settings is not null and p_client_updated_at is not null then
+    select settings into old_plan from public.lili_discipline_settings where user_id=me;
+    if old_plan->>'plan_version'='2' and p_settings->>'plan_version' is distinct from '2' then
+      p_settings:=p_settings||jsonb_build_object('plan_version',2,'weekly_target_minutes',old_plan->'weekly_target_minutes',
+        'workdays',old_plan->'workdays','start_time',old_plan->'start_time','finish_time',old_plan->'finish_time',
+        'planned_finish_enabled',old_plan->'planned_finish_enabled','catchup_strategy',old_plan->'catchup_strategy');
+    end if;
+    insert into public.lili_discipline_settings(user_id,settings,client_updated_at,updated_at)
+    values(me,p_settings,p_client_updated_at,now())
+    on conflict(user_id) do update set settings=excluded.settings,client_updated_at=excluded.client_updated_at,updated_at=now()
+    where excluded.client_updated_at>public.lili_discipline_settings.client_updated_at;
+  end if;
+  for item in select value from jsonb_array_elements(p_events) loop
+    begin
+      if jsonb_typeof(item)<>'object' or octet_length(item::text)>8192 then continue; end if;
+      event_id:=(item->>'id')::uuid; day:=(item->>'event_date')::date; kind:=item->>'event_type';
+      if kind not in ('start_work','late_start','long_break','finish_work','early_finish','focus_shortfall',
+                       'weekly_shortfall','daily_report','rest_day','cancel_rest_day') then continue; end if;
+      if jsonb_typeof(item->'metadata') is distinct from 'object' then continue; end if;
+      if kind='start_work' then
+        if coalesce(item->'metadata'->>'source','') in ('sleep','lock','display_off','restart_safe_seal','account_switch','restore','heartbeat','startup','reconnect')
+          or coalesce(item->'metadata'->>'restored','false')='true' then continue; end if;
+        actual_clock:=case when item->'metadata'->>'actual_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          then item->'metadata'->>'actual_start' else to_char((item->>'occurred_at')::timestamptz at time zone 'Asia/Shanghai','HH24:MI') end;
+        if actual_clock<'06:00' then continue; end if;
+      end if;
+      if kind in ('start_work','late_start') then affected_days:=array_append(affected_days,day); end if;
+      if exists(select 1 from public.lili_discipline_events where user_id=me and id=event_id) then
+        update public.lili_discipline_events set
+          metadata=case when (kind='start_work' and (item->>'occurred_at')::timestamptz<occurred_at)
+            or (kind in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall') and (item->>'occurred_at')::timestamptz>occurred_at)
+            then item->'metadata' else metadata end,
+          occurred_at=case when kind='start_work' then least(occurred_at,(item->>'occurred_at')::timestamptz)
+            when kind in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall') then greatest(occurred_at,(item->>'occurred_at')::timestamptz) else occurred_at end,
+          requires_explanation=case when kind in ('early_finish','focus_shortfall','weekly_shortfall') and (item->>'occurred_at')::timestamptz>occurred_at then coalesce((item->>'requires_explanation')::boolean,false) else requires_explanation end,
+          explanation=coalesce(explanation,nullif(nullif(item->'explanation','""'::jsonb),'null'::jsonb))
+          where user_id=me and id=event_id and event_type=kind;
+        if not found then continue; end if;
+        accepted:=accepted||jsonb_build_array(event_id);
+        continue;
+      end if;
+      if kind='rest_day' then
+        if day>(now() at time zone 'Asia/Shanghai')::date or not public.lili_week_plan(me)->'workdays'
+          ? (array['mon','tue','wed','thu','fri','sat','sun'])[extract(isodow from day)::int] then continue; end if;
+        item:=item||jsonb_build_object('requires_explanation',false,'metadata',jsonb_build_object('rule_key',day||':rest_day'));
+      end if;
+      -- One actual start per local day; earlier offline devices may correct the first timestamp.
+      dedupe:=coalesce(item->'metadata'->>'rule_key','');
+      if kind='start_work' then dedupe:=day||':actual_start'; end if;
+      if dedupe='' then dedupe:='event:'||event_id; end if;
+      insert into public.lili_discipline_events(user_id,id,dedupe_key,event_type,event_date,occurred_at,metadata,requires_explanation,explanation)
+      values(me,event_id,dedupe,kind,day,(item->>'occurred_at')::timestamptz,
+        coalesce(item->'metadata','{}'),coalesce((item->>'requires_explanation')::boolean,false),
+        nullif(nullif(item->'explanation','""'::jsonb),'null'::jsonb))
+      on conflict(user_id,dedupe_key) where dedupe_key<>'' do update set
+        occurred_at=case when excluded.event_type='start_work' then least(public.lili_discipline_events.occurred_at,excluded.occurred_at)
+          when excluded.event_type in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall') then greatest(public.lili_discipline_events.occurred_at,excluded.occurred_at)
+          else public.lili_discipline_events.occurred_at end,
+        metadata=case when (excluded.event_type='start_work' and excluded.occurred_at<public.lili_discipline_events.occurred_at)
+          or (excluded.event_type in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall') and excluded.occurred_at>public.lili_discipline_events.occurred_at)
+          then excluded.metadata else public.lili_discipline_events.metadata end,
+        requires_explanation=case when excluded.event_type in ('early_finish','focus_shortfall','weekly_shortfall') and excluded.occurred_at>public.lili_discipline_events.occurred_at then excluded.requires_explanation else public.lili_discipline_events.requires_explanation end,
+        explanation=coalesce(public.lili_discipline_events.explanation,excluded.explanation),
+        updated_at=now();
+      accepted:=accepted||jsonb_build_array(event_id);
+    exception when invalid_text_representation or invalid_datetime_format or datetime_field_overflow or not_null_violation or unique_violation then
+      -- Invalid rows get no ACK and remain durable in the client's queue.
+      continue;
+    end;
+  end loop;
+  -- Only changed work days need reconciliation. Idle runtime polls do not scan history.
+  for day in select distinct unnest(affected_days) loop
+    actual_clock:=public.lili_actual_work_start_clock(me,day);
+    if actual_clock is not null then
+      update public.lili_discipline_events e set
+        metadata=e.metadata||jsonb_build_object('minutes_late',greatest(0,extract(epoch from
+          actual_clock::time-substring(e.metadata->>'planned_start' from 12 for 5)::time)::int/60),
+          'actual_start',actual_clock,'actual_start_source','first_real_start_after_0600'),
+        requires_explanation=e.requires_explanation and greatest(0,extract(epoch from
+          actual_clock::time-substring(e.metadata->>'planned_start' from 12 for 5)::time)::int/60)>=30
+      where e.user_id=me and e.event_date=day and e.event_type='late_start'
+        and substring(e.metadata->>'planned_start' from 12 for 5) ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$';
+    end if;
+  end loop;
+  select coalesce(jsonb_agg(jsonb_build_object('id',e.id,'event_type',e.event_type,'event_date',e.event_date,
+      'occurred_at',e.occurred_at,'metadata',e.metadata,'requires_explanation',e.requires_explanation,
+      'explanation',e.explanation) order by e.sync_revision),'[]'),coalesce(max(e.sync_revision),next_revision)
+    into rows,next_revision from (
+      select * from public.lili_discipline_events where user_id=me and sync_revision>greatest(coalesce(p_after_revision,0),0)
+      and event_type in ('start_work','late_start','long_break','finish_work','early_finish','focus_shortfall',
+                        'weekly_shortfall','daily_report','rest_day','cancel_rest_day')
+      order by sync_revision limit 100) e;
+  select exists(select 1 from public.lili_discipline_events where user_id=me and sync_revision>next_revision
+    and event_type in ('start_work','late_start','long_break','finish_work','early_finish','focus_shortfall',
+                      'weekly_shortfall','daily_report','rest_day','cancel_rest_day')) into has_more;
+  if not has_more then select greatest(next_revision,coalesce(max(sync_revision),0)) into next_revision
+    from public.lili_discipline_events where user_id=me; end if;
+  result:=jsonb_build_object('events',rows,'acknowledged_ids',accepted,'next_revision',next_revision,'has_more',has_more,
+    'supervision',public.lili_discipline_runtime_snapshot(),
+    'nudges',coalesce((select jsonb_agg(jsonb_build_object('id',n.id,'supervisor_id',n.supervisor_id,'kind',n.kind,'created_at',n.created_at))
+      from public.lili_supervision_nudges n where n.owner_id=me and n.created_at>now()-interval '3 minutes'
+        and not public.lili_is_rest_day(me,(now() at time zone 'Asia/Shanghai')::date)
+        and (public.lili_supervision_permission(me,n.supervisor_id)->>'remind')::boolean),'[]'));
+  if p_include_config or p_settings is not null then
+    select settings,client_updated_at into remote_plan,remote_stamp from public.lili_discipline_settings where user_id=me;
+    result:=result||jsonb_build_object('settings',coalesce(remote_plan,'{}'),'client_updated_at',remote_stamp);
+  end if;
+  return result;
+end; $$;
+revoke execute on function public.lili_discipline_sync_delta(jsonb,timestamptz,jsonb,bigint,boolean) from public,anon,authenticated;
+grant execute on function public.lili_discipline_sync_delta(jsonb,timestamptz,jsonb,bigint,boolean) to authenticated;
+
+-- Notification polling is independent from low-frequency subscription configuration.
+create or replace function public.lili_buddy_reminder_events()
+returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare me uuid:=(select auth.uid()); events jsonb;
+begin
+  if me is null then raise exception '请先登录'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object('id',e.id,'target_user_id',e.actor_id,
+    'event_type',e.event_type,'occurred_at',e.occurred_at,'nickname',public.lili_owner_nickname(e.actor_id))
+    order by e.occurred_at),'[]') into events from (
+    select event_row.* from public.lili_work_events event_row
+    join public.lili_buddy_subscriptions s on s.subscriber_id=me and s.buddy_id=event_row.actor_id
+    where event_row.notify_eligible and event_row.created_at>now()-interval '3 minutes'
+      and event_row.created_at>=s.updated_at and not s.muted
+      and ((event_row.event_type='start_work' and s.on_focus_start) or (event_row.event_type='finish_work' and s.on_focus_end))
+      and public.lili_are_buddies(me,event_row.actor_id)
+    order by event_row.occurred_at desc limit 30) e;
+  return jsonb_build_object('events',events,'server_timestamp',now());
+end; $$;
+revoke execute on function public.lili_buddy_reminder_events() from public,anon,authenticated;
+grant execute on function public.lili_buddy_reminder_events() to authenticated;
+
+
+-- Internal, consent-filtered callers only. New clients carry the original local
+-- clock; legacy explicit start events used Asia/Shanghai. Restore/presence is excluded.
+create index if not exists lili_discipline_start_day_idx on public.lili_discipline_events(user_id,event_date,occurred_at)
+where event_type='start_work';
+create or replace function public.lili_actual_work_start_clock(p_owner_id uuid,p_day date)
+returns text language sql stable security definer set search_path='' as $$
+  select real_start.clock from (
+    select e.occurred_at,case when e.metadata->>'actual_start' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+      then e.metadata->>'actual_start' else to_char(e.occurred_at at time zone 'Asia/Shanghai','HH24:MI') end as clock
+    from public.lili_discipline_events e where e.user_id=p_owner_id and e.event_date=p_day and e.event_type='start_work'
+      and coalesce(e.metadata->>'source','') not in ('sleep','lock','display_off','restart_safe_seal','account_switch','restore','heartbeat','startup','reconnect')
+      and coalesce(e.metadata->>'restored','false')<>'true'
+  ) real_start where real_start.clock>='06:00' order by real_start.occurred_at limit 1;
+$$;
+revoke execute on function public.lili_actual_work_start_clock(uuid,date) from public,anon,authenticated;

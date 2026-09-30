@@ -112,6 +112,8 @@ def test_focus_tabs_remain_equal_on_resize_and_rest_is_not_offline():
         assert bar.height() in range(54, 61)
     today = datetime.now(BEIJING_TIMEZONE).date()
     record = {"user_id": "b", "nickname": "hjy", "online": False, "rest_day_date": today.isoformat()}
+    assert _presence_status(record) == "offline"
+    record["online"] = True
     assert _presence_status(record) == "exempt"
     card = BuddyCardWidget(record)
     assert "高挂免战牌" in card._headline_label.text()

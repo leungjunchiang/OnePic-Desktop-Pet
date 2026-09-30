@@ -1,12 +1,15 @@
-"""专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单。"""
+"""专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
+from copy import deepcopy
+import time as monotonic_time
+from html import escape
 from typing import Any, Callable
 from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons
 
-from PySide6.QtCore import QTime, Qt, Signal, QSize
+from PySide6.QtCore import QTime, Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout,
@@ -14,7 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget, QScrollArea,
 )
 
-from .discipline import DisciplineEngine, DisciplineSettings, DisciplineStore, WEEKDAYS
+from .discipline import DisciplineEngine, DisciplineSettings, DisciplineStore, WEEKDAYS, discipline_events, get_actual_work_start, local_work_time
 from .work_timer import format_work_duration
 
 
@@ -37,7 +40,8 @@ class EqualFocusTabBar(QTabBar):
     def tabSizeHint(self, index):
         count = max(1, self.count())
         available = self.parentWidget().width()
-        return QSize(available // count + (1 if index < available % count else 0), 56)
+        height = 48 if self.objectName() == "disciplineRecordNav" else 56
+        return QSize(available // count + (1 if index < available % count else 0), height)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -120,11 +124,16 @@ class DisciplineWorkspace(QWidget):
         self.ledger_page = QWidget()
         self.settings_page = QWidget()
         self.mode_page = QWidget()
-        self.records = QTabWidget()
-        self.records.addTab(self.today_page, "今日")
-        self.records.addTab(self.week_page, "本周")
+        self.records = FocusTabWidget()
+        self.records.setTabBar(EqualFocusTabBar(self.records))
+        self.records.tabBar().setObjectName("disciplineRecordNav")
+        self.records.tabBar().setStyleSheet("QTabBar::tab{height:48px;padding:0;color:#465861;border-bottom:4px solid transparent;}QTabBar::tab:selected{font-weight:700;color:#087f74;border-bottom-color:#087f74;}QTabBar::tab:hover{background:#e6f2ef;}")
+        self.records.addTab(self._scroll(self.today_page), "今日")
+        self.records.addTab(self._scroll(self.week_page), "本周")
         self.records.addTab(self.ledger_page, "历史")
-        self.tabs.addTab(self._scroll(self.settings_page), "工作计划")
+        plan_scroll = self._scroll(self.settings_page)
+        plan_scroll.setProperty("disciplinePlanPage", True)
+        self.tabs.addTab(plan_scroll, "工作计划")
         self.tabs.addTab(self._scroll(self.mode_page), "训导主任")
         self.tabs.addTab(self.records, "记录")
         self._build_today_page()
@@ -134,8 +143,27 @@ class DisciplineWorkspace(QWidget):
         self._build_mode_page()
         self._load_settings()
         self._render_summaries()
-        self.tabs.currentChanged.connect(lambda _index: self.refresh())
+        self.tabs.currentChanged.connect(self._tab_entered)
         self.records.currentChanged.connect(lambda _index: self.refresh())
+    def _tab_entered(self, index):
+        self.refresh()
+        if self.isVisible() and (self.tabs.widget(index) is self.records or self.tabs.widget(index).property("disciplinePlanPage")):
+            self._read_records_once()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        current = self.tabs.currentWidget()
+        if current is self.records or current.property("disciplinePlanPage"):
+            self._read_records_once()
+
+    def _read_records_once(self, *, include_config=True):
+        owner = getattr(self.engine_provider, "__self__", None)
+        provider = getattr(owner, "_discipline_engine_provider", None)
+        owner = getattr(provider, "__self__", owner)
+        callback = getattr(owner, "_sync_discipline_state", None)
+        if callable(callback):
+            callback(include_config=include_config)
+
     @staticmethod
     def _scroll(page):
         scroll = QScrollArea()
@@ -153,28 +181,66 @@ class DisciplineWorkspace(QWidget):
 
     def _build_today_page(self) -> None:
         layout = QVBoxLayout(self.today_page)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        heading = QHBoxLayout()
+        self.today_title = QLabel()
+        self.today_title.setStyleSheet("font-size:18px;font-weight:700;")
+        heading.addWidget(self.today_title, 1)
+        self.today_badge = QLabel()
+        self.today_badge.setStyleSheet("background:#e7f3ee;color:#26584e;border-radius:8px;padding:5px 9px;")
+        heading.addWidget(self.today_badge)
+        self.snooze_button = QPushButton("🏳 高挂免战牌")
+        self.snooze_button.clicked.connect(self._snooze_today)
+        heading.addWidget(self.snooze_button)
+        layout.addLayout(heading)
+        metrics = QHBoxLayout()
+        metrics.setSpacing(8)
+        self.discipline_metrics = []
+        for title in ("开工", "今日缺口", "长休", "待说明"):
+            label = QLabel(title)
+            label.setMinimumWidth(0)
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignTop)
+            label.setStyleSheet("background:#f0f6f5;color:#274b47;border:1px solid #d0e2de;border-radius:9px;padding:10px;font-size:12px;")
+            metrics.addWidget(label, 1)
+            self.discipline_metrics.append(label)
+        layout.addLayout(metrics)
         self.today_summary = self._summary_label()
         layout.addWidget(self.today_summary)
-        self.snooze_button = QPushButton("🏳️ 高挂免战牌 · 今日休息")
-        self.snooze_button.clicked.connect(self._snooze_today)
-        layout.addWidget(self.snooze_button, alignment=Qt.AlignmentFlag.AlignRight)
-        layout.addStretch()
+        self.today_events = self._summary_label()
+        layout.addWidget(self.today_events)
+        self.today_explanation_row = QWidget()
+        explanation_layout = QHBoxLayout(self.today_explanation_row)
+        explanation_layout.setContentsMargins(0,0,0,0)
+        self.today_pending = QComboBox()
+        explanation_layout.addWidget(self.today_pending, 1)
+        explain_today = QPushButton("说明事项")
+        explain_today.clicked.connect(lambda: self._explain_event(str(self.today_pending.currentData() or "")))
+        explanation_layout.addWidget(explain_today)
+        layout.addWidget(self.today_explanation_row)
 
     def _build_week_page(self) -> None:
         layout = QVBoxLayout(self.week_page)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.week_summary = self._summary_label()
         layout.addWidget(self.week_summary)
-        self.week_summary.setToolTip("当周周一至周日统计。周缺口留档，新周默认重新开始。")
-        layout.addStretch()
+        self.week_days = self._summary_label()
+        layout.addWidget(self.week_days)
 
     def _build_ledger_page(self) -> None:
         layout = QVBoxLayout(self.ledger_page)
         self.ledger = QTableWidget(0, 4)
-        self.ledger.setHorizontalHeaderLabels(("日期", "事项", "记录", "说明状态"))
+        self.ledger.setHorizontalHeaderLabels(("日期", "纪律结果", "完成 / 缺口", "待说明"))
         self.ledger.horizontalHeader().setStretchLastSection(True)
         self.ledger.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.ledger.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.ledger.itemSelectionChanged.connect(self._show_history_day)
         layout.addWidget(self.ledger)
+        self.history_detail = self._summary_label()
+        self.history_detail.setText("选择一天查看已结算的纪律事项。")
+        layout.addWidget(self.history_detail)
+        self.history_events = QComboBox()
+        layout.addWidget(self.history_events)
         self.explain_button = QPushButton("说明选中事项")
         self.explain_button.clicked.connect(self._explain_selected)
         layout.addWidget(self.explain_button, alignment=Qt.AlignmentFlag.AlignRight)
@@ -320,6 +386,16 @@ class DisciplineWorkspace(QWidget):
         self.progress_reminders.setChecked(settings.progress_reminders)
         self.carry.setChecked(settings.carry_across_weeks)
         self._update_mode_hint()
+        self._form_loaded_stamp = self.store.settings_updated_at
+        self._form_loaded_values = self._form_values()
+        self._settings_form_baseline = deepcopy(vars(settings))
+
+    def _form_values(self):
+        return (self.weekly_target.value(), tuple(check.isChecked() for check in self.workdays.values()),
+                self.usual_start.time(), self.usual_finish.time(), self.finish_enabled.isChecked(),
+                self.late_grace.value(), self.break_limit.value(), self.early_grace.value(), self.recommended_break.value(),
+                self.catchup.currentData(), self.carry.isChecked(), self.mode.currentData(),
+                tuple(check.isChecked() for check in self.normal_rules.values()), self.progress_reminders.isChecked())
 
     def _save_settings(self, section="plan") -> None:
         # Resolve the active account before writing; an old visible page must
@@ -349,7 +425,27 @@ class DisciplineWorkspace(QWidget):
                 "progress_reminders": self.progress_reminders.isChecked(),
                 "reminder_rules": {key: check.isChecked() for key, check in self.normal_rules.items()},
             }
-        self.store.update_settings(DisciplineSettings.from_dict({**vars(previous), **changes}))
+        changes = {key:value for key,value in changes.items() if value != self._settings_form_baseline.get(key)}
+        merged = DisciplineSettings.from_dict({**vars(previous), **changes})
+        if vars(merged) == vars(previous): return
+        draft = self._form_values()
+        self.store.update_settings(merged)
+        self._load_settings()
+        # 保存一页不能丢掉另一页尚未保存的草稿；基线保留已确认设置。
+        if section == "plan":
+            self.mode.setCurrentIndex(max(0, self.mode.findData(draft[11])))
+            for check, value in zip(self.normal_rules.values(), draft[12]): check.setChecked(value)
+            self.progress_reminders.setChecked(draft[13])
+            self._update_mode_hint()
+        else:
+            self.weekly_target.setValue(draft[0])
+            for check, value in zip(self.workdays.values(), draft[1]): check.setChecked(value)
+            self.usual_start.setTime(draft[2]); self.usual_finish.setTime(draft[3])
+            self.finish_enabled.setChecked(draft[4])
+            for widget, value in zip((self.late_grace,self.break_limit,self.early_grace,self.recommended_break),draft[5:9]): widget.setValue(value)
+            self.catchup.setCurrentIndex(max(0,self.catchup.findData(draft[9])))
+            self.carry.setChecked(draft[10])
+        self._read_records_once()
         self._render_summaries()
 
     def _snooze_today(self) -> None:
@@ -364,94 +460,153 @@ class DisciplineWorkspace(QWidget):
         seconds = round(self.weekly_target.value() * 3600 / count) if count else 0
         self.reference_hint.setText(f"每周 {count} 个工作日 · 建议每天约 {format_work_duration(seconds)}\n本周未完成的时间自动分摊到剩余工作日。" if count else "未选择通常工作日；周目标保留。")
 
+    def _completed_day_seconds(self, day, fallback):
+        """历史完成时长读取同一账号区间账本；不再以纪律日报副本为唯一来源。"""
+        owner = getattr(self.engine_provider, "__self__", None)
+        owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
+        analytics = getattr(owner, "focus_analytics", None)
+        reader = getattr(analytics, "account_today_seconds", None)
+        if not callable(reader): return fallback
+        cache = getattr(self, "_day_totals_cache", {})
+        key = (self.store.account_id, day.isoformat())
+        now = monotonic_time.monotonic()
+        if key not in cache or now - cache[key][0] >= 300:
+            from .discipline import BEIJING_TIMEZONE
+            cache[key] = (now, int(reader(datetime.combine(day, time(23,59,59), BEIJING_TIMEZONE))))
+        self._day_totals_cache = cache
+        return cache[key][1]
+
+    @staticmethod
+    def _event_description(row):
+        kind = row.get("event_type")
+        meta = row.get("metadata") or {}
+        labels = {"start_work":"实际开工", "late_start":"最终迟到", "long_break":"长休超时",
+                  "finish_work":"实际下班", "early_finish":"下班异常", "focus_shortfall":"最终目标缺口",
+                  "weekly_shortfall":"周内补账", "daily_report":"当天结算", "rest_day":"高挂免战牌", "cancel_rest_day":"取消免战牌"}
+        detail = str(meta.get("detail") or "")
+        if kind == "late_start": detail = "晚于计划 " + format_work_duration(int(meta.get("minutes_late", 0)) * 60)
+        elif kind == "long_break": detail = "超出 " + format_work_duration(int(meta.get("overtime_seconds", 0)))
+        elif kind == "daily_report": detail = "缺口 " + format_work_duration(int(meta.get("daily_gap_seconds", 0)))
+        elif kind == "weekly_shortfall": detail = "剩余 " + format_work_duration(int(meta.get("remaining_seconds", 0)))
+        return labels.get(kind, "纪律事项"), detail
+
     def _render_summaries(self) -> None:
+        if self.store.settings_updated_at != getattr(self, "_form_loaded_stamp", "") and self._form_values() == getattr(self, "_form_loaded_values", None):
+            self._load_settings()
         today_seconds, week_seconds = self.progress_provider()
-        from .discipline import as_beijing
-        now_day = as_beijing().date()
+        now_day = local_work_time().date()
         today = self.engine.daily_summary(now_day, today_seconds, week_seconds)
+        exempt = today["exempt"]
         if not self.snooze_button.property("actionBusy"):
-            self.snooze_button.setEnabled(self.store.settings.is_workday(now_day) and not today["exempt"])
-            self.snooze_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if today["exempt"] else "🏳️ 高挂免战牌 · 今日休息")
+            self.snooze_button.setEnabled(self.store.settings.is_workday(now_day) and not exempt)
+            self.snooze_button.setVisible(not exempt)
         decorate_buttons(self)
-        target = int(today["daily_target_seconds"])
-        actual = int(today["today_seconds"])
-        gap = int(today["daily_gap_seconds"])
-        mode_text = {"off": "关闭", "normal": "普通训导", "officer": "严格训导"}[today["mode"]]
-        self.today_summary.setText(
-            f"<h2>我的纪律记录 · {mode_text}</h2>"
-            f"通常开工：{today['planned_start']}　实际开工：{today['actual_start'] or '尚未开工'}<br>"
-            f"今日专注：{format_work_duration(actual)} / {format_work_duration(target)}<br>"
-            f"迟到：{today['lateness_minutes']} 分钟 · 未说明事项：{today['unexplained_count']}<br>"
-            f"今日缺口：{format_work_duration(gap)}<br>"
-            f"休息累计：{format_work_duration(today['rest_seconds'])}<br>"
-            f"长休息：{today['long_break_count']} 次　超时：{format_work_duration(today['break_overtime_seconds'])}<br>"
-            f"计划下班：{today['planned_finish']}　实际下班：{today['actual_finish'] or '工作中'}<br>"
-            f"本周已完成：{format_work_duration(today['week_seconds'])} / {format_work_duration(today['weekly_target_seconds'])}"
+        target, actual, gap = (int(today[key]) for key in ("daily_target_seconds", "today_seconds", "daily_gap_seconds"))
+        mode = {"off":"未启用训导", "normal":"普通训导", "officer":"严格训导"}[today["mode"]]
+        self.today_title.setText(f"今日纪律 · {now_day:%m/%d}")
+        self.today_badge.setText("🏳 今日免战" if exempt else mode)
+        late_text = "免战 · 不记迟到" if exempt else "尚未开工" if not today["actual_start"] else "迟到 " + format_work_duration(today["lateness_minutes"] * 60) if today["lateness_minutes"] else "准时开工"
+        cards = (
+            f"<b>开工</b><h2>{today['actual_start'] or '尚未开工'}</h2>计划 {today['planned_start']}<br>{late_text}",
+            f"<b>今日缺口</b><h2>{'免战' if exempt else format_work_duration(gap)}</h2>已完成 {format_work_duration(actual)}<br>参考 {format_work_duration(target)}",
+            f"<b>长休</b><h2>{today['long_break_count']} 次</h2>超时 {format_work_duration(today['break_overtime_seconds'])}",
+            f"<b>待说明</b><h2>{today['unexplained_count']} 项</h2>{'今日无需说明' if exempt else '仅记录重要事项'}",
         )
-        self.week_summary.setText(
-            f"<h2>本周目标与追赶计划</h2>"
-            f"周目标：{format_work_duration(today['weekly_target_seconds'])}<br>"
-            f"本周累计：{format_work_duration(today['week_seconds'])}<br>"
-            f"本周剩余：{format_work_duration(today['weekly_remaining_seconds'])}<br>"
-            f"剩余工作日：{today['remaining_workdays']}<br>"
-            f"今日参考目标：{format_work_duration(target)}<br>"
-            f"今日超额可追回前期缺口：{format_work_duration(today['caught_up_today_seconds'])}"
-        )
-        week_events = self.store.events_for_week(now_day)
-        started_days = {row.get("event_date") for row in week_events if row.get("event_type") == "start_work"}
-        late_days = {row.get("event_date") for row in week_events if row.get("event_type") == "late_start" and not self.store.is_exempt(str(row.get("event_date")))}
-        long_count = sum(row.get("event_type") == "long_break" and not self.store.is_exempt(str(row.get("event_date"))) for row in week_events)
-        early_count = sum(row.get("event_type") == "early_finish" and not self.store.is_exempt(str(row.get("event_date"))) for row in week_events)
-        self.week_summary.setText(self.week_summary.text() +
-            f"<br>准时开工：{len(started_days - late_days)} / {len(started_days)} 个已开工日"
-            f" · 迟到：{len(late_days)} 次 · 长休息：{long_count} 次 · 提前下班：{early_count} 次")
-        self.plan_summary.setText(
-            f"今日参考目标：{format_work_duration(target)} · 已完成：{format_work_duration(actual)} · 剩余：{format_work_duration(gap)}<br>"
-            f"本周计划：{format_work_duration(today['weekly_target_seconds'])} · 已完成：{format_work_duration(today['week_seconds'])} · 剩余：{format_work_duration(today['weekly_remaining_seconds'])}")
-        self.duty_status.setText(
-            f"<h3>{'训导主任值班中' if today['mode'] != 'off' else '训导主任未值班'} · {mode_text}</h3>"
-            f"开工：{today['actual_start'] or '尚未开工'} · 迟到：{today['lateness_minutes']} 分钟<br>"
-            f"今日 {format_work_duration(actual)} / {format_work_duration(target)} · 缺口 {format_work_duration(gap)}<br>"
-            f"本周 {format_work_duration(today['week_seconds'])} / {format_work_duration(today['weekly_target_seconds'])}<br>"
-            f"长休息：{today['long_break_count']} 次 · 未说明事项：{len(self.store.due_explanations())} 项")
-        rows = sorted(self.store.events, key=lambda row: str(row.get("occurred_at") or ""), reverse=True)
+        for label, text in zip(self.discipline_metrics, cards): label.setText(text)
+        self.today_summary.setText(f"计划下班：{today['planned_finish']}　实际下班：{today['actual_finish'] or '尚未下班'}" +
+            ("<br>今日免战；不记迟到、长休或今日缺口纪律，本周目标继续保留。" if exempt else ""))
+        events = [row for row in today["events"] if row.get("event_type") not in {"daily_report", "finish_work", "late_start"}]
+        lines = []
+        for row in events:
+            title, detail = self._event_description(row)
+            if row.get("event_type") == "start_work": detail = late_text
+            if exempt and row.get("event_type") not in {"start_work", "rest_day", "cancel_rest_day"}: continue
+            lines.append(f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])}　{title}</b><br>{escape(detail)}</p>")
+        self.today_events.setText("<h3>今日事件</h3>" + ("".join(lines) or "今天没有需要特别记录的纪律事项。"))
+        previous_pending = self.today_pending.currentData()
+        self.today_pending.clear()
+        if not exempt:
+            for row in today["events"]:
+                if row.get("requires_explanation") and not row.get("explanation"):
+                    title, _ = self._event_description(row)
+                    self.today_pending.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
+        if self.today_pending.findData(previous_pending) >= 0:
+            self.today_pending.setCurrentIndex(self.today_pending.findData(previous_pending))
+        self.today_explanation_row.setVisible(self.today_pending.count() > 0)
+        monday = now_day - timedelta(days=now_day.weekday())
+        week_events = list(discipline_events(self.store.events_for_week(now_day)))
+        late_days, long_count, due_count, exemptions = set(), 0, 0, 0
+        days = []
+        for offset in range(7):
+            day = monday + timedelta(days=offset)
+            if day > now_day: continue
+            rows = self.store.events_for_day(day)
+            summary_row = next((row for row in reversed(rows) if row.get("event_type") == "daily_report"), None)
+            meta = (summary_row or {}).get("metadata", {})
+            summary = self.engine.daily_summary(day, today_seconds if day == now_day else self._completed_day_seconds(day, int(meta.get("today_seconds", 0))), week_seconds)
+            if summary["exempt"]:
+                exemptions += 1
+                result = "🏳 免战"
+            else:
+                if summary["lateness_minutes"]: late_days.add(day)
+                long_count += summary["long_break_count"]
+                due_count += summary["unexplained_count"]
+                result = (summary['actual_start'] or "尚未开工") + "　" + ("迟到 " + format_work_duration(summary["lateness_minutes"] * 60) if summary["lateness_minutes"] else "正常" if summary["actual_start"] else "")
+            days.append(f"<p><b>{DAY_LABELS[offset]} {day:%m/%d}</b>　{result}　完成 {format_work_duration(summary['today_seconds'])}</p>")
+        self.week_summary.setText(f"<h2>本周纪律</h2>本周目标 {format_work_duration(today['weekly_target_seconds'])} · 已完成 {format_work_duration(week_seconds)} · 剩余 {format_work_duration(today['weekly_remaining_seconds'])}<br>迟到 {len(late_days)} 次 · 长休超时 {long_count} 次 · 待说明 {due_count} 项 · 免战 {exemptions} 天<br>剩余工作日 {today['remaining_workdays']} · 周目标继续分摊")
+        self.week_days.setText("".join(days))
+        self.plan_summary.setText(f"今日参考目标：{format_work_duration(target)} · 已完成：{format_work_duration(actual)} · 剩余：{format_work_duration(gap)}<br>本周计划：{format_work_duration(today['weekly_target_seconds'])} · 已完成：{format_work_duration(week_seconds)} · 剩余：{format_work_duration(today['weekly_remaining_seconds'])}")
+        self.duty_status.setText(f"<h3>{mode}</h3>开工：{today['actual_start'] or '尚未开工'} · {late_text}<br>今日缺口：{format_work_duration(gap)} · 长休：{today['long_break_count']} 次 · 待说明总计：{len(self.store.due_explanations())} 项")
+        rows = list(discipline_events(self.store.events))
         signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)))
-        if signature == getattr(self, "_ledger_signature", None):
-            return
+        if signature == getattr(self, "_ledger_signature", None): return
         self._ledger_signature = signature
-        self.ledger.setRowCount(len(rows))
-        labels = {
-            "start_work": "开工", "late_start": "迟到", "late_start_warning": "迟到提醒",
-            "start_break": "开始休息", "end_break": "结束休息", "long_break": "长休息",
-            "long_break_warning": "休息提醒", "finish_work": "下班", "early_finish": "提前下班",
-            "focus_shortfall": "日目标缺口", "behind_schedule": "进度落后",
-            "weekly_shortfall": "周目标结算",
-            "daily_report": "每日总结", "rest_day": "🏳️ 高挂免战牌",
-        }
-        for row_index, row in enumerate(rows):
-            moment = str(row.get("occurred_at") or "")
-            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            description = str(metadata.get("detail") or metadata.get("minutes_late") or metadata.get("duration_seconds") or "已记录")
-            if isinstance(description, int):
-                description = f"{description} 分钟"
-            explanation = row.get("explanation")
-            state = "免战 · 无需说明" if self.store.is_exempt(str(row.get("event_date"))) else "已说明" if explanation else "待说明" if row.get("requires_explanation") else "已记录"
-            values = (str(row.get("event_date") or ""), labels.get(str(row.get("event_type")), str(row.get("event_type"))), f"{moment[11:16]} · {description}", state)
+        settled_days = sorted({str(row.get("event_date")) for row in rows if row.get("event_type") in {"daily_report", "finish_work", "rest_day"} or str(row.get("event_date")) < now_day.isoformat()}, reverse=True)
+        selected = self.ledger.item(self.ledger.currentRow(), 0)
+        selected_day = selected.text() if selected else ""
+        self.ledger.blockSignals(True)
+        self.ledger.setRowCount(len(settled_days))
+        for index, day_key in enumerate(settled_days):
+            day_rows = [row for row in rows if row.get("event_date") == day_key]
+            final = next((row for row in reversed(day_rows) if row.get("event_type") == "daily_report"), {})
+            meta = final.get("metadata") or {}
+            summary = self.engine.daily_summary(date.fromisoformat(day_key), self._completed_day_seconds(date.fromisoformat(day_key), int(meta.get("today_seconds", 0))), week_seconds)
+            result = "🏳 免战" if summary["exempt"] else " · ".join(filter(None, ("严格训导" if meta.get("mode") == "officer" else "正常", "迟到 " + format_work_duration(summary["lateness_minutes"] * 60) if summary["lateness_minutes"] else "", f"长休 {summary['long_break_count']} 次" if summary["long_break_count"] else "")))
+            values = (day_key, result, "完成 " + format_work_duration(summary["today_seconds"]) + (" · 缺口 " + format_work_duration(int(meta.get("daily_gap_seconds", 0))) if meta.get("daily_gap_seconds") else ""), str(summary["unexplained_count"]))
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, str(row.get("id") or ""))
-                if row.get("requires_explanation") and not explanation:
-                    item.setForeground(QColor("#a33a3a"))
-                self.ledger.setItem(row_index, column, item)
+                item.setData(Qt.ItemDataRole.UserRole, day_key)
+                self.ledger.setItem(index, column, item)
+            if day_key == selected_day: self.ledger.selectRow(index)
+        self.ledger.resizeColumnsToContents()
+        self.ledger.blockSignals(False)
+        self._show_history_day()
+
+    def _show_history_day(self):
+        item = self.ledger.item(self.ledger.currentRow(), 0)
+        self.history_events.clear()
+        if item is None:
+            self.explain_button.setEnabled(False)
+            return
+        day = date.fromisoformat(item.text())
+        rows = list(discipline_events(self.store.events, day))
+        lines = []
+        for row in rows:
+            title, detail = self._event_description(row)
+            lines.append(f"<p>{escape(str(row.get('occurred_at', ''))[11:16])}　<b>{title}</b>　{escape(detail)}</p>")
+            if row.get("requires_explanation") and not row.get("explanation") and not self.store.is_exempt(day):
+                self.history_events.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
+        self.history_detail.setText(f"<h3>{day:%m/%d} 纪律记录</h3>" + "".join(lines))
+        self.history_events.setVisible(self.history_events.count() > 0)
+        self.explain_button.setEnabled(self.history_events.count() > 0)
 
     def _explain_selected(self) -> None:
+        self._explain_event(str(self.history_events.currentData() or ""))
+
+    def _explain_event(self, event_id):
         if self.engine_provider is not None and self.engine_provider().store is not self.store:
             self.refresh()
             return
-        row = self.ledger.currentRow()
-        if row < 0:
-            return
-        event_id = str(self.ledger.item(row, 0).data(Qt.ItemDataRole.UserRole) or "")
         event = next((item for item in self.store.events if item.get("id") == event_id), None)
         if not event or self.store.is_exempt(str(event.get("event_date"))) or not event.get("requires_explanation") or event.get("explanation"):
             return
@@ -462,6 +617,7 @@ class DisciplineWorkspace(QWidget):
             return
         key = next((name for name, label in EXPLANATION_LABELS.items() if label == reason), "other")
         self.store.explain(event_id, key)
+        self._read_records_once(include_config=False)
         self._render_summaries()
 
 

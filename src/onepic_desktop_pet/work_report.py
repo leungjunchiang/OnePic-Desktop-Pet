@@ -1,4 +1,5 @@
-"""按需计算并展示六毛工作报告，不生成或保存报告图片。
+"""实际开工复用纪律事实的本地 06:00 口径，专注分析仍从自然日区间派生。
+按需计算并展示六毛工作报告，不生成或保存报告图片。
 
 报告只读取当前登录账号的本地专注历史、当前计时器和最近一次自习室同步
 快照。日度、本周、月度和年度页签在窗口打开时计算，并在窗口保持打开时定时刷新；
@@ -462,6 +463,7 @@ def build_work_report(
     now: datetime | None = None,
     account_id: str = "",
     current_device_id: str = "",
+    work_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build an account-scoped report snapshot without writing a file."""
 
@@ -874,6 +876,10 @@ def build_work_report(
             for key in ("day", "week", "month", "year")
         ),
     }
+    from .discipline import get_actual_work_start
+    selected_day = selected_range[1] if selected_range and selected_key == "day" else moment.astimezone().date()
+    actual_start = get_actual_work_start(work_events or [], selected_day)
+    report["day"]["actual_work_start"] = actual_start.strftime("%H:%M") if actual_start else "尚未开工"
     return report
 
 
@@ -2260,7 +2266,7 @@ class WorkReportDialog(QDialog):
             metrics = [
                 (
                     "今日节奏",
-                    f"{data.get('first_started_at', '暂无记录')} 开始 · "
+                    f"实际开工 {data.get('actual_work_start', '尚未开工')} · 最后专注段 "
                     f"{data.get('last_ended_at', '暂无记录')} 结束",
                 ),
                 ("本周工作时间", format_work_duration(int(data.get("week_total_seconds", 0) or 0))),

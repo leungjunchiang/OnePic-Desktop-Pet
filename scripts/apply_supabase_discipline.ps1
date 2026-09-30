@@ -85,4 +85,8 @@ if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
     $verificationBody = @{ query = $verificationSql } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $verificationBody
     Write-Host 'Weekly plan, legacy device protection, pair pause, exemption, redaction and dynamic reminders verified; synthetic fixtures rolled back.'
+    $deltaSql = Get-Content -Raw -LiteralPath 'scripts/verify_discipline_delta.sql'
+    $deltaBody = @{ query = $deltaSql } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $deltaBody
+    Write-Host 'Discipline delta ACK, bounded commit cursor, no config polling, earlier-device correction, final summaries, legacy IDs and owner isolation verified; fixtures rolled back.'
 }

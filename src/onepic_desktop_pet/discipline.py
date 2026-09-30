@@ -1,4 +1,4 @@
-"""以周目标为总账的动态工作计划、免战日账本与独立的搭子监督授权。"""
+"""以周目标为总账的动态工作计划、免战日账本与独立的搭子监督授权；本地过程与云端最终事件分开，实际开工统一为本地 06:00 后首次真实操作。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from uuid import uuid4
 import time as monotonic_time
+import hashlib
+import json
 
 from .focus_analytics import BEIJING_TIMEZONE
 from .local_data import account_local_data_path, read_json, write_json_atomic
@@ -27,6 +29,72 @@ def as_beijing(value: datetime | None = None) -> datetime:
     if current.tzinfo is None:
         return current.replace(tzinfo=BEIJING_TIMEZONE)
     return current.astimezone(BEIJING_TIMEZONE)
+
+
+DISCIPLINE_EVENT_TYPES = frozenset({
+    "start_work", "late_start", "long_break", "finish_work", "early_finish",
+    "focus_shortfall", "weekly_shortfall", "daily_report", "rest_day", "cancel_rest_day",
+})
+RESTORE_SOURCES = {"sleep", "lock", "display_off", "restart_safe_seal", "account_switch", "restore", "heartbeat", "startup", "reconnect"}
+
+
+def local_work_time(value: datetime | None = None) -> datetime:
+    """实际开工使用电脑本地时区，不改变自然日专注总计的日界线。"""
+    return (value or datetime.now().astimezone()).astimezone()
+
+
+def get_actual_work_start(events, day: date, *, tz=None) -> datetime | None:
+    """当日 06:00 至午夜的首次真实 start_work；不从在线状态或区间切片推断。"""
+    candidates = []
+    for row in events:
+        if row.get("event_type") != "start_work":
+            continue
+        metadata = row.get("metadata") or {}
+        if metadata.get("source") in RESTORE_SOURCES or metadata.get("restored"):
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(row.get("occurred_at", "")).replace("Z", "+00:00"))
+            stamp = stamp.astimezone(tz) if tz is not None else stamp.astimezone()
+        except (ValueError, TypeError, OverflowError):
+            continue
+        if stamp.date() == day and stamp.hour >= 6:
+            candidates.append(stamp)
+    return min(candidates) if candidates else None
+
+
+def discipline_events(events, day: date | None = None):
+    """旧流水账兼容：仅呈现有纪律意义的结果，首次开工每天一条。"""
+    rows = [row for row in events if row.get("event_type") in DISCIPLINE_EVENT_TYPES
+            and (day is None or row.get("event_date") == day.isoformat())]
+    firsts = {}
+    final_finishes = {}
+    for row in rows:
+        if row.get("event_type") == "finish_work":
+            key = row.get("event_date")
+            if key not in final_finishes or str(row.get("occurred_at")) > str(final_finishes[key].get("occurred_at")):
+                final_finishes[key] = row
+    for row in sorted(rows, key=lambda r: str(r.get("occurred_at", ""))):
+        if row.get("event_type") == "finish_work" and row is not final_finishes.get(row.get("event_date")):
+            continue
+        if row.get("event_type") == "start_work":
+            key = row.get("event_date")
+            stamp = get_actual_work_start([row], date.fromisoformat(key)) if key else None
+            if stamp is None or key in firsts:
+                continue
+            firsts[key] = row
+        yield row
+
+
+def _event_fingerprint(row) -> str:
+    keys = ("id", "event_type", "event_date", "occurred_at", "metadata", "requires_explanation", "explanation")
+    payload = {key: row.get(key) for key in keys}
+    payload["explanation"] = payload.get("explanation") or ""
+    try:
+        from datetime import timezone
+        payload["occurred_at"] = datetime.fromisoformat(str(payload["occurred_at"]).replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError):
+        pass
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def _clock(value: Any, default: str) -> str:
@@ -138,11 +206,11 @@ class DisciplineSettings:
 
     def start_at(self, day: date) -> datetime:
         hour, minute = (int(part) for part in self.start_time.split(":"))
-        return datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
+        return datetime.combine(day, time(hour, minute)).astimezone()
 
     def finish_at(self, day: date) -> datetime:
         hour, minute = (int(part) for part in self.finish_time.split(":"))
-        result = datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
+        result = datetime.combine(day, time(hour, minute)).astimezone()
         start = self.start_at(day)
         return result + timedelta(days=1) if result <= start else result
 
@@ -165,11 +233,17 @@ class DisciplineStore:
         ]
         self.seen_nudges = set(str(i) for i in raw.get("seen_nudges", []))
         self.rest_days = set(str(i) for i in raw.get("rest_days", []))
+        self.synced_events = dict(raw.get("synced_events") or {})
+        self.synced_settings_at = str(raw.get("synced_settings_at") or "")
+        self.sync_cursor = max(0, int(raw.get("sync_cursor") or 0))
 
     def _save(self) -> None:
         if self.persist:
             write_json_atomic(self.path, {
-                "schema_version": 1,
+                "schema_version": 2,
+                "synced_events": self.synced_events,
+                "synced_settings_at": self.synced_settings_at,
+                "sync_cursor": self.sync_cursor,
                 "settings": asdict(self.settings),
                 "settings_updated_at": self.settings_updated_at,
                 "events": self.events,
@@ -186,14 +260,34 @@ class DisciplineStore:
         self.settings_updated_at = as_beijing().isoformat()
         self._save()
 
-    def sync_payload(self) -> dict[str, Any]:
-        """Build a bounded account sync payload separate from presence state."""
-
+    def sync_payload(self, *, include_config: bool = False) -> dict[str, Any]:
+        """最多 100 条未确认最终事件；配置仅修改或显式读取时携带。"""
+        settings_dirty = bool(self.settings_updated_at and self.settings_updated_at != self.synced_settings_at)
+        pending = [row for row in discipline_events(self.events)
+                   if self.synced_events.get(str(row.get("id"))) != _event_fingerprint(row)]
         return {
-            "p_settings": asdict(self.settings) if self.settings_updated_at else None,
-            "p_client_updated_at": self.settings_updated_at or None,
-            "p_events": self.events[-2000:],
+            "p_settings": asdict(self.settings) if settings_dirty else None,
+            "p_client_updated_at": self.settings_updated_at if settings_dirty else None,
+            "p_events": deepcopy(pending[:100]),
+            "p_after_revision": self.sync_cursor,
+            "p_include_config": include_config or settings_dirty,
         }
+
+    def acknowledge_sync(self, payload, result) -> None:
+        """仅确认服务端明确接受的批次；请求期间新编辑仍留在 outbox。"""
+        if not isinstance(result, dict):
+            return
+        acknowledged = set(str(key) for key in result.get("acknowledged_ids", []))
+        for row in payload.get("p_events", []):
+            current = next((event for event in self.events if event.get("id") == row.get("id")), None)
+            if str(row.get("id")) in acknowledged and current and _event_fingerprint(current) == _event_fingerprint(row):
+                self.synced_events[str(row["id"])] = _event_fingerprint(row)
+        stamp = payload.get("p_client_updated_at")
+        if stamp and result.get("client_updated_at") and self._stamp(result["client_updated_at"]) == self._stamp(stamp):
+            self.synced_settings_at = stamp
+        # The cursor advances only after merge_remote persisted all returned rows.
+        self.sync_cursor = max(self.sync_cursor, int(result.get("next_revision") or 0))
+        self._save()
 
     def merge_remote(self, payload: object) -> None:
         """Merge server settings and append-only events without losing local edits."""
@@ -220,7 +314,8 @@ class DisciplineStore:
                     continue
                 row = dict(raw)
                 row["explanation"] = row.get("explanation") or ""
-                row.setdefault("metadata", {})
+                if not isinstance(row.get("metadata"), dict):
+                    row["metadata"] = {}
                 rule_key = str(row.get("metadata", {}).get("rule_key") or "")
                 event_id = str(row.get("id") or "")
                 if not event_id:
@@ -228,6 +323,16 @@ class DisciplineStore:
                 existing_id = dedupe_ids.get(rule_key) if rule_key else None
                 existing = by_id.get(existing_id or event_id)
                 if existing is not None:
+                    earlier_start = row.get("event_type") == "start_work" and self._stamp(str(row.get("occurred_at"))) < self._stamp(str(existing.get("occurred_at")))
+                    later_summary = row.get("event_type") in {"daily_report", "finish_work", "early_finish", "focus_shortfall", "weekly_shortfall"} and self._stamp(str(row.get("occurred_at"))) > self._stamp(str(existing.get("occurred_at")))
+                    corrected_lateness = row.get("event_type") == "late_start" and row.get("metadata", {}).get("actual_start_source") == "first_real_start_after_0600"
+                    if corrected_lateness:
+                        existing["metadata"] = deepcopy(row["metadata"])
+                        existing["requires_explanation"] = bool(row.get("requires_explanation"))
+                    if earlier_start or later_summary:
+                        existing.update({key: row[key] for key in ("occurred_at", "metadata", "event_date")})
+                    if later_summary:
+                        existing["requires_explanation"] = bool(row.get("requires_explanation"))
                     if row.get("explanation") and not existing.get("explanation"):
                         existing["explanation"] = row["explanation"]
                     continue
@@ -242,6 +347,20 @@ class DisciplineStore:
                     })
                 if rule_key:
                     self.fired_rules.add(rule_key)
+        if isinstance(remote_events, list):
+            for remote in remote_events:
+                if not isinstance(remote, dict):
+                    continue
+                existing = next((row for row in self.events if row.get("id") == remote.get("id") or
+                    (remote.get("metadata", {}).get("rule_key") and row.get("metadata", {}).get("rule_key") == remote["metadata"]["rule_key"])), None)
+                if existing:
+                    normalized = {**remote, "id": existing["id"]}
+                    if _event_fingerprint(existing) == _event_fingerprint(normalized):
+                        self.synced_events[str(existing["id"])] = _event_fingerprint(existing)
+        pending_rows = {str(row["id"]): row for row in self.events if row.get("requires_explanation") and not row.get("explanation")}
+        self.pending_explanations = [{"event_id": key, "created_at": row["occurred_at"]} for key, row in pending_rows.items()]
+        if remote_stamp and remote_stamp == self.settings_updated_at:
+            self.synced_settings_at = remote_stamp
         self._save()
 
     @staticmethod
@@ -255,7 +374,7 @@ class DisciplineStore:
         self, event_type: str, at: datetime | None = None, *, metadata: dict[str, Any] | None = None,
         requires_explanation: bool = False,
     ) -> dict[str, Any]:
-        moment = as_beijing(at)
+        moment = local_work_time(at)
         row = {
             "id": str(uuid4()), "event_type": str(event_type),
             "event_date": moment.date().isoformat(), "occurred_at": moment.isoformat(),
@@ -280,6 +399,17 @@ class DisciplineStore:
         metadata: dict[str, Any] | None = None, requires_explanation: bool = False,
     ) -> dict[str, Any] | None:
         if rule_key in self.fired_rules:
+            if event_type in {"daily_report", "finish_work", "early_finish", "focus_shortfall", "weekly_shortfall"}:
+                existing = next((row for row in self.events if row.get("metadata", {}).get("rule_key") == rule_key), None)
+                if existing is not None:
+                    existing["occurred_at"] = local_work_time(at).isoformat()
+                    existing["metadata"] = {"rule_key": rule_key, **deepcopy(metadata or {})}
+                    existing["requires_explanation"] = bool(requires_explanation)
+                    self.pending_explanations = [row for row in self.pending_explanations if row.get("event_id") != existing["id"]]
+                    if requires_explanation and not existing.get("explanation"):
+                        self.pending_explanations.append({"event_id": existing["id"], "created_at": existing["occurred_at"]})
+                    self._save()
+                    return None
             return None
         self.fired_rules.add(rule_key)
         return self.append_event(
@@ -364,7 +494,12 @@ class DisciplineEngine:
         revision = int(payload["policy"].get("revision", 0))
         if revision < self._supervision_revision:
             return False
-        self.supervision = deepcopy(payload)
+        if "scope" in payload["policy"]:
+            self.supervision = deepcopy(payload)
+        else:
+            self.supervision["effective_mode"] = payload.get("effective_mode", "off")
+            if not payload["policy"].get("enabled"):
+                self.supervision.setdefault("policy", {})["enabled"] = False
         self._supervision_revision = revision
         mode = str(payload.get("effective_mode", "off"))
         self._remote_mode = mode if payload["policy"].get("enabled") and mode in MODES else "off"
@@ -404,7 +539,7 @@ class DisciplineEngine:
         return max(0, int(metadata.get("remaining_seconds", 0) or 0))
 
     def progress(self, today_seconds: int, week_seconds: int, at: datetime | None = None) -> PlanProgress:
-        moment = as_beijing(at)
+        moment = local_work_time(at)
         settings = self.store.settings
         week_target = settings.weekly_target_minutes * 60 + self._carried_week_debt_seconds(moment.date())
         remaining = max(0, week_target - max(0, int(week_seconds)))
@@ -437,6 +572,12 @@ class DisciplineEngine:
                 "focus_shortfall": "daily", "behind_schedule": "daily"}.get(event_type)
         if self.mode == "normal" and rule and not self.store.settings.reminder_rules.get(rule, True):
             return None
+        if event_type in {"late_start_warning", "long_break_warning", "behind_schedule"}:
+            if key in self.store.fired_rules:
+                return None
+            self.store.fired_rules.add(key)
+            self.store._save()
+            return DisciplineNotice(event_type, title, detail, severity, key)
         row = self.store.append_rule_once(
             key, event_type, at, metadata={"title": title, "detail": detail, "severity": severity},
             requires_explanation=requires_explanation,
@@ -449,20 +590,29 @@ class DisciplineEngine:
         self, event_type: str, today_seconds: int, week_seconds: int,
         at: datetime | None = None, *, metadata: dict[str, Any] | None = None,
     ) -> list[DisciplineNotice]:
-        if not self.enabled:
-            return []
-        moment = as_beijing(at)
+        moment = local_work_time(at)
         settings = self.store.settings
-        if self.store.is_exempt(moment.date()):
-            return []
         details = dict(metadata or {})
-        self.store.record_work_event(event_type, moment, metadata=details)
+        if event_type == "start_work":
+            if moment.hour < 6 or details.get("source") in RESTORE_SOURCES or details.get("restored"):
+                return []
+            if get_actual_work_start(self.store.events, moment.date(), tz=moment.tzinfo) is not None:
+                return []
+            details["actual_start"] = moment.strftime("%H:%M")
+            details["utc_offset_minutes"] = int(moment.utcoffset().total_seconds() // 60)
+            self.store.append_rule_once(f"{moment.date()}:actual_start", "start_work", moment, metadata=details)
+        elif event_type == "finish_work":
+            self.store.append_rule_once(f"{moment.date()}:actual_finish", "finish_work", moment, metadata=details)
+        elif event_type in {"start_break", "end_break"}:
+            # 过程细节留在本地，sync_payload 不携带普通 pause / resume。
+            self.store.record_work_event(event_type, moment, metadata=details)
+        if not self.enabled or moment.hour < 6 or self.store.is_exempt(moment.date()):
+            return []
         notices: list[DisciplineNotice] = []
         if event_type == "start_work":
-            start_events = [row for row in self.store.events_for_day(moment.date()) if row.get("event_type") == "start_work"]
-            planned = settings.start_at(moment.date())
+            planned = datetime.combine(moment.date(), time.fromisoformat(settings.start_time), moment.tzinfo)
             late_minutes = max(0, int((moment - planned).total_seconds() // 60))
-            if settings.for_weekday(moment.date()) > 0 and len(start_events) == 1 and late_minutes > settings.late_grace_minutes:
+            if settings.for_weekday(moment.date()) > 0 and late_minutes > 0:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:late_start", "late_start", moment,
                     metadata={"minutes_late": late_minutes, "planned_start": planned.isoformat()},
@@ -484,12 +634,14 @@ class DisciplineEngine:
                 over = max(0, elapsed - settings.break_limit_minutes * 60)
                 if over > 0:
                     needs_reason = self.mode == "officer" and over >= 10 * 60
-                    row = self.store.append_event(
-                        "long_break", moment,
+                    row = self.store.append_rule_once(
+                        f"{moment.date()}:long_break:{details.get('session_key')}", "long_break", moment,
                         metadata={"duration_seconds": elapsed, "overtime_seconds": over,
                                   "limit_minutes": settings.break_limit_minutes},
                         requires_explanation=needs_reason,
                     )
+                    if row is None:
+                        return notices
                     notices.append(DisciplineNotice(
                         "long_break", "休息超时记录",
                         f"本次休息 {elapsed // 60} 分钟，超过计划 {over // 60} 分钟",
@@ -499,11 +651,12 @@ class DisciplineEngine:
             progress = self.progress(today_seconds, week_seconds, moment)
             finish_at = settings.finish_at(moment.date())
             early = max(0, int((finish_at - moment).total_seconds() // 60))
-            if settings.planned_finish_enabled and settings.is_workday(moment.date()) and early > settings.early_finish_grace_minutes:
+            early_problem = settings.planned_finish_enabled and settings.is_workday(moment.date()) and early > settings.early_finish_grace_minutes
+            if early_problem or f"{moment.date()}:early_finish" in self.store.fired_rules:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:early_finish", "early_finish", moment,
-                    metadata={"minutes_early": early, "planned_finish": finish_at.isoformat()},
-                    requires_explanation=(self.mode == "officer" and early >= 60),
+                    metadata={"minutes_early": early if early_problem else 0, "planned_finish": finish_at.isoformat()},
+                    requires_explanation=(self.mode == "officer" and early_problem and early >= 60),
                 )
                 if row is not None:
                     notices.append(DisciplineNotice(
@@ -511,16 +664,15 @@ class DisciplineEngine:
                         f"比计划提前 {early} 分钟 · 今日 {today_seconds // 60} / {progress.daily_target_seconds // 60} 分钟",
                         "warning", str(row["id"]),
                     ))
-            if progress.daily_gap_seconds > 0:
-                notice = self._notice(
+            if progress.daily_gap_seconds > 0 or f"{moment.date()}:focus_shortfall" in self.store.fired_rules:
+                detail = f"今日缺口 {progress.daily_gap_seconds // 60} 分钟 · 本周还需 {progress.weekly_remaining_seconds // 60} 分钟"
+                row = self.store.append_rule_once(
                     f"{moment.date()}:focus_shortfall", "focus_shortfall", moment,
-                    "今日计划小结",
-                    f"今日缺口 {progress.daily_gap_seconds // 60} 分钟 · 本周还需 {progress.weekly_remaining_seconds // 60} 分钟",
-                    severity="info",
+                    metadata={"title": "今日计划小结", "detail": detail, "severity": "info", "gap_seconds": progress.daily_gap_seconds},
                     requires_explanation=(self.mode == "officer" and progress.daily_gap_seconds >= 60 * 60),
                 )
-                if notice:
-                    notices.append(notice)
+                if row and (self.mode == "officer" or settings.reminder_rules.get("daily", True)):
+                    notices.append(DisciplineNotice("focus_shortfall", "今日计划小结", detail, "info", str(row["id"])))
             week_end = moment.date() + timedelta(days=6 - moment.weekday())
             remaining_days = [
                 moment.date() + timedelta(days=offset)
@@ -543,15 +695,15 @@ class DisciplineEngine:
                         "warning", str(row["id"]),
                     ))
             day_events = self.store.events_for_day(moment.date())
-            first_start = next((row for row in day_events if row.get("event_type") == "start_work"), None)
+            actual_start = get_actual_work_start(self.store.events, moment.date(), tz=moment.tzinfo)
             late_events = [row for row in day_events if row.get("event_type") == "late_start"]
             long_breaks = [row for row in day_events if row.get("event_type") == "long_break"]
             daily_report = self.store.append_rule_once(
                 f"{moment.date()}:daily_report", "daily_report", moment,
                 metadata={
                     "planned_start": settings.start_at(moment.date()).strftime("%H:%M"),
-                    "actual_start": self._time_label(first_start),
-                    "lateness_minutes": int(late_events[0].get("metadata", {}).get("minutes_late", 0)) if late_events else 0,
+                    "actual_start": actual_start.strftime("%H:%M") if actual_start else "",
+                    "lateness_minutes": max(0, int((actual_start - datetime.combine(moment.date(), time.fromisoformat(settings.start_time), moment.tzinfo)).total_seconds() // 60)) if actual_start else 0,
                     "today_seconds": max(0, int(today_seconds)),
                     "daily_target_seconds": progress.daily_target_seconds,
                     "daily_gap_seconds": progress.daily_gap_seconds,
@@ -587,9 +739,9 @@ class DisciplineEngine:
     def evaluate(self, today_seconds: int, week_seconds: int, at: datetime | None = None, *, working: bool = False) -> list[DisciplineNotice]:
         if not self.enabled:
             return []
-        moment = as_beijing(at)
+        moment = local_work_time(at)
         settings = self.store.settings
-        if not settings.is_workday(moment.date()) or self.store.is_exempt(moment.date()):
+        if moment.hour < 6 or not settings.is_workday(moment.date()) or self.store.is_exempt(moment.date()):
             return []
         if settings.snooze_until:
             try:
@@ -600,17 +752,15 @@ class DisciplineEngine:
         notices: list[DisciplineNotice] = []
         start = settings.start_at(moment.date())
         late_minutes = int((moment - start).total_seconds() // 60)
-        started_today = working or any(
-            row.get("event_type") == "start_work" for row in self.store.events_for_day(moment.date())
-        )
+        started_today = working or get_actual_work_start(self.store.events, moment.date(), tz=moment.tzinfo) is not None
         thresholds = (settings.late_grace_minutes + 1,) if self.mode == "normal" else tuple(settings.late_grace_minutes + delta for delta in (1, 15, 30))
         if not started_today:
             for threshold in thresholds:
                 if late_minutes >= threshold:
                     notice = self._notice(
                         f"{moment.date()}:late:{threshold}", "late_start_warning", moment,
-                        "今天还没有开工" if threshold == thresholds[0] else ("训导主任点名" if threshold == 30 else "迟到已记账"),
-                        f"计划开工 {start.strftime('%H:%M')} · 已迟到 {late_minutes} 分钟",
+                        "今天还没有开工" if threshold == thresholds[0] else ("训导主任点名" if threshold == 30 else "尚未开工"),
+                        f"计划开工 {start.strftime('%H:%M')} · 已过计划时间 {late_minutes} 分钟",
                         severity="critical" if threshold >= 60 else "warning",
                     )
                     if notice:
@@ -640,8 +790,8 @@ class DisciplineEngine:
     def break_notices(self, at: datetime | None = None) -> list[DisciplineNotice]:
         if not self.enabled:
             return []
-        moment = as_beijing(at)
-        if self.store.is_exempt(moment.date()) or not self.store.settings.is_workday(moment.date()):
+        moment = local_work_time(at)
+        if moment.hour < 6 or self.store.is_exempt(moment.date()) or not self.store.settings.is_workday(moment.date()):
             return []
         snooze_until = self.store.settings.snooze_until
         if snooze_until:
@@ -684,13 +834,15 @@ class DisciplineEngine:
 
     def daily_summary(self, day: date, today_seconds: int, week_seconds: int) -> dict[str, Any]:
         events = self.store.events_for_day(day)
-        progress = self.progress(today_seconds, week_seconds, as_beijing(datetime.combine(day, time(23, 59))))
+        progress = self.progress(today_seconds, week_seconds, datetime.combine(day, time(23,59)).astimezone())
         late = [row for row in events if row.get("event_type") == "late_start"]
         breaks = [row for row in events if row.get("event_type") == "long_break"]
         finishes = [row for row in events if row.get("event_type") == "early_finish"]
         if self.store.is_exempt(day):
             late, breaks, finishes = [], [], []
-        start_event = next((row for row in events if row.get("event_type") == "start_work"), None)
+        actual_start = get_actual_work_start(self.store.events, day)
+        planned = datetime.combine(day, time.fromisoformat(self.store.settings.start_time), actual_start.tzinfo if actual_start else None)
+        late_minutes = max(0, int((actual_start - planned).total_seconds() // 60)) if actual_start and not self.store.is_exempt(day) else 0
         finish_event = next((row for row in reversed(events) if row.get("event_type") == "finish_work"), None)
         rest_seconds = 0
         break_start = None
@@ -710,8 +862,8 @@ class DisciplineEngine:
         return {
             "date": day.isoformat(), "mode": self.mode,
             "planned_start": self.store.settings.start_at(day).strftime("%H:%M"),
-            "actual_start": self._time_label(start_event),
-            "lateness_minutes": int(late[0].get("metadata", {}).get("minutes_late", 0)) if late else 0,
+            "actual_start": actual_start.strftime("%H:%M") if actual_start else "",
+            "lateness_minutes": late_minutes,
             "today_seconds": max(0, int(today_seconds)),
             "daily_target_seconds": progress.daily_target_seconds,
             "daily_gap_seconds": progress.daily_gap_seconds,
@@ -728,7 +880,7 @@ class DisciplineEngine:
             "caught_up_today_seconds": progress.caught_up_today_seconds,
             "unexplained_count": 0 if self.store.is_exempt(day) else sum(1 for row in events if row.get("requires_explanation") and not row.get("explanation")),
             "exempt": self.store.is_exempt(day),
-            "events": events,
+            "events": list(discipline_events(events, day)),
         }
 
     @staticmethod
@@ -736,6 +888,6 @@ class DisciplineEngine:
         if not row:
             return ""
         try:
-            return as_beijing(datetime.fromisoformat(str(row["occurred_at"]))).strftime("%H:%M")
+            return datetime.fromisoformat(str(row["occurred_at"])).astimezone().strftime("%H:%M")
         except (KeyError, TypeError, ValueError):
             return ""

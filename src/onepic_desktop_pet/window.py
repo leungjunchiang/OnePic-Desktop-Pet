@@ -2,6 +2,7 @@
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
+- 纪律云端只确认未同步的最终事件；配置按页面进入读取，专注事实增量读取间隔五分钟；
 - 复用周目标参考与免战日，默认不以固定下班时间审查，免战日不显示搭子训导提醒；
 - 将本人训导范围与搭子有效监督模式分开同步，私有备注优先显示，轻提醒保持不激活窗口；
 - 投喂复用搭子 RPC worker，待发送邀请独立防重入和预留价格，收到成功结果后才记账；
@@ -56,6 +57,8 @@ API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 
 """
 
 from __future__ import annotations
+
+from copy import deepcopy
 
 import json
 import logging
@@ -649,6 +652,8 @@ class PetWindow(QWidget):
         self._discipline_break_session_key = ""
         self._discipline_sync_thread: SocialBuddyRpcThread | None = None
         self._discipline_sync_inflight = False
+        self._discipline_config_read_pending = False
+        self._discipline_sync_has_more = False
         self._discipline_sync_last_attempt_at = 0.0
         self._discipline_sync_unavailable = False
         # Read-only account-wide display projection.  This is deliberately
@@ -7028,6 +7033,7 @@ class PetWindow(QWidget):
             self.work_timer,
             self.daily_stats,
             best_buddy=self._best_buddy_for_report(),
+            work_events=deepcopy(self._ensure_discipline_engine().store.events),
             # Do not overlay the old day/week compatibility counters here.
             # WorkReport rebuilds every calendar page from the closed ledger
             # plus all cached per-device live intervals below.  Passing the
@@ -7094,6 +7100,7 @@ class PetWindow(QWidget):
             if not report_range_is_standard(period, start, end, current_date):
                 selected_range = (period, start, end)
         best_buddy = self._best_buddy_for_report()
+        work_events = deepcopy(self._ensure_discipline_engine().store.events)
         account_id = str(_session_user_id(self.social_client) or "")
         current_device_id = str(getattr(self.focus_analytics, "_device_id", "") or "")
 
@@ -7103,6 +7110,7 @@ class PetWindow(QWidget):
                 timer,
                 daily_stats,
                 best_buddy=best_buddy,
+                work_events=work_events,
                 focus_snapshot=focus_snapshot,
                 focus_projection=None,
                 task_stats=task_stats,
@@ -8042,7 +8050,8 @@ class PetWindow(QWidget):
             if not engine.enabled:
                 return
             today, week = self._discipline_progress_seconds()
-            now = as_beijing()
+            from .discipline import local_work_time
+            now = local_work_time()
             notices = engine.evaluate(today, week, now, working=self.work_timer.is_running)
             notices.extend(engine.break_notices(now))
             for notice in notices:
@@ -8052,9 +8061,11 @@ class PetWindow(QWidget):
         except Exception:
             LOGGER.exception("discipline reminder tick failed")
 
-    def _sync_discipline_state(self) -> None:
+    def _sync_discipline_state(self, *, include_config: bool = False) -> None:
         """Sync only the account plan and append-only ledger through its own RPC."""
 
+        if include_config:
+            self._discipline_config_read_pending = True
         if (
             self._discipline_sync_unavailable
             or self._discipline_sync_inflight
@@ -8062,17 +8073,24 @@ class PetWindow(QWidget):
         ):
             return
         now = time.monotonic()
-        if now - self._discipline_sync_last_attempt_at < 60:
-            return
         store = self._ensure_discipline_engine().store
+        include_config = include_config or self._discipline_config_read_pending
+        payload = store.sync_payload(include_config=include_config)
+        dirty = bool(payload["p_events"] or payload["p_settings"])
+        if not include_config and not dirty and now - self._discipline_sync_last_attempt_at < 60:
+            return
+        if not include_config and dirty and now - self._discipline_sync_last_attempt_at < 5:
+            return
         account_id = str(self._active_focus_account_id or "")
         if not account_id:
             return
         self._discipline_sync_last_attempt_at = now
+        self._discipline_config_read_pending = False
         self._discipline_sync_inflight = True
         thread = SocialBuddyRpcThread(
-            self.social_client, "lili_discipline_sync", store.sync_payload(), self,
+            self.social_client, "lili_discipline_sync_delta", payload, self,
         )
+        thread.sync_payload = payload
         self._discipline_sync_thread = thread
         thread.completed.connect(
             lambda result, current=account_id, worker=thread: self._discipline_sync_completed(
@@ -8094,6 +8112,10 @@ class PetWindow(QWidget):
         try:
             engine = self._ensure_discipline_engine()
             engine.store.merge_remote(result)
+            engine.store.acknowledge_sync(getattr(thread, "sync_payload", {}), result)
+            self._discipline_sync_has_more = bool(isinstance(result, dict) and result.get("has_more"))
+            if self._discipline_sync_has_more:
+                self._discipline_sync_last_attempt_at = 0.0
             accepted = engine.apply_supervision(result.get("supervision") if isinstance(result, dict) else None)
             if accepted and isinstance(result, dict):
                 for nudge in result.get("nudges", []):
@@ -8125,9 +8147,13 @@ class PetWindow(QWidget):
             self._discipline_sync_unavailable = True
 
     def _discipline_sync_finished(self, thread) -> None:
-        if self._discipline_sync_thread is thread:
-            self._discipline_sync_thread = None
+        if self._discipline_sync_thread is not thread:
+            return
+        self._discipline_sync_thread = None
         self._discipline_sync_inflight = False
+        if self._discipline_config_read_pending or self._discipline_sync_has_more:
+            self._discipline_sync_has_more = False
+            QTimer.singleShot(0, self, self._sync_discipline_state)
 
     def _show_discipline_notice(self, notice) -> None:
         """Show a low-focus toast; the toast itself never activates the app."""
@@ -8618,6 +8644,7 @@ class PetWindow(QWidget):
             ),
             "outfit_key": self.settings.equipped_outfit,
             "outfit_set": self._personal_outfit_sync_pending,
+            "sync_compatibility_profile": self._personal_outfit_sync_pending or str(getattr(self, "_personal_profile_synced_user_id", "")) != str(self._active_focus_account_id or ""),
         }
 
     def _social_tick_impl(self) -> None:
@@ -8722,7 +8749,7 @@ class PetWindow(QWidget):
             and (
                 self._social_personal_sync_due
                 or focus_segment_flush_due
-                or now_monotonic - self._last_social_personal_sync_at >= 60.0
+                or now_monotonic - self._last_social_personal_sync_at >= 300.0
             )
         ):
             # SocialSyncThread invokes this factory in its worker thread. It
@@ -8824,6 +8851,8 @@ class PetWindow(QWidget):
             if str(item).strip()
         }
         self._merge_remote_personal_state(data)
+        if isinstance(data.get("_personal_state"), dict) and not data.get("_sync_offline"):
+            self._personal_profile_synced_user_id = str(self._active_focus_account_id or "")
         if self._personal_outfit_sync_pending and not data.get("_sync_offline"):
             # A local wardrobe choice is a pending write.  Do not clear the
             # fence merely because an online dashboard arrived: older

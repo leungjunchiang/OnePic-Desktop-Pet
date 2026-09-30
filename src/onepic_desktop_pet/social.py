@@ -2,6 +2,7 @@
 
 只发送账号认证、昵称、六毛外观、实时工作状态、FocusSession 区间事实、房间与串门事件。
 Todo 使用独立的 Direct-only RPC 旁路，不进入通用路由回退，也不拥有认证生命周期。
+搭子提醒订阅按进入 / 修改读取，事件单独低频查询；live tuple 缓存 60 秒，界面计时在本机推算。
 搭子提醒订阅与明确的工作事件经独立 RPC 读写；心跳和 Presence 不携带订阅字段。
 工作心跳只描述当前活动会话的存活状态，不携带任何累计时长；最终时长始终从有效
 FocusSession 区间派生。密码从不保存；
@@ -23,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -53,6 +55,7 @@ CONNECTION_STATES = {
 # into a false offline result.  The server itself uses a two-minute heartbeat
 # freshness window; allowing one extra minute here covers a missed poll and
 # the time needed for the next retry without claiming that the peer is live.
+PRESENCE_ONLINE_TTL_SECONDS = 120
 PRESENCE_GRACE_SECONDS = 180
 # These collections are read-only social overlays.  They do not carry
 # liveness or focus facts, so a five-minute account-scoped cache is safe for
@@ -3999,6 +4002,12 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         # RPC is negative-cached so old relays do not receive a 404 every
         # passive sync cycle.
         self._live_projection_unavailable_until = 0.0
+        self._live_projection_cache = None
+        self._live_projection_cache_key = ""
+        self._live_projection_cached_at = 0.0
+        self._reminder_snapshot_cache = None
+        self._reminder_snapshot_cache_key = ""
+        self._reminder_snapshot_cached_at = 0.0
         # Both the main window and the study-room window use this one client
         # instance.  Keep their reads behind shared coordinators so opening a
         # tab, a startup refresh, and a passive timer cannot fan out into
@@ -4293,14 +4302,32 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         self._remember_dashboard(room_id, result)
         return result
 
-    def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._manager.request("rpc", name, body)
+    def rpc(self, name: str, body: dict[str, Any]) -> Any:
+        result = self._manager.request("rpc", name, body)
+        if name in {"lili_set_buddy_subscription", "lili_set_buddy_reminder", "lili_set_buddy_reminder_mute"}:
+            self._reminder_snapshot_cache = None
+        return result
 
-    def buddy_reminder_snapshot(self) -> dict[str, Any]:
+    def buddy_reminder_snapshot(self, *, force: bool = False) -> dict[str, Any]:
         """Read authoritative reminder flags and confirmed work events."""
 
-        result = self.rpc("lili_buddy_reminder_snapshot", {})
+        now = time.monotonic()
+        key = _session_user_id(self)
+        cached = self._reminder_snapshot_cache_key == key and self._reminder_snapshot_cache is not None
+        if cached and not force and now - self._reminder_snapshot_cached_at < 60:
+            return deepcopy(self._reminder_snapshot_cache)
+        if cached and not force:
+            changes = self.rpc("lili_buddy_reminder_events", {})
+            if not isinstance(changes, dict) or not isinstance(changes.get("events"), list):
+                raise SocialError("搭子提醒事件返回异常。", kind="malformed", retryable=True)
+            result = {**self._reminder_snapshot_cache, **changes}
+        else:
+            result = self.rpc("lili_buddy_reminder_snapshot", {})
         if not isinstance(result, dict) or not isinstance(result.get("subscriptions"), list):
             raise SocialError("搭子提醒状态返回异常。", kind="malformed", retryable=True)
+        self._reminder_snapshot_cache = deepcopy(result)
+        self._reminder_snapshot_cache_key = key
+        self._reminder_snapshot_cached_at = now
         return result
 
     def todo_upsert(self, payload: dict[str, Any]) -> Any:
@@ -4338,10 +4365,13 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         )
 
     def focus_live_projection(self) -> dict[str, Any] | None:
-        """Read the tiny per-device live interval projection, if available."""
+        """账号隔离缓存小型 live tuple；每秒显示由本地计时器推算。"""
 
         now = time.monotonic()
-        if now < self._live_projection_unavailable_until:
+        key = _session_user_id(self)
+        if self._live_projection_cache_key == key and self._live_projection_cache is not None and now - self._live_projection_cached_at < 60:
+            return deepcopy(self._live_projection_cache)
+        if now < self._live_projection_unavailable_until and self._live_projection_cache_key == key:
             return None
         try:
             payload = self.rpc("lili_focus_live_projection", {})
@@ -4355,11 +4385,15 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
                 or "lili_focus_live_projection" in raw_error
             )
             if unsupported:
+                self._live_projection_cache_key = key
                 self._live_projection_unavailable_until = now + 300.0
                 return None
             raise
         if not isinstance(payload, dict):
             return None
+        self._live_projection_cache = deepcopy(payload)
+        self._live_projection_cache_key = key
+        self._live_projection_cached_at = now
         return dict(payload)
 
     def update_profile(self, **kwargs: Any) -> None: self._manager.request("update_profile", **kwargs)
@@ -4394,7 +4428,9 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
     def set_room_goal(self, **kwargs: Any) -> None: self._manager.request("set_room_goal", **kwargs)
     def set_room_schedule(self, **kwargs: Any) -> None: self._manager.request("set_room_schedule", **kwargs)
     def set_room_challenge(self, **kwargs: Any) -> None: self._manager.request("set_room_challenge", **kwargs)
-    def set_buddy_subscription(self, **kwargs: Any) -> None: self._manager.request("set_buddy_subscription", **kwargs)
+    def set_buddy_subscription(self, **kwargs: Any) -> None:
+        self._manager.request("set_buddy_subscription", **kwargs)
+        self._reminder_snapshot_cache = None
     def leave_room(self, **kwargs: Any) -> None: self._manager.request("leave_room", **kwargs)
 
 
