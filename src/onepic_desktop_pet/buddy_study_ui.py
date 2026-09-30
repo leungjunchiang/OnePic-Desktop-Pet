@@ -28,6 +28,7 @@ class BuddyStudyDialog(QDialog):
         self._request_pending = False
         self._permissions_dirty = False
         self._overview = {}
+        self._action_message = ""
         self.setWindowTitle(f"{buddy_name(buddy)} · 搭子自习室 - Lili")
         self.resize(570, 610)
         root = QVBoxLayout(self)
@@ -119,6 +120,14 @@ class BuddyStudyDialog(QDialog):
         def failed(error):
             if self._active() and generation == self._generation:
                 self._request_pending = False
+                if name in {"lili_buddy_study_overview", "lili_discipline_supervisor_report"}:
+                    self.records.clear()
+                    if name == "lili_buddy_study_overview":
+                        self._overview = {}
+                        self.peer_plan.setText("授权未能确认，已清除缓存计划。")
+                        self.relationship.setText("暂未确认 TA 的训导授权，请重试。")
+                        for button in (self.start_normal, self.start_officer, self.stop_supervising, self.invite, *self.nudges.values()):
+                            button.setEnabled(False)
                 self.message.setText(str(error)[:300])
         self.hub.study_rpc(name, body, completed, failed)
 
@@ -198,7 +207,7 @@ class BuddyStudyDialog(QDialog):
                 self._rpc("lili_discipline_supervisor_report", {"p_owner_id": self.buddy_id}, self._apply_reports)
         else:
             self.records_hint.setText("TA 尚未授权分享纪律日报。授权关闭后，已有摘要会从本窗口清除。")
-        self.message.setText("")
+        self.message.setText(self._action_message)
 
     def _apply_reports(self, payload):
         if not self._overview.get("can_read_reports"):
@@ -223,7 +232,10 @@ class BuddyStudyDialog(QDialog):
         self._generation += 1
         self._request_pending = False
         self.message.setText("正在同步…")
-        self._rpc(name, body, lambda _payload: self.refresh())
+        def completed(payload):
+            self._action_message = str(payload.get("message") or "设置已更新。") if isinstance(payload, dict) else "设置已更新。"
+            self.refresh()
+        self._rpc(name, body, completed)
 
     def _start_supervision(self, mode):
         if mode == "officer" and self._overview.get("active_mode") != "officer":

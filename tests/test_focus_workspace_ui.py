@@ -168,3 +168,20 @@ def test_buddy_supervision_is_direct_and_private_note_updates_title():
     hub._update_private_note_snapshot("b", "室友")
     assert room.windowTitle().startswith("室友 · ")
     dispose(room, hub)
+
+
+def test_failed_authority_refresh_clears_protected_cache():
+    qt = app()
+    hub = SocialHubDialog(Client())
+    calls = []
+    hub.study_rpc = lambda name, body, callback, failure: calls.append((name, callback, failure))
+    room = BuddyStudyDialog(hub, {"user_id": "b"})
+    room.show(); room.refresh()
+    room._apply_overview({"peer_permission": {"eligible": True}, "peer_plan": {"weekly_target_minutes": 2100}, "can_read_reports": True})
+    room.records.addItem("已显示的摘要")
+    room.refresh()
+    calls[-1][2]("只能查看已确认搭子的自习室")
+    assert room.records.count() == 0 and room._overview == {}
+    assert not room.start_normal.isEnabled()
+    assert "清除缓存" in room.peer_plan.text()
+    dispose(room, hub)
