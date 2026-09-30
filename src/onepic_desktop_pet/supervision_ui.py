@@ -1,6 +1,7 @@
 """训导授权使用服务端版本；后台读取不锁表单，超时和异常统一恢复请求状态。"""
 
 from PySide6.QtCore import Qt, QTimer
+from time import monotonic
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox, QListWidget, QListWidgetItem, QPushButton
 
 from .buddy_identity import buddy_choice, buddy_name
@@ -121,6 +122,7 @@ class SupervisionPolicyWidget(QWidget):
         self._set_controls(self.revision is not None)
         self.status.setText("正在保存授权…" if mutation else "正在同步授权…")
         timeout = QTimer(self)
+        deadline = monotonic() + self.request_timeout_ms / 1000
         self._request_timer = timeout
         timeout.setSingleShot(True)
         def current():
@@ -144,6 +146,9 @@ class SupervisionPolicyWidget(QWidget):
             self.status.setText(str(error)[:300] + "\n可重新读取授权后重试，未保存的其他设置仍保留。")
         def done(payload):
             if not current():
+                return
+            if monotonic() >= deadline:
+                failed("同步授权超时")
                 return
             try:
                 self._preserve_edits = edit_serial != self._edit_serial or (not mutation and self.dirty)

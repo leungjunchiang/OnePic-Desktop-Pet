@@ -160,7 +160,13 @@ def test_all_request_exit_paths_release_controls(editable_panel, failure, operat
         calls[-1][2](policy(8))
     elif failure == "timeout":
         callback = calls[-1][2]
-        QTest.qWait(30)
+        # AppKit/offscreen can defer a 10 ms timer; await the state instead of
+        # assuming it fired after one short event-loop sleep.
+        for _ in range(100):
+            if not panel.pending:
+                break
+            QTest.qWait(10)
+        assert not panel.pending
         callback(policy(99, False))  # Timed-out replies cannot resurrect state.
         assert panel.revision == 7
     assert not panel.pending and panel.save.isEnabled()
@@ -204,3 +210,16 @@ def test_periodic_sync_updates_authority_without_discarding_existing_dirty_form(
     calls[-1][2](policy(8))
     assert panel.revision == 8 and panel.dirty
     assert not panel.permissions["view_progress"].isChecked()
+
+
+def test_late_response_is_rejected_even_before_delayed_timer_delivery(editable_panel, monkeypatch):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    ticks = [1000.0]
+    monkeypatch.setattr("onepic_desktop_pet.supervision_ui.monotonic", lambda: ticks[0])
+    panel.refresh()
+    ticks[0] += 31
+    calls[-1][2](policy(99, False))
+    assert panel.revision == 7 and panel.enabled.isChecked()
+    assert not panel.pending and panel.save.isEnabled()
+    assert "超时" in panel.status.text()

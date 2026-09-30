@@ -149,12 +149,9 @@ jobs:
           printf 'BUILD_VERSION = "%s"\n' "$release_tag" > src/onepic_desktop_pet/_build_version.py
           echo "LILI_VERSION=$release_tag" >> "$GITHUB_ENV"
       - name: Run tests
-        # The hosted macOS runners have a platform-specific Qt/AppKit test
-        # baseline that has failed intermittently across the arm64 and Intel
-        # images while the DMG build remains healthy. Keep the suite running
-        # for diagnostics, but let both macOS package builds complete; the
-        # Windows suite remains a blocking gate.
-        continue-on-error: true
+        # Both Mac architectures must pass before installers are published.
+        # The native alarm-window exclusion below is explicit; other failures
+        # stop the release instead of being hidden by a healthy DMG build.
         env:
           QT_QPA_PLATFORM: offscreen
           TZ: Asia/Shanghai
