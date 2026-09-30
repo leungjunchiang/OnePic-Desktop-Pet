@@ -1082,7 +1082,7 @@ def test_supply_actions_are_in_compact_interaction_menu() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
     buttons = {button.text() for button in widget.findChildren(QPushButton)}
-    assert buttons == {"进入自习室", "互动 ▾"}
+    assert buttons == {"查看搭子", "互动 ▾"}
     assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= {action.text() for action in widget.interaction_menu.actions()}
     assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton))
     sent = []

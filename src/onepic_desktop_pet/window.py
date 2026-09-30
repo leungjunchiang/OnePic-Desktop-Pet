@@ -2,6 +2,7 @@
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
+- 复用周目标参考与免战日，默认不以固定下班时间审查，免战日不显示搭子训导提醒；
 - 将本人训导范围与搭子有效监督模式分开同步，私有备注优先显示，轻提醒保持不激活窗口；
 - 创建无边框、透明、可选始终置顶的 QWidget；
 - 使用 Windows/macOS 原生窗口层级补强置顶，同时保持不激活、不占任务栏和轮廓外点击穿透；
@@ -4425,7 +4426,9 @@ class PetWindow(QWidget):
         try:
             engine = self._ensure_discipline_engine()
             settings = engine.store.settings
-            if not engine.enabled:
+            if not engine.enabled or engine.store.is_exempt(as_beijing().date()):
+                return False
+            if not settings.planned_finish_enabled:
                 return False
             today, week = self._discipline_progress_seconds()
             now = as_beijing()
@@ -6771,6 +6774,9 @@ class PetWindow(QWidget):
     def _shared_work_status_suffix(self) -> str:
         """Describe local controls separately from account-wide live work."""
 
+        engine = getattr(self, "_discipline_engine", None)
+        if engine is not None and engine.store.is_exempt(as_beijing().date()):
+            return " · 🏳️ 高挂免战牌（今日休息）"
         remote_working = self._remote_focus_device_is_working()
         if self.work_timer.is_running:
             return " · 本机与另一台设备正在工作" if remote_working else " · 正在计时"
@@ -8080,10 +8086,10 @@ class PetWindow(QWidget):
                     if not identifier or identifier in engine.store.seen_nudges:
                         continue
                     engine.store.seen_nudges.add(identifier)
-                    if not detect_quiet_mode().blocked:
+                    if not detect_quiet_mode().blocked and not engine.store.is_exempt(as_beijing().date()):
                         from .buddy_identity import buddy_name
                         peer = self._buddy_display_record(str(nudge.get("supervisor_id") or ""))
-                        title = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班"}.get(nudge.get("kind"), "给你一个轻提醒")
+                        title = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班", "progress": "提醒你看看今日进度", "cheer": "给你加油", "take_break": "提醒你休息一下", "return": "喊你回来专注", "rest_more": "让你再歇会儿", "explain": "提醒你处理待说明事项"}.get(nudge.get("kind"), "给你一个轻提醒")
                         from .discipline import DisciplineNotice
                         self._show_discipline_notice(DisciplineNotice("buddy_nudge", buddy_name(peer) + title,
                             "来自你允许的搭子；是否开工或下班由你决定。", "info", identifier))

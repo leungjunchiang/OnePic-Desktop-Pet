@@ -48,21 +48,24 @@ def test_focus_navigation_and_network_diagnostics_have_stable_homes():
     dispose(hub)
 
 
-def test_plan_save_keeps_mode_and_accepts_individual_day_schedules(tmp_path):
+def test_plan_save_keeps_mode_and_uses_weekly_goal_workdays_and_optional_finish(tmp_path):
     qt = app()
     store = DisciplineStore("a", path=tmp_path / "a.json")
     store.update_settings({"mode": "officer"})
     panel = DisciplineDialog(store, DisciplineEngine(store), lambda: (3600, 7200))
     panel.weekly_target.setValue(31.5)
-    panel.daily_targets["wed"].setValue(5.5)
-    panel.daily_starts["wed"].setTime(QTime(10, 15))
-    panel.daily_finishes["wed"].setTime(QTime(19, 30))
+    panel.workdays["fri"].setChecked(False)
+    panel.usual_start.setTime(QTime(10, 15))
+    panel.usual_finish.setTime(QTime(19, 30))
+    panel.finish_enabled.setChecked(True)
     panel.mode.setCurrentIndex(panel.mode.findData("normal"))
     panel._save_settings("plan")
     reloaded = DisciplineStore("a", path=store.path)
     assert reloaded.settings.mode == "officer"
     assert reloaded.settings.weekly_target_minutes == 1890
-    assert reloaded.settings.daily_target_minutes["wed"] == 330
+    assert reloaded.settings.workdays == ["mon", "tue", "wed", "thu"]
+    assert reloaded.settings.planned_finish_enabled
+    assert reloaded.settings.for_weekday(datetime(2026, 9, 30).date()) == 473
     day = datetime(2026, 9, 30, tzinfo=BEIJING_TIMEZONE).date()
     assert reloaded.settings.start_at(day).strftime("%H:%M") == "10:15"
     assert reloaded.settings.finish_at(day).strftime("%H:%M") == "19:30"
@@ -111,7 +114,7 @@ def test_buddy_room_refresh_clears_revoked_plans_and_reports():
     room._apply_overview({"peer_plan": None, "can_read_reports": False})
     report_callback({"reports": [{"event_date": "2026-09-30", "metadata": {"today_seconds": 999}}]})
     assert room.records.count() == 0
-    assert "未授权" in room.peer_plan.text()
+    assert "TA 暂未向你公开工作计划。" in room.peer_plan.text()
     assert room.subscriptions["start_work"].isChecked()
     dispose(room, hub)
 
@@ -156,7 +159,7 @@ def test_buddy_supervision_is_direct_and_private_note_updates_title():
     room = BuddyStudyDialog(hub, buddy)
     room.show(); room.tabs.setCurrentIndex(3)
     room._apply_overview({"peer_permission": {"enabled": True, "eligible": True, "officer": False, "remind": True}})
-    assert room.windowTitle() == "论文搭子 · 搭子自习室 - Lili"
+    assert room.windowTitle() == "论文搭子 · 搭子详情"
     assert "论文搭子\n毛毛冲" in room.status_summary.text()
     assert room.start_normal.isEnabled() and not room.start_officer.isEnabled()
     room.start_normal.click()

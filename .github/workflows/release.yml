@@ -30,9 +30,9 @@ jobs:
       - name: Apply and verify durable buddy reminder schema
         shell: pwsh
         run: ./scripts/apply_supabase_buddy_reminders.ps1
-      - name: Apply owner supervision policy atomically and verify real RPC authorization
+      - name: Apply study plan and policy atomically and verify real RPC authorization
         shell: pwsh
-        run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930150000_lili_supervision_policy.sql
+        run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930180000_lili_study_plan_semantics.sql
 
 
   windows-build:

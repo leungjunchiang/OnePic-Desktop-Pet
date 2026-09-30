@@ -1,4 +1,4 @@
-"""训导主任的工作计划、账号账本与独立且限时有效的搭子监督授权。"""
+"""以周目标为总账的动态工作计划、免战日账本与独立的搭子监督授权。"""
 
 from __future__ import annotations
 
@@ -51,8 +51,11 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 class DisciplineSettings:
     """一个账号的工作计划和监督偏好；默认关闭监督功能。"""
 
+    plan_version: int = 2
     mode: str = "off"
     weekly_target_minutes: int = 1800
+    workdays: list[str] = field(default_factory=lambda: list(WEEKDAYS[:5]))
+    planned_finish_enabled: bool = False
     daily_target_minutes: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_DAILY_TARGETS))
     start_time: str = "09:00"
     finish_time: str = "18:00"
@@ -60,7 +63,7 @@ class DisciplineSettings:
     daily_finish_times: dict[str, str] = field(default_factory=dict)
     recommended_break_minutes: int = 20
     reminder_rules: dict[str, bool] = field(default_factory=dict)
-    late_grace_minutes: int = 15
+    late_grace_minutes: int = 30
     break_limit_minutes: int = 20
     early_finish_grace_minutes: int = 15
     catchup_strategy: str = "even"
@@ -92,11 +95,16 @@ class DisciplineSettings:
                 except (TypeError, ValueError):
                     pass
         strategy = str(data.get("catchup_strategy") or "even").casefold()
-        if strategy not in {"even", "frontload", "custom"}:
+        if strategy == "custom":
+            strategy = "none"
+        if strategy not in {"even", "frontload", "none"}:
             strategy = "even"
         return cls(
             mode=mode,
             weekly_target_minutes=_bounded_int(data.get("weekly_target_minutes", 1800), 1800, 0, 10080),
+            workdays=[day for day in WEEKDAYS if day in data["workdays"]]
+                     if isinstance(data.get("workdays"), list) else [day for day in WEEKDAYS if targets[day] > 0],
+            planned_finish_enabled=bool(data.get("planned_finish_enabled", False)),
             daily_target_minutes=targets,
             start_time=_clock(data.get("start_time"), "09:00"),
             finish_time=_clock(data.get("finish_time"), "18:00"),
@@ -110,7 +118,7 @@ class DisciplineSettings:
             reminder_rules={key: bool(value) for key, value in (data.get("reminder_rules") or {}).items()
                             if key in {"start", "break", "early", "daily", "weekly"}}
                             if isinstance(data.get("reminder_rules"), dict) else {},
-            late_grace_minutes=_bounded_int(data.get("late_grace_minutes", 15), 15, 0, 240),
+            late_grace_minutes=_bounded_int(data.get("late_grace_minutes", 30), 30, 0, 240),
             break_limit_minutes=_bounded_int(data.get("break_limit_minutes", 20), 20, 1, 480),
             early_finish_grace_minutes=_bounded_int(data.get("early_finish_grace_minutes", 15), 15, 0, 240),
             catchup_strategy=strategy,
@@ -122,7 +130,11 @@ class DisciplineSettings:
         )
 
     def for_weekday(self, day: date) -> int:
-        return max(0, int(self.daily_target_minutes.get(WEEKDAYS[day.weekday()], 0)))
+        # Legacy daily targets only infer workdays on import; they never form a second total.
+        return (self.weekly_target_minutes + len(self.workdays) - 1) // len(self.workdays) if self.is_workday(day) and self.workdays else 0
+
+    def is_workday(self, day: date) -> bool:
+        return WEEKDAYS[day.weekday()] in self.workdays
 
     def start_at(self, day: date) -> datetime:
         hour, minute = (int(part) for part in self.daily_start_times.get(WEEKDAYS[day.weekday()], self.start_time).split(":"))
@@ -152,6 +164,7 @@ class DisciplineStore:
             dict(row) for row in raw.get("pending_explanations", []) if isinstance(row, dict)
         ]
         self.seen_nudges = set(str(i) for i in raw.get("seen_nudges", []))
+        self.rest_days = set(str(i) for i in raw.get("rest_days", []))
 
     def _save(self) -> None:
         if self.persist:
@@ -163,6 +176,7 @@ class DisciplineStore:
                 "fired_rules": sorted(self.fired_rules)[-5_000:],
                 "pending_explanations": self.pending_explanations[-500:],
                 "seen_nudges": sorted(self.seen_nudges)[-500:],
+                "rest_days": sorted(self.rest_days),
             })
 
     def update_settings(self, settings: DisciplineSettings | dict[str, Any]) -> None:
@@ -187,6 +201,7 @@ class DisciplineStore:
         if not isinstance(payload, dict):
             return
         remote_stamp = str(payload.get("client_updated_at") or "")
+        self.rest_days.update(str(day) for day in payload.get("rest_days", []) if isinstance(day, str))
         local_stamp = self.settings_updated_at
         if remote_stamp and (not local_stamp or self._stamp(remote_stamp) > self._stamp(local_stamp)):
             self.settings = DisciplineSettings.from_dict(payload.get("settings"))
@@ -293,7 +308,19 @@ class DisciplineStore:
 
     def due_explanations(self) -> list[dict[str, Any]]:
         pending_ids = {str(item.get("event_id")) for item in self.pending_explanations}
-        return [dict(row) for row in self.events if str(row.get("id")) in pending_ids]
+        return [dict(row) for row in self.events if str(row.get("id")) in pending_ids and not self.is_exempt(str(row.get("event_date")))]
+
+    def is_exempt(self, day: date | str) -> bool:
+        key = day.isoformat() if isinstance(day, date) else day
+        return key in self.rest_days or any(row.get("event_type") == "rest_day" and row.get("event_date") == key for row in self.events)
+
+    def exempt_today(self, at: datetime | None = None) -> bool:
+        moment = as_beijing(at)
+        if not self.settings.is_workday(moment.date()):
+            return False
+        self.rest_days.add(moment.date().isoformat())
+        self.append_rule_once(f"{moment.date()}:rest_day", "rest_day", moment)
+        return True
 
 
 @dataclass(frozen=True)
@@ -357,7 +384,7 @@ class DisciplineEngine:
     def remaining_workdays(self, day: date) -> list[date]:
         monday = day - timedelta(days=day.weekday())
         week = [monday + timedelta(days=index) for index in range(7)]
-        return [candidate for candidate in week if candidate >= day and self.store.settings.for_weekday(candidate) > 0]
+        return [candidate for candidate in week if candidate >= day and self.store.settings.is_workday(candidate) and not self.store.is_exempt(candidate)]
 
     def _carried_week_debt_seconds(self, day: date) -> int:
         """Return the last settled weekly shortfall when carry is explicitly enabled."""
@@ -379,21 +406,20 @@ class DisciplineEngine:
     def progress(self, today_seconds: int, week_seconds: int, at: datetime | None = None) -> PlanProgress:
         moment = as_beijing(at)
         settings = self.store.settings
-        day_target = settings.for_weekday(moment.date()) * 60
         week_target = settings.weekly_target_minutes * 60 + self._carried_week_debt_seconds(moment.date())
         remaining = max(0, week_target - max(0, int(week_seconds)))
         days = self.remaining_workdays(moment.date())
-        if settings.catchup_strategy == "custom":
-            extra = int(settings.custom_catchup_minutes.get(WEEKDAYS[moment.weekday()], 0)) * 60
-            catchup = min(remaining, day_target + extra)
-        elif settings.catchup_strategy == "frontload" and days:
-            future_base = sum(settings.for_weekday(candidate) for candidate in days[1:]) * 60
-            extra = max(0, remaining - day_target - future_base)
-            catchup = day_target + min(extra, remaining)
-        else:
-            catchup = max(day_target, (remaining + len(days) - 1) // len(days)) if days else day_target
         today = max(0, int(today_seconds))
         week = max(0, int(week_seconds))
+        # Include today's actual work when distributing the budget at the start of this day.
+        budget = max(0, week_target - max(0, week - today))
+        day_target = 0
+        if moment.date() in days and settings.catchup_strategy != "none":
+            day_target = (budget + len(days) - 1) // len(days)
+            if settings.catchup_strategy == "frontload":
+                base = (week_target + max(1, len(settings.workdays)) - 1) // max(1, len(settings.workdays))
+                day_target = max(day_target, budget - base * (len(days) - 1))
+        catchup = day_target
         return PlanProgress(
             date=moment.date().isoformat(), daily_target_seconds=day_target,
             catchup_target_seconds=catchup, today_seconds=today,
@@ -427,6 +453,8 @@ class DisciplineEngine:
             return []
         moment = as_beijing(at)
         settings = self.store.settings
+        if self.store.is_exempt(moment.date()):
+            return []
         details = dict(metadata or {})
         self.store.record_work_event(event_type, moment, metadata=details)
         notices: list[DisciplineNotice] = []
@@ -471,7 +499,7 @@ class DisciplineEngine:
             progress = self.progress(today_seconds, week_seconds, moment)
             finish_at = settings.finish_at(moment.date())
             early = max(0, int((finish_at - moment).total_seconds() // 60))
-            if settings.for_weekday(moment.date()) > 0 and early > settings.early_finish_grace_minutes:
+            if settings.planned_finish_enabled and settings.is_workday(moment.date()) and early > settings.early_finish_grace_minutes:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:early_finish", "early_finish", moment,
                     metadata={"minutes_early": early, "planned_finish": finish_at.isoformat()},
@@ -497,7 +525,7 @@ class DisciplineEngine:
             remaining_days = [
                 moment.date() + timedelta(days=offset)
                 for offset in range(1, (week_end - moment.date()).days + 1)
-                if settings.for_weekday(moment.date() + timedelta(days=offset)) > 0
+                if settings.is_workday(moment.date() + timedelta(days=offset)) and not self.store.is_exempt(moment.date() + timedelta(days=offset))
             ]
             if not remaining_days:
                 weekly_debt = max(0, progress.weekly_target_seconds - max(0, int(week_seconds)))
@@ -531,7 +559,7 @@ class DisciplineEngine:
                     "break_overtime_seconds": sum(
                         int(row.get("metadata", {}).get("overtime_seconds", 0)) for row in long_breaks
                     ),
-                    "planned_finish": settings.finish_at(moment.date()).strftime("%H:%M"),
+                    "planned_finish": settings.finish_at(moment.date()).strftime("%H:%M") if settings.planned_finish_enabled else "",
                     "actual_finish": moment.strftime("%H:%M"),
                     "weekly_target_seconds": progress.weekly_target_seconds,
                     "week_seconds": max(0, int(week_seconds)),
@@ -561,7 +589,7 @@ class DisciplineEngine:
             return []
         moment = as_beijing(at)
         settings = self.store.settings
-        if settings.for_weekday(moment.date()) <= 0:
+        if not settings.is_workday(moment.date()) or self.store.is_exempt(moment.date()):
             return []
         if settings.snooze_until:
             try:
@@ -575,7 +603,7 @@ class DisciplineEngine:
         started_today = working or any(
             row.get("event_type") == "start_work" for row in self.store.events_for_day(moment.date())
         )
-        thresholds = (settings.late_grace_minutes + 1,) if self.mode == "normal" else LATE_ESCALATION_MINUTES
+        thresholds = (settings.late_grace_minutes + 1,) if self.mode == "normal" else tuple(settings.late_grace_minutes + delta for delta in (1, 15, 30))
         if not started_today:
             for threshold in thresholds:
                 if late_minutes >= threshold:
@@ -589,7 +617,7 @@ class DisciplineEngine:
                         notices.append(notice)
         if settings.progress_reminders:
             progress = self.progress(today_seconds, week_seconds, moment)
-            finish_at = settings.finish_at(moment.date())
+            finish_at = settings.finish_at(moment.date()) if settings.planned_finish_enabled else start + timedelta(seconds=progress.daily_target_seconds + settings.recommended_break_minutes * 60)
             remaining_time = max(0, int((finish_at - moment).total_seconds()))
             remaining_work = max(0, progress.catchup_target_seconds - progress.today_seconds)
             if remaining_time >= 30 * 60 and remaining_work > 0:
@@ -613,6 +641,8 @@ class DisciplineEngine:
         if not self.enabled:
             return []
         moment = as_beijing(at)
+        if self.store.is_exempt(moment.date()) or not self.store.settings.is_workday(moment.date()):
+            return []
         snooze_until = self.store.settings.snooze_until
         if snooze_until:
             try:
@@ -658,6 +688,8 @@ class DisciplineEngine:
         late = [row for row in events if row.get("event_type") == "late_start"]
         breaks = [row for row in events if row.get("event_type") == "long_break"]
         finishes = [row for row in events if row.get("event_type") == "early_finish"]
+        if self.store.is_exempt(day):
+            late, breaks, finishes = [], [], []
         start_event = next((row for row in events if row.get("event_type") == "start_work"), None)
         finish_event = next((row for row in reversed(events) if row.get("event_type") == "finish_work"), None)
         rest_seconds = 0
@@ -686,7 +718,7 @@ class DisciplineEngine:
             "long_break_count": len(breaks),
             "rest_seconds": rest_seconds,
             "break_overtime_seconds": sum(int(row.get("metadata", {}).get("overtime_seconds", 0)) for row in breaks),
-            "planned_finish": self.store.settings.finish_at(day).strftime("%H:%M"),
+            "planned_finish": self.store.settings.finish_at(day).strftime("%H:%M") if self.store.settings.planned_finish_enabled else "未启用",
             "actual_finish": self._time_label(finish_event),
             "early_finish_count": len(finishes),
             "week_seconds": max(0, int(week_seconds)),
@@ -694,7 +726,8 @@ class DisciplineEngine:
             "weekly_remaining_seconds": progress.weekly_remaining_seconds,
             "remaining_workdays": progress.remaining_workdays,
             "caught_up_today_seconds": progress.caught_up_today_seconds,
-            "unexplained_count": sum(1 for row in events if row.get("requires_explanation") and not row.get("explanation")),
+            "unexplained_count": 0 if self.store.is_exempt(day) else sum(1 for row in events if row.get("requires_explanation") and not row.get("explanation")),
+            "exempt": self.store.is_exempt(day),
             "events": events,
         }
 

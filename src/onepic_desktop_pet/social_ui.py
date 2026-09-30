@@ -1,6 +1,6 @@
 """搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
-首页搭子卡片通往个人自习室，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的。
+首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
 本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
@@ -537,6 +537,8 @@ def _presence_uncertain(presence: dict[str, Any]) -> bool:
 def _presence_status(presence: dict[str, Any]) -> str:
     """Return a stable user-facing status for old and new API payloads."""
 
+    if presence.get("rest_day_date") == datetime.now(BEIJING_TIMEZONE).date().isoformat():
+        return "exempt"
     if _presence_load_state(presence) != "ready":
         return "unknown"
     # A transport-stale cache has already been conservatively downgraded to a
@@ -2529,7 +2531,7 @@ class BuddyCardWidget(QWidget):
             else:
                 status_text = "同步中"
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         headline = QLabel(
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f" · {status_text}{'（我）' if is_self else ''}"
@@ -2571,7 +2573,7 @@ class BuddyCardWidget(QWidget):
         footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
         root.addWidget(footer)
         actions = QHBoxLayout()
-        self.study_button = QPushButton("进入自习室")
+        self.study_button = QPushButton("查看搭子")
         self.study_button.setMinimumHeight(32)
         self.study_button.setEnabled(not is_self)
         self.study_button.clicked.connect(lambda: self.study_requested.emit(self.buddy))
@@ -2624,7 +2626,7 @@ class BuddyCardWidget(QWidget):
             else:
                 status_text = "同步中"
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         self._headline_label.setText(
@@ -2724,7 +2726,7 @@ class RoomPetCardWidget(QWidget):
                     else "同步中"
                 )
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         nickname = _owner_nickname(buddy)
         # Create the headline before the image so existing accessibility/tests
         # and screen readers encounter identity/state first.
@@ -2805,7 +2807,7 @@ class RoomPetCardWidget(QWidget):
                     else "同步中"
                 )
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         self._headline_label.setText(
             f"{'🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
@@ -3679,6 +3681,8 @@ class SocialHubDialog(QDialog):
             self._today_display_seconds = display_today_seconds
         labels = {"focus": "专注中", "rest": "休息中", "idle": "尚未开始"}
         status_text = labels.get(str(status), "等待同步")
+        if self._focus_engine().store.is_exempt(datetime.now(BEIJING_TIMEZONE).date()):
+            status_text = "🏳️ 高挂免战牌 · 今日休息"
         clock_text = format_work_duration(int(session_seconds))
         today_text = f"今日累计 {format_work_duration(int(display_today_seconds))}"
         if self.focus_status.text() != status_text:
@@ -4250,6 +4254,7 @@ class SocialHubDialog(QDialog):
             engine.store, engine, self._focus_progress,
             supervisor_open_callback=self._open_supervisor, parent=self,
             engine_provider=self._focus_engine, policy_factory=self._supervision_policy_panel,
+            rest_day_callback=self._set_rest_day,
         )
         self.focus_workspace.tabs.insertTab(0, today_page, "今日")
         self.focus_workspace.tabs.setCurrentIndex(0)
@@ -4260,6 +4265,21 @@ class SocialHubDialog(QDialog):
         self.focus_refresh_timer.start()
         self._refresh_focus_goals()
         return self.focus_workspace
+
+    def _set_rest_day(self, callback):
+        engine = self._focus_engine()
+        account = engine.store.account_id
+        if not bool(getattr(self.client, "signed_in", False)):
+            if engine.store.exempt_today():
+                self._refresh_focus_goals()
+                callback()
+            return
+        def completed(payload):
+            if self._focus_engine().store.account_id == account:
+                engine.store.merge_remote(payload)
+                self._refresh_focus_goals()
+                callback()
+        self.study_rpc("lili_set_rest_day", {}, completed, self._set_status)
 
     def open_focus_section(self, index=0) -> None:
         self.tabs.setCurrentIndex(2)
@@ -4282,6 +4302,11 @@ class SocialHubDialog(QDialog):
                 f"{title} {format_work_duration(actual)} / {format_work_duration(target)} · 还差 {format_work_duration(max(0, target - actual))}"
                 if target else f"{title} {format_work_duration(actual)} · {'休息日' if key == 'today' else '未设目标'}")
             self.focus_goal_bars[key].setValue(min(100, actual * 100 // target) if target else 0)
+        exempt = engine.store.is_exempt(datetime.now(BEIJING_TIMEZONE).date())
+        self.rest_day_button.setEnabled(not exempt and engine.store.settings.is_workday(datetime.now(BEIJING_TIMEZONE).date()))
+        self.rest_day_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if exempt else "🏳️ 高挂免战牌 · 今日休息")
+        if exempt:
+            self.focus_status.setText("🏳️ 高挂免战牌 · 今日休息")
         self.set_focus_analytics(self._focus_analytics)
         if hasattr(self, "focus_workspace") and self.focus_workspace.isVisible():
             self.focus_workspace.refresh()
@@ -4363,6 +4388,9 @@ class SocialHubDialog(QDialog):
         report_button.setObjectName("focusReportButton")
         report_button.clicked.connect(self.work_report_requested.emit)
         focus_layout.addWidget(report_button)
+        self.rest_day_button = QPushButton("🏳️ 高挂免战牌 · 今日休息")
+        self.rest_day_button.clicked.connect(lambda: self._set_rest_day(self.focus_workspace.refresh))
+        focus_layout.addWidget(self.rest_day_button)
         task_button = QPushButton("设置一次只盯一件事")
         task_button.clicked.connect(self._set_focus_task)
         review_button = QPushButton("写下明天第一件事")
@@ -6687,7 +6715,7 @@ class SocialHubDialog(QDialog):
         if not buddy_id:
             return
         menu = QMenu(self)
-        enter = menu.addAction("进入搭子自习室")
+        enter = menu.addAction("查看搭子")
         menu.addSeparator()
         subscriptions = {}
         for kind, field, label in (("start_work", "on_focus_start", "订阅开工提醒"), ("finish_work", "on_focus_end", "订阅下班提醒")):

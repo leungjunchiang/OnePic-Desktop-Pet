@@ -1,4 +1,4 @@
-"""验证训导事件、逐日计划、提醒开关、账号合并与监督隐私边界。"""
+"""验证训导事件、周目标参考、提醒开关、账号合并与监督隐私边界。"""
 
 from __future__ import annotations
 
@@ -72,9 +72,10 @@ def test_remote_settings_and_append_only_events_merge_idempotently(tmp_path) -> 
 def test_late_rules_escalate_once_and_start_is_only_counted_once_per_day(tmp_path) -> None:
     store = _enabled_store(tmp_path, "officer")
     engine = DisciplineEngine(store)
-    first = engine.evaluate(0, 0, _time(30, 9, 10))
-    repeated = engine.evaluate(0, 0, _time(30, 9, 11))
-    second = engine.evaluate(0, 0, _time(30, 9, 30))
+    assert engine.evaluate(0, 0, _time(30, 9, 30)) == []
+    first = engine.evaluate(0, 0, _time(30, 9, 31))
+    repeated = engine.evaluate(0, 0, _time(30, 9, 32))
+    second = engine.evaluate(0, 0, _time(30, 9, 45))
     third = engine.evaluate(0, 0, _time(30, 10, 0))
     assert len(first) == 1
     assert repeated == []

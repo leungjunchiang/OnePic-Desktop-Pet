@@ -26,7 +26,7 @@ class SupervisionPolicyWidget(QWidget):
         self.enabled.clicked.connect(self._toggle_enabled)
         self.enabled.setEnabled(False)
         root.addWidget(self.enabled)
-        text = QLabel("开启后，范围内的搭子可直接开始普通监督；军官监督需另行开放。关闭后暂停所有搭子监督，保留历史记录。")
+        text = QLabel("开启后，范围内的搭子可直接开始普通训导；严格训导需另行开放。关闭后暂停所有搭子监督，保留历史记录。")
         text.setWordWrap(True); root.addWidget(text)
         self.scope = QComboBox()
         for label, value in (("我指定的搭子", "selected"), ("我的所有搭子", "all"), ("只有我邀请的人", "invited")):
@@ -53,7 +53,7 @@ class SupervisionPolicyWidget(QWidget):
             check = QCheckBox(label); check.clicked.connect(self._changed)
             self.permissions[key] = check; permission_grid.addWidget(check, index // 2, index % 2)
         root.addLayout(permission_grid)
-        root.addWidget(QLabel("军官模式资格（仍须符合上方训导范围）"))
+        root.addWidget(QLabel("严格训导资格（仍须符合上方训导范围）"))
         self.officer_scope = QComboBox()
         self.officer_scope.addItem("仅指定搭子", "selected"); self.officer_scope.addItem("所有范围内搭子", "all")
         self.officer_scope.activated.connect(self._changed); root.addWidget(self.officer_scope)
@@ -68,7 +68,7 @@ class SupervisionPolicyWidget(QWidget):
         root.addWidget(QLabel("我正在训导"))
         self.supervising = QListWidget(); self.supervising.setMaximumHeight(120)
         self.supervising.itemDoubleClicked.connect(self._open_room); root.addWidget(self.supervising)
-        open_room = QPushButton("进入所选搭子的自习室")
+        open_room = QPushButton("查看所选搭子")
         open_room.clicked.connect(lambda: self._open_room(self.supervising.currentItem()))
         root.addWidget(open_room)
         self._set_controls(False)
@@ -158,13 +158,13 @@ class SupervisionPolicyWidget(QWidget):
         self.supervising.clear()
         for row in data.get("supervising", []):
             identifier = row.get("owner_id")
-            item = QListWidgetItem(f"{buddy_name(by_id.get(identifier, {'user_id': identifier}))} · {'军官模式' if row.get('mode') == 'officer' else '正常模式'}")
+            item = QListWidgetItem(f"{buddy_name(by_id.get(identifier, {'user_id': identifier}))} · {'严格训导' if row.get('mode') == 'officer' else '普通训导'}")
             item.setData(Qt.ItemDataRole.UserRole, by_id.get(identifier, {"user_id": identifier}))
             self.supervising.addItem(item)
         self._changed(); self.dirty = False
         self._set_controls(True)
         supervisors = data.get("supervisors", [])
-        names = "、".join(buddy_name(by_id.get(row.get("supervisor_id"), {"user_id": row.get("supervisor_id")})) for row in supervisors)
+        names = "\n".join(buddy_name(by_id.get(row.get("supervisor_id"), {"user_id": row.get("supervisor_id")})) + " · " + ("严格训导" if row.get("mode") == "officer" else "普通训导") for row in supervisors)
         self.status.setText(("已开启，范围内搭子无需再次申请。" + ("\n正在训导我：" + names if names else "\n暂无搭子正在监督我。"))
                             if p.get("enabled") else "搭子训导已关闭。历史记录保留。")
 

@@ -19,12 +19,15 @@ if ([string]::IsNullOrWhiteSpace($projectRef) -or [string]::IsNullOrWhiteSpace($
     throw "Supabase project ref or access token is missing."
 }
 $sql = Get-Content -Raw -LiteralPath $MigrationPath
-if ($MigrationPath -like '*lili_supervision_policy.sql') {
+if ($MigrationPath -like '*lili_supervision_policy.sql' -or $MigrationPath -like '*lili_study_plan_semantics.sql') {
     # Upgrade all discipline RPCs atomically, so older definitions cannot
     # temporarily bypass an owner's already revoked policy during deployment.
     $baseSql = Get-Content -Raw -LiteralPath 'supabase/migrations/20260930100000_lili_discipline_state.sql'
     $viewSql = Get-Content -Raw -LiteralPath 'supabase/migrations/20260930120000_lili_buddy_study_permissions.sql'
-    $sql = "begin;`n$baseSql`n$viewSql`n$sql`ncommit;"
+    $policySql = if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
+        Get-Content -Raw -LiteralPath 'supabase/migrations/20260930150000_lili_supervision_policy.sql'
+    } else { '' }
+    $sql = "begin;`n$baseSql`n$viewSql`n$policySql`n$sql`ncommit;"
 }
 if ([string]::IsNullOrWhiteSpace($sql)) {
     throw "Discipline migration is empty."
@@ -66,4 +69,11 @@ if ($MigrationPath -like '*lili_buddy_study_permissions.sql') {
     $verificationBody = @{ query = $verificationSql } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType "application/json" -Body $verificationBody
     Write-Host "Buddy study RPC consent, field opt-outs, revocation, and non-buddy denial verified; synthetic fixtures rolled back."
+}
+
+if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
+    $verificationSql = Get-Content -Raw -LiteralPath 'scripts/verify_study_plan_semantics.sql'
+    $verificationBody = @{ query = $verificationSql } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $verificationBody
+    Write-Host 'Weekly plan, legacy device protection, pair pause, exemption, redaction and dynamic reminders verified; synthetic fixtures rolled back.'
 }
