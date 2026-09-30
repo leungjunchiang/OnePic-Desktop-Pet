@@ -160,6 +160,8 @@ class BuddyStudyDialog(QDialog):
         if fresh is not None:
             self.buddy = dict(fresh)
         status = {"focus": "🟢 正在专注", "rest": "正在休息", "offline": "已离线", "unknown": "状态同步中", "exempt": "🏳️ 高挂免战牌 · 今日休息"}.get(_presence_status(self.buddy), "状态同步中")
+        if self._overview.get("exempt") and self._overview.get("exemption_date") == as_beijing().date().isoformat():
+            status = "🏳️ 高挂免战牌 · 今日休息"
         session = max(0, int(self.buddy.get("session_seconds", 0) or 0))
         session_text = format_work_duration(session) if self.buddy.get("session_seconds") is not None else "时长未公开"
         self.setWindowTitle(f"{buddy_name(self.buddy)} · 搭子详情")
@@ -224,6 +226,7 @@ class BuddyStudyDialog(QDialog):
             self.peer_plan.setText(text + "\n" + self._progress_text())
         else:
             self.peer_plan.setText("TA 暂未向你公开工作计划。\n" + self._progress_text())
+        self._render_public()
         self.explain_nudge.setVisible("explain" in actions)
         self.explain_nudge.setEnabled("explain" in actions)
         self.records.clear()

@@ -118,3 +118,14 @@ def test_focus_tabs_remain_equal_on_resize_and_rest_is_not_offline():
     record["rest_day_date"] = (today - timedelta(days=1)).isoformat()
     assert _presence_status(record) != "exempt"
     card.close(); hub.close(); app.processEvents()
+
+
+def test_study_deployment_preserves_latest_projection_without_replaying_backfill():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/deploy-supabase-focus-history.yml").read_text(encoding="utf-8")
+    script = (root / "scripts/apply_supabase_discipline.ps1").read_text(encoding="utf-8")
+    assert '"supabase/migrations/**"' not in workflow
+    assert '"supabase/migrations/*focus*.sql"' in workflow
+    assert "projectionSource.Substring($projectionStart)" in script
+    assert 'begin;`n$projectionSql' in script

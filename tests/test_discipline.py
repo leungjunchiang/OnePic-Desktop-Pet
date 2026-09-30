@@ -154,17 +154,19 @@ def test_server_migration_isolates_discipline_and_gates_reports_on_explicit_cons
     assert "octet_length(item::text) > 8192" in migration
 
 
-def test_per_day_schedule_preserves_legacy_settings_and_overnight_work():
+def test_old_per_day_fields_are_retained_but_usual_schedule_is_authoritative():
     legacy = DisciplineSettings.from_dict({"start_time": "08:30", "finish_time": "17:30"})
     day = _time(30, 9).date()
     assert legacy.start_at(day).strftime("%H:%M") == "08:30"
     assert legacy.finish_at(day).strftime("%H:%M") == "17:30"
     schedule = DisciplineSettings.from_dict({
-        "daily_start_times": {"wed": "22:00", "thu": "invalid"},
+        "start_time": "22:00", "finish_time": "06:00",
+        "daily_start_times": {"wed": "10:00", "thu": "invalid"},
         "daily_finish_times": {"wed": "06:00"},
     })
     assert schedule.finish_at(day).date() == day + timedelta(days=1)
-    assert schedule.start_at(day + timedelta(days=1)).strftime("%H:%M") == "09:00"
+    assert schedule.start_at(day + timedelta(days=1)).strftime("%H:%M") == "22:00"
+    assert schedule.daily_start_times["wed"] == "10:00"
 
 
 def test_normal_rule_opt_out_suppresses_reminders_without_removing_history(tmp_path):

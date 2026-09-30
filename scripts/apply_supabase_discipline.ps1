@@ -27,7 +27,16 @@ if ($MigrationPath -like '*lili_supervision_policy.sql' -or $MigrationPath -like
     $policySql = if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
         Get-Content -Raw -LiteralPath 'supabase/migrations/20260930150000_lili_supervision_policy.sql'
     } else { '' }
-    $sql = "begin;`n$baseSql`n$viewSql`n$policySql`n$sql`ncommit;"
+    $projectionSql = ''
+    if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
+        # Restore the latest function definitions if an older standalone focus
+        # workflow ran. Do not replay its backfill or alter stored focus facts.
+        $projectionSource = Get-Content -Raw -LiteralPath 'supabase/migrations/20260911100000_lili_focus_legacy_compatibility_ledger.sql'
+        $projectionStart = $projectionSource.IndexOf('create or replace function public.lili_record_legacy_focus_day(')
+        if ($projectionStart -lt 0) { throw 'Latest canonical projection definitions are missing.' }
+        $projectionSql = $projectionSource.Substring($projectionStart)
+    }
+    $sql = "begin;`n$projectionSql`n$baseSql`n$viewSql`n$policySql`n$sql`ncommit;"
 }
 if ([string]::IsNullOrWhiteSpace($sql)) {
     throw "Discipline migration is empty."

@@ -187,7 +187,7 @@ begin
   end if;
   return jsonb_build_object('own_permission',own,'peer_permission',peer,
     'peer_plan',case when (peer->>'view_plan')::boolean then plan- 'late_grace_minutes'-'break_limit_minutes'-'catchup_strategy' else null end,
-    'progress',progress,'rest_seconds',rest_seconds,'exempt',exempt,'actions',actions,
+    'progress',progress,'rest_seconds',rest_seconds,'exempt',exempt,'exemption_date',case when exempt then day else null end,'actions',actions,
     'can_read_reports',(peer->>'view_reports')::boolean,
     'active_mode',(select case when s.mode='officer' and (peer->>'officer')::boolean then 'officer' else 'normal' end
       from public.lili_supervision_sessions s where s.owner_id=p_buddy_id and s.supervisor_id=me and s.active and (peer->>'eligible')::boolean),

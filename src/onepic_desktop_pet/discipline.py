@@ -137,11 +137,11 @@ class DisciplineSettings:
         return WEEKDAYS[day.weekday()] in self.workdays
 
     def start_at(self, day: date) -> datetime:
-        hour, minute = (int(part) for part in self.daily_start_times.get(WEEKDAYS[day.weekday()], self.start_time).split(":"))
+        hour, minute = (int(part) for part in self.start_time.split(":"))
         return datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
 
     def finish_at(self, day: date) -> datetime:
-        hour, minute = (int(part) for part in self.daily_finish_times.get(WEEKDAYS[day.weekday()], self.finish_time).split(":"))
+        hour, minute = (int(part) for part in self.finish_time.split(":"))
         result = datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
         start = self.start_at(day)
         return result + timedelta(days=1) if result <= start else result
