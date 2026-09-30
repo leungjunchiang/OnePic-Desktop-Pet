@@ -89,7 +89,7 @@ def test_blocked_interaction_does_not_block_gui_and_releases_guard(application, 
             self.entered = threading.Event(); self.release = threading.Event(); self.calls = 0
         def rpc(self, name, body):
             self.calls += 1; self.entered.set()
-            assert self.release.wait(3)
+            assert self.release.wait(10)
             if failure:
                 raise SocialError("network failed", kind="network")
             return {}
@@ -104,7 +104,12 @@ def test_blocked_interaction_does_not_block_gui_and_releases_guard(application, 
         hub._send_interaction(buddy, kind)
         assert client.entered.wait(1)
         hub._send_interaction(buddy, kind)
-        QTest.qWait(50)
+        # AppKit/offscreen 在负载下会延迟短计时器派发；等待实际心跳，
+        # 网络仍由 release 保持阻塞，不能把一次 50 ms 等待当作 GUI 卡死。
+        for _ in range(100):
+            if beats:
+                break
+            QTest.qWait(20)
         assert beats and client.calls == 1 and hub.tabs.isEnabled()
         assert "正在" in hub.status_label.text()
     finally:
