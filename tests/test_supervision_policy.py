@@ -223,3 +223,20 @@ def test_late_response_is_rejected_even_before_delayed_timer_delivery(editable_p
     assert panel.revision == 7 and panel.enabled.isChecked()
     assert not panel.pending and panel.save.isEnabled()
     assert "超时" in panel.status.text()
+
+
+def test_dirty_form_only_updates_changed_fields_after_another_device_saved(editable_panel):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    panel.permissions["view_plan"].click()
+    panel.refresh()
+    remote = policy(8, False)
+    remote["policy"].update({"scope": "all", "view_reports": False})
+    calls[-1][2](remote)
+    panel._save()
+    body = calls[-1][1]
+    assert body["p_expected_revision"] == 8
+    assert body["p_policy"]["view_plan"] is False  # My actual edit.
+    assert body["p_policy"]["view_reports"] is False  # Other device edit survives.
+    assert body["p_policy"]["scope"] == "all"
+    assert body["p_policy"]["enabled"] is False  # An old form cannot undo revocation.

@@ -27,6 +27,8 @@ class SupervisionPolicyWidget(QWidget):
         self.request_timeout_ms = 30000
         self._request_timer = None
         self._policy = {}
+        self._form_baseline = None
+        self._master_edited = False
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 10)
         root.addWidget(QLabel("👨‍🏫 谁可以训导我"))
@@ -143,6 +145,7 @@ class SupervisionPolicyWidget(QWidget):
             if mutation and edit_serial == self._edit_serial:
                 # A failed master save must not claim that consent was revoked.
                 self.enabled.setChecked(bool(self._policy.get("enabled")))
+                self._master_edited = False
             self.status.setText(str(error)[:300] + "\n可重新读取授权后重试，未保存的其他设置仍保留。")
         def done(payload):
             if not current():
@@ -182,6 +185,7 @@ class SupervisionPolicyWidget(QWidget):
             self.revision = None; self.dirty = False; self.pending = False
             self._save_requested = False; self._mutation_pending = False
             self._policy = {}
+            self._form_baseline = None; self._master_edited = False
             self.selected.clear(); self.officers.clear(); self.supervising.clear()
             self.enabled.setChecked(False); self._set_controls(False)
         if self.isVisible() and not self.pending:
@@ -239,6 +243,8 @@ class SupervisionPolicyWidget(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, by_id.get(identifier, {"user_id": identifier}))
             self.supervising.addItem(item)
         self._changed(); self.dirty = False
+        self._form_baseline = self._form_policy()
+        self._master_edited = False
         self._set_controls(True)
         supervisors = data.get("supervisors", [])
         names = "\n".join(buddy_name(by_id.get(row.get("supervisor_id"), {"user_id": row.get("supervisor_id")})) + " · " + ("严格训导" if row.get("mode") == "officer" else "普通训导") for row in supervisors)
@@ -250,19 +256,31 @@ class SupervisionPolicyWidget(QWidget):
         return [listing.item(i).data(Qt.ItemDataRole.UserRole) for i in range(listing.count())
                 if listing.item(i).checkState() == Qt.CheckState.Checked]
 
+    def _form_policy(self):
+        return {"enabled": self.enabled.isChecked(), "scope": self.scope.currentData(),
+                  "selected_ids": self._checked(self.selected), "officer_scope": self.officer_scope.currentData(),
+                  "officer_ids": self._checked(self.officers),
+                  **{key: check.isChecked() for key, check in self.permissions.items()}}
+
     def _save(self):
         if self.pending:
             self._save_requested = True
             return
         if self.revision is None or self.account_id != self.engine_provider().store.account_id:
             self.refresh(); return
-        policy = {"enabled": self.enabled.isChecked(), "scope": self.scope.currentData(),
-                  "selected_ids": self._checked(self.selected), "officer_scope": self.officer_scope.currentData(),
-                  "officer_ids": self._checked(self.officers),
-                  **{key: check.isChecked() for key, check in self.permissions.items()}}
+        policy = self._form_policy()
+        # 保留编辑时同步 revision，不能把未修改的旧表单字段也当成新写入。
+        # 以最近确认的服务端值为底，仅覆盖本表单实际改变的字段。
+        if self._form_baseline is not None:
+            for key, value in list(policy.items()):
+                if value != self._form_baseline.get(key) or (key == "enabled" and self._master_edited):
+                    continue
+                default = "selected" if key in {"scope", "officer_scope"} else [] if key.endswith("_ids") else key != "enabled"
+                policy[key] = self._policy.get(key, default)
         self._rpc("lili_set_supervision_policy", {"p_policy": policy, "p_expected_revision": self.revision}, self._apply)
 
     def _toggle_enabled(self):
+        self._master_edited = True
         self._changed()
         self._save()
 
