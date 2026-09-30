@@ -43,3 +43,9 @@ if (-not ($row.settings_ready -and $row.events_ready -and $row.consent_ready -an
     throw "Discipline migration verification failed."
 }
 Write-Host "Discipline sync and consent schema/RPCs verified."
+if ($MigrationPath -like '*lili_buddy_study_permissions.sql') {
+    $verificationSql = Get-Content -Raw -LiteralPath "scripts/verify_buddy_study_permissions.sql"
+    $verificationBody = @{ query = $verificationSql } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType "application/json" -Body $verificationBody
+    Write-Host "Buddy study RPC consent, field opt-outs, revocation, and non-buddy denial verified; synthetic fixtures rolled back."
+}

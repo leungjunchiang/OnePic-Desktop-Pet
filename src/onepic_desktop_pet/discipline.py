@@ -1,4 +1,4 @@
-"""训导主任的本地计划、纪律事件、进度计算与提醒规则。"""
+"""训导主任的逐日工作计划、可选提醒规则、纪律事件与账号进度。"""
 
 from __future__ import annotations
 
@@ -55,6 +55,10 @@ class DisciplineSettings:
     daily_target_minutes: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_DAILY_TARGETS))
     start_time: str = "09:00"
     finish_time: str = "18:00"
+    daily_start_times: dict[str, str] = field(default_factory=dict)
+    daily_finish_times: dict[str, str] = field(default_factory=dict)
+    recommended_break_minutes: int = 20
+    reminder_rules: dict[str, bool] = field(default_factory=dict)
     late_grace_minutes: int = 15
     break_limit_minutes: int = 20
     early_finish_grace_minutes: int = 15
@@ -95,6 +99,16 @@ class DisciplineSettings:
             daily_target_minutes=targets,
             start_time=_clock(data.get("start_time"), "09:00"),
             finish_time=_clock(data.get("finish_time"), "18:00"),
+            daily_start_times={day: _clock(value, _clock(data.get("start_time"), "09:00"))
+                               for day, value in (data.get("daily_start_times") or {}).items() if day in WEEKDAYS}
+                               if isinstance(data.get("daily_start_times"), dict) else {},
+            daily_finish_times={day: _clock(value, _clock(data.get("finish_time"), "18:00"))
+                                for day, value in (data.get("daily_finish_times") or {}).items() if day in WEEKDAYS}
+                                if isinstance(data.get("daily_finish_times"), dict) else {},
+            recommended_break_minutes=_bounded_int(data.get("recommended_break_minutes", 20), 20, 1, 480),
+            reminder_rules={key: bool(value) for key, value in (data.get("reminder_rules") or {}).items()
+                            if key in {"start", "break", "early", "daily", "weekly"}}
+                            if isinstance(data.get("reminder_rules"), dict) else {},
             late_grace_minutes=_bounded_int(data.get("late_grace_minutes", 15), 15, 0, 240),
             break_limit_minutes=_bounded_int(data.get("break_limit_minutes", 20), 20, 1, 480),
             early_finish_grace_minutes=_bounded_int(data.get("early_finish_grace_minutes", 15), 15, 0, 240),
@@ -110,11 +124,11 @@ class DisciplineSettings:
         return max(0, int(self.daily_target_minutes.get(WEEKDAYS[day.weekday()], 0)))
 
     def start_at(self, day: date) -> datetime:
-        hour, minute = (int(part) for part in self.start_time.split(":"))
+        hour, minute = (int(part) for part in self.daily_start_times.get(WEEKDAYS[day.weekday()], self.start_time).split(":"))
         return datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
 
     def finish_at(self, day: date) -> datetime:
-        hour, minute = (int(part) for part in self.finish_time.split(":"))
+        hour, minute = (int(part) for part in self.daily_finish_times.get(WEEKDAYS[day.weekday()], self.finish_time).split(":"))
         result = datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
         start = self.start_at(day)
         return result + timedelta(days=1) if result <= start else result
@@ -143,7 +157,7 @@ class DisciplineStore:
                 "schema_version": 1,
                 "settings": asdict(self.settings),
                 "settings_updated_at": self.settings_updated_at,
-                "events": self.events[-20_000:],
+                "events": self.events,
                 "fired_rules": sorted(self.fired_rules)[-5_000:],
                 "pending_explanations": self.pending_explanations[-500:],
             })
@@ -366,6 +380,10 @@ class DisciplineEngine:
         self, key: str, event_type: str, at: datetime, title: str, detail: str,
         *, severity: str = "info", requires_explanation: bool = False,
     ) -> DisciplineNotice | None:
+        rule = {"late_start_warning": "start", "long_break_warning": "break",
+                "focus_shortfall": "daily", "behind_schedule": "daily"}.get(event_type)
+        if self.store.settings.mode == "normal" and rule and not self.store.settings.reminder_rules.get(rule, True):
+            return None
         row = self.store.append_rule_once(
             key, event_type, at, metadata={"title": title, "detail": detail, "severity": severity},
             requires_explanation=requires_explanation,
@@ -389,7 +407,7 @@ class DisciplineEngine:
             start_events = [row for row in self.store.events_for_day(moment.date()) if row.get("event_type") == "start_work"]
             planned = settings.start_at(moment.date())
             late_minutes = max(0, int((moment - planned).total_seconds() // 60))
-            if len(start_events) == 1 and late_minutes > settings.late_grace_minutes:
+            if settings.for_weekday(moment.date()) > 0 and len(start_events) == 1 and late_minutes > settings.late_grace_minutes:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:late_start", "late_start", moment,
                     metadata={"minutes_late": late_minutes, "planned_start": planned.isoformat()},
@@ -426,7 +444,7 @@ class DisciplineEngine:
             progress = self.progress(today_seconds, week_seconds, moment)
             finish_at = settings.finish_at(moment.date())
             early = max(0, int((finish_at - moment).total_seconds() // 60))
-            if early > settings.early_finish_grace_minutes:
+            if settings.for_weekday(moment.date()) > 0 and early > settings.early_finish_grace_minutes:
                 row = self.store.append_rule_once(
                     f"{moment.date()}:early_finish", "early_finish", moment,
                     metadata={"minutes_early": early, "planned_finish": finish_at.isoformat()},
@@ -476,7 +494,7 @@ class DisciplineEngine:
             daily_report = self.store.append_rule_once(
                 f"{moment.date()}:daily_report", "daily_report", moment,
                 metadata={
-                    "planned_start": settings.start_time,
+                    "planned_start": settings.start_at(moment.date()).strftime("%H:%M"),
                     "actual_start": self._time_label(first_start),
                     "lateness_minutes": int(late_events[0].get("metadata", {}).get("minutes_late", 0)) if late_events else 0,
                     "today_seconds": max(0, int(today_seconds)),
@@ -486,7 +504,7 @@ class DisciplineEngine:
                     "break_overtime_seconds": sum(
                         int(row.get("metadata", {}).get("overtime_seconds", 0)) for row in long_breaks
                     ),
-                    "planned_finish": settings.finish_time,
+                    "planned_finish": settings.finish_at(moment.date()).strftime("%H:%M"),
                     "actual_finish": moment.strftime("%H:%M"),
                     "weekly_target_seconds": progress.weekly_target_seconds,
                     "week_seconds": max(0, int(week_seconds)),
@@ -505,6 +523,10 @@ class DisciplineEngine:
                     f"本周剩余 {progress.weekly_remaining_seconds // 60} 分钟",
                     "info", str(daily_report["id"]),
                 ))
+        if settings.mode == "normal":
+            kinds = {"late_start": "start", "long_break": "break", "early_finish": "early",
+                     "focus_shortfall": "daily", "daily_report": "daily", "weekly_shortfall": "weekly"}
+            notices = [notice for notice in notices if settings.reminder_rules.get(kinds.get(notice.event_type, ""), True)]
         return notices
 
     def evaluate(self, today_seconds: int, week_seconds: int, at: datetime | None = None) -> list[DisciplineNotice]:
@@ -533,7 +555,7 @@ class DisciplineEngine:
                     notice = self._notice(
                         f"{moment.date()}:late:{threshold}", "late_start_warning", moment,
                         "今天还没有开工" if threshold == thresholds[0] else ("训导主任点名" if threshold == 30 else "迟到已记账"),
-                        f"计划开工 {settings.start_time} · 已迟到 {late_minutes} 分钟",
+                        f"计划开工 {start.strftime('%H:%M')} · 已迟到 {late_minutes} 分钟",
                         severity="critical" if threshold >= 60 else "warning",
                     )
                     if notice:
@@ -611,23 +633,40 @@ class DisciplineEngine:
         finishes = [row for row in events if row.get("event_type") == "early_finish"]
         start_event = next((row for row in events if row.get("event_type") == "start_work"), None)
         finish_event = next((row for row in reversed(events) if row.get("event_type") == "finish_work"), None)
+        rest_seconds = 0
+        break_start = None
+        for row in sorted(events, key=lambda item: str(item.get("occurred_at") or "")):
+            try:
+                stamp = as_beijing(datetime.fromisoformat(str(row.get("occurred_at"))))
+            except (ValueError, TypeError):
+                continue
+            if row.get("event_type") == "start_break" and break_start is None:
+                break_start = stamp
+            elif row.get("event_type") in {"end_break", "finish_work"} and break_start is not None:
+                rest_seconds += max(0, int((stamp - break_start).total_seconds()))
+                break_start = None
+        if break_start is not None:
+            end = min(as_beijing(), datetime.combine(day + timedelta(days=1), time(), BEIJING_TIMEZONE))
+            rest_seconds += max(0, int((end - break_start).total_seconds()))
         return {
             "date": day.isoformat(), "mode": self.store.settings.mode,
-            "planned_start": self.store.settings.start_time,
+            "planned_start": self.store.settings.start_at(day).strftime("%H:%M"),
             "actual_start": self._time_label(start_event),
             "lateness_minutes": int(late[0].get("metadata", {}).get("minutes_late", 0)) if late else 0,
             "today_seconds": max(0, int(today_seconds)),
             "daily_target_seconds": progress.daily_target_seconds,
             "daily_gap_seconds": progress.daily_gap_seconds,
             "long_break_count": len(breaks),
+            "rest_seconds": rest_seconds,
             "break_overtime_seconds": sum(int(row.get("metadata", {}).get("overtime_seconds", 0)) for row in breaks),
-            "planned_finish": self.store.settings.finish_time,
+            "planned_finish": self.store.settings.finish_at(day).strftime("%H:%M"),
             "actual_finish": self._time_label(finish_event),
             "early_finish_count": len(finishes),
             "week_seconds": max(0, int(week_seconds)),
             "weekly_target_seconds": progress.weekly_target_seconds,
             "weekly_remaining_seconds": progress.weekly_remaining_seconds,
             "remaining_workdays": progress.remaining_workdays,
+            "caught_up_today_seconds": progress.caught_up_today_seconds,
             "unexplained_count": sum(1 for row in events if row.get("requires_explanation") and not row.get("explanation")),
             "events": events,
         }

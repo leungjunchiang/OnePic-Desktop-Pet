@@ -1,4 +1,4 @@
-"""验证搭子自习室四标签布局和未登录交互反馈。"""
+"""验证自习室导航、精简搭子卡片、账号同步及未登录交互反馈。"""
 
 import json
 import os
@@ -1077,13 +1077,18 @@ def test_wealth_leaderboard_is_on_by_default_but_preserves_explicit_opt_out() ->
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
-def test_supply_actions_are_large_inline_buttons() -> None:
+def test_supply_actions_are_in_compact_interaction_menu() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
     buttons = {button.text() for button in widget.findChildren(QPushButton)}
-    assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= buttons
-    assert "送补给 ▼" not in buttons
-    assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton) if button.text() in buttons)
+    assert buttons == {"进入自习室", "互动 ▾"}
+    assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= {action.text() for action in widget.interaction_menu.actions()}
+    assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton))
+    sent = []
+    widget.food_interaction_requested.connect(lambda buddy, kind: sent.append((buddy, kind)))
+    widget._food_buttons["food_coffee"].trigger()
+    assert sent == [(widget.buddy, "food_coffee")]
+    assert not widget._food_buttons["food_coffee"].isEnabled()
     widget.close(); widget.deleteLater(); app.processEvents()
 
 
@@ -1454,7 +1459,7 @@ def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch)
     )
     for payload in payloads:
         card = BuddyCardWidget(payload)
-        assert any(button.text() == "嘲讽" for button in card.findChildren(QPushButton))
+        assert any(action.text() == "嘲讽" for action in card.interaction_menu.actions())
         card.close(); card.deleteLater()
     app.processEvents()
 

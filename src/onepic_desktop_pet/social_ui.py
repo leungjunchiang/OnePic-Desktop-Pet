@@ -1,5 +1,6 @@
 """搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
+首页搭子卡片通往个人自习室，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
 邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabBar, QTabWidget, QMenu,
-    QVBoxLayout, QWidget, QSizePolicy,
+    QVBoxLayout, QWidget, QSizePolicy, QProgressBar,
 )
 
 from .resources import resource_path
@@ -2519,6 +2520,7 @@ class BuddyCardWidget(QWidget):
     food_interaction_requested = Signal(dict, str)
     interaction_blocked = Signal(str)
     subscription_requested = Signal(dict, str, bool)
+    study_requested = Signal(dict)
 
     def __init__(self, buddy: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
@@ -2585,63 +2587,45 @@ class BuddyCardWidget(QWidget):
         footer.setWordWrap(False)
         footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
         root.addWidget(footer)
-        actions = QGridLayout()
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setHorizontalSpacing(4)
-        actions.setVerticalSpacing(3)
-        # The action follows the buddy's confirmed state: focus -> cheer;
-        # rest/offline -> taunt.  The server repeats this check authoritatively
-        # when the interaction is sent.
-        action_specs = (
-            ("visit", "串门"),
-            ("cheer", _reaction_label(buddy)),
-            ("food_coffee", "请咖啡"),
-            ("food_milk_tea", "请奶茶"),
-            ("food_tea", "敬茶"),
-            ("food_cake", "请蛋糕"),
-        )
-        for index, (kind, label) in enumerate(action_specs):
-            button = QPushButton(label)
-            # Keep the compact two-row grid, but leave enough touch/trackpad
-            # area for the supply actions on both Windows and macOS.
-            button.setFixedHeight(32)
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            button.setStyleSheet("font-size:11px;padding:2px 4px;border-radius:7px;")
+        actions = QHBoxLayout()
+        self.study_button = QPushButton("进入自习室")
+        self.study_button.setMinimumHeight(32)
+        self.study_button.setEnabled(not is_self)
+        self.study_button.clicked.connect(lambda: self.study_requested.emit(self.buddy))
+        actions.addWidget(self.study_button, 1)
+        interaction = QPushButton("互动 ▾")
+        interaction.setMinimumHeight(32)
+        self.interaction_menu = QMenu(interaction)
+        for kind, label in (("visit", "串门"), ("cheer", _reaction_label(buddy)),
+                            ("food_coffee", "请咖啡"), ("food_milk_tea", "请奶茶"),
+                            ("food_tea", "敬茶"), ("food_cake", "请蛋糕")):
+            action = self.interaction_menu.addAction(label)
+            action.setEnabled(not is_self)
             if kind.startswith("food_"):
-                button.clicked.connect(lambda _checked=False, action_kind=kind: self._request_food(action_kind))
-                if is_self:
-                    button.setEnabled(False)
-                    button.setToolTip("补给按钮只对房间里的其他搭子开放")
-                self._food_buttons[kind] = button
+                self._food_buttons[kind] = action
+                action.triggered.connect(lambda _checked=False, value=kind: self._request_food(value))
             else:
-                button.clicked.connect(lambda _checked=False, action=kind: self._request_interaction(action))
-                if is_self:
-                    button.setEnabled(False)
-                    button.setToolTip("互动按钮只对房间里的其他搭子开放")
-                self._buttons[kind] = button
-            actions.addWidget(button, index // 3, index % 3)
+                self._buttons[kind] = action
+                action.triggered.connect(lambda _checked=False, value=kind: self._request_interaction(value))
+        interaction.setMenu(self.interaction_menu)
+        actions.addWidget(interaction)
         root.addLayout(actions)
-        if not is_self:
-            for event_type, field, label, hint in (
-                ("start_work", "on_focus_start", "🔔 开工提醒", "TA 每次开始专注时提醒我"),
-                ("finish_work", "on_focus_end", "🔔 下班提醒", "TA 每次结束当天工作时提醒我"),
-            ):
-                subscribe = QCheckBox(label)
-                subscribe.setFixedHeight(18)
-                subscribe.setToolTip(hint)
-                subscribe.setChecked(bool(buddy.get(field, buddy.get("subscribed", False))))
-                subscribe.setEnabled(event_type not in buddy.get("_reminder_pending_types", ()))
-                subscribe.stateChanged.connect(
-                    lambda state, kind=event_type: self.subscription_requested.emit(
-                        self.buddy, kind, bool(state)
-                    )
-                )
-                root.addWidget(subscribe)
+        self.reminder_summary = QLabel(self._reminder_text(buddy))
+        self.reminder_summary.setStyleSheet("color:#61727d;font-size:11px;")
+        self.reminder_summary.setVisible(not is_self)
+        root.addWidget(self.reminder_summary)
+
+    @staticmethod
+    def _reminder_text(buddy) -> str:
+        enabled = [label for key, label in (("on_focus_start", "开工"), ("on_focus_end", "下班"))
+                   if buddy.get(key, buddy.get("subscribed", False))]
+        return "🔔 " + ("、".join(enabled) + "提醒已开启" if enabled else "提醒未开启 · 可在自习室设置")
 
     def update_buddy(self, buddy: dict[str, Any]) -> None:
         """Update live status/time labels without rebuilding the card tree."""
 
         self.buddy = dict(buddy)
+        self.reminder_summary.setText(self._reminder_text(buddy))
         uncertain = _presence_uncertain(buddy)
         status = _presence_status(buddy)
         online = _presence_is_online(buddy, status)
@@ -3374,6 +3358,11 @@ class SocialHubDialog(QDialog):
         # causing another leaderboard RPC.
         self._local_focus_week_seconds_provider: Callable[[], int] | None = None
         self._local_focus_week_seconds: int | None = None
+        self._discipline_engine_provider = None
+        self._discipline_progress_provider = None
+        self._discipline_supervisor_callback = None
+        self._discipline_rpc_executor = None
+        self._buddy_study_dialogs = {}
         self._applying_dashboard = False
         self._defer_pages = bool(defer_pages)
         self._lazy_page_factories: dict[int, Callable[[], QWidget]] = {}
@@ -4002,6 +3991,8 @@ class SocialHubDialog(QDialog):
                 f"较昨天 {'多' if difference >= 0 else '少'} "
                 f"{format_work_duration(abs(difference))}"
             )
+        if self._discipline_progress_provider is not None:
+            summary["weekly_total_seconds"] = self._focus_progress()[1]
         self.focus_insights.setText(
             f"今天第 {int(summary.get('today_rounds') or 0)} 轮 · 连续专注 {int(summary.get('current_streak_days') or 0)} 天 · "
             f"本周 {format_work_duration(int(summary.get('weekly_total_seconds') or 0))}\n"
@@ -4188,19 +4179,10 @@ class SocialHubDialog(QDialog):
         refresh = QPushButton("刷新首页")
         refresh.clicked.connect(self.refresh)
         welcome_layout.addWidget(refresh)
-        network_row = QHBoxLayout()
-        self.network_hint = QLabel(self._backend_hint())
-        self.network_hint.setObjectName("muted")
-        self.network_hint.setWordWrap(True)
-        network_row.addWidget(self.network_hint, 1)
-        network_check = QPushButton("检测自习室网络")
-        network_check.clicked.connect(self._check_network)
-        network_row.addWidget(network_check)
-        welcome_layout.addLayout(network_row)
         layout.addWidget(welcome)
         buddies_card, buddies_layout = self._card(
             "我的搭子",
-            "正在专注的绿色搭子优先，其次是绿色休息；黄灯/离线排在后面。相同状态按今日专注、本周专注、最后确认时间和账号 ID 稳定排序。首次同步完成前显示同步中，不会把未加载误判为离线。",
+            "看看搭子今天的进度，进入自习室一起专注，或送上一份鼓励。",
         )
         buddy_tools = QHBoxLayout()
         add_buddy = QPushButton("用搭子码添加")
@@ -4210,7 +4192,7 @@ class SocialHubDialog(QDialog):
         buddies_layout.addLayout(buddy_tools)
         self.buddies = QListWidget(); self.buddies.setSpacing(5)
         self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
-        self.buddies.itemDoubleClicked.connect(lambda _item: self._send_visit())
+        self.buddies.itemDoubleClicked.connect(lambda item: self.open_buddy_study(item.data(Qt.ItemDataRole.UserRole)))
         self.buddies.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.buddies.customContextMenuRequested.connect(self._buddy_context_menu)
         buddies_layout.addWidget(self.buddies)
@@ -4241,11 +4223,106 @@ class SocialHubDialog(QDialog):
         layout.addStretch()
         return self._scroll_page(page)
 
+    def configure_discipline(self, engine_provider, progress_provider, supervisor_callback, rpc_executor) -> None:
+        self._discipline_engine_provider = engine_provider
+        self._discipline_progress_provider = progress_provider
+        self._discipline_supervisor_callback = supervisor_callback
+        self._discipline_rpc_executor = rpc_executor
+        if hasattr(self, "focus_workspace"):
+            self.focus_workspace.engine_provider = self._focus_engine
+            self.focus_workspace.refresh()
+
+    def _focus_engine(self):
+        if self._discipline_engine_provider is not None:
+            return self._discipline_engine_provider()
+        from .discipline import DisciplineEngine, DisciplineStore
+        account_id = _session_user_id(self.client)
+        if getattr(self, "_fallback_discipline_account", None) != account_id:
+            self._fallback_discipline_account = account_id
+            self._fallback_discipline_engine = DisciplineEngine(DisciplineStore(account_id, persist=False))
+        return self._fallback_discipline_engine
+
+    def _focus_progress(self) -> tuple[int, int]:
+        if self._discipline_progress_provider is not None:
+            return self._discipline_progress_provider()
+        return int(self._today_display_seconds or 0), int(self._local_week_seconds() or 0)
+
+    def _open_supervisor(self) -> None:
+        if self._discipline_supervisor_callback is not None:
+            self._discipline_supervisor_callback()
+
     def _focus_page(self) -> QWidget:
+        from .discipline_ui import DisciplineDialog
+        today_page = self._focus_today_page()
+        engine = self._focus_engine()
+        self.focus_workspace = DisciplineDialog(
+            engine.store, engine, self._focus_progress,
+            supervisor_open_callback=self._open_supervisor, parent=self,
+            embedded=True, engine_provider=self._focus_engine,
+        )
+        self.focus_workspace.tabs.insertTab(0, today_page, "今日")
+        self.focus_workspace.tabs.setCurrentIndex(0)
+        self.focus_navigation = self.focus_workspace.tabs
+        self.focus_refresh_timer = QTimer(self)
+        self.focus_refresh_timer.setInterval(10000)
+        self.focus_refresh_timer.timeout.connect(self._refresh_focus_goals)
+        self.focus_refresh_timer.start()
+        self._refresh_focus_goals()
+        return self.focus_workspace
+
+    def open_focus_section(self, index=0) -> None:
+        self.tabs.setCurrentIndex(2)
+        if 2 in self._lazy_page_factories:
+            self._materialize_lazy_page(2)
+        self.focus_navigation.setCurrentIndex(index)
+        self.focus_workspace.refresh()
+        self._refresh_focus_goals()
+
+    def _refresh_focus_goals(self) -> None:
+        if not hasattr(self, "focus_goal_labels"):
+            return
+        engine = self._focus_engine()
+        today, week = self._focus_progress()
+        progress = engine.progress(today, week)
+        for key, actual, target in (("today", today, progress.daily_target_seconds),
+                                    ("week", week, progress.weekly_target_seconds)):
+            title = "今日" if key == "today" else "本周"
+            self.focus_goal_labels[key].setText(
+                f"{title} {format_work_duration(actual)} / {format_work_duration(target)} · 还差 {format_work_duration(max(0, target - actual))}"
+                if target else f"{title} {format_work_duration(actual)} · {'休息日' if key == 'today' else '未设目标'}")
+            self.focus_goal_bars[key].setValue(min(100, actual * 100 // target) if target else 0)
+        self.set_focus_analytics(self._focus_analytics)
+        if hasattr(self, "focus_workspace") and self.focus_workspace.isVisible():
+            self.focus_workspace.refresh()
+
+    def study_rpc(self, name, body, callback, failure) -> None:
+        if self._discipline_rpc_executor is not None:
+            self._discipline_rpc_executor(name, body, callback, failure)
+            return
+        failure("请从桌面六毛打开自习室后同步授权。")
+
+    def open_buddy_study(self, buddy, section=0) -> None:
+        if not isinstance(buddy, dict) or buddy.get("is_self"):
+            return
+        from .buddy_study_ui import BuddyStudyDialog
+        key = (_session_user_id(self.client), _buddy_identifier(buddy))
+        if not key[1]:
+            return
+        dialog = self._buddy_study_dialogs.get(key)
+        if dialog is None:
+            dialog = BuddyStudyDialog(self, buddy)
+            self._buddy_study_dialogs[key] = dialog
+        dialog.tabs.setCurrentIndex(section)
+        dialog.show()
+        dialog.refresh()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _focus_today_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
         focus_card, focus_layout = self._card(
             "我的专注",
-            "桌面六毛与自习室共用同一个 FocusSession；这里不会再启动第二套计时器。",
+            "桌面六毛与自习室共享同一专注状态，无需重复计时。",
         )
         self.focus_status = QLabel("等待同步")
         self.focus_status.setStyleSheet("font-size:18px;font-weight:700;color:#087f74;")
@@ -4256,6 +4333,17 @@ class SocialHubDialog(QDialog):
         focus_layout.addWidget(self.focus_status)
         focus_layout.addWidget(self.focus_clock)
         focus_layout.addWidget(self.focus_today)
+        self.focus_goal_labels = {}
+        self.focus_goal_bars = {}
+        for key, title in (("today", "今日"), ("week", "本周")):
+            label = QLabel(title)
+            bar = QProgressBar(); bar.setRange(0, 100); bar.setTextVisible(False)
+            bar.setFixedHeight(9)
+            bar.setStyleSheet("QProgressBar{border:0;background:#e4eded;border-radius:4px;} QProgressBar::chunk{background:#159b88;border-radius:4px;}")
+            self.focus_goal_labels[key] = label
+            self.focus_goal_bars[key] = bar
+            focus_layout.addWidget(label)
+            focus_layout.addWidget(bar)
         self.focus_account_hint = QLabel("")
         self.focus_account_hint.setObjectName("muted")
         self.focus_account_hint.setWordWrap(True)
@@ -5188,6 +5276,18 @@ class SocialHubDialog(QDialog):
         self.account_stack.addWidget(self._auth_card())
         self.account_stack.addWidget(self._profile_card())
         layout.addWidget(self.account_stack)
+        diagnostic_card, diagnostic_layout = self._card("高级设置 · 网络诊断", "连接异常时，可在这里检查自习室服务。")
+        network_row = QHBoxLayout()
+        self.network_hint = QLabel(self._backend_hint())
+        self.network_hint.setObjectName("muted")
+        self.network_hint.setWordWrap(True)
+        network_row.addWidget(self.network_hint, 1)
+        network_check = QPushButton("检测自习室网络")
+        network_check.clicked.connect(self._check_network)
+        network_row.addWidget(network_check)
+        diagnostic_layout.addLayout(network_row)
+        layout.addWidget(diagnostic_card)
+
         preview_card, preview_layout = self._card(
             "登录后可以做什么",
             "账号只用于搭子与私人自习室；聊天、计时、动作和离线陪伴不登录也能使用。",
@@ -5380,6 +5480,12 @@ class SocialHubDialog(QDialog):
         return False
 
     def _update_account_state(self) -> None:
+        active_account = _session_user_id(self.client)
+        for (account, _buddy), study in self._buddy_study_dialogs.items():
+            if account != active_account:
+                study.close()
+        if hasattr(self, "focus_workspace"):
+            self.focus_workspace.refresh()
         self.account_stack.setCurrentIndex(1 if self.client.signed_in else 0)
         if not self.client.signed_in:
             self._fill_signed_out_placeholders()
@@ -6140,6 +6246,7 @@ class SocialHubDialog(QDialog):
                 buddy_widget.food_interaction_requested.connect(self._send_food_interaction)
                 buddy_widget.interaction_blocked.connect(lambda message: self._set_status(message, error=True))
                 buddy_widget.subscription_requested.connect(self._set_subscription)
+                buddy_widget.study_requested.connect(self.open_buddy_study)
                 self.buddies.setItemWidget(item, buddy_widget)
                 self._set_buddy_item_height(item, buddy_widget)
             self._buddy_card_widgets[buddy_id] = (item, buddy_widget)
@@ -6589,6 +6696,18 @@ class SocialHubDialog(QDialog):
         if not buddy_id:
             return
         menu = QMenu(self)
+        enter = menu.addAction("进入搭子自习室")
+        menu.addSeparator()
+        subscriptions = {}
+        for kind, field, label in (("start_work", "on_focus_start", "订阅开工提醒"), ("finish_work", "on_focus_end", "订阅下班提醒")):
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(bool(buddy.get(field, buddy.get("subscribed", False))))
+            action.setEnabled(kind not in buddy.get("_reminder_pending_types", ()))
+            subscriptions[action] = kind
+        menu.addSeparator()
+        discipline = menu.addAction("训导主任设置…")
+        menu.addSeparator()
         edit = menu.addAction("修改私人备注…")
         if str(buddy.get("private_note_name") or "").strip():
             clear = menu.addAction("清空私人备注")
@@ -6598,9 +6717,15 @@ class SocialHubDialog(QDialog):
         muted = bool(buddy.get("notifications_muted") or buddy_id in self._muted_buddy_ids)
         mute = menu.addAction("关闭消息免打扰" if muted else "消息免打扰")
         menu.addSeparator()
-        remove = menu.addAction("删除搭子")
+        remove = menu.addAction("移除搭子")
         chosen = menu.exec(self.buddies.viewport().mapToGlobal(position))
-        if chosen is edit:
+        if chosen is enter:
+            self.open_buddy_study(buddy)
+        elif chosen is discipline:
+            self.open_buddy_study(buddy, 3)
+        elif chosen in subscriptions:
+            self._set_subscription(buddy, subscriptions[chosen], chosen.isChecked())
+        elif chosen is edit:
             self._edit_buddy_private_note(buddy)
         elif clear is not None and chosen is clear:
             self._save_buddy_private_note(buddy, "")

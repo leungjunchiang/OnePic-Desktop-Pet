@@ -2,6 +2,7 @@
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
+- 将工作计划、训导规则与纪律记录接入自习室专注导航，搭子监督操作按当前账号异步执行；
 - 创建无边框、透明、可选始终置顶的 QWidget；
 - 使用 Windows/macOS 原生窗口层级补强置顶，同时保持不激活、不占任务栏和轮廓外点击穿透；
 - macOS 应用失焦时立即修复宠物和计时小栏层级，并在浮动窗口 watchdog 中重新核对小栏可见性；
@@ -7741,6 +7742,10 @@ class PetWindow(QWidget):
                 None,
                 defer_pages=True,
             )
+            self._social_dialog.configure_discipline(
+                self._ensure_discipline_engine, self._discipline_progress_seconds,
+                self.show_discipline_supervisor_dialog, self._discipline_rpc,
+            )
             lifecycle_log("study_room.create", self._social_dialog)
             self._social_dialog.destroyed.connect(
                 lambda _obj=None: lifecycle_log(
@@ -8104,19 +8109,10 @@ class PetWindow(QWidget):
         self._buddy_reminder_toasts.append(toast)
 
     def show_discipline_dialog(self, *_args) -> None:
-        """Open the account's daily plan and append-only discipline ledger."""
+        """从用户主动入口跳转到专注中的训导主任页面。"""
 
-        engine = self._ensure_discipline_engine()
-        if self._discipline_dialog is None:
-            self._discipline_dialog = DisciplineDialog(
-                engine.store, engine, self._discipline_progress_seconds,
-                supervisor_open_callback=self.show_discipline_supervisor_dialog,
-                parent=self,
-            )
-        self._discipline_dialog._render_summaries()
-        self._discipline_dialog.show()
-        self._discipline_dialog.raise_()
-        self._discipline_dialog.activateWindow()
+        self.open_social_hub()
+        self._social_dialog.open_focus_section(2)
 
     def show_discipline_supervisor_dialog(self, *_args) -> None:
         """Open the two-party consent panel for trusted discipline reports."""

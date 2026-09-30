@@ -1,4 +1,4 @@
-"""训导主任日计划、周进度、纪律账本和监督强度设置界面。"""
+"""专注二级导航中的工作计划、训导规则、纪律记录与明确监督授权。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from typing import Any, Callable
 from PySide6.QtCore import QTime, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFormLayout, QGridLayout, QHBoxLayout,
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout,
     QLabel, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QTabWidget,
-    QTableWidget, QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget, QScrollArea,
 )
 
 from .discipline import DisciplineEngine, DisciplineSettings, DisciplineStore, WEEKDAYS
@@ -89,7 +89,7 @@ class DisciplineSupervisorDialog(QDialog):
         self.incoming = QListWidget()
         layout.addWidget(self.incoming, 1)
         response_row = QHBoxLayout()
-        accept = QPushButton("允许对方查看我的纪律摘要")
+        accept = QPushButton("接受邀请，担任对方训导主任")
         accept.clicked.connect(lambda: self._respond(True))
         reject = QPushButton("拒绝")
         reject.clicked.connect(lambda: self._respond(False))
@@ -170,9 +170,11 @@ class DisciplineSupervisorDialog(QDialog):
             data = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
             actual = int(data.get("today_seconds", 0) or 0)
             target = int(data.get("daily_target_seconds", 0) or 0)
+            target_text = f" / {format_work_duration(target)}" if "daily_target_seconds" in data else ""
+            late_text = f"迟到 {int(data.get('lateness_minutes', 0) or 0)} 分" if "lateness_minutes" in data else "迟到信息未授权"
             line = (
-                f"{day}  专注 {format_work_duration(actual)} / {format_work_duration(target)}"
-                f"  · 迟到 {int(data.get('lateness_minutes', 0) or 0)} 分"
+                f"{day}  专注 {format_work_duration(actual)}{target_text}"
+                f"  · {late_text}"
                 f"  · 长休息 {int(data.get('long_break_count', 0) or 0)} 次"
                 f"  · 缺口 {format_work_duration(int(data.get('daily_gap_seconds', 0) or 0))}"
                 f"  · {'已阅' if row.get('read_at') else '未阅'}"
@@ -214,7 +216,7 @@ class DisciplineSupervisorDialog(QDialog):
             if not isinstance(row, dict):
                 continue
             request_id = str(row.get("request_id") or "")
-            label = f"{row.get('owner_nickname') or '搭子'} 希望查看你的纪律摘要"
+            label = f"{row.get('owner_nickname') or '搭子'} 邀请你担任 TA 的训导主任"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, request_id)
             self._request_ids[request_id] = row
@@ -241,12 +243,17 @@ class DisciplineDialog(QDialog):
         self, store: DisciplineStore, engine: DisciplineEngine,
         progress_provider: Callable[[], tuple[int, int]], *,
         supervisor_open_callback: Callable[[], object] | None = None, parent=None,
+        embedded: bool = False, engine_provider=None,
     ) -> None:
         super().__init__(parent)
         self.store = store
         self.engine = engine
         self.progress_provider = progress_provider
         self.supervisor_open_callback = supervisor_open_callback
+        self.engine_provider = engine_provider
+        self._embedded = bool(embedded)
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
         self.setWindowTitle("训导主任 · 工作计划与纪律账本")
         self.resize(650, 590)
         self.setStyleSheet(
@@ -255,30 +262,44 @@ class DisciplineDialog(QDialog):
             "background:#dcefeb;color:#155a52;border:0;border-radius:8px;font-weight:600;}"
         )
         root = QVBoxLayout(self)
-        intro = QLabel("正常模式负责提醒你；军官模式会持续记录偏差，并在严重事项时要求说明。")
-        intro.setWordWrap(True)
-        root.addWidget(intro)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
         self.today_page = QWidget()
         self.week_page = QWidget()
         self.ledger_page = QWidget()
         self.settings_page = QWidget()
-        self.tabs.addTab(self.today_page, "今日")
-        self.tabs.addTab(self.week_page, "本周")
-        self.tabs.addTab(self.ledger_page, "纪律账本")
-        self.tabs.addTab(self.settings_page, "计划与模式")
+        self.mode_page = QWidget()
+        self.records = QTabWidget()
+        self.records.addTab(self.today_page, "今日")
+        self.records.addTab(self.week_page, "本周")
+        self.records.addTab(self.ledger_page, "历史")
+        self.tabs.addTab(self._scroll(self.settings_page), "工作计划")
+        self.tabs.addTab(self._scroll(self.mode_page), "训导主任")
+        self.tabs.addTab(self.records, "记录")
         self._build_today_page()
         self._build_week_page()
         self._build_ledger_page()
         self._build_settings_page()
+        self._build_mode_page()
+        self._load_settings()
         self._render_summaries()
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        close = QPushButton("关闭")
-        close.clicked.connect(self.accept)
-        buttons.addWidget(close)
-        root.addLayout(buttons)
+        self.tabs.currentChanged.connect(lambda _index: self.refresh())
+        self.records.currentChanged.connect(lambda _index: self.refresh())
+        if not embedded:
+            buttons = QHBoxLayout()
+            buttons.addStretch()
+            close = QPushButton("关闭")
+            close.clicked.connect(self.accept)
+            buttons.addWidget(close)
+            root.addLayout(buttons)
+
+    @staticmethod
+    def _scroll(page):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
 
     def _summary_label(self) -> QLabel:
         label = QLabel()
@@ -286,6 +307,10 @@ class DisciplineDialog(QDialog):
         label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         label.setStyleSheet("font-size:14px;line-height:1.6;padding:18px;background:white;border-radius:10px;")
         return label
+
+    def reject(self) -> None:
+        if not self._embedded:
+            super().reject()
 
     def _build_today_page(self) -> None:
         layout = QVBoxLayout(self.today_page)
@@ -315,116 +340,180 @@ class DisciplineDialog(QDialog):
         self.explain_button.clicked.connect(self._explain_selected)
         layout.addWidget(self.explain_button, alignment=Qt.AlignmentFlag.AlignRight)
 
+    @staticmethod
+    def _hours() -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0, 24)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.25)
+        spin.setSuffix(" 小时")
+        return spin
+
     def _build_settings_page(self) -> None:
         layout = QVBoxLayout(self.settings_page)
         form = QFormLayout()
-        self.mode = QComboBox()
-        self.mode.addItem("关闭训导", "off")
-        self.mode.addItem("正常模式", "normal")
-        self.mode.addItem("军官模式", "officer")
-        form.addRow("监督模式", self.mode)
-        self.weekly_target = QSpinBox()
+        self.plan_form = form
+        self.weekly_target = self._hours()
         self.weekly_target.setRange(0, 168)
-        self.weekly_target.setSuffix(" 小时 / 周")
-        form.addRow("周目标", self.weekly_target)
-        self.daily_targets: dict[str, QSpinBox] = {}
+        form.addRow("本周目标", self.weekly_target)
+        self.daily_targets = {}
+        self.daily_starts = {}
+        self.daily_finishes = {}
         day_grid = QGridLayout()
-        for index, (key, label) in enumerate(zip(WEEKDAYS, DAY_LABELS)):
-            spin = QSpinBox()
-            spin.setRange(0, 24)
-            spin.setSuffix(" 小时")
+        for column, label in enumerate(("工作日", "开工", "下班", "专注目标（0 为休息日）")):
+            day_grid.addWidget(QLabel(label), 0, column)
+        for index, (key, label) in enumerate(zip(WEEKDAYS, DAY_LABELS), 1):
+            spin = self._hours()
+            start = QTimeEdit(); start.setDisplayFormat("HH:mm")
+            finish = QTimeEdit(); finish.setDisplayFormat("HH:mm")
             self.daily_targets[key] = spin
-            day_grid.addWidget(QLabel(label), 0, index)
-            day_grid.addWidget(spin, 1, index)
-        form.addRow("基础日计划", day_grid)
-        self.start_time = QTimeEdit()
-        self.start_time.setDisplayFormat("HH:mm")
-        form.addRow("计划开工", self.start_time)
-        self.finish_time = QTimeEdit()
-        self.finish_time.setDisplayFormat("HH:mm")
-        form.addRow("计划下班", self.finish_time)
-        self.late_grace = QSpinBox(); self.late_grace.setRange(0, 240); self.late_grace.setSuffix(" 分钟")
-        form.addRow("迟到宽限", self.late_grace)
-        self.break_limit = QSpinBox(); self.break_limit.setRange(1, 480); self.break_limit.setSuffix(" 分钟")
-        form.addRow("计划休息", self.break_limit)
-        self.early_grace = QSpinBox(); self.early_grace.setRange(0, 240); self.early_grace.setSuffix(" 分钟")
-        form.addRow("提前下班宽限", self.early_grace)
+            self.daily_starts[key] = start
+            self.daily_finishes[key] = finish
+            for column, widget in enumerate((QLabel(label), start, finish, spin)):
+                day_grid.addWidget(widget, index, column)
+        form.addRow("工作日计划", day_grid)
+        self.recommended_break = QSpinBox()
+        self.recommended_break.setRange(1, 480)
+        self.recommended_break.setSuffix(" 分钟")
+        form.addRow("每次建议休息", self.recommended_break)
         self.catchup = QComboBox()
-        self.catchup.addItem("均匀补账", "even")
-        self.catchup.addItem("前置补账", "frontload")
+        self.catchup.addItem("周内均匀补足", "even")
+        self.catchup.addItem("尽快补足", "frontload")
         self.catchup.addItem("自定义每日额外时长", "custom")
-        form.addRow("周内补账方式", self.catchup)
-        self.custom_catchup: dict[str, QSpinBox] = {}
+        form.addRow("补计划方式", self.catchup)
+        self.custom_catchup = {}
         custom_grid = QGridLayout()
         for index, (key, label) in enumerate(zip(WEEKDAYS, DAY_LABELS)):
-            spin = QSpinBox()
-            spin.setRange(0, 24)
-            spin.setSuffix(" 小时")
+            spin = self._hours()
             self.custom_catchup[key] = spin
-            custom_grid.addWidget(QLabel(label), 0, index)
-            custom_grid.addWidget(spin, 1, index)
-        form.addRow("每天额外追赶", custom_grid)
-        self.progress_reminders = QCheckBox("提醒明显落后的日进度（每天最多按固定时段触发）")
-        form.addRow("进度提醒", self.progress_reminders)
-        self.carry = QCheckBox("跨周追账（默认关闭）")
-        self.carry.setToolTip("开启后上周缺口会增加到新周；关闭时历史留档，新周重新计算。")
+            custom_grid.addWidget(QLabel(label), index, 0)
+            custom_grid.addWidget(spin, index, 1)
+        self.custom_container = QWidget()
+        self.custom_container.setLayout(custom_grid)
+        form.addRow("每天额外追赶", self.custom_container)
+        self.catchup.currentIndexChanged.connect(
+            lambda _index: form.setRowVisible(self.custom_container, self.catchup.currentData() == "custom"))
+        self.carry = QCheckBox("跨周继续补足（默认关闭）")
         form.addRow("周结算", self.carry)
         layout.addLayout(form)
-        privacy = QLabel("登录后，计划和纪律账本会按账号同步到六毛服务端与本人其他设备；未登录时仅保存在本机。训导主任授权流程尚未开放，其他用户不会看到你的账本。")
+        self.plan_summary = self._summary_label()
+        layout.addWidget(self.plan_summary)
+        privacy = QLabel("登录后，工作计划与纪律记录会同步到本人其他设备。搭子仅能看到你明确授权的内容。")
         privacy.setWordWrap(True)
-        privacy.setStyleSheet("color:#5c6d76;padding:8px;")
         layout.addWidget(privacy)
-        save = QPushButton("保存计划")
-        save.clicked.connect(self._save_settings)
+        save = QPushButton("保存工作计划")
+        save.clicked.connect(lambda: self._save_settings("plan"))
         layout.addWidget(save, alignment=Qt.AlignmentFlag.AlignRight)
-        supervisor = QPushButton("训导主任授权与监督者报告…")
-        supervisor.setToolTip("设置好友互相授权，或查看已授权给你的纪律摘要。")
+        layout.addStretch()
+
+    def _build_mode_page(self) -> None:
+        layout = QVBoxLayout(self.mode_page)
+        self.duty_status = self._summary_label()
+        layout.addWidget(self.duty_status)
+        form = QFormLayout()
+        self.mode = QComboBox()
+        for label, value in (("关闭", "off"), ("正常模式", "normal"), ("军官模式", "officer")):
+            self.mode.addItem(label, value)
+        form.addRow("监督模式", self.mode)
+        self.normal_rules = {}
+        for key, label in (("start", "到点未开工提醒"), ("break", "长休息提醒"),
+                           ("early", "提前下班提醒"), ("daily", "今日目标提醒"), ("weekly", "本周目标提醒")):
+            check = QCheckBox(label)
+            self.normal_rules[key] = check
+            form.addRow(check)
+        self.late_grace = QSpinBox(); self.late_grace.setRange(0, 240); self.late_grace.setSuffix(" 分钟")
+        self.break_limit = QSpinBox(); self.break_limit.setRange(1, 480); self.break_limit.setSuffix(" 分钟")
+        self.early_grace = QSpinBox(); self.early_grace.setRange(0, 240); self.early_grace.setSuffix(" 分钟")
+        form.addRow("迟到宽限", self.late_grace)
+        form.addRow("休息上限", self.break_limit)
+        form.addRow("提前下班宽限", self.early_grace)
+        self.progress_reminders = QCheckBox("提醒今日进度明显落后")
+        form.addRow(self.progress_reminders)
+        layout.addLayout(form)
+        self.mode_hint = QLabel()
+        self.mode_hint.setWordWrap(True)
+        layout.addWidget(self.mode_hint)
+        self.mode.currentIndexChanged.connect(self._update_mode_hint)
+        save = QPushButton("保存训导规则")
+        save.clicked.connect(lambda: self._save_settings("mode"))
+        layout.addWidget(save, alignment=Qt.AlignmentFlag.AlignRight)
+        supervisor = QPushButton("监督关系与授权…")
         supervisor.setEnabled(self.supervisor_open_callback is not None)
         if self.supervisor_open_callback is not None:
             supervisor.clicked.connect(self.supervisor_open_callback)
-        layout.addWidget(supervisor, alignment=Qt.AlignmentFlag.AlignRight)
-        self._load_settings()
+        layout.addWidget(supervisor)
+        layout.addStretch()
+
+    def _update_mode_hint(self, *_args) -> None:
+        officer = self.mode.currentData() == "officer"
+        for check in self.normal_rules.values():
+            check.setVisible(not officer)
+        self.mode_hint.setText(
+            "军官规则：迟到分级提醒、长休息巡视、严重偏差说明、提前下班审查。日缺口纳入本周剩余目标；未说明事项次日保留，可在记录中补充说明。每日摘要与周结算写入账本，监督者只查看已授权的摘要。"
+            if officer else "正常模式以提醒和进度追踪为主，不要求解释行为。关闭后暂停训导，已有记录保留。")
+
+    def refresh(self) -> None:
+        if self.engine_provider is not None:
+            engine = self.engine_provider()
+            if engine.store is not self.store:
+                self.engine = engine
+                self.store = engine.store
+                self._load_settings()
+        self._render_summaries()
 
     def _load_settings(self) -> None:
         settings = self.store.settings
         self.mode.setCurrentIndex(max(0, self.mode.findData(settings.mode)))
-        self.weekly_target.setValue(settings.weekly_target_minutes // 60)
+        self.weekly_target.setValue(settings.weekly_target_minutes / 60)
         for day, spin in self.daily_targets.items():
-            spin.setValue(settings.daily_target_minutes.get(day, 0) // 60)
-        hour, minute = (int(part) for part in settings.start_time.split(":"))
-        self.start_time.setTime(QTime.fromString(f"{hour:02d}:{minute:02d}", "HH:mm"))
-        hour, minute = (int(part) for part in settings.finish_time.split(":"))
-        self.finish_time.setTime(QTime.fromString(f"{hour:02d}:{minute:02d}", "HH:mm"))
+            spin.setValue(settings.daily_target_minutes.get(day, 0) / 60)
+            self.daily_starts[day].setTime(QTime.fromString(settings.daily_start_times.get(day, settings.start_time), "HH:mm"))
+            self.daily_finishes[day].setTime(QTime.fromString(settings.daily_finish_times.get(day, settings.finish_time), "HH:mm"))
+        self.recommended_break.setValue(settings.recommended_break_minutes)
         self.late_grace.setValue(settings.late_grace_minutes)
         self.break_limit.setValue(settings.break_limit_minutes)
         self.early_grace.setValue(settings.early_finish_grace_minutes)
         self.catchup.setCurrentIndex(max(0, self.catchup.findData(settings.catchup_strategy)))
+        self.plan_form.setRowVisible(self.custom_container, settings.catchup_strategy == "custom")
         for day, spin in self.custom_catchup.items():
-            spin.setValue(settings.custom_catchup_minutes.get(day, 0) // 60)
+            spin.setValue(settings.custom_catchup_minutes.get(day, 0) / 60)
+        for key, check in self.normal_rules.items():
+            check.setChecked(settings.reminder_rules.get(key, True))
         self.progress_reminders.setChecked(settings.progress_reminders)
         self.carry.setChecked(settings.carry_across_weeks)
+        self._update_mode_hint()
 
-    def _save_settings(self) -> None:
+    def _save_settings(self, section="plan") -> None:
+        # Resolve the active account before writing; an old visible page must
+        # never apply another account's form values after login changes.
+        if self.engine_provider is not None and self.engine_provider().store is not self.store:
+            self.refresh()
+            return
         previous = self.store.settings
-        targets = {day: spin.value() * 60 for day, spin in self.daily_targets.items()}
-        settings = DisciplineSettings.from_dict({
-            **vars(previous), "mode": self.mode.currentData(),
-            "weekly_target_minutes": self.weekly_target.value() * 60,
-            "daily_target_minutes": targets,
-            "start_time": self.start_time.time().toString("HH:mm"),
-            "finish_time": self.finish_time.time().toString("HH:mm"),
-            "late_grace_minutes": self.late_grace.value(),
-            "break_limit_minutes": self.break_limit.value(),
-            "early_finish_grace_minutes": self.early_grace.value(),
-            "catchup_strategy": self.catchup.currentData(),
-            "custom_catchup_minutes": {day: spin.value() * 60 for day, spin in self.custom_catchup.items()},
-            "progress_reminders": self.progress_reminders.isChecked(),
-            "carry_across_weeks": self.carry.isChecked(),
-        })
-        self.store.update_settings(settings)
+        if section == "plan":
+            changes = {
+                "weekly_target_minutes": round(self.weekly_target.value() * 60),
+                "daily_target_minutes": {day: round(spin.value() * 60) for day, spin in self.daily_targets.items()},
+                "daily_start_times": {day: spin.time().toString("HH:mm") for day, spin in self.daily_starts.items()},
+                "daily_finish_times": {day: spin.time().toString("HH:mm") for day, spin in self.daily_finishes.items()},
+                "recommended_break_minutes": self.recommended_break.value(),
+                "catchup_strategy": self.catchup.currentData(),
+                "custom_catchup_minutes": {day: round(spin.value() * 60) for day, spin in self.custom_catchup.items()},
+                "carry_across_weeks": self.carry.isChecked(),
+            }
+        else:
+            changes = {
+                "mode": self.mode.currentData(), "late_grace_minutes": self.late_grace.value(),
+                "break_limit_minutes": self.break_limit.value(),
+                "early_finish_grace_minutes": self.early_grace.value(),
+                "progress_reminders": self.progress_reminders.isChecked(),
+                "reminder_rules": {key: check.isChecked() for key, check in self.normal_rules.items()},
+            }
+        self.store.update_settings(DisciplineSettings.from_dict({**vars(previous), **changes}))
         self._render_summaries()
 
     def _snooze_today(self) -> None:
+        self.refresh()
         settings = self.store.settings
         from .discipline import as_beijing
         next_day = as_beijing().date() + timedelta(days=1)
@@ -445,7 +534,9 @@ class DisciplineDialog(QDialog):
             f"<h2>今日纪律 · {mode_text}</h2>"
             f"计划开工：{today['planned_start']}　实际开工：{today['actual_start'] or '尚未开工'}<br>"
             f"今日专注：{format_work_duration(actual)} / {format_work_duration(target)}<br>"
+            f"迟到：{today['lateness_minutes']} 分钟 · 未说明事项：{today['unexplained_count']}<br>"
             f"今日缺口：{format_work_duration(gap)}<br>"
+            f"休息累计：{format_work_duration(today['rest_seconds'])}<br>"
             f"长休息：{today['long_break_count']} 次　超时：{format_work_duration(today['break_overtime_seconds'])}<br>"
             f"计划下班：{today['planned_finish']}　实际下班：{today['actual_finish'] or '工作中'}<br>"
             f"本周已完成：{format_work_duration(today['week_seconds'])} / {format_work_duration(today['weekly_target_seconds'])}"
@@ -460,7 +551,28 @@ class DisciplineDialog(QDialog):
             f"今日追赶目标：{format_work_duration(self.engine.progress(today_seconds, week_seconds).catchup_target_seconds)}<br>"
             f"今日超额可追回前期缺口：{format_work_duration(today['caught_up_today_seconds'])}"
         )
-        rows = self.store.events_for_week(now_day)
+        week_events = self.store.events_for_week(now_day)
+        started_days = {row.get("event_date") for row in week_events if row.get("event_type") == "start_work"}
+        late_days = {row.get("event_date") for row in week_events if row.get("event_type") == "late_start"}
+        long_count = sum(row.get("event_type") == "long_break" for row in week_events)
+        early_count = sum(row.get("event_type") == "early_finish" for row in week_events)
+        self.week_summary.setText(self.week_summary.text() +
+            f"<br>准时开工：{len(started_days - late_days)} / {len(started_days)} 个已开工日"
+            f" · 迟到：{len(late_days)} 次 · 长休息：{long_count} 次 · 提前下班：{early_count} 次")
+        self.plan_summary.setText(
+            f"今日计划：{format_work_duration(target)} · 已完成：{format_work_duration(actual)} · 剩余：{format_work_duration(gap)}<br>"
+            f"本周计划：{format_work_duration(today['weekly_target_seconds'])} · 已完成：{format_work_duration(today['week_seconds'])} · 剩余：{format_work_duration(today['weekly_remaining_seconds'])}")
+        self.duty_status.setText(
+            f"<h3>{'训导主任值班中' if today['mode'] != 'off' else '训导主任未值班'} · {mode_text}</h3>"
+            f"开工：{today['actual_start'] or '尚未开工'} · 迟到：{today['lateness_minutes']} 分钟<br>"
+            f"今日 {format_work_duration(actual)} / {format_work_duration(target)} · 缺口 {format_work_duration(gap)}<br>"
+            f"本周 {format_work_duration(today['week_seconds'])} / {format_work_duration(today['weekly_target_seconds'])}<br>"
+            f"长休息：{today['long_break_count']} 次 · 未说明事项：{len(self.store.due_explanations())} 项")
+        rows = sorted(self.store.events, key=lambda row: str(row.get("occurred_at") or ""), reverse=True)
+        signature = tuple(repr(row) for row in rows)
+        if signature == getattr(self, "_ledger_signature", None):
+            return
+        self._ledger_signature = signature
         self.ledger.setRowCount(len(rows))
         labels = {
             "start_work": "开工", "late_start": "迟到", "late_start_warning": "迟到提醒",
@@ -487,6 +599,9 @@ class DisciplineDialog(QDialog):
                 self.ledger.setItem(row_index, column, item)
 
     def _explain_selected(self) -> None:
+        if self.engine_provider is not None and self.engine_provider().store is not self.store:
+            self.refresh()
+            return
         row = self.ledger.currentRow()
         if row < 0:
             return

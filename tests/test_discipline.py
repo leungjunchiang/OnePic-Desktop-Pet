@@ -1,3 +1,5 @@
+"""验证训导事件、逐日计划、提醒开关、账号合并与监督隐私边界。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -149,3 +151,39 @@ def test_server_migration_isolates_discipline_and_gates_reports_on_explicit_cons
     assert "'metadata', jsonb_build_object(" in supervisor_report
     assert "octet_length(p_settings::text) > 16384" in migration
     assert "octet_length(item::text) > 8192" in migration
+
+
+def test_per_day_schedule_preserves_legacy_settings_and_overnight_work():
+    legacy = DisciplineSettings.from_dict({"start_time": "08:30", "finish_time": "17:30"})
+    day = _time(30, 9).date()
+    assert legacy.start_at(day).strftime("%H:%M") == "08:30"
+    assert legacy.finish_at(day).strftime("%H:%M") == "17:30"
+    schedule = DisciplineSettings.from_dict({
+        "daily_start_times": {"wed": "22:00", "thu": "invalid"},
+        "daily_finish_times": {"wed": "06:00"},
+    })
+    assert schedule.finish_at(day).date() == day + timedelta(days=1)
+    assert schedule.start_at(day + timedelta(days=1)).strftime("%H:%M") == "09:00"
+
+
+def test_normal_rule_opt_out_suppresses_reminders_without_removing_history(tmp_path):
+    store = _enabled_store(tmp_path)
+    store.update_settings({**vars(store.settings), "reminder_rules": {"start": False, "early": False, "daily": False, "weekly": False}})
+    engine = DisciplineEngine(store)
+    assert not engine.evaluate(0, 0, _time(30, 10))
+    assert not engine.record_work_event("start_work", 0, 0, _time(30, 10))
+    assert any(row["event_type"] == "late_start" for row in store.events)
+    assert not engine.record_work_event("finish_work", 3600, 3600, _time(30, 15))
+    assert any(row["event_type"] == "daily_report" for row in store.events)
+    assert not any(row.get("requires_explanation") for row in store.events)
+
+
+def test_daily_rest_summary_and_rest_day_do_not_create_lateness(tmp_path):
+    store = _enabled_store(tmp_path)
+    engine = DisciplineEngine(store)
+    engine.record_work_event("start_break", 0, 0, _time(30, 10), metadata={"session_key": "round"})
+    engine.record_work_event("end_break", 0, 0, _time(30, 10, 15), metadata={"session_key": "round"})
+    summary = engine.daily_summary(_time(30, 10).date(), 0, 0)
+    assert summary["rest_seconds"] == 900
+    engine.record_work_event("start_work", 0, 0, _time(26, 14))
+    assert not any(row["event_type"] == "late_start" for row in store.events_for_day(_time(26, 14).date()))

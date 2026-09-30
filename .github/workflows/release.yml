@@ -33,6 +33,10 @@ jobs:
       - name: Apply and verify discipline plan and consent schema
         shell: pwsh
         run: ./scripts/apply_supabase_discipline.ps1
+      - name: Apply and verify buddy study viewing permissions
+        shell: pwsh
+        run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930120000_lili_buddy_study_permissions.sql
+
 
   windows-build:
     runs-on: windows-latest
