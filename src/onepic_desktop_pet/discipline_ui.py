@@ -236,14 +236,14 @@ class DisciplineSupervisorDialog(QDialog):
         self.status.setText(str(error)[:300])
 
 
-class DisciplineDialog(QDialog):
-    """展示训导状态与账本，并编辑按账号保存的工作计划。"""
+class DisciplineWorkspace(QWidget):
+    """可直接嵌入专注导航的普通页面，统一管理计划、模式与记录。"""
 
     def __init__(
         self, store: DisciplineStore, engine: DisciplineEngine,
         progress_provider: Callable[[], tuple[int, int]], *,
         supervisor_open_callback: Callable[[], object] | None = None, parent=None,
-        embedded: bool = False, engine_provider=None,
+        engine_provider=None,
     ) -> None:
         super().__init__(parent)
         self.store = store
@@ -251,13 +251,8 @@ class DisciplineDialog(QDialog):
         self.progress_provider = progress_provider
         self.supervisor_open_callback = supervisor_open_callback
         self.engine_provider = engine_provider
-        self._embedded = bool(embedded)
-        if embedded:
-            self.setWindowFlags(Qt.WindowType.Widget)
-        self.setWindowTitle("训导主任 · 工作计划与纪律账本")
-        self.resize(650, 590)
         self.setStyleSheet(
-            "QDialog{background:#edf3f6;} QTabWidget::pane{background:white;border:1px solid #d3e0e6;"
+            "QTabWidget::pane{background:white;border:1px solid #d3e0e6;"
             "border-radius:10px;} QLabel{color:#273946;} QPushButton{min-height:30px;padding:5px 12px;"
             "background:#dcefeb;color:#155a52;border:0;border-radius:8px;font-weight:600;}"
         )
@@ -285,14 +280,6 @@ class DisciplineDialog(QDialog):
         self._render_summaries()
         self.tabs.currentChanged.connect(lambda _index: self.refresh())
         self.records.currentChanged.connect(lambda _index: self.refresh())
-        if not embedded:
-            buttons = QHBoxLayout()
-            buttons.addStretch()
-            close = QPushButton("关闭")
-            close.clicked.connect(self.accept)
-            buttons.addWidget(close)
-            root.addLayout(buttons)
-
     @staticmethod
     def _scroll(page):
         scroll = QScrollArea()
@@ -307,10 +294,6 @@ class DisciplineDialog(QDialog):
         label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         label.setStyleSheet("font-size:14px;line-height:1.6;padding:18px;background:white;border-radius:10px;")
         return label
-
-    def reject(self) -> None:
-        if not self._embedded:
-            super().reject()
 
     def _build_today_page(self) -> None:
         layout = QVBoxLayout(self.today_page)
@@ -617,3 +600,28 @@ class DisciplineDialog(QDialog):
         key = next((name for name, label in EXPLANATION_LABELS.items() if label == reason), "other")
         self.store.explain(event_id, key)
         self._render_summaries()
+
+
+class DisciplineDialog(QDialog):
+    """兼容独立弹窗入口，页面内容通过普通 QWidget 复用。"""
+
+    def __init__(self, store, engine, progress_provider, *, supervisor_open_callback=None, parent=None, engine_provider=None):
+        super().__init__(parent)
+        self.setWindowTitle("训导主任 · 工作计划与纪律账本")
+        self.resize(650, 640)
+        layout = QVBoxLayout(self)
+        self.workspace = DisciplineWorkspace(
+            store, engine, progress_provider,
+            supervisor_open_callback=supervisor_open_callback,
+            engine_provider=engine_provider, parent=self,
+        )
+        layout.addWidget(self.workspace)
+        close = QPushButton("关闭")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close)
+
+    def __getattr__(self, name):
+        workspace = self.__dict__.get("workspace")
+        if workspace is not None:
+            return getattr(workspace, name)
+        raise AttributeError(name)

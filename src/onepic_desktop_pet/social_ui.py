@@ -4252,13 +4252,13 @@ class SocialHubDialog(QDialog):
             self._discipline_supervisor_callback()
 
     def _focus_page(self) -> QWidget:
-        from .discipline_ui import DisciplineDialog
+        from .discipline_ui import DisciplineWorkspace
         today_page = self._focus_today_page()
         engine = self._focus_engine()
-        self.focus_workspace = DisciplineDialog(
+        self.focus_workspace = DisciplineWorkspace(
             engine.store, engine, self._focus_progress,
             supervisor_open_callback=self._open_supervisor, parent=self,
-            embedded=True, engine_provider=self._focus_engine,
+            engine_provider=self._focus_engine,
         )
         self.focus_workspace.tabs.insertTab(0, today_page, "今日")
         self.focus_workspace.tabs.setCurrentIndex(0)

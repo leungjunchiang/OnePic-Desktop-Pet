@@ -88,7 +88,8 @@ jobs:
                 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               }
             } else {
-              .\.venv\Scripts\python.exe -m pytest --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)" $file.FullName
+              $detailArgs = if ($file.Name -eq "test_social_ui.py") { @("-vv", "-s") } else { @() }
+              .\.venv\Scripts\python.exe -m pytest @detailArgs --basetemp "$env:RUNNER_TEMP\pytest-$($file.BaseName)" $file.FullName
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
           }

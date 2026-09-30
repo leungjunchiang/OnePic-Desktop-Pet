@@ -251,6 +251,7 @@ class BuddyStudyDialog(QDialog):
         self._generation += 1
         self._request_pending = False
         self._overview = {}
+        self._permissions_dirty = False
         self.peer_plan.setText("TA 的计划未授权，或尚未同步。")
         self.records.clear()
         super().closeEvent(event)
