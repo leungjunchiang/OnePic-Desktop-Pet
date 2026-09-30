@@ -6,6 +6,8 @@ from datetime import datetime
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+import pytest
 
 from onepic_desktop_pet.buddy_identity import buddy_choice, buddy_name, public_name
 from onepic_desktop_pet.discipline import DisciplineEngine, DisciplineStore, BEIJING_TIMEZONE
@@ -105,3 +107,100 @@ def test_failed_master_switch_does_not_claim_revocation_succeeded():
     assert panel.enabled.isChecked() and engine.mode == "officer"
     assert "另一台电脑" in panel.status.text()
     panel.close(); panel.deleteLater(); app.processEvents()
+
+
+@pytest.fixture
+def editable_panel():
+    app = QApplication.instance() or QApplication([])
+    engine = DisciplineEngine(DisciplineStore("a", persist=False))
+    calls = []
+    panel = SupervisionPolicyWidget(lambda: engine, lambda: [{"user_id": "b"}],
+        lambda name, body, done, fail: calls.append((name, body, done, fail)), lambda *_: None)
+    panel._apply(policy(7))
+    panel.show(); app.processEvents()
+    yield panel, calls
+    panel.close(); panel.deleteLater(); app.processEvents()
+
+
+def test_background_sync_keeps_form_editable_and_preserves_new_edits(editable_panel):
+    panel, calls = editable_panel
+    assert panel.pending
+    assert panel.enabled.isEnabled() and panel.scope.isEnabled()
+    assert not panel.scope.isEditable()  # Choose-only is enabled, not disabled.
+    assert all(check.isEnabled() for check in panel.permissions.values())
+    panel.permissions["view_plan"].click()
+    calls[-1][2](policy(8))
+    assert not panel.permissions["view_plan"].isChecked()
+    assert panel.dirty and panel.revision == 8 and not panel.pending
+    panel._save()
+    assert calls[-1][1]["p_expected_revision"] == 8
+    assert calls[-1][1]["p_policy"]["view_plan"] is False
+
+
+@pytest.mark.parametrize("failure", ["payload", "network", "callback", "executor", "timeout"])
+@pytest.mark.parametrize("operation", ["read", "save"])
+def test_all_request_exit_paths_release_controls(editable_panel, failure, operation):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    panel.request_timeout_ms = 10
+    if failure == "executor":
+        def broken(*_):
+            raise RuntimeError("executor failed")
+        panel.rpc_executor = broken
+    if failure == "callback":
+        def broken_apply(_):
+            raise RuntimeError("callback failed")
+        panel._apply = broken_apply
+    panel.refresh() if operation == "read" else panel._save()
+    if failure == "payload":
+        calls[-1][2]({"policy": None})
+    elif failure == "network":
+        calls[-1][3]("network failed")
+    elif failure == "callback":
+        calls[-1][2](policy(8))
+    elif failure == "timeout":
+        callback = calls[-1][2]
+        QTest.qWait(30)
+        callback(policy(99, False))  # Timed-out replies cannot resurrect state.
+        assert panel.revision == 7
+    assert not panel.pending and panel.save.isEnabled()
+    assert panel.enabled.isEnabled() and panel.scope.isEnabled()
+    assert "重试" in panel.status.text()
+
+
+def test_master_off_alone_disables_dependents_and_save_preserves_later_edits(editable_panel):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    panel.enabled.click()
+    assert panel.enabled.isEnabled() and not panel.scope.isEnabled()
+    assert not panel.save.isEnabled()
+    panel.enabled.click()  # Re-enable during save, keep latest intent and queue it.
+    assert panel.scope.isEnabled()
+    calls[-1][2](policy(8, False))
+    assert panel.enabled.isChecked() and panel.scope.isEnabled()
+    assert calls[-1][1]["p_policy"]["enabled"] is True
+    assert calls[-1][1]["p_expected_revision"] == 8
+    calls[-1][2](policy(9))
+    assert not panel.pending and panel.save.isEnabled()
+
+
+def test_stale_and_duplicate_callbacks_cannot_change_current_form(editable_panel):
+    panel, calls = editable_panel
+    old = calls[-1][2]
+    old(policy(8))
+    panel.refresh()
+    old(policy(99, False))
+    assert panel.pending and panel.enabled.isChecked()
+    calls[-1][2](policy(7, False))
+    assert panel.revision == 8 and panel.enabled.isChecked()
+
+
+def test_periodic_sync_updates_authority_without_discarding_existing_dirty_form(editable_panel):
+    panel, calls = editable_panel
+    calls[-1][2](policy(7))
+    panel.permissions["view_progress"].click()
+    panel.refresh()
+    assert panel.pending and panel.save.isEnabled()
+    calls[-1][2](policy(8))
+    assert panel.revision == 8 and panel.dirty
+    assert not panel.permissions["view_progress"].isChecked()

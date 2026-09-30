@@ -2,6 +2,7 @@
 
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
 本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
+搭子卡片直接展示串门、加油、嘲讽；投喂按配置聚合，持久提醒状态在身份区显示标签。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
 搭子提醒订阅按事件独立写入服务端，工作事件由明确的计时操作发布，状态轮询不再制造提醒；
 邮箱确认页打开项目页面后，用户回到这里即可登录，不会把“没有即时 session”误报成注册失败。
@@ -2494,6 +2495,13 @@ class BuddyProfileDialog(QDialog):
         self.return_button.setFocus()
 
 
+# 投喂入口配置；kind 复用服务端现有补给事件，可在此扩展菜单而不复制 UI。
+BUDDY_FEED_ITEMS = (
+    ("food_coffee", "☕ 咖啡"), ("food_milk_tea", "🧋 奶茶"),
+    ("food_tea", "🍵 茶"), ("food_cake", "🍰 蛋糕"),
+)
+
+
 class BuddyCardWidget(QWidget):
     """把搭子的在线、工作和今日时长显示成一眼能看清的卡片。"""
 
@@ -2509,7 +2517,7 @@ class BuddyCardWidget(QWidget):
         self._cooldown_seconds = 15
         self._cooldown_until: dict[str, float] = {}
         self._buttons: dict[str, QPushButton] = {}
-        self._food_buttons: dict[str, QPushButton] = {}
+        self._food_buttons = {}
         self.setObjectName("buddyCard")
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 5, 8, 5)
@@ -2543,7 +2551,19 @@ class BuddyCardWidget(QWidget):
         self._identity_detail = QLabel(_public_owner_nickname(buddy))
         self._identity_detail.setStyleSheet("color:#61727d;font-size:11px;")
         self._identity_detail.setVisible(_owner_nickname(buddy) != _public_owner_nickname(buddy))
-        root.addWidget(self._identity_detail)
+        identity_row = QHBoxLayout()
+        identity_row.addWidget(self._identity_detail)
+        self.reminder_summary = QLabel(self._reminder_text(buddy))
+        self.reminder_summary.setObjectName("buddyReminderBadge")
+        self.reminder_summary.setStyleSheet(
+            "background:#fff0d3;color:#60451e;border:1px solid #e4cc96;"
+            "border-radius:9px;padding:3px 7px;font-size:11px;"
+        )
+        self.reminder_summary.setVisible(not is_self and bool(self._reminder_text(buddy)))
+        self.reminder_summary.setToolTip("持续订阅；可在搭子自习室更改开工 / 下班提醒。")
+        identity_row.addWidget(self.reminder_summary)
+        identity_row.addStretch()
+        root.addLayout(identity_row)
         # Historical totals remain useful even when live presence is
         # uncertain or timed out. The confirmation label below communicates
         # freshness separately, so it must not replace these totals.
@@ -2573,38 +2593,68 @@ class BuddyCardWidget(QWidget):
         footer.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
         root.addWidget(footer)
         actions = QHBoxLayout()
-        self.study_button = QPushButton("查看搭子")
-        self.study_button.setMinimumHeight(32)
-        self.study_button.setEnabled(not is_self)
+        actions.setSpacing(6)
+        def make_button(label, background, hover):
+            button = QPushButton(label)
+            button.setMinimumHeight(32)
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            button.setStyleSheet(
+                f"QPushButton{{background:{background};color:#25434c;border:1px solid #bdcfd1;"
+                "border-radius:8px;padding:3px 2px;font-size:12px;}"
+                f"QPushButton:hover{{background:{hover};color:#193841;border-color:#719eaa;}}"
+                "QPushButton:pressed{background:#c6dce0;color:#193841;border-color:#527f8b;}"
+                "QPushButton:disabled{background:#edf0f1;color:#5b6970;border-color:#ced6d9;}"
+            )
+            return button
+        self.study_button = make_button("查看搭子", "#edf5f5", "#dcebea")
         self.study_button.clicked.connect(lambda: self.study_requested.emit(self.buddy))
-        actions.addWidget(self.study_button, 1)
-        interaction = QPushButton("互动 ▾")
-        interaction.setMinimumHeight(32)
-        self.interaction_menu = QMenu(interaction)
-        for kind, label in (("visit", "串门"), ("cheer", _reaction_label(buddy)),
-                            ("food_coffee", "请咖啡"), ("food_milk_tea", "请奶茶"),
-                            ("food_tea", "敬茶"), ("food_cake", "请蛋糕")):
-            action = self.interaction_menu.addAction(label)
-            action.setEnabled(not is_self)
-            if kind.startswith("food_"):
-                self._food_buttons[kind] = action
-                action.triggered.connect(lambda _checked=False, value=kind: self._request_food(value))
+        actions.addWidget(self.study_button, 27)
+        interactions = QHBoxLayout()
+        interactions.setSpacing(4)
+        for kind, label, bg, hover in (
+            ("visit", "🏠 串门", "#e1f3ec", "#ceeadd"),
+            ("cheer", "💪 加油", "#e2f4f4", "#cce9e9"),
+            ("taunt", "😈 嘲讽", "#f0eafa", "#e0d5f1"),
+        ):
+            button = make_button(label, bg, hover)
+            self._buttons[kind] = button
+            if kind == "visit":
+                button.clicked.connect(lambda: self._request_interaction("visit"))
             else:
-                self._buttons[kind] = action
-                action.triggered.connect(lambda _checked=False, value=kind: self._request_interaction(value))
-        interaction.setMenu(self.interaction_menu)
-        actions.addWidget(interaction)
+                button.clicked.connect(lambda _checked=False, value=kind: self._request_reaction(value))
+            interactions.addWidget(button, 1)
+        self.feed_button = make_button("🎁 投喂⌄", "#fff1d9", "#f5e2b9")
+        self.feed_menu = QMenu(self.feed_button)
+        self.feed_menu.setStyleSheet(
+            "QMenu{background:#fffaf1;color:#493d2d;border:1px solid #d7c9ad;}"
+            "QMenu::item:selected{background:#f0dfb9;color:#33291d;}"
+            "QMenu::item:disabled{color:#697078;}"
+        )
+        for kind, label in BUDDY_FEED_ITEMS:
+            action = self.feed_menu.addAction(label)
+            action.setEnabled(not is_self)
+            self._food_buttons[kind] = action
+            action.triggered.connect(lambda _checked=False, value=kind: self._request_food(value))
+        self.feed_button.setMenu(self.feed_menu)
+        interactions.addWidget(self.feed_button, 1)
+        actions.addLayout(interactions, 73)
         root.addLayout(actions)
-        self.reminder_summary = QLabel(self._reminder_text(buddy))
-        self.reminder_summary.setStyleSheet("color:#61727d;font-size:11px;")
-        self.reminder_summary.setVisible(not is_self)
-        root.addWidget(self.reminder_summary)
+        for label in (headline, self._identity_detail, focus, confirmation, footer, self.reminder_summary):
+            label.setWordWrap(True)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        # 身份行需要保留标签的宽度提示；Ignored 配合 stretch 会把 badge 压到零宽。
+        for label in (self._identity_detail, self.reminder_summary):
+            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.reminder_summary.setWordWrap(False)
+        self._sync_action_controls()
 
     @staticmethod
     def _reminder_text(buddy) -> str:
         enabled = [label for key, label in (("on_focus_start", "开工"), ("on_focus_end", "下班"))
                    if buddy.get(key, buddy.get("subscribed", False))]
-        return "🔔 " + ("、".join(enabled) + "提醒已开启" if enabled else "提醒未开启 · 可在自习室设置")
+        return "🔔 " + "、".join(enabled) + "提醒已开启" if enabled else ""
 
     def update_buddy(self, buddy: dict[str, Any]) -> None:
         """Update live status/time labels without rebuilding the card tree."""
@@ -2613,6 +2663,7 @@ class BuddyCardWidget(QWidget):
         self._identity_detail.setText(_public_owner_nickname(buddy))
         self._identity_detail.setVisible(_owner_nickname(buddy) != _public_owner_nickname(buddy))
         self.reminder_summary.setText(self._reminder_text(buddy))
+        self.reminder_summary.setVisible(not buddy.get("is_self") and bool(self._reminder_text(buddy)))
         uncertain = _presence_uncertain(buddy)
         status = _presence_status(buddy)
         online = _presence_is_online(buddy, status)
@@ -2640,9 +2691,33 @@ class BuddyCardWidget(QWidget):
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         self._footer_label.setText(f"娃衣：{outfit}")
         self._footer_label.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
-        cheer = self._buttons.get("cheer")
-        if cheer is not None and cheer.isEnabled():
-            cheer.setText(_reaction_label(buddy))
+        self._sync_action_controls()
+
+    def _sync_action_controls(self) -> None:
+        """两个反应按钮共享原 cheer handler 与冷却，按真实状态提供对应操作。"""
+        is_self = bool(self.buddy.get("is_self"))
+        self.study_button.setEnabled(not is_self)
+        self.feed_button.setEnabled(not is_self)
+        for kind, button in self._buttons.items():
+            key = "cheer" if kind == "taunt" else kind
+            cooling = self._cooldown_until.get(key, 0) > time.monotonic()
+            available = (kind == "visit" or
+                         kind == "cheer" and _presence_status(self.buddy) == "focus" or
+                         kind == "taunt" and _taunt_available(self.buddy))
+            button.setEnabled(not is_self and not cooling and available)
+            button.setText("已发送" if cooling else {"visit": "🏠 串门", "cheer": "💪 加油", "taunt": "😈 嘲讽"}[kind])
+            button.setToolTip("互动冷却 15 秒" if cooling else
+                              "专注中可加油；休息或离线时可嘲讽（北京时间 08:00–22:30）。" if kind != "visit" else "去 TA 的自习室串门")
+        for kind, action in self._food_buttons.items():
+            action.setEnabled(not is_self and self._cooldown_until.get(f"food:{kind}", 0) <= time.monotonic())
+
+    def _request_reaction(self, kind: str) -> None:
+        if not self._buttons[kind].isEnabled():
+            return
+        if kind == "taunt" and not _taunt_window_open():
+            self.interaction_blocked.emit("现在是嘲讽时间之外，给对方留点私人休息时间。")
+            return
+        self._request_interaction("cheer")
 
     def _request_food(self, kind: str) -> None:
         now = time.monotonic()
@@ -2656,7 +2731,7 @@ class BuddyCardWidget(QWidget):
         if button is not None:
             button.setEnabled(False)
             button.setText(f"已发送 ({self._cooldown_seconds}s)")
-            QTimer.singleShot(self._cooldown_seconds * 1000, lambda: self._restore_button(kind))
+            QTimer.singleShot(self._cooldown_seconds * 1000, self, lambda: self._restore_button(kind))
         self.food_interaction_requested.emit(self.buddy, kind)
 
     def _request_interaction(self, kind: str) -> None:
@@ -2666,26 +2741,19 @@ class BuddyCardWidget(QWidget):
             self.interaction_blocked.emit(f"互动冷却中，请 {int(remaining) + 1} 秒后再试。")
             return
         self._cooldown_until[kind] = now + self._cooldown_seconds
-        button = self._buttons.get(kind)
-        if button is not None:
-            button.setEnabled(False)
-            button.setText(f"已发送 ({self._cooldown_seconds}s)")
-            QTimer.singleShot(self._cooldown_seconds * 1000, lambda: self._restore_button(kind))
+        self._sync_action_controls()
+        QTimer.singleShot(self._cooldown_seconds * 1000, self, lambda: self._restore_button(kind))
         self.interaction_requested.emit(self.buddy, kind)
 
     def _restore_button(self, kind: str) -> None:
-        button = self._buttons.get(kind) or self._food_buttons.get(kind)
-        if button is None:
+        key = f"food:{kind}" if kind in self._food_buttons else kind
+        remaining = self._cooldown_until.get(key, 0) - time.monotonic()
+        if remaining > 0:
+            QTimer.singleShot(max(1, int(remaining * 1000) + 1), self, lambda: self._restore_button(kind))
             return
-        labels = {
-            "visit": "串门",
-            "cheer": _reaction_label(self.buddy),
-            "food_coffee": "请咖啡", "food_milk_tea": "请奶茶",
-            "food_tea": "敬茶", "food_cake": "请蛋糕",
-        }
-        button.setText(labels.get(kind, "互动"))
-        if not bool(self.buddy.get("is_self")):
-            button.setEnabled(True)
+        if kind in self._food_buttons:
+            self._food_buttons[kind].setText(dict(BUDDY_FEED_ITEMS)[kind])
+        self._sync_action_controls()
 
 
 class RoomPetCardWidget(QWidget):

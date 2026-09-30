@@ -1,4 +1,4 @@
-"""验证房间状态、清楚的身份状态分隔、互动菜单冷却与空闲暂停。"""
+"""验证房间状态、清楚的身份状态分隔、直接互动按钮冷却与空闲暂停。"""
 
 from __future__ import annotations
 
@@ -89,11 +89,11 @@ def test_first_open_does_not_enter_any_room_implicitly():
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
-def test_interaction_menu_action_has_a_visible_cooldown():
+def test_direct_interaction_button_has_a_visible_cooldown():
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"user_id": "peer", "nickname": "搭子", "online": True, "working": True})
     button = widget._buttons["visit"]
-    button.trigger()
+    button.click()
     app.processEvents()
     assert not button.isEnabled()
     assert "已发送" in button.text()

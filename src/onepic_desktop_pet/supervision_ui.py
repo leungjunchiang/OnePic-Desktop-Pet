@@ -1,4 +1,4 @@
-"""本人一次开放训导范围，搭子直接监督；服务端版本保护跨设备授权。"""
+"""训导授权使用服务端版本；后台读取不锁表单，超时和异常统一恢复请求状态。"""
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QComboBox, QListWidget, QListWidgetItem, QPushButton
@@ -18,6 +18,13 @@ class SupervisionPolicyWidget(QWidget):
         self.dirty = False
         self.pending = False
         self.generation = 0
+        self._request_id = 0
+        self._edit_serial = 0
+        self._preserve_edits = False
+        self._save_requested = False
+        self._mutation_pending = False
+        self.request_timeout_ms = 30000
+        self._request_timer = None
         self._policy = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 10)
@@ -72,50 +79,107 @@ class SupervisionPolicyWidget(QWidget):
         open_room.clicked.connect(lambda: self._open_room(self.supervising.currentItem()))
         root.addWidget(open_room)
         self._set_controls(False)
+        self.setStyleSheet(
+            "QComboBox{background:#f7fbfc;color:#203847;border:1px solid #a8c4c9;"
+            "border-radius:5px;padding:4px 8px;}"
+            "QComboBox:disabled{background:#e8edef;color:#596b74;border-color:#c2ccd0;}"
+            "QCheckBox:disabled{color:#596b74;}"
+        )
         self.timer = QTimer(self); self.timer.setInterval(10000)
         self.timer.timeout.connect(self.refresh); self.timer.start()
 
     def _set_controls(self, ready):
-        for widget in (self.enabled, self.scope, self.selected, self.invitee, self.invite, self.uninvite,
-                       self.officer_scope, self.officers, self.save, *self.permissions.values()):
-            widget.setEnabled(ready)
+        self.enabled.setEnabled(ready)
+        for widget in (self.scope, self.selected, self.invitee, self.officer_scope,
+                       self.officers, *self.permissions.values()):
+            widget.setEnabled(ready and self.enabled.isChecked())
+        for widget in (self.invite, self.uninvite):
+            widget.setEnabled(ready and self.enabled.isChecked() and not self.pending)
+        self.save.setEnabled(ready and not self._mutation_pending)
+        self.reload.setEnabled(not self.pending)
 
     def _changed(self, *_):
+        self._edit_serial += 1
         self.dirty = True
         self.selected.setVisible(self.scope.currentData() == "selected")
         self.officers.setVisible(self.officer_scope.currentData() == "selected")
         for widget in (self.invited_hint, self.invitee, self.invite, self.uninvite):
             widget.setVisible(self.scope.currentData() == "invited")
+        self._set_controls(self.revision is not None)
 
     def _rpc(self, name, body, callback):
+        if self.pending:
+            return
         account = self.engine_provider().store.account_id
         generation = self.generation
+        self._request_id += 1
+        request_id = self._request_id
+        edit_serial = self._edit_serial
+        mutation = name != "lili_supervision_snapshot"
         self.pending = True
-        self._set_controls(False)
-        def done(payload):
-            if account != self.engine_provider().store.account_id or generation != self.generation:
-                return
+        self._mutation_pending = mutation
+        self._set_controls(self.revision is not None)
+        self.status.setText("正在保存授权…" if mutation else "正在同步授权…")
+        timeout = QTimer(self)
+        self._request_timer = timeout
+        timeout.setSingleShot(True)
+        def current():
+            return (self.pending and request_id == self._request_id
+                    and account == self.engine_provider().store.account_id
+                    and generation == self.generation)
+        def finish():
+            timeout.stop(); timeout.deleteLater()
+            self._request_timer = None
             self.pending = False
-            callback(payload)
-        def failed(error):
-            if account != self.engine_provider().store.account_id or generation != self.generation:
-                return
-            self.pending = False
+            self._mutation_pending = False
+            self._preserve_edits = False
             self._set_controls(self.revision is not None)
-            self.enabled.setChecked(bool(self._policy.get("enabled")))
-            self.status.setText(str(error)[:300] + "\n可重新读取授权后重试。")
-        self.rpc_executor(name, body, done, failed)
+            if self._save_requested:
+                self._save_requested = False
+                self._save()
+        def report_error(error):
+            if mutation and edit_serial == self._edit_serial:
+                # A failed master save must not claim that consent was revoked.
+                self.enabled.setChecked(bool(self._policy.get("enabled")))
+            self.status.setText(str(error)[:300] + "\n可重新读取授权后重试，未保存的其他设置仍保留。")
+        def done(payload):
+            if not current():
+                return
+            try:
+                self._preserve_edits = edit_serial != self._edit_serial or (not mutation and self.dirty)
+                callback(payload)
+            except Exception as error:
+                report_error(error)
+            finally:
+                finish()
+        def failed(error):
+            if not current():
+                return
+            try:
+                report_error(error)
+            finally:
+                finish()
+        timeout.timeout.connect(lambda: failed("同步授权超时"))
+        timeout.start(self.request_timeout_ms)
+        try:
+            self.rpc_executor(name, body, done, failed)
+        except Exception as error:
+            failed(error)
 
     def refresh(self):
         current = self.engine_provider().store.account_id
         if current != self.account_id:
+            if self._request_timer is not None:
+                self._request_timer.stop(); self._request_timer.deleteLater()
+                self._request_timer = None
             self.generation += 1
             self.account_id = current
             self.revision = None; self.dirty = False; self.pending = False
+            self._save_requested = False; self._mutation_pending = False
             self._policy = {}
             self.selected.clear(); self.officers.clear(); self.supervising.clear()
             self.enabled.setChecked(False); self._set_controls(False)
-        if self.isVisible() and not self.pending and not self.dirty:
+        if self.isVisible() and not self.pending:
             self._rpc("lili_supervision_snapshot", {}, self._apply)
 
     def showEvent(self, event):
@@ -124,14 +188,22 @@ class SupervisionPolicyWidget(QWidget):
 
     def _apply(self, data):
         if not isinstance(data, dict) or not isinstance(data.get("policy"), dict):
-            self.status.setText("未能读取授权，请重新读取。")
-            return
+            raise ValueError("未能读取有效授权，请重新读取。")
         p = data["policy"]
         if self.account_id != self.engine_provider().store.account_id:
             return
-        self._policy = p
-        self.revision = int(p.get("revision", 0))
-        self.engine_provider().apply_supervision(data)
+        revision = int(p.get("revision", 0))
+        if self.revision is not None and revision < self.revision:
+            self.status.setText("忽略较旧的授权版本，当前设置保持不变。")
+            return
+        if not self.engine_provider().apply_supervision(data):
+            self.status.setText("忽略较旧的授权版本，当前设置保持不变。")
+            return
+        self._policy = dict(p)
+        self.revision = revision
+        if self._preserve_edits:
+            self.status.setText("授权已同步；保留你正在修改的设置，请保存后生效。")
+            return
         self.enabled.setChecked(bool(p.get("enabled")))
         self.scope.setCurrentIndex(max(0, self.scope.findData(p.get("scope", "selected"))))
         self.officer_scope.setCurrentIndex(max(0, self.officer_scope.findData(p.get("officer_scope", "selected"))))
@@ -174,6 +246,9 @@ class SupervisionPolicyWidget(QWidget):
                 if listing.item(i).checkState() == Qt.CheckState.Checked]
 
     def _save(self):
+        if self.pending:
+            self._save_requested = True
+            return
         if self.revision is None or self.account_id != self.engine_provider().store.account_id:
             self.refresh(); return
         policy = {"enabled": self.enabled.isChecked(), "scope": self.scope.currentData(),

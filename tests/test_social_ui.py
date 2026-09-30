@@ -1078,12 +1078,12 @@ def test_wealth_leaderboard_is_on_by_default_but_preserves_explicit_opt_out() ->
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
-def test_supply_actions_are_in_compact_interaction_menu() -> None:
+def test_core_interactions_are_visible_and_supplies_share_feed_menu() -> None:
     app = QApplication.instance() or QApplication([])
     widget = BuddyCardWidget({"nickname": "搭子", "online": True, "working": False})
     buttons = {button.text() for button in widget.findChildren(QPushButton)}
-    assert buttons == {"查看搭子", "互动 ▾"}
-    assert {"请咖啡", "请奶茶", "敬茶", "请蛋糕"} <= {action.text() for action in widget.interaction_menu.actions()}
+    assert buttons == {"查看搭子", "🏠 串门", "💪 加油", "😈 嘲讽", "🎁 投喂⌄"}
+    assert {"☕ 咖啡", "🧋 奶茶", "🍵 茶", "🍰 蛋糕"} == {action.text() for action in widget.feed_menu.actions()}
     assert all(button.minimumHeight() >= 32 for button in widget.findChildren(QPushButton))
     sent = []
     widget.food_interaction_requested.connect(lambda buddy, kind: sent.append((buddy, kind)))
@@ -1461,7 +1461,9 @@ def test_taunt_action_is_visible_for_rest_or_offline_cached_buddies(monkeypatch)
     )
     for payload in payloads:
         card = BuddyCardWidget(payload)
-        assert any(action.text() == "嘲讽" for action in card.interaction_menu.actions())
+        assert card._buttons["taunt"].text() == "😈 嘲讽"
+        assert card._buttons["taunt"].isEnabled()
+        assert not card._buttons["cheer"].isEnabled()
         card.close(); card.deleteLater()
     app.processEvents()
 
