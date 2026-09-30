@@ -1,6 +1,6 @@
 """
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
-喂食、离线对话、陪伴动作、工作计时和自拍成片。
+喂食、离线对话、陪伴动作、工作计时、专注导航入口和自拍成片。
 
 测试在 Qt 的离屏平台中创建真实 PetWindow，但不显示到用户桌面、不写配置文件，
 也不启动系统托盘。重点检查透明区域不会形成完整矩形点击区、重复绘制能够复用缓存，
@@ -4647,3 +4647,24 @@ def test_activity_transition_uses_fixed_target_and_precise_200ms_timer() -> None
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_discipline_entry_opens_shared_focus_navigation_without_another_timer() -> None:
+    app, window = _create_window()
+    session = window.focus_session
+    try:
+        window.show_discipline_dialog()
+        app.processEvents()
+        hub = window._social_dialog
+        assert hub is not None and hub.isVisible()
+        assert hub.tabs.currentIndex() == 2
+        assert hub.focus_navigation.currentIndex() == 2
+        assert hub.focus_workspace.store is window._ensure_discipline_engine().store
+        assert window.focus_session is session
+        window.show_discipline_dialog()
+        assert window._social_dialog is hub
+        assert window._discipline_dialog is None
+    finally:
+        if window._social_dialog is not None:
+            window._social_dialog.close()
+        window.close(); window.deleteLater(); app.processEvents()

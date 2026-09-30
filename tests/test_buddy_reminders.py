@@ -1,4 +1,4 @@
-"""验证长期搭子订阅事件的本地重试、去重和非激活提示计时。"""
+"""验证长期订阅、自习室提醒控件、事件重试、去重和非激活提示计时。"""
 
 import os
 import time
@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit
 
+from onepic_desktop_pet.buddy_study_ui import BuddyStudyDialog
 from onepic_desktop_pet.buddy_reminders import BuddyReminderStore
 from onepic_desktop_pet.buddy_reminder_toast import BuddyReminderToast, ReminderToastClock
 from onepic_desktop_pet.social_ui import BuddyCardWidget, SocialHubDialog, SocialSyncThread
@@ -104,22 +105,34 @@ def test_toast_show_and_close_do_not_take_keyboard_focus() -> None:
         editor.close()
 
 
-def test_buddy_card_has_independent_persistent_reminder_controls() -> None:
+def test_buddy_study_has_independent_persistent_reminder_controls() -> None:
     app = QApplication.instance() or QApplication([])
-    card = BuddyCardWidget({
+    class Client:
+        signed_in = True
+        session = SimpleNamespace(user_id="viewer")
+    buddy = {
         "user_id": "buddy-b", "nickname": "张三", "status": "offline",
         "online": False, "on_focus_start": True, "on_focus_end": False,
-    })
+    }
+    card = BuddyCardWidget(buddy)
+    hub = SocialHubDialog(Client())
+    emitted = []
+    hub._set_subscription = lambda _buddy, kind, enabled: emitted.append((kind, enabled))
+    room = BuddyStudyDialog(hub, buddy)
     try:
-        controls = {box.text(): box for box in card.findChildren(QCheckBox)}
-        assert controls["🔔 开工提醒"].isChecked()
-        assert not controls["🔔 下班提醒"].isChecked()
-        emitted = []
-        card.subscription_requested.connect(lambda _buddy, kind, enabled: emitted.append((kind, enabled)))
-        controls["🔔 下班提醒"].setChecked(True)
+        assert card.findChildren(QCheckBox) == []
+        assert "开工提醒已开启" in card.reminder_summary.text()
+        controls = room.subscriptions
+        assert controls["start_work"].isChecked()
+        assert not controls["finish_work"].isChecked()
+        controls["finish_work"].click()
         assert emitted == [("finish_work", True)]
+        assert controls["start_work"].isChecked()
     finally:
-        card.close()
+        room.close(); room.deleteLater()
+        hub.close(); hub.deleteLater()
+        card.close(); card.deleteLater()
+        app.processEvents()
 
 
 def test_server_reminder_snapshot_overrides_stale_device_dashboard_without_presence_notifications() -> None:
