@@ -284,6 +284,9 @@ class UnifiedMenuModel:
         entries.extend(work_entries)
         if report_item is not None:
             entries.append(report_item)
+        discipline_item = self._optional("训导主任与工作计划…", "discipline")
+        if discipline_item is not None:
+            entries.append(discipline_item)
 
         entries.append(MenuItemSpec.divider())
         entries.extend(

@@ -265,6 +265,8 @@ from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .buddy_reminders import BuddyReminderStore, NOTIFICATION_LIFETIME_SECONDS, _parse_time
 from .buddy_reminder_toast import BuddyReminderToast
+from .discipline import DisciplineEngine, DisciplineStore, as_beijing
+from .discipline_ui import DisciplineDialog, DisciplineSupervisorDialog, FinishReviewDialog
 from .qt_lifecycle import request_stop_all, running_threads
 from .lifecycle_log import lifecycle_log
 from .performance import EventLoopLagTracker, PerformanceMonitor
@@ -277,6 +279,7 @@ from .social_ui import (
     SocialHeartbeatWorker,
     SocialHubDialog,
     SocialProfileThread,
+    SocialBuddyRpcThread,
     SocialSyncThread,
     SocialVisitResponseThread,
 )
@@ -632,6 +635,19 @@ class PetWindow(QWidget):
         self.focus_session.set_period_seconds_provider(self._shared_focus_period_seconds)
         self._focus_quality_tracker = FocusQualityTracker()
         self._active_focus_account_id = ""
+        self._discipline_store: DisciplineStore | None = None
+        self._discipline_account_id: str | None = None
+        self._discipline_engine: DisciplineEngine | None = None
+        self._discipline_dialog: DisciplineDialog | None = None
+        self._discipline_supervisor_dialog: DisciplineSupervisorDialog | None = None
+        self._discipline_supervisor_account_id = ""
+        self._discipline_rpc_threads: list[SocialBuddyRpcThread] = []
+        self._discipline_finish_review_dialog: FinishReviewDialog | None = None
+        self._discipline_break_session_key = ""
+        self._discipline_sync_thread: SocialBuddyRpcThread | None = None
+        self._discipline_sync_inflight = False
+        self._discipline_sync_last_attempt_at = 0.0
+        self._discipline_sync_unavailable = False
         # Read-only account-wide display projection.  This is deliberately
         # separate from ``_shared_focus_period_seconds`` so reports, weekly
         # statistics, sync payloads and rewards retain their existing source.
@@ -1150,6 +1166,11 @@ class PetWindow(QWidget):
         self.work_clock_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.work_clock_timer.timeout.connect(self._work_timer_tick)
         self.work_clock_timer.start()
+
+        self.discipline_tick_timer = QTimer(self)
+        self.discipline_tick_timer.setInterval(60_000)
+        self.discipline_tick_timer.timeout.connect(self._discipline_tick)
+        self.discipline_tick_timer.start()
 
         # Keep the one-second clock strictly presentation-only.  Persistence,
         # reminders and reward bookkeeping are maintenance work and must not
@@ -4070,6 +4091,20 @@ class PetWindow(QWidget):
         self.focus_analytics.begin_focus_session()
         self._invalidate_focus_projection("focus_started")
         if started:
+            progress = self._discipline_progress_seconds()
+            if self._discipline_break_session_key:
+                self._record_discipline_work_event(
+                    "end_break", progress[0], progress[1],
+                    metadata={"session_key": self._discipline_break_session_key},
+                )
+                self._discipline_break_session_key = ""
+            # Lifecycle restores and wakeups resume a session without creating
+            # a new work transition. A user initiated resume is a new event.
+            if previous_pause_reason not in {"sleep", "lock", "display_off", "restart_safe_seal", "account_switch"}:
+                self._record_discipline_work_event(
+                    "start_work", progress[0], progress[1],
+                    metadata={"session_id": str(self.work_timer.focus_session_id or "")},
+                )
             self.set_paused(True)
             self._queue_buddy_work_transition(
                 "focused", self.work_timer.focus_session_id,
@@ -4170,6 +4205,14 @@ class PetWindow(QWidget):
         )
         if was_running:
             self._queue_buddy_work_transition("resting", str(session_id or ""))
+            if reason not in {"sleep", "lock", "display_off", "restart_safe_seal", "account_switch"}:
+                self._discipline_break_session_key = str(session_id or uuid.uuid4())
+                progress = self._discipline_progress_seconds()
+                self._record_discipline_work_event(
+                    "start_break", progress[0], progress[1],
+                    at=effective_end_at,
+                    metadata={"session_key": self._discipline_break_session_key, "reason": reason},
+                )
         # This must happen in the same transition that changes the local UI
         # to paused. Do not delegate it solely to ``_schedule_social_tick``:
         # that helper deliberately waits for an authenticated dashboard loop,
@@ -4292,8 +4335,11 @@ class PetWindow(QWidget):
                 self.food_scene_timer.stop()
         return reply
 
-    def finish_work_timer(self) -> CompanionReply:
+    def finish_work_timer(self, *_args, _skip_review: bool = False) -> CompanionReply | None:
         """完成本次工作、保留今日累计并播放庆祝动作。"""
+
+        if not _skip_review and self._request_discipline_finish_review():
+            return None
 
         self._record_user_interaction()
         self._reset_idle_episode()
@@ -4310,6 +4356,17 @@ class PetWindow(QWidget):
             completed=True,
             session_id=session_id,
             started_at=segment_started_at,
+        )
+        progress = self._discipline_progress_seconds()
+        if self._discipline_break_session_key:
+            self._record_discipline_work_event(
+                "end_break", progress[0], progress[1],
+                metadata={"session_key": self._discipline_break_session_key},
+            )
+            self._discipline_break_session_key = ""
+        self._record_discipline_work_event(
+            "finish_work", progress[0], progress[1],
+            metadata={"session_id": str(session_id or "")},
         )
         self.focus_session.finish()
         if session_id:
@@ -4360,6 +4417,62 @@ class PetWindow(QWidget):
         if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
             self._work_report_dialog.request_refresh(force=True)
         return reply
+
+    def _request_discipline_finish_review(self) -> bool:
+        """Present an early-finish review before sealing a user requested finish."""
+
+        try:
+            engine = self._ensure_discipline_engine()
+            settings = engine.store.settings
+            if not engine.enabled:
+                return False
+            today, week = self._discipline_progress_seconds()
+            now = as_beijing()
+            progress = engine.progress(today, week, now)
+            early = max(0, int((settings.finish_at(now.date()) - now).total_seconds() // 60))
+            officer = settings.mode == "officer"
+            if not officer and early <= settings.early_finish_grace_minutes:
+                return False
+            summary = engine.daily_summary(now.date(), today, week)
+            detail = (
+                f"今日计划：{format_work_duration(progress.daily_target_seconds)}\n"
+                f"已完成：{format_work_duration(today)}\n"
+                f"今日缺口：{format_work_duration(progress.daily_gap_seconds)}\n"
+                f"本周剩余：{format_work_duration(progress.weekly_remaining_seconds)}\n\n"
+                f"开工：{summary['actual_start'] or '尚未开工'}　迟到：{summary['lateness_minutes']} 分钟\n"
+                f"长休息：{summary['long_break_count']} 次　超时：{format_work_duration(summary['break_overtime_seconds'])}\n"
+                f"计划下班：{settings.finish_time}　现在：{now.strftime('%H:%M')}\n\n"
+                + ("确认后会把今日结果记入纪律账本。" if officer else f"今天将提前 {early} 分钟下班。")
+            )
+            if self._discipline_finish_review_dialog is None:
+                self._discipline_finish_review_dialog = FinishReviewDialog(
+                    "训导主任 · 今日下班审查" if officer else "提前下班确认",
+                    detail,
+                    confirm_label="确认下班并记账" if officer else "确认下班",
+                    parent=self,
+                )
+                self._discipline_finish_review_dialog.finish_confirmed.connect(
+                    lambda: self.finish_work_timer(_skip_review=True)
+                )
+            else:
+                # A new dialog keeps the snapshot current if the previous
+                # review was closed while the focus timer continued running.
+                old = self._discipline_finish_review_dialog
+                old.close()
+                self._discipline_finish_review_dialog = FinishReviewDialog(
+                    "训导主任 · 今日下班审查" if officer else "提前下班确认",
+                    detail,
+                    confirm_label="确认下班并记账" if officer else "确认下班",
+                    parent=self,
+                )
+                self._discipline_finish_review_dialog.finish_confirmed.connect(
+                    lambda: self.finish_work_timer(_skip_review=True)
+                )
+            self._discipline_finish_review_dialog.open()
+            return True
+        except Exception:
+            LOGGER.exception("discipline finish review failed")
+            return False
 
     # Public state-machine commands.  The older *_work_timer names remain as
     # compatibility entry points for menus and plugins, while all callers
@@ -7850,6 +7963,227 @@ class PetWindow(QWidget):
             self._buddy_reminder_store = store
         return store
 
+    def _ensure_discipline_engine(self) -> DisciplineEngine:
+        """Load the private discipline ledger for the currently selected account."""
+
+        account_id = str(self._active_focus_account_id or "").strip()
+        if self._discipline_store is None or self._discipline_account_id != account_id:
+            self._discipline_store = DisciplineStore(
+                account_id, persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
+            )
+            self._discipline_account_id = account_id
+            self._discipline_engine = DisciplineEngine(self._discipline_store)
+            self._discipline_break_session_key = ""
+            if self._discipline_dialog is not None:
+                self._discipline_dialog.close()
+                self._discipline_dialog = None
+        assert self._discipline_engine is not None
+        return self._discipline_engine
+
+    def _discipline_progress_seconds(self) -> tuple[int, int]:
+        """Read the same account-wide calendar projection shown by the app."""
+
+        projection = self._shared_focus_period_seconds()
+        return (
+            max(0, int(projection.get("today_seconds", 0) or 0)),
+            max(0, int(projection.get("week_seconds", 0) or 0)),
+        )
+
+    def _record_discipline_work_event(
+        self, event_type: str, today_seconds: int, week_seconds: int, *,
+        at: datetime | None = None, metadata: dict | None = None,
+    ) -> None:
+        try:
+            engine = self._ensure_discipline_engine()
+            notices = engine.record_work_event(
+                event_type, today_seconds, week_seconds, at=at, metadata=metadata,
+            )
+            for notice in notices:
+                self._show_discipline_notice(notice)
+            self._sync_discipline_state()
+            if self._discipline_dialog is not None and self._discipline_dialog.isVisible():
+                self._discipline_dialog._render_summaries()
+        except Exception:
+            LOGGER.exception("discipline event processing failed: %s", event_type)
+
+    @_guard_qt_callback
+    def _discipline_tick(self) -> None:
+        """Run local plan reminders and queue isolated account synchronization."""
+
+        try:
+            engine = self._ensure_discipline_engine()
+            self._sync_discipline_state()
+            if not engine.enabled:
+                return
+            today, week = self._discipline_progress_seconds()
+            now = as_beijing()
+            notices = engine.evaluate(today, week, now)
+            notices.extend(engine.break_notices(now))
+            for notice in notices:
+                self._show_discipline_notice(notice)
+            if self._discipline_dialog is not None and self._discipline_dialog.isVisible():
+                self._discipline_dialog._render_summaries()
+        except Exception:
+            LOGGER.exception("discipline reminder tick failed")
+
+    def _sync_discipline_state(self) -> None:
+        """Sync only the account plan and append-only ledger through its own RPC."""
+
+        if (
+            self._discipline_sync_unavailable
+            or self._discipline_sync_inflight
+            or not bool(getattr(self.social_client, "signed_in", False))
+        ):
+            return
+        now = time.monotonic()
+        if now - self._discipline_sync_last_attempt_at < 60:
+            return
+        store = self._ensure_discipline_engine().store
+        account_id = str(self._active_focus_account_id or "")
+        if not account_id:
+            return
+        self._discipline_sync_last_attempt_at = now
+        self._discipline_sync_inflight = True
+        thread = SocialBuddyRpcThread(
+            self.social_client, "lili_discipline_sync", store.sync_payload(), self,
+        )
+        self._discipline_sync_thread = thread
+        thread.completed.connect(
+            lambda result, current=account_id, worker=thread: self._discipline_sync_completed(
+                result, current, worker,
+            )
+        )
+        thread.failed.connect(
+            lambda error, current=account_id, worker=thread: self._discipline_sync_failed(
+                error, current, worker,
+            )
+        )
+        thread.finished.connect(lambda worker=thread: self._discipline_sync_finished(worker))
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _discipline_sync_completed(self, result, account_id: str, thread) -> None:
+        if account_id != str(self._active_focus_account_id or ""):
+            return
+        try:
+            self._ensure_discipline_engine().store.merge_remote(result)
+            if self._discipline_dialog is not None and self._discipline_dialog.isVisible():
+                self._discipline_dialog._render_summaries()
+        except Exception:
+            LOGGER.exception("discipline cloud state merge failed")
+
+    def _discipline_sync_failed(self, error, account_id: str, thread) -> None:
+        message = str(error)
+        kind = str(getattr(error, "kind", "") or "")
+        status = getattr(error, "status", None)
+        LOGGER.warning("discipline account sync failed (%s, %s): %s", kind, status, message[:240])
+        # An unapplied optional migration is a permanent endpoint mismatch for
+        # this process; avoid retrying its 404 every minute.
+        if status == 404 or kind in {"config", "not_found"}:
+            self._discipline_sync_unavailable = True
+
+    def _discipline_sync_finished(self, thread) -> None:
+        if self._discipline_sync_thread is thread:
+            self._discipline_sync_thread = None
+        self._discipline_sync_inflight = False
+
+    def _show_discipline_notice(self, notice) -> None:
+        """Show a low-focus toast; the toast itself never activates the app."""
+
+        if detect_quiet_mode().blocked:
+            return
+        toast = BuddyReminderToast(
+            notice.title, notice.detail,
+            mini_title=f"📋 {notice.title[:18]}",
+        )
+        toast.open_requested.connect(self.show_discipline_dialog)
+        self._buddy_reminder_toasts = [item for item in self._buddy_reminder_toasts if item.isVisible()]
+        if len(self._buddy_reminder_toasts) >= 4:
+            self._buddy_reminder_toasts.pop(0).close()
+        toast.show_passive(stack_index=len(self._buddy_reminder_toasts))
+        self._buddy_reminder_toasts.append(toast)
+
+    def show_discipline_dialog(self, *_args) -> None:
+        """Open the account's daily plan and append-only discipline ledger."""
+
+        engine = self._ensure_discipline_engine()
+        if self._discipline_dialog is None:
+            self._discipline_dialog = DisciplineDialog(
+                engine.store, engine, self._discipline_progress_seconds,
+                supervisor_open_callback=self.show_discipline_supervisor_dialog,
+                parent=self,
+            )
+        self._discipline_dialog._render_summaries()
+        self._discipline_dialog.show()
+        self._discipline_dialog.raise_()
+        self._discipline_dialog.activateWindow()
+
+    def show_discipline_supervisor_dialog(self, *_args) -> None:
+        """Open the two-party consent panel for trusted discipline reports."""
+
+        if not bool(getattr(self.social_client, "signed_in", False)):
+            QMessageBox.information(self, "训导主任授权", "请先登录搭子自习室并添加对方为搭子，再设置训导主任授权。")
+            self.open_social_hub()
+            return
+        account_id = str(self._current_social_user_id() or "")
+        if self._discipline_supervisor_account_id != account_id:
+            if self._discipline_supervisor_dialog is not None:
+                self._discipline_supervisor_dialog.close()
+            self._discipline_supervisor_dialog = None
+            self._discipline_supervisor_account_id = account_id
+        if self._discipline_supervisor_dialog is None:
+            self._discipline_supervisor_dialog = DisciplineSupervisorDialog(
+                self._discipline_buddy_choices, self._discipline_rpc, self,
+            )
+        else:
+            self._discipline_supervisor_dialog.refresh_buddies()
+            self._discipline_rpc(
+                "lili_discipline_supervisor_snapshot", {},
+                self._discipline_supervisor_dialog._apply_snapshot,
+                self._discipline_supervisor_dialog._failed,
+            )
+        self._discipline_supervisor_dialog.show()
+        self._discipline_supervisor_dialog.raise_()
+        self._discipline_supervisor_dialog.activateWindow()
+
+    def _discipline_buddy_choices(self) -> list[dict]:
+        """Return only the already synchronized buddy list; never block UI on a fetch."""
+
+        dialog = self._social_dialog
+        data = (getattr(dialog, "data", {}) or {}) if dialog is not None else {}
+        rows = data.get("buddies", []) if isinstance(data, dict) else []
+        return [
+            dict(row) for row in rows
+            if isinstance(row, dict) and not bool(row.get("is_self"))
+        ]
+
+    def _discipline_rpc(self, name: str, body: dict, callback, failure) -> None:
+        """Run an explicit supervisor action off the GUI thread."""
+
+        account_id = str(self._current_social_user_id() or "")
+        thread = SocialBuddyRpcThread(self.social_client, name, body, self)
+        self._discipline_rpc_threads.append(thread)
+        thread.completed.connect(
+            lambda result, expected=account_id: callback(result)
+            if expected == str(self._current_social_user_id() or "") else None,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.failed.connect(
+            lambda error, expected=account_id: failure(error)
+            if expected == str(self._current_social_user_id() or "") else None,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.finished.connect(
+            lambda worker=thread: self._discipline_rpc_finished(worker),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _discipline_rpc_finished(self, thread: SocialBuddyRpcThread) -> None:
+        if thread in self._discipline_rpc_threads:
+            self._discipline_rpc_threads.remove(thread)
+
     def _queue_buddy_work_transition(
         self, status: str, session_id: str, *, silent: bool = False,
     ) -> None:
@@ -11047,6 +11381,7 @@ class PetWindow(QWidget):
             "work_resume": lambda _checked=False: self.start_work_timer(),
             "work_finish": lambda _checked=False: self.finish_work_timer(),
             "social": lambda _checked=False: self.open_social_hub(),
+            "discipline": lambda _checked=False: self.show_discipline_dialog(),
             "quick_panel": lambda _checked=False: self.show_quick_panel(),
             "music_toggle": lambda _checked=False: self.control_music("toggle"),
             "music_previous": lambda _checked=False: self.control_music("previous"),

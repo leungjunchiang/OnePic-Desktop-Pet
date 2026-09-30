@@ -30,6 +30,9 @@ jobs:
       - name: Apply and verify durable buddy reminder schema
         shell: pwsh
         run: ./scripts/apply_supabase_buddy_reminders.ps1
+      - name: Apply and verify discipline plan and consent schema
+        shell: pwsh
+        run: ./scripts/apply_supabase_discipline.ps1
 
   windows-build:
     runs-on: windows-latest
