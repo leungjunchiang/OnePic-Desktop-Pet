@@ -7,6 +7,7 @@ Windows 使用系统 API，macOS 在可用时使用 Cocoa；平台能力缺失�
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
 import sys
 from pathlib import Path
@@ -120,6 +121,61 @@ DISPLAY_MODE_MAXIMIZED = "maximized"
 DISPLAY_MODE_FULLSCREEN = "fullscreen"
 
 
+class _WindowsRect(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_long) for name in ("left", "top", "right", "bottom")]
+
+
+class _WindowsMonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", _WindowsRect),
+                ("rcWork", _WindowsRect), ("dwFlags", wintypes.DWORD)]
+
+
+def _bind_windows_api(library, name, arguments, result):
+    """声明原生指针宽度；纯 Python 测试替身保持原有调用契约。"""
+    function = getattr(library, name, None)
+    if isinstance(function, ctypes._CFuncPtr):
+        function.argtypes, function.restype = arguments, result
+    return function
+
+
+def _prepare_windows_geometry_api(user32):
+    """所有 HWND/HMONITOR 使用指针类型，避免 64 位默认 c_int 截断。"""
+    signatures = {
+        "GetForegroundWindow": ([], wintypes.HWND),
+        "GetAncestor": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+        "MonitorFromWindow": ([wintypes.HWND, wintypes.DWORD], wintypes.HANDLE),
+        # windll caches function objects across modules. Accept an opaque
+        # output pointer so existing equivalent RECT/MONITORINFO definitions
+        # in other local probes are not rejected by ctypes type checking.
+        "GetMonitorInfoW": ([wintypes.HANDLE, ctypes.c_void_p], wintypes.BOOL),
+        "GetWindowRect": ([wintypes.HWND, ctypes.c_void_p], wintypes.BOOL),
+        "GetClassNameW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
+        "GetWindowLongPtrW": ([wintypes.HWND, ctypes.c_int], ctypes.c_ssize_t),
+        "GetWindowLongW": ([wintypes.HWND, ctypes.c_int], wintypes.LONG),
+    }
+    for name in ("IsWindow", "IsWindowVisible", "IsIconic", "IsZoomed"):
+        signatures[name] = ([wintypes.HWND], wintypes.BOOL)
+    for name, (arguments, result) in signatures.items():
+        _bind_windows_api(user32, name, arguments, result)
+
+
+def _windows_visible_frame_bounds(user32, hwnd):
+    """优先 DWM 可见边界，失败回退 GetWindowRect；不读取窗口内容。"""
+    if not isinstance(getattr(user32, "GetWindowRect", None), ctypes._CFuncPtr):
+        return None
+    try:
+        get_bounds = _bind_windows_api(ctypes.windll.dwmapi, "DwmGetWindowAttribute",
+            [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD], wintypes.LONG)
+        rect = _WindowsRect()
+        if get_bounds(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect)) == 0:
+            bounds = (rect.left, rect.top, rect.right, rect.bottom)
+            if rect.right > rect.left and rect.bottom > rect.top:
+                return bounds
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+    return None
+
+
 def _is_macos_desktop_shell(name: str) -> bool:
     """Return whether *name* is macOS's desktop/compositor, not a document app."""
 
@@ -171,23 +227,13 @@ def _windows_foreground_is_normal_window(
         # style while resizing to the monitor. Geometry is still required by
         # the display-mode detector below.
         if style & (0x00C00000 | 0x00040000) and not (
-            allow_game_fullscreen or allow_presentation_fullscreen
+            allow_media_fullscreen or allow_game_fullscreen or allow_presentation_fullscreen
         ):
             return True
 
-        # Some Chromium builds keep the maximised bit while switching to
-        # borderless video fullscreen.  For non-browser apps, IsZoomed remains
-        # a useful conservative guard (and protects normal maximised apps
-        # whose style query is unavailable).  A known player/browser is
-        # allowed through only after the style check above has confirmed it is
-        # borderless; geometry is still checked by the display-mode detector.
-        is_zoomed = getattr(user32, "IsZoomed", None)
-        if is_zoomed is not None and bool(is_zoomed(hwnd)):
-            return not (
-                allow_media_fullscreen
-                or allow_game_fullscreen
-                or allow_presentation_fullscreen
-            )
+        # Fullscreen browsers/players can retain frame styles, and borderless
+        # applications can retain IsZoomed. Neither bit vetoes a genuine
+        # monitor takeover; the monitor/work-area geometry decides below.
         return False
 
     except (AttributeError, OSError, TypeError, ValueError):
@@ -253,6 +299,11 @@ def _windows_foreground_process() -> str:
     try:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
+        _prepare_windows_geometry_api(user32)
+        _bind_windows_api(user32, "GetWindowThreadProcessId", [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD)
+        _bind_windows_api(kernel32, "OpenProcess", [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE)
+        _bind_windows_api(kernel32, "QueryFullProcessImageNameW", [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL)
+        _bind_windows_api(kernel32, "CloseHandle", [wintypes.HANDLE], wintypes.BOOL)
         hwnd = user32.GetForegroundWindow()
         process_id = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
@@ -296,7 +347,7 @@ def active_application_category() -> str:
 def _rect_close(
     left: tuple[int, int, int, int],
     right: tuple[int, int, int, int],
-    tolerance: int = 2,
+    tolerance: int = 4,
 ) -> bool:
     return all(abs(a - b) <= tolerance for a, b in zip(left, right))
 
@@ -304,37 +355,23 @@ def _rect_close(
 def _windows_foreground_rectangles(user32, hwnd):
     """Return foreground, monitor, and work-area rectangles without titles."""
 
-    class RECT(ctypes.Structure):
-        _fields_ = [
-            ("left", ctypes.c_long),
-            ("top", ctypes.c_long),
-            ("right", ctypes.c_long),
-            ("bottom", ctypes.c_long),
-        ]
-
-    class MONITORINFO(ctypes.Structure):
-        _fields_ = [
-            ("cbSize", ctypes.c_ulong),
-            ("rcMonitor", RECT),
-            ("rcWork", RECT),
-            ("dwFlags", ctypes.c_ulong),
-        ]
-
-    window_rect = RECT()
+    _prepare_windows_geometry_api(user32)
+    window_rect = _WindowsRect()
     if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
         return None
     monitor = user32.MonitorFromWindow(hwnd, 2)
     if not monitor:
         return None
-    info = MONITORINFO()
-    info.cbSize = ctypes.sizeof(MONITORINFO)
+    info = _WindowsMonitorInfo()
+    info.cbSize = ctypes.sizeof(info)
     if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
         return None
 
-    def values(rect: RECT) -> tuple[int, int, int, int]:
+    def values(rect: _WindowsRect) -> tuple[int, int, int, int]:
         return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
 
-    return values(window_rect), values(info.rcMonitor), values(info.rcWork)
+    visible_bounds = _windows_visible_frame_bounds(user32, hwnd)
+    return visible_bounds or values(window_rect), values(info.rcMonitor), values(info.rcWork)
 
 
 def _windows_foreground_display_mode(
@@ -344,6 +381,10 @@ def _windows_foreground_display_mode(
     *,
     reference_hwnd=None,
 ) -> str:
+    _prepare_windows_geometry_api(user32)
+    get_root = getattr(user32, "GetAncestor", None)
+    if get_root is not None:
+        hwnd = get_root(hwnd, 2) or hwnd  # GA_ROOT: browser/player child HWND -> top level.
     # A minimized or otherwise hidden HWND is not currently taking over the
     # desktop.  During a minimize transition Windows can briefly keep the
     # old HWND as the foreground handle; treating its stale geometry as a
@@ -569,6 +610,7 @@ def active_window_display_mode(
         return DISPLAY_MODE_NORMAL
     try:
         user32 = ctypes.windll.user32
+        _prepare_windows_geometry_api(user32)
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return DISPLAY_MODE_NORMAL
@@ -610,10 +652,10 @@ def active_fullscreen_video() -> bool:
     """Return true for a known player or browser in real fullscreen.
 
     A maximised Word/PDF/browser/IDE window is intentionally not enough
-    evidence.  Browser video fullscreen is identified by the browser process
-    plus a borderless monitor-sized foreground window; ordinary maximised
-    browser/document windows retain their caption or resize frame and remain
-    visible.  This helper reads only the process name and coarse window
+    evidence. Browser video fullscreen is identified by the browser process
+    plus visible bounds covering the complete monitor, even if caption/frame
+    styles remain. Ordinary maximised windows occupy its work area. This
+    helper reads only the process name and coarse window
     geometry, never page content or pixels.
     """
 

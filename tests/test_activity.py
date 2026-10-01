@@ -1,3 +1,4 @@
+"""前台窗口、原生全屏几何与跨显示器检测回归测试。"""
 from __future__ import annotations
 
 import sys
@@ -147,7 +148,7 @@ def test_windows_maximised_chatgpt_is_not_treated_as_fullscreen(monkeypatch) -> 
     monkeypatch.setattr(
         activity.ctypes,
         "windll",
-        SimpleNamespace(user32=_fake_windows_user32(zoomed=True)),
+        SimpleNamespace(user32=_fake_windows_user32(zoomed=True, style=0x00C00000 | 0x00040000)),
         raising=False,
     )
 
@@ -187,6 +188,8 @@ def test_windows_maximised_browser_is_not_treated_as_video_fullscreen(monkeypatc
             user32=_fake_windows_user32(
                 zoomed=True,
                 style=0x00C00000 | 0x00040000,
+                window_bounds=(0, 0, 1920, 1040),
+                work_bounds=(0, 0, 1920, 1040),
             )
         ),
         raising=False,

@@ -1,4 +1,4 @@
-"""复用一张用户回应卡和一个进度牌；监督者处置与用户输入严格分开。"""
+"""复用一张用户回应卡和一个进度牌；监督者处置与用户输入严格分开，被动层遵守全屏显示门禁。"""
 
 from __future__ import annotations
 
@@ -216,7 +216,8 @@ class DesktopCoachingSurface(QFrame):
                 self.label.text(), Qt.TextElideMode.ElideRight, self.width()-32))
             self.open_button.setToolTip(self.label.text())
             self.adjustSize()
-        self.show()
         parent = self.parentWidget()
         if hasattr(parent, "_show_nonactivating"):
             parent._show_nonactivating(self, always_on_top=True)
+        else:
+            self.show()

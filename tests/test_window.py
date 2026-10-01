@@ -916,7 +916,7 @@ def test_macos_pet_uses_a_low_frequency_nonactivating_topmost_watchdog(monkeypat
     app, window = _create_window()
     assert window.topmost_timer.isActive()
     assert window.topmost_timer.interval() == 3000
-    assert window.fullscreen_poll_timer.interval() == 200
+    assert window.fullscreen_poll_timer.interval() == 750
     window.close()
     window.deleteLater()
     app.processEvents()

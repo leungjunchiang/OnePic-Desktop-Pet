@@ -83,8 +83,12 @@ class NotificationManager(QObject):
             toast.close()
 
     def clear_all(self):
+        self.suspend_display()
+        self.baselines.clear()
+        self.shown_event_ids.clear()
+
+    def suspend_display(self):
+        """全屏只关闭展示；保留历史基线和已消费 ID，退出全屏不补弹。"""
         self.timer.stop()
         self.pending.clear()
         self.close_current()
-        self.baselines.clear()
-        self.shown_event_ids.clear()

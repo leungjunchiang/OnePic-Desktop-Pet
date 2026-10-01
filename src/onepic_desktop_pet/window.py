@@ -2,6 +2,8 @@
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
+同显示器全屏使用本地原生几何检测并实际隐藏；所有置顶修复服从隐藏状态，退出不重播瞬时互动。
+
 双向训导复用低频增量同步和专注事实；被动头顶卡、进度牌与启动静默。
 
 本模块（进程级心跳、隐藏不断线、显式退出下线）实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
@@ -794,9 +796,11 @@ class PetWindow(QWidget):
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
         self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
         self._fullscreen_suppression_mode = "normal"
+        self._fullscreen_poll_candidate = None
+        self._fullscreen_poll_samples = 0
         self._process_started_at = now_beijing()
         from .notification_manager import NotificationManager
-        self.notification_manager = NotificationManager(self, blocked=lambda: self._close_in_progress or detect_quiet_mode().blocked or getattr(self,"_social_notification_dnd",False),
+        self.notification_manager = NotificationManager(self, blocked=lambda: self._close_in_progress or self._fullscreen_hidden or detect_quiet_mode().blocked or getattr(self,"_social_notification_dnd",False),
             foreground=lambda: self._social_dialog is not None and self._social_dialog.isActiveWindow(),
             inline=lambda text: self._social_dialog._set_status(text))
         self._sleep_after_sit = False
@@ -1331,8 +1335,8 @@ class PetWindow(QWidget):
         # work-idle policy so the pet and its accessories disappear quickly,
         # then return with exactly the visibility state they had before.
         self.fullscreen_poll_timer = QTimer(self)
-        self.fullscreen_poll_timer.setInterval(200)
-        self.fullscreen_poll_timer.timeout.connect(self._sync_fullscreen_visibility)
+        self.fullscreen_poll_timer.setInterval(750)
+        self.fullscreen_poll_timer.timeout.connect(self._poll_fullscreen_visibility)
         self.fullscreen_poll_timer.start()
 
         # Keep a low-frequency, cross-platform system probe.  It is the one
@@ -2223,6 +2227,8 @@ class PetWindow(QWidget):
     def _ensure_on_top(self, *, event: str = "PolicyCheck") -> None:
         """在生命周期节点校验 native 层级，但绝不激活或抢输入焦点。"""
 
+        if self._fullscreen_hidden or self._manually_hidden:
+            return
         visible_surfaces = [
             widget for widget in self._fullscreen_surfaces() if widget.isVisible()
         ]
@@ -2245,6 +2251,9 @@ class PetWindow(QWidget):
     ) -> None:
         """应用 native policy 并写入一条本地 pet-window 诊断记录。"""
 
+        if (self._fullscreen_hidden or self._manually_hidden) and widget in self._fullscreen_surfaces():
+            widget.hide()
+            return
         try:
             qt_stays_on_top = bool(
                 widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
@@ -2513,6 +2522,7 @@ class PetWindow(QWidget):
         ]
         if getattr(self, "_local_burst_effect", None) is not None:
             surfaces.append(self._local_burst_effect)
+        surfaces.extend(getattr(self, "_coaching_surfaces", {}).values())
         for optional in (
             self._compact_todo_panel,
             self._alarm_card,
@@ -2523,8 +2533,29 @@ class PetWindow(QWidget):
                 surfaces.append(optional)
         return list(dict.fromkeys(surfaces))
 
+    def _foreground_display_mode(self) -> str:
+        """初次检测和延迟恢复复用同一个原生显示器引用，避免 DPI 坐标混用。"""
+        monitor_bounds = self._pet_monitor_bounds()
+        native_window_handle = self._pet_native_window_handle()
+        if native_window_handle is None:
+            return active_window_display_mode(monitor_bounds)
+        return active_window_display_mode(monitor_bounds, reference_hwnd=native_window_handle)
+
     @_guard_qt_callback
-    def _sync_fullscreen_visibility(self) -> None:
+    def _poll_fullscreen_visibility(self) -> None:
+        """750ms 本地几何采样，连续两次相同结果才切换，减少边界闪烁。"""
+        mode = self._foreground_display_mode()
+        suppressed = mode == DISPLAY_MODE_FULLSCREEN
+        if suppressed == self._fullscreen_poll_candidate:
+            self._fullscreen_poll_samples += 1
+        else:
+            self._fullscreen_poll_candidate = suppressed
+            self._fullscreen_poll_samples = 1
+        if self._fullscreen_poll_samples >= 2 and suppressed != self._fullscreen_hidden:
+            self._sync_fullscreen_visibility(mode=mode)
+
+    @_guard_qt_callback
+    def _sync_fullscreen_visibility(self, *, mode: str | None = None) -> None:
         """Synchronise NORMAL/SUPPRESSED/RESTORING pet visibility state.
 
         The display-mode detector is intentionally separate from the focus
@@ -2537,15 +2568,7 @@ class PetWindow(QWidget):
         cannot leave one accessory behind.
         """
 
-        monitor_bounds = self._pet_monitor_bounds()
-        native_window_handle = self._pet_native_window_handle()
-        if native_window_handle is None:
-            mode = active_window_display_mode(monitor_bounds)
-        else:
-            mode = active_window_display_mode(
-                monitor_bounds,
-                reference_hwnd=native_window_handle,
-            )
+        mode = self._foreground_display_mode() if mode is None else mode
         # Maximized desktop applications are not display takeovers.  Keep the
         # pet visible above them without activation or focus stealing.  Only
         # true fullscreen surfaces (PPT slideshow, video fullscreen, games)
@@ -2556,8 +2579,13 @@ class PetWindow(QWidget):
                 self._fullscreen_restore_visible = {
                     widget: bool(widget.isVisible())
                     and widget is not getattr(self, "_local_burst_effect", None)
+                    and widget is not self.speech_bubble
+                    and widget not in getattr(self, "_coaching_surfaces", {}).values()
                     for widget in self._fullscreen_surfaces()
                 }
+                # Hide transient notices without resetting event deduplication/baselines.
+                self.notification_manager.suspend_display()
+                self.speech_timer.stop()
             self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_SUPPRESSED
             self._fullscreen_suppression_mode = str(mode)
             self._fullscreen_hidden = True
@@ -2591,6 +2619,10 @@ class PetWindow(QWidget):
             # particular, the duration badge must be derived from the current
             # focus state rather than blindly replaying an old visible bit.
             self._update_work_duration_bubble()
+            # Sustained discipline cards are derived from the current business state.
+            engine = getattr(self, "_discipline_engine", None)
+            if engine is not None:
+                self._refresh_desktop_coaching(engine)
         self._position_accessories()
         # A Todo may have changed while another app was covering the desktop.
         self._refresh_todo_surfaces()
@@ -2611,7 +2643,7 @@ class PetWindow(QWidget):
             self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
             self._update_topmost_watchdog()
             return
-        mode = active_window_display_mode(self._pet_monitor_bounds())
+        mode = self._foreground_display_mode()
         if mode == DISPLAY_MODE_FULLSCREEN:
             # The foreground app reclaimed the display during the repair.
             self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
