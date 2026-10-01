@@ -1,6 +1,6 @@
 """普通成功反馈复用页内标签，不创建系统对话框。
 
-互动收件箱批量读取、跨设备已读与轻量回应；免战入口共用北京时间八日额度。
+互动收件箱按北京日期分组、页面切换复用缓存、批量已读与轻量回应；免战入口共用北京时间八日额度。
 
 正式回应卡与执行牌复用同一状态投影，勾选配置使用统一矢量绘制。
 搭子自习室界面、后台同步线程和双六毛本地串门窗口。
@@ -3411,6 +3411,11 @@ class SocialHubDialog(QDialog):
         self._interaction_rows = []
         self._interaction_inflight = False
         self._interaction_last_read = 0.0
+        self._interaction_loaded = False
+        self._interaction_dirty = False
+        self._interaction_revision = 0
+        self._interaction_source_signature = None
+        self._interaction_account = _session_user_id(client)
         self._interaction_read_pending = set()
         self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
@@ -4275,13 +4280,16 @@ class SocialHubDialog(QDialog):
         self.inbox.currentItemChanged.connect(self._update_inbox_actions)
         inbox_layout.addWidget(self.inbox)
         layout.addWidget(inbox_card)
-        recent_card, recent_layout = self._card("今天 / 更早", "最近7天，最多30条；互动在这里回应，正式训导去专注处理。")
+        recent_card, recent_layout = self._card("近期互动", "按北京时间日期排列，最近7天最多30条；正式训导去专注处理。")
         self.recent_interactions = QListWidget(); self.recent_interactions.setMaximumHeight(180)
         recent_layout.addWidget(self.recent_interactions)
         self.recent_interactions.hide()
         from .interaction_center import InteractionFeed
         self.interaction_feed = InteractionFeed(self._interaction_response, self)
         recent_layout.addWidget(self.interaction_feed)
+        refresh_interactions = QPushButton("↻ 刷新互动")
+        refresh_interactions.clicked.connect(lambda:self._load_interactions(force=True))
+        recent_layout.addWidget(refresh_interactions)
         layout.addWidget(recent_card)
         layout.addStretch()
         return self._scroll_page(page)
@@ -4716,7 +4724,9 @@ class SocialHubDialog(QDialog):
         if index not in {1, 3} or self._applying_dashboard or not self.client.signed_in:
             return
         if index == 1:
-            self._load_interactions(force=True)
+            self._render_interaction_feed()
+            self._load_interactions()
+            return
         self.refresh()
 
     def _show_room_invite(self) -> None:
@@ -6248,13 +6258,39 @@ class SocialHubDialog(QDialog):
             self.inbox.addItem(empty)
         self._fit_list_height(self.inbox, 40, 360)
 
+    def invalidate_interactions(self, event=None):
+        """新事件就地合并；缺少明细时标脏，普通切页/心跳不下载历史。"""
+        if (isinstance(event, dict) and event.get("event_id") and self._interaction_loaded
+                and self._interaction_account == _session_user_id(self.client)):
+            stamp = parse_server_datetime(event.get("created_at"))
+            if stamp is not None:
+                rows = [r for r in self._interaction_rows if r.get("event_id") != event["event_id"]]
+                rows.append(dict(event))
+                rows.sort(key=lambda r:(parse_server_datetime(r.get("created_at")) or stamp).timestamp(),reverse=True)
+                self._interaction_rows = rows[:30]
+                self._render_interaction_feed()
+                return
+        self._interaction_dirty = True
+        self._interaction_revision += 1
+        if self.tabs.currentIndex() == 1 and self.isVisible():
+            self._load_interactions()
+
     def _load_interactions(self, *, force=False):
+        account = _session_user_id(self.client)
+        if account != self._interaction_account:
+            self._interaction_rows = []
+            self._interaction_read_pending.clear()
+            self._interaction_account = account
+            self._interaction_loaded = False
+            self._interaction_dirty = False
+            self._interaction_source_signature = None
+            self._interaction_revision += 1
         if not self.client.signed_in or self._interaction_inflight:
             return
-        if not force and time.monotonic()-self._interaction_last_read < 60:
+        if not force and self._interaction_loaded and not self._interaction_dirty:
             return
         self._interaction_inflight = True
-        account = _session_user_id(self.client)
+        revision = self._interaction_revision
         thread = SocialBuddyRpcThread(self.client, "lili_interaction_inbox", {}, self)
         self._buddy_rpc_threads.append(thread)
         def done(payload):
@@ -6263,8 +6299,10 @@ class SocialHubDialog(QDialog):
             rows = payload.get("interaction_events")
             if not isinstance(rows, list):
                 return
-            self._interaction_rows = rows
+            self._interaction_rows = [r for r in rows[:30] if isinstance(r,dict)]
             self._interaction_account = account
+            self._interaction_loaded = True
+            self._interaction_dirty = revision != self._interaction_revision
             self._render_interaction_feed()
         thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
         thread.failed.connect(lambda error: self._set_status("互动暂时未更新：" + social_user_message(error), error=True), Qt.ConnectionType.QueuedConnection)
@@ -6272,6 +6310,10 @@ class SocialHubDialog(QDialog):
             self._interaction_inflight = False
             self._interaction_last_read = time.monotonic()
             self._buddy_rpc_finished(thread)
+            # 查询期间又收到新事件，完成后仅补读一次；失败不自动重试。
+            if account != _session_user_id(self.client) or (self._interaction_loaded and self._interaction_dirty and revision != self._interaction_revision):
+                if self.isVisible() and self.tabs.currentIndex() == 1:
+                    QTimer.singleShot(0, self._load_interactions)
         thread.finished.connect(finish, Qt.ConnectionType.QueuedConnection)
         thread.start()
 
@@ -6283,6 +6325,9 @@ class SocialHubDialog(QDialog):
             self._interaction_rows = []
             self._interaction_read_pending.clear()
             self._interaction_account = current_account
+            self._interaction_loaded = False
+            self._interaction_dirty = False
+            self._interaction_revision += 1
         from .buddy_identity import buddy_name
         for row in self._interaction_rows:
             peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
@@ -6302,11 +6347,14 @@ class SocialHubDialog(QDialog):
             return
         self._interaction_read_pending.update(ids)
         account = _session_user_id(self.client)
-        thread = SocialBuddyRpcThread(self.client, "lili_interaction_inbox", {"p_read_ids":ids}, self)
+        thread = SocialBuddyRpcThread(self.client, "lili_mark_interactions_read", {"p_read_ids":ids}, self)
         self._buddy_rpc_threads.append(thread)
         def done(payload):
-            if account == _session_user_id(self.client):
-                self._interaction_rows = payload.get("interaction_events", self._interaction_rows)
+            if account == _session_user_id(self.client) and isinstance(payload, dict):
+                read_ids = set(payload.get("read_event_ids") or [])
+                for row in self._interaction_rows:
+                    if row.get("event_id") in read_ids:
+                        row["unread"] = False
                 self._render_interaction_feed()
         thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
         thread.failed.connect(lambda error: self._set_status("已读状态未同步，可重新进入互动重试。", error=True), Qt.ConnectionType.QueuedConnection)
@@ -6658,8 +6706,17 @@ class SocialHubDialog(QDialog):
                         f"🍰 今日蛋糕 · 已邀请 {total} 人 · 已接受 {accepted}/{total}\n{message}"
                     )
                 self._recent_interactions_signature = recent_signature
+        source = {key:[{field:row.get(field) for field in ("id","kind","status","created_at")} for row in (self.data.get(key) or []) if isinstance(row,dict)]
+                  for key in ("requests","outgoing_requests","visits","activity","room_activity")}
+        source.update({key:{field:(self.data.get(key) or {}).get(field) for field in ("id","active","created_at")}
+                       for key in ("_taunt_state","_encouragement_state")})
+        signature = json.dumps(source,sort_keys=True,default=str)
+        if self._interaction_source_signature is not None and signature != self._interaction_source_signature:
+            self._interaction_dirty = True
+            self._interaction_revision += 1
+        self._interaction_source_signature = signature
         self._render_interaction_feed()
-        if self.isVisible():
+        if self.isVisible() and self.tabs.currentIndex() == 1:
             self._load_interactions()
         self._update_inbox_actions(self.inbox.currentItem(), None)
         if inbox_changed:
@@ -6823,7 +6880,16 @@ class SocialHubDialog(QDialog):
                 self.room_challenge.setText("共同挑战：未设置")
         activity = list(room_detail.get("room_activity") or self.data.get("room_activity") or self.data.get("activity") or [])
         me_id = str(me.get("user_id") or me.get("id") or "")
-        for event in activity:
+        fresh_snapshot = not self.data.get("_sync_offline") and self.data.get("data_source") != "local_cache"
+        if getattr(self, "_room_event_account", None) != me_id:
+            self._room_event_account = me_id
+            self._room_event_baseline = None
+            self._seen_room_event_ids.clear()
+        room_baseline = getattr(self, "_room_event_baseline", None)
+        observed_at = now_beijing()
+        if fresh_snapshot and room_baseline is None:
+            self._room_event_baseline = observed_at
+        for event in activity if fresh_snapshot else []:
             if not isinstance(event, dict):
                 continue
             event_id = str(event.get("id") or "")
@@ -6835,7 +6901,9 @@ class SocialHubDialog(QDialog):
                 )
                 actor_id = str(event.get("actor_id") or "")
                 if (
-                    not self.data.get("_sync_offline")
+                    room_baseline is not None
+                    and room_baseline < (parse_server_datetime(event.get("created_at")) or room_baseline) <= observed_at
+                    and not self.data.get("_sync_offline")
                     and me_id
                     and is_target
                     and actor_id != me_id

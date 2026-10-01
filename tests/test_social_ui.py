@@ -1889,3 +1889,64 @@ def test_local_focus_wins_and_missing_leaderboard_does_not_clear_cache() -> None
     app.processEvents()
     assert "暂无可展示" in dialog.wealth_leaderboard.item(0).text()
     dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_interaction_cache_reentry_manual_refresh_and_new_event(monkeypatch):
+    import onepic_desktop_pet.social_ui as module
+    from PySide6.QtCore import QObject,Signal
+    calls=[]
+    class Rpc(QObject):
+        completed=Signal(dict);failed=Signal(str);finished=Signal()
+        def __init__(self,client,name,params,parent):
+            super().__init__(parent);self.name=name;self.params=params
+        def start(self):
+            calls.append(self.name)
+            self.completed.emit({'interaction_events':[]})
+            self.finished.emit()
+        def isRunning(self):return False
+    app=QApplication.instance()
+    client=SignedInClient();dialog=SocialHubDialog(client)
+    monkeypatch.setattr(module,'SocialBuddyRpcThread',Rpc)
+    monkeypatch.setattr(dialog,'refresh',lambda:None)
+    dialog._load_interactions(force=True);app.processEvents()
+    assert calls.count('lili_interaction_inbox')==1
+    for index in [1,0,1,2,1]:
+        dialog.tabs.setCurrentIndex(index);app.processEvents()
+    assert calls.count('lili_interaction_inbox')==1
+    dialog._load_interactions(force=True);app.processEvents()
+    assert calls.count('lili_interaction_inbox')==2
+    dialog.invalidate_interactions();dialog._load_interactions();app.processEvents()
+    assert calls.count('lili_interaction_inbox')==3
+    dialog.close();dialog.deleteLater();app.processEvents()
+
+
+def test_room_interactions_first_success_is_silent_then_new_only(monkeypatch):
+    import onepic_desktop_pet.social_ui as module
+    from onepic_desktop_pet.time_service import BEIJING_TIMEZONE
+    now=datetime(2026,10,1,12,tzinfo=BEIJING_TIMEZONE)
+    monkeypatch.setattr(module,'now_beijing',lambda:now)
+    app=QApplication.instance();dialog=SocialHubDialog(SignedInClient())
+    seen=QSignalSpy(dialog.room_event_received)
+    data=SignedInClient().dashboard();data['me']['user_id']='me'
+    old={'id':'old','actor_id':'other','target_id':'me','kind':'cheer','created_at':(now-timedelta(minutes=1)).isoformat()}
+    data['activity']=[old]
+    dialog.apply_dashboard({**data,'_sync_offline':True,'data_source':'local_cache'})
+    assert getattr(dialog,'_room_event_baseline',None) is None and seen.count()==0
+    dialog.apply_dashboard({**data,'_sync_offline':False,'data_source':'server'})
+    assert dialog._room_event_baseline==now and seen.count()==0
+    fresh={**old,'id':'new','created_at':(now+timedelta(seconds=1)).isoformat()}
+    now+=timedelta(seconds=2)
+    data['activity']=[fresh,old]
+    dialog.apply_dashboard({**data,'_sync_offline':False,'data_source':'server'})
+    dialog.apply_dashboard({**data,'_sync_offline':False,'data_source':'server'})
+    assert seen.count()==1
+    dialog.close();dialog.deleteLater();app.processEvents()
+
+def test_confirmed_interaction_merges_cache_without_history_download(monkeypatch):
+    dialog=SocialHubDialog(SignedInClient());app=QApplication.instance()
+    dialog._interaction_loaded=True
+    calls=[];monkeypatch.setattr(dialog,'_load_interactions',lambda **kwargs:calls.append(kwargs))
+    row={'event_id':'nudge:new','created_at':'2026-10-01T12:00:00+08:00','event_type':'cheer','unread':False}
+    dialog.invalidate_interactions(row);dialog.invalidate_interactions(row)
+    assert len(dialog._interaction_rows)==1 and not calls
+    dialog.close();dialog.deleteLater();app.processEvents()

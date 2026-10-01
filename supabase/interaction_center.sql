@@ -166,11 +166,31 @@ begin
     from public.lili_interaction_feed f
     left join public.lili_profiles p on p.user_id=f.sender_id
     left join public.lili_interaction_reads r on r.user_id=me and r.event_id=f.event_id
-    where f.receiver_id=me and (f.created_at>now()-interval '7 days' or f.requires_action)
-    order by f.requires_action desc,f.created_at desc limit 30
+    where f.receiver_id=me and ((f.created_at >= (((now() at time zone 'Asia/Shanghai')::date-6)::timestamp at time zone 'Asia/Shanghai')
+      and f.created_at < (((now() at time zone 'Asia/Shanghai')::date+1)::timestamp at time zone 'Asia/Shanghai')) or f.requires_action)
+    order by f.created_at desc,f.event_id desc limit 30
   ) x;
   delete from public.lili_interaction_reads where user_id=me and read_at<now()-interval '30 days';
   return jsonb_build_object('interaction_events',result,'server_timestamp',now());
 end $$;
 revoke all on function public.lili_interaction_inbox(jsonb) from public,anon,authenticated;
 grant execute on function public.lili_interaction_inbox(jsonb) to authenticated;
+
+-- 已读只返回小回执，不再为了标记已读重传完整列表；旧 inbox 参数保持兼容。
+create or replace function public.lili_mark_interactions_read(p_read_ids jsonb) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare me uuid:=(select auth.uid()); ids jsonb;
+begin
+  if me is null then raise exception '请先登录'; end if;
+  if p_read_ids is null or jsonb_typeof(p_read_ids)<>'array' or jsonb_array_length(p_read_ids)>30 then
+    raise exception '一次最多处理30条已读状态'; end if;
+  select coalesce(jsonb_agg(x.event_id),'[]') into ids from (
+    select distinct f.event_id from public.lili_interaction_feed f
+    where f.receiver_id=me and f.event_id in (select jsonb_array_elements_text(p_read_ids))
+  ) x;
+  insert into public.lili_interaction_reads(user_id,event_id)
+    select me,jsonb_array_elements_text(ids) on conflict do nothing;
+  return jsonb_build_object('read_event_ids',ids,'server_timestamp',now());
+end $$;
+revoke all on function public.lili_mark_interactions_read(jsonb) from public,anon,authenticated;
+grant execute on function public.lili_mark_interactions_read(jsonb) to authenticated;

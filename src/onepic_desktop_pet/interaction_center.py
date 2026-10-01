@@ -1,8 +1,10 @@
-"""搭子互动收件箱：内容驱动的小卡片，未读与待回应分开，回应复用原业务入口。"""
+"""搭子互动收件箱：北京时间日期 Feed、缓存组装和四秒即时反馈；持续纪律使用独立状态牌。"""
 from __future__ import annotations
+from datetime import timedelta
+from time import monotonic
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame
-from .time_service import now_beijing, parse_server_datetime, format_clock
+from .time_service import now_beijing, parse_server_datetime, format_clock, to_beijing
 from .ui_feedback import decorate_buttons
 
 LABELS = {
@@ -33,14 +35,57 @@ def response_actions(row):
     if kind in {"start", "return", "knock", "poke"}: return [("知道了", "ack"), ("去开工", "focus")]
     return [("知道了", "ack")]
 
+INTERACTION_HINT_DURATION_MS = 4000
+HINT_LABELS = {"return":"👀 该回来了", "cheer":"💪 加油", "praise":"✨ 夸一下",
+               "tease":"😈 嘲讽了一下", "taunt":"😈 嘲讽了一下", "knock":"👊 敲桌子",
+               "poke":"👊 拍了拍你", "visit":"🏠 来串门了", "flower":"🌸 小红花",
+               "start":"⏰ 提醒开工", "finish":"🌙 提醒下班", "approve_finish":"🌙 批准下班",
+               "rest":"☕ 休息有点久啦", "take_break":"☕ 歇一会儿", "rest_more":"☕ 再歇会儿",
+               "progress":"📋 看看进度", "ask":"📝 搭子问问你", "drink":"🥤 奶茶",
+               "food_coffee":"☕ 投喂咖啡", "food_milk_tea":"🥤 投喂奶茶", "food_tea":"🍵 敬茶",
+               "food_cake":"🍰 投喂蛋糕", "food_cake_share":"🍰 一起吃蛋糕"}
+
+
+class InteractionHintState:
+    """只存本运行周期的提示计数；沿用六毛现有单次 speech_timer 隐藏。"""
+    def __init__(self):
+        self.kind = None
+        self.count = 0
+        self.until = 0.0
+
+    def text(self, kind, label=None, *, at=None):
+        now = monotonic() if at is None else at
+        self.count = self.count + 1 if kind == self.kind and now < self.until else 1
+        self.kind = kind
+        self.until = now + INTERACTION_HINT_DURATION_MS / 1000
+        label = label or HINT_LABELS.get(kind) or ("🎁 投喂" if kind.startswith("food_") else "收到新互动")
+        return f"{label} · +{self.count}"
+
+
 def grouped_rows(rows, at=None):
-    today = (at or now_beijing()).date()
-    groups = {"待我回应":[], "今天":[], "更早":[]}
-    for row in rows[:30]:
-        if not isinstance(row, dict): continue
-        stamp = parse_server_datetime(row.get("created_at"))
-        group = "待我回应" if row.get("requires_action") else "今天" if stamp and stamp.astimezone(now_beijing().tzinfo).date()==today else "更早"
-        groups[group].append(row)
+    """时间与分组共用服务端 UTC 解析；今天及之前六个北京自然日，待回应独立。"""
+    today = to_beijing(at or now_beijing()).date()
+    earliest = today - timedelta(days=6)
+    pending, dated, unknown = [], {}, []
+    parsed = [(row, parse_server_datetime(row.get("created_at"))) for row in rows if isinstance(row, dict)]
+    parsed.sort(key=lambda item: item[1].timestamp() if item[1] else float('-inf'), reverse=True)
+    for row, stamp in parsed[:30]:
+        if row.get("requires_action"):
+            pending.append(row)
+            continue
+        if stamp is None:
+            unknown.append(row)
+            continue
+        day = stamp.date()
+        if earliest <= day <= today:
+            dated.setdefault(day, []).append(row)
+    groups = {"待我回应":pending}
+    for day in sorted(dated, reverse=True):
+        title = "今天" if day == today else "昨天" if day == today-timedelta(days=1) else (
+            f"{day.year}年{day.month}月{day.day}日" if day.year != today.year else f"{day.month}月{day.day}日")
+        groups[title] = dated[day]
+    if unknown:
+        groups["日期未知"] = unknown
     return groups
 
 class InteractionFeed(QWidget):
@@ -62,8 +107,8 @@ class InteractionFeed(QWidget):
             item = self.layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         # 搭子/投喂邀请已由上方原有接受/拒绝卡呈现，避免重复处理入口。
-        groups = grouped_rows([r for r in rows if not (r.get("requires_action") and r.get("source") in {"buddy","visit"})])
-        if not rows:
+        groups = grouped_rows([r for r in rows if isinstance(r, dict) and not (r.get("requires_action") and r.get("source") in {"buddy","visit"})])
+        if not any(groups.values()):
             quiet = QLabel("今天还挺安静。暂时没有人来闹你。")
             quiet.setStyleSheet("color:#52675f;padding:10px;")
             self.layout.addWidget(quiet)
@@ -85,7 +130,8 @@ class InteractionFeed(QWidget):
                 who = QLabel(("● " if row.get("unread") else "") + name)
                 who.setTextFormat(Qt.TextFormat.PlainText)
                 header.addWidget(who,1)
-                header.addWidget(QLabel(format_clock(row.get("created_at"))))
+                stamp = parse_server_datetime(row.get("created_at"))
+                header.addWidget(QLabel(format_clock(stamp) or "时间未知"))
                 layout.addLayout(header)
                 kind = str(row.get("event_type") or "")
                 payload = row.get("payload") or {}

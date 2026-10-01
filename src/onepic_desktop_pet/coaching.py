@@ -1,4 +1,4 @@
-"""双向训导事项的只读投影；状态由服务端流转，补时复用原始专注区间。"""
+"""持续训导状态只读投影；长休观察与四秒瞬时互动分开，补时复用原始专注区间。"""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ def projection(engine, today_seconds=0, now=None):
                 overtime = max(0, int((moment - start).total_seconds()) - engine.store.settings.break_limit_minutes * 60)
                 if overtime:
                     badges.append({"id": "observe-break:" + str(latest_break["id"]), "priority": 2,
-                                   "badge_text": "👀 该回来了", "detail": "休息已超出计划 " + format_work_duration(overtime)})
+                                   "badge_text": "⏳ 长休观察中", "detail": "休息已超出计划 " + format_work_duration(overtime)})
             except (ValueError, TypeError):
                 pass
         for row in reversed(engine.store.events_for_day(moment.date())):

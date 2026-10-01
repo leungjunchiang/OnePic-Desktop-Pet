@@ -1,4 +1,4 @@
-"""本地闹钟独立调度与 occurrence 去重；普通成功反馈复用页内标签。
+"""本地闹钟独立调度与 occurrence 去重；互动气泡四秒收起，与持续纪律分离。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
@@ -7920,6 +7920,18 @@ class PetWindow(QWidget):
         else:
             self._last_focus_snapshot_status = snapshot_status
 
+    def _notify_instant_interaction(self, identifier, kind, title, detail, *, label=None):
+        """只由基线后的新事件调用；同类合并、异类替换，复用单次四秒计时器。"""
+        from .interaction_center import InteractionHintState, INTERACTION_HINT_DURATION_MS
+        if not hasattr(self, "_interaction_hint_state"):
+            self._interaction_hint_state = InteractionHintState()
+        display = None
+        if (self.isVisible() and not self._manually_hidden and not self._fullscreen_hidden
+                and not (self._social_dialog is not None and self._social_dialog.isVisible())):
+            display = lambda: self.show_speech(self._interaction_hint_state.text(kind, label), INTERACTION_HINT_DURATION_MS)
+        return self.notification_manager.notify(identifier, title, detail, self._open_interaction_inbox,
+            duration_ms=INTERACTION_HINT_DURATION_MS, display=display)
+
     def _room_event_received(self, event: dict) -> None:
         """Play a received room interaction on this desktop pet."""
 
@@ -7944,7 +7956,8 @@ class PetWindow(QWidget):
             text = f"{actor}{labels.get(kind, '给你发来一条房间动态')}"
             activity = {"poke": "surprised", "cheer": "pointing", "drink": "tea"}.get(kind, "happy")
         self._set_temporary_activity(activity, 20_000)
-        self.show_speech(text, 5200)
+        self._notify_instant_interaction("room:"+str(event.get("id") or ""), kind, text,
+            message.strip() or "打开互动收件箱查看。", label=text)
 
     def _buddy_request_received(self, request: dict) -> None:
         """Give a fast desktop-pet notice for a new buddy request."""
@@ -8179,11 +8192,18 @@ class PetWindow(QWidget):
                     # IDs. Timestamp + first-response fence keeps them silent.
                     if (accepted and not seen and baseline is not None and created is not None
                             and baseline < created <= observed_at and not self._close_in_progress
-                            and detail and title and not engine.store.is_exempt(as_beijing().date())):
+                            ):
+                        if self._social_dialog is not None:
+                            self._social_dialog.invalidate_interactions({"event_id":"nudge:"+identifier,
+                                "source_id":identifier,"source":"nudge","sender_id":str(nudge.get("supervisor_id") or ""),
+                                "event_type":str(nudge.get("kind") or ""),"created_at":created.isoformat(),
+                                "nickname":buddy_name(peer),"payload":{},"unread":True,"requires_action":False})
+                        if not detail or not title or engine.store.is_exempt(as_beijing().date()):
+                            continue
                         from .discipline import DisciplineNotice
                         if nudge.get("kind") in {"cheer", "praise", "flower", "approve_finish", "knock", "ask", "rest_more", "return", "start", "finish", "progress", "take_break", "rest"}:
                             if not detect_quiet_mode().blocked:
-                                self.notification_manager.notify("nudge:"+identifier, title, detail, self._open_interaction_inbox)
+                                self._notify_instant_interaction("nudge:"+identifier, str(nudge.get("kind") or ""), title, detail)
                         else:
                             self._show_discipline_notice(DisciplineNotice("buddy_nudge", title, detail, "info", identifier))
                 engine.store._save()
@@ -8363,6 +8383,10 @@ class PetWindow(QWidget):
 
     def _reset_discipline_notifications(self) -> None:
         self.notification_manager.clear_all()
+        if hasattr(self, "_interaction_hint_state"):
+            del self._interaction_hint_state
+            self.speech_timer.stop()
+            self.speech_bubble.hide()
         timer = getattr(self, "_discipline_notice_timer", None)
         if timer is not None:
             timer.stop()
@@ -9144,6 +9168,16 @@ class PetWindow(QWidget):
                 or ""
             )
 
+        for channel, key, kind in (("taunt", "_taunt_state", "tease"), ("cheer", "_encouragement_state", "cheer")):
+            state = data.get(key)
+            if isinstance(state, dict):
+                rows = [state] if state.get("active") else []
+                def present(row, prefix=channel, event_kind=kind):
+                    if str(row.get("sender_id") or "") not in self._muted_buddy_ids:
+                        self._notify_instant_interaction(prefix+":"+str(row.get("id") or ""), event_kind,
+                            str(row.get("sender_display_name") or row.get("sender_nickname") or "搭子")+"发来互动",
+                            str(row.get("message") or "打开互动收件箱查看。"))
+                self.notification_manager.observe(channel, rows, notify=present)
         self.notification_manager.observe("requests", data.get("requests"), notify=self._enqueue_buddy_request_notice)
         self.notification_manager.observe("visits", data.get("visits"), notify=self._enqueue_incoming_visit_notice)
         pending_visits = [item for item in (data.get("visits") or []) if isinstance(item, dict)]
@@ -9327,10 +9361,8 @@ class PetWindow(QWidget):
             if self._taunt_active:
                 return False
             self._change_ambient_activity("work-cheer")
-            self.visit_status_bubble.set_encourager(sender)
-            # 持续加油状态静默恢复；即时事件在互动收件箱中保留。
-            self._position_visit_status_bubble()
-            self._raise_accessory(self.visit_status_bubble)
+            # 一小时娃衣效果仍保留；加油文字仅由新事件四秒气泡展示。
+            self.visit_status_bubble.hide()
             return True
         if self._encouragement_active:
             self._encouragement_active = False
@@ -10550,9 +10582,9 @@ class PetWindow(QWidget):
     def _present_incoming_visit_notice(self, event: dict) -> None:
         from .buddy_identity import buddy_name
         peer = self._buddy_display_record(str(event.get("sender_id") or event.get("user_id") or ""), str(event.get("nickname") or "搭子"))
-        self.notification_manager.notify("visit:"+self._incoming_visit_id(event),
+        self._notify_instant_interaction("visit:"+self._incoming_visit_id(event), str(event.get("kind") or "visit"),
             buddy_name(peer)+("给你投喂了" if str(event.get("kind", "")).startswith("food_") else "来找你了"),
-            "打开互动收件箱回应邀请。", self._open_interaction_inbox)
+            "打开互动收件箱回应邀请。")
 
     def _open_interaction_inbox(self):
         self.open_social_hub()

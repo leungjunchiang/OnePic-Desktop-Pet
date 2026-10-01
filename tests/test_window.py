@@ -846,7 +846,7 @@ def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
     )
     app.processEvents()
     assert window.visit_status_bubble.isVisible()
-    assert window.visit_status_bubble.text() == "小梁和大毛正在嘲讽你 · 还剩 1:53"
+    assert window.visit_status_bubble.text() == "😈 嘲讽挑战 · 小梁和大毛 · 还剩 1:53"
     assert not window.speech_bubble.isVisible()
     window._taunt_chatter_tick()
     assert not window.taunt_chatter_timer.isActive()
@@ -871,7 +871,7 @@ def test_single_taunt_status_stays_on_one_line() -> None:
     app.processEvents()
 
     bubble = window.visit_status_bubble
-    assert bubble.text() == "dahao正在嘲讽你 · 还剩 19:47"
+    assert bubble.text() == "😈 嘲讽挑战 · dahao · 还剩 19:47"
     assert bubble.wordWrap() is False
     assert bubble.height() <= bubble.fontMetrics().height() + 12
 
@@ -900,8 +900,8 @@ def test_encouragement_uses_private_display_name() -> None:
         }
     )
     app.processEvents()
-    assert window.visit_status_bubble.isVisible()
-    assert window.visit_status_bubble.text() == "小梁送来鼓励"
+    assert window._encouragement_sender_nickname == "小梁"
+    assert not window.visit_status_bubble.isVisible()
     assert not window.speech_bubble.isVisible()
     window._apply_encouragement_state({"active": False})
     window.close()
@@ -2306,7 +2306,8 @@ def test_pending_visit_notice_closes_when_server_no_longer_lists_invitation() ->
     app.processEvents()
     assert window._incoming_visit_notice is None
     window.notification_manager.flush()
-    assert window.notification_manager.current is not None
+    assert window.notification_manager.current is None
+    assert window.speech_bubble.isVisible() and window.speech_timer.interval() == 4000
 
     window._social_dashboard_received({"visits": [], "active_visits": []})
     app.processEvents()
@@ -4698,3 +4699,50 @@ def test_reminder_uses_private_note_without_opening_main_window(monkeypatch) -> 
         for toast in window._buddy_reminder_toasts:
             toast.close()
         window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_instant_interaction_uses_four_second_timer_and_expires_without_refresh(monkeypatch):
+    app,window=_create_window()
+    monkeypatch.setattr(window.notification_manager,'blocked',lambda:False)
+    # Isolate the local UI lifecycle from unrelated ambient speech / network timers.
+    for timer in window.findChildren(__import__('PySide6.QtCore',fromlist=['QTimer']).QTimer):
+        timer.stop()
+    assert window._notify_instant_interaction('nudge:one','return','搭子喊你回来','正文')
+    assert window.speech_timer.interval()==4000 and window.speech_timer.isSingleShot()
+    assert window.speech_bubble.text()=='👀 该回来了 · +1'
+    QTest.qWait(2200)
+    assert window._notify_instant_interaction('nudge:two','return','搭子喊你回来','正文')
+    assert window.speech_bubble.text()=='👀 该回来了 · +2'
+    remaining=window.speech_timer.remainingTime()
+    assert not window._notify_instant_interaction('nudge:two','return','搭子喊你回来','正文')
+    assert window.speech_timer.remainingTime()<=remaining
+    QTest.qWait(2100)
+    assert window.speech_bubble.isVisible() # Old timer cannot hide the new event.
+    QTest.qWait(2100)
+    assert not window.speech_bubble.isVisible() and not window.speech_timer.isActive()
+    assert window._notify_instant_interaction('cheer:three','cheer','加油','正文')
+    assert window.speech_bubble.text()=='💪 加油 · +1'
+    window._reset_discipline_notifications()
+    assert not window.speech_bubble.isVisible() and not window.speech_timer.isActive()
+    window.close();window.deleteLater();app.processEvents()
+
+
+def test_restored_encouragement_is_silent_and_fresh_event_is_deduplicated(monkeypatch):
+    from onepic_desktop_pet.time_service import BEIJING_TIMEZONE
+    import onepic_desktop_pet.notification_manager as module
+    app,window=_create_window();now=datetime(2026,10,1,12,tzinfo=BEIJING_TIMEZONE)
+    monkeypatch.setattr(module,'now_beijing',lambda:now)
+    monkeypatch.setattr(window.notification_manager,'blocked',lambda:False)
+    state={'id':'old','active':True,'sender_id':'buddy','created_at':(now-timedelta(minutes=1)).isoformat()}
+    window._social_dashboard_received({'_encouragement_state':state})
+    assert not window.speech_bubble.isVisible() and not window.visit_status_bubble.isVisible()
+    window._social_dashboard_received({'_encouragement_state':state})
+    assert not window.speech_bubble.isVisible()
+    now+=timedelta(seconds=2)
+    fresh={**state,'id':'new','created_at':(now-timedelta(seconds=1)).isoformat()}
+    window._social_dashboard_received({'_encouragement_state':fresh})
+    assert window.speech_bubble.text()=='💪 加油 · +1'
+    window._social_dashboard_received({'_encouragement_state':fresh})
+    assert window.speech_bubble.text()=='💪 加油 · +1'
+    assert 'cheer:new' in window.notification_manager.shown_event_ids
+    window.close();window.deleteLater();app.processEvents()

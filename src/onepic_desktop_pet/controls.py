@@ -1,4 +1,4 @@
-"""提供不依赖系统托盘的六毛快捷面板、原生音乐控制、工作气泡和尺寸调节器。
+"""提供六毛快捷面板、原生音乐控制、工作气泡和尺寸调节器；嘲讽挑战明确显示持续进度。
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
@@ -443,7 +443,7 @@ class VisitStatusBubble(RoundedSurfaceLabel):
             if count > 1 and "和" not in name and "、" not in name
             else ""
         )
-        display = f"{name}{count_suffix}正在嘲讽你"
+        display = f"😈 嘲讽挑战 · {name}{count_suffix}"
         # _format_taunt_senders uses 和/、 only when there are multiple
         # distinct names; preserve one-line rendering for the common case.
         if remaining_seconds is not None:

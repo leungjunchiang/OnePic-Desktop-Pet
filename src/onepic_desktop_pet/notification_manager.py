@@ -1,4 +1,4 @@
-"""统一即时通知入口：首次成功读取建基线、稳定 ID 去重、最多一个无焦点窗口。"""
+"""统一即时通知入口：首次成功读取建基线、稳定 ID 去重、最多一个无焦点窗口；瞬时互动复用六毛四秒气泡。"""
 from __future__ import annotations
 
 from .time_service import now_beijing, parse_server_datetime
@@ -33,7 +33,7 @@ class NotificationManager(QObject):
             if identifier and created and baseline < created <= observed and notify is not None:
                 notify(row)
 
-    def notify(self, event_id, title, detail, callback, *, duration_ms=3000):
+    def notify(self, event_id, title, detail, callback, *, duration_ms=3000, display=None):
         identifier = str(event_id or "").strip()
         if not identifier or identifier in self.shown_event_ids:
             return False
@@ -41,6 +41,12 @@ class NotificationManager(QObject):
         self.shown_event_ids.add(identifier)
         if not str(title or "").strip() or not str(detail or "").strip() or self.blocked():
             return False
+        if display is not None:
+            self.pending.clear()
+            self.timer.stop()
+            self.close_current()
+            display()
+            return True
         self.pending[identifier] = (str(title), str(detail), callback, duration_ms)
         if not self.timer.isActive():
             self.timer.start()

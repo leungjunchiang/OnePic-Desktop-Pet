@@ -46,10 +46,28 @@ begin
   result:=public.lili_interaction_inbox(jsonb_build_array(key));
   if (result->'interaction_events'->0->>'unread')::boolean then raise exception 'Cross-device read receipt missing'; end if;
   if not (result->'interaction_events'->0->>'requires_action')::boolean then raise exception 'Reading consumed invitation'; end if;
+  result:=public.lili_mark_interactions_read(jsonb_build_array(key));
+  if result ? 'interaction_events' or result->'read_event_ids'<>jsonb_build_array(key) then
+    raise exception 'Read receipt re-downloaded history / failed'; end if;
+  -- Beijing natural calendar range, despite the connection's Los Angeles timezone.
+  insert into public.lili_visit_events(sender_id,receiver_id,kind,status,created_at)
+    values(sender,owner,'food_tea','accepted',((today-6)::timestamp at time zone 'Asia/Shanghai')),
+          (sender,owner,'food_tea','accepted',((today-6)::timestamp at time zone 'Asia/Shanghai')-interval '1 second');
+  result:=public.lili_interaction_inbox();
+  if jsonb_array_length(result->'interaction_events')<>2 then
+    raise exception 'Seven Beijing dates range boundary failed'; end if;
+  for key in select jsonb_object_keys(result->'interaction_events'->0) loop
+    if key not in ('event_id','sender_id','event_type','created_at','source_id','source','requires_action','payload','nickname','unread') then
+      raise exception 'Unexpected heavy inbox field: %',key; end if;
+  end loop;
+  key:=result->'interaction_events'->0->>'event_id';
   perform set_config('request.jwt.claim.sub',outsider::text,true);
   result:=public.lili_interaction_inbox(jsonb_build_array(key));
   if jsonb_array_length(result->'interaction_events')<>0 or exists(select 1 from public.lili_interaction_reads where user_id=outsider) then
     raise exception 'Inbox / receipt owner isolation failed'; end if;
+  result:=public.lili_mark_interactions_read(jsonb_build_array(key));
+  if jsonb_array_length(result->'read_event_ids')<>0 then raise exception 'Outsider read receipt bypass'; end if;
+  if has_function_privilege('anon','public.lili_mark_interactions_read(jsonb)','EXECUTE') then raise exception 'Read receipt exposed'; end if;
   if has_table_privilege('authenticated','public.lili_interaction_reads','INSERT')
      or has_table_privilege('authenticated','public.lili_interaction_feed','SELECT')
      or has_function_privilege('anon','public.lili_interaction_inbox(jsonb)','EXECUTE') then
