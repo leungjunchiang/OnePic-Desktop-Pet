@@ -4727,6 +4727,11 @@ def test_instant_interaction_uses_four_second_timer_and_expires_without_refresh(
     QTest.qWait(2100)
     assert bool(window._interaction_hint_text) # Old timer cannot hide the new event.
     QTest.qWait(2100)
+    # Qt 默认 coarse timer 在 macOS CI 上可能晚一个投递周期。
+    # 等待真实 timeout（最多再1秒），不调用刷新/隐藏来清空提示。
+    if window._interaction_hint_text:
+        from PySide6.QtTest import QSignalSpy
+        assert QSignalSpy(window.interaction_hint_timer.timeout).wait(1000)
     assert not bool(window._interaction_hint_text) and not window.interaction_hint_timer.isActive()
     assert window._notify_instant_interaction('cheer:three','cheer','加油','正文')
     assert window._interaction_hint_text=='💪 加油 · +1'
