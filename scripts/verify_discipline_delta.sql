@@ -3,7 +3,9 @@ begin;
 do $$
 declare owner uuid:=gen_random_uuid(); other_user uuid:=gen_random_uuid(); event_id uuid:=gen_random_uuid();
   report_id uuid:=gen_random_uuid(); bad_id uuid:=gen_random_uuid(); payload jsonb; replay jsonb; revision bigint;
-  facts bigint; denied boolean; incoming jsonb; day date:=(now() at time zone 'Asia/Shanghai')::date;
+  -- Use a completed Beijing day: 07:30/09:26 fixtures must never be future
+  -- events when this release gate runs before dawn. Keep the RPC's future guard.
+  facts bigint; denied boolean; incoming jsonb; day date:=(now() at time zone 'Asia/Shanghai')::date-1;
 begin
   select count(*) into facts from public.lili_focus_segments;
   insert into auth.users(id,raw_user_meta_data) values(owner,'{}'),(other_user,'{}');
