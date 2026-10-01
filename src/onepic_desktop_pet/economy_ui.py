@@ -1,8 +1,12 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""普通成功反馈复用页内标签，不创建系统对话框。
+
+北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
 六毛钱袋：钱袋总览、工资条、账本、小卖部、仓库和生活图鉴。"""
 
 from __future__ import annotations
+
+from .ui_feedback import show_inline_feedback
 
 from .time_service import format_clock
 
@@ -383,7 +387,7 @@ class EconomyDialog(QDialog):
         ) != QMessageBox.StandardButton.Yes:
             return
         if not self.ledger.delete_pending_achievement(achievement_id):
-            QMessageBox.information(self, "无法删除", "这条申请可能已经被处理或删除。")
+            show_inline_feedback(self, "无法删除", "这条申请可能已经被处理或删除。")
             return
         self.refresh()
         self.changed.emit()
@@ -410,20 +414,16 @@ class EconomyDialog(QDialog):
             return
         self.refresh()
         self.changed.emit()
-        QMessageBox.information(
-            self,
-            "等待搭子见证",
-            "成果已保存为“等待见证”。\n需要 2 名不同搭子确认后，吉他拨片才会入账；本月最多成立 3 次。",
-        )
+        show_inline_feedback(self, "等待搭子见证", "成果已保存为“等待见证”。\n需要 2 名不同搭子确认后，吉他拨片才会入账；本月最多成立 3 次。")
 
     def _purchase(self, item_key: str) -> None:
         spec = ITEM_CATALOG.get(item_key) or {}
         if self.ledger.balance < int(spec.get("price") or 0):
-            QMessageBox.information(self, "钱袋有点瘪", "哥们，吉他拨片不够，先去认真开一会儿工吧。")
+            show_inline_feedback(self, "钱袋有点瘪", "哥们，吉他拨片不够，先去认真开一会儿工吧。")
             return
         event = self.ledger.purchase_item(item_key)
         if event is None:
-            QMessageBox.information(self, "暂时不能购买", "这件家当已经添置过，或购买没有成功。")
+            show_inline_feedback(self, "暂时不能购买", "这件家当已经添置过，或购买没有成功。")
             return
         self.refresh()
         self.changed.emit()
@@ -431,8 +431,8 @@ class EconomyDialog(QDialog):
     def _use(self, item_key: str) -> None:
         result = self.ledger.use_item(item_key)
         if result is None:
-            QMessageBox.information(self, "仓库里没有", "先去荒野小卖部买一个，再回来使用吧。")
+            show_inline_feedback(self, "仓库里没有", "先去荒野小卖部买一个，再回来使用吧。")
             return
         self.refresh()
         self.changed.emit()
-        QMessageBox.information(self, "六毛生活记录", str(result.get("feedback") or "六毛把这件事记下来了。"))
+        show_inline_feedback(self, "六毛生活记录", str(result.get("feedback") or "六毛把这件事记下来了。"))

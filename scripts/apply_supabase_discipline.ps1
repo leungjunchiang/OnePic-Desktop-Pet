@@ -38,7 +38,8 @@ if ($MigrationPath -like '*lili_supervision_policy.sql' -or $MigrationPath -like
     }
     $coachingSql = if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
         (Get-Content -Raw -LiteralPath 'supabase/coaching_lifecycle.sql') + "`n" +
-        (Get-Content -Raw -LiteralPath 'supabase/beijing_time_contract.sql')
+        (Get-Content -Raw -LiteralPath 'supabase/beijing_time_contract.sql') + "`n" +
+        (Get-Content -Raw -LiteralPath 'supabase/interaction_center.sql')
     } else { '' }
     $sql = "begin;`n$projectionSql`n$baseSql`n$viewSql`n$policySql`n$sql`n$coachingSql`ncommit;"
 }
@@ -101,4 +102,8 @@ if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
     $timezoneBody = @{ query = $timezoneTest } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $timezoneBody
     Write-Host 'Actual timestamptz schema, UTC return shape, Beijing midnight/week, 06:00 genuine session start, legacy device offset and wall-clock plan verified; fixtures rolled back.'
+    $inboxTest = Get-Content -Raw -LiteralPath 'scripts/verify_interaction_center.sql'
+    $inboxBody = @{ query = $inboxTest } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $inboxBody
+    Write-Host 'Beijing distinct-day quota, ninth-day legacy rejection, cancellation/re-enable, monthly reset, inbox baseline, read receipts and receiver isolation verified; fixtures rolled back.'
 }

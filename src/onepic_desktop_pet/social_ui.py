@@ -1,4 +1,6 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""普通成功反馈复用页内标签，不创建系统对话框。
+
+互动收件箱批量读取、跨设备已读与轻量回应；免战入口共用北京时间八日额度。
 
 正式回应卡与执行牌复用同一状态投影，勾选配置使用统一矢量绘制。
 搭子自习室界面、后台同步线程和双六毛本地串门窗口。
@@ -15,6 +17,8 @@
 """
 
 from __future__ import annotations
+
+from .ui_feedback import show_inline_feedback
 
 from .time_service import BEIJING_TIMEZONE, format_clock, now_beijing, parse_server_datetime, to_beijing
 
@@ -3155,7 +3159,7 @@ class AccountSecurityDialog(QDialog):
     def _password_changed(self) -> None:
         self.current_password.clear(); self.new_password.clear(); self.confirm_password.clear()
         self._show_status("密码已修改成功；为保护账号安全，其他设备可能需要重新登录。")
-        QMessageBox.information(self, "密码已修改", "密码已修改成功。其他设备可能需要重新登录。")
+        self._show_status("密码已修改成功。其他设备可能需要重新登录。")
 
     def _password_change_failed(self, error: object) -> None:
         exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
@@ -3182,7 +3186,7 @@ class AccountSecurityDialog(QDialog):
     def _reset_requested(self) -> None:
         # Keep this response neutral even when the email is not registered.
         self._show_status("如果该邮箱已注册，我们会向其发送密码重置邮件；请检查收件箱和垃圾邮件。")
-        QMessageBox.information(self, "密码重置邮件已提交", "如果该邮箱已注册，我们会向其发送密码重置邮件。请检查收件箱和垃圾邮件。")
+        self._show_status("如果该邮箱已注册，我们会向其发送密码重置邮件。请检查收件箱和垃圾邮件。")
 
     def _reset_failed(self, error: object) -> None:
         exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
@@ -3230,7 +3234,7 @@ class AccountSecurityDialog(QDialog):
 
     def _account_deleted(self) -> None:
         self.account_deleted.emit()
-        QMessageBox.information(self, "账号已注销", "账号和六毛云端数据已删除。")
+        self._show_status("账号和六毛云端数据已删除。")
         self.accept()
 
     def _delete_failed(self, error: object) -> None:
@@ -3404,6 +3408,10 @@ class SocialHubDialog(QDialog):
         self._inbox_signature: str | None = None
         self._room_list_signature: str | None = None
         self._recent_interactions_signature: str | None = None
+        self._interaction_rows = []
+        self._interaction_inflight = False
+        self._interaction_last_read = 0.0
+        self._interaction_read_pending = set()
         self._auto_accepting_food: set[str] = set()
         self._focus_analytics: dict[str, Any] = {}
         self._last_ritual_notice = ""
@@ -4262,14 +4270,18 @@ class SocialHubDialog(QDialog):
 
     def _chat_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(12)
-        inbox_card, inbox_layout = self._card("待处理", "搭子申请、成果见证和串门都会在这里等待你的明确决定。添加搭子请回到首页“我的搭子”。")
-        self.inbox = QListWidget(); self.inbox.setSpacing(6); self.inbox.setMinimumHeight(125); self.inbox.setMaximumHeight(360)
+        inbox_card, inbox_layout = self._card("待我回应", "需要接受邀请或处理训导的事项。")
+        self.inbox = QListWidget(); self.inbox.setSpacing(6); self.inbox.setMinimumHeight(0); self.inbox.setMaximumHeight(360)
         self.inbox.currentItemChanged.connect(self._update_inbox_actions)
         inbox_layout.addWidget(self.inbox)
         layout.addWidget(inbox_card)
-        recent_card, recent_layout = self._card("最近互动", "已处理的事件会保留一条轻量记录。")
+        recent_card, recent_layout = self._card("今天 / 更早", "最近7天，最多30条；互动在这里回应，正式训导去专注处理。")
         self.recent_interactions = QListWidget(); self.recent_interactions.setMaximumHeight(180)
         recent_layout.addWidget(self.recent_interactions)
+        self.recent_interactions.hide()
+        from .interaction_center import InteractionFeed
+        self.interaction_feed = InteractionFeed(self._interaction_response, self)
+        recent_layout.addWidget(self.interaction_feed)
         layout.addWidget(recent_card)
         layout.addStretch()
         return self._scroll_page(page)
@@ -4321,6 +4333,7 @@ class SocialHubDialog(QDialog):
         self.focus_workspace.tabs.insertTab(0, today_page, "今日")
         self.focus_workspace.tabs.setCurrentIndex(0)
         self.focus_navigation = self.focus_workspace.tabs
+        self.focus_navigation.currentChanged.connect(lambda index: self._load_exemption_quota() if index == 0 else None)
         self.focus_refresh_timer = QTimer(self)
         self.focus_refresh_timer.setInterval(10000)
         self.focus_refresh_timer.timeout.connect(self._refresh_focus_goals)
@@ -4328,7 +4341,10 @@ class SocialHubDialog(QDialog):
         self._refresh_focus_goals()
         return self.focus_workspace
 
-    def _set_rest_day(self, callback, button=None):
+    def _set_rest_day(self, callback, button=None, *, enabled=True):
+        if enabled and not self._focus_engine().store.exemption_quota()["can_use"]:
+            self._set_status("今天是固定休息日，或本月免战额度已用完。", error=True)
+            return
         if getattr(self, "_rest_day_pending", False):
             return
         if button is not None and not begin_button_work(button, "正在设置…"):
@@ -4350,7 +4366,12 @@ class SocialHubDialog(QDialog):
         account = engine.store.account_id
         if not bool(getattr(self.client, "signed_in", False)):
             try:
-                engine.store.exempt_today()
+                if account:
+                    self._set_status("请联网恢复登录后确认免战额度。", error=True)
+                elif enabled:
+                    engine.store.exempt_today()
+                else:
+                    engine.store.cancel_exemption()
             finally:
                 finish()
             return
@@ -4375,9 +4396,32 @@ class SocialHubDialog(QDialog):
         try:
             timer.timeout.connect(lambda: failed("请求超时"))
             timer.start(30000)
-            self.study_rpc("lili_set_rest_day", {}, completed, failed)
+            self.study_rpc("lili_set_rest_day" if enabled else "lili_cancel_rest_day", {}, completed, failed)
         except Exception as error:
             failed(error)
+
+    def _load_exemption_quota(self):
+        if not self.client.signed_in or getattr(self,"_quota_loading",False):
+            return
+        self._quota_loading=True
+        if hasattr(self,"rest_day_button"):
+            self.rest_day_button.setEnabled(False)
+        account=_session_user_id(self.client)
+        thread=SocialBuddyRpcThread(self.client,"lili_rest_day_quota",{},self)
+        self._buddy_rpc_threads.append(thread)
+        def done(payload):
+            if account==_session_user_id(self.client):
+                self._focus_engine().store.merge_remote({"rest_day_quota":payload})
+                self._refresh_focus_goals()
+        thread.completed.connect(done,Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(lambda error:self._set_status("免战额度暂时未更新，请联网后重试。",error=True),Qt.ConnectionType.QueuedConnection)
+        def finish():
+            self._quota_loading=False
+            self._buddy_rpc_finished(thread)
+            if account==_session_user_id(self.client):
+                self._refresh_focus_goals()
+        thread.finished.connect(finish,Qt.ConnectionType.QueuedConnection)
+        thread.start()
 
     def open_focus_section(self, index=0) -> None:
         self.tabs.setCurrentIndex(2)
@@ -4402,8 +4446,13 @@ class SocialHubDialog(QDialog):
             self.focus_goal_bars[key].setValue(min(100, actual * 100 // target) if target else 0)
         exempt = engine.store.is_exempt(datetime.now(BEIJING_TIMEZONE).date())
         if not self.rest_day_button.property("actionBusy"):
-            self.rest_day_button.setEnabled(not exempt and engine.store.settings.is_workday(datetime.now(BEIJING_TIMEZONE).date()))
-            self.rest_day_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if exempt else "🏳️ 高挂免战牌 · 今日休息")
+            self.rest_day_button.setEnabled(not exempt and engine.store.exemption_quota()["can_use"] and not getattr(self,"_quota_loading",False))
+            quota = engine.store.exemption_quota()
+            self.rest_day_button.setText("🏳 高挂免战牌" if quota["can_use"] else "本月免战额度已用完 · 下月恢复" if not quota["remaining"] else "固定休息日 · 无需免战")
+            self.rest_day_button.setToolTip("每个北京时间自然月最多免战8天；取消不退额，同一天重挂不重复扣额。")
+        self.rest_day_button.setVisible(not exempt)
+        self.rest_day_quota_label.setText(("🏳 今日免战 · " if exempt else "") + engine.store.exemption_quota()["text"])
+        self.rest_day_cancel.setVisible(exempt)
         if exempt:
             self.focus_status.setText("🏳️ 高挂免战牌 · 今日休息")
         self.coaching_panel.refresh()
@@ -4513,6 +4562,15 @@ class SocialHubDialog(QDialog):
         self.rest_day_button = QPushButton("🏳️ 高挂免战牌 · 今日休息")
         self.rest_day_button.clicked.connect(lambda: self._set_rest_day(self.focus_workspace.refresh, self.rest_day_button))
         focus_layout.addWidget(self.rest_day_button)
+        quota_row = QHBoxLayout()
+        self.rest_day_quota_label = QLabel()
+        self.rest_day_quota_label.setStyleSheet("color:#52675f;font-size:12px;")
+        quota_row.addWidget(self.rest_day_quota_label,1)
+        self.rest_day_cancel = QPushButton("取消今日免战")
+        self.rest_day_cancel.setObjectName("minorRefresh")
+        self.rest_day_cancel.clicked.connect(lambda:self._set_rest_day(self.focus_workspace.refresh,self.rest_day_cancel,enabled=False))
+        quota_row.addWidget(self.rest_day_cancel)
+        focus_layout.addLayout(quota_row)
         task_button = QPushButton("设置一次只盯一件事")
         task_button.clicked.connect(self._set_focus_task)
         review_button = QPushButton("写下明天第一件事")
@@ -4653,8 +4711,12 @@ class SocialHubDialog(QDialog):
 
         if index in self._lazy_page_factories:
             self._materialize_lazy_page(index)
+        if index == 2 and self.client.signed_in:
+            self._load_exemption_quota()
         if index not in {1, 3} or self._applying_dashboard or not self.client.signed_in:
             return
+        if index == 1:
+            self._load_interactions(force=True)
         self.refresh()
 
     def _show_room_invite(self) -> None:
@@ -4667,7 +4729,7 @@ class SocialHubDialog(QDialog):
         room = current.data(Qt.ItemDataRole.UserRole) if current is not None else {}
         code = str(room.get("invite_code") or "") if isinstance(room, dict) else ""
         if code:
-            QMessageBox.information(self, "邀请好友", f"把这个房间码发给搭子：\n\n{code}")
+            self._set_status(f"把这个房间码发给搭子：\n\n{code}")
         else:
             self._set_status("当前房间暂时没有可用房间码。", error=True)
 
@@ -4922,7 +4984,12 @@ class SocialHubDialog(QDialog):
         self._buddy_rpc_threads.append(thread)
         def done(_):
             if account == _session_user_id(self.client):
-                self._interaction_sent(_owner_label(buddy), kind)
+                if kind == "cancel_request":
+                    self._set_status("申请已撤回。")
+                    self.refresh()
+                    self._load_interactions(force=True)
+                else:
+                    self._interaction_sent(_owner_label(buddy), kind)
         def failed(error):
             if account != _session_user_id(self.client):
                 return
@@ -5456,15 +5523,11 @@ class SocialHubDialog(QDialog):
             self.room_changed.emit(None)
             self._set_status("已离开当前自习室，本次共同专注已保留在房间动态中。")
             if isinstance(summary, dict) and summary:
-                QMessageBox.information(
-                    self,
-                    "本次自习室总结",
-                    f"{room_name}\n\n"
+                show_inline_feedback(self, "本次自习室总结", f"{room_name}\n\n"
                     f"今日共同专注：{format_work_duration(int(summary.get('today_shared_focus_seconds') or 0))}\n"
                     f"累计共同专注：{format_work_duration(int(summary.get('cumulative_shared_focus_seconds') or summary.get('shared_focus_seconds') or 0))}\n"
                     f"参与成员：{int(summary.get('member_count') or 0)} 人\n"
-                    f"离开后可再次用房间码加入。",
-                )
+                    f"离开后可再次用房间码加入。")
             self.refresh()
         except SocialError as exc:
             self._error(exc)
@@ -5632,7 +5695,7 @@ class SocialHubDialog(QDialog):
     def _password_reset_completed(self) -> None:
         self._end_action()
         self._set_status("如果该邮箱已注册，我们会向其发送密码重置邮件；请检查收件箱和垃圾邮件。")
-        QMessageBox.information(self, "密码重置邮件已提交", "如果该邮箱已注册，我们会向其发送密码重置邮件。请检查收件箱和垃圾邮件。")
+        self._set_status("如果该邮箱已注册，我们会向其发送密码重置邮件。请检查收件箱和垃圾邮件。")
 
     def _password_reset_failed(self, error: object) -> None:
         self._end_action()
@@ -5753,7 +5816,7 @@ class SocialHubDialog(QDialog):
         self._set_status(message, error=True, relogin=is_auth)
         if is_auth or retryable:
             return
-        QMessageBox.warning(self, "六毛搭子自习室", message)
+        # 普通网络/配置错误已经在页内显示，后台失败不能弹 modal。
 
     def _signup(self) -> None:
         if self._signup_thread is not None and self._signup_thread.isRunning():
@@ -5802,17 +5865,13 @@ class SocialHubDialog(QDialog):
                 title = "账号可能已存在"
                 status = "该邮箱可能已注册，请不要重复注册；先使用原密码登录或重新发送确认邮件。"
             self._set_status(status)
-            QMessageBox.information(self, title, message)
+            self._set_status(message)
         elif isinstance(result, SignupResult) and result.confirmation_pending:
             self._set_status("注册成功，确认邮件已提交；请点击邮件后回到这里登录。")
-            QMessageBox.information(
-                self,
-                "注册成功，请确认邮箱",
-                f"账号 {result.email} 已创建。\n\n"
+            show_inline_feedback(self, "注册成功，请确认邮箱", f"账号 {result.email} 已创建。\n\n"
                 "请打开确认邮件中的链接。链接会跳转到六毛项目页面；这表示邮箱确认已完成，"
                 "不是失败。然后回到 Lili，在“登录”页输入邮箱和密码即可。\n\n"
-                "如果 163 或学校邮箱暂时没有收到，请检查垃圾邮件/广告邮件，稍后点击“重新发送确认邮件”。",
-            )
+                "如果 163 或学校邮箱暂时没有收到，请检查垃圾邮件/广告邮件，稍后点击“重新发送确认邮件”。")
         elif result:
             # Compatibility path for legacy backends that still return a
             # plain truthy value. SignupResult itself is handled explicitly
@@ -5823,12 +5882,8 @@ class SocialHubDialog(QDialog):
             self._set_status("注册并登录成功，六毛自习室已准备好。")
         else:
             self._set_status("注册请求已提交，请到邮箱确认后回来登录。")
-            QMessageBox.information(
-                self,
-                "请确认邮箱",
-                "注册请求已提交。请到邮箱完成确认，然后回到这里登录。\n\n"
-                "确认页会打开六毛项目页面，不需要启动 localhost 服务。",
-            )
+            show_inline_feedback(self, "请确认邮箱", "注册请求已提交。请到邮箱完成确认，然后回到这里登录。\n\n"
+                "确认页会打开六毛项目页面，不需要启动 localhost 服务。")
 
     def _signup_failed(self, error: object) -> None:
         exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
@@ -5860,11 +5915,7 @@ class SocialHubDialog(QDialog):
     def _resend_completed(self) -> None:
         self._end_action()
         self._set_status("确认邮件已重新提交，请稍后检查收件箱和垃圾邮件。")
-        QMessageBox.information(
-            self,
-            "确认邮件已重发",
-            "邮件已重新提交。163、学校邮箱可能需要几分钟；如果仍未收到，需要管理员为 Supabase Auth 配置自定义 SMTP。",
-        )
+        show_inline_feedback(self, "确认邮件已重发", "邮件已重新提交。163、学校邮箱可能需要几分钟；如果仍未收到，需要管理员为 Supabase Auth 配置自定义 SMTP。")
 
     def _resend_failed(self, error: object) -> None:
         exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
@@ -6162,15 +6213,6 @@ class SocialHubDialog(QDialog):
                 "对方想和你成为搭子；接受后可以看到彼此的自习状态。",
                 ("接受", "拒绝"),
             )
-        for request in self.data.get("outgoing_requests") or []:
-            if not isinstance(request, dict):
-                continue
-            self._add_inbox_item(
-                "buddy_outgoing", request,
-                f"已发出的搭子申请 · {_owner_label(request)}",
-                "等待对方回应；如果不想继续，可以撤回这条申请。",
-                ("撤回申请",),
-            )
         labels = {
             "food_coffee": "☕ 一起开工邀请",
             "food_milk_tea": "🥤 一起休息邀请",
@@ -6201,9 +6243,105 @@ class SocialHubDialog(QDialog):
                 ("接受", "拒绝"),
             )
         if self.inbox.count() == 0:
-            empty = QListWidgetItem("当前没有待处理申请或串门，新的邀请会显示在这里。")
+            empty = QListWidgetItem("✓ 没有需要你处理的事情")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             self.inbox.addItem(empty)
+        self._fit_list_height(self.inbox, 40, 360)
+
+    def _load_interactions(self, *, force=False):
+        if not self.client.signed_in or self._interaction_inflight:
+            return
+        if not force and time.monotonic()-self._interaction_last_read < 60:
+            return
+        self._interaction_inflight = True
+        account = _session_user_id(self.client)
+        thread = SocialBuddyRpcThread(self.client, "lili_interaction_inbox", {}, self)
+        self._buddy_rpc_threads.append(thread)
+        def done(payload):
+            if account != _session_user_id(self.client) or not isinstance(payload, dict):
+                return
+            rows = payload.get("interaction_events")
+            if not isinstance(rows, list):
+                return
+            self._interaction_rows = rows
+            self._interaction_account = account
+            self._render_interaction_feed()
+        thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(lambda error: self._set_status("互动暂时未更新：" + social_user_message(error), error=True), Qt.ConnectionType.QueuedConnection)
+        def finish():
+            self._interaction_inflight = False
+            self._interaction_last_read = time.monotonic()
+            self._buddy_rpc_finished(thread)
+        thread.finished.connect(finish, Qt.ConnectionType.QueuedConnection)
+        thread.start()
+
+    def _render_interaction_feed(self):
+        if not hasattr(self, "interaction_feed"):
+            return
+        current_account = _session_user_id(self.client)
+        if getattr(self,"_interaction_account",current_account) != current_account:
+            self._interaction_rows = []
+            self._interaction_read_pending.clear()
+            self._interaction_account = current_account
+        from .buddy_identity import buddy_name
+        for row in self._interaction_rows:
+            peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
+            row["display_name"] = buddy_name(peer) if peer else str(row.get("nickname") or "搭子")
+        outgoing = [{"event_id":"buddy-outgoing:"+str(row.get("id")), "source_id":row.get("id"),
+                     "sender_id":row.get("user_id"),"event_type":"buddy_outgoing","source":"buddy_outgoing",
+                     "display_name":_owner_label(row),"created_at":row.get("created_at"),
+                     "payload":{"status":"pending"}} for row in self.data.get("outgoing_requests", [])]
+        known = {row.get("event_id") for row in self._interaction_rows}
+        self.interaction_feed.render(self._interaction_rows + [row for row in outgoing if row["event_id"] not in known])
+        unread = sum(bool(r.get("unread")) for r in self._interaction_rows)
+        self.tabs.setTabText(1, f"互动 · {unread}" if unread else "互动")
+        if self.tabs.currentIndex() != 1 or not self.isVisible():
+            return
+        ids = [str(r["event_id"]) for r in self._interaction_rows if r.get("unread") and str(r["event_id"]) not in self._interaction_read_pending]
+        if not ids:
+            return
+        self._interaction_read_pending.update(ids)
+        account = _session_user_id(self.client)
+        thread = SocialBuddyRpcThread(self.client, "lili_interaction_inbox", {"p_read_ids":ids}, self)
+        self._buddy_rpc_threads.append(thread)
+        def done(payload):
+            if account == _session_user_id(self.client):
+                self._interaction_rows = payload.get("interaction_events", self._interaction_rows)
+                self._render_interaction_feed()
+        thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(lambda error: self._set_status("已读状态未同步，可重新进入互动重试。", error=True), Qt.ConnectionType.QueuedConnection)
+        def finish():
+            self._interaction_read_pending.difference_update(ids)
+            self._buddy_rpc_finished(thread)
+        thread.finished.connect(finish, Qt.ConnectionType.QueuedConnection)
+        thread.start()
+
+    def _interaction_response(self, row, action):
+        if action == "home":
+            self.tabs.setCurrentIndex(0)
+            return
+        if action in {"focus", "handle"}:
+            if row.get("source") in {"buddy", "visit"}:
+                self.inbox.setFocus()
+                return
+            if (row.get("payload") or {}).get("state") == "explained":
+                peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
+                self.open_buddy_study({**peer,"user_id":row.get("sender_id"),"nickname":row.get("display_name") or row.get("nickname")})
+                return
+            self.open_focus_section(0)
+            return
+        peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
+        peer = {**peer, "user_id": row.get("sender_id"), "nickname": row.get("display_name") or row.get("nickname")}
+        if action == "cancel_request":
+            self._send_interaction_rpc(peer,"lili_cancel_buddy_request",{"request_id":row.get("source_id")},"cancel_request")
+        elif action == "food":
+            self._send_food_interaction(peer, "food_coffee")
+        elif action in {"cheer", "visit", "taunt"}:
+            self._send_interaction(peer, action)
+        elif action == "flower":
+            self._send_interaction_rpc(peer, "lili_supervision_nudge", {"p_owner_id":row.get("sender_id"),"p_kind":"flower"}, "flower")
+        else:
+            self._set_status("✓ 知道了")
 
     def apply_dashboard(self, data: dict[str, Any] | None) -> None:
         """Render a dashboard already fetched by the background sync thread.
@@ -6520,6 +6658,9 @@ class SocialHubDialog(QDialog):
                         f"🍰 今日蛋糕 · 已邀请 {total} 人 · 已接受 {accepted}/{total}\n{message}"
                     )
                 self._recent_interactions_signature = recent_signature
+        self._render_interaction_feed()
+        if self.isVisible():
+            self._load_interactions()
         self._update_inbox_actions(self.inbox.currentItem(), None)
         if inbox_changed:
             QTimer.singleShot(0, self._auto_accept_light_food_interactions)

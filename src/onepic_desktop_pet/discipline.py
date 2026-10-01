@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""北京时间月度免战最多八个不同工作日，取消不退额；UTC 事实保持原始瞬间。
 
 动态计划与纪律账本；正式训导按服务端版本合并，原始会话推导开工与补时。"""
 
@@ -286,6 +286,7 @@ class DisciplineStore:
         self.coach_messages = [dict(row) for row in raw.get("coach_messages", [])
                                if isinstance(row, dict)][-500:]
         self.rest_days = set(str(i) for i in raw.get("rest_days", []))
+        self.quota_snapshots = dict(raw.get("quota_snapshots") or {})
         self.synced_events = dict(raw.get("synced_events") or {})
         self.synced_settings_at = str(raw.get("synced_settings_at") or "")
         self.sync_cursor = max(0, int(raw.get("sync_cursor") or 0))
@@ -309,6 +310,7 @@ class DisciplineStore:
                 "seen_nudges": sorted(self.seen_nudges)[-500:],
                 "coach_messages": self.coach_messages[-500:],
                 "rest_days": sorted(self.rest_days),
+                "quota_snapshots": self.quota_snapshots,
             })
 
     def remember_coach_message(self, identifier: str, title: str, detail: str, at: datetime) -> None:
@@ -402,6 +404,12 @@ class DisciplineStore:
 
         if not isinstance(payload, dict):
             return
+        quota = payload.get("rest_day_quota")
+        if isinstance(quota, dict):
+            self.rest_days.update(str(day) for day in quota.get("used_dates", []) if isinstance(day, str))
+            month = str(quota.get("month") or "")
+            if month:
+                self.quota_snapshots[month] = list(quota.get("used_dates") or [])
         remote_stamp = str(payload.get("client_updated_at") or "")
         self.rest_days.update(str(day) for day in payload.get("rest_days", []) if isinstance(day, str))
         local_stamp = self.settings_updated_at
@@ -432,7 +440,7 @@ class DisciplineStore:
                 existing = by_id.get(existing_id or event_id)
                 if existing is not None:
                     earlier_start = row.get("event_type") == "start_work" and self._stamp(str(row.get("occurred_at"))) < self._stamp(str(existing.get("occurred_at")))
-                    later_summary = row.get("event_type") in {"daily_report", "finish_work", "early_finish", "focus_shortfall", "weekly_shortfall"} and self._stamp(str(row.get("occurred_at"))) > self._stamp(str(existing.get("occurred_at")))
+                    later_summary = row.get("event_type") in {"daily_report", "finish_work", "early_finish", "focus_shortfall", "weekly_shortfall", "rest_day", "cancel_rest_day"} and self._stamp(str(row.get("occurred_at"))) > self._stamp(str(existing.get("occurred_at")))
                     corrected_lateness = row.get("event_type") == "late_start" and row.get("metadata", {}).get("actual_start_source") == "first_real_start_after_0600"
                     if corrected_lateness:
                         existing["metadata"] = deepcopy(row["metadata"])
@@ -554,15 +562,42 @@ class DisciplineStore:
 
     def is_exempt(self, day: date | str) -> bool:
         key = day.isoformat() if isinstance(day, date) else day
-        return key in self.rest_days or any(row.get("event_type") == "rest_day" and row.get("event_date") == key for row in self.events)
+        rows = [r for r in self.events if r.get("event_date")==key and r.get("event_type") in {"rest_day","cancel_rest_day"}]
+        if rows:
+            return max(rows, key=lambda r:(self._stamp(r.get("occurred_at", "")),int(r.get("revision") or 0)))["event_type"]=="rest_day"
+        return key in self.rest_days
+
+    def exemption_quota(self, at: datetime | None = None) -> dict:
+        day = as_beijing(at).date()
+        used = set(self.rest_days)
+        for row in self.events:
+            if row.get("event_type") == "rest_day":
+                stamp = parse_timestamp(row.get("occurred_at"))
+                used.add(stamp.date().isoformat() if stamp else str(row.get("event_date")))
+        if day.strftime("%Y-%m") in self.quota_snapshots:
+            used = set(self.quota_snapshots[day.strftime("%Y-%m")])
+        days = {key for key in used if key.startswith(day.strftime("%Y-%m") + "-")}
+        count = len(days)
+        return {"used": count, "remaining": max(0, 8-count), "limit": 8,
+                "can_use": self.settings.is_workday(day) and (day.isoformat() in days or count < 8),
+                "text": f"本月 {count}/8 · 还剩{max(0, 8-count)}天"}
 
     def exempt_today(self, at: datetime | None = None) -> bool:
         moment = as_beijing(at)
-        if not self.settings.is_workday(moment.date()):
+        if not self.exemption_quota(moment)["can_use"]:
             return False
+        month = moment.strftime("%Y-%m")
+        if month in self.quota_snapshots:
+            self.quota_snapshots[month] = sorted(set(self.quota_snapshots[month]) | {moment.date().isoformat()})
         self.rest_days.add(moment.date().isoformat())
-        self.append_rule_once(f"{moment.date()}:rest_day", "rest_day", moment)
+        if not self.is_exempt(moment.date()) or not any(r.get("event_type")=="rest_day" and r.get("event_date")==moment.date().isoformat() for r in self.events):
+            self.append_event("rest_day", moment)
         return True
+
+    def cancel_exemption(self, at: datetime | None = None) -> None:
+        moment = as_beijing(at)
+        if self.is_exempt(moment.date()):
+            self.append_event("cancel_rest_day", moment)
 
 
 @dataclass(frozen=True)

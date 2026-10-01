@@ -56,7 +56,7 @@ def establish(pet):
 def test_initial_three_messages_only_restore_inbox(pet):
     sync(pet, [row("old-1"), row("old-2"), row("old-3")])
     pet._flush_discipline_notices()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
     assert not pet._discipline_pending_notices
     assert pet._discipline_store.seen_nudges == {"old-1", "old-2", "old-3"}
     assert len(pet._discipline_store.coach_messages) == 3
@@ -77,11 +77,11 @@ def test_missing_inbox_does_not_establish_baseline(pet, payload):
 def test_three_new_messages_coalesce_and_later_update_same_window(pet):
     establish(pet)
     sync(pet, [row("new-1"), row("new-2"), row("new-3")])
-    assert not pet._buddy_reminder_toasts  # burst buffering, no immediate shells
+    assert pet.notification_manager.current is None  # burst buffering, no immediate shells
     pet._flush_discipline_notices()
-    toast = pet._discipline_toast
-    assert len(pet._buddy_reminder_toasts) == 1
-    assert "3 条新事项" in toast.title_label.text()
+    toast = pet.notification_manager.current
+    assert pet.notification_manager.current is not None
+    assert "3 条新互动" in toast.title_label.text()
     assert "论文搭子" in toast.detail_label.text()
     assert toast.detail_label.text().strip()
     shot = toast.grab(); pixels = shot.toImage(); scale = shot.devicePixelRatio()
@@ -90,24 +90,21 @@ def test_three_new_messages_coalesce_and_later_update_same_window(pet):
     assert toast.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
     assert toast.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
     assert pet._social_dialog is None
-    toast.clock.elapsed_ms = 12_000; toast._tick()
-    assert toast.title_label.text() == "📋 3 条训导事项"
     sync(pet, [row("new-4")]); pet._flush_discipline_notices()
-    assert pet._discipline_toast is toast
-    assert len(pet._buddy_reminder_toasts) == 1
-    assert "4 条新事项" in toast.title_label.text()
-    assert toast.detail_label.isVisible()
+    assert pet.notification_manager.current is not toast
+    assert not toast.isVisible()
+    assert len(pet._discipline_store.coach_messages)==4
 
 
 def test_refresh_reconnect_and_delayed_history_do_not_replay(pet):
     establish(pet)
     fresh = row("new")
     sync(pet, [fresh]); pet._flush_discipline_notices()
-    toast = pet._discipline_toast
+    toast = pet.notification_manager.current
     toast.close()
     sync(pet, [fresh, row("late-page", at=datetime.now().astimezone()-timedelta(days=1))])
     pet._flush_discipline_notices()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
     assert "late-page" in pet._discipline_store.seen_nudges
 
 
@@ -116,7 +113,7 @@ def test_refresh_reconnect_and_delayed_history_do_not_replay(pet):
 def test_invalid_time_or_empty_body_cannot_create_toast(pet, extra):
     establish(pet)
     sync(pet, [row("invalid", **extra)]); pet._flush_discipline_notices()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
 
 
 def test_local_officer_thresholds_are_not_desktop_events(pet):
@@ -130,7 +127,7 @@ def test_local_officer_thresholds_are_not_desktop_events(pet):
     establish(pet)
     for notice in notices: pet._show_discipline_notice(notice)
     pet._flush_discipline_notices()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
     assert len(engine.store.fired_rules) == 3
 
 
@@ -140,19 +137,19 @@ def test_quiet_and_exempt_messages_stay_inbox_without_later_replay(pet, monkeypa
     sync(pet, [row("quiet")]); pet._flush_discipline_notices()
     monkeypatch.setattr("onepic_desktop_pet.window.detect_quiet_mode", lambda: SimpleNamespace(blocked=False))
     sync(pet, [row("quiet")]); pet._flush_discipline_notices()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
     pet._discipline_store.rest_days.add(datetime.now().astimezone().date().isoformat())
     sync(pet, [row("exempt")]); pet._flush_discipline_notices()
     assert len(pet._discipline_store.coach_messages) == 2
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
 
 
 def test_close_only_dismisses_window_and_exit_cancels_pending(pet, app):
     establish(pet)
     sync(pet, [row("one")]); pet._flush_discipline_notices()
-    toast = pet._discipline_toast; toast.close()
-    assert not pet._buddy_reminder_toasts
-    assert pet._discipline_toast is None
+    toast = pet.notification_manager.current; toast.close()
+    assert pet.notification_manager.current is None
+    assert pet.notification_manager.current is None
     assert pet._discipline_store.coach_messages[0]["id"] == "one"
     assert pet._discipline_engine.supervision["policy"]["enabled"]
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -161,14 +158,14 @@ def test_close_only_dismisses_window_and_exit_cancels_pending(pet, app):
     assert not pet._discipline_notice_timer.isActive()
     assert not pet._discipline_pending_notices
     pet._flush_discipline_notices()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
 
 
 def test_exit_destroys_active_toast(pet):
     establish(pet); sync(pet, [row("active")]); pet._flush_discipline_notices()
-    toast = pet._discipline_toast
+    toast = pet.notification_manager.current
     pet.close()
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert not isValid(toast)
 
@@ -178,7 +175,7 @@ def test_account_switch_resets_baseline_and_rejects_old_callback(pet):
     pet._active_focus_account_id = "account-b"
     new = pet._ensure_discipline_engine()
     assert pet._discipline_notice_baseline_at is None
-    assert not pet._buddy_reminder_toasts
+    assert pet.notification_manager.current is None
     sync(pet, [row("late-old-account")])
     assert not new.store.coach_messages
 
@@ -186,15 +183,15 @@ def test_account_switch_resets_baseline_and_rejects_old_callback(pet):
 def test_same_account_reauthentication_keeps_baseline_and_dedup(pet, monkeypatch):
     establish(pet); sync(pet, [row("already-shown")]); pet._flush_discipline_notices()
     baseline = pet._discipline_notice_baseline_at
-    toast = pet._discipline_toast
+    toast = pet.notification_manager.current
     monkeypatch.setattr(pet, "_current_social_user_id", lambda: "account-a")
     monkeypatch.setattr(pet, "_switch_focus_account", lambda _: None)
     monkeypatch.setattr(pet, "_schedule_social_tick", lambda **_: None)
     pet._social_account_state_changed(True)
     assert pet._discipline_notice_baseline_at == baseline
-    assert pet._discipline_toast is toast
+    assert pet.notification_manager.current is toast
     sync(pet, [row("already-shown"), row("after-reconnect")]); pet._flush_discipline_notices()
-    assert pet._discipline_toast is toast
+    assert pet.notification_manager.current is not toast
     assert len(pet._discipline_toast_notices) == 2
 
 
@@ -227,7 +224,7 @@ def test_hydrated_messages_are_visible_in_today_and_records(pet, app, defer_page
         assert "请说明昨天的缺口" in dialog.focus_coach_summary.text()
         dialog.open_focus_section(3)
         assert "请说明昨天的缺口" in dialog.focus_workspace.today_events.text()
-        assert not pet._buddy_reminder_toasts
+        assert pet.notification_manager.current is None
     finally:
         dialog.close(); dialog.deleteLater(); app.processEvents()
 

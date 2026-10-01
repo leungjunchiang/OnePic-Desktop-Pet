@@ -543,10 +543,10 @@ begin
         nullif(nullif(item->'explanation','""'::jsonb),'null'::jsonb))
       on conflict(user_id,dedupe_key) where dedupe_key<>'' do update set
         occurred_at=case when excluded.event_type='start_work' then least(public.lili_discipline_events.occurred_at,excluded.occurred_at)
-          when excluded.event_type in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall') then greatest(public.lili_discipline_events.occurred_at,excluded.occurred_at)
+          when excluded.event_type in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall','rest_day','cancel_rest_day') then greatest(public.lili_discipline_events.occurred_at,excluded.occurred_at)
           else public.lili_discipline_events.occurred_at end,
         metadata=case when (excluded.event_type='start_work' and excluded.occurred_at<public.lili_discipline_events.occurred_at)
-          or (excluded.event_type in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall') and excluded.occurred_at>public.lili_discipline_events.occurred_at)
+          or (excluded.event_type in ('daily_report','finish_work','early_finish','focus_shortfall','weekly_shortfall','rest_day','cancel_rest_day') and excluded.occurred_at>public.lili_discipline_events.occurred_at)
           then excluded.metadata else public.lili_discipline_events.metadata end,
         requires_explanation=case when excluded.event_type in ('early_finish','focus_shortfall','weekly_shortfall') and excluded.occurred_at>public.lili_discipline_events.occurred_at then excluded.requires_explanation else public.lili_discipline_events.requires_explanation end,
         explanation=coalesce(public.lili_discipline_events.explanation,excluded.explanation),
@@ -592,7 +592,8 @@ begin
         and (public.lili_supervision_permission(me,n.supervisor_id)->>'remind')::boolean),'[]'));
   if p_include_config or p_settings is not null then
     select settings,client_updated_at into remote_plan,remote_stamp from public.lili_discipline_settings where user_id=me;
-    result:=result||jsonb_build_object('settings',coalesce(remote_plan,'{}'),'client_updated_at',remote_stamp);
+    result:=result||jsonb_build_object('settings',coalesce(remote_plan,'{}'),'client_updated_at',remote_stamp,
+      'rest_day_quota',public.lili_rest_day_quota());
   end if;
   return result;
 end; $$;

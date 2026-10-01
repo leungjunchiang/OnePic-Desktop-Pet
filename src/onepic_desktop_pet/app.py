@@ -1,4 +1,6 @@
 """
+普通成功反馈复用页内标签，不创建系统对话框。
+
 本模块管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
 职责范围：
@@ -28,6 +30,8 @@ Agent 快速定位：
 """
 
 from __future__ import annotations
+
+from .ui_feedback import show_inline_feedback
 
 import os
 import faulthandler
@@ -745,18 +749,14 @@ class DesktopPetApplication(QObject):
         if result.release is None:
             self.program_update_state = UpdateState.UP_TO_DATE
             if self._program_update_manual:
-                QMessageBox.information(
-                    self.window,
-                    "检查程序更新",
-                    (
+                show_inline_feedback(self.window, "检查程序更新", (
                         "暂未找到可用的程序发布版本。\n"
                         if result.status == "no_release"
                         else "六毛已经是最新版。\n"
                     )
                     + f"当前版本：{result.current_version}\n"
                     + f"最新版本：{result.latest_version}\n"
-                    + "更新源：GitHub Releases",
-                )
+                    + "更新源：GitHub Releases")
             return
         self.program_update_state = UpdateState.UPDATE_AVAILABLE
         release = result.release

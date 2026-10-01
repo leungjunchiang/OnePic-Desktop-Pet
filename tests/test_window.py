@@ -808,7 +808,7 @@ def test_duration_bubble_content_refresh_does_not_bypass_owner_visibility_policy
     app.processEvents()
 
 
-def test_taunt_state_schedules_periodic_followup_speech() -> None:
+def test_taunt_state_restoration_does_not_schedule_followup_speech() -> None:
     app, window = _create_window()
     window._apply_taunt_state(
         {
@@ -818,10 +818,10 @@ def test_taunt_state_schedules_periodic_followup_speech() -> None:
             "message": "就这？",
         }
     )
-    assert window.taunt_chatter_timer.isActive()
+    assert not window.taunt_chatter_timer.isActive()
     window._taunt_chatter_tick()
-    assert window.taunt_chatter_timer.isActive()
-    assert window.speech_bubble.text().startswith("搭子：")
+    assert not window.taunt_chatter_timer.isActive()
+    assert not window.speech_bubble.isVisible()
 
     window._apply_taunt_state({"active": False})
     assert not window.taunt_chatter_timer.isActive()
@@ -847,11 +847,9 @@ def test_taunt_state_keeps_multiple_taunters_in_status_and_speech() -> None:
     app.processEvents()
     assert window.visit_status_bubble.isVisible()
     assert window.visit_status_bubble.text() == "小梁和大毛正在嘲讽你 · 还剩 1:53"
-    assert window.speech_bubble.isVisible()
-    assert window.speech_bubble.text().startswith("小梁和大毛：")
-
+    assert not window.speech_bubble.isVisible()
     window._taunt_chatter_tick()
-    assert window.speech_bubble.text().startswith("小梁和大毛：")
+    assert not window.taunt_chatter_timer.isActive()
     window._apply_taunt_state({"active": False})
     assert not window.visit_status_bubble.isVisible()
     window.close()
@@ -904,7 +902,7 @@ def test_encouragement_uses_private_display_name() -> None:
     app.processEvents()
     assert window.visit_status_bubble.isVisible()
     assert window.visit_status_bubble.text() == "小梁送来鼓励"
-    assert window.speech_bubble.text().startswith("小梁：")
+    assert not window.speech_bubble.isVisible()
     window._apply_encouragement_state({"active": False})
     window.close()
     window.deleteLater()
@@ -2306,7 +2304,9 @@ def test_pending_visit_notice_closes_when_server_no_longer_lists_invitation() ->
     event = {"id": "visit-pending", "nickname": "搭子", "kind": "visit"}
     window._enqueue_incoming_visit_notice(event)
     app.processEvents()
-    assert window._incoming_visit_notice is not None
+    assert window._incoming_visit_notice is None
+    window.notification_manager.flush()
+    assert window.notification_manager.current is not None
 
     window._social_dashboard_received({"visits": [], "active_visits": []})
     app.processEvents()
@@ -4682,11 +4682,12 @@ def test_reminder_uses_private_note_without_opening_main_window(monkeypatch) -> 
     monkeypatch.setattr(window, "_discipline_buddy_choices", lambda: [
         {"user_id": "buddy-b", "private_note_name": "论文搭子", "nickname": "毛毛冲"}])
     monkeypatch.setattr(window, "open_social_hub", lambda: (_ for _ in ()).throw(AssertionError("Reminder opened main window")))
-    event = {"target_user_id": "buddy-b", "nickname": "毛毛冲", "event_type": "start_work",
+    event = {"id":"event-b", "target_user_id": "buddy-b", "nickname": "毛毛冲", "event_type": "start_work",
              "occurred_at": datetime.now(timezone.utc).isoformat()}
     try:
         window._show_buddy_reminder(event)
-        toast = window._buddy_reminder_toasts[-1]
+        window.notification_manager.flush()
+        toast = window.notification_manager.current
         assert isinstance(toast, BuddyReminderToast)
         assert "论文搭子开始专注了" in toast.title_label.text()
         assert "毛毛冲" in toast.detail_label.text()

@@ -901,12 +901,11 @@ def test_outgoing_buddy_request_has_retract_action_and_is_not_acceptable() -> No
         "outgoing_requests": [{"id": "request-1", "nickname": "胡老师", "owner_nickname": "胡老师"}],
         "visits": [],
     })
-    dialog.inbox.setCurrentRow(0)
-    assert dialog.inbox.item(0).data(Qt.ItemDataRole.UserRole)[0] == "buddy_outgoing"
-    card = dialog.inbox.itemWidget(dialog.inbox.item(0))
-    assert card is not None
-    assert "撤回申请" in {button.text() for button in card.findChildren(QPushButton)}
-    assert "接受" not in {button.text() for button in card.findChildren(QPushButton)}
+    assert dialog.inbox.item(0).data(Qt.ItemDataRole.UserRole) is None
+    from onepic_desktop_pet.interaction_center import InteractionFeed
+    buttons={button.text() for button in dialog.interaction_feed.findChildren(QPushButton)}
+    assert "撤回申请" in buttons
+    assert "接受" not in buttons
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

@@ -1,9 +1,13 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""普通成功反馈复用页内标签，不创建系统对话框。
+
+北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
 勾选配置使用统一矢量绘制。
 六毛补给站：食物是场景入口，仓库、商店和账本共用一个经济核心。"""
 
 from __future__ import annotations
+
+from .ui_feedback import show_inline_feedback
 
 from .time_service import format_clock
 
@@ -448,11 +452,11 @@ class FoodSceneDialog(QDialog):
     def _purchase(self, item_key: str) -> None:
         spec = ITEM_CATALOG.get(item_key) or {}
         if self.ledger.balance < int(spec.get("price") or 0):
-            QMessageBox.information(self, "钱袋有点瘪", "哥们，吉他拨片不够，先去认真开一会儿工吧。")
+            show_inline_feedback(self, "钱袋有点瘪", "哥们，吉他拨片不够，先去认真开一会儿工吧。")
             return
         event = self.ledger.purchase_item(item_key)
         if event is None:
-            QMessageBox.information(self, "暂时不能购买", "这件家当已经添置过，或购买没有成功。")
+            show_inline_feedback(self, "暂时不能购买", "这件家当已经添置过，或购买没有成功。")
             return
         self.refresh()
 
@@ -474,10 +478,10 @@ class FoodSceneDialog(QDialog):
                 selected.append(str(item.data(Qt.ItemDataRole.UserRole) or "").strip())
         selected = [value for value in selected if value]
         if not 1 <= len(selected) <= 3:
-            QMessageBox.information(self, "还差一步", "请选择 1～3 位好友一起庆祝。")
+            show_inline_feedback(self, "还差一步", "请选择 1～3 位好友一起庆祝。")
             return
         if self.cake_share_submitter is None:
-            QMessageBox.information(self, "需要登录", "登录搭子自习室后，才能邀请好友分享蛋糕。")
+            show_inline_feedback(self, "需要登录", "登录搭子自习室后，才能邀请好友分享蛋糕。")
             return
         try:
             result = self.cake_share_submitter(str(message.text()).strip()[:160], selected)
@@ -487,7 +491,7 @@ class FoodSceneDialog(QDialog):
         if result is None:
             return
         self.refresh()
-        QMessageBox.information(self, "蛋糕已摆上桌", f"已邀请 {len(selected)} 位好友；他们上线后可以分别接受。")
+        show_inline_feedback(self, "蛋糕已摆上桌", f"已邀请 {len(selected)} 位好友；他们上线后可以分别接受。")
 
     def _request(self, key: str, selector: QComboBox | None) -> None:
         duration = 0
@@ -513,7 +517,7 @@ class FoodSceneDialog(QDialog):
             choices = [dict(item) for item in (self.witness_choices() or ()) if isinstance(item, dict)]
             choices = [item for item in choices if str(item.get("user_id") or item.get("id") or "").strip()]
             if len(choices) < 2:
-                QMessageBox.information(self, "暂时不能登记", "成果奖励需要 2 名已经建立搭子关系的好友共同见证。")
+                show_inline_feedback(self, "暂时不能登记", "成果奖励需要 2 名已经建立搭子关系的好友共同见证。")
                 return
             for slot in range(2):
                 labels = [str(item.get("nickname") or item.get("owner_nickname") or item.get("user_id"))[:60] for item in choices if str(item.get("user_id") or item.get("id")) not in selected_ids]
@@ -538,7 +542,7 @@ class FoodSceneDialog(QDialog):
             QMessageBox.warning(self, "暂时不能登记", str(exc))
             return
         if pending is None:
-            QMessageBox.information(self, "暂时不能登记", "同月同名成果不能重复提交。")
+            show_inline_feedback(self, "暂时不能登记", "同月同名成果不能重复提交。")
             return
         if self.achievement_submitter is not None and isinstance(pending, dict):
             pending = dict(pending)
@@ -555,9 +559,9 @@ class FoodSceneDialog(QDialog):
             self._remote_achievement_claims.append(pending)
         self.refresh()
         if isinstance(pending, dict) and pending.get("status") == "submission_limit":
-            QMessageBox.information(self, "本月申请已达上限", "本月最多发起 4 次成果见证申请，下个月再来。")
+            show_inline_feedback(self, "本月申请已达上限", "本月最多发起 4 次成果见证申请，下个月再来。")
             return
-        QMessageBox.information(self, "等待搭子见证", "已向两名指定搭子发送见证申请；两人同意后固定获得 200 吉他拨片，确认前不会入账。")
+        show_inline_feedback(self, "等待搭子见证", "已向两名指定搭子发送见证申请；两人同意后固定获得 200 吉他拨片，确认前不会入账。")
 
     def closeEvent(self, event) -> None:
         event.ignore()

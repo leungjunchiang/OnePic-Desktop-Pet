@@ -1,4 +1,6 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""普通成功反馈复用页内标签，不创建系统对话框。
+
+北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
 双向训导复用低频增量同步和专注事实；被动头顶卡、进度牌与启动静默。
 
@@ -60,6 +62,8 @@ API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 
 """
 
 from __future__ import annotations
+
+from .ui_feedback import show_inline_feedback
 
 from .time_service import now_beijing, parse_server_datetime
 
@@ -790,6 +794,10 @@ class PetWindow(QWidget):
         self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
         self._fullscreen_suppression_mode = "normal"
         self._process_started_at = now_beijing()
+        from .notification_manager import NotificationManager
+        self.notification_manager = NotificationManager(self, blocked=lambda: self._close_in_progress or detect_quiet_mode().blocked or getattr(self,"_social_notification_dnd",False),
+            foreground=lambda: self._social_dialog is not None and self._social_dialog.isActiveWindow(),
+            inline=lambda text: self._social_dialog._set_status(text))
         self._sleep_after_sit = False
         self._room_quick_status = ""
         self._room_quick_status_expires_at: datetime | None = None
@@ -3537,15 +3545,8 @@ class PetWindow(QWidget):
         self.speech_timer.start(max(1200, duration_ms))
 
     def _schedule_taunt_chatter(self) -> None:
-        """在惩罚持续期间隔几分钟再说一句随机嘲讽。"""
-
-        if not self._taunt_active:
-            self.taunt_chatter_timer.stop()
-            return
-        # Keep the cadence playful rather than machine-like: one line every
-        # 2.5–3.5 minutes, while the server remains the authority on when the
-        # punishment ends.
-        self.taunt_chatter_timer.start(random.randint(150_000, 210_000))
+        """旧入口不再为持续状态启动重复通知。"""
+        self.taunt_chatter_timer.stop()
 
     def _update_taunt_countdown(self) -> None:
         """Keep the visible redemption countdown moving once per second."""
@@ -3567,28 +3568,8 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _taunt_chatter_tick(self) -> None:
-        """Show a follow-up taunt and schedule the next one if still active."""
-
-        if not self._taunt_active:
-            self.taunt_chatter_timer.stop()
-            return
-        # Include the messages returned for each active taunt when the
-        # backend provides them, while retaining the local catalogue for
-        # mixed-version relays.  A single chatter timer keeps the cadence
-        # visible without creating one timer per sender.
-        message_pool = list(dict.fromkeys((*self._taunt_messages, *_TAUNT_FOLLOWUP_MESSAGES)))
-        candidates = [
-            message
-            for message in message_pool
-            if message not in {self._taunt_chatter_last_message, self._taunt_message}
-        ]
-        if not candidates:
-            candidates = message_pool
-        message = random.choice(candidates)
-        self._taunt_chatter_last_message = message
-        sender = self._taunt_sender_nickname or "搭子"
-        self.show_speech(f"{sender}：{message}", 5200)
-        self._schedule_taunt_chatter()
+        """睡眠前排队的旧回调也不能重启通知循环。"""
+        self.taunt_chatter_timer.stop()
 
     def feed_pet(self, food_key: str) -> CompanionReply:
         """喂给 Lili 一种菜单食物，并播放对应表情与文字反馈。"""
@@ -5162,9 +5143,10 @@ class PetWindow(QWidget):
             self._today_note_window.refresh()
 
     def rest_today(self) -> None:
-        self.time_memory.records.set_rest_day(True)
-        self._set_temporary_activity("daydream", 20_000)
-        self.show_speech("行，那今天不算旷工。", 4200)
+        # 待办/AI 免战入口也走同一配额和服务器写入，不能绕过月限制。
+        self.open_social_hub()
+        self._social_dialog.open_focus_section(0)
+        self._social_dialog._set_rest_day(self._social_dialog._refresh_focus_goals, self._social_dialog.rest_day_button)
         if self._today_note_window is not None:
             self._today_note_window.refresh()
 
@@ -8147,6 +8129,17 @@ class PetWindow(QWidget):
             engine = self._ensure_discipline_engine()
             engine.store.merge_remote(result)
             engine.store.merge_coaching(result)
+            if isinstance(result, dict) and isinstance(result.get("coaching_cases"), list):
+                immediate = []
+                for case in result["coaching_cases"]:
+                    history = case.get("history") or []
+                    action = history[-1] if history else {}
+                    if action.get("action_id") and str(action.get("actor_id")) != account_id:
+                        immediate.append({"id":"case:"+str(case.get("id"))+":"+str(action["action_id"]),
+                            "created_at":action.get("at"), "title":str(case.get("title") or ""),
+                            "detail":"" if case.get("paused") or engine.store.is_exempt(as_beijing().date()) else "搭子有一条新的训导要求，打开专注 → 今日查看。"})
+                self.notification_manager.observe("cases", immediate, notify=lambda row:
+                    self.notification_manager.notify(row["id"], row["title"], row["detail"], self._open_discipline_notice))
             engine.store.acknowledge_sync(getattr(thread, "sync_payload", {}), result)
             self._discipline_sync_has_more = bool(isinstance(result, dict) and (result.get("has_more") or result.get("has_more_cases")))
             if self._discipline_sync_has_more:
@@ -8189,7 +8182,7 @@ class PetWindow(QWidget):
                         from .discipline import DisciplineNotice
                         if nudge.get("kind") in {"cheer", "praise", "flower", "approve_finish", "knock", "ask", "rest_more", "return", "start", "finish", "progress", "take_break", "rest"}:
                             if not detect_quiet_mode().blocked:
-                                self.show_speech(title, duration_ms=2600)
+                                self.notification_manager.notify("nudge:"+identifier, title, detail, self._open_interaction_inbox)
                         else:
                             self._show_discipline_notice(DisciplineNotice("buddy_nudge", title, detail, "info", identifier))
                 engine.store._save()
@@ -8359,21 +8352,16 @@ class PetWindow(QWidget):
         if count > 3:
             detail += "\n其余事项可在专注 → 今日查看。"
         mini = f"📋 {count} 条训导事项"
-        toast = self._discipline_toast
-        if toast is None:
-            toast = BuddyReminderToast(title, detail, mini_title=mini, parent=self)
-            self._discipline_toast = toast
-            toast.open_requested.connect(self._open_discipline_notice)
-            self._register_reminder_toast(toast)
-        else:
-            toast.set_content(title, detail, mini_title=mini)
-        toast.show_passive()
+        for identifier, notice in pending.items():
+            self.notification_manager.notify("nudge:"+identifier, notice.title, notice.detail, self._open_discipline_notice)
+        self.notification_manager.flush()
 
     def _open_discipline_notice(self) -> None:
         self.open_social_hub()
         self._social_dialog.open_focus_section(0)
 
     def _reset_discipline_notifications(self) -> None:
+        self.notification_manager.clear_all()
         timer = getattr(self, "_discipline_notice_timer", None)
         if timer is not None:
             timer.stop()
@@ -8404,6 +8392,7 @@ class PetWindow(QWidget):
         toast.deleteLater()
 
     def _clear_reminder_toasts(self) -> None:
+        self.notification_manager.clear_all()
         self._reset_discipline_notifications()
         for toast in list(self._buddy_reminder_toasts):
             toast.close()
@@ -8481,6 +8470,8 @@ class PetWindow(QWidget):
         return row
 
     def _show_buddy_reminder(self, event: dict) -> None:
+        if not str(event.get("id") or "").strip():
+            return
         event_type = str(event.get("event_type") or "")
         from .buddy_identity import buddy_name, public_name
         peer = self._buddy_display_record(str(event.get("target_user_id") or event.get("user_id") or ""), str(event.get("nickname") or "搭子"))
@@ -8496,14 +8487,8 @@ class PetWindow(QWidget):
         age_seconds = max(0, (datetime.now(timezone.utc) - stamp).total_seconds()) if stamp else 0
         remaining_ms = max(1, int((NOTIFICATION_LIFETIME_SECONDS - age_seconds) * 1000))
         mini_title = f"{'🟢' if event_type == 'start_work' else '🌙'} {nickname}"
-        toast = BuddyReminderToast(title, detail, mini_title=mini_title, remaining_ms=remaining_ms, parent=self)
-        toast.open_requested.connect(self.open_social_hub)
-        self._buddy_reminder_toasts = [item for item in self._buddy_reminder_toasts if item.isVisible()]
-        if len(self._buddy_reminder_toasts) >= 4:
-            self._buddy_reminder_toasts.pop(0).close()
-        stack_index = len(self._buddy_reminder_toasts)
-        self._register_reminder_toast(toast)
-        toast.show_passive(stack_index=stack_index)
+        self.notification_manager.notify("work:" + str(event.get("id") or ""), title, detail,
+            self.open_social_hub, duration_ms=remaining_ms)
 
     def _social_dialog_finished(self) -> None:
         dialog = self._social_dialog
@@ -9088,6 +9073,7 @@ class PetWindow(QWidget):
             for item in (data.get("muted_buddy_ids") or [])
             if str(item).strip()
         }
+        self._social_notification_dnd = str((data.get("me") or {}).get("buddy_interaction_mode") or "") == "do_not_disturb"
         self._merge_remote_personal_state(data)
         if isinstance(data.get("_personal_state"), dict) and not data.get("_sync_offline"):
             self._personal_profile_synced_user_id = str(self._active_focus_account_id or "")
@@ -9130,9 +9116,9 @@ class PetWindow(QWidget):
             and not data.get("_sync_offline")
             and data.get("data_source") != "local_cache"
         ):
-            for event in reminder_store.unseen_events(reminder_snapshot.get("events")):
-                if not detect_quiet_mode().blocked:
-                    self._show_buddy_reminder(event)
+            events = reminder_snapshot.get("events")
+            reminder_store.unseen_events(events)
+            self.notification_manager.observe("work", events, timestamp="occurred_at", notify=self._show_buddy_reminder)
 
         taunt_active = self._apply_taunt_state(data.get("_taunt_state"))
         encouragement_active = self._apply_encouragement_state(data.get("_encouragement_state"))
@@ -9157,9 +9143,8 @@ class PetWindow(QWidget):
                 or ""
             )
 
-        for request in data.get("requests") or []:
-            if sender_id(request) not in self._muted_buddy_ids:
-                self._enqueue_buddy_request_notice(request)
+        self.notification_manager.observe("requests", data.get("requests"), notify=self._enqueue_buddy_request_notice)
+        self.notification_manager.observe("visits", data.get("visits"), notify=self._enqueue_incoming_visit_notice)
         pending_visits = [item for item in (data.get("visits") or []) if isinstance(item, dict)]
         pending_visit_ids = {self._incoming_visit_id(item) for item in pending_visits}
         # If the response was handled on another device, or the ten-minute
@@ -9170,13 +9155,6 @@ class PetWindow(QWidget):
             current_id = self._incoming_visit_id(current_notice._event_payload)
             if current_id and current_id not in pending_visit_ids:
                 self._finish_incoming_visit_notice(current_notice._event_payload)
-        for visit in pending_visits:
-            visit_id = self._incoming_visit_id(visit) if isinstance(visit, dict) else ""
-            if (
-                sender_id(visit) not in self._muted_buddy_ids
-                and visit_id not in self._handled_visit_ids
-            ):
-                self._enqueue_incoming_visit_notice(visit)
         active = self._active_visits_after_startup(
             [
                 item for item in (data.get("active_visits") or [])
@@ -9294,12 +9272,8 @@ class PetWindow(QWidget):
             )
             if is_new_taunt:
                 self._taunt_chatter_last_message = self._taunt_message
-                self.show_speech(f"{sender}：{self._taunt_message}", 5200)
-                self._schedule_taunt_chatter()
-            elif not self.taunt_chatter_timer.isActive():
-                # Recover the periodic chatter after a sleep/resume or a
-                # transient timer reset without repeating the current line.
-                self._schedule_taunt_chatter()
+            # 持续嘲讽只恢复进度旁的小牌子；刷新不朗读旧消息，也不重注册提醒。
+            self.taunt_chatter_timer.stop()
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
             return True
@@ -9353,8 +9327,7 @@ class PetWindow(QWidget):
                 return False
             self._change_ambient_activity("work-cheer")
             self.visit_status_bubble.set_encourager(sender)
-            if is_new_encouragement:
-                self.show_speech(f"{sender}：{self._encouragement_message}", 5200)
+            # 持续加油状态静默恢复；即时事件在互动收件箱中保留。
             self._position_visit_status_bubble()
             self._raise_accessory(self.visit_status_bubble)
             return True
@@ -9384,6 +9357,8 @@ class PetWindow(QWidget):
 
         if not isinstance(request, dict):
             return
+        if str(request.get("sender_id") or request.get("requester_id") or request.get("user_id") or "") in self._muted_buddy_ids:
+            return
         item = dict(request)
         request_id = self._buddy_request_id(item)
         if not request_id or request_id in self._seen_buddy_request_ids:
@@ -9396,7 +9371,7 @@ class PetWindow(QWidget):
             or "新搭子"
         )
         self._set_temporary_activity("pointing", 20_000)
-        self.show_speech(f"💌 {nickname} 发来搭子申请\n打开“互动”处理。", 7000)
+        self.notification_manager.notify("buddy:"+request_id, f"💌 {nickname} 发来搭子申请", "打开互动收件箱处理。", self._open_interaction_inbox)
         if self._social_dialog is not None:
             self._social_dialog._set_status(f"💌 {nickname} 发来搭子申请，请到“互动”处理。")
 
@@ -10339,14 +10314,10 @@ class PetWindow(QWidget):
         reasons = "、".join(
             f"{key} {value}条" for key, value in report.skip_reasons.items()
         ) or "无"
-        QMessageBox.information(
-            parent or self,
-            "历史专注恢复",
-            f"已扫描 {report.scanned} 条，恢复 {report.recovered} 段，"
+        show_inline_feedback(parent or self, "历史专注恢复", f"已扫描 {report.scanned} 条，恢复 {report.recovered} 段，"
             f"已存在/重复 {report.duplicates} 段，跳过 {report.skipped} 条。\n"
             f"待上传 {report.upload_pending} 段；网络失败时会在下次同步继续。\n"
-            f"跳过原因：{reasons}",
-        )
+            f"跳过原因：{reasons}")
 
     def _switch_focus_account(self, account_id: str | None) -> None:
         """在本地加载目标账号的计时与分析命名空间。"""
@@ -10561,6 +10532,8 @@ class PetWindow(QWidget):
 
         if not isinstance(event, dict):
             return
+        if str(event.get("sender_id") or event.get("user_id") or "") in self._muted_buddy_ids:
+            return
         event = dict(event)
         event_id = self._incoming_visit_id(event)
         if not event_id or event_id in self._seen_visit_ids:
@@ -10574,14 +10547,15 @@ class PetWindow(QWidget):
         self._present_incoming_visit_notice(event)
 
     def _present_incoming_visit_notice(self, event: dict) -> None:
-        notice = IncomingVisitNotice(event, self)
-        self._incoming_visit_notice = notice
-        notice.accept_requested.connect(self._accept_incoming_visit)
-        notice.reject_requested.connect(self._reject_incoming_visit)
-        notice.later_requested.connect(self._defer_incoming_visit)
-        notice.show()
-        notice.raise_()
-        notice.activateWindow()
+        from .buddy_identity import buddy_name
+        peer = self._buddy_display_record(str(event.get("sender_id") or event.get("user_id") or ""), str(event.get("nickname") or "搭子"))
+        self.notification_manager.notify("visit:"+self._incoming_visit_id(event),
+            buddy_name(peer)+("给你投喂了" if str(event.get("kind", "")).startswith("food_") else "来找你了"),
+            "打开互动收件箱回应邀请。", self._open_interaction_inbox)
+
+    def _open_interaction_inbox(self):
+        self.open_social_hub()
+        self._social_dialog.tabs.setCurrentIndex(1)
 
     def _finish_incoming_visit_notice(self, event: dict) -> None:
         event_id = self._incoming_visit_id(event)

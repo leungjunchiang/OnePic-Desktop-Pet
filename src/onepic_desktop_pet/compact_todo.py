@@ -1,4 +1,6 @@
-"""勾选配置使用统一矢量绘制。
+"""普通成功反馈复用页内标签，不创建系统对话框。
+
+勾选配置使用统一矢量绘制。
 A small, pet-attached Todo strip.
 
 The compact Todo surface is deliberately separate from ``TodayNoteWindow``.
@@ -14,6 +16,8 @@ controls paint visible surfaces.
 """
 
 from __future__ import annotations
+
+from .ui_feedback import show_inline_feedback
 
 import logging
 from datetime import date
@@ -726,7 +730,7 @@ class CompactTodoPanel(QWidget):
         try:
             task = self.memory.todos.add(title.strip())
         except ValueError as exc:
-            QMessageBox.information(self, "暂时不能添加", str(exc))
+            show_inline_feedback(self, "暂时不能添加", str(exc))
             return
         self.memory.select_task(task.id)
         self.task_selected.emit(task.id)

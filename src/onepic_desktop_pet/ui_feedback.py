@@ -1,4 +1,4 @@
-"""共享轻量按钮样式与处理状态，保留现有 Qt 组件和业务调用。"""
+"""共享按钮响应和页内反馈；普通成功提示不创建独立系统对话框。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontMetrics
@@ -49,3 +49,32 @@ def end_button_work(button):
     button.setText(str(button.property("workLabel") or ""))
     button.setEnabled(bool(button.property("workEnabled")))
     button.style().unpolish(button); button.style().polish(button)
+
+
+def show_inline_feedback(parent, title, message):
+    """复用页面状态/桌宠气泡，否则创建有父级的短暂标签，不激活任何窗口。"""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QLabel, QWidget, QFormLayout
+    text = str(message or title)
+    for name in ("_set_status", "_show_status", "show_speech"):
+        callback = getattr(parent, name, None)
+        if callable(callback):
+            callback(text)
+            return
+    if not isinstance(parent, QWidget):
+        return
+    label = getattr(parent,"_inline_feedback_label", None)
+    if label is None:
+        label = QLabel(parent)
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setStyleSheet("background:#e1efec;color:#24564e;border-radius:8px;padding:8px;")
+        parent._inline_feedback_label = label
+        layout = parent.layout()
+        if isinstance(layout,QFormLayout): layout.addRow(label)
+        elif layout is not None: layout.addWidget(label)
+        else: label.setGeometry(10,max(10,parent.height()-100),max(100,parent.width()-20),80)
+        timer = QTimer(label);timer.setSingleShot(True);timer.timeout.connect(label.hide)
+        parent._inline_feedback_timer=timer
+    label.setText(text);label.show()
+    parent._inline_feedback_timer.start(6000)

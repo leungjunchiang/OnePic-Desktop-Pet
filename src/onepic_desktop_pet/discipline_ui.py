@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""纪律记录按内容布局；免战入口显示北京时间自然月八日额度并提前禁用超额操作。
 
 双向训导结案汇总进入纪律记录，正式说明通过今日回应卡，勾选配置统一绘制。
 专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
@@ -199,6 +199,9 @@ class DisciplineWorkspace(QWidget):
         self.snooze_button.clicked.connect(self._snooze_today)
         heading.addWidget(self.snooze_button)
         layout.addLayout(heading)
+        self.quota_label = QLabel()
+        self.quota_label.setStyleSheet("color:#52675f;font-size:12px;")
+        layout.addWidget(self.quota_label)
         metrics = QHBoxLayout()
         metrics.setSpacing(8)
         self.discipline_metrics = []
@@ -505,8 +508,14 @@ class DisciplineWorkspace(QWidget):
         today = self.engine.daily_summary(now_day, today_seconds, week_seconds, sessions=starts)
         exempt = today["exempt"]
         if not self.snooze_button.property("actionBusy"):
-            self.snooze_button.setEnabled(self.store.settings.is_workday(now_day) and not exempt)
-            self.snooze_button.setVisible(not exempt)
+            self.snooze_button.setEnabled(self.store.exemption_quota()["can_use"] and not exempt)
+        quota = self.store.exemption_quota()
+        self.quota_label.setText(quota["text"] + (" · 本月免战额度已用完，下月恢复" if not quota["can_use"] and not quota["remaining"] and not exempt else ""))
+        self.snooze_button.setToolTip("每个北京时间自然月最多高挂免战牌8天；同一天重挂不重复扣额，取消不退额。")
+        quota = self.store.exemption_quota()
+        self.quota_label.setText(quota["text"] + (" · 本月免战额度已用完，下月恢复" if not quota["remaining"] and not exempt else ""))
+        self.snooze_button.setToolTip("每个北京时间自然月最多高挂免战牌8天；同一天重挂不重复扣额，取消不退额。")
+        self.snooze_button.setVisible(not exempt)
         decorate_buttons(self)
         target, actual, gap = (int(today[key]) for key in ("daily_target_seconds", "today_seconds", "daily_gap_seconds"))
         mode = {"off":"未启用训导", "normal":"普通训导", "officer":"严格训导"}[today["mode"]]
