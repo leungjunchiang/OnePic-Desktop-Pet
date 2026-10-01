@@ -79,6 +79,7 @@ class BuddyStudyDialog(QDialog):
         pages[3].addLayout(modes)
         self.nudges = {}
         nudge_row = QGridLayout()
+        self.nudge_layout = nudge_row
         for index, (kind, label) in enumerate((("start", "催 TA 开工"), ("rest", "提醒休息太久"), ("progress", "提醒今日进度"), ("finish", "提醒 TA 下班"), ("cheer", "加油一下"), ("take_break", "提醒休息"), ("return", "该回来了"), ("rest_more", "再歇会儿"), ("knock", "👊 敲桌子"), ("ask", "问问怎么回事"), ("praise", "👏 夸一下"), ("flower", "🌸 发小红花"), ("approve_finish", "✅ 批准下班"))):
             button = QPushButton(label); button.setEnabled(False)
             button.clicked.connect(lambda _checked=False, k=kind: self._nudge(k))
@@ -108,6 +109,7 @@ class BuddyStudyDialog(QDialog):
         case_layout.addWidget(self.review_note)
         self.case_actions = {}
         actions_layout = QGridLayout()
+        self.case_action_layout = actions_layout
         for index, (kind, title) in enumerate((("request_explanation", "要求说明"), ("request_makeup", "要求补时"),
                 ("forgive", "放过"), ("approve", "通过说明"), ("approve_makeup", "通过 + 补时"),
                 ("reject", "退回说明"), ("week_makeup", "本周补回"), ("tomorrow_makeup", "明天优先补"))):
@@ -248,6 +250,7 @@ class BuddyStudyDialog(QDialog):
         for kind, button in self.nudges.items():
             button.setVisible(kind in actions)
             button.setEnabled(kind in actions)
+        self._compact_actions(self.nudge_layout, [button for kind, button in self.nudges.items() if kind in actions])
         self.progress_button.setVisible(bool(permission.get("view_progress")) and not exempt)
         self.rest_hint.setText("🏳️ TA 今天挂了免战牌，暂停训导。\n今日休息，本周目标仍会继续累计。" if exempt else
                                "看看休息多久了：" + format_work_duration(int(self._overview["rest_seconds"])) if self._overview.get("rest_seconds") is not None else "")
@@ -315,9 +318,20 @@ class BuddyStudyDialog(QDialog):
         elif state == "explained": choices |= {"approve", "approve_makeup", "reject"}
         for kind, button in self.case_actions.items():
             button.setVisible(kind in choices and allowed)
+        self._compact_actions(self.case_action_layout,
+                              [button for kind, button in self.case_actions.items() if kind in choices and allowed])
+        self.makeup_minutes.setVisible(bool(choices & {"request_makeup", "approve_makeup", "week_makeup", "tomorrow_makeup"}) and allowed)
         if row.get("id") != getattr(self, "_review_draft_case", None):
             self.review_note.clear()
         self._review_draft_case = row.get("id")
+
+    @staticmethod
+    def _compact_actions(layout, buttons):
+        """当前状态的操作连续排布，隐藏的旧动作不保留空行或空列。"""
+        while layout.count():
+            layout.takeAt(0)
+        for index, button in enumerate(buttons):
+            layout.addWidget(button, index//3, index%3)
 
     def _case_action(self, kind):
         row = self.case_selector.currentData() or {}
