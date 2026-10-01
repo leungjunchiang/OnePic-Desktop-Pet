@@ -4,7 +4,7 @@
 
 双向训导复用低频增量同步和专注事实；被动头顶卡、进度牌与启动静默。
 
-本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
+本模块（进程级心跳、隐藏不断线、显式退出下线）实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
 职责范围：
 - 纪律云端只确认未同步的最终事件；配置按页面进入读取，专注事实增量读取间隔五分钟；
@@ -835,6 +835,9 @@ class PetWindow(QWidget):
         self._todo_sync_kick_timer: QTimer | None = None
         self._todo_sync_wake_pending = False
         self._close_in_progress = False
+        self.close_to_tray = False
+        self.application_exit_requested = False
+        self._presence_exit_started_at = 0.0
         self._social_dialog: SocialHubDialog | None = None
         self._close_retry_scheduled = False
         self._social_thread: SocialSyncThread | None = None
@@ -2638,8 +2641,15 @@ class PetWindow(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
+        if self.close_to_tray and not self.application_exit_requested:
+            event.ignore()
+            self.hide_pet()
+            return
         lifecycle_log("pet_window.close_event.begin", self)
         self._close_in_progress = True
+        self.social_sync_timer.stop()
+        self.social_timer.stop()
+        self.social_heartbeat_watchdog_timer.stop()
         self.discipline_tick_timer.stop()
         self._clear_reminder_toasts()
         # Pause/seal first, then ask workers to stop. Do not hide the pet,
@@ -2655,11 +2665,14 @@ class PetWindow(QWidget):
         thread_roots = self._thread_shutdown_roots()
         request_stop_all(*thread_roots)
         heartbeat_thread = getattr(self, "_social_heartbeat_thread", None)
-        if heartbeat_thread is not None and heartbeat_thread.isRunning():
+        if heartbeat_thread is not None and heartbeat_thread.isRunning() and not self._presence_exit_started_at:
+            self._presence_exit_started_at = time.monotonic()
             final_user_id = self._current_social_user_id()
             heartbeat_thread.stop(
                 {
                     "user_id": final_user_id,
+                    "presence_state": "offline",
+                    "activity_state": "idle",
                     "working": False,
                     "session_active": False,
                     "session_id": None,
@@ -2668,6 +2681,16 @@ class PetWindow(QWidget):
                 if final_user_id
                 else None
             )
+        # Keep Qt alive while the process worker finishes its final small RPC.
+        # A broken network must still permit exit, with the existing TTL fallback.
+        if (isinstance(heartbeat_thread, SocialHeartbeatWorker)
+                and heartbeat_thread.isRunning()
+                and time.monotonic() - self._presence_exit_started_at < 15.0):
+            event.ignore()
+            if not self._close_retry_scheduled:
+                self._close_retry_scheduled = True
+                QTimer.singleShot(250, self._retry_close_after_threads_stop)
+            return
         running = running_threads(*thread_roots)
         if running:
             names = ", ".join(type(thread).__name__ for thread in running)
@@ -8658,6 +8681,8 @@ class PetWindow(QWidget):
                 input_idle_seconds = None
         return {
             "user_id": str(user_id or self._heartbeat_identity_for_local_state() or "").strip(),
+            "presence_state": "online",
+            "activity_state": "focus" if active else "rest" if has_active_session else "idle",
             "working": active,
             "session_active": active,
             "session_id": session_id if active else None,
@@ -8678,6 +8703,9 @@ class PetWindow(QWidget):
             user_id=self._heartbeat_identity_for_local_state(),
             immediate=True,
         )
+        update_presence = getattr(heartbeat_thread, "update_presence", None)
+        if callable(update_presence):
+            update_presence(self._build_local_liveness_presence(user_id=str(payload.get("user_id") or "")))
         lifecycle_log(
             "social.heartbeat.force_inactive",
             self,

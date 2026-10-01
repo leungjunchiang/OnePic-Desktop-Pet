@@ -204,7 +204,7 @@ class BuddyStudyDialog(QDialog):
                       if isinstance(row, dict) and _buddy_identifier(row) == self.buddy_id), None)
         if fresh is not None:
             self.buddy = dict(fresh)
-        status = {"focus": "🟢 正在专注", "rest": "正在休息", "offline": "已离线", "unknown": "状态同步中", "exempt": "🏳️ 高挂免战牌 · 今日休息"}.get(_presence_status(self.buddy), "状态同步中")
+        status = {"focus": "🟢 正在专注", "rest": "正在休息", "online": "在线", "offline": "已离线", "unknown": "状态同步中", "exempt": "🏳️ 高挂免战牌 · 今日休息"}.get(_presence_status(self.buddy), "状态同步中")
         if self._overview.get("exempt") and self._overview.get("exemption_date") == as_beijing().date().isoformat():
             status = "🏳️ 高挂免战牌 · 今日休息"
         session = max(0, int(self.buddy.get("session_seconds", 0) or 0))

@@ -1,3 +1,3 @@
-"""Build-time version written by the release workflow."""
+"""发布构建版本；进程在线状态与专注活动分离。"""
 
-BUILD_VERSION = "0.23.298"
+BUILD_VERSION = "0.23.310"

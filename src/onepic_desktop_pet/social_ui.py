@@ -1,4 +1,4 @@
-"""普通成功反馈复用页内标签，不创建系统对话框。
+"""普通成功反馈复用页内标签；统一进程 Presence、活动状态、TTL 与本地自身显示。
 
 互动收件箱按北京日期分组、页面切换复用缓存、批量已读与轻量回应；免战入口共用北京时间八日额度。
 
@@ -484,6 +484,8 @@ _PRESENCE_LOAD_READY_FIELDS = (
 _PRESENCE_FIELDS = frozenset(
     {
         "online",
+        "presence_state",
+        "activity_state",
         "working",
         "session_active",
         "status",
@@ -542,7 +544,7 @@ def _presence_uncertain(presence: dict[str, Any]) -> bool:
         presence.get("presence_transport_stale")
     ):
         return True
-    return presence.get("online") is False and _presence_has_login_evidence(presence)
+    return False
 
 
 def _presence_status(presence: dict[str, Any], now: datetime | None = None) -> str:
@@ -552,18 +554,26 @@ def _presence_status(presence: dict[str, Any], now: datetime | None = None) -> s
     age = _presence_last_seen_age_seconds(presence, now)
     if (age is not None and age > PRESENCE_ONLINE_TTL_SECONDS) or presence.get("stale_presence"):
         return "offline"
-    if presence.get("online") is False or str(presence.get("status", "")).casefold() in {"offline", "离线"}:
+    explicit_presence = presence.get("presence_state")
+    if explicit_presence == "offline" or (explicit_presence != "online" and (
+            presence.get("online") is False
+            or str(presence.get("status", "")).casefold() in {"offline", "离线"})):
         return "offline"
     if presence.get("presence_uncertain") or presence.get("presence_transport_stale"):
         return "unknown"
     if presence.get("rest_day_date") == (to_beijing(now) if now else now_beijing()).date().isoformat():
         return "exempt"
+    activity = str(presence.get("activity_state") or "").casefold()
+    if activity in {"focus", "rest", "idle"}:
+        return "online" if activity == "idle" else activity
+    if str(presence.get("status") or "").casefold() in {"idle", "online"}:
+        return "online"
     return "focus" if _presence_working(presence) else "rest"
 
 
 def _presence_is_online(presence: dict[str, Any], status: str | None = None) -> bool:
     """在线圆点与统一状态完全一致。"""
-    return (status or _presence_status(presence)) in {"focus", "rest", "exempt"}
+    return (status or _presence_status(presence)) in {"focus", "rest", "online", "exempt"}
 
 
 def _taunt_available(presence: dict[str, Any]) -> bool:
@@ -577,7 +587,7 @@ def _taunt_available(presence: dict[str, Any]) -> bool:
     not encourage an action that the server may reject.
     """
 
-    return _presence_status(presence) in {"rest", "offline"}
+    return _presence_status(presence) in {"rest", "online", "offline"}
 
 
 def _taunt_window_open(now: datetime | None = None) -> bool:
@@ -725,7 +735,7 @@ def _buddy_status_rank(record: dict[str, Any] | None) -> int | None:
         return 0
     if not _presence_uncertain(record) and online and status == "rest":
         return 1
-    return 2
+    return 2 if online else 3
 
 
 def _buddy_presence_batch_ready(records: list[dict[str, Any]]) -> bool:
@@ -1080,6 +1090,8 @@ class SocialHeartbeatWorker:
                     "input_idle_seconds": None,
                 }
             )
+            if raw.get("presence_state") is not None:
+                raw.update(presence_state="online", activity_state="rest")
             payload = _heartbeat_payload(raw)
             self._pending = dict(payload)
             self._send_now = self._send_now or bool(immediate)
@@ -2504,9 +2516,9 @@ class BuddyCardWidget(QWidget):
             else:
                 status_text = "同步中"
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "online": "在线", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         headline = QLabel(
-            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain or status == 'rest' else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f" · {status_text}{'（我）' if is_self else ''}"
         )
         self._headline_label = headline
@@ -2543,6 +2555,7 @@ class BuddyCardWidget(QWidget):
         self._confirmation_label = confirmation
         confirmation.setStyleSheet("color:#61727d;font-size:11px;")
         confirmation.setWordWrap(False)
+        confirmation.setVisible(status in {"offline", "unknown"})
         root.addWidget(confirmation)
         quick_status = str(buddy.get("quick_status") or "").strip()
         expires = str(buddy.get("quick_status_expires_at") or "")
@@ -2646,17 +2659,18 @@ class BuddyCardWidget(QWidget):
             else:
                 status_text = "同步中"
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "online": "在线", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         nickname = _owner_nickname(buddy)
         is_self = bool(buddy.get("is_self"))
         self._headline_label.setText(
-            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain or status == 'rest' else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f" · {status_text}{'（我）' if is_self else ''}"
         )
         self._focus_label.setText(_buddy_focus_totals_text(buddy))
         self._confirmation_label.setText(
             _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
         )
+        self._confirmation_label.setVisible(status in {"offline", "unknown"})
         outfit = str(buddy.get("outfit_key") or "经典六毛")
         self._footer_label.setText(f"娃衣：{outfit}")
         self._footer_label.setToolTip(f"当前娃衣：{outfit} · 可以直接对这位搭子串门、嘲讽或送补给")
@@ -2765,12 +2779,12 @@ class RoomPetCardWidget(QWidget):
                     else "同步中"
                 )
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "online": "在线", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         nickname = _owner_nickname(buddy)
         # Create the headline before the image so existing accessibility/tests
         # and screen readers encounter identity/state first.
         headline = QLabel(
-            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain or status == 'rest' else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
         )
         headline.setStyleSheet("font-size:14px;font-weight:700;color:#203847;")
@@ -2846,9 +2860,9 @@ class RoomPetCardWidget(QWidget):
                     else "同步中"
                 )
         else:
-            status_text = {"focus": "正在工作", "rest": "正在休息", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
+            status_text = {"focus": "正在工作", "rest": "正在休息", "online": "在线", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         self._headline_label.setText(
-            f"{'⚫' if status == 'offline' else '🟡' if uncertain else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
+            f"{'⚫' if status == 'offline' else '🟡' if uncertain or status == 'rest' else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
             f"{status_text}{'（我）' if buddy.get('is_self') else ''}"
         )
         self._metrics_label.setText(
@@ -6806,6 +6820,16 @@ class SocialHubDialog(QDialog):
                 "session_seconds": int(getattr(local_status, "session_seconds", 0)),
                 "today_seconds": int(getattr(local_status, "today_seconds", 0)),
             }
+        local_presence.update({
+            "presence_state": "online", "online": True,
+            "presence_load_state": "ready",
+            "activity_state": "focus" if local_presence.get("working") else
+                "rest" if str(local_presence.get("status")) in {"paused", "rest", "resting", "break"} else "idle",
+            "last_seen_at": now_beijing().isoformat(),
+            "last_confirmed_at": now_beijing().isoformat(),
+            "stale_presence": False, "presence_uncertain": False,
+            "presence_transport_stale": False,
+        })
         if isinstance(self._focus_analytics, dict):
             local_presence.update({
                 "today_interruptions": int(self._focus_analytics.get("today_interruptions") or 0),

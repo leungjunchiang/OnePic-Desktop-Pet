@@ -132,8 +132,11 @@ async function handleDashboard(env, event, roomId = "") {
 async function handlePresence(env, event, body) {
   bearer(event);
   const inputIdleSeconds = Number(body.input_idle_seconds);
-  return supabaseFetch(env, event, "/rest/v1/rpc/lili_upsert_focus_presence_v2", {
+  const modern = body.presence_state != null;
+  return supabaseFetch(env, event, modern ? "/rest/v1/rpc/lili_presence_heartbeat" : "/rest/v1/rpc/lili_upsert_focus_presence_v2", {
     body: {
+      ...(modern ? { p_presence_state: body.presence_state === "offline" ? "offline" : "online",
+        p_activity_state: ["focus", "rest", "idle"].includes(body.activity_state) ? body.activity_state : "idle" } : {}),
       p_working: Boolean(body.working),
       p_session_active: Boolean(body.session_active),
       p_session_id: body.session_id ? String(body.session_id).slice(0, 160) : null,

@@ -1,4 +1,4 @@
-"""远端返回量可选本地诊断；闹钟与铃声不进入心跳或社交请求。
+"""远端返回量可选本地诊断；进程 Presence 与 focus/rest/idle 分离，心跳不携带统计或配置。
 
 Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
@@ -80,6 +80,8 @@ SOCIAL_LEADERBOARD_TTL_SECONDS = 300.0
 HEARTBEAT_FIELDS = frozenset(
     {
         "user_id",
+        "presence_state",
+        "activity_state",
         "session_id",
         "working",
         "session_active",
@@ -596,7 +598,13 @@ def _normalise_never_seen_presence(data: dict[str, Any]) -> dict[str, Any]:
 def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
     """Select and normalize liveness-only fields for the heartbeat API."""
 
-    payload = {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence}
+    payload = {key: presence[key] for key in HEARTBEAT_FIELDS if key in presence and not (key in {"presence_state", "activity_state"} and presence[key] is None)}
+    if presence.get("presence_state") is not None:
+        payload["presence_state"] = "offline" if presence["presence_state"] == "offline" else "online"
+        activity = str(presence.get("activity_state") or "idle")
+        payload["activity_state"] = activity if activity in {"focus", "rest", "idle"} else "idle"
+        if payload["presence_state"] == "offline" or payload["activity_state"] != "focus":
+            payload["working"] = payload["session_active"] = False
     active = bool(payload.get("working")) and bool(payload.get("session_active"))
     session_id = str(payload.get("session_id") or "").strip()
     started_at = payload.get("session_started_at")
@@ -639,7 +647,7 @@ def _heartbeat_payload(presence: dict[str, Any]) -> dict[str, Any]:
 def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
     """Map the transport-neutral heartbeat to the atomic RPC parameters."""
 
-    return {
+    result = {
         "p_working": bool(body.get("working")),
         "p_session_active": bool(body.get("session_active")),
         "p_session_id": str(body.get("session_id") or "")[:160] or None,
@@ -648,6 +656,14 @@ def _atomic_presence_body(body: dict[str, Any]) -> dict[str, Any]:
         "p_sequence": max(0, int(body.get("sequence") or 0)),
         "p_input_idle_seconds": body.get("input_idle_seconds"),
     }
+    if body.get("presence_state") is not None:
+        result.update(p_presence_state=body["presence_state"], p_activity_state=body["activity_state"])
+    return result
+
+
+def _presence_rpc_path(body: dict[str, Any]) -> str:
+    """新版状态明确分层；旧客户端保留已部署的 v2 协议。"""
+    return "/rest/v1/rpc/" + ("lili_presence_heartbeat" if body.get("presence_state") is not None else "lili_upsert_focus_presence_v2")
 
 
 class ConnectionStateStore:
@@ -1518,7 +1534,7 @@ class SocialBackend(Protocol):
     def todo_pull(self, *, after_updated_at: str | None, after_id: str | None, limit: int) -> Any: ...
     def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
-    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None: ...
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None, presence_state: str | None = None, activity_state: str | None = None) -> None: ...
     def recover_session(self) -> bool: ...
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None: ...
     def record_room_event(self, *, room_id: str, kind: str, target_id: str | None = None, message: str = "") -> None: ...
@@ -2210,7 +2226,7 @@ class HttpSocialBackend:
         else:
             self._raw("PATCH", "/profile", body, authenticated=True)
 
-    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None:
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None, presence_state: str | None = None, activity_state: str | None = None) -> None:
         # ``AuthSessionManager`` is the source of truth.  During login and
         # token refresh it can already hold a valid session while this
         # transport's compatibility attribute is still empty.  Returning at
@@ -2250,6 +2266,8 @@ class HttpSocialBackend:
                 "device_id": str(device_id or stable_device_id),
                 "sequence": max(0, int(sequence or 0)),
                 "input_idle_seconds": input_idle_seconds,
+                "presence_state": presence_state,
+                "activity_state": activity_state,
             }
         )
         body["device_id"] = stable_device_id
@@ -2259,7 +2277,7 @@ class HttpSocialBackend:
             try:
                 result = self._raw(
                     "POST",
-                    "/rest/v1/rpc/lili_upsert_focus_presence_v2",
+                    _presence_rpc_path(body),
                     _atomic_presence_body(body),
                     authenticated=True,
                 )
@@ -2267,7 +2285,7 @@ class HttpSocialBackend:
                     body["sequence"] = _next_presence_sequence(requested_user_id)
                     result = self._raw(
                         "POST",
-                        "/rest/v1/rpc/lili_upsert_focus_presence_v2",
+                        _presence_rpc_path(body),
                         _atomic_presence_body(body),
                         authenticated=True,
                     )
@@ -3126,9 +3144,9 @@ class LegacyDirectSocialClient:
             body["owner_nickname"] = clean_owner_nickname(owner_nickname) or None
         self._raw("PATCH", path, body, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
-    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None) -> None:
+    def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None, presence_state: str | None = None, activity_state: str | None = None) -> None:
         if self._http_backend is not None:
-            return self._http_backend.heartbeat(user_id=user_id, working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence, input_idle_seconds=input_idle_seconds)
+            return self._http_backend.heartbeat(user_id=user_id, working=working, session_active=session_active, session_id=session_id, session_started_at=session_started_at, device_id=device_id, sequence=sequence, input_idle_seconds=input_idle_seconds, presence_state=presence_state, activity_state=activity_state)
         if not self.session:
             raise SocialError(
                 "登录会话暂时不可用，正在恢复在线状态。",
@@ -3152,15 +3170,17 @@ class LegacyDirectSocialClient:
                 "device_id": stable_device_id,
                 "sequence": max(0, int(sequence or 0)),
                 "input_idle_seconds": input_idle_seconds,
+                "presence_state": presence_state,
+                "activity_state": activity_state,
             }
         )
         if not body.get("sequence"):
             body["sequence"] = _next_presence_sequence(self.session.user_id)
         try:
-            result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence_v2", _atomic_presence_body(body), authenticated=True)
+            result = self._raw("POST", _presence_rpc_path(body), _atomic_presence_body(body), authenticated=True)
             if _reconcile_presence_rpc_response(self.session.user_id, stable_device_id, result):
                 body["sequence"] = _next_presence_sequence(self.session.user_id)
-                result = self._raw("POST", "/rest/v1/rpc/lili_upsert_focus_presence_v2", _atomic_presence_body(body), authenticated=True)
+                result = self._raw("POST", _presence_rpc_path(body), _atomic_presence_body(body), authenticated=True)
                 _reconcile_presence_rpc_response(self.session.user_id, stable_device_id, result)
         except SocialError as exc:
             if "device_session_revoked" in str(exc).casefold() or str(exc.error_code).casefold() == "device_session_revoked":

@@ -39,7 +39,8 @@ if ($MigrationPath -like '*lili_supervision_policy.sql' -or $MigrationPath -like
     $coachingSql = if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
         (Get-Content -Raw -LiteralPath 'supabase/coaching_lifecycle.sql') + "`n" +
         (Get-Content -Raw -LiteralPath 'supabase/beijing_time_contract.sql') + "`n" +
-        (Get-Content -Raw -LiteralPath 'supabase/interaction_center.sql')
+        (Get-Content -Raw -LiteralPath 'supabase/interaction_center.sql') + "`n" +
+        (Get-Content -Raw -LiteralPath 'supabase/presence_lifecycle.sql')
     } else { '' }
     $sql = "begin;`n$projectionSql`n$baseSql`n$viewSql`n$policySql`n$sql`n$coachingSql`ncommit;"
 }
@@ -102,6 +103,12 @@ if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
     $timezoneBody = @{ query = $timezoneTest } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $timezoneBody
     Write-Host 'Actual timestamptz schema, UTC return shape, Beijing midnight/week, 06:00 genuine session start, legacy device offset and wall-clock plan verified; fixtures rolled back.'
+    $presenceTest = Get-Content -Raw -LiteralPath 'scripts/verify_presence_lifecycle.sql'
+    $presenceReplay = Get-Content -Raw -LiteralPath 'supabase/presence_lifecycle.sql'
+    $presenceTest = $presenceTest.Replace('-- REPLAY_PRESENCE_HERE', "$presenceReplay`n$presenceReplay")
+    $presenceBody = @{ query = $presenceTest } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $presenceBody
+    Write-Host 'Presence lifecycle, idle/rest/focus, multi-device exit, sequence fencing, TTL, recovery, privacy and legacy protocol verified; fixtures rolled back.'
     $inboxTest = Get-Content -Raw -LiteralPath 'scripts/verify_interaction_center.sql'
     $inboxBody = @{ query = $inboxTest } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $inboxBody

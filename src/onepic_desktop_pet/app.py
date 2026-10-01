@@ -1,7 +1,7 @@
 """
 普通成功反馈复用页内标签，不创建系统对话框。
 
-本模块管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
+本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
 职责范围：
 - 创建或复用 QApplication；
@@ -354,6 +354,7 @@ class DesktopPetApplication(QObject):
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.settings = settings or load_settings()
         self.window = PetWindow(self.settings)
+        self.window.close_to_tray = True
         lifecycle_log("pet_window.created", self.window, owner="DesktopPetApplication")
         type(self)._active_instance = self
         self.window.quit_requested.connect(self.quit)
@@ -623,6 +624,7 @@ class DesktopPetApplication(QObject):
         window_closed = False
         try:
             lifecycle_log("application.close_entry", self.window, target="pet window")
+            self.window.application_exit_requested = True
             window_closed = self.window.close() is not False
         except Exception:
             LOGGER.exception("[Lifecycle] failed to close pet window")
