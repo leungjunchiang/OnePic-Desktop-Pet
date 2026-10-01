@@ -1,11 +1,11 @@
-"""搭子互动收件箱：北京时间日期 Feed、缓存组装和四秒即时反馈；持续纪律使用独立状态牌。"""
+"""搭子互动收件箱：北京日期 Feed、直接回应按钮生命周期与四秒即时反馈。"""
 from __future__ import annotations
 from datetime import timedelta
 from time import monotonic
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame
 from .time_service import now_beijing, parse_server_datetime, format_clock, to_beijing
-from .ui_feedback import decorate_buttons
+from .ui_feedback import decorate_buttons, begin_button_work, end_button_work
 
 LABELS = {
     "visit":"🏠 来串了个门", "cheer":"💪 给你加了个油", "praise":"✨ 夸了夸你",
@@ -92,6 +92,8 @@ class InteractionFeed(QWidget):
     def __init__(self, respond, parent=None):
         super().__init__(parent)
         self.respond = respond
+        self._responses = {}
+        self._response_buttons = {}
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0,0,0,0)
         self.layout.setSpacing(8)
@@ -103,6 +105,7 @@ class InteractionFeed(QWidget):
         if signature == getattr(self,"_signature",None):
             return
         self._signature = signature
+        self._response_buttons = {}
         while self.layout.count():
             item = self.layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
@@ -148,8 +151,47 @@ class InteractionFeed(QWidget):
                 actions.addStretch()
                 for label,action in response_actions(row):
                     button = QPushButton(label)
-                    button.clicked.connect(lambda checked=False,r=row,a=action:self.respond(r,a))
+                    key = (str(row.get("event_id")), action)
+                    self._response_buttons[key] = button
+                    if key in self._responses:
+                        begin_button_work(button, self._responses[key][1])
+                    button.clicked.connect(lambda checked=False,r=row,a=action,b=button:self._respond(r,a,b))
                     actions.addWidget(button)
                 layout.addLayout(actions)
                 self.layout.addWidget(card)
         decorate_buttons(self)
+
+    def _respond(self, row, action, button):
+        if action not in {"cheer", "taunt", "food", "flower", "visit"}:
+            return self.respond(row, action)
+        key = (str(row.get("event_id")), action)
+        if key in self._responses:
+            return
+        token = object()
+        self._responses[key] = (token, "正在发送…")
+        begin_button_work(button, "正在发送…")
+        def complete(success, message=""):
+            from shiboken6 import isValid
+            if not isValid(self) or self._responses.get(key, (None,))[0] is not token:
+                return
+            if success:
+                text = {"taunt":"✓ 已回击", "food":"✓ 已回请", "cheer":"✓ 已加油",
+                        "flower":"✓ 已回一朵", "visit":"✓ 已串门"}[action]
+                self._responses[key] = (token, text)
+                current = self._response_buttons.get(key)
+                if current is not None and isValid(current): current.setText(text)
+                QTimer.singleShot(2000, self, restore)
+            else:
+                restore()
+        def restore():
+            from shiboken6 import isValid
+            if not isValid(self) or self._responses.get(key, (None,))[0] is not token: return
+            self._responses.pop(key, None)
+            current = self._response_buttons.get(key)
+            if current is not None and isValid(current): end_button_work(current)
+        try:
+            # 回调只在本地流转，不进入 RPC payload 或互动缓存。
+            self.respond({**row, "_response_done": complete}, action)
+        except Exception:
+            restore()
+            raise

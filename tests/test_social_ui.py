@@ -1,4 +1,4 @@
-"""验证自习室导航、备注优先身份、搭子卡片、账号同步及未登录交互。"""
+"""验证自习室导航、备注优先身份、直接互动与房间边界、账号同步及未登录交互。"""
 
 import json
 import os
@@ -1542,7 +1542,7 @@ def test_taunt_outside_window_only_warns_and_sends_no_rpc(monkeypatch) -> None:
     dialog = SocialHubDialog(client)
     dialog._send_interaction(
         {"user_id": "buddy-1", "nickname": "休息搭子", "online": False, "status": "offline"},
-        "cheer",
+        "taunt",
     )
 
     assert client.calls == []

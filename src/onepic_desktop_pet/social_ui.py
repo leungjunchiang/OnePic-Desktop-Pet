@@ -1,6 +1,6 @@
 """普通成功反馈复用页内标签；统一进程 Presence、活动状态、TTL 与本地自身显示。
 
-互动收件箱按北京日期分组、页面切换复用缓存、批量已读与轻量回应；免战入口共用北京时间八日额度。
+互动收件箱按北京日期分组；直接回应继承原发送者、独立于房间，并保证按钮恢复和短暂错误反馈。
 
 正式回应卡与执行牌复用同一状态投影，勾选配置使用统一矢量绘制。
 搭子自习室界面、后台同步线程和双六毛本地串门窗口。
@@ -2700,7 +2700,7 @@ class BuddyCardWidget(QWidget):
         if kind == "taunt" and not _taunt_window_open():
             self.interaction_blocked.emit("现在是嘲讽时间之外，给对方留点私人休息时间。")
             return
-        self._request_interaction("cheer")
+        self._request_interaction(kind)
 
     def _request_food(self, kind: str) -> None:
         now = time.monotonic()
@@ -2719,17 +2719,18 @@ class BuddyCardWidget(QWidget):
 
     def _request_interaction(self, kind: str) -> None:
         now = time.monotonic()
-        remaining = self._cooldown_until.get(kind, 0.0) - now
+        key = "cheer" if kind == "taunt" else kind
+        remaining = self._cooldown_until.get(key, 0.0) - now
         if remaining > 0:
             self.interaction_blocked.emit(f"互动冷却中，请 {int(remaining) + 1} 秒后再试。")
             return
-        self._cooldown_until[kind] = now + self._cooldown_seconds
+        self._cooldown_until[key] = now + self._cooldown_seconds
         self._sync_action_controls()
         QTimer.singleShot(self._cooldown_seconds * 1000, self, lambda: self._restore_button(kind))
         self.interaction_requested.emit(self.buddy, kind)
 
     def _restore_button(self, kind: str) -> None:
-        key = f"food:{kind}" if kind in self._food_buttons else kind
+        key = f"food:{kind}" if kind in self._food_buttons else "cheer" if kind == "taunt" else kind
         remaining = self._cooldown_until.get(key, 0) - time.monotonic()
         if remaining > 0:
             QTimer.singleShot(max(1, int(remaining * 1000) + 1), self, lambda: self._restore_button(kind))
@@ -5000,7 +5001,15 @@ class SocialHubDialog(QDialog):
         pending = getattr(self, "_pending_interactions", None)
         if pending is None:
             pending = self._pending_interactions = set()
+        response_done = buddy.get("_response_done")
+        settled = False
+        def settle(success):
+            nonlocal settled
+            if not settled:
+                settled = True
+                if callable(response_done): response_done(success)
         if key in pending:
+            settle(False)
             return
         pending.add(key)
         account = _session_user_id(self.client)
@@ -5013,21 +5022,47 @@ class SocialHubDialog(QDialog):
                     self.refresh()
                     self._load_interactions(force=True)
                 else:
-                    self._interaction_sent(_owner_label(buddy), kind)
+                    if name == "lili_send_interaction" and body.get("p_room_id") is None:
+                        self._set_status(f"✓ 已向 {_owner_label(buddy)} 送出互动", transient=True)
+                    else:
+                        self._interaction_sent(_owner_label(buddy), kind)
+                settle(True)
         def failed(error):
             if account != _session_user_id(self.client):
                 return
             unsupported = getattr(error, "status", None) in {404, 405} or "不支持" in str(error)
             if fallback and unsupported:
-                self._send_room_interaction(buddy, "cheer")
+                self._send_direct_interaction(buddy, "cheer")
             else:
                 self._set_status("互动没有送出：" + social_user_message(error), error=True)
+            settle(False)
         thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
         thread.failed.connect(failed, Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(lambda: pending.discard(key), Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(lambda: settle(False), Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(lambda: self._buddy_rpc_finished(thread), Qt.ConnectionType.QueuedConnection)
         self._set_status(f"正在向 {_owner_label(buddy)} 送出互动…")
-        thread.start()
+        try:
+            thread.start()
+        except Exception as error:
+            pending.discard(key)
+            failed(error)
+            self._buddy_rpc_finished(thread)
+
+    def _send_direct_interaction(self, buddy, kind, reply_to_event_id=None):
+        """既有收件箱信息直接选定目标；权限在同一次 RPC 内验证，不读取房间。"""
+        from uuid import uuid4
+        target = str(buddy.get("user_id") or buddy.get("id") or "").strip()
+        if not self._require_login() or not target:
+            done = buddy.get("_response_done")
+            if callable(done): done(False)
+            if not target: self._set_status("没找到这位搭子的账号。", error=True)
+            return
+        self._send_interaction_rpc(buddy, "lili_send_interaction", {
+            "p_target": target, "p_kind": {"taunt":"tease", "knock_desk":"knock", "remind_start":"start"}.get(kind, kind),
+            "p_room_id": None, "p_payload": {"operation_key": uuid4().hex,
+                **({"reply_to_event_id": reply_to_event_id} if reply_to_event_id else {})},
+        }, kind)
 
     def _send_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
@@ -5038,22 +5073,17 @@ class SocialHubDialog(QDialog):
         if kind == "visit":
             self._send_interaction_rpc(buddy, "lili_send_visit", {"target": target, "visit_kind": "visit"}, kind)
             return
+        if kind == "taunt" and not _taunt_window_open():
+            self._set_status("现在是嘲讽时间之外，给对方留点私人休息时间。", error=True)
+            return
         if kind == "cheer":
-            # Outside a focus session this is a playful, persistent taunt.
-            # Keep the daytime rule local for immediate feedback; the RPC
-            # repeats it server-side so stale cards cannot bypass privacy time.
-            if _taunt_available(buddy):
-                if not _taunt_window_open():
-                    self._set_status(
-                        "现在是嘲讽时间之外，给对方留点私人休息时间。"
-                    )
-                    return
-                self._send_interaction_rpc(buddy, "lili_send_taunt", {"p_target": target}, "taunt")
-                return
             if _presence_working(buddy):
                 self._send_interaction_rpc(buddy, "lili_send_encouragement", {"p_target": target}, "encouragement", fallback=True)
                 return
-        self._send_room_interaction(buddy, kind)
+        if kind in {"cheer", "taunt", "tease", "praise", "knock", "knock_desk", "poke", "start", "remind_start", "return", "flower"}:
+            self._send_direct_interaction(buddy, kind)
+        else:
+            self._send_room_interaction(buddy, kind)
 
     def _send_room_interaction(self, buddy, kind):
         target = str(buddy.get("user_id") or buddy.get("id") or "")
@@ -5110,6 +5140,8 @@ class SocialHubDialog(QDialog):
 
     def _send_food_interaction(self, buddy: dict[str, Any], kind: str) -> None:
         if not self._require_login():
+            done = buddy.get("_response_done")
+            if callable(done): done(False)
             return
         self.food_interaction_requested.emit(buddy, kind)
 
@@ -5738,16 +5770,24 @@ class SocialHubDialog(QDialog):
         if hasattr(self, "login_email"):
             self.login_email.setFocus()
 
-    def _set_status(self, message: str, *, error: bool = False, relogin: bool = False) -> None:
+    def _set_status(self, message: str, *, error: bool = False, relogin: bool = False, transient: bool = False) -> None:
         signature = (str(message), bool(error), bool(relogin))
         if signature == getattr(self, "_status_signature", None):
             return
         self._status_signature = signature
+        timer = getattr(self, "_status_timer", None)
+        if timer is None:
+            timer = self._status_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: (self.status_label.hide(), setattr(self, "_status_signature", None)))
+        timer.stop()
         self.status_label.setText(message)
+        self.status_label.show()
         color = "#a33a3a" if error else "#087f74"
         background = "#f7e5e5" if error else "#e1efec"
         self.status_label.setStyleSheet(f"background:{background};color:{color};border-radius:9px;padding:7px 10px;")
         self.relogin_button.setVisible(bool(relogin))
+        if (error and not relogin) or transient: timer.start(4000 if error else 2000)
 
     def _begin_action(self, message: str) -> None:
         self._set_status(message)
@@ -6393,15 +6433,15 @@ class SocialHubDialog(QDialog):
             self.open_focus_section(0)
             return
         peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
-        peer = {**peer, "user_id": row.get("sender_id"), "nickname": row.get("display_name") or row.get("nickname")}
+        peer = {**peer, "user_id": row.get("sender_id"), "nickname": row.get("display_name") or row.get("nickname"),
+                "_response_done": row.get("_response_done")}
         if action == "cancel_request":
             self._send_interaction_rpc(peer,"lili_cancel_buddy_request",{"request_id":row.get("source_id")},"cancel_request")
         elif action == "food":
+            peer["_reply_to_event_id"] = row.get("event_id")
             self._send_food_interaction(peer, "food_coffee")
-        elif action in {"cheer", "visit", "taunt"}:
-            self._send_interaction(peer, action)
-        elif action == "flower":
-            self._send_interaction_rpc(peer, "lili_supervision_nudge", {"p_owner_id":row.get("sender_id"),"p_kind":"flower"}, "flower")
+        elif action in {"cheer", "visit", "taunt", "flower"}:
+            self._send_direct_interaction(peer, action, row.get("event_id"))
         else:
             self._set_status("✓ 知道了")
 

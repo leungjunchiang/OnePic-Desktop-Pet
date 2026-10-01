@@ -1,4 +1,4 @@
-"""本地闹钟独立调度与 occurrence 去重；互动气泡四秒收起，与持续纪律分离。
+"""本地闹钟独立调度与 occurrence 去重；直接回请共用扣款、异步发送与按钮完成回调。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
@@ -3945,12 +3945,26 @@ class PetWindow(QWidget):
 
     def _send_food_interaction(self, buddy: dict, kind: str) -> None:
         """Send a food scene invitation; gifts are charged locally and never create income."""
+        # 收件箱回请仍复用同一投喂扣款与 worker；本地按钮回调不上传。
+        response_done = buddy.get("_response_done")
+        response_account = str(self._current_social_user_id() or "")
+        settled = False
+        def settle(success, message=""):
+            nonlocal settled
+            if settled: return
+            settled = True
+            if callable(response_done): response_done(success, message)
+            if not success and callable(response_done) and response_account == str(self._current_social_user_id() or ""):
+                dialog = getattr(self, "_social_dialog", None)
+                if dialog is not None: dialog._set_status(message or "回请没有送出，请重试。", error=True)
         if not self.social_client.signed_in:
             self.show_speech("先登录搭子自习室，才能给搭子送吃的。", 4200)
+            settle(False, "请先登录，再回请搭子。")
             return
         target = str(buddy.get("user_id") or buddy.get("id") or "").strip()
         if not target:
             self.show_speech("没找到这位搭子的账号。", 4200)
+            settle(False, "没找到这位搭子的账号。")
             return
         item_key = {
             "food_coffee": "coffee",
@@ -3959,9 +3973,11 @@ class PetWindow(QWidget):
             "food_cake": "cake",
         }.get(str(kind))
         if not item_key:
+            settle(False, "不支持这种投喂。")
             return
         if item_key == "cake":
             self.show_speech("小蛋糕不能单独请一位搭子；请打开补给站，邀请 1～3 位好友一起分享。", 5200)
+            settle(False)
             return
         catalog = self.economy.catalog().get(item_key) or {}
         price = int(catalog.get("price") or 0)
@@ -3972,10 +3988,12 @@ class PetWindow(QWidget):
         key = (account, target, str(kind))
         if key in pending:
             self.show_speech("这份投喂正在发送，请稍等。", 2400)
+            settle(False, "这份投喂正在发送，请稍等。")
             return
         reserved = sum(value[0] for identity, value in pending.items() if identity[0] == account)
         if self.economy.balance - reserved < price:
             self.show_speech("哥们，钱袋有点瘪。", 4200)
+            settle(False, "余额不足，无法回请咖啡。")
             return
         recipient_label = str(
             buddy.get("private_note_name")
@@ -3996,6 +4014,8 @@ class PetWindow(QWidget):
                 "cake": "这件事值得庆祝一下。",
             }.get(item_key, ""),
         }
+        reply_to = buddy.get("_reply_to_event_id")
+        if reply_to: payload["reply_to_event_id"] = str(reply_to)
         # 请求离开 GUI 线程；同一邀请防重入，待发送价格预留，成功后才记账。
         reservation = (price, operation_key)
         pending[key] = reservation
@@ -4007,6 +4027,7 @@ class PetWindow(QWidget):
                 event = self.economy.record_food_gift_sent(target, recipient_label, item_key, operation_key=operation_key)
                 if event is None:
                     self.show_speech("邀请已发出，但本地钱袋扣款失败，请先检查余额。", 5200)
+                    settle(False, "邀请已发出，但本地扣款失败，请检查余额。")
                     return
                 self._sync_economy_events([event.as_dict()])
                 self._set_social_food_activity(item_key, duration)
@@ -4016,18 +4037,24 @@ class PetWindow(QWidget):
                     "tea": f"🍵 已给 {recipient_label} 敬茶。",
                 }.get(item_key, "互动已经送出。")
                 self.show_speech(text, 5200)
+                settle(True)
             finally:
                 release()
         def failed(error):
             try:
                 self.show_speech(f"没送出去：{str(error)[:120]}", 5200)
+                settle(False, f"回请没有送出：{str(error)[:120]}")
             finally:
                 release()
         self.show_speech(f"正在给 {recipient_label} 发送投喂…", 2400)
         try:
-            self._discipline_rpc("lili_send_food_interaction",
-                {"p_target": target, "p_kind": str(kind), "p_payload": payload}, completed, failed,
-                finally_callback=release)
+            name = "lili_send_interaction" if reply_to else "lili_send_food_interaction"
+            body = {"p_target": target, "p_kind": str(kind), "p_payload": payload}
+            if reply_to: body["p_room_id"] = None
+            def finished():
+                release()
+                settle(False)
+            self._discipline_rpc(name, body, completed, failed, finally_callback=finished)
         except Exception as error:
             failed(error)
 

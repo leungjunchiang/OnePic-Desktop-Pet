@@ -1,4 +1,4 @@
-"""验证卡片核心操作、真实反应状态、共享冷却与窄窗口提醒标签布局。"""
+"""验证卡片核心操作、加油/嘲讽各自目标动作、共享冷却与窄窗口提醒标签布局。"""
 
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -36,7 +36,7 @@ def test_five_actions_fit_and_badge_is_above_footer(card, width):
     assert "4小时57分钟" in widget._focus_label.text()
 
 
-def test_reactions_reuse_cheer_handler_and_share_cooldown_across_status_updates(card, monkeypatch):
+def test_reactions_preserve_action_and_share_cooldown_across_status_updates(card, monkeypatch):
     widget, _ = card
     monkeypatch.setattr("onepic_desktop_pet.social_ui._taunt_window_open", lambda: True)
     ticks = [1000.0]
@@ -53,7 +53,8 @@ def test_reactions_reuse_cheer_handler_and_share_cooldown_across_status_updates(
     widget._restore_button("cheer")
     assert widget._buttons["taunt"].isEnabled() and not widget._buttons["cheer"].isEnabled()
     widget._buttons["taunt"].click()
-    assert sent == ["cheer", "cheer"]
+    assert sent == ["cheer", "taunt"]
+    assert not widget._buttons["taunt"].isEnabled()
 
 
 def test_feed_config_and_reminder_updates_keep_existing_events(card):
