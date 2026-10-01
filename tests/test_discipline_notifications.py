@@ -183,6 +183,21 @@ def test_account_switch_resets_baseline_and_rejects_old_callback(pet):
     assert not new.store.coach_messages
 
 
+def test_same_account_reauthentication_keeps_baseline_and_dedup(pet, monkeypatch):
+    establish(pet); sync(pet, [row("already-shown")]); pet._flush_discipline_notices()
+    baseline = pet._discipline_notice_baseline_at
+    toast = pet._discipline_toast
+    monkeypatch.setattr(pet, "_current_social_user_id", lambda: "account-a")
+    monkeypatch.setattr(pet, "_switch_focus_account", lambda _: None)
+    monkeypatch.setattr(pet, "_schedule_social_tick", lambda **_: None)
+    pet._social_account_state_changed(True)
+    assert pet._discipline_notice_baseline_at == baseline
+    assert pet._discipline_toast is toast
+    sync(pet, [row("already-shown"), row("after-reconnect")]); pet._flush_discipline_notices()
+    assert pet._discipline_toast is toast
+    assert len(pet._discipline_toast_notices) == 2
+
+
 def test_inbox_and_seen_persist_but_are_not_cloud_events(tmp_path):
     path = tmp_path / "discipline.json"
     store = DisciplineStore("account-a", path=path)

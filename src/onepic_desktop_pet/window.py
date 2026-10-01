@@ -10001,8 +10001,9 @@ class PetWindow(QWidget):
         """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
 
         account_id = self._current_social_user_id() if signed_in else ""
-        self._clear_reminder_toasts()
-        self._buddy_reminder_store = None
+        if not signed_in or account_id != str(self._active_focus_account_id or ""):
+            self._clear_reminder_toasts()
+            self._buddy_reminder_store = None
         self._switch_focus_account(account_id)
         self._set_login_reward_account(account_id)
         # A new account has its own presence metadata row.  Force one
